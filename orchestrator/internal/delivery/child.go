@@ -215,11 +215,16 @@ func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, pha
 	}
 	id = ids.New(ids.Run)
 	capabilities, _ := json.Marshal(in.Capabilities)
-	_, err = tx.Exec(ctx, `INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role,
+	err = tx.QueryRow(ctx, `INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role,
 		parent_run_id, parent_session_id, source_kind, child_profile, child_prompt, child_capabilities, creation_key, base_refs)
-		VALUES ($1,$2,$3,1,'pending',$4::run_phase,$5::agent_role,$6,$3,'session',$7,$8,$9::jsonb,$10,'{}'::jsonb)`,
-		id, ref.Org, ref.SessionID, phase, RoleForPhase[phase], ref.RunID, in.Profile, db.Nullable(in.Prompt), capabilities, key)
-	if err != nil {
+		VALUES ($1,$2,$3,1,'pending',$4::run_phase,$5::agent_role,$6,$3,'session',$7,$8,$9::jsonb,$10,'{}'::jsonb)
+		ON CONFLICT DO NOTHING RETURNING id`,
+		id, ref.Org, ref.SessionID, phase, RoleForPhase[phase], ref.RunID, in.Profile, db.Nullable(in.Prompt), capabilities, key).Scan(&id)
+	if err == pgx.ErrNoRows {
+		if err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE session_id=$1 AND creation_key=$2`, ref.SessionID, key).Scan(&id); err != nil {
+			return "", err
+		}
+	} else if err != nil {
 		return "", err
 	}
 	if in.Note != "" {
