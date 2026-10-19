@@ -540,7 +540,6 @@ func TestAnUnreadSessionImageGoesToTheNextLiveAgent(t *testing.T) {
 			AND payload->>'supersedes' = $2 AND payload->'attachments'->0->>'id' = 'att_on'`, next, from) == 1
 	})
 	var luxRun, copy string
-	_ = s.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE id = $1`, next).Scan(&luxRun)
 	_ = s.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE supersedes = $1`, from).Scan(&copy)
 	s.until("the next agent's lux input to have the image", func() bool {
 		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, next).Scan(&luxRun)
