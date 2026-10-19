@@ -187,7 +187,37 @@ type Error struct {
 	// Refusal is dude's own reason for refusing an agent's read (one of the
 	// Refusal* kinds), "" when GitHub's answer is the refusal.
 	Refusal string
+	// AcceptedPermissions is a 403's X-Accepted-GitHub-Permissions: the
+	// permission sets that would have been let through, sets split by "; ",
+	// each "name=access" joined by ",". "" when GitHub sent none, or sent
+	// anything else (see acceptedPermissions).
+	AcceptedPermissions string
 }
+
+// acceptedPermissions is h's X-Accepted-GitHub-Permissions, normalised,
+// when every entry is a lowercase permission name and read, write or
+// admin; else "". Only such a value may reach an agent or the ledger.
+func acceptedPermissions(h http.Header) string {
+	raw := strings.TrimSpace(h.Get("X-Accepted-GitHub-Permissions"))
+	if raw == "" || len(raw) > 512 {
+		return ""
+	}
+	var sets []string
+	for _, set := range strings.Split(raw, ";") {
+		var perms []string
+		for _, p := range strings.Split(set, ",") {
+			name, access, ok := strings.Cut(strings.TrimSpace(p), "=")
+			if !ok || !permissionName.MatchString(name) || access != "read" && access != "write" && access != "admin" {
+				return ""
+			}
+			perms = append(perms, name+"="+access)
+		}
+		sets = append(sets, strings.Join(perms, ","))
+	}
+	return strings.Join(sets, "; ")
+}
+
+var permissionName = regexp.MustCompile(`^[a-z][a-z_]{0,63}$`)
 
 // Why dude refused an agent's read on its own account. Message then holds
 // dude's words only, never what GitHub sent.
@@ -483,6 +513,55 @@ func (g *GitHub) doURL(ctx context.Context, scope, method, target string, body, 
 		return err
 	}
 	return g.send(ctx, method, target, "Bearer "+token, body, out)
+}
+
+// getLinked is do's GET that also answers the response's Link header.
+func (g *GitHub) getLinked(ctx context.Context, path string, out any) (string, error) {
+	token, err := g.Token(ctx, scopeOf(path))
+	if err != nil {
+		return "", err
+	}
+	header, err := g.exchange(ctx, "GET", g.cred.APIBaseURL+path, "Bearer "+token, nil, out)
+	if err != nil {
+		return "", err
+	}
+	return header.Get("Link"), nil
+}
+
+// lastPage is the page number of a Link header's rel="last" URL, 0 when
+// there is none or it does not parse: a positive `page` query parameter of
+// at most 100000 (a bound keeping page arithmetic far from overflow).
+func lastPage(link string) int {
+	for _, part := range strings.Split(link, ",") {
+		target, params, ok := strings.Cut(strings.TrimSpace(part), ";")
+		target = strings.TrimSpace(target)
+		if !ok || !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
+			continue
+		}
+		// rel is a space-separated list of relation types, compared, like
+		// the parameter name, case-insensitively (RFC 8288).
+		last := false
+		for _, p := range strings.Split(params, ";") {
+			if name, rels, ok := strings.Cut(strings.TrimSpace(p), "="); ok && strings.EqualFold(name, "rel") {
+				last = last || slices.ContainsFunc(strings.Fields(strings.Trim(rels, `"`)), func(r string) bool {
+					return strings.EqualFold(r, "last")
+				})
+			}
+		}
+		if !last {
+			continue
+		}
+		u, err := url.Parse(target[1 : len(target)-1])
+		if err != nil {
+			return 0
+		}
+		n, err := strconv.Atoi(u.Query().Get("page"))
+		if err != nil || n < 1 || n > 100000 {
+			return 0
+		}
+		return n
+	}
+	return 0
 }
 
 type ghPull struct {
@@ -1651,6 +1730,10 @@ type PullRequestRead struct {
 	// ChecksCut: the agent read's cap left checks out.
 	ChecksCut bool
 	Files     []FileRead
+	// The conversation's newest comments, oldest first (see
+	// PullRequestRead); CommentCount is how many it has.
+	Comments     []IssueComment
+	CommentCount int
 }
 
 type ghLabel struct {
@@ -1787,9 +1870,9 @@ func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int
 
 // PullRequestRead reads a pull request whole: its text, head and base,
 // every review with its text, the threads nobody resolved, the checks on
-// its head and the files it changes (at most maxFiles), each file's diff
-// with it.
-func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int, requested ...string) (_ PullRequestRead, err error) {
+// its head, the files it changes (at most maxFiles), each file's diff
+// with it, and the newest maxComments comments of its conversation.
+func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles, maxComments int, requested ...string) (_ PullRequestRead, err error) {
 	ctx = agentReadContext(ctx)
 	defer func() { err = g.itemMoved(ctx, slug, err) }()
 	if err := g.readBudget(ctx, slug, "core", "graphql"); err != nil {
@@ -1856,7 +1939,63 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 	for _, f := range files[:min(len(files), maxFiles)] {
 		out.Files = append(out.Files, FileRead{Path: f.Filename, Status: f.Status, Additions: f.Additions, Deletions: f.Deletions, Patch: f.Patch})
 	}
+	if out.Comments, out.CommentCount, err = g.conversationTail(ctx, slug, number, maxComments); err != nil {
+		return PullRequestRead{}, err
+	}
 	return out, nil
+}
+
+// conversationTail reads the newest conversation comments and derives their
+// total from the paginated list rather than the pull request's comment count.
+// It reads page 1, the last page from its Link header, and at most one page
+// before that. An empty last page is stepped back once. keep must be at most
+// 100, so one prepended page holds the rest.
+func (g *GitHub) conversationTail(ctx context.Context, slug string, number int, keep int) ([]IssueComment, int, error) {
+	if keep <= 0 {
+		return []IssueComment{}, 0, nil
+	}
+	path := fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=100&page=", slug, number)
+	var first []ghComment
+	link, err := g.getLinked(ctx, path+"1", &first)
+	if err != nil {
+		return nil, 0, err
+	}
+	read := func(page int) ([]ghComment, error) {
+		if page == 1 {
+			return first, nil
+		}
+		var batch []ghComment
+		err := g.do(ctx, "GET", path+strconv.Itoa(page), nil, &batch)
+		return batch, err
+	}
+	all, last := first, max(lastPage(link), 1)
+	lastWasEmpty := false
+	if last > 1 {
+		if all, err = read(last); err != nil {
+			return nil, 0, err
+		}
+		if len(all) == 0 {
+			last--
+			lastWasEmpty = true
+			if all, err = read(last); err != nil {
+				return nil, 0, err
+			}
+		}
+	}
+	total := (last-1)*100 + len(all)
+	// After an empty last page, only the held page 1 avoids a fourth request.
+	if len(all) < keep && last > 1 && (!lastWasEmpty || last == 2) {
+		prev, err := read(last - 1)
+		if err != nil {
+			return nil, 0, err
+		}
+		all = append(slices.Clip(prev), all...)
+	}
+	out := []IssueComment{}
+	for _, c := range all[max(0, len(all)-keep):] {
+		out = append(out, IssueComment{Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt})
+	}
+	return out, total, nil
 }
 
 // openThreads is a pull request's unresolved review threads with their

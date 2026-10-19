@@ -44,6 +44,7 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 		case "/repos/acme/target/issues/4":
 			_, _ = w.Write([]byte(`{"number":4,"title":"` + canary + `","body":"` + strings.Repeat("x", 5<<20) + `"}`))
 		case "/repos/acme/target/issues/5":
+			w.Header().Set("X-Accepted-GitHub-Permissions", "issues=read")
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(message))
 		case "/repos/acme/target/issues/6":
@@ -136,6 +137,10 @@ func TestARefusedReadIsRecordedWithItsKindAndNoGitHubText(t *testing.T) {
 		}
 		if _, ok := p["bytes"]; ok {
 			t.Errorf("issue %d: a refused read has bytes: %v", w.number, p)
+		}
+		// Only the 403 that named a permission records one.
+		if perm, ok := p["permission"]; ok != (w.number == 5) || ok && perm != "issues=read" {
+			t.Errorf("issue %d: permission %v", w.number, p)
 		}
 	}
 	// Every event of the organisation, decoded: none holds GitHub's text.
