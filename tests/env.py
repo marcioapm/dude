@@ -12,6 +12,7 @@ deployed system rather than of internal functions (plan §29, §50).
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import socket
 import sys
@@ -21,9 +22,8 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
+from pathlib import Path
 
 import boto3
 import psycopg
@@ -328,7 +328,7 @@ class TestEnvironment:
                 messages = body.get("messages", [])
                 question = " ".join(str(m.get("content", "")) for m in messages)
                 context = question.lower()
-                decision = "no" if "missing" in question.lower() else "yes"
+                decision = "no" if "missing" in context else "yes"
                 if "status: error" in context or "fail: testgreeting" in context or "exit status 1" in context:
                     # Judge the latest recorded completion: an earlier
                     # failed turn is not evidence against the corrected turn.

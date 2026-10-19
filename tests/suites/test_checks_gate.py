@@ -57,12 +57,12 @@ def _start(client: ApiClient, fake_github: FakeGitHub, model: str) -> dict:
     return task
 
 
-def _runs(client: ApiClient, task_id: str) -> list[dict]:
-    return client.task_runs(task_id)
+def _implementer_runs(client: ApiClient, task_id: str) -> list[dict]:
+    return [r for r in client.task_runs(task_id) if r["phase"] == "implement"]
 
 
 def _implementer(client: ApiClient, task_id: str) -> dict:
-    return next(r for r in _runs(client, task_id) if r["phase"] == "implement")
+    return _implementer_runs(client, task_id)[0]
 
 
 def _checks_events(client: ApiClient, run_id: str) -> list[dict]:
@@ -70,7 +70,7 @@ def _checks_events(client: ApiClient, run_id: str) -> list[dict]:
 
 
 def _checks_for_task(client: ApiClient, task_id: str) -> list[dict]:
-    runs = [r for r in _runs(client, task_id) if r["phase"] == "implement"]
+    runs = _implementer_runs(client, task_id)
     return _checks_events(client, runs[0]["id"]) if runs else []
 
 
@@ -119,7 +119,6 @@ def test_failing_command_is_sent_back_then_corrected_turn_publishes(client: ApiC
 @pytest.mark.e2e
 def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClient, fake_github: FakeGitHub):
     _judge(client, fake_github)
-    settings = client.get("/v1/forge/settings").json()
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
     task = _start(client, fake_github, CHECKS_MODELS["unbacked"])
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "awaiting_input",
