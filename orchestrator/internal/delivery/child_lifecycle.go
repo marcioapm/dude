@@ -24,11 +24,21 @@ type lockedChild struct {
 	BaseRefs                                                         map[string]string
 	Actionable                                                       bool
 	ParentLive                                                       bool
+	// The task's latest delivery, as lockChildTx read or locked it.
+	Delivery *Delivery
 }
 
-// Read attribution without a lock, then acquire parent-before-child locks.
-// Attribution is rechecked after locking; no request can select a different parent.
+// Read attribution without a lock, then acquire Chat, parent, delivery and
+// task locks. Attribution is rechecked after locking; no request can select
+// a different parent.
 func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, error) {
+	return lockChildTx(ctx, tx, childID, nil)
+}
+
+// lockChildTx is lockChild with the delivery locked after the parent Run and
+// before the task's row (LockEscalationTx's order). betweenLocks runs between
+// those two locks for deterministic concurrency tests.
+func lockChildTx(ctx context.Context, tx pgx.Tx, childID string, betweenLocks func()) (*lockedChild, error) {
 	c := &lockedChild{}
 	err := tx.QueryRow(ctx, `SELECT task_id, parent_run_id FROM runs
 		WHERE id = $1 AND source_kind = 'task_conductor'`, childID).Scan(&c.TaskID, &c.ParentID)
@@ -48,6 +58,12 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 	if err != nil {
 		return nil, err
 	}
+	if c.Delivery, err = LoadDelivery(ctx, tx, c.TaskID); err != nil {
+		return nil, err
+	}
+	if betweenLocks != nil {
+		betweenLocks()
+	}
 	var taskStatus string
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, c.TaskID).Scan(&taskStatus); err != nil {
 		return nil, err
@@ -64,10 +80,7 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 	if err != nil {
 		return nil, err
 	}
-	d, err := ReadDelivery(ctx, tx, c.TaskID)
-	if err != nil {
-		return nil, err
-	}
+	d := c.Delivery
 	attempt, err := EffectiveChildAttemptTx(ctx, tx, c.TaskID, d)
 	if err != nil {
 		return nil, err
@@ -196,12 +209,17 @@ func (s *Store) RestartChild(ctx context.Context, org, taskID, childID, key stri
 }
 
 func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key string) (string, error) {
+	return restartChildTx(ctx, tx, org, taskID, childID, key, nil)
+}
+
+func restartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key string, betweenLocks func()) (string, error) {
 	if key == "" {
 		return "", refuseText(rChildRestartKeyRequired)
 	}
 	var id string
 	err := func() error {
-		c, err := lockChild(ctx, tx, childID)
+		// A writer child's delivery locked: its admission below reads it.
+		c, err := lockChildTx(ctx, tx, childID, betweenLocks)
 		if err != nil {
 			return err
 		}
@@ -227,25 +245,15 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 		if !c.Actionable {
 			return refuseText(rChildParentNotLive)
 		}
-		// The delivery a writer is admitted under; createPhaseRunTx refuses an
-		// implementer whose delivery a Close or Archive has since ended.
+		// The delivery a writer is admitted under, live on the child's
+		// attempt (Actionable); createPhaseRunTx refuses an implementer
+		// whose delivery a Close or Archive has since ended.
 		var workflowID string
 		if Publishes[c.Phase] {
-			d, err := LoadDelivery(ctx, tx, taskID)
-			if err != nil {
+			if err := refuseWriterAdmissionTx(ctx, tx, taskID, childID, c.Delivery); err != nil {
 				return err
 			}
-			attempt, err := EffectiveChildAttemptTx(ctx, tx, taskID, d)
-			if err != nil {
-				return err
-			}
-			if d == nil || !d.Live() || attempt != c.Attempt {
-				return refuseText(rChildParentNotLive)
-			}
-			if err := refuseWriterAdmissionTx(ctx, tx, taskID, childID, d); err != nil {
-				return err
-			}
-			workflowID = d.WorkflowID
+			workflowID = c.Delivery.WorkflowID
 		}
 		encoded, _ := json.Marshal([]string{childID, key})
 		id, err = createPhaseRunTx(ctx, tx, org, PhaseRun{TaskID: taskID, Phase: c.Phase, WorkflowID: workflowID,
