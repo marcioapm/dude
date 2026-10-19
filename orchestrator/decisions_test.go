@@ -54,7 +54,9 @@ func (w *world) reachGate(task string) {
 	w.t.Helper()
 	w.talk(task)
 	w.implemented(task)
-	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.carriedOut(task, "start_phase", `{"phase":"simplify"}`)
+	// The review of the simplifier's diff, done by agents: finishSimplifierReview finds it.
+	w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	w.finishSimplifierReview(task)
 	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
 }

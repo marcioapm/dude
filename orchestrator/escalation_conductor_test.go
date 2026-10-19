@@ -340,7 +340,7 @@ func testBlocked(t *testing.T, owner func(w *world, task string)) (*world, strin
 	owner(w, task)
 	w.talk(task)
 	w.implemented(task)
-	w.must(task, "start_phase", `{"phase":"test"}`)
+	w.carriedOut(task, "start_phase", `{"phase":"test"}`)
 	w.until("blocked", func() bool { return w.escalationReason(task) == delivery.ReasonTestBlocked })
 	w.wokenWith(task, "Escalated to a person: test blocked")
 	return w, task
