@@ -176,20 +176,49 @@ func TestASessionAnswerInChatCarriesItsImages(t *testing.T) {
 	s.until("lux to have the answer's image", func() bool { return len(s.lux.Attachments(luxRun)[directive]) == 1 })
 }
 
-// After a model change a message with images stays with the agent that is
-// running, since a fresh one would read it in its briefing; the next
-// message without images swaps.
-func TestASessionMessageWithImagesDefersTheModelSwap(t *testing.T) {
+// refusedForModelSwap says a message with image att was refused because a
+// model change is pending: nothing was queued on run, the image is unsent,
+// and the session still runs on run with no swap recorded.
+func (s *sessionWorld) refusedForModelSwap(status int, body map[string]any, session, run, att string) {
+	s.t.Helper()
+	e, _ := body["error"].(map[string]any)
+	if status != 409 || e["code"] != "images_need_model_swap" || e["message"] !=
+		"the session's model changed: send a message without images first so an agent on the new model takes over, then send the images again" {
+		s.t.Fatalf("an image message with a model change pending: %d %v", status, body)
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1`, run); n != 0 {
+		s.t.Errorf("the refused message queued %d directives", n)
+	}
+	if n := s.count(`SELECT count(*) FROM attachments WHERE id = $1 AND attached_at IS NULL AND directive_id IS NULL`, att); n != 1 {
+		s.t.Errorf("the refused image was attached")
+	}
+	if next, _ := s.brainstorm(session); next != run {
+		s.t.Errorf("a fresh agent %s was started", next)
+	}
+	s.noSwap(session)
+}
+
+// After a model change, a message with images that would hand the session
+// to a fresh agent is refused: the briefing carries no images, and queueing
+// it on the old agent would let image messages hold off the change. Words
+// alone then swap, and the image goes to the agent on the new model.
+func TestASessionMessageWithImagesWaitsForTheModelSwap(t *testing.T) {
 	s := newSessionWorld(t)
 	b := s.withImages()
 	gpt := s.tierOn("Sol", "gpt-6-sol")
-	id, run, luxRun := s.liveSession()
+	id, run, _ := s.liveSession()
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": gpt, "harness": nil})
 	s.uploadToSession(b, "att_swap", id, "swap.png", screenshot)
+	status, body := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_swap"}})
+	s.refusedForModelSwap(status, body, id, run, "att_swap")
+
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "switch over"})
+	next := s.freshAgent(id, run)
 	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_swap"}})
-	s.queuedOn(out, run)
-	s.noSwap(id)
-	s.until("lux to have the image", func() bool { return len(s.lux.Attachments(luxRun)[out["directiveId"].(string)]) == 1 })
+	s.queuedOn(out, next)
+	if n := s.count(`SELECT count(*) FROM attachments WHERE id = 'att_swap' AND directive_id = $1`, out["directiveId"]); n != 1 {
+		t.Errorf("the image is not on the message to the agent on the new model")
+	}
 }
 
 // A message with images an ended agent never read goes to the session's

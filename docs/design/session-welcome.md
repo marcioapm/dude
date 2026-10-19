@@ -111,7 +111,10 @@ back; under 1000px it stays the drawer it is today.
   a briefing carries no images. Later messages in the session's Chat take
   them (`POST /v1/brainstorms/:id/attachments`, then `attachmentIds` on
   `/chat`), as a directive to the live agent; a message that would start
-  an agent with images is refused 409 `images_need_agent`.
+  an agent with images is refused 409 `images_need_agent`, and one that
+  would hand the session to a fresh agent on its changed model is refused
+  409 `images_need_model_swap` (words alone apply the change first). The
+  refused images stay unsent in the tray.
 - **Recent sessions** is the existing `GET /sessions` (newest activity
   first); it already carries title, filed count, shared and owner.
 

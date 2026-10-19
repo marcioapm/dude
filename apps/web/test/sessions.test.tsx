@@ -387,6 +387,43 @@ describe("a brainstorm session's page", () => {
     expect([...images.querySelectorAll("[data-testid=message-image]")].map((b) => b.getAttribute("aria-label"))).toEqual(["Open shot.png"]);
   });
 
+  test("an image refused until the model change is applied says why and stays in the tray", async () => {
+    const REFUSAL = "the session's model changed: send a message without images first so an agent on the new model takes over, then send the images again";
+    class Refusing extends SessionClient {
+      attached: Array<ReadonlyArray<string>> = [];
+      override sessionChat(_id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}) {
+        this.attached.push(opts.attachmentIds ?? []);
+        if ((opts.attachmentIds ?? []).length > 0) return Promise.reject(new ApiError(409, "images_need_model_swap", REFUSAL));
+        return super.sessionChat(_id, text, opts);
+      }
+    }
+    const g = globalThis as { createImageBitmap?: unknown };
+    const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
+    const saved = { bitmap: g.createImageBitmap, getContext: canvas["getContext"], toBlob: canvas["toBlob"] };
+    g.createImageBitmap = async () => ({ width: 40, height: 30, close() {} });
+    canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
+    canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
+    try {
+      const client = new Refusing(detail("chat"));
+      const page = await sessionPage(client);
+      const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])], "shot.png", { type: "image/png" });
+      const drop = new Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
+      drop.dataTransfer = { types: ["Files"], items: [png], files: [png], dropEffect: "" };
+      await act(async () => void page.querySelector("[data-testid=session-screen] textarea")!.dispatchEvent(drop));
+      await until(() => page.querySelector("[data-testid=attachment-chip][data-state=ready]"), "the uploaded image");
+      await write(page, "look");
+      expect(client.attached).toEqual([["att_fx1"]]);
+      expect((await until(() => page.querySelector("[data-testid=session-problem]"), "the refusal")).textContent)
+        .toBe(`Could not send the message: ${REFUSAL}`);
+      expect(page.querySelectorAll("[data-testid=attachment-chip][data-state=ready]").length).toBe(1);
+      expect(client.sent).toEqual([]);
+    } finally {
+      g.createImageBitmap = saved.bitmap;
+      canvas["getContext"] = saved.getContext;
+      canvas["toBlob"] = saved.toBlob;
+    }
+  });
+
   test("a reader's paperclip is off, and so is one before the agent has started", async () => {
     const reader = await sessionPage(new SessionClient(detail("read")));
     expect(reader.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(true);

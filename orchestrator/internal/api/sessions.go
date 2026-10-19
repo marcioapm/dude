@@ -1183,13 +1183,16 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		// aside, or a message held for another member's answer, is queued
 		// on the agent that asked.
 		var swap *delivery.SessionModelApplied
-		// A message with images stays with the agent that is running: a
-		// fresh one would read it in its briefing, which carries no images.
-		// The model change applies from the next message without them.
-		if (qerr != nil || answers) && len(body.AttachmentIDs) == 0 {
+		if qerr != nil || answers {
 			if swap, err = delivery.BrainstormSwap(r.Context(), tx, runID, id); err != nil {
 				return err
 			}
+		}
+		// A fresh agent reads the message in its briefing, which carries no
+		// images; queueing it on the old agent instead would let image
+		// messages hold off the model change indefinitely.
+		if swap != nil && len(body.AttachmentIDs) > 0 {
+			return errImagesNeedModelSwap
 		}
 		if answers {
 			answered, err := answerBody{Text: body.Text}.check(items)
@@ -1308,6 +1311,11 @@ func retryError(err error, live string) error {
 // no images (phases.brainstormSpec), so they would be dropped.
 var errImagesNeedAgent = fail(http.StatusConflict, "images_need_agent",
 	"the session's agent is not running yet: send your words alone to start it, then send the images again once it has started")
+
+// errImagesNeedModelSwap refuses images on a message that would hand the
+// session to a fresh agent on its new model, for the same reason.
+var errImagesNeedModelSwap = fail(http.StatusConflict, "images_need_model_swap",
+	"the session's model changed: send a message without images first so an agent on the new model takes over, then send the images again")
 
 // checkChatText refuses a message the session's agent would not be given:
 // blank, or over delivery.ChatMessageMax bytes. field names it in the error.
