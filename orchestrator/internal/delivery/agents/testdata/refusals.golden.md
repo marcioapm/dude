@@ -1042,3 +1042,7 @@ the brainstorm parent is no longer live
 
 this profile is not available to a brainstorm session child
 
+## refusals/delivery/child/session-restart-unsupported
+
+session children cannot be restarted; start a new investigator child from the live brainstorm
+

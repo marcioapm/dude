@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
@@ -41,6 +43,9 @@ func TestSessionChildAdmissionAndParentFence(t *testing.T) {
 	}
 	if task != "" || session != "ssn_child" || source != "session" || parent != "run_brainstorm" || profile != "investigator" {
 		t.Fatalf("metadata: %q %q %q %q %q", task, session, source, parent, profile)
+	}
+	if replacement, err := s.RestartChild(ctx, org, "", id, "restart"); !IsRefusal(err) || replacement != "" {
+		t.Fatalf("session restart: replacement=%q err=%v", replacement, err)
 	}
 	for _, profile := range []string{"implementer", "fixer", "simplifier", "reviewer", "qa_browser"} {
 		bad := in
@@ -120,7 +125,34 @@ func TestSessionChildForgedReferenceCannotChooseParent(t *testing.T) {
 		('run_real', $1, 'session_real', 1, 'running', 'agent', 'brainstorm'),
 		('run_other', $1, 'session_other', 1, 'running', 'agent', 'brainstorm')`, org)
 	s := &Store{DB: app}
-	in := StartChildInput{Parent: ChildParent{Kind: ChildParentSession, Run: RunRef{Org: org, SessionID: "session_real", RunID: "run_real"}}, Profile: "investigator", Key: "forged"}
+	in := StartChildInput{Parent: ChildParent{Kind: ChildParentSession, Run: RunRef{Org: org, SessionID: "session_other", RunID: "run_real"}}, Profile: "investigator", Key: "forged"}
+	if _, err := s.StartChild(ctx, in); !IsRefusal(err) {
+		t.Fatalf("mismatched session accepted: %v", err)
+	}
+	in.Parent.Run.SessionID = "session_real"
+	otherOrg := dbtest.Org(t, owner)
+	exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('session_foreign', $1, 'Foreign')`, otherOrg)
+	exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role)
+		VALUES ('run_foreign', $1, 'session_foreign', 1, 'running', 'agent', 'brainstorm')`, otherOrg)
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_forged', $1, 'Task', 'task', 'TASK')`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('task_forged', $1, 'prj_forged', 1, 'Task', 'Investigate')`, org)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role)
+		VALUES ('run_task_forged', $1, 'prj_forged', 'task_forged', 1, 'running', 'agent', 'conductor')`, org)
+	for _, ref := range []RunRef{
+		{Org: org, SessionID: "session_other", RunID: "run_real"},
+		{Org: org, SessionID: "session_foreign", RunID: "run_foreign"},
+		{Org: org, SessionID: "session_real", RunID: "run_task_forged"},
+	} {
+		bad := in
+		bad.Parent.Run = ref
+		err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+			_, err := StartChildTx(ctx, tx, bad)
+			return err
+		})
+		if !IsRefusal(err) {
+			t.Fatalf("forged primitive reference %+v: %v", ref, err)
+		}
+	}
 	if _, err := s.StartChild(ctx, in); err != nil {
 		t.Fatal(err)
 	}
