@@ -395,20 +395,27 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 // carried by a briefing; such a message fails saying to send it again.
 // The caller holds the session's lock.
 func SessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error) {
-	return sessionHandOver(ctx, tx, ref, "")
+	return sessionHandOver(ctx, tx, ref, "", false)
 }
 
+// imagesNotPassedOn is the error of a message with images an ended
+// brainstorm never read and no live agent took (sessionHandOver).
+const imagesNotPassedOn = "the session's agent stopped before reading it; its images were not passed on; send it again"
+
 // sessionHandOver is SessionHandOver; a new agent it starts names retries
-// in its run.created (startBrainstorm).
-func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string) (string, error) {
+// in its run.created (startBrainstorm). With refused, it also hands on
+// what an earlier hand-over failed as imagesNotPassedOn and nothing has
+// sent again since: Try again's new Run is live, so they reach it.
+func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string, refused bool) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
 			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, ''), COALESCE(e.payload->>'text', '')
 		FROM directives d
 		LEFT JOIN LATERAL (SELECT e.actor_type, e.actor_id, e.payload FROM events e WHERE e.run_id = d.run_id
 			AND e.event_type IN ('chat.message', 'question.answered') AND e.payload->>'directiveId' = d.id
 			ORDER BY e.cursor LIMIT 1) e ON true
-		WHERE d.run_id = $1 AND d.delivered_at IS NULL AND d.failed_at IS NULL
-		ORDER BY d.created_at, d.id FOR UPDATE OF d`, ref.RunID)
+		WHERE d.run_id = $1 AND d.delivered_at IS NULL AND (d.failed_at IS NULL
+			OR ($2 AND d.error = $3 AND NOT EXISTS (SELECT 1 FROM directives s WHERE s.supersedes = d.id)))
+		ORDER BY d.created_at, d.id FOR UPDATE OF d`, ref.RunID, refused, imagesNotPassedOn)
 	if err != nil {
 		return "", err
 	}
@@ -445,7 +452,7 @@ func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string)
 				return "", err
 			}
 			if len(images) > 0 {
-				failed[d.ID] = "the session's agent stopped before reading it; its images were not passed on; send it again"
+				failed[d.ID] = imagesNotPassedOn
 				continue
 			}
 			if next, _, err = startBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, Opening{Message: d.Text, Shown: d.Shown}, retries, d.ID); err != nil {

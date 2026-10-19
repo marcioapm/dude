@@ -2071,6 +2071,25 @@ describe("Try again hands each unread message on as the directive it replaces, n
     ]);
   });
 
+  test("a message whose images were not passed on, then Try again carrying them: one turn, no longer failed, read once", () => {
+    const image = { id: "att_1", name: "plan.png", width: 10, height: 10, original: { bytes: 1 } };
+    const IMAGES = "the session's agent stopped before reading it; its images were not passed on; send it again";
+    const ledger = [
+      ...failedWith(() => [], () => [ev("chat.message", { text: "look", directiveId: "dir_img", attachments: [image] }, by(YOU))]),
+      // The syncer's hand-over found no agent to take the images; Try again's fresh agent then takes them.
+      settled("dir_img", IMAGES),
+      retried(),
+      on(ev("session.briefed", { text: "Brainstorm, …" })),
+      on(ev("chat.message", { text: "look", directiveId: "dir_copy", supersedes: "dir_img", attachments: [image] }, by(YOU))),
+      settled("dir_img"),
+    ];
+    expect(humans(ledger)).toEqual([[YOU, "look", "dir_copy", false, null]]);
+    const read = [...ledger, on(ev("agent.session.started", { role: "brainstorm" })), on(ev("run.directive.delivered", { directiveId: "dir_copy", read: true }))];
+    expect(humans(read)).toEqual([[YOU, "look", "dir_copy", true, null]]);
+    const shown = project(read, "running").turns.flatMap((t) => (t.kind === "human" ? t.attachments.map((a) => a.id) : []));
+    expect(shown).toEqual(["att_1"]);
+  });
+
   test("of two identical unread messages, the one refused for its images stays failed; the one handed on is read", () => {
     const image = { id: "att_1", name: "plan.png", width: 10, height: 10, original: { bytes: 1 } };
     const IMAGES = "the session's agent stopped before reading it; its images were not passed on; send it again";

@@ -135,7 +135,9 @@ var ErrRetryTaken = errors.New("a new agent already took the later messages")
 // syncer's hand-over would, its run.created naming the Run it retries too.
 // Either way messages sent to the failed one are
 // handed on after it (SessionHandOver), once: each is settled on the
-// failed Run as it is passed on. The caller holds the session's lock, as
+// failed Run as it is passed on. One that never ran also gets the messages
+// whose images the syncer's hand-over failed for want of an agent: its
+// briefing may say images follow. The caller holds the session's lock, as
 // the syncer's hand-over does; returns the new Run.
 func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer) (string, error) {
 	var latest, status, briefing string
@@ -154,7 +156,7 @@ func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 	}
 	failed := RunRef{Org: org, SessionID: sessionID, RunID: latest}
 	if ran {
-		next, err := sessionHandOver(ctx, tx, failed, latest)
+		next, err := sessionHandOver(ctx, tx, failed, latest, false)
 		if err == nil && next == "" {
 			err = ErrNothingToRetry
 		}
@@ -176,7 +178,7 @@ func RetryBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 	if err := SessionEvent(ctx, tx, ref, EvSessionBriefed, ledger.ActorSystem, "dude", map[string]any{"text": briefing}); err != nil {
 		return "", err
 	}
-	if _, err := SessionHandOver(ctx, tx, failed); err != nil {
+	if _, err := sessionHandOver(ctx, tx, failed, "", true); err != nil {
 		return "", err
 	}
 	return id, nil

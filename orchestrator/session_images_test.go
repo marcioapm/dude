@@ -392,6 +392,65 @@ func TestAFailedFreshAgentStartLeavesNoRunDirectiveOrImage(t *testing.T) {
 	s.nothingWrittenFor(id, "att_first")
 }
 
+// Try again on a first message with an image whose agent never started,
+// after the syncer failed its image directive for want of an agent: the
+// fresh agent's briefing still says images follow, and they do, as a copy
+// of that directive superseding it. lux gets the image once, and Chat shows
+// it once, on the copy.
+func TestTryAgainOnAFailedImageStartCarriesTheImage(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	id := s.session()
+	s.uploadToSession(b, "att_first", id, "first.png", screenshot)
+	s.lux.FailStarts("dude.session="+id, 1)
+	failed := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_first"}})["runId"].(string)
+	original := s.imageDirective(failed, "att_first")
+	s.until("the image directive failed for want of an agent", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, original) == 1
+	})
+	s.lux.Decide = hang
+	next := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/retry", nil)["runId"].(string)
+	if next == failed {
+		t.Fatalf("the retry is the failed Run %s", failed)
+	}
+	if p := s.prompt(next); !strings.Contains(p, "## The first message\n\nMárcio Martins: look\n\n[Images come with this message") {
+		t.Errorf("the retried briefing does not end with the message and its images note:\n%s", p)
+	}
+	// The copy carries the image by superseding the original with its words
+	// (DirectiveAttachments): the attachment row stays on the original.
+	var directive string
+	if err := s.owner.QueryRow(context.Background(), `SELECT d.id FROM directives d JOIN directives o ON o.id = d.supersedes
+		WHERE d.run_id = $1 AND o.id = $2 AND d.text = o.text`, next, original).Scan(&directive); err != nil {
+		t.Fatalf("no directive on the retry supersedes %s with its words: %v", original, err)
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1`, next); n != 1 {
+		t.Errorf("%d directives on the retry, want the image's one", n)
+	}
+	if n := s.count(`SELECT count(*) FROM attachments WHERE directive_id = $1 AND id = 'att_first'`, original); n != 1 {
+		t.Errorf("att_first is no longer the original directive's")
+	}
+	s.imageOnce(next, directive, "att_first")
+	// "send it again" is no longer the original's last word: the retry has it.
+	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND error = $2`, original,
+		"the session's agent stopped before reading it; the next one, "+next+", has it"); n != 1 {
+		t.Errorf("the original directive's error does not name the retry")
+	}
+	var lastError string
+	_ = s.owner.QueryRow(context.Background(), `SELECT payload->>'error' FROM events WHERE event_type = 'run.directive.failed'
+		AND payload->>'directiveId' = $1 ORDER BY cursor DESC LIMIT 1`, original).Scan(&lastError)
+	if !strings.HasSuffix(lastError, next+", has it") {
+		t.Errorf("the original's last run.directive.failed says %q, want the retry to have it", lastError)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'chat.message'
+		AND payload->'attachments' @> '[{"id":"att_first"}]'`, id); n != 2 {
+		t.Errorf("%d chat.message events show the image, want the original and its copy", n)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message' AND payload->>'text' = 'look'
+		AND payload->>'directiveId' = $2 AND payload->>'supersedes' = $3`, next, directive, original); n != 1 {
+		t.Errorf("Chat does not show the copy as the original message's turn")
+	}
+}
+
 // A model swap for a message with an image that fails at its last write,
 // session.model.applied (after the old agent is aborted and the fresh one
 // is started with the image), leaves the old agent live and untouched and
