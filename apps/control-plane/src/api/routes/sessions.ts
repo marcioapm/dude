@@ -29,6 +29,13 @@ const chatText = () => z.string().trim().min(1)
   .refine(withinChatBytes, `at most ${CHAT_MESSAGE_MAX_BYTES} bytes in UTF-8`);
 
 export const text = z.object({ text: chatText(), aside: z.boolean().optional() }).strict();
+// A session's message may carry images uploaded to it, and be images alone;
+// the orchestrator checks they are the session's and unsent.
+const sessionMessage = z.object({
+  text: z.string().trim().refine(withinChatBytes, `at most ${CHAT_MESSAGE_MAX_BYTES} bytes in UTF-8`),
+  aside: z.boolean().optional(),
+  attachmentIds: z.array(z.string().min(1)).max(6).optional(),
+}).strict().refine((m) => m.text.trim().length > 0 || (m.attachmentIds?.length ?? 0) > 0, "text or an image is required");
 // The question's form: one answer per question (picks and/or own words), a
 // note; the orchestrator checks them against what was asked. A task's Chat
 // takes them too.
@@ -116,7 +123,7 @@ export function registerSessionRoutes(router: Router): void {
   router.post("/v1/brainstorms", forward("POST", () => "/internal/sessions", create));
   router.get("/v1/brainstorms/:id", getBrainstorm);
   router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
-  router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), text));
+  router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), sessionMessage));
   // Try again on an agent that did not start: a fresh one with the message it was started for.
   router.post("/v1/brainstorms/:id/retry", forward("POST", at("/retry")));
   router.post("/v1/brainstorms/:id/questions/:question/answer",
