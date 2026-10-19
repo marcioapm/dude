@@ -467,6 +467,29 @@ func (w *world) ran(task string) []string {
 	return pending
 }
 
+// upTo runs task's delivery on, finishing each phase Run it starts as its
+// agent would (finished), until a Run of phase is pending: that one is left
+// for the syncer and the fake lux. Returns it.
+func (w *world) upTo(task, phase string) string {
+	w.t.Helper()
+	for range 20 {
+		w.advanced()
+		pending := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND status = 'pending'
+			ORDER BY created_at, id`, task)
+		if len(pending) == 0 {
+			w.t.Fatalf("no phase Run pending before a %s\n%s", phase, w.describeRuns())
+		}
+		for _, id := range pending {
+			if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND phase::text = $2`, id, phase) == 1 {
+				return id
+			}
+			w.finished(id)
+		}
+	}
+	w.t.Fatalf("no %s Run\n%s", phase, w.describeRuns())
+	return ""
+}
+
 // agentsDone runs task's delivery on, reading its pull requests from GitHub
 // before each pass (sync) and finishing each phase Run it starts as its
 // agent would (finished), until cond holds. What the delivery does with
