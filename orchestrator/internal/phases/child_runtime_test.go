@@ -647,49 +647,54 @@ func TestSessionChildSpecUsesReadOnlyLinkedRepositoriesAndNoSecrets(t *testing.T
 
 func TestSessionChildArtifactsAreSessionOwnedAndVersioned(t *testing.T) {
 	w := newResumeWorld(t)
-	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_artifacts', $1, 'Research')`, w.run.Org)
-	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role) VALUES ('run_brainstorm_art', $1, 'ssn_artifacts', 1, 'running', 'agent', 'brainstorm')`, w.run.Org)
+	session := "ssn_artifacts_" + w.run.Org
+	brainstorm := "run_brainstorm_art_" + w.run.Org
+	first, second, task := "run_art_one_"+w.run.Org, "run_art_two_"+w.run.Org, "run_task_art_"+w.run.Org
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ($1, $2, 'Research')`, session, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role) VALUES ($1, $2, $3, $4, 1, 'running', 'agent', 'brainstorm')`, brainstorm, w.run.Org, w.run.ProjectID, w.run.TaskID)
 	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role, source_kind, parent_run_id, parent_session_id, child_profile, child_capabilities)
-		SELECT id, $1, 'ssn_artifacts', 1, 'running', 'investigate', 'investigator', 'session', 'run_brainstorm_art', 'ssn_artifacts', 'investigator', '{}'::jsonb FROM unnest(ARRAY['run_art_one','run_art_two']) id`, w.run.Org)
-	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role) VALUES ('run_task_art', $1, $2, $3, 1, 'completed', 'investigate', 'investigator')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+		SELECT id, $1, $2, 1, 'running', 'investigate', 'investigator', 'session', $3, $2, 'investigator', '{}'::jsonb FROM unnest($4::text[]) id`, w.run.Org, session, brainstorm, []string{first, second})
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role) VALUES ($1, $2, $3, $4, 1, 'completed', 'investigate', 'investigator')`, task, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	// Isolate recordArtifact's owner attribution from the legacy run-derived trigger.
+	w.exec(`ALTER TABLE events DISABLE TRIGGER events_session_of_run`)
 	record := func(run, storage, sha string) {
 		t.Helper()
 		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
-			return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, SessionID: "ssn_artifacts", ID: run}, lux.Artifact{ID: storage, Path: lux.PublishedPrefix + "design.md", SHA256: sha, Available: true})
+			return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, SessionID: session, ID: run}, lux.Artifact{ID: storage, Path: lux.PublishedPrefix + "design.md", SHA256: sha, Available: true})
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	record("run_art_one", "artifact_one", "sha-one")
-	record("run_art_two", "artifact_two", "sha-two")
+	record(first, "artifact_one_"+w.run.Org, "sha-one")
+	record(second, "artifact_two_"+w.run.Org, "sha-two")
 	var eventSession *string
 	var correlation string
-	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, "run_art_one").Scan(&eventSession, &correlation); err != nil {
+	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, first).Scan(&eventSession, &correlation); err != nil {
 		t.Fatal(err)
 	}
-	if eventSession == nil || *eventSession != "ssn_artifacts" || correlation != "ssn_artifacts" {
+	if eventSession == nil || *eventSession != session || correlation != session {
 		t.Fatalf("session artifact event attribution: session=%v correlation=%q", eventSession, correlation)
 	}
 	var count int
-	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE r.session_id='ssn_artifacts' AND a.name='design.md'`).Scan(&count); err != nil {
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE r.session_id=$1 AND a.name='design.md'`, session).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 2 {
 		t.Fatalf("session artifact copies: %d", count)
 	}
 	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
-		return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, ID: "run_task_art"}, lux.Artifact{ID: "task_storage", Path: lux.PublishedPrefix + "design.md", SHA256: "task-sha", Available: true})
+		return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, ID: task}, lux.Artifact{ID: "task_storage_" + w.run.Org, Path: lux.PublishedPrefix + "design.md", SHA256: "task-sha", Available: true})
 	}); err != nil {
 		t.Fatal(err)
 	}
 	var artifactSessionID, artifactTaskID *string
-	if err := w.owner.QueryRow(w.ctx, `SELECT a.session_id, r.task_id FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE a.storage_key='task_storage'`).Scan(&artifactSessionID, &artifactTaskID); err != nil {
+	if err := w.owner.QueryRow(w.ctx, `SELECT a.session_id, r.task_id FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE a.storage_key=$1`, "task_storage_"+w.run.Org).Scan(&artifactSessionID, &artifactTaskID); err != nil {
 		t.Fatal(err)
 	}
 	if artifactSessionID != nil || artifactTaskID == nil || *artifactTaskID != w.run.TaskID {
 		t.Fatalf("task artifact ownership: session=%v task=%v", artifactSessionID, artifactTaskID)
 	}
-	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, "run_task_art").Scan(&eventSession, &correlation); err != nil {
+	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, task).Scan(&eventSession, &correlation); err != nil {
 		t.Fatal(err)
 	}
 	if eventSession != nil || correlation != w.run.TaskID {
