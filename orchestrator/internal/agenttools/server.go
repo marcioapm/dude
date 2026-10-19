@@ -37,6 +37,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -76,6 +77,8 @@ type Server struct {
 
 // Caller is the Run a token names: who is calling, and all it may reach.
 type Caller struct {
+	CallID                                      string
+	Child                                       bool
 	RunID, Org, ProjectID, TaskID, Role, Status string
 	// A session's agent: its session, in place of a task and project.
 	SessionID string
@@ -166,6 +169,25 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, httpInternalError, http.StatusInternalServerError)
 			return
 		}
+		caller.CallID = r.Header.Get("X-Dude-Tool-Call-ID")
+		if r.Method == http.MethodPost && r.URL.Path == "/" {
+			body, err := io.ReadAll(io.LimitReader(r.Body, maxInput+1))
+			if err != nil || len(body) > maxInput {
+				http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var envelope struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if json.Unmarshal(body, &envelope) == nil && envelope.Method == "tools/call" && len(envelope.ID) > 0 {
+				caller.CallID = "mcp:" + string(envelope.ID)
+			}
+		}
+		if caller.CallID == "" {
+			caller.CallID = ids.New("call")
+		}
 		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	})
 }
@@ -186,7 +208,7 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []entry{}
 	for _, t := range allTools() {
-		if t.allowed(c.Role) {
+		if t.allowed(c.Role) && (!c.Child || childToolAllowed(t.name)) {
 			out = append(out, entry{t.name, s.descriptionFor(r.Context(), c, t)})
 		}
 	}
@@ -236,8 +258,8 @@ type callerKey struct{}
 
 var errUnknown = errors.New("unknown token")
 
-// lookup finds the live Run a token names. A Run that has ended — finished,
-// failed, aborted — has no tools.
+// lookup finds the Run a token names, and whether it is a started child. The
+// handler refuses an ended Run's tools, except the final hooks' diff bases.
 func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	var c Caller
 	var role *string
@@ -253,7 +275,10 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	if role != nil {
 		c.Role = *role
 	}
-	return c, nil
+	err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child)
+	})
+	return c, err
 }
 
 var serverInstructions = delivery.ToolText("common/server-instructions", nil)
@@ -265,7 +290,7 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 		Instructions: serverInstructions,
 	})
 	for _, t := range allTools() {
-		if !t.allowed(c.Role) {
+		if !t.allowed(c.Role) || c.Child && !childToolAllowed(t.name) {
 			continue
 		}
 		handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -531,6 +556,18 @@ const (
 // transaction as what the tool did (for a tool split by outside, the
 // transaction recording what it did outside).
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
+	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		var child bool
+		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&child); err != nil {
+			return err
+		}
+		if child && !childToolAllowed(t.name) {
+			return refuseText(rChildToolsReadOnly)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
 		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait)}
@@ -606,6 +643,9 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil || t.outside == nil {
+		if err == nil && t.name == "start_agent" && s.Kick != nil {
+			s.Kick()
+		}
 		return out, err
 	}
 	done, err := t.outside(ctx, c, checked)
@@ -632,6 +672,14 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	return out, err
 }
 
+func childToolAllowed(name string) bool {
+	switch name {
+	case "list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event":
+		return true
+	}
+	return false
+}
+
 // recordRefusal records what a refused call says of itself, once the
 // call's own transaction is gone.
 func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) {
@@ -642,6 +690,9 @@ func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused re
 		}
 		if refused.blocked != nil {
 			return delivery.RecordStartRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", ledger.ActorAgent, c.RunID, refused.blocked.Blockers)
+		}
+		if refused.lifecycle != "" {
+			return delivery.RecordLifecycleRefusedTx(ctx, tx, c.Org, c.TaskID, "start_phase", refused.lifecycle, ledger.ActorAgent, c.RunID)
 		}
 		return nil
 	}); logged != nil {
@@ -688,6 +739,8 @@ type refusal struct {
 	code    string
 	event   *refusedEvent
 	blocked *delivery.BlockedError
+	// A start refused as archived or closed: its reason.
+	lifecycle string
 }
 
 type refusedEvent struct {

@@ -81,6 +81,15 @@ func TestGoldenDeliveryLines(t *testing.T) {
 	add("blocked-agent", blocked.AgentRefusal())
 	add("not-a-peer", NotAPeer("GLD-9"))
 	add("relation-line", RelationLine(rels))
+	add("relation-line-duplicate", RelationLine(&TaskRelationsOut{DuplicateOf: "GLD-8"}))
+	add("relation-line-duplicated-by", RelationLine(&TaskRelationsOut{DuplicatedBy: []string{"GLD-9", "GLD-10"}}))
+	duplicateRels := *rels
+	duplicateRels.DuplicateOf, duplicateRels.DuplicatedBy = "GLD-8", []string{"GLD-9"}
+	add("relation-line-all", RelationLine(&duplicateRels))
+	add("lifecycle-archived", ArchivedError{TaskKey: "GLD-7"}.Error())
+	add("lifecycle-closed", ClosedError{TaskKey: "GLD-7", Resolution: ResolutionDuplicate}.Error())
+	add("lifecycle-pick-up", ClosedError{TaskKey: "GLD-7", PickUp: true}.Error())
+	add("lifecycle-agent", agentLifecycleRefusal(ArchivedError{TaskKey: "GLD-7"}))
 	add("external-text-note", ExternalTextNote)
 	add("github-read-note", GitHubReadNote("abc"))
 	add("talk-it-through", TalkItThrough)

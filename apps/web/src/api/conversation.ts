@@ -330,6 +330,8 @@ export interface EndedTurn {
   why: string | null;
   /** A start that failed before the agent ran: where it was, as the row showed it. lux's reason is `why`. */
   start?: StartState;
+  /** A repository's setup script failed it: which, its exit code, and the end of its output. */
+  setup?: SetupFailure;
   /** That start was tried again: a fresh agent took its message. */
   retried?: boolean;
   /** A later agent took what it left without Try again (the hand-over, a next message): nothing is left to try again. */
@@ -360,8 +362,26 @@ export interface StartState {
   done: Array<{ stage: StartStage; tookMs: number }>;
   /** lux's reason with its latest stage (why it waits for a machine), when it gave one. */
   luxReason: string | null;
-  /** It failed in `stage`: lux's raw reason, or dude's own sentence (`run.failed`'s error) when lux gave none. */
-  failed: { reason: string | null; source: "lux" | "dude" } | null;
+  /**
+   * It failed in `stage`: lux's raw reason, or dude's own sentence (`run.failed`'s error) when lux gave none or when a
+   * repository's setup script failed it (lux's own words are then only "exit code N"); `setup` says which and what it printed.
+   */
+  failed: { reason: string | null; source: "lux" | "dude"; setup?: SetupFailure } | null;
+}
+
+/** A repository's setup script that failed a Run: `run.failed`'s `setup`, as the orchestrator records it. */
+export interface SetupFailure {
+  repository: string;
+  exitCode: number;
+  /** The end of what the script printed, secrets redacted. */
+  output: string;
+}
+
+function setupFailure(value: unknown): SetupFailure | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.repository !== "string" || typeof v.exitCode !== "number") return null;
+  return { repository: v.repository, exitCode: v.exitCode, output: typeof v.output === "string" ? v.output : "" };
 }
 
 export type Turn =
@@ -1567,6 +1587,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           by: failed ? null : humanActor(event),
           why: why || null,
         };
+        const setup = failed ? setupFailure(payload.setup) : null;
+        if (setup) ended.setup = setup;
         // A start that failed before the agent ran: the row's stages, failed in the one it was in, with lux's own reason.
         // A move whose Run failed at its stop (park: a resumePolicy that does not resume it) never began a start.
         const starting = state.start;
@@ -1574,7 +1596,13 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (failed && starting && payload.kept !== true && stage !== "park") {
           if (stage) enterStage(starting, stage, event.occurredAt);
           const luxReason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason : null;
-          starting.failed = luxReason ? { reason: luxReason, source: "lux" } : { reason: ended.why, source: "dude" };
+          if (setup) {
+            starting.failed = { reason: ended.why, source: "dude", setup };
+          } else if (luxReason) {
+            starting.failed = { reason: luxReason, source: "lux" };
+          } else {
+            starting.failed = { reason: ended.why, source: "dude" };
+          }
           ended.start = starting;
           // Only the wake's own first start, or a move of it before the agent ran: a woken conductor that ran and then
           // failed resuming for a person's message keeps Try again.

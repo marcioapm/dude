@@ -955,6 +955,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   small-caps headers, epics carry the layers glyph and a total, tasks
   lead with a status dot and a mono key, agent sessions sit on a guide line behind
   a role avatar. A tree four deep still reads in grayscale.
+  The epic's glyph leads its row, after the chevron, as in `Breadcrumb` and
+  the board's lane header; a task row never draws it.
 - Default open state is derived from triage and never needs three clicks: a
   project opens if anything inside is counted; an epic if anything needs you
   or is active; a task only if it needs you, down to the asking
@@ -1059,6 +1061,37 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   epic keeps its row so its position stays visible. Cards drop their epic
   line; ↑↓ walk a column across rows. The header's "…" is the app's
   `RowMenu` via `laneMenu`.
+- **Archived tasks are not on the board**; the header's quiet "3 archived"
+  (`archivedHint`, the app's link) opens the archived list. A closed task
+  in Closed says its resolution on its marks line (`ResolutionMark`), and
+  its foot says "closed" where a stopped one says "stopped".
+
+### Lifecycle (closed, archived)
+
+- **Closed, archived.** Neutral, muted, never a tone: neither needs anyone.
+  A closed task's resolution (`ResolutionMark`, a neutral small badge: Won't
+  do, Duplicate of CP-62, Can't reproduce, Nothing to merge) sits beside its
+  status, which still says what delivery did. `ArchivedMark` is the
+  `archive` glyph and "Archived" in muted ink.
+- **The task's `…` menu carries the lifecycle** (`lifecycleMenuItems`):
+  Close… (Reopen on a closed task), Archive… (Unarchive on an archived one),
+  each shown to everyone and disabled with its reason, checked in order:
+  who may not ("Only Ana, the owner, or an admin can do this"), agents
+  working ("Stop its agents first"), a pull request open ("It has a pull
+  request open": `review` or `ready_to_merge`, or `pullRequestOpen` on any
+  other status), then the task's own state ("Already ended"; "Unarchive it
+  first, then reopen it").
+- **`CloseDialog`** is the decision: four resolutions as a `ChoiceList`, two
+  disabled with why (Nothing to merge is Mark done's; Can't reproduce where
+  the caller says so). Duplicate opens a `SearchPicker` that refuses the task
+  itself and a duplicate ("pick that one") and says what the handover does.
+  Any other resolution with something waiting on the task says it keeps
+  waiting, with **Remove the relation**. `andArchive` makes it Close and
+  archive: nothing chosen, one primary that does both. `refused` disables the
+  primary with whose decision it is.
+- **`ArchiveDialog`** is the plain confirmation for an ended task; Keep it
+  holds the focus. **`ArchiveEpicDialog`** refuses an epic with unended
+  tasks, listing them, and offers to archive its ended ones.
 
 ### Task relations (blocked by, blocks, related)
 
@@ -1090,6 +1123,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - `RelationList` groups a task's relations as Blocked by, Blocks, Related;
   a settled blocker stays listed, struck through as merged. A row its reader
   may not remove says whose it is (`removeHint`) instead of a disabled ✕.
+  A closed duplicate adds **Duplicate of** / **Duplicated by** (`copy`
+  glyph): Close writes them and Reopen removes them, so their rows are never
+  removable, and a group's `note` says the handover under it ("CP-63's
+  blocking came here with it: CP-47 now waits on CP-62.").
   `RelationPicker` refuses a loop and names it ("That would make a loop:
   CP-40 → CP-41 → CP-40"), offering Make it Related instead. Its search
   takes the focus when it opens; the gallery passes `autoFocus={false}`, so its
@@ -1809,6 +1846,17 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   (its name and version; its line count and what won't build), and what is
   added after the text — the dude layer — read-only on the sunken shade
   under it, told apart by shade.
+- **A repository's setup script is its own document**, opened from
+  `Setup script…` in the repository's `RowMenu` or from the
+  `SetupScriptMark` after its name; the repository's own dialog stays its
+  four fields. The script is a `CodeEditor language="shell"` with a
+  `placeholder` and `maxLines`, its footer the line count, any warning
+  count and a `SizeMeter` against the server's limit; Save is disabled
+  over the limit, and a cleared script saves as none. A line that moves
+  git's hooks away from dude's (`core.hooksPath`, `--no-verify`,
+  `HUSKY=0`) is a warning diagnostic, never a block. A reader (no row
+  menu) opens the mark and reads it read-only with Close. Gallery:
+  Settings → Repository setup script (`#s-repository-setup-script`).
 - **The builder's queue is a `BuildQueueStrip`** over the images list, on
   the chrome shade: what builds now with the live dot, how many wait and
   which, Open, and the limits every build has on the right ("Rootless ·
@@ -1925,6 +1973,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<RelationChip kind="blocked-by" tasks={…} />` under a card's title; `<StartGate>` in the task header while blocked | `<Badge tone="attention">Blocked</Badge>`, or a disabled Deliver with no reason |
 | `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
+| `<SetupScriptMark repository="api" lines={9} action="view" />` after the name, and `<SizeMeter bytes={n} limit={max} />` in the editor's footer | a wide Setup column, a coloured "has script" badge, or a byte count in a tone that never changes |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
 | `<ProposalCard items={…} />` and let it fold once nothing is yours to file; merge it into the Chat by instant | a card whose unfiled items are all someone else's kept full size, or placed by the text of its time; a "Nothing to file" button; an item nobody can file folded away as "for others" |
 | New session opens `Welcome`; its first send makes the session with the message and its links | a click that makes an empty, untitled session |
@@ -2241,6 +2290,21 @@ MarkdownCheatsheet.
 - **CodeEditor** — CodeMirror 6, lazy: `language`, `diagnostics`,
   `complete`, `header`, `after` (read-only, under the text) and `footer`.
   `CodeEditorCore` is the chunk it loads; nothing imports it directly.
+  `language` is `dockerfile`, `shell` or `plain`; `shell` uses the legacy
+  shell stream parser and is for short bash scripts. `placeholder` is muted
+  guidance, never a submitted value. `maxLines` caps the text viewport so a
+  long document keeps its header and footer visible; content scrolls inside
+  the frame after the cap.
+- **SetupScriptMark** — a repository that has a setup script: a terminal
+  glyph and `setup` on the raised shade after its name (shadow in light).
+  It is a button because it opens the script for both editors and readers;
+  its accessible label says the repository, the action (`edit` | `view`)
+  and the line count. It is not a status colour, and absent when there is
+  no script. `textLines` counts the lines it names.
+- **SizeMeter** — a code document footer's tabular byte count against a
+  caller-supplied `limit` ("284 B of 16 KB", `formatBytes`). It changes to
+  attention past 90% of the limit and danger over it (`sizeLevel`); the
+  caller owns validation and the save action.
 - **ImagePicker / ImageMark / ImageStatusBadge / CanRunContainersBadge** —
   the image combobox, an image's cube mark, a newer version's state as a
   badge, and "Can run containers" (`size` `sm` | `md`, `lower` for the

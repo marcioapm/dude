@@ -10,7 +10,7 @@ import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { click, emitForTest, mount, settle, until } from "./dom.ts";
 import { EventTypes, type SessionsList } from "@dude/domain";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PROJECT, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
+import { EPIC, PROJECT, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { ApiError, type RunDetail } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
@@ -101,6 +101,90 @@ describe("an epic's page reads its open waits cheaply", () => {
     await until(() => page.querySelector("[data-testid=coordination]"), "the Coordination view");
     await settle();
     expect(calls.threads).toBe(1);
+  });
+});
+
+describe("epic archive navigation", () => {
+  async function archiveClient(allEnded = false) {
+    const client = new FixtureClient("a");
+    let tree = await client.navigation();
+    const endTasks = () => {
+      tree = { projects: tree.projects.map((p) => ({ ...p, epics: p.epics?.map((e) => e.id === EPIC.id
+        ? { ...e, tasks: e.tasks.map((t) => ({ ...t, status: "done" as const, runs: [] })) } : e) })) };
+    };
+    if (allEnded) endTasks();
+    client.navigation = async () => tree;
+    const overview = client.projectOverview.bind(client);
+    client.projectOverview = async () => {
+      const result = await overview();
+      const live = tree.projects.find((p) => p.id === PROJECT.id)?.epics ?? [];
+      return { ...result, epics: result.epics.filter((e) => live.some((l) => l.id === e.id)) };
+    };
+    client.archiveEpic = async (id, withEndedTasks = false) => {
+      const epic = tree.projects.flatMap((p) => p.epics ?? []).find((e) => e.id === id)!;
+      const ended = epic.tasks.filter((t) => t.status === "done");
+      if (!withEndedTasks && ended.length !== epic.tasks.length) throw new ApiError(409, "not_ended", "Unfinished tasks remain.");
+      const archived = ended.length === epic.tasks.length;
+      tree = { projects: tree.projects.map((p) => ({ ...p, epics: p.epics?.filter((e) => e.id !== id || !archived)
+        .map((e) => e.id === id ? { ...e, tasks: e.tasks.filter((t) => !ended.includes(t)) } : e) })) };
+      return { archived, tasks: ended.map((t) => t.id) };
+    };
+    return { client, endTasks };
+  }
+
+  async function openArchive(page: HTMLElement) {
+    await click(await until(() => page.querySelector("[data-testid=archive-epic-button]"), "the epic archive action"));
+    return until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the archive dialog");
+  }
+
+  test("subset archive stays on the exact epic route and refreshes its unfinished tasks and count", async () => {
+    const { client } = await archiveClient();
+    const page = await app(`#/epic/${EPIC.id}`, client);
+    const board = await until(() => page.querySelector<HTMLElement>(`[aria-label="${EPIC.title} board"]`), "the epic board");
+    expect(board.textContent).toContain("Done1");
+    expect(board.textContent).toContain("Cart summary: show tax breakdown");
+    const dialog = await openArchive(page);
+    await click(dialog.querySelector("[data-testid=archive-ended]")!);
+    await until(() => document.querySelector("[role=dialog]") ? null : true, "the archive dialog closed");
+    expect(window.location.hash).toBe(`#/epic/${EPIC.id}`);
+    await until(() => board.textContent?.includes("Done0") ? true : null, "the refreshed ended-task count");
+    expect(board.textContent).not.toContain("Cart summary: show tax breakdown");
+    for (const title of ["Address form: autocomplete with Places", "Checkout v2: split payment step", "Payment step: Apple Pay fallback", "Order confirmation e-mail template", "Analytics: checkout funnel events"]) {
+      expect(board.textContent).toContain(title);
+    }
+    expect(page.querySelector("[data-testid=epic-screen]")).not.toBeNull();
+  });
+
+  for (const allEnded of [true, false]) {
+    test(`actual full archive redirects to the project and removes the epic (${allEnded ? "all ended" : "ended while dialog open"})`, async () => {
+      const { client, endTasks } = await archiveClient(allEnded);
+      const page = await app(`#/epic/${EPIC.id}`, client);
+      const dialog = await openArchive(page);
+      const archive = client.archiveEpic.bind(client);
+      if (!allEnded) endTasks();
+      const requests: boolean[] = [];
+      client.archiveEpic = (id, withEndedTasks) => { requests.push(withEndedTasks ?? false); return archive(id, withEndedTasks); };
+      await click(dialog.querySelector(`[data-testid=${allEnded ? "archive-confirm" : "archive-ended"}]`)!);
+      await until(() => document.querySelector("[role=dialog]") ? null : true, "the archive dialog closed");
+      expect(requests).toEqual([!allEnded]);
+      expect(window.location.hash).toBe(`#/project/${PROJECT.id}`);
+      await until(() => page.querySelector(`[aria-label="${PROJECT.name} board"]`), "the project board");
+      expect(page.querySelectorAll("[data-testid=epic-screen]").length).toBe(0);
+      await until(() => page.querySelector(`[data-epic="${EPIC.id}"]`) ? null : true, "the archived epic removed from navigation and project list");
+      expect(page.querySelectorAll(`[data-epic="${EPIC.id}"]`).length).toBe(0);
+    });
+  }
+
+  test("a rejected archive keeps the route, dialog, error and task count", async () => {
+    const { client } = await archiveClient();
+    client.archiveEpic = async () => { throw new ApiError(409, "conflict", "The epic changed. Try again."); };
+    const page = await app(`#/epic/${EPIC.id}`, client);
+    const dialog = await openArchive(page);
+    await click(dialog.querySelector("[data-testid=archive-ended]")!);
+    await until(() => dialog.textContent?.includes("The epic changed. Try again.") ? true : null, "the archive error");
+    expect(window.location.hash).toBe(`#/epic/${EPIC.id}`);
+    expect(document.querySelector("[role=dialog]")).toBe(dialog);
+    expect(page.querySelector(`[aria-label="${EPIC.title} board"]`)?.textContent).toContain("Done1");
   });
 });
 

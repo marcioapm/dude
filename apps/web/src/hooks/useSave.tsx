@@ -54,8 +54,8 @@ export interface FormDialogProps {
   description?: ReactNode;
   /** Above the title: where the thing sits (a `Breadcrumb size="sm"`). */
   context?: ReactNode;
-  /** `document`: writing one document, with `aside` beside the fields. */
-  size?: "sm" | "md" | "document";
+  /** `document`: writing one document, with `aside` beside the fields; `lg`: one wide field (a script). */
+  size?: "sm" | "md" | "lg" | "document";
   /** `document` only: the column beside the fields — where it sits, help for writing it. */
   aside?: ReactNode;
   asideLabel?: string;

@@ -23,6 +23,7 @@
   "suites/test_hierarchy.py": 2.8,
   "suites/test_image_containers.py": 81.5,
   "suites/test_images.py": 26.8,
+  "suites/test_lifecycle.py": 1.7,
   "suites/test_live.py": 25.6,
   "suites/test_lux_contract.py": 0.0,
   "suites/test_lux_replay_contract.py": 0.0,

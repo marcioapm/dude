@@ -1231,6 +1231,63 @@ body {
   gap: var(--ds-space-4);
   color: var(--ds-color-accent-text);
 }
+/* A repository's setup script dialog: the editor, then its warnings and what running it means. */
+.setupScriptBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.setupScriptSpacer {
+  flex: 1;
+}
+.setupScriptWarnCount {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-tone-attention-fg);
+}
+.setupScriptOver {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-danger-fg);
+}
+.setupScriptWarnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.setupScriptWarnings > li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-6);
+}
+.setupScriptWarnings svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ds-tone-attention-fg);
+}
+.setupScriptHelp {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  line-height: 1.45;
+  color: var(--ds-color-text-secondary);
+}
+.setupScriptFails {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-6);
+}
+.setupScriptFails > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ds-color-text-muted);
+}
 .buildFix {
   margin: calc(-1 * var(--ds-space-8)) 0 var(--ds-space-8);
   font-size: var(--ds-text-sm);
@@ -1627,4 +1684,44 @@ body {
   gap: 2px;
   font-size: var(--ds-text-xs);
   color: var(--ds-color-text-secondary);
+}
+/* The board's archived list: one row per archived epic or task. */
+.archivedList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.archivedList li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.archivedLead {
+  color: var(--ds-color-text-muted);
+}
+.archivedTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--ds-color-text-secondary);
+}
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.linkish:hover {
+  color: var(--ds-color-text-primary);
+  text-decoration: underline;
 }

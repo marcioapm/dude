@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	s.githubRoutes(mux)
 	s.sourceRoutes(mux)
 	s.recoverRoutes(mux)
+	s.lifecycleRoutes(mux)
 	s.stallRoutes(mux)
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
@@ -599,12 +600,11 @@ func ownerOnly(ctx context.Context, tx pgx.Tx, taskID, personID, verb string) er
 }
 
 // taskOwner is the task's first active ordered member; nil when it has none.
+// The owner's id first, then its name by key: a join on the subquery loses
+// people_pkey under row-level security.
 func taskOwner(ctx context.Context, tx pgx.Tx, taskID string) (id, name *string, err error) {
-	err = tx.QueryRow(ctx, `SELECT owner.id, owner.name FROM tasks t
-		LEFT JOIN LATERAL (SELECT p.id, p.name FROM task_people tp JOIN people p ON p.id = tp.person_id
-			WHERE tp.task_id = t.id AND p.removed_at IS NULL
-			ORDER BY tp.position, tp.person_id LIMIT 1) owner ON true
-		WHERE t.id = $1`, taskID).Scan(&id, &name)
+	err = tx.QueryRow(ctx, `SELECT o.pid, (SELECT name FROM people WHERE id = o.pid)
+		FROM (SELECT `+delivery.TaskOwnerOf+` AS pid FROM tasks t WHERE t.id = $1) o`, taskID).Scan(&id, &name)
 	return id, name, err
 }
 
@@ -966,6 +966,28 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 	var taskID string
 	conductor := false
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		var source, childTask string
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(source_kind,''), COALESCE(task_id,'') FROM runs WHERE id=$1`, runID).Scan(&source, &childTask); err != nil {
+			if db.IsNotFound(err) {
+				return fail(http.StatusNotFound, "not_found", "run %s not found", runID)
+			}
+			return err
+		}
+		if childTask != "" {
+			if err := delivery.LockChat(r.Context(), tx, childTask); err != nil {
+				return err
+			}
+		}
+		if source != "" {
+			if err := delivery.LockChat(r.Context(), tx, childTask); err != nil {
+				return err
+			}
+			if err := ownerOnly(r.Context(), tx, childTask, principalOf(r).Person, "abort"); err != nil {
+				return err
+			}
+			conductor = true
+			return refusal(delivery.AbortChildTx(r.Context(), tx, childTask, runID))
+		}
 		ri, err := loadRun(r.Context(), tx, runID)
 		if err != nil {
 			return err
@@ -992,6 +1014,9 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 				control_reason = $2, ended_at = now() WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
 				return err
 			}
+			if _, err := tx.Exec(r.Context(), `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false WHERE parent_run_id=$1 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, runID); err != nil {
+				return err
+			}
 			return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", principalOf(r), map[string]any{"reason": db.Nullable(body.Reason)})
 		}
 		// The step it is part of stops with it — the reviewers beside it, the
@@ -1000,7 +1025,7 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		// Kept: one lux has (keep has no meaning for one it never had).
 		rows, err := tx.Query(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
 			control_reason = $3, ended_at = now(), keep = lux_run_id IS NOT NULL
-			WHERE (id = $1 OR task_id = $2 AND kind = 'agent' AND phase IS NOT NULL)
+			WHERE (id = $1 OR task_id = $2 AND kind = 'agent' AND phase IS NOT NULL) AND source_kind IS NULL
 			  AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
 			RETURNING id`,
 			runID, ri.TaskID, db.Nullable(body.Reason))
@@ -1200,8 +1225,14 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		}
 		// Who marked it done goes with the move: a task it blocks is told
 		// it still blocks, and by whom it was marked done.
-		_, err = delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
+		moved, err := delivery.SetTaskStatusTx(delivery.ActingPerson(r.Context(), principalOf(r).Person), tx, org, projectID, id,
 			"review", "done", "marked done by "+actor(r))
+		if err != nil || !moved {
+			return err
+		}
+		// Done with nothing merged has its name (tracking-work.md, "Close, and resolutions").
+		_, err = tx.Exec(r.Context(), `UPDATE tasks t SET resolution = 'nothing_to_merge' WHERE t.id = $1
+			AND NOT EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = t.id AND pr.state = 'merged')`, id)
 		return err
 	})
 	if err != nil {

@@ -43,8 +43,10 @@ export interface CodeCompletionContext {
 export interface CodeEditorProps {
   readonly value: string;
   readonly onChange?: ((value: string) => void) | undefined;
-  /** `dockerfile` for a Containerfile; `plain` for none. */
-  readonly language?: "dockerfile" | "plain" | undefined;
+  /** `dockerfile` for a Containerfile; `shell` for a bash script; `plain` for none. */
+  readonly language?: "dockerfile" | "shell" | "plain" | undefined;
+  /** Muted guidance while the text is empty; never a value. */
+  readonly placeholder?: string | undefined;
   /** Marked in place, and in the gutter; recomputed by the caller on change. */
   readonly diagnostics?: ReadonlyArray<CodeDiagnostic> | undefined;
   /** What Ctrl-Space (and typing) offers at the cursor; null for nothing. */
@@ -60,6 +62,8 @@ export interface CodeEditorProps {
   readonly footer?: ReactNode;
   /** The least the text area is, in lines. */
   readonly minLines?: number | undefined;
+  /** The most the text area grows to, in lines; past it the text scrolls inside the frame. */
+  readonly maxLines?: number | undefined;
   readonly className?: string | undefined;
   readonly "data-testid"?: string | undefined;
 }
@@ -67,24 +71,34 @@ export interface CodeEditorProps {
 const Core = lazy(() => import("./CodeEditorCore.tsx"));
 
 /**
+ * What the text area shows while the editor's chunk loads: the text's
+ * lines as a skeleton, busy for assistive tech. Once the chunk has loaded
+ * in this page, CodeEditor no longer passes through it.
+ */
+export function CodeEditorLoading({ label, lines }: { readonly label: string; readonly lines: number }) {
+  return (
+    <div className={styles["loading"]} aria-busy="true" aria-label={`${label}, loading`}>
+      <SkeletonLines lines={Math.min(lines, 12)} />
+    </div>
+  );
+}
+
+/**
  * A framed code editor. The frame (header, the dude layer under the text,
  * the footer) is drawn at once; the text area is CodeMirror, loaded the
  * first time an editor renders.
  */
 export function CodeEditor(props: CodeEditorProps) {
-  const { header, after, footer, className, minLines = 12, value } = props;
-  const lines = Math.max(minLines, value.split("\n").length);
+  const { header, after, footer, className, minLines = 12, maxLines, value } = props;
+  const lines = Math.min(Math.max(minLines, value.split("\n").length), maxLines ?? Infinity);
   return (
     <div className={cx(styles["frame"], className)} data-testid={props["data-testid"]}>
       {header ? <div className={styles["header"]}>{header}</div> : null}
-      <div className={styles["text"]} style={{ minHeight: `calc(${minLines} * var(--ds-code-line))` }}>
-        <Suspense
-          fallback={
-            <div className={styles["loading"]} aria-busy="true" aria-label={`${props["aria-label"]}, loading`}>
-              <SkeletonLines lines={Math.min(lines, 12)} />
-            </div>
-          }
-        >
+      <div className={styles["text"]} style={{
+        minHeight: `calc(${minLines} * var(--ds-code-line))`,
+        ...(maxLines ? { maxHeight: `calc(${maxLines} * var(--ds-code-line) + 2 * var(--ds-space-8))` } : {}),
+      }}>
+        <Suspense fallback={<CodeEditorLoading label={props["aria-label"]} lines={lines} />}>
           <Core {...props} />
         </Suspense>
       </div>

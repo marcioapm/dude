@@ -61,3 +61,7 @@ mRunNotFound                          refusals/domain/steer/run-not-found
 mRunBranchPreviewNotAgent             refusals/domain/steer/run-branch-preview-not-agent
 mRunAndCanNoLongerBe                  refusals/domain/steer/run-and-can-no-longer-be
 mMessageSentAgainCarriesImagesHad     refusals/domain/steer/message-sent-again-carries-images-had
+mLifecycleArchived                    refusals/domain/lifecycle/archived
+mLifecycleClosedPickUp                refusals/domain/lifecycle/closed-pick-up
+mLifecycleClosed                      refusals/domain/lifecycle/closed
+mLifecycleAgent                       refusals/domain/lifecycle/agent

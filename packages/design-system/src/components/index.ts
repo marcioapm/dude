@@ -73,6 +73,10 @@ export { ComposerLinks, RECENT_SESSIONS_SHOWN, RecentSessions, StarterPills, WEL
 export type { ComposerLinksProps, LinkableProject, RecentSession, RecentSessionsProps, Starter, StarterPillsProps, WelcomeProps } from "./Welcome.tsx";
 export { Board } from "./Board.tsx";
 export type { BoardProps, BoardCardStartFocus } from "./Board.tsx";
+export { ArchiveDialog, ArchiveEpicDialog, ArchivedMark, CloseDialog, ResolutionMark, lifecycleMenuItems } from "./Lifecycle.tsx";
+export type {
+  ArchiveDialogProps, ArchiveEpicDialogProps, CloseDecision, CloseDialogProps, LifecycleMenuOptions, LifecycleTask, LifecycleTaskRef, ResolutionMarkProps,
+} from "./Lifecycle.tsx";
 export {
   AutoStartMark, DependencyStrip, HOW_LABEL, RelationChip, RelationList, RelationRow, StartGate, StartMenu,
   blockedReason, relationWords, startsWhen, stateWord,
@@ -169,6 +173,8 @@ export { ModelPicker, effectiveModel, modelWords } from "./ModelPicker.tsx";
 export type { ModelChoice, ModelPickerProps, PickerTier } from "./ModelPicker.tsx";
 export { CodeEditor } from "./CodeEditor.tsx";
 export type { CodeEditorProps, CodeDiagnostic, CodeCompletion, CodeCompletionContext } from "./CodeEditor.tsx";
+export { SetupScriptMark, SizeMeter, sizeLevel, textLines } from "./SetupScript.tsx";
+export type { SetupScriptMarkProps } from "./SetupScript.tsx";
 export { CanRunContainersBadge, ImagePicker, ImageMark, ImageStatusBadge } from "./ImagePicker.tsx";
 export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";

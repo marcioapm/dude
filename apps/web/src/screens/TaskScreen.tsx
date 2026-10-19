@@ -55,7 +55,7 @@ import {
 } from "@dude/design-system/components";
 import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskStatus } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, RESOLUTION_LABEL, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskResolution, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -91,6 +91,7 @@ import { GitHubBody } from "../GitHubBody.tsx";
 import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
+import { TaskMenu, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
@@ -322,6 +323,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
   // What it waits on and what waits on it: with the page's reads, and on relations.changed.
   const { relations, reload: reloadRelations } = useRelations(client, taskId, version + relationsVersion);
+  // Close, Reopen, Archive, Unarchive: the header's menu, the notices, the dialogs.
+  const waiting = useMemo(() => waitingOn(relations?.blocks ?? []), [relations]);
+  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting,
+    pullRequestOpen: pullRequests.some((p) => p.state === "open"), onChanged: reload });
 
   const deliver = async () => {
     setDelivering(true);
@@ -520,8 +525,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Overview's StartChoice cards offer both then; the header's buttons are for every other tab.
   const startInHeader = startable && tab !== "overview";
   const stopped = item.status === "aborted" || item.status === "failed";
-  // The pick-up is the current attempt's: an earlier one is only to read.
-  const stop = stopped && !earlier ? stopOfTask : null;
+  // The pick-up is the current attempt's: an earlier one is only to read. A
+  // closed task is picked back up by none of the ways: its notice offers Reopen.
+  const stop = stopped && !earlier && !item.resolution && !item.archivedAt ? stopOfTask : null;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   const { prs, mine, others, sessions } = parts;
@@ -602,6 +608,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Button variant="quiet" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
             Edit
           </Button>
+          {!earlier ? <TaskMenu items={lifecycle.items} /> : null}
         </span>
       </header>
 
@@ -611,6 +618,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <div className="taskMeta">
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
+            {!earlier ? lifecycle.marks : null}
             {driver}
             {!earlier ? <MergeHoldChip count={feedback.blocking} onOpen={() => pickTab("feedback")} /> : null}
             {prs.map((pr) => (
@@ -636,9 +644,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <DriverConfirmation control={driverControl} />
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
-      {item.escalation || stop || aside || problem || blocked || openOrDraft || commentingNotices || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || openOrDraft || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
+          {!earlier ? lifecycle.notice : null}
+          {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
           {openOrDraft && source ? <OpenOrDraft client={client} task={item} source={source} you={people.you} onDone={() => void load()} /> : null}
           {item.escalation && !earlier ? (
@@ -661,6 +671,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       {editing ? (
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
+      {lifecycle.dialogs}
       {pickingUp && stop && recovery ? (
         <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp}
           onEdit={() => {
@@ -1468,6 +1479,15 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         out.push({ ...base, who: face, quote: p.note ? String(p.note) : undefined,
           text: <>{person} started it anyway, past {blockerKeys(p.blockers, true)} — {HOW[String(p.how)] ?? String(p.how ?? "")}</> });
         break;
+      case EventTypes.TaskClosed:
+      case EventTypes.TaskReopened:
+      case EventTypes.TaskArchived:
+      case EventTypes.TaskUnarchived: {
+        const text = lifecycleLine(e, key, events);
+        if (text) out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} {text}</>,
+          quote: e.eventType === EventTypes.TaskClosed && p.note ? String(p.note) : undefined });
+        break;
+      }
       case "question.asked":
         if (p.kind === "agent") out.push({ ...base, who: <AgentAvatar role="implementer" size="lg" />, text: <>The <b>{doer(e.runId)}</b> asked a question</>, quote: String(p.prompt ?? ""), open: session(e.runId) });
         break;
@@ -1539,12 +1559,50 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
 
 const HOW: Record<string, string> = { deliver: "Deliver", talk: "Talk it through" };
 
+/**
+ * A lifecycle event in Activity's words, after who did it
+ * (docs/design/tracking-work.md, "Data, API, events"): "closed CP-63 as a
+ * duplicate of CP-62 — CP-47, which waited on CP-63, now waits on CP-62".
+ * A close with andArchived and the task.archived {viaClose} it caused are
+ * one line, the close's; the archive alone says nothing. Null for no line.
+ */
+export function lifecycleLine(e: PersistedEvent, key: string | null | undefined, events: readonly PersistedEvent[]): ReactNode {
+  const p = e.payload;
+  const here = <b>{key ?? "the task"}</b>;
+  const resolution = typeof p.resolution === "string" ? (p.resolution as TaskResolution) : null;
+  switch (e.eventType) {
+    case EventTypes.TaskClosed: {
+      const archived = p.andArchived === true ? " and archived it" : "";
+      if (resolution === "duplicate" && typeof p.duplicateOf === "string") {
+        const handed = Array.isArray(p.handedOver) ? p.handedOver.filter((k): k is string => typeof k === "string") : [];
+        return <>closed {here} as a duplicate of <b>{p.duplicateOf}</b>{archived}{handed.length
+          ? <> — <b>{keyList(handed)}</b>, which waited on {key ?? "it"}, now {handed.length === 1 ? "waits" : "wait"} on {p.duplicateOf}</> : null}</>;
+      }
+      const removed = Array.isArray(p.removedRelations) ? p.removedRelations.filter((k): k is string => typeof k === "string") : [];
+      return <>closed {here} as {resolution ? RESOLUTION_LABEL[resolution] : "closed"}{archived}{removed.length
+        ? <><span className="muted"> · {keyList(removed)} no longer {removed.length === 1 ? "waits" : "wait"} on it</span></> : null}</>;
+    }
+    case EventTypes.TaskReopened:
+      return <>reopened {here}{typeof p.was === "string" && p.was in RESOLUTION_LABEL ? <> (was {RESOLUTION_LABEL[p.was as TaskResolution]})</> : null}</>;
+    case EventTypes.TaskArchived: {
+      // Said by the close it came with.
+      if (p.viaClose === true && events.some((c) => c.eventType === EventTypes.TaskClosed && c.eventId === e.causationId)) return null;
+      return <>archived {here}{typeof p.viaEpic === "string" ? " with its epic" : ""}</>;
+    }
+    case EventTypes.TaskUnarchived:
+      return <>unarchived {here}</>;
+  }
+  return null;
+}
+
 /** How a start when unblocked ended without firing, after who ended it. */
 const AUTO_END: Record<string, string> = {
   owner: "cancelled start when unblocked",
   started: "started it, which ends start when unblocked",
   owner_changed: "handed it to someone else, which ends start when unblocked: it was the old owner's to set",
   unblocked_by_removal: "removed its last open blocker, which ends start when unblocked: it can start now",
+  closed: "closed it, which ends start when unblocked",
+  archived: "archived it, which ends start when unblocked",
 };
 
 /** "CP-41 and CP-43", or with their states: "CP-38 (failed)". */

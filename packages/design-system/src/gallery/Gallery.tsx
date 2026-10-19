@@ -15,6 +15,7 @@ import { PeersSection } from "./sections/Peers.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
 import { RelationsSection } from "./sections/Relations.tsx";
+import { LifecycleSection } from "./sections/Lifecycle.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
 import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
@@ -163,6 +164,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     [
       ["nav-triage", "Triage"],
       ["nav-tree", "NavTree"],
+      ["nav-tree-epics", "NavTree epic rows"],
       ["nav-tree-menus", "NavTree row menus"],
       ["nav-sidebar", "Sidebar (realistic)"],
       ["nav-waiting-list", "WaitingList"],
@@ -200,9 +202,22 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     ],
   ],
   [
+    "Lifecycle",
+    [
+      ["lifecycle-marks", "ResolutionMark / ArchivedMark"],
+      ["lifecycle-menu", "The task menu's lifecycle"],
+      ["lifecycle-close", "CloseDialog"],
+      ["lifecycle-close-archive", "Close and archive"],
+      ["lifecycle-archive", "ArchiveDialog / ArchiveEpicDialog"],
+      ["lifecycle-board", "Board: closed cards, archived hint"],
+      ["lifecycle-relations", "RelationList: duplicates"],
+    ],
+  ],
+  [
     "Settings",
     [
       ["s-layout", "Settings page"],
+      ["s-repository-setup-script", "Repository setup script"],
       ["s-network", "Agent network"],
       ["s-markdown", "MarkdownDocument"],
       ["s-history", "PromptHistory"],
@@ -374,6 +389,7 @@ function Shell() {
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
           <RelationsSection mode={panes} />
+          <LifecycleSection mode={panes} />
           <SettingsGallerySection mode={panes} />
           <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />

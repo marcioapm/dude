@@ -219,10 +219,12 @@ func unreachableOr(err error) error {
 
 // NewState is a new delivery's state: on the branch BranchFor names for
 // the attempt, or, for a task that took over existing work, on its
-// source's head branch, measured against its base. The caller sets the
-// rest (Attempt included, where it keeps one).
+// source's head branch, measured against its base. Attempt must be positive.
 func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy Policy, attempt int) (State, error) {
-	st := State{TaskID: taskID, ProjectID: projectID, Policy: policy, Branch: BranchFor(taskID, attempt)}
+	if attempt < 1 {
+		return State{}, refuseText(rChildPositiveAttemptRequired)
+	}
+	st := State{TaskID: taskID, ProjectID: projectID, Policy: policy, Attempt: attempt, Branch: BranchFor(taskID, attempt)}
 	src, err := TaskSource(ctx, tx, taskID)
 	if err != nil || src == nil {
 		return st, err

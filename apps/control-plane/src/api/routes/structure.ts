@@ -30,7 +30,8 @@ const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_bra
 // An epic's state is stored only when a person sets it; otherwise it is what
 // its tasks say (epicState, @dude/domain).
 const EPIC_SELECT = `id, project_id AS "projectId", title, description, position, state AS "storedState",
-  (SELECT COALESCE(array_agg(t.status::text), '{}') FROM tasks t WHERE t.epic_id = epics.id) AS "taskStatuses",
+  (SELECT COALESCE(array_agg(t.status::text), '{}') FROM tasks t WHERE t.epic_id = epics.id AND t.archived_at IS NULL) AS "taskStatuses",
+  archived_at AS "archivedAt",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 /** An epic as the API gives it: its state resolved, the statuses it came from dropped. */

@@ -260,6 +260,9 @@ type TaskRelationsOut struct {
 	BlockedBy []BlockerOut `json:"blockedBy"`
 	Blocks    []BlocksOut  `json:"blocks"`
 	Related   []string     `json:"related"`
+	// Closed as a duplicate of this key; the keys closed as duplicates of it.
+	DuplicateOf  string   `json:"duplicateOf,omitempty"`
+	DuplicatedBy []string `json:"duplicatedBy,omitempty"`
 	// Not started, and nothing unmerged in front of it.
 	Startable           bool    `json:"startable"`
 	StartsWhenUnblocked *string `json:"startsWhenUnblocked"`
@@ -309,6 +312,15 @@ func RelationsOf(ctx context.Context, tx pgx.Tx, taskIDs []string) (map[string]*
 	var fromID, toID, kind, fromKey, fromStatus, toKey, toStatus string
 	var merged bool
 	_, err = pgx.ForEachRow(rows, []any{&fromID, &toID, &kind, &fromKey, &fromStatus, &merged, &toKey, &toStatus}, func() error {
+		if kind == "duplicates" {
+			if o := out[fromID]; o != nil {
+				o.DuplicateOf = toKey
+			}
+			if o := out[toID]; o != nil {
+				o.DuplicatedBy = append(o.DuplicatedBy, fromKey)
+			}
+			return nil
+		}
 		if o := out[toID]; o != nil {
 			if kind == "blocks" {
 				o.BlockedBy = append(o.BlockedBy, BlockerOut{Key: fromKey, Status: fromStatus, Merged: merged})
@@ -343,5 +355,8 @@ func RelationLine(r *TaskRelationsOut) string {
 	for _, b := range r.Blocks {
 		blocks = append(blocks, b.Key)
 	}
-	return render(relationLineTmpl, struct{ Open, Blocks, Related []string }{open, blocks, r.Related})
+	return render(relationLineTmpl, struct {
+		Open, Blocks, Related, DuplicatedBy []string
+		DuplicateOf                         string
+	}{open, blocks, r.Related, r.DuplicatedBy, r.DuplicateOf})
 }

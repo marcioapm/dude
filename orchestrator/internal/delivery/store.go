@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // Event types this package writes. The string values are the contract with
@@ -110,6 +112,9 @@ func runByKey(ctx context.Context, tx pgx.Tx, taskID, key string) (string, error
 type PhaseRun struct {
 	TaskID string
 	Phase  string
+	// The delivery (workflow run) the Run is made for; an implementer is
+	// refused once it has ended.
+	WorkflowID string
 	// The commit each repository starts from, by name; a repository not
 	// named starts from its default branch.
 	BaseRefs    map[string]string
@@ -145,6 +150,7 @@ type PhaseRun struct {
 	// request's fix (CandidateBranch) is checked before the pull request
 	// shows it.
 	Branch string
+	Child  bool
 }
 
 // ReviewRange is the range a review covers: from Base, per repository,
@@ -169,6 +175,37 @@ func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (st
 	return runID, err
 }
 
+// ErrDeliveryEnded refuses an implementer whose delivery a Close or
+// Archive ended, or whose task is closed or archived.
+var ErrDeliveryEnded = errors.New("the delivery has ended: its task was closed or archived")
+
+// refuseEndedDeliveryTx is ErrDeliveryEnded when the delivery the Run is
+// made for (workflowID) is no longer live or RefuseLifecycleTx refuses the
+// task. locked is the task's latest delivery, which the caller holds; the
+// Run's own is loaded and locked only when it is another.
+func refuseEndedDeliveryTx(ctx context.Context, tx pgx.Tx, locked *Delivery, taskID, workflowID string) error {
+	if workflowID == "" {
+		return fmt.Errorf("an implementer of task %s names no delivery", taskID)
+	}
+	d := locked
+	if d == nil || d.WorkflowID != workflowID {
+		var err error
+		if d, err = loadDeliveryByID(ctx, tx, taskID, workflowID); err != nil {
+			return err
+		}
+	}
+	if d == nil || !d.Live() {
+		return ErrDeliveryEnded
+	}
+	if err := RefuseLifecycleTx(ctx, tx, taskID); err != nil {
+		if IsLifecycleRefusal(err) {
+			return ErrDeliveryEnded
+		}
+		return err
+	}
+	return nil
+}
+
 func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (string, error) {
 	var runID string
 	if in.Key != "" {
@@ -177,11 +214,33 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 			return runID, err
 		}
 	}
+	var locked *Delivery
 	if Publishes[in.Phase] {
 		// A writer waits for the conductor's publish moving the task
 		// branch.
-		if err := lockAndRefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
+		var err error
+		if locked, err = lockAndRefuseWhileMovingTx(ctx, tx, in.TaskID); err != nil {
 			return "", err
+		}
+	}
+	if in.Phase == PhaseImplement {
+		// Path 5: with the step's delivery locked, a Close or Archive
+		// committed since the step's own check makes no implementer, nor
+		// does a delivery a later start replaced.
+		if err := refuseEndedDeliveryTx(ctx, tx, locked, in.TaskID, in.WorkflowID); err != nil {
+			return "", err
+		}
+		if !in.Child {
+			var childWriter bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs w
+				WHERE w.task_id = $1 AND w.source_kind = 'task_conductor'
+				AND w.phase IN `+writerPhases+`
+				AND w.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))`, in.TaskID).Scan(&childWriter); err != nil {
+				return "", err
+			}
+			if childWriter {
+				return "", workflow.Wait{After: time.Second, Why: "the child writer is working on this task"}
+			}
 		}
 	}
 	var projectID string
@@ -573,7 +632,7 @@ func (s *Store) SetTaskStatus(ctx context.Context, org string, st *State, status
 func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, from, status, reason string) (bool, error) {
 	if Ended(status) {
 		// Not while the conductor's publish moves the task branch.
-		if err := lockAndRefuseWhileMovingTx(ctx, tx, taskID); err != nil {
+		if _, err := lockAndRefuseWhileMovingTx(ctx, tx, taskID); err != nil {
 			return false, err
 		}
 	}
@@ -586,6 +645,10 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 	}
 	if Ended(status) {
 		// Its peers waiting on a reply from it would wait for ever.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false
+			WHERE task_id=$1 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, taskID); err != nil {
+			return false, err
+		}
 		if _, err := PeerEndedTx(ctx, tx, org, taskID, status); err != nil {
 			return false, err
 		}

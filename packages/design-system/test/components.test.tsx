@@ -18,6 +18,7 @@ import { ToolCallCard } from "../src/components/ToolCallCard.tsx";
 import { Icon } from "../src/icons/index.tsx";
 import { formatTimestamp } from "../src/util/format.ts";
 import type { NavProject, NavRow, NavTask } from "../src/util/navModel.ts";
+import { EMPTY_TRIAGE_COUNTS } from "../src/tokens/triage.ts";
 
 const noop = () => {};
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
@@ -200,6 +201,39 @@ describe("NavTree task row: its people and its one state", () => {
     expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "draft"), pr(2, "merged")] }))?.number).toBe(1);
     expect(currentPullRequest(wi([], false, { pullRequests: [pr(1, "open"), pr(2, "draft")] }))?.number).toBe(2);
     expect(currentPullRequest(wi([], false, {}))).toBeNull();
+  });
+});
+
+// The README's Navigation rule: epics carry the layers glyph, tasks never do.
+describe("NavTree epic row: the layers glyph leads it", () => {
+  const dom = (markup: string) => {
+    const host = document.createElement("div");
+    host.innerHTML = markup;
+    return host;
+  };
+  const navRow = (node: NavRow["node"], kind: "epic" | "task"): NavRow => ({
+    key: kind, ref: { kind, id: node.id }, depth: kind === "epic" ? 1 : 2, parentKey: null, expandable: kind === "epic", expanded: false,
+    forced: false, node, counts: kind === "epic" ? { ...EMPTY_TRIAGE_COUNTS, needs_you: 1 } : null, triage: null, projectId: "p",
+  });
+  const render = (row: NavRow, selected = false) =>
+    dom(html(<NavTreeRow row={row} selected={selected} tabIndex={0} onFocus={noop} onKeyDown={noop} onClick={noop} onToggle={noop} />));
+  const epic = { id: "e", title: "Billing v2", tasks: [{ id: "t", key: "CP-41", title: "Meter", status: "running" as const }] };
+
+  test("an epic row holds exactly one layers glyph, after its chevron and before its title", () => {
+    for (const selected of [false, true]) {
+      const host = render(navRow(epic, "epic"), selected);
+      const glyphs = host.querySelectorAll('svg[data-icon="layers"]');
+      expect(glyphs.length).toBe(1);
+      const row = host.querySelector('[role="treeitem"]')!;
+      const order = [...row.querySelectorAll("svg[data-icon], span")].map((el) => el.getAttribute("data-icon") ?? el.textContent);
+      expect(order.indexOf("chevron-right")).toBeLessThan(order.indexOf("layers"));
+      expect(order.indexOf("layers")).toBeLessThan(order.indexOf("Billing v2"));
+    }
+  });
+
+  test("a task row never draws it", () => {
+    const host = render(navRow(epic.tasks[0]!, "task"));
+    expect(host.querySelectorAll('svg[data-icon="layers"]').length).toBe(0);
   });
 });
 

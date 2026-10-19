@@ -4,6 +4,8 @@
 package agenttools
 
 const (
+	rChildProfileRequired                  = "an existing phase profile is required"
+	rChildToolsReadOnly                    = "independent report children cannot mutate workflow or start Runs"
 	rYourContainerNotRunningAsLux          = "your container is not running as lux sees it; call sync_base again in a moment"
 	rThisRunHoldsNoRepositoryMay           = "this Run holds no repository it may change: there is no base to bring in"
 	rThisDudeCannotAskLuxFor               = "this dude cannot ask lux for a sync: sync_base is not available here"
@@ -93,7 +95,7 @@ const (
 	rArguments                             = "arguments: %v"
 	rTooManyCallsAtMostMinute              = "too many calls: at most %d a minute; slow down"
 	rLimitedCallsInRunThisRun              = "%s is limited to %d calls in a run; this run has used them"
-	rPeersListsYourPeersWholeLeave         = "peers lists your peers whole: leave text and startable out"
+	rPeersListsYourPeersWholeLeave         = "peers lists your peers whole: leave text, startable, archived and closed out"
 	rTitleRequired                         = "a title is required"
 	rTaskNeedsGoalAtLeastCharacters        = "a task needs a goal of at least %d characters: say why it matters and what should change, so a person can decide on it without asking you"
 	rTooLongTitleAtMost500                 = "too long: a title of at most 500 characters, a goal of %d, at most 50 criteria"

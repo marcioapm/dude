@@ -1,0 +1,561 @@
+/*
+ * Layout the mockup's pages need beyond the design system's components:
+ * the board's lead slot (which `Board` would own), the
+ * task page additions (apps/web's task screen classes come from app.css),
+ * the tasks list, the brief comparison and the meaning page. Tokens only.
+ */
+
+.mono {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+.muted {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+.grow {
+  flex: 1;
+}
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ds-color-text-secondary);
+  text-align: left;
+}
+.linkish:hover {
+  color: var(--ds-color-text-strong);
+  text-decoration: underline;
+}
+
+/* closed-duplicate: both tasks side by side. */
+.split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  background: var(--ds-color-sunken);
+}
+.split > * {
+  background: var(--ds-color-canvas);
+  min-width: 0;
+}
+.split :global(.taskTop) {
+  flex-wrap: wrap;
+}
+.split :global(.taskCrumbs) {
+  flex-basis: 100%;
+}
+
+/* -- Board -- */
+.boardHost {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.boardActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+/* Proposed in Board.module.css: the card's lead after its key. */
+.leadSlot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.leadSlot:empty {
+  display: none;
+}
+
+/* -- Sidebar epic rows (the NavTree fix) --
+   Proposed in NavTree.module.css as `.epicGlyph`: 14px wide like `.mark`,
+   Breadcrumb's muted ink for the same glyph. */
+.epicSlot {
+  display: inline-flex;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  color: var(--ds-color-text-muted);
+}
+:global([aria-selected="true"]) > .epicSlot,
+:global([role="treeitem"]:hover) > .epicSlot {
+  color: var(--ds-color-text-secondary);
+}
+/* Variant (b): the roll-up word, at the epic count's size and ink. */
+.epicStateSlot {
+  flex-shrink: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.variants {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 340px));
+  gap: var(--ds-space-32);
+  margin-top: var(--ds-space-16);
+}
+.variantCol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.variantCol > .variantHead {
+  margin: 0;
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.variantTree {
+  padding: var(--ds-space-8) 0;
+  background: var(--ds-color-chrome);
+  container-type: inline-size;
+}
+
+/* -- Task page additions -- */
+@media (max-width: 640px) {
+  .top {
+    flex-wrap: wrap;
+  }
+  .top > :first-child {
+    flex-basis: 100%;
+  }
+}
+.titleLine {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-12);
+}
+.facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+}
+.callTitle {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.callLine {
+  margin: var(--ds-space-2) 0 0;
+  color: var(--ds-color-text-secondary);
+}
+.callActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+  margin-top: var(--ds-space-8);
+}
+/* StartGate's reachable disabled control, for any refused action. */
+.gateTriggerish {
+  display: inline-flex;
+  border-radius: var(--ds-radius-control);
+}
+.gateTriggerish:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.bugGrid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--ds-space-8) var(--ds-space-24);
+  margin: 0;
+}
+.bugGrid dt {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+  padding-top: 2px;
+}
+.bugGrid dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--ds-color-text-primary);
+}
+.bugGrid ol {
+  margin: 0;
+  padding-left: var(--ds-space-20);
+}
+@media (max-width: 640px) {
+  .bugGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-2);
+  }
+  .bugGrid dd {
+    margin-bottom: var(--ds-space-8);
+  }
+}
+.railFacts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.railFact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-12);
+  min-height: var(--ds-size-control-sm);
+}
+.railFact > :first-child {
+  color: var(--ds-color-text-muted);
+}
+
+/* -- Dialog contents -- */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+}
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ds-space-12);
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.optionTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picked {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+}
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.list li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+}
+
+/* -- Tasks list -- */
+.listPage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.listHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-12) var(--ds-space-24) 0;
+}
+.listTitle {
+  margin: 0;
+  font-size: var(--ds-text-xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.listBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  padding: var(--ds-space-12) var(--ds-space-24);
+}
+.listSearch {
+  width: 280px;
+  max-width: 100%;
+}
+.listBody {
+  container: tasklist / inline-size;
+  padding: 0 var(--ds-space-16) var(--ds-space-24);
+}
+.listRows {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.listFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ds-space-12) var(--ds-space-8);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+.listNote {
+  padding: 0 var(--ds-space-24) var(--ds-space-8);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+.views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2);
+}
+
+/* -- Find work tokens -- */
+/* Stands in for the proposed Sidebar search mode: while a query has tokens,
+   the results take the tree's place (the tree's "No matches" would be wrong). */
+.finding :global(aside) > [class*="_treeHead_"],
+.finding :global(aside) > [class*="_scroll_"] {
+  display: none;
+}
+.finding :global(aside) > [class*="_band_"] {
+  margin-top: auto;
+}
+.findPane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+}
+.findField {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-height: var(--ds-size-control-md);
+  padding: var(--ds-space-4) var(--ds-space-8);
+  background: var(--ds-color-field-raised);
+  border-radius: var(--ds-radius-control);
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+  font-size: var(--ds-text-sm);
+}
+.token {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: 0 var(--ds-space-6);
+  min-height: 22px;
+  background: var(--ds-color-active-wash);
+  border-radius: var(--ds-radius-mark);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-strong);
+}
+.findWords {
+  color: var(--ds-color-text-primary);
+}
+.caret {
+  width: 1px;
+  height: 16px;
+  background: var(--ds-color-text-primary);
+}
+.findSaid {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.findResults {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+.findResults li {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.findResults li[data-dim] {
+  color: var(--ds-color-text-secondary);
+}
+.findResults li[aria-selected="true"] {
+  background: var(--ds-color-active-wash);
+}
+.findTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* An epic result: the tree's layers glyph in Breadcrumb's muted ink, and its total. */
+.epicGlyph {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.findCount {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.findGroup {
+  padding: var(--ds-space-8) var(--ds-space-6) var(--ds-space-2);
+}
+.findHelp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  padding: var(--ds-space-8) var(--ds-space-6) 0;
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.findHelp code {
+  font-family: var(--ds-font-mono);
+  color: var(--ds-color-text-secondary);
+}
+
+/* -- Text pages: meaning, brief -- */
+.doc {
+  overflow: auto;
+  flex: 1;
+  padding: var(--ds-space-24) var(--ds-space-32) var(--ds-space-48);
+}
+.docInner {
+  max-width: 1100px;
+}
+.doc h1 {
+  margin: 0 0 var(--ds-space-8);
+  font-size: var(--ds-text-2xl);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.doc h2 {
+  margin: var(--ds-space-32) 0 var(--ds-space-8);
+  font-size: var(--ds-text-lg);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.doc h3 {
+  margin: var(--ds-space-16) 0 var(--ds-space-4);
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.doc p,
+.doc li {
+  color: var(--ds-color-text-secondary);
+  line-height: var(--ds-leading-prose);
+}
+.lede {
+  max-width: 760px;
+  font-size: var(--ds-text-md);
+}
+.words {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--ds-space-12) var(--ds-space-24);
+  margin: 0;
+  max-width: 900px;
+}
+.words dt {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.words dd {
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+  line-height: var(--ds-leading-normal);
+}
+.epics3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ds-space-16);
+}
+.epicBox {
+  padding: var(--ds-space-16);
+  background: var(--ds-color-surface);
+}
+.epicBox h3 {
+  margin-top: 0;
+}
+.compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ds-space-16);
+}
+.compareCol {
+  padding: var(--ds-space-16);
+  background: var(--ds-color-surface);
+  min-width: 0;
+}
+.compareCol h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin-top: 0;
+}
+.prompt {
+  margin: 0;
+  padding: var(--ds-space-12);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-normal);
+  color: var(--ds-color-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.added {
+  background: var(--ds-color-active-wash);
+  display: block;
+}
+.source {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+  font-family: var(--ds-font-mono);
+}
+@media (max-width: 1100px) {
+  .compare,
+  .epics3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .doc {
+    padding: var(--ds-space-16);
+  }
+  .words {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-2);
+  }
+  .words dd {
+    margin-bottom: var(--ds-space-12);
+  }
+}
+
+/* -- Proposal -- */
+.proposalPage {
+  overflow: auto;
+  flex: 1;
+  padding: var(--ds-space-24);
+}
+.proposalInner {
+  max-width: 820px;
+}
+.itemLead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}

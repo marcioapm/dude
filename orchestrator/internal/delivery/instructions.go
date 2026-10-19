@@ -9,6 +9,8 @@ import (
 // is assembled from: what the Run has, and the saved prompts for its role.
 // Nothing in it changes during a Run, so a resume assembles the same file.
 type InstructionsInput struct {
+	// An independent child receives the report-only contract.
+	Child bool
 	// The Run has dude's tools, and the dude CLI on its shell.
 	Tools, CLI bool
 	// A brainstorm that may reach any host.
@@ -41,7 +43,7 @@ type PromptVars struct {
 func (in PromptInput) InstructionsInput() InstructionsInput {
 	in = in.withImages()
 	return InstructionsInput{
-		Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
+		Child: in.Child, Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
 		Context: in.Context,
 		Vars:    PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
@@ -89,10 +91,11 @@ func (in InstructionsInput) data(role string) instructionData {
 }
 
 var (
-	charterTmpl   = mustTemplate("instructions/charter")
-	dudeTmpl      = mustTemplate("instructions/dude")
-	savedTmpl     = mustTemplate("instructions/saved")
-	roleNotesTmpl = mustTemplate("instructions/notes")
+	charterTmpl    = mustTemplate("instructions/charter")
+	dudeTmpl       = mustTemplate("instructions/dude")
+	savedTmpl      = mustTemplate("instructions/saved")
+	roleNotesTmpl  = mustTemplate("instructions/notes")
+	childToolsTmpl = mustTemplate("contracts/child-tools")
 )
 
 // roleParts are each role file's three parts (parseRole), resolved at init.
@@ -157,6 +160,9 @@ func Instructions(role, aspect string, in InstructionsInput) string {
 	}
 	if c := strings.TrimSpace(in.Context); c != "" {
 		sections = append(sections, render(roleNotesTmpl, c))
+	}
+	if in.Child {
+		sections = append(sections, render(childToolsTmpl, in))
 	}
 	return strings.Join(sections, "\n\n") + "\n"
 }
