@@ -55,7 +55,7 @@ const (
 // reason, and may be taken by an organization admin as well as the
 // task's owner: shipping past an unmet or unchecked criterion.
 func NeedsReason(reason, action string) bool {
-	return reason == ReasonTestFailedCriteria && action == "accept" || reason == ReasonTestBlocked && action == ActionWaive
+	return reason == ReasonTestFailedCriteria && action == "accept" || (reason == ReasonTestBlocked || reason == ReasonChecksUnverified) && action == ActionWaive
 }
 
 // RunReplyTx is everything a Run's agent said, its messages joined.

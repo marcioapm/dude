@@ -229,6 +229,8 @@ func (e *Escalation) Actions() []string {
 		// Another fix round, or ship with the failure: a person's call,
 		// with their reason.
 		out = append(out, "retry", "accept")
+	case ReasonChecksUnverified:
+		out = append(out, "retry", ActionWaive)
 	case ReasonTestBlocked:
 		// Test again (after someone told dude how to run it), or ship what
 		// could not be checked, with a reason.
@@ -2487,6 +2489,13 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// Checked when it was taken; a decision that cannot be carried out
 		// must not leave the task looking busy.
 		return workflow.Result{}, fmt.Errorf("escalation %s cannot %s", e.Reason, d.Action)
+	}
+	if e.Reason == ReasonChecksUnverified {
+		st.Escalation = nil
+		if d.Action == "stop" {
+			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
+		}
+		return workflow.Result{Next: e.At, State: st, AwaitSignals: []string{SignalPhaseFinished}}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action)
 	}
 	st.Escalation = nil
 	switch d.Action {

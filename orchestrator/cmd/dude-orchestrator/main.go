@@ -59,6 +59,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
@@ -163,9 +164,10 @@ func run(log *slog.Logger) error {
 	if bucket != nil {
 		objectStore = bucket
 	}
+	judgeService := &judge.Service{DB: database, LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}}
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient, Objects: objectStore,
-		Forges: forges, Agent: agent, Registry: registryLogin, Log: log,
+		Forges: forges, Agent: agent, Registry: registryLogin, Log: log, Judge: judgeService,
 		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, KeepFor: set.KeepStopped,
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 		// A pass stops waiting for a slow Run or publish after 2 s, so the

@@ -41,16 +41,22 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/images"
+	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
+type ChecksJudge interface {
+	Judge(context.Context, string, judge.Ask) (judge.Judgement, error)
+}
+
 type Syncer struct {
 	DB     *db.DB
 	Lux    lux.Client
 	Forges delivery.Forges
+	Judge  ChecksJudge
 	Agent  AgentConfig
 	// The login for the registry agent images come from; nil for none.
 	Registry registry.Provider
@@ -1987,6 +1993,12 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	pushes := r.PushBranch != "" && r.HoldsPushable
 	if pushes && r.PushResult == nil {
 		if r.PushRequestID == "" {
+			if delivery.ChecksGated[r.Phase] {
+				ok, err := s.checksBeforePush(ctx, r)
+				if err != nil || !ok {
+					return true, err
+				}
+			}
 			// lux's git.checkout, which says where each checkout started,
 			// trails the agent's records like any lifecycle event: a turn
 			// read before it waits for it, and nothing is pushed without it.

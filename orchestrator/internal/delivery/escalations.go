@@ -160,6 +160,11 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 			return err
 		}
 	}
+	if e.Reason == ReasonChecksUnverified {
+		if err := settleChecksTx(ctx, tx, org, projectID, taskID, e, in.Action, note); err != nil {
+			return err
+		}
+	}
 	if in.Action == "resume" {
 		// The Run that failed, taken back up now; the workflow waits on it.
 		if err := ResumeKeptTx(ctx, tx, org, projectID, taskID, e.RunIDs(), note); err != nil {
