@@ -23,7 +23,9 @@ const escalationQuestion = `{"question":"Stuck on the finding. I propose one mor
 	"choices":["Retry as proposed","Accept as it is","Stop"],"actions":["retry","accept","stop"]}`
 
 // stuck is a conducted delivery whose review is stuck on its finding (one
-// fix attempt per finding): escalated, the conductor told.
+// fix attempt per finding): escalated, the conductor told. The conductor's
+// earlier wakes arrive batched (conductor_wakes/directives are fewer than on
+// the real path), so tests must not assert per-decision delivery on this state.
 func stuck(t *testing.T) (*world, string) {
 	w := conducting(t)
 	scripted := w.lux.Decide
@@ -44,13 +46,12 @@ func stuck(t *testing.T) (*world, string) {
 	task := w.task()
 	w.talk(task)
 	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
-	w.must(task, "decide", `{"action":"next"}`)
+	w.implemented(task)
+	w.carriedOut(task, "decide", `{"action":"next"}`)
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	w.must(task, "start_phase", `{"phase":"fix"}`)
+	w.carriedOut(task, "start_phase", `{"phase":"fix"}`)
 	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-	w.must(task, "decide", `{"action":"next"}`)
+	w.carriedOut(task, "decide", `{"action":"next"}`)
 	w.until("stuck", func() bool { return w.escalationReason(task) == "stuck" })
 	w.wokenWith(task, "Escalated to a person: stuck")
 	return w, task
@@ -340,9 +341,8 @@ func testBlocked(t *testing.T, owner func(w *world, task string)) (*world, strin
 	task := w.task()
 	owner(w, task)
 	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
-	w.must(task, "start_phase", `{"phase":"test"}`)
+	w.implemented(task)
+	w.carriedOut(task, "start_phase", `{"phase":"test"}`)
 	w.until("blocked", func() bool { return w.escalationReason(task) == delivery.ReasonTestBlocked })
 	w.wokenWith(task, "Escalated to a person: test blocked")
 	return w, task
