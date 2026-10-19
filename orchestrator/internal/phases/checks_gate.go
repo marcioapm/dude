@@ -25,6 +25,11 @@ var checksText = delivery.MustText("notices/checks")
 var backedQuestion = delivery.MustText("notices/checks/backed")
 var missingQuestion = delivery.MustText("notices/checks/missing")
 var checksSkip = delivery.MustText("notices/checks/skip")
+var checksMany = delivery.MustText("notices/checks/many")
+
+// checksCountMax bounds the judge calls one report costs, one per check
+// plus one, made in turn before anything is pushed.
+const checksCountMax = 30
 
 type checksVerdict struct {
 	Command  string `json:"command"`
@@ -143,6 +148,11 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	checks, ok := delivery.ParseChecks(reply)
 	if !ok {
 		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:", Reason: "missing or unparseable checks YAML block"})
+		return d, nil
+	}
+	if len(checks) > checksCountMax {
+		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:",
+			Reason: checksMany.Render(struct{ Count, Max int }{len(checks), checksCountMax})})
 		return d, nil
 	}
 	for _, c := range checks {

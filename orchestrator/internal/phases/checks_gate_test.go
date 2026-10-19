@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -208,6 +209,41 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 		}
 	})
+}
+
+// A report of more than checksCountMax checks is sent back unjudged,
+// saying why; one of exactly checksCountMax is judged.
+func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
+	report := func(n int) string {
+		var b strings.Builder
+		b.WriteString("checks:\n")
+		for i := range n {
+			fmt.Fprintf(&b, "  - command: check %d\n    result: pass\n    evidence: ok\n", i)
+		}
+		return b.String()
+	}
+	for _, tc := range []struct {
+		n, calls int
+		judged   bool
+	}{{checksCountMax + 1, 0, false}, {checksCountMax, checksCountMax + 1, true}} {
+		t.Run(fmt.Sprint(tc.n), func(t *testing.T) {
+			w := newHarnessWorld(t)
+			checksReply(w, report(tc.n))
+			fake := &checksFake{backed: judge.Yes, missing: judge.No}
+			w.s.Judge = fake
+			got, err := w.s.judgeChecks(context.Background(), w.run)
+			if err != nil || fake.calls != tc.calls {
+				t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+			}
+			if tc.judged {
+				return
+			}
+			want := fmt.Sprintf("the report lists %d checks, more than the %d that are verified", tc.n, checksCountMax)
+			if got.Verified || !strings.Contains(checksText.Render(got.Verdicts), want) {
+				t.Fatalf("%+v: the send-back lacks %q", got, want)
+			}
+		})
+	}
 }
 
 func TestChecksNonGatedPhaseDeclaration(t *testing.T) {
