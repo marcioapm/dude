@@ -819,13 +819,12 @@ func TestATransientForgeFailureBacksOff(t *testing.T) {
 				failures, got, next.Sub(after), next.Sub(before), want)
 		}
 	}
-	base := compares.Load()
-	if base != 0 {
-		t.Fatalf("%d comparisons before the push was recorded", base)
+	if n := compares.Load(); n != 0 {
+		t.Fatalf("%d comparisons before the push was recorded", n)
 	}
 	e.due(id)
 	backedOff(1, 2*time.Second)
-	if n := compares.Load() - base; n != 1 {
+	if n := compares.Load(); n != 1 {
 		t.Fatalf("%d comparisons in one pass", n)
 	}
 	// Not due: passes leave it alone. The deadline is pushed far out so a
@@ -835,12 +834,12 @@ func TestATransientForgeFailureBacksOff(t *testing.T) {
 	for range 5 {
 		e.settleOnce()
 	}
-	if n := compares.Load() - base; n != 1 {
+	if n := compares.Load(); n != 1 {
 		t.Errorf("%d comparisons while the back-off was not up, want 1", n)
 	}
 	e.due(id)
 	backedOff(2, 4*time.Second)
-	if n := compares.Load() - base; n != 2 {
+	if n := compares.Load(); n != 2 {
 		t.Errorf("%d comparisons once due, want 2", n)
 	}
 }
