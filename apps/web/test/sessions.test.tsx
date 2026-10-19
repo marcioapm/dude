@@ -387,14 +387,31 @@ describe("a brainstorm session's page", () => {
     expect([...images.querySelectorAll("[data-testid=message-image]")].map((b) => b.getAttribute("aria-label"))).toEqual(["Open shot.png"]);
   });
 
-  test("an image refused until the model change is applied says why and stays in the tray", async () => {
-    const REFUSAL = "the session's model changed: send a message without images first so an agent on the new model takes over, then send the images again";
-    class Refusing extends SessionClient {
+  test("a first message with an image is one turn: its words and its image, read with the image's directive", async () => {
+    const shot = { id: "att_first", name: "first.png", contentType: "image/png" as const, width: 10, height: 10, bytes: 100,
+      original: { contentType: "image/png" as const, width: 20, height: 20, bytes: 200 } };
+    const page = await sessionPage(new SessionClient(detail("owner"), [
+      ev("run.created", { role: "brainstorm" }),
+      ev("chat.message", { text: "look", directiveId: "dir_img", attachments: [shot] }, { type: "human", id: YOU }),
+      ev("session.briefed", { text: "Brainstorm, this is the session.\n\n## The first message\n\nMárcio: look\n\n[Images come with this message: they follow as your next input.]" }),
+      ev("run.directive.accepted", { directiveId: "dir_img", lands: "next_step", receipt: true }),
+      ev("run.directive.delivered", { directiveId: "dir_img", read: true }),
+    ]));
+    const images = await until(() => page.querySelector("[data-testid=message-images]"), "the message's image");
+    const humans = page.querySelectorAll("[data-testid=human-turn]");
+    expect(humans.length).toBe(1);
+    expect(humans[0]!.textContent).toContain("look");
+    expect(humans[0]!.contains(images)).toBe(true);
+    expect([...images.querySelectorAll("[data-testid=message-image]")].map((b) => b.getAttribute("aria-label"))).toEqual(["Open first.png"]);
+    expect(page.querySelector("[data-testid=chat-briefing]")!.textContent).not.toContain("Images come with this message");
+  });
+
+  test("before the agent has started the paperclip is on, and a first message sends its words and its image", async () => {
+    class Starting extends SessionClient {
       attached: Array<ReadonlyArray<string>> = [];
-      override sessionChat(_id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}) {
+      override sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}) {
         this.attached.push(opts.attachmentIds ?? []);
-        if ((opts.attachmentIds ?? []).length > 0) return Promise.reject(new ApiError(409, "images_need_model_swap", REFUSAL));
-        return super.sessionChat(_id, text, opts);
+        return super.sessionChat(id, text, opts);
       }
     }
     const g = globalThis as { createImageBitmap?: unknown };
@@ -404,19 +421,20 @@ describe("a brainstorm session's page", () => {
     canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
     canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
     try {
-      const client = new Refusing(detail("chat"));
+      const fresh = detail("chat");
+      fresh.session.run = null;
+      const client = new Starting(fresh);
       const page = await sessionPage(client);
+      expect(page.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(false);
       const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])], "shot.png", { type: "image/png" });
       const drop = new Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
       drop.dataTransfer = { types: ["Files"], items: [png], files: [png], dropEffect: "" };
       await act(async () => void page.querySelector("[data-testid=session-screen] textarea")!.dispatchEvent(drop));
       await until(() => page.querySelector("[data-testid=attachment-chip][data-state=ready]"), "the uploaded image");
       await write(page, "look");
+      expect(client.sent).toEqual(["look"]);
       expect(client.attached).toEqual([["att_fx1"]]);
-      expect((await until(() => page.querySelector("[data-testid=session-problem]"), "the refusal")).textContent)
-        .toBe(`Could not send the message: ${REFUSAL}`);
-      expect(page.querySelectorAll("[data-testid=attachment-chip][data-state=ready]").length).toBe(1);
-      expect(client.sent).toEqual([]);
+      await until(() => page.querySelectorAll("[data-testid=attachment-chip]").length === 0 || null, "the tray emptied");
     } finally {
       g.createImageBitmap = saved.bitmap;
       canvas["getContext"] = saved.getContext;
@@ -424,13 +442,9 @@ describe("a brainstorm session's page", () => {
     }
   });
 
-  test("a reader's paperclip is off, and so is one before the agent has started", async () => {
+  test("a reader's paperclip is off", async () => {
     const reader = await sessionPage(new SessionClient(detail("read")));
     expect(reader.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(true);
-    const ended = detail("chat");
-    ended.session.run = null;
-    const fresh = await sessionPage(new SessionClient(ended));
-    expect(fresh.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(true);
   });
 
   test("a reader's composer is closed, with why, and the card files nothing", async () => {

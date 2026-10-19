@@ -296,9 +296,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const isOwner = you.role === "owner";
   const reader = you.role === "read";
   const live = status !== undefined && !["completed", "failed", "aborted"].includes(status);
-  // Images ride a directive to a running agent; a message that starts one carries words only (the briefing).
+  // A message that starts the agent takes images too: they follow its briefing.
   const attachOff = reader ? "You can read this session: writing is for its owner and members who can chat."
-    : !live ? "Images go to the session's agent once it has started: send a message first."
     : tray.disabledReason;
   const dude = dudeName(sessionId);
   const steer: SteerActions | undefined = live ? {
@@ -347,7 +346,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
         </>}
       />
       {/* A dropped image anywhere on the conversation goes into the composer's tray. */}
-      <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || reader || !live || Boolean(yours)}
+      <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || reader || Boolean(yours)}
         disabledReason={attachOff}
         detail={<>They go with your next message to <b>Brainstorm</b>.</>}>
       <div className="runScreen" data-view={view}>
