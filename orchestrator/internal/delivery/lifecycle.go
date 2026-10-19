@@ -16,7 +16,7 @@ import (
 // delivery still writes status; these columns are a person's.
 //
 // The start rule lives here: RefuseStartTx, the one guard every start path
-// takes, reads task_start_refusal (migration 147) — archived, then closed,
+// takes, reads task_start_refusal (migration 158) — archived, then closed,
 // then blocked.
 
 // Resolutions, as task_resolution stores them.

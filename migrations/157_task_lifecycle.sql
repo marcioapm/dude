@@ -1,4 +1,4 @@
--- 147_task_lifecycle.sql — a person ends a task saying why (Close, a
+-- 157_task_lifecycle.sql — a person ends a task saying why (Close, a
 -- resolution), and puts work away (Archive) (docs/design/tracking-work.md,
 -- Epic 1 — Lifecycle).
 --
@@ -6,7 +6,7 @@
 -- ended it, and whether it is out of everyday views. Status stays
 -- delivery's; Close and Reopen each make one status move of their own.
 --
--- The functions that read the new `duplicates` relation kind are in 147:
+-- The functions that read the new `duplicates` relation kind are in 158:
 -- a value ALTER TYPE … ADD VALUE adds can't be used in the transaction
 -- that adds it.
 --
