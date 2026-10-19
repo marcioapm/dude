@@ -425,7 +425,13 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	// Feedback on it is fixed on the same branch, by fast-forward.
 	jervsHead := w.gh.SHA("feature/greet")
 	w.gh.ReviewSaying(n, "jerv", "CHANGES_REQUESTED", "Please rename the greeting.")
-	head := w.prFixPushed(wi)
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("the fix pushed", func() bool {
+		w.sync()
+		s := w.taskStatus(wi)
+		return w.fixes(wi) == 1 && w.gh.SHA("feature/greet") != jervsHead && (s == "review" || s == "ready_to_merge")
+	})
+	head := w.gh.SHA("feature/greet")
 	if head == jervsHead || len(w.gh.Pulls()) != 1 {
 		t.Fatalf("fix head %s (was %s), %d pull requests", head, jervsHead, len(w.gh.Pulls()))
 	}
