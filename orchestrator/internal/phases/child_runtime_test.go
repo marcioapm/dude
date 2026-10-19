@@ -467,6 +467,86 @@ func TestChildReportSpec(t *testing.T) {
 	}
 }
 
+func TestSessionChildSpecUsesReadOnlyLinkedRepositoriesAndNoSecrets(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_spec', $1, 'Research')`, w.run.Org)
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_linked', $1, 'Linked', 'linked', 'L')`, w.run.Org)
+	w.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ('repo_linked', $1, 'prj_linked', 'linked-repo', 'https://github.com/test/linked', 'main')`, w.run.Org)
+	w.exec(`INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_spec', 'prj_linked', $1)`, w.run.Org)
+	w.exec(`INSERT INTO session_repositories (session_id, repository_id, organization_id) VALUES ('ssn_spec', 'repo_linked', $1)`, w.run.Org)
+	w.exec(`INSERT INTO project_secrets (project_id, organization_id, name, value, hint, recipients) VALUES ('prj_' || $1, $1, 'INVESTIGATOR_SECRET', 'secret-value-not-for-child', 'child', '{reviewer}')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role) VALUES ('run_brainstorm', $1, 'ssn_spec', 1, 'running', 'agent', 'brainstorm')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role, source_kind, parent_run_id, parent_session_id, child_profile, child_capabilities, child_prompt)
+		VALUES ('run_session_child', $1, 'ssn_spec', 1, 'running', 'investigate', 'investigator', 'session', 'run_brainstorm', 'ssn_spec', 'investigator', '{}', 'read the linked repository')`, w.run.Org)
+	w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('investigator', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
+	w.run = phaseRun{ID: "run_session_child", Org: w.run.Org, SessionID: "ssn_spec", Phase: delivery.PhaseInvestigate, Role: delivery.RoleForPhase[delivery.PhaseInvestigate], SourceKind: string(delivery.ChildParentSession), Status: statusRunning}
+	w.s.Agent.ToolsURL = "http://tools.test"
+	w.s.Agent.ToolsService = true
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+	sp, _, _, secrets, err := w.s.spec(w.ctx, w.run, nil, chosenImage{Ref: "test/image:latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 0 {
+		t.Fatalf("session child received project secrets: %v", secrets)
+	}
+	for _, secret := range sp.Secrets {
+		if secret.Name == "INVESTIGATOR_SECRET" || secret.Value == "secret-value-not-for-child" {
+			t.Fatalf("project secret reached submitted spec: %v", secret.Name)
+		}
+	}
+	if sp.Git == nil || len(sp.Git.Repositories) != 1 || sp.Git.Repositories[0].Push == nil || *sp.Git.Repositories[0].Push || !strings.HasPrefix(sp.Git.Repositories[0].Name, "l-linked-repo") {
+		t.Fatalf("linked read-only repositories: %+v", sp.Git)
+	}
+	var rows int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM run_project_secrets WHERE run_id='run_session_child'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("session child secret rows: %d", rows)
+	}
+}
+
+func TestSessionChildArtifactsAreSessionOwnedAndVersioned(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_artifacts', $1, 'Research')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role) VALUES ('run_brainstorm_art', $1, 'ssn_artifacts', 1, 'running', 'agent', 'brainstorm')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role, source_kind, parent_run_id, parent_session_id, child_profile, child_capabilities)
+		SELECT id, $1, 'ssn_artifacts', 1, 'running', 'investigate', 'investigator', 'session', 'run_brainstorm_art', 'ssn_artifacts', 'investigator', '{}'::jsonb FROM unnest(ARRAY['run_art_one','run_art_two']) id`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role) VALUES ('run_task_art', $1, $2, $3, 1, 'completed', 'investigate', 'investigator')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	record := func(run, storage, sha string) {
+		t.Helper()
+		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+			return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, SessionID: "ssn_artifacts", ID: run}, lux.Artifact{ID: storage, Path: lux.PublishedPrefix + "design.md", SHA256: sha, Available: true})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record("run_art_one", "artifact_one", "sha-one")
+	record("run_art_two", "artifact_two", "sha-two")
+	var count int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE r.session_id='ssn_artifacts' AND a.name='design.md'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("session artifact copies: %d", count)
+	}
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, ID: "run_task_art"}, lux.Artifact{ID: "task_storage", Path: lux.PublishedPrefix + "design.md", SHA256: "task-sha", Available: true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var sessionID *string
+	var taskID *string
+	if err := w.owner.QueryRow(w.ctx, `SELECT a.session_id, r.task_id FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE a.storage_key='task_storage'`).Scan(&sessionID, &taskID); err != nil {
+		t.Fatal(err)
+	}
+	if sessionID != nil || taskID == nil || *taskID != w.run.TaskID {
+		t.Fatalf("task artifact ownership: session=%v task=%v", sessionID, taskID)
+	}
+}
+
 func TestChildRuntimeIsolation(t *testing.T) {
 	for _, action := range []string{"finish", "fail", "idle", "resume", "abort"} {
 		t.Run(action, func(t *testing.T) {
