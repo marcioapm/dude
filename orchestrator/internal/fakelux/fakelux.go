@@ -828,6 +828,9 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	str := func(k string) string { v, _ := labels[k].(string); return v }
 	// The fix is in if any repository the reviewer checked out holds it.
 	fixed := slices.ContainsFunc(specRepos(spec), func(r specRepo) bool {
+		if there, ok := hasPath(s.repoPath(r.URL), r.Ref, fakeagent.FixedFile); ok {
+			return there
+		}
 		return exec.Command("git", "-C", s.repoPath(r.URL), "cat-file", "-e", r.Ref+":"+fakeagent.FixedFile).Run() == nil
 	})
 	step := fakeagent.For(str("dude.phase"), str("dude.model"), str("dude.run"), fixed)
@@ -2264,6 +2267,9 @@ func head(repo, ref string) string {
 	if ref == "" {
 		ref = "HEAD"
 	}
+	if sha, ok := resolved(repo, ref); ok {
+		return sha
+	}
 	out, err := exec.Command("git", "-C", repo, "rev-parse", ref).Output()
 	if err != nil {
 		return ""
@@ -2782,6 +2788,10 @@ func commit(repo, base, branch string, files map[string]string, message string) 
 	}
 	if len(files) == 0 {
 		return base, nil
+	}
+	if sha, ok := commitInProcess(repo, base, files, message); ok {
+		_, err := exec.Command("git", "-C", repo, "update-ref", "refs/heads/"+branch, sha).CombinedOutput()
+		return sha, err
 	}
 	env := []string{"GIT_AUTHOR_NAME=agent", "GIT_AUTHOR_EMAIL=a@x", "GIT_COMMITTER_NAME=agent", "GIT_COMMITTER_EMAIL=a@x",
 		"GIT_INDEX_FILE=" + repo + "/fakelux.index"}

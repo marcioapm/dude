@@ -85,7 +85,7 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 		// As lux checks one out: a branch as a local branch (checkout -B,
 		// which the reflog records), anything else detached.
 		checkout := []string{"-C", dst, "checkout", "-q", "--detach", head(src, repo.Ref)}
-		if repo.Ref == "" || exec.Command("git", "-C", src, "rev-parse", "-q", "--verify", "refs/heads/"+repo.Ref).Run() == nil {
+		if repo.Ref == "" || isBranch(src, repo.Ref) {
 			branch := repo.Ref
 			if branch == "" {
 				branch = "main"
