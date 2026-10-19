@@ -968,7 +968,7 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
 		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
-		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels), "comments": len(p.Comments),
+		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels),
 	}
 }
 
@@ -1161,7 +1161,7 @@ func (s *Server) comments(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	write(w, 200, page(r, s.commentsJSON(p, p.Comments, "issuecomment")))
+	write(w, 200, linkedPage(w, r, s.commentsJSON(p, p.Comments, "issuecomment")))
 }
 
 func (s *Server) lineComments(w http.ResponseWriter, r *http.Request) {
@@ -1341,17 +1341,47 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 // page is one page of a list, as GitHub pages it: `per_page` clamped to
 // 1..100, 30 when absent or invalid; `page` from 1.
 func page[T any](r *http.Request, all []T) []T {
+	size, n := pageOf(r)
+	start := min((n-1)*size, len(all))
+	return all[start:min(start+size, len(all))]
+}
+
+func pageOf(r *http.Request) (size, n int) {
 	size, err := strconv.Atoi(r.URL.Query().Get("per_page"))
 	if err != nil || size < 1 {
 		size = 30
 	}
 	size = min(size, 100)
-	n, err := strconv.Atoi(r.URL.Query().Get("page"))
+	n, err = strconv.Atoi(r.URL.Query().Get("page"))
 	if err != nil || n < 1 {
 		n = 1
 	}
-	start := min((n-1)*size, len(all))
-	return all[start:min(start+size, len(all))]
+	return size, n
+}
+
+// linkedPage is page that also sets GitHub's Link header when the list has
+// more than one page: prev/first before the page, next/last after it.
+func linkedPage[T any](w http.ResponseWriter, r *http.Request, all []T) []T {
+	size, n := pageOf(r)
+	if last := max(1, (len(all)+size-1)/size); last > 1 {
+		at := func(p int, rel string) string {
+			q := r.URL.Query()
+			q.Set("per_page", strconv.Itoa(size))
+			q.Set("page", strconv.Itoa(p))
+			return fmt.Sprintf(`<http://%s%s?%s>; rel="%s"`, r.Host, r.URL.Path, q.Encode(), rel)
+		}
+		var links []string
+		if n > 1 {
+			links = append(links, at(n-1, "prev"), at(1, "first"))
+		}
+		if n < last {
+			links = append(links, at(n+1, "next"), at(last, "last"))
+		}
+		if links != nil {
+			w.Header().Set("Link", strings.Join(links, ", "))
+		}
+	}
+	return page(r, all)
 }
 
 // compareFileCap is the most files GitHub's compare lists

@@ -355,17 +355,23 @@ func (g *GitHub) Bot(ctx context.Context) (BotIdentity, error) {
 // send makes one GitHub request with the given Authorization and decodes
 // the answer, turning a refusal into *Error and no answer into Unreachable.
 func (g *GitHub) send(ctx context.Context, method, target, authorization string, body, out any) error {
+	_, err := g.exchange(ctx, method, target, authorization, body, out)
+	return err
+}
+
+// exchange is send that also answers the response's headers on success.
+func (g *GitHub) exchange(ctx context.Context, method, target, authorization string, body, out any) (http.Header, error) {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reader = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", authorization)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -377,7 +383,7 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	client := g.http
 	if agentRead {
 		if err := reserveAgentRequest(target, authorization, g.rateResource(target)); err != nil {
-			return err
+			return nil, err
 		}
 		copy := *client
 		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -385,7 +391,7 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		return &Unreachable{err}
+		return nil, &Unreachable{err}
 	}
 	defer res.Body.Close()
 	noteRate(target, authorization, res.Header)
@@ -396,16 +402,16 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		// A redirect's body is another location's answer: drained unread.
 		if res.StatusCode >= 300 && res.StatusCode < 400 {
 			_, _ = io.Copy(io.Discard, response)
-			return g.redirectRefusal(method, target, res.StatusCode)
+			return nil, g.redirectRefusal(method, target, res.StatusCode)
 		}
 	}
 	data, err := io.ReadAll(response)
 	if agentRead && len(data) > agentResponseMax {
-		return &Error{Status: http.StatusRequestEntityTooLarge, Refusal: RefusalTooLarge,
+		return nil, &Error{Status: http.StatusRequestEntityTooLarge, Refusal: RefusalTooLarge,
 			Message: "GitHub response exceeds the agent read limit (4 MiB)"}
 	}
 	if err != nil {
-		return &Unreachable{err}
+		return nil, &Unreachable{err}
 	}
 	if res.StatusCode >= 300 {
 		var e struct {
@@ -422,12 +428,14 @@ func (g *GitHub) send(ctx context.Context, method, target, authorization string,
 		} else if res.StatusCode == http.StatusForbidden {
 			refusal.AcceptedPermissions = acceptedPermissions(res.Header)
 		}
-		return refusal
+		return nil, refusal
 	}
 	if out != nil && len(data) > 0 {
-		return json.Unmarshal(data, out)
+		if err := json.Unmarshal(data, out); err != nil {
+			return nil, err
+		}
 	}
-	return nil
+	return res.Header, nil
 }
 
 // rateResource is the rate limit GitHub counts a request to target on, by

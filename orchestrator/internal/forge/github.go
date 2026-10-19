@@ -515,6 +515,51 @@ func (g *GitHub) doURL(ctx context.Context, scope, method, target string, body, 
 	return g.send(ctx, method, target, "Bearer "+token, body, out)
 }
 
+// getLinked is do's GET that also answers the response's Link header.
+func (g *GitHub) getLinked(ctx context.Context, path string, out any) (string, error) {
+	token, err := g.Token(ctx, scopeOf(path))
+	if err != nil {
+		return "", err
+	}
+	header, err := g.exchange(ctx, "GET", g.cred.APIBaseURL+path, "Bearer "+token, nil, out)
+	if err != nil {
+		return "", err
+	}
+	return header.Get("Link"), nil
+}
+
+// lastPage is the page number of a Link header's rel="last" URL, 0 when
+// there is none or it does not parse: a positive `page` query parameter of
+// at most 100000 (a bound keeping page arithmetic far from overflow).
+func lastPage(link string) int {
+	for _, part := range strings.Split(link, ",") {
+		target, params, ok := strings.Cut(strings.TrimSpace(part), ";")
+		target = strings.TrimSpace(target)
+		if !ok || !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
+			continue
+		}
+		last := false
+		for _, p := range strings.Split(params, ";") {
+			if strings.TrimSpace(p) == `rel="last"` {
+				last = true
+			}
+		}
+		if !last {
+			continue
+		}
+		u, err := url.Parse(target[1 : len(target)-1])
+		if err != nil {
+			return 0
+		}
+		n, err := strconv.Atoi(u.Query().Get("page"))
+		if err != nil || n < 1 || n > 100000 {
+			return 0
+		}
+		return n
+	}
+	return 0
+}
+
 type ghPull struct {
 	Number         int     `json:"number"`
 	NodeID         string  `json:"node_id"`
@@ -1834,8 +1879,6 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 		Body      string    `json:"body"`
 		UpdatedAt string    `json:"updated_at"`
 		Labels    []ghLabel `json:"labels"`
-		// The conversation's comments; nil when GitHub's answer has none.
-		Comments *int `json:"comments"`
 	}
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
 		return PullRequestRead{}, err
@@ -1892,7 +1935,7 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 	for _, f := range files[:min(len(files), maxFiles)] {
 		out.Files = append(out.Files, FileRead{Path: f.Filename, Status: f.Status, Additions: f.Additions, Deletions: f.Deletions, Patch: f.Patch})
 	}
-	if out.Comments, out.CommentCount, err = g.conversationTail(ctx, slug, number, p.Comments, maxComments); err != nil {
+	if out.Comments, out.CommentCount, err = g.conversationTail(ctx, slug, number, maxComments); err != nil {
 		return PullRequestRead{}, err
 	}
 	return out, nil
@@ -1901,55 +1944,60 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 // conversationTail is a pull request's newest keep conversation comments,
 // oldest first, and how many it has. A pull request's conversation is its
 // issue's comments, listed oldest first; reading them needs Pull requests:
-// Read only, where GET /issues/{n} needs Issues: Read. count, the pull
-// request's own comment count, names the last page: it is read, the pages
-// after it while each is full (the count was behind), and the pages before
-// it until keep are held. With no count every page is read, as pages does.
-func (g *GitHub) conversationTail(ctx context.Context, slug string, number int, count *int, keep int) ([]IssueComment, int, error) {
-	path := fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number)
-	if keep <= 0 || count != nil && *count == 0 {
+// Read only, where GET /issues/{n} needs Issues: Read. The pull request's
+// own comment count lags and leads the list, so the list's pages say where
+// it ends: page 1's Link header names the last page L (none, or one that
+// does not parse: page 1 is all of it). The total is (L-1)*100 plus page L's
+// comments, and page L-1 is prepended when L holds fewer than keep. An empty
+// page L (comments deleted since page 1) makes L-1 the last page, once, and
+// then the page before it is prepended only when it is the held page 1. At
+// most 3 requests, and page 1 is never read twice. keep is at most 100: one
+// prepended page holds the rest.
+func (g *GitHub) conversationTail(ctx context.Context, slug string, number int, keep int) ([]IssueComment, int, error) {
+	if keep <= 0 {
 		return []IssueComment{}, 0, nil
 	}
-	var all []ghComment
-	first := 1
-	if count == nil {
-		var err error
-		if all, err = pages[ghComment](ctx, g, path); err != nil {
+	path := fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=100&page=", slug, number)
+	var first []ghComment
+	link, err := g.getLinked(ctx, path+"1", &first)
+	if err != nil {
+		return nil, 0, err
+	}
+	read := func(page int) ([]ghComment, error) {
+		if page == 1 {
+			return first, nil
+		}
+		var batch []ghComment
+		err := g.do(ctx, "GET", path+strconv.Itoa(page), nil, &batch)
+		return batch, err
+	}
+	all, last, stepped := first, max(lastPage(link), 1), false
+	if last > 1 {
+		if all, err = read(last); err != nil {
 			return nil, 0, err
 		}
-	} else {
-		read := func(page int) ([]ghComment, error) {
-			var batch []ghComment
-			err := g.do(ctx, "GET", fmt.Sprintf("%s?per_page=100&page=%d", path, page), nil, &batch)
-			return batch, err
-		}
-		first = (*count + 99) / 100
-		// At most pages' 50 pages, so an endpoint that ignores paging cannot loop.
-		for page := first; page < first+50; page++ {
-			batch, err := read(page)
-			if err != nil {
+		if len(all) == 0 {
+			last, stepped = last-1, true
+			if all, err = read(last); err != nil {
 				return nil, 0, err
 			}
-			all = append(all, batch...)
-			if len(batch) < 100 {
-				break
-			}
 		}
-		for first > 1 && len(all) < keep {
-			first--
-			batch, err := read(first)
-			if err != nil {
-				return nil, 0, err
-			}
-			all = append(batch, all...)
+	}
+	total := (last-1)*100 + len(all)
+	// After a step back page last was the third request unless it is page 1;
+	// a fourth is not made, and a page last-1 of 1 is already held.
+	if len(all) < keep && last > 1 && (!stepped || last-1 == 1) {
+		prev, err := read(last - 1)
+		if err != nil {
+			return nil, 0, err
 		}
+		all = append(slices.Clip(prev), all...)
 	}
 	out := []IssueComment{}
 	for _, c := range all[max(0, len(all)-keep):] {
 		out = append(out, IssueComment{Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt})
 	}
-	// Every page before the first read is full.
-	return out, (first-1)*100 + len(all), nil
+	return out, total, nil
 }
 
 // openThreads is a pull request's unresolved review threads with their

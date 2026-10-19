@@ -113,17 +113,23 @@ func TestAPullRequestReadIsWhatAReaderSees(t *testing.T) {
 }
 
 // A pull request's conversation keeps its newest comments, oldest first,
-// with how many it has. The pull request's own count says which page is the
-// last, so the pages before the newest are not read.
+// with how many it has. Page 1's Link header names the last page, which is
+// read, with the page before it when the last holds fewer than are kept.
 func TestAPullRequestReadKeepsTheNewestConversation(t *testing.T) {
 	for _, tc := range []struct {
 		comments  int
 		wantPages []string
 	}{
+		{0, []string{"1"}},
 		{1, []string{"1"}},
-		{73, []string{"1"}},
-		{120, []string{"2", "1"}},
-		{250, []string{"3"}},
+		{50, []string{"1"}},
+		{51, []string{"1"}},
+		{100, []string{"1"}},
+		{101, []string{"1", "2"}},
+		{150, []string{"1", "2"}},
+		{200, []string{"1", "2"}},
+		{210, []string{"1", "3", "2"}},
+		{250, []string{"1", "3"}},
 	} {
 		t.Run(strconv.Itoa(tc.comments), func(t *testing.T) {
 			target, _, gh := readsWorld(t)
@@ -160,39 +166,107 @@ func TestAPullRequestReadKeepsTheNewestConversation(t *testing.T) {
 	}
 }
 
-// A pull request whose answer has no comment count has its conversation
-// read page by page to the end.
-func TestAPullRequestReadWithNoCountReadsEveryPage(t *testing.T) {
-	var pages []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/issues/1/comments"):
-			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-			pages = append(pages, strconv.Itoa(page))
-			batch := []map[string]any{}
-			for i := (page-1)*100 + 1; i <= min(page*100, 130); i++ {
-				batch = append(batch, map[string]any{"body": fmt.Sprintf("comment %d", i), "user": map[string]string{"login": "bo"},
-					"created_at": "2026-01-01T00:00:00Z"})
+// The conversation's length is the list's, whatever the pull request's own
+// count says, and comments deleted between pages or a Link header that does
+// not parse cost at most 3 requests.
+func TestAPullRequestConversationIsCountedByItsPages(t *testing.T) {
+	const deleted = -1
+	for _, tc := range []struct {
+		name string
+		// The pull request's comments count; deleted for none in its answer.
+		reported int
+		// The conversation, and what is left of it after page 1 is read.
+		comments, afterFirst int
+		// Replaces page 1's Link header when set.
+		link                        string
+		wantPages                   []string
+		wantTotal                   int
+		wantFirstBody, wantLastBody int
+	}{
+		{name: "count stale at zero", reported: 0, comments: 1, afterFirst: 1,
+			wantPages: []string{"1"}, wantTotal: 1, wantFirstBody: 1, wantLastBody: 1},
+		{name: "count behind", reported: 1, comments: 650, afterFirst: 650,
+			wantPages: []string{"1", "7"}, wantTotal: 650, wantFirstBody: 601, wantLastBody: 650},
+		{name: "count ahead", reported: 350, comments: 150, afterFirst: 150,
+			wantPages: []string{"1", "2"}, wantTotal: 150, wantFirstBody: 101, wantLastBody: 150},
+		{name: "no count", reported: deleted, comments: 130, afterFirst: 130,
+			wantPages: []string{"1", "2"}, wantTotal: 130, wantFirstBody: 81, wantLastBody: 130},
+		{name: "last page emptied", reported: 250, comments: 250, afterFirst: 180,
+			wantPages: []string{"1", "3", "2"}, wantTotal: 180, wantFirstBody: 131, wantLastBody: 180},
+		// One step back only: page 3 is taken as the last page, empty or not.
+		{name: "last two pages emptied", reported: 350, comments: 350, afterFirst: 120,
+			wantPages: []string{"1", "4", "3"}, wantTotal: 200, wantFirstBody: deleted, wantLastBody: deleted},
+		{name: "last page emptied to page 2", reported: 250, comments: 250, afterFirst: 120,
+			wantPages: []string{"1", "3", "2"}, wantTotal: 120, wantFirstBody: 71, wantLastBody: 120},
+		// Page 1 was read whole before the deletion; it is the last page.
+		{name: "last page emptied, page 1 held", reported: 120, comments: 120, afterFirst: 90,
+			wantPages: []string{"1", "2"}, wantTotal: 100, wantFirstBody: 51, wantLastBody: 100},
+		{name: "link without a page", reported: 250, comments: 250, afterFirst: 250, link: `<https://api.github.com/x?per_page=100>; rel="last"`,
+			wantPages: []string{"1"}, wantTotal: 100, wantFirstBody: 51, wantLastBody: 100},
+		{name: "link page not a number", reported: 250, comments: 250, afterFirst: 250, link: `<https://api.github.com/x?page=3x>; rel="last"`,
+			wantPages: []string{"1"}, wantTotal: 100, wantFirstBody: 51, wantLastBody: 100},
+		{name: "link page zero", reported: 250, comments: 250, afterFirst: 250, link: `<https://api.github.com/x?page=0>; rel="last"`,
+			wantPages: []string{"1"}, wantTotal: 100, wantFirstBody: 51, wantLastBody: 100},
+		{name: "link unbracketed", reported: 250, comments: 250, afterFirst: 250, link: `https://api.github.com/x?page=3; rel="last"`,
+			wantPages: []string{"1"}, wantTotal: 100, wantFirstBody: 51, wantLastBody: 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := tc.comments
+			var pages []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/issues/1/comments"):
+					page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+					pages = append(pages, strconv.Itoa(page))
+					batch := []map[string]any{}
+					for i := (page-1)*100 + 1; i <= min(page*100, left); i++ {
+						batch = append(batch, map[string]any{"body": fmt.Sprintf("comment %d", i), "user": map[string]string{"login": "bo"},
+							"created_at": "2026-01-01T00:00:00Z"})
+					}
+					if last := (left + 99) / 100; page == 1 && tc.link != "" {
+						w.Header().Set("Link", tc.link)
+					} else if page < last {
+						w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?per_page=100&page=%d>; rel="next", <http://%[1]s%[2]s?per_page=100&page=%[4]d>; rel="last"`,
+							r.Host, r.URL.Path, page+1, last))
+					}
+					if page == 1 {
+						left = tc.afterFirst
+					}
+					_ = json.NewEncoder(w).Encode(batch)
+				case strings.HasSuffix(r.URL.Path, "/reviews"), strings.HasSuffix(r.URL.Path, "/files"):
+					_, _ = w.Write([]byte(`[]`))
+				case r.URL.Path == "/graphql":
+					_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`))
+				case tc.reported == deleted:
+					_, _ = w.Write([]byte(`{"number":1}`))
+				default:
+					_, _ = fmt.Fprintf(w, `{"number":1,"comments":%d}`, tc.reported)
+				}
+			}))
+			defer srv.Close()
+			p, err := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL}).PullRequestRead(context.Background(), "acme/allowed", 1, 300, 50)
+			if err != nil {
+				t.Fatal(err)
 			}
-			_ = json.NewEncoder(w).Encode(batch)
-		case strings.HasSuffix(r.URL.Path, "/reviews"), strings.HasSuffix(r.URL.Path, "/files"):
-			_, _ = w.Write([]byte(`[]`))
-		case r.URL.Path == "/graphql":
-			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`))
-		default:
-			_, _ = w.Write([]byte(`{"number":1}`))
-		}
-	}))
-	defer srv.Close()
-	p, err := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL}).PullRequestRead(context.Background(), "acme/allowed", 1, 300, 50)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.CommentCount != 130 || len(p.Comments) != 50 || p.Comments[0].Body != "comment 81" || p.Comments[49].Body != "comment 130" {
-		t.Fatalf("%d comments of %d: first %+v", len(p.Comments), p.CommentCount, p.Comments[:min(1, len(p.Comments))])
-	}
-	if !slices.Equal(pages, []string{"1", "2"}) {
-		t.Errorf("pages read %v", pages)
+			if len(pages) > 3 {
+				t.Fatalf("%d conversation requests %v, want at most 3", len(pages), pages)
+			}
+			if p.CommentCount != tc.wantTotal {
+				t.Errorf("total %d, want %d", p.CommentCount, tc.wantTotal)
+			}
+			if tc.wantFirstBody == deleted {
+				if len(p.Comments) != 0 {
+					t.Errorf("%d comments, want none: %+v", len(p.Comments), p.Comments[0])
+				}
+			} else if want := tc.wantLastBody - tc.wantFirstBody + 1; len(p.Comments) != want ||
+				p.Comments[0].Body != fmt.Sprintf("comment %d", tc.wantFirstBody) ||
+				p.Comments[want-1].Body != fmt.Sprintf("comment %d", tc.wantLastBody) {
+				t.Errorf("%d comments, want %d from comment %d to %d", len(p.Comments), want, tc.wantFirstBody, tc.wantLastBody)
+			}
+			if !slices.Equal(pages, tc.wantPages) {
+				t.Errorf("pages read %v, want %v", pages, tc.wantPages)
+			}
+		})
 	}
 }
 
