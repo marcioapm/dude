@@ -343,6 +343,56 @@ func TestWorkPastTheReviewLoopAsksOpenOrDraftForARepositoryWithoutAnOpenPullRequ
 	}
 }
 
+// The same steering on two repositories, web's pull request merged at the
+// head the work left there and target's still open: the fix changes only
+// target, nothing would open, so the delivery waits on target's again.
+func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestBesideOneMergedAtItsHead(t *testing.T) {
+	w := conducting(t)
+	arm := w.firstReviewAfter()
+	task := w.prOpen(w.task(), prAt{web: true})
+	setPolicy(w, task, `{"maxReviewIterations":9}`)
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w.web.Merge(1)
+	w.until("web's pull request merged, and waiting on target's", func() bool {
+		w.syncs(1)
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND state = 'merged'`, task) == 1 && w.waitingOnPR(task)
+	})
+	branch := w.gh.Pull(1).Head
+	before, webHead := w.gh.SHA(branch), w.web.SHA(branch)
+	arm()
+
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("waiting on the pull request, or the decision before it", func() bool {
+		switch w.decisionAt(task) {
+		case delivery.PointReviewed, delivery.PointFixed:
+			w.must(task, "decide", `{"action":"next"}`)
+		case delivery.PointBeforePR:
+			return true
+		}
+		return w.waitingOnPR(task) && w.gh.SHA(branch) != before
+	})
+	if point := w.decisionAt(task); point != "" {
+		t.Fatalf("parked on the conductor's %q decision, want waiting on target's pull request again\n%s", point, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = $3`,
+		task, delivery.EvDecisionAwaited, delivery.PointBeforePR); n != 0 {
+		t.Errorf("%d decisions awaited before the pull request", n)
+	}
+	if got := w.web.SHA(branch); got != webHead {
+		t.Errorf("web's branch moved to %s, want %s: the fix was to change target only", got, webHead)
+	}
+	if a, b := len(w.gh.Pulls()), len(w.web.Pulls()); a != 1 || b != 1 {
+		t.Errorf("%d pull requests on target, %d on web, want one each", a, b)
+	}
+}
+
 // Refused while a phase that publishes is at work (one writer), and past
 // the pull request's fix bound.
 func TestStartingAPhaseWhileThePullRequestWaitsHasTheSameBounds(t *testing.T) {

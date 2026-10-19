@@ -1215,8 +1215,8 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 }
 
 // beforePR goes to the pull request step, through the decision before it
-// (Open or Draft) — except for a pull request taken over, or pull requests
-// open already for every repository the work changed: nothing to decide.
+// (Open or Draft) — except for a pull request taken over, or open pull
+// requests with nothing new to open: nothing to decide.
 func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State, line string) (workflow.Result, error) {
 	if st.Integration != nil {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
@@ -1224,11 +1224,10 @@ func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State
 	if st.adoptedPR() || st.ActingOnPR {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
-	if covered, err := w.changedReposHaveOpenPRs(ctx, sc, st); err != nil {
+	if covered, err := w.prsCoverTheWork(ctx, sc, st); err != nil {
 		return workflow.Result{}, err
 	} else if covered {
-		// Back to the open pull requests as work started at their wait
-		// returns: openPullRequest asks reviewers of an older head again.
+		// Nothing to open: back to the wait, with reviewers of an older head asked again (openPullRequest).
 		st.ActingOnPR = true
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
@@ -1835,10 +1834,9 @@ func (w *steps) openPRRepos(ctx context.Context, sc workflow.StepContext, st *St
 	return repos, nil
 }
 
-// changedReposHaveOpenPRs says whether every writable repository the work
-// moved (OpenPullRequests' rule) has an open pull request of the task's.
-// False with no pull request, or with nothing changed.
-func (w *steps) changedReposHaveOpenPRs(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
+// prsCoverTheWork says whether one of the task's pull requests is open and
+// OpenPullRequests would open no new one (reposToOpen).
+func (w *steps) prsCoverTheWork(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
 	if len(st.PullRequestIDs) == 0 {
 		return false, nil
 	}
@@ -1846,24 +1844,13 @@ func (w *steps) changedReposHaveOpenPRs(ctx context.Context, sc workflow.StepCon
 	if err != nil || len(open) == 0 {
 		return false, err
 	}
-	var repos []Repository
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		repos, err = TaskRepositories(ctx, tx, st.TaskID)
+	var todo []Repository
+	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		var err error
+		todo, _, _, err = reposToOpen(ctx, tx, st)
 		return err
-	}); err != nil {
-		return false, err
-	}
-	changed := 0
-	for _, r := range repos {
-		if _, moved := st.Heads[r.Name]; !moved || r.Access != "write" {
-			continue
-		}
-		changed++
-		if !slices.Contains(open, r.Name) {
-			return false, nil
-		}
-	}
-	return changed > 0, nil
+	})
+	return err == nil && len(todo) == 0, err
 }
 
 // feedbackRepos names the pull requests (by repository) feedback is on.
