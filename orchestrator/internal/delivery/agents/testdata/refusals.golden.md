@@ -1030,3 +1030,15 @@ not this task's parent
 
 child does not belong to this task
 
+## refusals/delivery/child/session-ended
+
+the brainstorm session has ended
+
+## refusals/delivery/child/session-parent-ended
+
+the brainstorm parent is no longer live
+
+## refusals/delivery/child/session-profile
+
+this profile is not available to a brainstorm session child
+
