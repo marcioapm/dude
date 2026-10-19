@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -202,67 +203,157 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	return d, nil
 }
 
-// Each question gets at most 128 KiB: report 16 KiB, project notes 8 KiB,
-// changed paths/stat 16 KiB, and tool records 80 KiB. Oversize records
-// retain their tails; omitted evidence is explicitly marked for the model.
+// The judge's context is bounded, so a long Run's still fits the model it
+// is sent to: the report and the project's notes whole up to their caps,
+// what changed up to checksChangesMax, and the recorded calls newest first
+// up to checksCallsMax, whole calls only, saying how many earlier ones were
+// left out. Each call's output is already capped in the ledger
+// (capOutput: its first and last 2 KiB, so a command's last lines, where
+// it says how it ended, are kept).
+const (
+	checksReportMax  = 16 << 10
+	checksNotesMax   = 8 << 10
+	checksChangesMax = 16 << 10
+	checksCallsMax   = 80 << 10
+)
+
+var (
+	checksContextText = delivery.MustText("notices/checks/context")
+	checksCallText    = delivery.MustText("notices/checks/call")
+)
+
+// checksCall is one recorded tool call and its completion, as the judge
+// reads it.
+type checksCall struct {
+	Tool, Input, Status string
+	Exit                *int
+	Streams             []checksStream
+}
+
+type checksStream struct {
+	Name, Head, Tail string
+	Omitted, Bytes   int
+	Withheld         bool
+}
+
+// checksContext is what the judge reads: the report, the project's notes
+// for the Run's role, what the Run changed and the tool calls it recorded,
+// each with how it ended, in order (checksReportMax and its neighbours).
 func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []delivery.Check) (string, error) {
 	report, _ := json.Marshal(checks)
-	var notes, changes string
-	var records strings.Builder
+	var notes string
+	var changes strings.Builder
+	var calls []checksCall
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var p, o []byte
-		if err := tx.QueryRow(ctx, `SELECT p.agent_models,o.default_agent_models FROM projects p JOIN organizations o ON o.id=p.organization_id WHERE p.id=$1`, r.ProjectID).Scan(&p, &o); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT p.agent_models, o.default_agent_models FROM projects p
+			JOIN organizations o ON o.id = p.organization_id WHERE p.id = $1`, r.ProjectID).Scan(&p, &o); err != nil && !db.IsNotFound(err) {
 			return err
 		}
 		notes = delivery.ResolveRole(delivery.PromptRoleFor(r.Phase, r.Role), p, o).Context
-		rows, err := tx.Query(ctx, `SELECT f->>'path',f->>'additions',f->>'deletions' FROM run_diffs d CROSS JOIN LATERAL jsonb_array_elements(d.files) f WHERE d.run_id=$1`, r.ID)
+		rows, err := tx.Query(ctx, `SELECT COALESCE(f->>'path', ''), COALESCE(f->>'additions', '?'), COALESCE(f->>'deletions', '?')
+			FROM run_diffs d CROSS JOIN LATERAL jsonb_array_elements(d.files) f WHERE d.run_id = $1`, r.ID)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var path, a, d *string
-			if err := rows.Scan(&path, &a, &d); err != nil {
+			var path, added, removed string
+			if err := rows.Scan(&path, &added, &removed); err != nil {
 				rows.Close()
 				return err
 			}
-			fmt.Fprintf(&records, "%v +%v -%v\n", value(path), value(a), value(d))
+			fmt.Fprintf(&changes, "%s +%s -%s\n", path, added, removed)
 		}
-		err = rows.Err()
 		rows.Close()
-		if err != nil {
+		if err := rows.Err(); err != nil {
 			return err
 		}
-		changes = records.String()
-		records.Reset()
-		rows, err = tx.Query(ctx, `SELECT event_type,payload FROM events WHERE run_id=$1 AND event_type IN ('agent.tool.called','agent.tool.completed') ORDER BY cursor`, r.ID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var typ string
-			var raw []byte
-			if err := rows.Scan(&typ, &raw); err != nil {
-				return err
-			}
-			fmt.Fprintf(&records, "%s %s\n", typ, raw)
-		}
-		return rows.Err()
+		calls, err = recordedCalls(ctx, tx, r.ID)
+		return err
 	})
 	if err != nil {
 		return "", err
 	}
-	return "Report:\n" + checksBound(string(report), 16<<10) + "\nProject notes:\n" + checksBound(notes, 8<<10) + "\nChange paths/stat (recorded snapshot):\n" + checksBound(changes, 16<<10) + "\nRecorded calls and completions in order:\n" + checksBound(records.String(), 80<<10), nil
-}
-func value(s *string) string {
-	if s == nil {
-		return "unknown"
+	// Newest first, whole calls, up to the bound; then back in order.
+	var shown []string
+	size := 0
+	for i := len(calls) - 1; i >= 0; i-- {
+		text := checksCallText.Render(calls[i])
+		if size+len(text) > checksCallsMax && len(shown) > 0 {
+			break
+		}
+		shown = append(shown, text)
+		size += len(text)
 	}
-	return *s
+	slices.Reverse(shown)
+	return checksContextText.Render(struct {
+		Report, Notes, Changes string
+		Calls                  []string
+		Omitted                int
+	}{boundHead(string(report), checksReportMax), boundHead(notes, checksNotesMax), boundHead(changes.String(), checksChangesMax),
+		shown, len(calls) - len(shown)}), nil
 }
-func checksBound(s string, n int) string {
+
+// recordedCalls are the Run's own tool calls, each with its completion,
+// in the order they were made.
+func recordedCalls(ctx context.Context, tx pgx.Tx, runID string) ([]checksCall, error) {
+	rows, err := tx.Query(ctx, `SELECT event_type, payload FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor`,
+		runID, evToolCalled, evToolCompleted)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var calls []checksCall
+	byID := map[string]int{}
+	for rows.Next() {
+		var typ string
+		var p map[string]any
+		if err := rows.Scan(&typ, &p); err != nil {
+			return nil, err
+		}
+		id, _ := p["callId"].(string)
+		i, seen := byID[id]
+		if !seen {
+			calls = append(calls, checksCall{})
+			i = len(calls) - 1
+			byID[id] = i
+		}
+		c := &calls[i]
+		if tool, _ := p["tool"].(string); tool != "" && (c.Tool == "" || typ == evToolCalled) {
+			c.Tool = tool
+		}
+		if typ == evToolCalled {
+			if in, ok := p["input"]; ok {
+				raw, _ := json.Marshal(in)
+				c.Input = string(raw)
+			}
+			continue
+		}
+		c.Status, _ = p["status"].(string)
+		if exit, ok := p["exitCode"].(float64); ok {
+			n := int(exit)
+			c.Exit = &n
+		}
+		for _, name := range []string{"output", "stdout", "stderr"} {
+			out, ok := p[name].(map[string]any)
+			if !ok {
+				continue
+			}
+			st := checksStream{Name: name}
+			st.Head, _ = out["head"].(string)
+			st.Tail, _ = out["tail"].(string)
+			st.Omitted, st.Bytes = byteCount(out["omittedBytes"]), byteCount(out["bytes"])
+			st.Withheld = out["withheld"] == true
+			c.Streams = append(c.Streams, st)
+		}
+	}
+	return calls, rows.Err()
+}
+
+// boundHead is s up to n bytes, saying so when it was cut.
+func boundHead(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return "[earlier context omitted; unavailable evidence must not be assumed]\n" + s[len(s)-n:]
+	return cutRunes(s[:n], false) + "\n[… the rest left out for length]"
 }

@@ -143,6 +143,8 @@ var agentFuncs = template.FuncMap{
 	"quoteLines": func(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ") },
 	// fenced breaks each ``` in a log so it cannot close the fence around it.
 	"fenced": func(s string) string { return strings.ReplaceAll(s, "```", "`\u200b``") },
+	// indent indents each line of a text by four spaces.
+	"indent": func(s string) string { return "    " + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n    ") },
 }
 
 // fileText is a file's text: its content less one trailing newline.
