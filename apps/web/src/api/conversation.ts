@@ -1594,8 +1594,13 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (failed && starting && payload.kept !== true && stage !== "park") {
           if (stage) enterStage(starting, stage, event.occurredAt);
           const luxReason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason : null;
-          starting.failed = setup ? { reason: ended.why, source: "dude", setup }
-            : luxReason ? { reason: luxReason, source: "lux" } : { reason: ended.why, source: "dude" };
+          if (setup) {
+            starting.failed = { reason: ended.why, source: "dude", setup };
+          } else if (luxReason) {
+            starting.failed = { reason: luxReason, source: "lux" };
+          } else {
+            starting.failed = { reason: ended.why, source: "dude" };
+          }
           ended.start = starting;
           // Only the wake's own first start, or a move of it before the agent ran: a woken conductor that ran and then
           // failed resuming for a person's message keeps Try again.
