@@ -54,7 +54,7 @@ async function projectOverview(ctx: RequestContext): Promise<Response> {
     const epics = (await scope.sql`
       SELECT e.id, e.title, e.description, e.position, e.state AS "storedState",
              e.created_at AS "createdAt", e.updated_at AS "updatedAt",
-             COALESCE((SELECT array_agg(t.status::text) FROM tasks t WHERE t.epic_id = e.id), '{}') AS statuses,
+             COALESCE((SELECT array_agg(t.status::text) FROM tasks t WHERE t.epic_id = e.id AND t.archived_at IS NULL), '{}') AS statuses,
              -- Who owns its tasks, as people, most tasks first. A task's owner
              -- is its first active person by (position, person_id), as in
              -- ownerJson(): positions are not renumbered when someone leaves.
@@ -72,7 +72,8 @@ async function projectOverview(ctx: RequestContext): Promise<Response> {
              -- What it cost, tokens and machine time, as its metrics count it.
              m.cost_usd AS "costUsd", m.machine_usd AS "machineUsd",
              (SELECT max(t.updated_at) FROM tasks t WHERE t.epic_id = e.id) AS "lastActivity",
-             (SELECT count(*)::int FROM tasks t WHERE t.epic_id = e.id AND t.status IN ('awaiting_input', 'awaiting_confirmation')) AS "needsYou",
+             (SELECT count(*)::int FROM tasks t WHERE t.epic_id = e.id AND t.archived_at IS NULL
+                AND t.status IN ('awaiting_input', 'awaiting_confirmation')) AS "needsYou",
              -- Its agents waiting on each other: [the waiting task's key, the key it waits on], from live Runs' open waits.
              COALESCE((SELECT json_agg(json_build_array(fp.key_prefix || '-' || ft.number, tp.key_prefix || '-' || tt.number) ORDER BY w.since)
                        FROM peer_waits w JOIN runs r ON r.id = w.run_id
@@ -81,11 +82,16 @@ async function projectOverview(ctx: RequestContext): Promise<Response> {
                        JOIN tasks tt ON tt.id = m.to_task_id JOIN projects tp ON tp.id = tt.project_id
                        WHERE ft.epic_id = e.id AND w.closed_at IS NULL
                          AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')), '[]') AS waiting
-      FROM epics e CROSS JOIN LATERAL epic_metrics(e.id) m WHERE e.project_id = ${projectId}
+      FROM epics e CROSS JOIN LATERAL epic_metrics(e.id) m WHERE e.project_id = ${projectId} AND e.archived_at IS NULL
       ORDER BY e.position, e.created_at`) as EpicRow[];
+    // Put away, out of the list: reachable here to unarchive.
+    const archivedEpics = (await scope.sql`
+      SELECT id, title, archived_at AS "archivedAt" FROM epics WHERE project_id = ${projectId} AND archived_at IS NOT NULL
+      ORDER BY archived_at DESC`) as Array<{ id: string; title: string; archivedAt: string }>;
 
     return {
       project: projects[0],
+      archivedEpics,
       epics: epics.map(({ statuses, storedState, ...e }) => {
         const lanes = { done: 0, review: 0, progress: 0, backlog: 0 };
         for (const s of statuses) lanes[LANE[s] ?? "backlog"]++;

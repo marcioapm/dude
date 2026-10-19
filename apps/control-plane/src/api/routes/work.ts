@@ -10,10 +10,10 @@ import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
   BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
-  resolveAgentModel, resolveTier,
+  resolveAgentModel, resolveTier, startRefusalWords,
   taskCriteriaInput, taskGoalInput, taskGoalShortBy, taskSourceInputSchema,
 } from "@dude/domain";
-import type { AgentModels, BlockerRef } from "@dude/domain";
+import type { AgentModels, BlockerRef, TaskResolution } from "@dude/domain";
 import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { HttpError, badRequest, conflict, json, notFound, parseBody } from "../http.ts";
@@ -55,6 +55,12 @@ const TASK_SELECT = `
       'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
+  -- Lifecycle (migrations 157/158): why a person ended it, and whether it is put away.
+  resolution, archived_at AS "archivedAt",
+  (SELECT person_ref(p) FROM people p WHERE p.id = tasks.closed_by) AS "closedBy",
+  (SELECT person_ref(p) FROM people p WHERE p.id = tasks.archived_by) AS "archivedBy",
+  (SELECT cp.key_prefix || '-' || c.number FROM task_relations r JOIN tasks c ON c.id = r.to_task_id JOIN projects cp ON cp.id = c.project_id
+    WHERE r.from_task_id = tasks.id AND r.kind = 'duplicates') AS "duplicateOf",
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 
@@ -253,6 +259,47 @@ async function markTaskDone(ctx: RequestContext): Promise<Response> {
     "{}", ctx.principal);
 }
 
+// Close and Close and archive (docs/design/tracking-work.md, "Data, API,
+// events"): the orchestrator owns the rules, the status move and the
+// guard; this validates the shape and forwards, as Mark done.
+const closeInput = z.object({
+  resolution: z.enum(["wont_do", "duplicate", "cant_reproduce"]),
+  duplicateOf: z.string().min(1).max(200).optional(),
+  note: z.string().max(2000).optional(),
+  removeRelations: z.boolean().optional(),
+}).strict();
+
+const archiveInput = closeInput.partial({ resolution: true });
+
+/** Close a task, saying why: owner or admin. */
+async function closeTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, closeInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/close`,
+    JSON.stringify(input), ctx.principal);
+}
+
+/** Archive a task: one not ended is closed with the resolution given, in one transaction. */
+async function archiveTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, archiveInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/archive`,
+    JSON.stringify(input), ctx.principal);
+}
+
+/** Reopen and Unarchive take no body. */
+function lifecycleStep(path: "reopen" | "unarchive", what: "tasks" | "epics" = "tasks") {
+  return (ctx: RequestContext): Promise<Response> =>
+    orchestrator(ctx.principal.organizationId, "POST", `/internal/${what}/${encodeURIComponent(ctx.params.id!)}/${path}`, "{}", ctx.principal);
+}
+
+const epicArchiveInput = z.object({ withEndedTasks: z.boolean().optional() }).strict();
+
+/** Archive an epic with its tasks, or with withEndedTasks its ended ones alone. */
+async function archiveEpic(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, epicArchiveInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/epics/${encodeURIComponent(ctx.params.id!)}/archive`,
+    JSON.stringify(input), ctx.principal);
+}
+
 /** Its owner decides how delivery goes on after it stopped for them. */
 async function decideTask(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/decide`,
@@ -320,13 +367,18 @@ async function recoverTask(ctx: RequestContext): Promise<Response> {
 async function listTasks(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.url.searchParams.get("projectId");
   const status = ctx.url.searchParams.get("status");
+  // Archived work is out of every everyday view: `archived=1` lists only it,
+  // newest archived first. TODO(tracking-work.md, "GET /v1/tasks"): the
+  // rest of the filters and keyset paging are Epic 3's.
+  const archived = ctx.url.searchParams.get("archived") === "1";
 
   const tasks = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
       SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks
       WHERE (${projectId}::text IS NULL OR project_id = ${projectId})
         AND (${status}::text IS NULL OR status::text = ${status})
-      ORDER BY created_at DESC
+        AND (archived_at IS NOT NULL) = ${archived}
+      ORDER BY ${archived ? scope.sql`archived_at DESC` : scope.sql`created_at DESC`}
       LIMIT 200`) as Array<Record<string, unknown>>;
   });
   return json({ tasks });
@@ -375,10 +427,20 @@ async function createRun(ctx: RequestContext): Promise<Response> {
     const task = tasks[0];
     if (!task) return { missing: true as const };
 
-    // Path 8: a bare Run is a start, refused while the task waits on unmerged
-    // work. The rule is task_blocked_by's (migration 111), the one the
-    // orchestrator's RefuseBlockedTx reads; the row is locked as it does.
+    // Path 8: a bare Run is a start, refused as the orchestrator's
+    // RefuseStartTx refuses one: archived, then closed (neither ever
+    // overridden), then blocked. The order is task_start_refusal's
+    // (migration 158), the blockers task_blocked_by's; the row is locked as
+    // RefuseStartTx locks it.
     await scope.sql`SELECT 1 FROM tasks WHERE id = ${taskId} FOR NO KEY UPDATE`;
+    const [refusal] = (await scope.sql`
+      SELECT task_start_refusal(t.id) AS refusal, p.key_prefix || '-' || t.number AS key, t.resolution
+      FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ${taskId}`) as Array<{
+      refusal: "archived" | "closed" | "blocked" | null; key: string; resolution: TaskResolution | null;
+    }>;
+    if (refusal?.refusal === "archived" || refusal?.refusal === "closed") {
+      return { refused: refusal.refusal, message: startRefusalWords(refusal.refusal, refusal.key, refusal.resolution) };
+    }
     const blockers = (await scope.sql`SELECT key, status FROM task_blocked_by(${taskId})`) as BlockerRef[];
     if (blockers.length > 0) return { blocked: blockers };
 
@@ -420,7 +482,27 @@ async function createRun(ctx: RequestContext): Promise<Response> {
   if ("missing" in result) throw notFound(`task ${taskId} not found`);
   if ("raced" in result) throw conflict("a run for this attempt was created concurrently; retry");
   if ("blocked" in result) throw await refusedStart(ctx, taskId, "create_run", result.blocked);
+  if ("refused" in result && result.refused) throw await refusedLifecycleStart(ctx, taskId, "create_run", result.refused, result.message);
   return json(result.run, 201);
+}
+
+/**
+ * A start refused because a person closed or archived the task: recorded
+ * (task.start_refused {path, reason}) and answered as the orchestrator
+ * answers it, 409 `archived` or `closed`, the same words.
+ */
+async function refusedLifecycleStart(ctx: RequestContext, taskId: string, path: string, reason: "archived" | "closed", message: string): Promise<HttpError> {
+  const { organizationId } = ctx.principal;
+  await withOrg(organizationId, async (scope) => {
+    const [row] = (await scope.sql`SELECT project_id AS "projectId" FROM tasks WHERE id = ${taskId}`) as Array<{ projectId: string }>;
+    const actor = auditActor(ctx.principal);
+    await appendInScope(scope, {
+      eventType: EventTypes.TaskStartRefused, organizationId, projectId: row!.projectId, taskId,
+      actor: { type: actor.kind, id: actor.id }, source: "control-plane", correlationId: taskId,
+      payload: { path, reason },
+    });
+  });
+  return new HttpError(409, message, reason);
 }
 
 /**
@@ -581,6 +663,12 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/runs", createRun);
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
+  router.post("/v1/tasks/:id/close", closeTask);
+  router.post("/v1/tasks/:id/reopen", lifecycleStep("reopen"));
+  router.post("/v1/tasks/:id/archive", archiveTask);
+  router.post("/v1/tasks/:id/unarchive", lifecycleStep("unarchive"));
+  router.post("/v1/epics/:id/archive", archiveEpic);
+  router.post("/v1/epics/:id/unarchive", lifecycleStep("unarchive", "epics"));
   router.post("/v1/tasks/:id/decide", decideTask);
   router.post("/v1/tasks/:id/chat", chatTask);
   router.post("/v1/tasks/:id/retry", retryConductor);

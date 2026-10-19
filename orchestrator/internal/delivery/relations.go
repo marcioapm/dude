@@ -15,8 +15,8 @@ import (
 
 // Task relations (docs/design/task-relations.md): a `blocks` edge A → B
 // holds B's start until A is merged — done, with a merged pull request.
-// task_blocked_by (migration 111) is the rule; RefuseBlockedTx is every
-// start path's guard over it.
+// task_blocked_by (migration 111, 158) is the rule; RefuseStartTx
+// (lifecycle.go) is every start path's guard over it.
 
 // Events about relations and starts that wait on them.
 const (
@@ -134,11 +134,24 @@ const blockedRecheck = 5 * time.Minute
 // parkIfBlocked is path 5: the implement step of a delivery whose task
 // gained an open blocker after it started. The task goes back to queued,
 // saying what it waits on, and the step parks on relations.unblocked;
-// nothing fails. The refusal is recorded once per blocker set.
-func (s *Store) parkIfBlocked(ctx context.Context, org string, st *State) (bool, error) {
+// nothing fails. The refusal is recorded once per blocker set. A task
+// closed or archived meanwhile (a Close racing the step an unblock woke)
+// parks too, whatever blockers says, and is never an error: Close has
+// already ended the delivery, so no implementer is made.
+func (s *Store) parkIfBlocked(ctx context.Context, org string, st *State, blockers bool) (bool, error) {
 	parked := false
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		err := RefuseBlockedTx(ctx, tx, st.TaskID)
+		if err := RefuseLifecycleTx(ctx, tx, st.TaskID); err != nil {
+			if IsLifecycleRefusal(err) {
+				parked = true
+				return nil
+			}
+			return err
+		}
+		if !blockers {
+			return nil
+		}
+		err := refuseBlockedOnlyTx(ctx, tx, st.TaskID)
 		blocked, ok := AsBlocked(err)
 		if !ok {
 			return err
@@ -162,18 +175,31 @@ func (s *Store) parkIfBlocked(ctx context.Context, org string, st *State) (bool,
 }
 
 // refuseBlockedStart is path 4: the conductor's first implementer on a
-// task that gained an open blocker while it planned. A person's override
-// lets it through; otherwise the conductor is told, as a Refusal carrying
-// the blockers. The refusal rolls the tool call back, so the tools server
+// task that gained an open blocker while it planned, or was archived or
+// closed. A person's override lets a blocked one through, never an
+// archived or closed one; otherwise the conductor is told, as a Refusal
+// carrying why. The refusal rolls the tool call back, so the tools server
 // records task.start_refused {path: "start_phase"} in a transaction of its
 // own, as the API's refusedStart does.
 func refuseBlockedStart(ctx context.Context, tx pgx.Tx, ref RunRef, st *State) error {
+	if err := refuseLifecycleStart(ctx, tx, ref.TaskID); err != nil {
+		return err
+	}
 	if st.Overridden {
 		return nil
 	}
-	err := RefuseBlockedTx(ctx, tx, ref.TaskID)
+	err := RefuseStartTx(ctx, tx, ref.TaskID)
 	if blocked, ok := AsBlocked(err); ok {
 		return Refusal{Msg: blocked.AgentRefusal(), Blocked: &blocked}
+	}
+	return err
+}
+
+// refuseLifecycleStart is RefuseLifecycleTx as a conductor's Refusal.
+func refuseLifecycleStart(ctx context.Context, tx pgx.Tx, taskID string) error {
+	err := RefuseLifecycleTx(ctx, tx, taskID)
+	if refused := lifecycleRefusal(err); refused != nil {
+		return Refusal{Msg: agentLifecycleRefusal(refused), Lifecycle: StartRefusalReason(refused)}
 	}
 	return err
 }
@@ -198,22 +224,10 @@ func OverrideParkedTx(ctx context.Context, tx pgx.Tx, org, taskID string, d *Del
 	return d.WorkflowID, workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalRelationsUnblock, map[string]any{"override": true}, "")
 }
 
-// RefuseBlockedTx is the guard every start path takes: the task's row
-// locked (after its delivery's, as LockEscalationTx orders them), then its
-// open blockers read; a BlockedError when there is any.
+// RefuseBlockedTx is RefuseStartTx under its earlier name, kept while
+// callers move: it refuses archived and closed tasks too.
 func RefuseBlockedTx(ctx context.Context, tx pgx.Tx, taskID string) error {
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID); err != nil {
-		return err
-	}
-	blockers, err := OpenBlockers(ctx, tx, taskID)
-	if err != nil || len(blockers) == 0 {
-		return err
-	}
-	key, err := TaskKeyOf(ctx, tx, taskID)
-	if err != nil {
-		return err
-	}
-	return BlockedError{TaskKey: key, Blockers: blockers}
+	return RefuseStartTx(ctx, tx, taskID)
 }
 
 // AsBlocked is err's BlockedError, if it is one.
@@ -235,7 +249,7 @@ func RecordStartRefusedTx(ctx context.Context, tx pgx.Tx, org, taskID, path, act
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvStartRefused, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		ActorType: actorType, ActorID: actorID, Source: ledger.SourceOrchestrator, CorrelationID: taskID,
-		Payload: map[string]any{"path": path, "blockers": BlockersPayload(blockers)}})
+		Payload: map[string]any{"path": path, "reason": RefusedBlocked, "blockers": BlockersPayload(blockers)}})
 	return err
 }
 
@@ -262,10 +276,10 @@ func RecordOverrideTx(ctx context.Context, tx pgx.Tx, org, taskID string, blocke
 }
 
 // GuardStartTx is a start's guard with a person's override: nil when
-// nothing blocks it; with override, nothing blocks it once recorded;
-// otherwise the BlockedError.
+// nothing refuses it; archived and closed refuse whatever the override;
+// blocked, with override, passes once recorded; otherwise the refusal.
 func GuardStartTx(ctx context.Context, tx pgx.Tx, org, taskID string, override *Override) error {
-	err := RefuseBlockedTx(ctx, tx, taskID)
+	err := RefuseStartTx(ctx, tx, taskID)
 	blocked, ok := AsBlocked(err)
 	if !ok || override == nil {
 		return err

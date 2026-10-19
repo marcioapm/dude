@@ -173,6 +173,12 @@
   color: var(--ds-color-text-muted);
   font-variant-numeric: tabular-nums;
 }
+/* The epic's level, leading its row as in Breadcrumb and the board's lane header. */
+.epicGlyph {
+  flex-shrink: 0;
+  width: 14px;
+  color: var(--ds-color-text-muted);
+}
 
 /* -- Task: mono key · title · its one state · its people. -- */
 .task {
@@ -213,8 +219,10 @@
 /* Muted falls under 4.5:1 on the hover and selection washes (light). */
 .row:hover .wiKey,
 .row:hover .epicCount,
+.row:hover .epicGlyph,
 .selected .wiKey,
-.selected .epicCount {
+.selected .epicCount,
+.selected .epicGlyph {
   color: var(--ds-color-text-secondary);
 }
 /* In a narrow sidebar the title wins; the people stay in the row's label. */
