@@ -579,11 +579,17 @@ func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runIn
 // large together.
 func attach(ctx context.Context, tx pgx.Tx, owner delivery.AttachOwner, directiveID string, ids []string) ([]json.RawMessage, error) {
 	attached, err := delivery.AttachOwnerImages(ctx, tx, owner, directiveID, ids)
+	return attached, attachmentRefused(err)
+}
+
+// attachmentRefused is err as the API answers it: 400 invalid_attachment
+// for a delivery.AttachmentError, else err itself.
+func attachmentRefused(err error) error {
 	var refused delivery.AttachmentError
 	if errors.As(err, &refused) {
-		return nil, fail(http.StatusBadRequest, "invalid_attachment", "%s", refused.Message)
+		return fail(http.StatusBadRequest, "invalid_attachment", "%s", refused.Message)
 	}
-	return attached, err
+	return err
 }
 
 // ownerOnly uses the first active ordered member, independent of credentials.

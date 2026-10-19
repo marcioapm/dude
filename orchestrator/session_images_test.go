@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -116,23 +117,95 @@ func TestASessionMessageRefusesImagesItMayNotSend(t *testing.T) {
 	}
 }
 
-// With no live agent the message would be a fresh agent's briefing, which
-// carries no images: it is refused, nothing starts, and the image stays
-// unsent for the next message.
-func TestASessionMessageWithImagesStartsNoAgent(t *testing.T) {
+// freshAgentGotImage says the session's new agent run was briefed with
+// briefed and no image, that the message's images went as a directive
+// queued on it, and that its lux input carries att's bytes. Returns the
+// directive.
+func (s *sessionWorld) freshAgentGotImage(run, att, briefed string) string {
+	s.t.Helper()
+	if p := s.prompt(run); !strings.Contains(p, "## The first message\n\n"+briefed) {
+		s.t.Errorf("the briefing does not end with %q:\n%s", briefed, p)
+	}
+	var directive string
+	if err := s.owner.QueryRow(context.Background(), `SELECT d.id FROM directives d JOIN attachments a ON a.directive_id = d.id
+		WHERE d.run_id = $1 AND a.id = $2`, run, att).Scan(&directive); err != nil {
+		s.t.Fatalf("no directive on %s carries %s: %v", run, att, err)
+	}
+	var luxRun string
+	s.until("the fresh agent's lux input to have the image", func() bool {
+		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, run).Scan(&luxRun)
+		return luxRun != "" && len(s.lux.Attachments(luxRun)[directive]) == 1
+	})
+	got := s.lux.Attachments(luxRun)
+	if a := got[directive][0]; !bytes.Equal(a.Data, screenshot) || a.ContentType != "image/png" {
+		s.t.Errorf("lux got %s %s (%d bytes)", a.Name, a.ContentType, len(a.Data))
+	}
+	// The briefing is the Run's prompt and carries none: the image is a later input.
+	if len(got["prompt"]) != 0 {
+		s.t.Errorf("the briefing carried %d images", len(got["prompt"]))
+	}
+	return directive
+}
+
+// oneChatMessage says the session's Chat has one chat.message on run, the
+// member's: its words, and att on it under the image directive.
+func (s *sessionWorld) oneChatMessage(session, run, text, directive, att string) {
+	s.t.Helper()
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND run_id = $2 AND event_type = 'chat.message'`, session, run); n != 1 {
+		s.t.Errorf("%d chat.message events on the fresh agent, want 1", n)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message' AND payload->>'text' = $2
+		AND payload->>'directiveId' = $3 AND payload->'attachments'->0->>'id' = $4`, run, text, directive, att); n != 1 {
+		s.t.Errorf("the chat.message does not show %q with %s", text, att)
+	}
+}
+
+// A first message with words and an image starts the session's agent:
+// the words are its briefing, and the image goes to it as its first
+// directive, shown on the one message in Chat.
+func TestASessionsFirstMessageWithImagesStartsItsAgent(t *testing.T) {
 	s := newSessionWorld(t)
 	b := s.withImages()
+	s.lux.Decide = hang
 	id := s.session()
 	s.uploadToSession(b, "att_first", id, "first.png", screenshot)
-	status, body := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_first"}})
-	if e, _ := body["error"].(map[string]any); status != 409 || e["code"] != "images_need_agent" {
-		t.Fatalf("a first message with an image: %d %v", status, body)
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_first"}})
+	run, _ := s.brainstorm(id)
+	if out["runId"] != run || out["created"] != true {
+		t.Fatalf("answered %v, want the new agent %s", out, run)
 	}
-	if run, _ := s.brainstorm(id); run != "" {
-		t.Errorf("an agent was started: %s", run)
-	}
-	if n := s.count(`SELECT count(*) FROM attachments WHERE id = 'att_first' AND attached_at IS NULL`); n != 1 {
-		t.Errorf("the refused image was attached")
+	directive := s.freshAgentGotImage(run, "att_first", "Márcio Martins: look\n\n[Images come with this message")
+	s.oneChatMessage(id, run, "look", directive, "att_first")
+}
+
+// An image alone starts the agent too: its briefing says who sent images.
+func TestASessionsFirstMessageMayBeAnImageAlone(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	s.lux.Decide = hang
+	id := s.session()
+	s.uploadToSession(b, "att_alone", id, "alone.png", screenshot)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "", "attachmentIds": []string{"att_alone"}})
+	run, _ := s.brainstorm(id)
+	directive := s.freshAgentGotImage(run, "att_alone", "Márcio Martins: [Images come with this message")
+	s.oneChatMessage(id, run, "", directive, "att_alone")
+}
+
+// While another member's answer is awaited, a pending model change does not
+// swap for a message with images: it is held for the answer on the agent
+// that asked.
+func TestAHeldSessionMessageWithImagesIgnoresAPendingModelChange(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	id, run, question := s.asked(askAna, true)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+	s.uploadToSession(b, "att_held", id, "held.png", screenshot)
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "meanwhile", "attachmentIds": []string{"att_held"}})
+	s.queuedOn(out, run)
+	s.noSwap(id)
+	if n := s.count(`SELECT count(*) FROM directives d JOIN attachments a ON a.directive_id = d.id
+		WHERE d.id = $1 AND d.held_for = $2 AND a.id = 'att_held'`, out["directiveId"], question); n != 1 {
+		t.Errorf("the held message does not hold its image")
 	}
 }
 
@@ -176,79 +249,66 @@ func TestASessionAnswerInChatCarriesItsImages(t *testing.T) {
 	s.until("lux to have the answer's image", func() bool { return len(s.lux.Attachments(luxRun)[directive]) == 1 })
 }
 
-// refusedForModelSwap says a message with image att was refused because a
-// model change is pending: nothing was queued on run, the image is unsent,
-// and the session still runs on run with no swap recorded.
-func (s *sessionWorld) refusedForModelSwap(status int, body map[string]any, session, run, att string) {
-	s.t.Helper()
-	e, _ := body["error"].(map[string]any)
-	if status != 409 || e["code"] != "images_need_model_swap" || e["message"] !=
-		"the session's model changed: send a message without images first so an agent on the new model takes over, then send the images again" {
-		s.t.Fatalf("an image message with a model change pending: %d %v", status, body)
-	}
-	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1`, run); n != 0 {
-		s.t.Errorf("the refused message queued %d directives", n)
-	}
-	if n := s.count(`SELECT count(*) FROM attachments WHERE id = $1 AND attached_at IS NULL AND directive_id IS NULL`, att); n != 1 {
-		s.t.Errorf("the refused image was attached")
-	}
-	if next, _ := s.brainstorm(session); next != run {
-		s.t.Errorf("a fresh agent %s was started", next)
-	}
-	s.noSwap(session)
-}
-
-// After a model change, a message with images that would hand the session
-// to a fresh agent is refused: the briefing carries no images, and queueing
-// it on the old agent would let image messages hold off the change. Words
-// alone then swap, and the image goes to the agent on the new model.
-func TestASessionMessageWithImagesWaitsForTheModelSwap(t *testing.T) {
+// After a model change, a message with images hands the session to a fresh
+// agent on the new model as words alone do: its words are the briefing's,
+// its image the fresh agent's first directive, and Chat shows one message.
+func TestASessionMessageWithImagesAppliesTheModelSwap(t *testing.T) {
 	s := newSessionWorld(t)
 	b := s.withImages()
 	gpt := s.tierOn("Sol", "gpt-6-sol")
 	id, run, _ := s.liveSession()
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": gpt, "harness": nil})
 	s.uploadToSession(b, "att_swap", id, "swap.png", screenshot)
-	status, body := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_swap"}})
-	s.refusedForModelSwap(status, body, id, run, "att_swap")
-
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "switch over"})
-	next := s.freshAgent(id, run)
 	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_swap"}})
-	s.queuedOn(out, next)
-	if n := s.count(`SELECT count(*) FROM attachments WHERE id = 'att_swap' AND directive_id = $1`, out["directiveId"]); n != 1 {
-		t.Errorf("the image is not on the message to the agent on the new model")
+	next := s.freshAgent(id, run)
+	if out["runId"] != next || out["created"] != true {
+		t.Errorf("answered %v, want the fresh agent %s", out, next)
 	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1`, run); n != 0 {
+		t.Errorf("the message was queued on the old agent too")
+	}
+	directive := s.freshAgentGotImage(next, "att_swap", "Márcio Martins: look\n\n[Images come with this message")
+	s.oneChatMessage(id, next, "look", directive, "att_swap")
 }
 
 // A message with images answering the agent's question after a model
-// change is refused the same way: the question stays open with no answer,
-// and the answer in words alone then hands it to a fresh agent.
-func TestASessionAnswerWithImagesWaitsForTheModelSwap(t *testing.T) {
+// change answers it through a fresh agent: the answer is its briefing's,
+// the image its first directive, and question.answered shows the image.
+func TestASessionAnswerWithImagesAppliesTheModelSwap(t *testing.T) {
 	s := newSessionWorld(t)
 	b := s.withImages()
 	id, run, question := s.asked(`{"question":"Which layout?"}`, false)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
 	s.uploadToSession(b, "att_layout", id, "layout.png", screenshot)
-	status, body := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "this one", "attachmentIds": []string{"att_layout"}})
-	s.refusedForModelSwap(status, body, id, run, "att_layout")
-	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, question); n != 1 {
-		t.Errorf("the refused answer closed the question")
-	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type IN ('question.answered', 'question.closed')`, id); n != 0 {
-		t.Errorf("the refused answer was recorded")
-	}
-
-	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "this one"})
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "this one", "attachmentIds": []string{"att_layout"}})
 	next := s.freshAgent(id, run)
 	if out["runId"] != next || out["created"] != true || out["questionId"] != question {
-		t.Errorf("the answer in words answered %v, want the fresh agent %s answering %s", out, next, question)
+		t.Errorf("the answer answered %v, want the fresh agent %s answering %s", out, next, question)
 	}
-	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'answered'`, question); n != 1 {
+	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'answered' AND answer = 'this one'`, question); n != 1 {
 		t.Errorf("the question is not answered")
 	}
-	if n := s.count(`SELECT count(*) FROM attachments WHERE id = 'att_layout' AND attached_at IS NULL`); n != 1 {
-		t.Errorf("the refused image was attached by the answer in words")
+	if p := s.prompt(next); !strings.Contains(p, "this one") {
+		t.Errorf("the fresh agent's briefing lacks the answer:\n%s", p)
+	}
+	var directive string
+	if err := s.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = 'att_layout'`).Scan(&directive); err != nil {
+		t.Fatal(err)
+	}
+	var luxRun string
+	s.until("the fresh agent's lux input to have the answer's image", func() bool {
+		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, next).Scan(&luxRun)
+		return luxRun != "" && len(s.lux.Attachments(luxRun)[directive]) == 1
+	})
+	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND run_id = $2`, directive, next); n != 1 {
+		t.Errorf("the image is not on a directive of the fresh agent")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'question.answered'
+		AND payload->>'questionId' = $2 AND payload->'attachments'->0->>'id' = 'att_layout'`, id, question); n != 1 {
+		t.Errorf("question.answered does not show the image")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message'`, next); n != 0 {
+		t.Errorf("the answer was shown again as a chat.message")
 	}
 }
 

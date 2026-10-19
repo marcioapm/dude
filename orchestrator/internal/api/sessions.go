@@ -184,7 +184,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 		if err != nil {
 			return err
 		}
-		runID, err = startSessionAgent(r.Context(), tx, org, id, p.writer(), name, *body.Message)
+		runID, err = startSessionAgent(r.Context(), tx, org, id, p.writer(), name, *body.Message, nil)
 		return err
 	})
 	if err != nil {
@@ -1107,7 +1107,9 @@ func relatedOf(ctx context.Context, tx pgx.Tx, taskID string) (delivery.RelatedT
 // starts one, briefed; with one, it is its next input, delivered at its
 // next step (a directive), resuming it if parked. While the agent waits on
 // a question, the person it is for answers it with their message; anyone
-// else's is held and goes with the answer, not as it.
+// else's is held and goes with the answer, not as it. A fresh agent (none
+// live, or a model change applied) is briefed with the words and sent the
+// images as its first directive (delivery.Opening).
 func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -1156,11 +1158,8 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 			err = find()
 		}
 		if db.IsNotFound(err) {
-			if len(body.AttachmentIDs) > 0 {
-				return errImagesNeedAgent
-			}
 			created = true
-			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text)
+			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text, body.AttachmentIDs)
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
@@ -1188,19 +1187,13 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 		}
-		// A fresh agent reads the message in its briefing, which carries no
-		// images; queueing it on the old agent instead would let image
-		// messages hold off the model change indefinitely.
-		if swap != nil && len(body.AttachmentIDs) > 0 {
-			return errImagesNeedModelSwap
-		}
 		if answers {
 			answered, err := answerBody{Text: body.Text}.check(items)
 			if err != nil {
 				return err
 			}
 			if swap != nil {
-				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p)
+				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
 				out = map[string]any{"runId": next, "created": true, "questionId": questionID}
 				created = true
 				return err
@@ -1214,9 +1207,9 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if swap != nil {
 			created = true
-			runID, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, delivery.Attributed(name, body.Text), body.Text)
+			runID, _, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, sessionOpening(name, body.Text, body.AttachmentIDs))
 			out = map[string]any{"runId": runID, "created": true}
-			return err
+			return attachmentRefused(err)
 		}
 		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(name, body.Text), Scope: "run"})
 		if err != nil {
@@ -1306,17 +1299,6 @@ func retryError(err error, live string) error {
 	return err
 }
 
-// errImagesNeedAgent refuses images on a message that would start a fresh
-// agent: its briefing is its first prompt, and a brainstorm's prompt carries
-// no images (phases.brainstormSpec), so they would be dropped.
-var errImagesNeedAgent = fail(http.StatusConflict, "images_need_agent",
-	"the session's agent is not running yet: send your words alone to start it, then send the images again once it has started")
-
-// errImagesNeedModelSwap refuses images on a message that would hand the
-// session to a fresh agent on its new model, for the same reason.
-var errImagesNeedModelSwap = fail(http.StatusConflict, "images_need_model_swap",
-	"the session's model changed: send a message without images first so an agent on the new model takes over, then send the images again")
-
 // checkChatText refuses a message the session's agent would not be given:
 // blank, or over delivery.ChatMessageMax bytes. field names it in the error.
 func checkChatText(field, text string) error {
@@ -1329,11 +1311,22 @@ func checkChatText(field, text string) error {
 	return nil
 }
 
+// sessionOpening is a member's message as a fresh agent's first: attributed
+// in its briefing, and with images, saying they follow (delivery.Opening).
+func sessionOpening(name, text string, images []string) delivery.Opening {
+	if len(images) == 0 {
+		return delivery.Opening{Message: delivery.Attributed(name, text), Shown: text}
+	}
+	return delivery.Opening{Message: delivery.Attributed(name, delivery.WithImages(text)), Shown: text, Images: images}
+}
+
 // startSessionAgent starts the brainstorm of a session with no live agent,
 // briefed with the writer's message attributed to them and shown in Chat as
-// written. The caller kicks the syncer once the transaction commits.
-func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr delivery.Writer, name, text string) (string, error) {
-	return delivery.StartBrainstorm(ctx, tx, org, sessionID, wr, delivery.Attributed(name, text), text)
+// written, its images queued for it. The caller kicks the syncer once the
+// transaction commits.
+func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr delivery.Writer, name, text string, images []string) (string, error) {
+	runID, _, err := delivery.StartBrainstorm(ctx, tx, org, sessionID, wr, sessionOpening(name, text, images))
+	return runID, attachmentRefused(err)
 }
 
 // settleSessionQuestion marks the agent's open question answered by p.
@@ -1374,20 +1367,29 @@ func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, 
 // answerByFreshAgent settles the agent's open question with a member's
 // answer when the session's model changed since it started: the answer is
 // the fresh agent's first message, its briefing's replay carrying the
-// question asked. The answer is recorded on the old Run after the
-// briefing, with no directive, so the briefing has it once and later
-// replays read it as heard. Returns the fresh agent.
+// question asked, and its images that agent's first directive. The answer
+// is recorded on the old Run after the briefing, with no directive, so the
+// briefing has it once and later replays read it as heard. Returns the
+// fresh agent.
 func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to delivery.SessionModelApplied, questionID, prompt string,
-	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
+	items []delivery.QuestionItem, a delivery.Answered, name string, p principal, images []string) (string, error) {
 	if err := settleSessionQuestion(ctx, tx, questionID, a, p); err != nil {
 		return "", err
 	}
-	next, err := delivery.ReplaceBrainstorm(ctx, tx, ref, to, p.writer(), delivery.AnswerDirective(prompt, items, a, name, true), "")
+	answer := delivery.AnswerDirective(prompt, items, a, name, true)
+	if len(images) > 0 {
+		answer = delivery.WithImages(answer)
+	}
+	next, attached, err := delivery.ReplaceBrainstorm(ctx, tx, ref, to, p.writer(),
+		delivery.Opening{Message: answer, Images: images, Answer: true})
 	if err != nil {
-		return "", err
+		return "", attachmentRefused(err)
 	}
 	payload := answeredPayload(questionID, "", a)
 	delete(payload, "directiveId")
+	if len(attached) > 0 {
+		payload["attachments"] = attached
+	}
 	ev := ref.Event("question.answered", p.writer().ActorType, payload)
 	ev.ActorID = p.Actor
 	_, err = ledger.Append(ctx, tx, ev)
@@ -1395,9 +1397,9 @@ func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to 
 }
 
 // sessionAnswer is a member answering the session agent's open question
-// through its form: one answer per question, and a note (answerBody; no
-// images: the form takes none; Chat does, sessionChat). Only the member it is put to,
-// or with none named, anyone who can chat.
+// through its form: one answer per question, and a note (answerBody: the
+// form takes no images; a Chat message does, through sessionChat). Only the
+// member it is put to, or with none named, anyone who can chat.
 func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -1446,7 +1448,7 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		if swap != nil {
-			next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p)
+			next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p, nil)
 			out = map[string]any{"id": questionID, "runId": next, "status": "answered", "answer": answered.Text,
 				"answers": answered.Answers}
 			return err

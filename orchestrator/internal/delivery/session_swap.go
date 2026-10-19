@@ -81,11 +81,11 @@ type SessionModelApplied struct{ Tier, Model, Harness string }
 
 // ReplaceBrainstorm ends the session's agent ref for the model it no
 // longer matches and starts a fresh one briefed with the conversation and
-// message (shown, the text Chat shows, if any); what the old one never
-// read is handed on after it. Returns the new Run. The caller holds the
-// session's lock and has settled the question the message answers: while
-// a question is open, nothing else swaps the agent.
-func ReplaceBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, to SessionModelApplied, w Writer, message, shown string) (string, error) {
+// the message o (StartBrainstorm); what the old one never read is handed
+// on after it. Returns the new Run and the images it was sent. The caller
+// holds the session's lock and has settled the question the message
+// answers: while a question is open, nothing else swaps the agent.
+func ReplaceBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, to SessionModelApplied, w Writer, o Opening) (string, []json.RawMessage, error) {
 	// Aborted, not completed: the syncer then cancels its lux Run, idle or
 	// parked (Syncer.end), and never keeps a talker.
 	const why = "the session's model changed"
@@ -93,26 +93,26 @@ func ReplaceBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, to SessionMod
 		control_reason = $2, ended_at = now(), keep = false WHERE id = $1 AND status IN ('scheduled', 'starting', 'running', 'paused')`,
 		ref.RunID, why)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if tag.RowsAffected() == 1 {
 		if _, err := ledger.Append(ctx, tx, ref.Event("run.completed", ledger.ActorSystem,
 			map[string]any{"status": "aborted", "reason": why})); err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
-	next, err := StartBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, message, shown)
+	next, attached, err := StartBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, o)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if _, err := SessionHandOver(ctx, tx, ref); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	var tier any
 	if to.Tier != "" {
 		tier = map[string]any{"name": to.Tier}
 	}
-	return next, SessionEvent(ctx, tx, RunRef{Org: ref.Org, SessionID: ref.SessionID, RunID: next}, EvSessionModelApplied,
+	return next, attached, SessionEvent(ctx, tx, RunRef{Org: ref.Org, SessionID: ref.SessionID, RunID: next}, EvSessionModelApplied,
 		ledger.ActorSystem, "dude", map[string]any{"from": ref.RunID, "to": next, "tier": tier, "model": db.Nullable(to.Model),
 			"harness": to.Harness})
 }
