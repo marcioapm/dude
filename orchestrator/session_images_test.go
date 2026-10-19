@@ -118,33 +118,69 @@ func TestASessionMessageRefusesImagesItMayNotSend(t *testing.T) {
 }
 
 // freshAgentGotImage says the session's new agent run was briefed with
-// briefed and no image, that the message's images went as a directive
-// queued on it, and that its lux input carries att's bytes. Returns the
+// briefed and no image, that att alone went as the one directive queued on
+// it, and that lux got att once, on that directive (imageOnce). Returns the
 // directive.
 func (s *sessionWorld) freshAgentGotImage(run, att, briefed string) string {
 	s.t.Helper()
 	if p := s.prompt(run); !strings.Contains(p, "## The first message\n\n"+briefed) {
 		s.t.Errorf("the briefing does not end with %q:\n%s", briefed, p)
 	}
+	directive := s.imageDirective(run, att)
+	s.imageOnce(run, directive, att)
+	return directive
+}
+
+// imageDirective is the one directive queued on run, which carries att and
+// nothing else.
+func (s *sessionWorld) imageDirective(run, att string) string {
+	s.t.Helper()
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1`, run); n != 1 {
+		s.t.Fatalf("%d directives on %s, want the image's one", n, run)
+	}
 	var directive string
-	if err := s.owner.QueryRow(context.Background(), `SELECT d.id FROM directives d JOIN attachments a ON a.directive_id = d.id
-		WHERE d.run_id = $1 AND a.id = $2`, run, att).Scan(&directive); err != nil {
+	var images int
+	if err := s.owner.QueryRow(context.Background(), `SELECT d.id, (SELECT count(*) FROM attachments a WHERE a.directive_id = d.id)
+		FROM directives d JOIN attachments a ON a.directive_id = d.id WHERE d.run_id = $1 AND a.id = $2`, run, att).
+		Scan(&directive, &images); err != nil {
 		s.t.Fatalf("no directive on %s carries %s: %v", run, att, err)
 	}
+	if images != 1 {
+		s.t.Errorf("the directive carries %d images, want only %s", images, att)
+	}
+	return directive
+}
+
+// imageOnce waits for run's lux input to have att, then says it is the one
+// image any lux Run of the world got, on directive's input, with att's
+// name, type and exact bytes; the briefing (prompt) carries none.
+func (s *sessionWorld) imageOnce(run, directive, att string) {
+	s.t.Helper()
 	var luxRun string
 	s.until("the fresh agent's lux input to have the image", func() bool {
 		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, run).Scan(&luxRun)
-		return luxRun != "" && len(s.lux.Attachments(luxRun)[directive]) == 1
+		return luxRun != "" && len(s.lux.Attachments(luxRun)[directive]) > 0
 	})
-	got := s.lux.Attachments(luxRun)
-	if a := got[directive][0]; !bytes.Equal(a.Data, screenshot) || a.ContentType != "image/png" {
-		s.t.Errorf("lux got %s %s (%d bytes)", a.Name, a.ContentType, len(a.Data))
+	var name, contentType string
+	if err := s.owner.QueryRow(context.Background(), `SELECT name, content_type FROM attachments WHERE id = $1`, att).
+		Scan(&name, &contentType); err != nil {
+		s.t.Fatal(err)
 	}
-	// The briefing is the Run's prompt and carries none: the image is a later input.
-	if len(got["prompt"]) != 0 {
-		s.t.Errorf("the briefing carried %d images", len(got["prompt"]))
+	copies := 0
+	for _, r := range s.lux.Runs() {
+		for input, images := range s.lux.Attachments(r.ID) {
+			copies += len(images)
+			if r.ID != luxRun || input != directive {
+				s.t.Errorf("lux Run %s got %d images on input %q, want them only on %s's %s", r.ID, len(images), input, luxRun, directive)
+			}
+		}
 	}
-	return directive
+	if copies != 1 {
+		s.t.Fatalf("lux got %d copies of the image, want 1", copies)
+	}
+	if a := s.lux.Attachments(luxRun)[directive][0]; a.Name != name || a.ContentType != contentType || !bytes.Equal(a.Data, screenshot) {
+		s.t.Errorf("lux got %q %s (%d bytes), want %q %s (%d bytes)", a.Name, a.ContentType, len(a.Data), name, contentType, len(screenshot))
+	}
 }
 
 // oneChatMessage says the session's Chat has one chat.message on run, the
@@ -291,18 +327,8 @@ func TestASessionAnswerWithImagesAppliesTheModelSwap(t *testing.T) {
 	if p := s.prompt(next); !strings.Contains(p, "this one") {
 		t.Errorf("the fresh agent's briefing lacks the answer:\n%s", p)
 	}
-	var directive string
-	if err := s.owner.QueryRow(context.Background(), `SELECT directive_id FROM attachments WHERE id = 'att_layout'`).Scan(&directive); err != nil {
-		t.Fatal(err)
-	}
-	var luxRun string
-	s.until("the fresh agent's lux input to have the answer's image", func() bool {
-		_ = s.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, next).Scan(&luxRun)
-		return luxRun != "" && len(s.lux.Attachments(luxRun)[directive]) == 1
-	})
-	if n := s.count(`SELECT count(*) FROM directives WHERE id = $1 AND run_id = $2`, directive, next); n != 1 {
-		t.Errorf("the image is not on a directive of the fresh agent")
-	}
+	directive := s.imageDirective(next, "att_layout")
+	s.imageOnce(next, directive, "att_layout")
 	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'question.answered'
 		AND payload->>'questionId' = $2 AND payload->'attachments'->0->>'id' = 'att_layout'`, id, question); n != 1 {
 		t.Errorf("question.answered does not show the image")
