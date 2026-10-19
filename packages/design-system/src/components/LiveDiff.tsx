@@ -254,7 +254,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     [files, view],
   );
 
-  // Following: bring the newest change into view.
+  // Following: bring the newest change into view, while the diff is on screen.
   const scroller = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!follow || fresh.lines.size === 0) return;
@@ -263,8 +263,11 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     const last = marks?.[marks.length - 1];
     // On a narrow screen the file list and the diff scroll as one, in the body around them.
     const box = diffs && getComputedStyle(diffs).overflowY === "visible" ? diffs.parentElement : diffs;
-    if (box && last) {
-      const top = last.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+    // Off screen nobody sees it follow, and a smooth scroll running there makes
+    // Chromium drop a fragment navigation the page starts meanwhile.
+    const where = box?.getBoundingClientRect();
+    if (box && last && where && where.bottom > 0 && where.top < window.innerHeight) {
+      const top = last.getBoundingClientRect().top - where.top + box.scrollTop;
       box.scrollTo({ top: Math.max(0, top - box.clientHeight / 3), behavior: "smooth" });
     }
   }, [follow, fresh]);
