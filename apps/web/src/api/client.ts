@@ -597,6 +597,9 @@ export interface AttachmentLimits {
   maxSide: number;
 }
 
+/** What an image is uploaded to: a task, or a brainstorm session. */
+export type UploadRoute = "tasks" | "brainstorms";
+
 export class ApiClient {
   readonly #baseUrl: string;
   readonly #apiKey: string | undefined;
@@ -1503,12 +1506,12 @@ export class ApiClient {
   }
 
   /**
-   * Upload one image to a task: the original as picked and the variant the
-   * agent is sent. `onProgress` follows the upload (0..1). XHR, because
-   * fetch reports no upload progress.
+   * Upload one image to a task, or with `route` "brainstorms" to a session:
+   * the original as picked and the variant the agent is sent. `onProgress`
+   * follows the upload (0..1). XHR, because fetch reports no upload progress.
    */
   uploadAttachment(taskId: string, image: { name: string; original: Blob; delivered: Blob },
-    onProgress?: (fraction: number) => void, route = "tasks"): Promise<AttachmentInfo> {
+    onProgress?: (fraction: number) => void, route: UploadRoute = "tasks"): Promise<AttachmentInfo> {
     const form = new FormData();
     form.set("name", image.name);
     form.set("original", image.original, image.name);
@@ -1606,11 +1609,6 @@ export class ApiClient {
   }
 
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
-  uploadSessionAttachment(sessionId: string, image: { name: string; original: Blob; delivered: Blob },
-    onProgress?: (fraction: number) => void): Promise<AttachmentInfo> {
-    return this.uploadAttachment(sessionId, image, onProgress, "brainstorms");
-  }
-
   sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}): Promise<{ runId: string; created: boolean; questionId?: string; directiveId?: string; attachments?: AttachmentInfo[] }> {
     return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}), ...(opts.attachmentIds?.length ? { attachmentIds: opts.attachmentIds } : {}) });
   }

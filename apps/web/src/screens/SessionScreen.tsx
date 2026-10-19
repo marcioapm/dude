@@ -146,7 +146,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   // Which tools its agent called, dude's own among them, as a task's session rail says it.
   const tools = toolUsage(conversation);
   const limits = useAttachmentLimits(client);
-  const tray = useImageTray(client, sessionId, limits, "session");
+  const tray = useImageTray(client, sessionId, limits, "brainstorms");
   const images = useSentImages(client);
   const [imageViewing, setImageViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
   const send = useCallback(async (text: string, aside = false, attachmentIds: ReadonlyArray<string> = []) => {
@@ -297,8 +297,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const reader = you.role === "read";
   const live = status !== undefined && !["completed", "failed", "aborted"].includes(status);
   // No live agent is no reason to refuse images: the message starts one, which gets them after its briefing.
-  const attachOff = reader ? "You can read this session: writing is for its owner and members who can chat."
-    : tray.disabledReason;
+  const readOnly = "You can read this session: writing is for its owner and members who can chat.";
+  const attachOff = reader ? readOnly : tray.disabledReason;
   const dude = dudeName(sessionId);
   const steer: SteerActions | undefined = live ? {
     wait: (turn) => steerWait(turn, status!, conversation.activeTool?.name ?? null, conversation.lands, conversation.start),
@@ -374,18 +374,18 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                   disabled={reader}
                   // An empty session (made through the API without a message) is for writing in.
                   autoFocus={!reader && session.messages === 0}
-                  disabledReason={reader ? "You can read this session: writing is for its owner and members who can chat." : undefined}
+                  disabledReason={reader ? readOnly : undefined}
                   // A session has no task: the chat composer's own words would say "this task".
                   placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.`
                     : "Message the brainstorm…"}
                   // Written beside your own open question ("Write to the agent instead"): aside, never the answer.
-                   onSubmit={({ text, attachmentIds }) => send(text, yours !== null, attachmentIds)}
-                   attachments={tray.attachments}
-                   onAttachFiles={tray.add}
-                   onRemoveAttachment={tray.remove}
-                   attachAccept="image/png,image/jpeg,image/webp,image/gif"
-                   attachHint={limitsHint(tray.limits)}
-                   attachDisabledReason={attachOff}
+                  onSubmit={({ text, attachmentIds }) => send(text, yours !== null, attachmentIds)}
+                  attachments={tray.attachments}
+                  onAttachFiles={tray.add}
+                  onRemoveAttachment={tray.remove}
+                  attachAccept="image/png,image/jpeg,image/webp,image/gif"
+                  attachHint={limitsHint(tray.limits)}
+                  attachDisabledReason={attachOff}
                   sentAs={people.names.get(you.id) ? `${firstName(people.names.get(you.id)!)} · everyone in the session sees it` : undefined}
                   to={<>To <b>Brainstorm</b></>}
                   toAside={startHint ? <span className="muted" data-testid="composer-start-hint">· {startHint}</span> : undefined}
