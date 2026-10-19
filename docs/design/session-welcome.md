@@ -107,7 +107,11 @@ back; under 1000px it stays the drawer it is today.
   Given one, it does create + link + start the agent in one transaction,
   so a failed send leaves no empty session, and answers with `runId` as
   well as `id`. Without one it is the bare create it was: the API is
-  additive. Image attachments on the first message are not taken yet.
+  additive. Image attachments on the first message are not taken yet:
+  a briefing carries no images. Later messages in the session's Chat take
+  them (`POST /v1/brainstorms/:id/attachments`, then `attachmentIds` on
+  `/chat`), as a directive to the live agent; a message that would start
+  an agent with images is refused 409 `images_need_agent`.
 - **Recent sessions** is the existing `GET /sessions` (newest activity
   first); it already carries title, filed count, shared and owner.
 
