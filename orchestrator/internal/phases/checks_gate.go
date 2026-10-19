@@ -16,11 +16,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-const (
-	checksJudgedEvent  = delivery.EvRunChecksJudged
-	checksDecidedEvent = delivery.EvRunChecksDecided
-)
-
 var checksText = delivery.MustText("notices/checks")
 var backedQuestion = delivery.MustText("notices/checks/backed")
 var missingQuestion = delivery.MustText("notices/checks/missing")
@@ -67,7 +62,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 			return err
 		}
 		var raw []byte
-		err = tx.QueryRow(ctx, `SELECT payload FROM events WHERE run_id=$1 AND event_type=$2 AND (payload->>'turn')::bigint=$3 ORDER BY cursor DESC LIMIT 1`, r.ID, checksJudgedEvent, turn).Scan(&raw)
+		err = tx.QueryRow(ctx, `SELECT payload FROM events WHERE run_id=$1 AND event_type=$2 AND (payload->>'turn')::bigint=$3 ORDER BY cursor DESC LIMIT 1`, r.ID, delivery.EvRunChecksJudged, turn).Scan(&raw)
 		if err == nil {
 			previous = &checksDecision{}
 			return json.Unmarshal(raw, previous)
@@ -79,7 +74,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 		// Run's checks: a retry gives the agent the configured rounds again.
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id=$1 AND event_type=$2 AND payload->>'verified'='false'
 			AND cursor > COALESCE((SELECT max(cursor) FROM events WHERE run_id=$1 AND event_type=$3), 0)`,
-			r.ID, checksJudgedEvent, checksDecidedEvent).Scan(&rounds); err != nil {
+			r.ID, delivery.EvRunChecksJudged, delivery.EvRunChecksDecided).Scan(&rounds); err != nil {
 			return err
 		}
 		err = tx.QueryRow(ctx, `SELECT settings FROM forge_credentials WHERE forge='github' LIMIT 1`).Scan(&rawSettings)
@@ -114,20 +109,21 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 		raw, _ := json.Marshal(d)
 		var payload map[string]any
 		_ = json.Unmarshal(raw, &payload)
-		if d.Verified {
-			return s.event(ctx, tx, r, checksJudgedEvent, ledger.ActorSystem, payload)
-		}
-		if rounds >= maxRounds {
+		escalate := !d.Verified && rounds >= maxRounds
+		if escalate {
 			payload["escalated"] = true
 		}
-		if err := s.event(ctx, tx, r, checksJudgedEvent, ledger.ActorSystem, payload); err != nil {
+		if err := s.event(ctx, tx, r, delivery.EvRunChecksJudged, ledger.ActorSystem, payload); err != nil {
 			return err
 		}
-		if rounds < maxRounds {
-			_, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: d.Message, Scope: "run"})
-			return err
+		switch {
+		case d.Verified:
+			return nil
+		case escalate:
+			return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds)
 		}
-		return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds)
+		_, _, err = delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: d.Message, Scope: "run"})
+		return err
 	})
 	if errors.Is(err, errRetry) {
 		return false, true, nil
@@ -171,15 +167,15 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	if svc == nil {
 		svc = &judge.Service{DB: s.DB}
 	}
-	asks := []string{}
-	for _, c := range checks {
-		asks = append(asks, backedQuestion.Render(c))
-	}
-	asks = append(asks, missingQuestion.Render(nil))
-	for i, q := range asks {
-		name := "missing checks"
+	verified := true
+	// One Backed question per check, answered yes to pass, then Missing,
+	// answered no to pass.
+	for i := range len(checks) + 1 {
+		var name, q, want string
 		if i < len(checks) {
-			name = checks[i].Command
+			name, q, want = checks[i].Command, backedQuestion.Render(checks[i]), judge.Yes
+		} else {
+			name, q, want = "missing checks", missingQuestion.Render(nil), judge.No
 		}
 		j, err := svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID, Question: q, Context: text})
 		if errors.Is(err, judge.ErrOff) || errors.Is(err, judge.ErrNoModel) {
@@ -197,23 +193,18 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			v.Reason = err.Error()
 		}
 		// An absent CallID also fails closed, including a zero Judgement.
-		accepted := err == nil && j.CallID != "" && ((i < len(checks) && j.Decision == judge.Yes) || (i == len(checks) && j.Decision == judge.No))
-		if !accepted && v.Reason == "" {
-			v.Reason = "the judgement did not establish verification"
-		}
-		if accepted {
+		if err == nil && j.CallID != "" && j.Decision == want {
 			v.Result = "pass"
 		} else {
+			verified = false
 			v.Result = "unverified"
+			if v.Reason == "" {
+				v.Reason = "the judgement did not establish verification"
+			}
 		}
 		d.Verdicts = append(d.Verdicts, v)
 	}
-	d.Verified = true
-	for _, v := range d.Verdicts {
-		if v.Result != "pass" {
-			d.Verified = false
-		}
-	}
+	d.Verified = verified
 	return d, nil
 }
 

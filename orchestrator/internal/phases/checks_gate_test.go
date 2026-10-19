@@ -136,7 +136,7 @@ func TestChecksARestartNeverPassesAnUnjudgedOrRejectedTurn(t *testing.T) {
 	if ok, _, err := w.s.checksBeforePush(ctx, w.run); ok || err == nil || cut.calls == 0 {
 		t.Fatalf("an interrupted judgement: pass %v, %v", ok, err)
 	}
-	if n := w.countEvents(checksJudgedEvent); n != 0 {
+	if n := w.countEvents(delivery.EvRunChecksJudged); n != 0 {
 		t.Fatalf("%d verdicts recorded for an interrupted judgement", n)
 	}
 	// The next process judges it again, here rejecting it...
@@ -149,7 +149,7 @@ func TestChecksARestartNeverPassesAnUnjudgedOrRejectedTurn(t *testing.T) {
 	if ok, _, err := after.checksBeforePush(context.Background(), w.run); ok || err != nil {
 		t.Fatalf("after the rejection: pass %v, %v", ok, err)
 	}
-	if n := w.countEvents(checksJudgedEvent); n != 1 {
+	if n := w.countEvents(delivery.EvRunChecksJudged); n != 1 {
 		t.Fatalf("%d verdicts, want the one rejection", n)
 	}
 }
