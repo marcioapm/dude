@@ -221,6 +221,37 @@ func TestASessionMessageWithImagesWaitsForTheModelSwap(t *testing.T) {
 	}
 }
 
+// A message with images answering the agent's question after a model
+// change is refused the same way: the question stays open with no answer,
+// and the answer in words alone then hands it to a fresh agent.
+func TestASessionAnswerWithImagesWaitsForTheModelSwap(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	id, run, question := s.asked(`{"question":"Which layout?"}`, false)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+	s.uploadToSession(b, "att_layout", id, "layout.png", screenshot)
+	status, body := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "this one", "attachmentIds": []string{"att_layout"}})
+	s.refusedForModelSwap(status, body, id, run, "att_layout")
+	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'open'`, question); n != 1 {
+		t.Errorf("the refused answer closed the question")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type IN ('question.answered', 'question.closed')`, id); n != 0 {
+		t.Errorf("the refused answer was recorded")
+	}
+
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "this one"})
+	next := s.freshAgent(id, run)
+	if out["runId"] != next || out["created"] != true || out["questionId"] != question {
+		t.Errorf("the answer in words answered %v, want the fresh agent %s answering %s", out, next, question)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'answered'`, question); n != 1 {
+		t.Errorf("the question is not answered")
+	}
+	if n := s.count(`SELECT count(*) FROM attachments WHERE id = 'att_layout' AND attached_at IS NULL`); n != 1 {
+		t.Errorf("the refused image was attached by the answer in words")
+	}
+}
+
 // A message with images an ended agent never read goes to the session's
 // next live agent with its images: Chat shows them on the handed-on
 // message, and the next agent's lux input has them.
