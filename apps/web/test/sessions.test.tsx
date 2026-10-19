@@ -374,6 +374,28 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelectorAll("[data-testid=link-open]").length).toBe(0);
   });
 
+  test("a member's composer takes images; a message's images show on its turn", async () => {
+    const shot = { id: "att_shot", name: "shot.png", contentType: "image/png" as const, width: 10, height: 10, bytes: 100,
+      original: { contentType: "image/png" as const, width: 20, height: 20, bytes: 200 } };
+    const client = new SessionClient(detail("chat"), [
+      ev("chat.message", { text: "see this", directiveId: "dir_1", attachments: [shot] }, { type: "human", id: YOU }),
+    ]);
+    const page = await sessionPage(client);
+    const clip = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=attach-button]"), "the paperclip");
+    expect(clip.disabled).toBe(false);
+    const images = await until(() => page.querySelector("[data-testid=message-images]"), "the message's images");
+    expect([...images.querySelectorAll("[data-testid=message-image]")].map((b) => b.getAttribute("aria-label"))).toEqual(["Open shot.png"]);
+  });
+
+  test("a reader's paperclip is off, and so is one before the agent has started", async () => {
+    const reader = await sessionPage(new SessionClient(detail("read")));
+    expect(reader.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(true);
+    const ended = detail("chat");
+    ended.session.run = null;
+    const fresh = await sessionPage(new SessionClient(ended));
+    expect(fresh.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(true);
+  });
+
   test("a reader's composer is closed, with why, and the card files nothing", async () => {
     const client = new SessionClient(detail("read", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task", project: "BL", title: "Dedupe on run id", goal: "g" }],

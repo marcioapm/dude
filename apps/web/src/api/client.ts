@@ -1508,7 +1508,7 @@ export class ApiClient {
    * fetch reports no upload progress.
    */
   uploadAttachment(taskId: string, image: { name: string; original: Blob; delivered: Blob },
-    onProgress?: (fraction: number) => void): Promise<AttachmentInfo> {
+    onProgress?: (fraction: number) => void, route = "tasks"): Promise<AttachmentInfo> {
     const form = new FormData();
     form.set("name", image.name);
     form.set("original", image.original, image.name);
@@ -1517,7 +1517,7 @@ export class ApiClient {
     form.set("deliveredType", image.delivered.type);
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${this.#baseUrl}/v1/tasks/${encodeURIComponent(taskId)}/attachments`);
+      xhr.open("POST", `${this.#baseUrl}/v1/${route}/${encodeURIComponent(taskId)}/attachments`);
       xhr.withCredentials = true;
       if (this.#apiKey) xhr.setRequestHeader("authorization", `Bearer ${this.#apiKey}`);
       if (this.#organizationId) xhr.setRequestHeader("x-dude-organization", this.#organizationId);
@@ -1606,8 +1606,13 @@ export class ApiClient {
   }
 
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
-  sessionChat(id: string, text: string, opts: { aside?: boolean } = {}): Promise<{ runId: string; created: boolean; questionId?: string }> {
-    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}) });
+  uploadSessionAttachment(sessionId: string, image: { name: string; original: Blob; delivered: Blob },
+    onProgress?: (fraction: number) => void): Promise<AttachmentInfo> {
+    return this.uploadAttachment(sessionId, image, onProgress, "brainstorms");
+  }
+
+  sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}): Promise<{ runId: string; created: boolean; questionId?: string; directiveId?: string; attachments?: AttachmentInfo[] }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}), ...(opts.attachmentIds?.length ? { attachmentIds: opts.attachmentIds } : {}) });
   }
 
   /** Try again on a session whose agent failed, to start or to resume: a fresh agent takes what it never read. */

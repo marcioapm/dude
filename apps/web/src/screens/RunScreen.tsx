@@ -1180,16 +1180,16 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
 });
 
 /** A turn whose images the viewer shows. */
-type ViewedTurn = HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; at: string };
+export type ViewedTurn = HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; at: string };
 
 /** How a turn's images are shown, and opened. */
-interface ShownImages {
+export interface ShownImages {
   images: Pick<SentImages, "sent" | "mounted" | "visible">;
   open: (turn: ViewedTurn, index: number) => void;
 }
 
 /** "15:52:40": a read time, in the viewer's line. */
-function clock(at: string): string {
+export function clock(at: string): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 }
 
@@ -1235,7 +1235,7 @@ function GithubSource({ github, reply }: { github: GithubRef; reply: boolean }) 
 }
 
 /** "Márcio · steer to Implement · 15:52": who sent a message's images, to whom, when. */
-function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: string): string {
+export function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: string): string {
   const at = new Date(turn.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   if (turn.kind === "prompt") return `${dude} · task to ${agent} · ${at}`;
   const who = actorName(turn.by, people.names);

@@ -14,7 +14,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, LinkedProjects, Markdown, ModelPicker, ProposalCard, PublishedFiles,
+  AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, ModelPicker, ProposalCard, PublishedFiles,
   ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type ModelChoice, type ProposalCardItem, type ProposalRelation,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
@@ -31,9 +31,10 @@ import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
+import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
 import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
-import { EventLog, asides, conversationOption, eventsOption, interleaved, questionTurnSelector, renderTurn, type SteerActions } from "./RunScreen.tsx";
+import { EventLog, asides, clock, conversationOption, eventsOption, interleaved, questionTurnSelector, renderTurn, viewedContext, type SteerActions, type ViewedTurn } from "./RunScreen.tsx";
 import { SessionMachineBlock } from "./actions.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 
@@ -144,16 +145,21 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const grouped = useMemo(() => asides(conversation.turns), [conversation]);
   // Which tools its agent called, dude's own among them, as a task's session rail says it.
   const tools = toolUsage(conversation);
-  const send = useCallback(async (text: string, aside = false) => {
+  const limits = useAttachmentLimits(client);
+  const tray = useImageTray(client, sessionId, limits, "session");
+  const images = useSentImages(client);
+  const [imageViewing, setImageViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
+  const send = useCallback(async (text: string, aside = false, attachmentIds: ReadonlyArray<string> = []) => {
     setProblem(null);
     try {
-      await client.sessionChat(sessionId, text, { aside });
+      await client.sessionChat(sessionId, text, { aside, attachmentIds });
+      tray.clear(attachmentIds);
       return true;
     } catch (err) {
       setProblem(`Could not send the message: ${errorText(err)}`);
       return false;
     }
-  }, [client, sessionId]);
+  }, [client, sessionId, tray]);
 
   // Try again on an agent that failed to start or to resume: a fresh one takes what it never read.
   const [retrying, setRetrying] = useState(false);
@@ -290,16 +296,21 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const isOwner = you.role === "owner";
   const reader = you.role === "read";
   const live = status !== undefined && !["completed", "failed", "aborted"].includes(status);
+  // Images ride a directive to a running agent; a message that starts one carries words only (the briefing).
+  const attachOff = reader ? "You can read this session: writing is for its owner and members who can chat."
+    : !live ? "Images go to the session's agent once it has started: send a message first."
+    : tray.disabledReason;
   const dude = dudeName(sessionId);
   const steer: SteerActions | undefined = live ? {
     wait: (turn) => steerWait(turn, status!, conversation.activeTool?.name ?? null, conversation.lands, conversation.start),
     resend: () => undefined,
   } : undefined;
+  const shown = { images, open: (turn: ViewedTurn, index: number) => setImageViewing({ turn, index }) };
   const render = (turn: Turn) => turn.kind === "ended" && turn.start
     ? <StartRow key={turn.id} start={turn.start} role="brainstorm" taken={turn.taken || retryTaken === turn.id}
         onRetry={reader || turn.retried || retrying ? undefined : () => void retryStart(turn.id)} />
     : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
-      undefined, undefined, live && !reader ? { answer } : undefined);
+      shown, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;
   // The header: where the start is, or where it failed until a next agent is created.
   const headerStart = starting ?? conversation.startFailed;
@@ -335,6 +346,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           {isOwner ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : null}
         </>}
       />
+      {/* A dropped image anywhere on the conversation goes into the composer's tray. */}
+      <AttachDropZone className="runDrop" onFiles={tray.add} disabled={view !== "chat" || reader || !live || Boolean(yours)}
+        disabledReason={attachOff}
+        detail={<>They go with your next message to <b>Brainstorm</b>.</>}>
       <div className="runScreen" data-view={view}>
         {/* The Run screen's switch, without Changes: a session changes no code. */}
         <div className="runBar">
@@ -365,7 +380,13 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                   placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.`
                     : "Message the brainstorm…"}
                   // Written beside your own open question ("Write to the agent instead"): aside, never the answer.
-                  onSubmit={({ text }) => send(text, yours !== null)}
+                   onSubmit={({ text, attachmentIds }) => send(text, yours !== null, attachmentIds)}
+                   attachments={tray.attachments}
+                   onAttachFiles={tray.add}
+                   onRemoveAttachment={tray.remove}
+                   attachAccept="image/png,image/jpeg,image/webp,image/gif"
+                   attachHint={limitsHint(tray.limits)}
+                   attachDisabledReason={attachOff}
                   sentAs={people.names.get(you.id) ? `${firstName(people.names.get(you.id)!)} · everyone in the session sees it` : undefined}
                   to={<>To <b>Brainstorm</b></>}
                   toAside={startHint ? <span className="muted" data-testid="composer-start-hint">· {startHint}</span> : undefined}
@@ -384,6 +405,18 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                   activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
               ) : null}
             </ChatTranscript>
+            {imageViewing ? (
+              <ImageViewer
+                images={imageViewing.turn.attachments.map(images.sent)}
+                index={imageViewing.index}
+                onIndexChange={(index) => setImageViewing({ ...imageViewing, index })}
+                onClose={() => setImageViewing(null)}
+                context={viewedContext(imageViewing.turn, people, "Brainstorm", dude)}
+                readAt={imageViewing.turn.kind === "human" && imageViewing.turn.read && imageViewing.turn.deliveredAt ? clock(imageViewing.turn.deliveredAt) : undefined}
+                onWantOriginal={(i) => images.wantOriginal(imageViewing.turn.attachments[i]!.id)}
+                onDownload={(i, variant) => void images.download(imageViewing.turn.attachments[i]!, variant)}
+              />
+            ) : null}
             <SessionRail className="runRail" aria-label="The session" data-testid="session-rail">
               <SessionRailBlock label={<span className="sessionRailHead">People{isOwner ? (
                 <Button size="sm" variant="quiet" onClick={() => setDialog("share")}>Share</Button>) : null}</span>}>
@@ -443,6 +476,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
         </div>
         {problem ? <Callout tone="danger" data-testid="session-problem">{problem}</Callout> : null}
       </div>
+      </AttachDropZone>
       <ArtifactViewer client={client} files={files} open={viewing} onOpenChange={setViewing} />
       {isOwner ? (
         <>

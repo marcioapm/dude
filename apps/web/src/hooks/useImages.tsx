@@ -52,7 +52,7 @@ export function useAttachmentLimits(client: ApiClient): AttachmentLimits | null 
  * uploaded; the chip shows each step. With no task known, images are made
  * and kept, not uploaded.
  */
-export function useImageTray(client: ApiClient, taskId: string | undefined, limitsAnswer: AttachmentLimits | null): ImageTray {
+export function useImageTray(client: ApiClient, taskId: string | undefined, limitsAnswer: AttachmentLimits | null, uploadKind: "task" | "session" = "task"): ImageTray {
   const [chips, setChips] = useState<Chip[]>([]);
   const chipsRef = useRef<Chip[]>([]);
   chipsRef.current = chips;
@@ -117,7 +117,9 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
         }
         update(chip.id, { name: made.name, deliveredBytes: made.delivered.size, progress: 0 });
         try {
-          const uploaded = await client.uploadAttachment(taskId, made, (p) => update(chip.id, { progress: p }));
+          const uploaded = uploadKind === "session"
+            ? await client.uploadSessionAttachment(taskId, made, (p) => update(chip.id, { progress: p }))
+            : await client.uploadAttachment(taskId, made, (p) => update(chip.id, { progress: p }));
           if (!chipsRef.current.some((c) => c.id === chip.id)) {
             void client.removeAttachment(uploaded.id).catch(() => {});
             continue;
@@ -128,7 +130,7 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
         }
       }
     })();
-  }, [client, taskId, limits, update, uploadFailed, dropPreview]);
+  }, [client, taskId, limits, uploadKind, update, uploadFailed, dropPreview]);
 
   const remove = useCallback((id: string) => {
     const chip = chipsRef.current.find((c) => c.id === id);
