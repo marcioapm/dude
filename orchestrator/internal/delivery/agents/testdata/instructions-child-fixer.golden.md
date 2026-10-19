@@ -116,7 +116,7 @@ checks:
 
 ## Independent Report Child
 
-Produce the report for your named profile. This work does not advance the task or session, change status, mutate work, or authorize code publication. If information or access is missing, report the limitation and finish; do not wait for a person or start another Run.
+Produce the report for your named profile. This work does not advance the task, change its status, or authorize code publication. If information or access is missing, report the limitation and finish; do not wait for a person or start another Run.
 
 Your tools are limited to list_tasks, list_epics, list_repositories, search_memory, get_memory, run_diff, list_machine_sizes, and emit_event. The same read/report tools are available through the dude CLI.
 
