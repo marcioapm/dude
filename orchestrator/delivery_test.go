@@ -1096,11 +1096,12 @@ func TestTheAgentsWorkReachesTheLedgerAsAConversation(t *testing.T) {
 	var runID string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&runID)
 
-	// One message, whole: the chunks it streamed in are joined.
+	// One message, whole: the chunks it streamed in are joined, ending
+	// with the writer's checks report.
 	var text string
 	_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(payload->>'text', '|') FROM events
 		WHERE run_id = $1 AND event_type = 'agent.message'`, runID).Scan(&text)
-	if text != "Implemented it." {
+	if text != "Implemented it.\n\n"+fakeagent.NoChecks {
 		t.Errorf("messages = %q", text)
 	}
 	for typ, want := range map[string]int{
