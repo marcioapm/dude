@@ -31,13 +31,22 @@ const attachmentJSON = `json_build_object('id', a.id, 'name', a.name, 'contentTy
 	'original', json_build_object('contentType', a.original_content_type, 'width', a.original_width,
 		'height', a.original_height, 'bytes', a.original_bytes))`
 
-// Attach marks the task's uploads ids as sent with the directive
-// directiveID. Each must be this task's and not sent yet (nor shown in the
-// task's text: the backend attaches those); together at most
+// AttachOwner is what an upload belongs to (migration 157): a task, or a
+// brainstorm session; exactly one is set.
+type AttachOwner struct{ TaskID, SessionID string }
+
+// Attach is AttachOwnerImages for a task's uploads.
+func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []string) ([]json.RawMessage, error) {
+	return AttachOwnerImages(ctx, tx, AttachOwner{TaskID: taskID}, directiveID, ids)
+}
+
+// AttachOwnerImages marks owner's uploads ids as sent with the directive
+// directiveID. Each must be owner's and not sent yet (nor shown in a task's
+// text: the backend attaches those); together at most
 // MaxAttachmentsPerMessage, and MaxMessageAttachmentBytes of what the agent
 // is sent. Returns their metadata, in the order given, for the message's
 // event. Locks the rows, so two messages cannot both take one.
-func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []string) ([]json.RawMessage, error) {
+func AttachOwnerImages(ctx context.Context, tx pgx.Tx, owner AttachOwner, directiveID string, ids []string) ([]json.RawMessage, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -51,17 +60,26 @@ func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 		}
 		seen[id] = true
 	}
-	rows, err := tx.Query(ctx, `SELECT a.id, a.task_id, a.attached_at IS NOT NULL, a.bytes FROM attachments a
-		WHERE a.id = ANY($1) FOR UPDATE`, ids)
+	notOwners := mImageNotOneThisTask
+	if owner.SessionID != "" {
+		notOwners = mImageNotOneThisSession
+	}
+	rows, err := tx.Query(ctx, `SELECT a.id, COALESCE(a.task_id, ''), COALESCE(a.session_id, ''), a.attached_at IS NOT NULL, a.bytes
+		FROM attachments a WHERE a.id = ANY($1) FOR UPDATE`, ids)
 	if err != nil {
 		return nil, err
 	}
 	type row struct {
-		ID, TaskID string
-		Sent       bool
-		Bytes      int64
+		ID    string
+		Owner AttachOwner
+		Sent  bool
+		Bytes int64
 	}
-	found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
+	found, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (row, error) {
+		var x row
+		err := r.Scan(&x.ID, &x.Owner.TaskID, &x.Owner.SessionID, &x.Sent, &x.Bytes)
+		return x, err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +88,8 @@ func Attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []st
 		i := slices.IndexFunc(found, func(r row) bool { return r.ID == id })
 		// Another organization's is not visible here at all: the same
 		// answer as one that does not exist.
-		if i < 0 || found[i].TaskID != taskID {
-			return nil, AttachmentError{fmt.Sprintf(mImageNotOneThisTask, id)}
+		if i < 0 || found[i].Owner != owner {
+			return nil, AttachmentError{fmt.Sprintf(notOwners, id)}
 		}
 		if found[i].Sent {
 			return nil, AttachmentError{fmt.Sprintf(mImageWasAlreadySent, id)}
@@ -167,7 +185,7 @@ func TaskImages(ctx context.Context, tx pgx.Tx, taskID, goal string, criteria []
 // bytes is an AttachmentError; an id with no row stays text.
 func SyncTaskImagesTx(ctx context.Context, tx pgx.Tx, taskID, goal string, criteria []string) error {
 	ids := TaskImageIDs(goal, criteria)
-	rows, err := tx.Query(ctx, `SELECT id, task_id, directive_id IS NOT NULL, bytes FROM attachments
+	rows, err := tx.Query(ctx, `SELECT id, COALESCE(task_id, ''), directive_id IS NOT NULL, bytes FROM attachments
 		WHERE id = ANY($1) ORDER BY id FOR UPDATE`, ids)
 	if err != nil {
 		return err

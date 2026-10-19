@@ -422,14 +422,24 @@ func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string)
 			continue
 		}
 		to := RunRef{Org: ref.Org, SessionID: ref.SessionID, RunID: next}
+		// Superseding d with the same words, the copy carries d's images
+		// (DirectiveAttachments).
 		id, _, err := QueueDirective(ctx, tx, to, Directive{Text: d.Text, Scope: "run", Supersedes: d.ID})
+		if err != nil {
+			return "", err
+		}
+		images, err := directiveAttachmentInfo(ctx, tx, id)
 		if err != nil {
 			return "", err
 		}
 		if err := RequestResumeForMessage(ctx, tx, next, "a message handed on from the session's agent before"); err != nil {
 			return "", err
 		}
-		if err := ChatEvent(ctx, tx, to, w, map[string]any{"text": d.Shown, "directiveId": id, "supersedes": d.ID}); err != nil {
+		payload := map[string]any{"text": d.Shown, "directiveId": id, "supersedes": d.ID}
+		if len(images) > 0 {
+			payload["attachments"] = images
+		}
+		if err := ChatEvent(ctx, tx, to, w, payload); err != nil {
 			return "", err
 		}
 	}

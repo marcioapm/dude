@@ -1117,12 +1117,17 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		Text string `json:"text"`
 		// Written to the agent, not as the answer to its open question.
 		Aside bool `json:"aside"`
+		// Images uploaded to the session, sent with the words; they may be
+		// all there is, as a steer's may.
+		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if err := checkChatText("text", body.Text); err != nil {
-		return err
+	if len(body.AttachmentIDs) == 0 || strings.TrimSpace(body.Text) != "" {
+		if err := checkChatText("text", body.Text); err != nil {
+			return err
+		}
 	}
 	id := r.PathValue("id")
 	wr := p.writer()
@@ -1151,6 +1156,9 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 			err = find()
 		}
 		if db.IsNotFound(err) {
+			if len(body.AttachmentIDs) > 0 {
+				return errImagesNeedAgent
+			}
 			created = true
 			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text)
 			out = map[string]any{"runId": runID, "created": true}
@@ -1175,7 +1183,10 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		// aside, or a message held for another member's answer, is queued
 		// on the agent that asked.
 		var swap *delivery.SessionModelApplied
-		if qerr != nil || answers {
+		// A message with images stays with the agent that is running: a
+		// fresh one would read it in its briefing, which carries no images.
+		// The model change applies from the next message without them.
+		if (qerr != nil || answers) && len(body.AttachmentIDs) == 0 {
 			if swap, err = delivery.BrainstormSwap(r.Context(), tx, runID, id); err != nil {
 				return err
 			}
@@ -1191,7 +1202,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 				created = true
 				return err
 			}
-			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
+			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
 			if err != nil {
 				return err
 			}
@@ -1208,7 +1219,14 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		if err != nil {
 			return err
 		}
+		attached, err := attach(r.Context(), tx, delivery.AttachOwner{SessionID: id}, directiveID, body.AttachmentIDs)
+		if err != nil {
+			return err
+		}
 		payload := map[string]any{"text": body.Text, "directiveId": directiveID}
+		if len(attached) > 0 {
+			payload["attachments"] = attached
+		}
 		if qerr == nil && to != "" && to != p.Person {
 			// Waiting on another member's answer: held until it comes. The
 			// question's own person, or anyone when it names nobody, is
@@ -1285,6 +1303,12 @@ func retryError(err error, live string) error {
 	return err
 }
 
+// errImagesNeedAgent refuses images on a message that would start a fresh
+// agent: its briefing is its first prompt, and a brainstorm's prompt carries
+// no images (phases.brainstormSpec), so they would be dropped.
+var errImagesNeedAgent = fail(http.StatusConflict, "images_need_agent",
+	"the session's agent is not running yet: send your words alone to start it, then send the images again once it has started")
+
 // checkChatText refuses a message the session's agent would not be given:
 // blank, or over delivery.ChatMessageMax bytes. field names it in the error.
 func checkChatText(field, text string) error {
@@ -1316,7 +1340,7 @@ func settleSessionQuestion(ctx context.Context, tx pgx.Tx, questionID string, a 
 // answerSessionQuestion settles the agent's open question with a member's
 // answer, queued as its next input, naming who answered.
 func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, questionID, prompt string,
-	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
+	items []delivery.QuestionItem, a delivery.Answered, name string, p principal, attachmentIDs []string) (string, error) {
 	if err := settleSessionQuestion(ctx, tx, questionID, a, p); err != nil {
 		return "", err
 	}
@@ -1325,7 +1349,15 @@ func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, 
 	if err != nil {
 		return "", err
 	}
-	ev := ref.Event("question.answered", p.writer().ActorType, answeredPayload(questionID, directiveID, a))
+	attached, err := attach(ctx, tx, delivery.AttachOwner{SessionID: ref.SessionID}, directiveID, attachmentIDs)
+	if err != nil {
+		return "", err
+	}
+	payload := answeredPayload(questionID, directiveID, a)
+	if len(attached) > 0 {
+		payload["attachments"] = attached
+	}
+	ev := ref.Event("question.answered", p.writer().ActorType, payload)
 	ev.ActorID = p.Actor
 	_, err = ledger.Append(ctx, tx, ev)
 	return directiveID, err
@@ -1411,7 +1443,7 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 				"answers": answered.Answers}
 			return err
 		}
-		directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
+		directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p, nil)
 		if err != nil {
 			return err
 		}

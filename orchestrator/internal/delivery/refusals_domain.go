@@ -23,6 +23,7 @@ const (
 	mMessageCarriesAtMostImages           = "a message carries at most %d images"
 	mImageNamedTwice                      = "image %s is named twice"
 	mImageNotOneThisTask                  = "image %s is not one of this task's"
+	mImageNotOneThisSession               = "image %s is not one of this session's"
 	mImageWasAlreadySent                  = "image %s was already sent"
 	mMessageImagesAreAtMostMib            = "a message's images are at most %d MiB together"
 	mImageAnotherTaskUploadThisOne        = "image %s is another task's; upload it to this one"

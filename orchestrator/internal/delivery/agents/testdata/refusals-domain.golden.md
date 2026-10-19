@@ -238,3 +238,7 @@ run %s is %s and can no longer be steered
 
 a message sent again carries the images it had: send new images in a new message
 
+## refusals/domain/attachments/image-not-one-this-session
+
+image %s is not one of this session's
+
