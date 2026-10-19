@@ -345,7 +345,6 @@ func TestAnUnreadSessionImageIsNotHandedToAFreshAgent(t *testing.T) {
 	b := s.withImages()
 	id, run, _ := s.liveSession()
 	s.uploadToSession(b, "att_lost", id, "lost.png", screenshot)
-	// Paused by a person: the directive waits unsent.
 	mustExec(t, s.owner, `UPDATE runs SET status = 'paused', lux_state = 'stopped' WHERE id = $1`, run)
 	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look", "attachmentIds": []string{"att_lost"}})
 	directive := out["directiveId"].(string)
