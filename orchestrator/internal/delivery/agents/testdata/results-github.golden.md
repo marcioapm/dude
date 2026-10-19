@@ -64,7 +64,7 @@ the projects linked to this session
 
 ## issue-pull-request
 
-a pull request: github_pull_request reads its reviews, threads, checks and files
+a pull request: github_pull_request reads its conversation comments, reviews, threads, checks and files
 
 ## issue-more-comments
 

@@ -21,7 +21,7 @@
 
 {{- define "results/github/search-more"}}{{.}} more match: narrow the query{{end}}
 
-{{- define "results/github/issue-pull-request"}}a pull request: github_pull_request reads its reviews, threads, checks and files{{end}}
+{{- define "results/github/issue-pull-request"}}a pull request: github_pull_request reads its conversation comments, reviews, threads, checks and files{{end}}
 
 {{- define "results/github/comments-cut"}}{{.Cut}}: the first {{.Shown}} of {{.Total}} comments{{end}}
 
