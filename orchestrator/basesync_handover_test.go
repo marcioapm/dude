@@ -461,10 +461,10 @@ func (w *world) handedOverWith(tell bool, arm func()) string {
 			w.t.Fatalf("resolve: %d %v", code, body)
 		}
 	}
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	w.integrated(wi)
 	asked := w.count(escalations, wi)
 	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
-	w.until("validation reading GitHub", func() bool {
+	w.agentsDone(wi, "validation reading GitHub", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
 			AND (state->'integration'->>'polls')::int >= 1`, wi) == 1
 	})
@@ -584,15 +584,26 @@ func (w *world) handedOverWithout(arm func()) string {
 	w.toolsWithSync()
 	wi := w.reviewing()
 	w.conflictWithMovedBase()
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
+	w.integrated(wi)
 	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
-	w.until("validation reading GitHub", func() bool {
+	w.agentsDone(wi, "validation reading GitHub", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest'
 			AND (state->'integration'->>'polls')::int >= 1`, wi) == 1
 	})
 	arm()
 	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{integration,polls}', '8'), wake_at = now() WHERE task_id = $1`, wi)
 	return wi
+}
+
+// integrated waits for task's integration Run, its merge on the real path,
+// to finish: the review after it is left to agentsDone.
+func (w *world) integrated(task string) {
+	w.t.Helper()
+	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, task) == 1 })
+	w.until("the integration Run finished", func() bool {
+		w.sync()
+		return w.count(integrationRuns+` AND status = 'completed'`, task) == 1
+	})
 }
 
 // HandOverMergedTx runs while the step that records the hand-over is still
