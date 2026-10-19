@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -55,8 +56,10 @@ func (w *world) hangingReviews(call [3]string) {
 }
 
 // reviewersOpen waits for n reviewers with their call open, and returns them.
+// The Runs before the round are done by agents (toReview).
 func (w *world) reviewersOpen(task string, n int) []string {
 	w.t.Helper()
+	w.toReview(task)
 	var ids []string
 	w.until("reviewers in their open call", func() bool {
 		ids = w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'
@@ -64,6 +67,16 @@ func (w *world) reviewersOpen(task string, n int) []string {
 		return len(ids) == n
 	})
 	return ids
+}
+
+// toReview finishes the phase Runs before task's first review round as
+// their agents would (upTo), and leaves the round to the syncer and the
+// fake lux. A task with a reviewer already is left as it is.
+func (w *world) toReview(task string) {
+	w.t.Helper()
+	if w.phaseRuns(task, delivery.PhaseReview) == 0 {
+		w.upTo(task, delivery.PhaseReview)
+	}
 }
 
 func (w *world) ids(sql string, args ...any) []string {
@@ -866,9 +879,11 @@ func (w *world) silentReviews() {
 }
 
 // reviewersSilent waits for n reviewers whose turn has started, with no
-// call open, and returns them.
+// call open, and returns them. The Runs before the round are done by
+// agents (toReview).
 func (w *world) reviewersSilent(task string, n int) []string {
 	w.t.Helper()
+	w.toReview(task)
 	var ids []string
 	w.until("reviewers silent in their turn", func() bool {
 		ids = w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'
