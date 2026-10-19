@@ -1396,7 +1396,7 @@ func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to 
 
 // sessionAnswer is a member answering the session agent's open question
 // through its form: one answer per question, and a note (answerBody; no
-// images, which a session does not take). Only the member it is put to,
+// images: the form takes none; Chat does, sessionChat). Only the member it is put to,
 // or with none named, anyone who can chat.
 func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
