@@ -149,7 +149,7 @@ const START_VARIANT = "secondary" as const;
 /** What changes the task's feedback, or where a batch submitted now would go. */
 const FEEDBACK_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.FeedbackSubmitted, EventTypes.FeedbackDelivered, EventTypes.FeedbackReplied, EventTypes.FeedbackResolved,
-  EventTypes.FeedbackReopened, EventTypes.FeedbackOutdated, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
+  EventTypes.FeedbackReopened, EventTypes.FeedbackOutdated, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed, EventTypes.RunChecksJudged, EventTypes.RunChecksDecided,
 ]);
 
 /** Under the pull request the task took over: dude works on it and opened none of its own. */
@@ -1384,6 +1384,13 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       case "workflow.transitioned":
         break;
+      case EventTypes.RunChecksJudged: {
+        const verdicts = Array.isArray(p.checks) ? p.checks as Array<{ command?: string; result?: string; reason?: string; decision?: string; callId?: string }> : [];
+        const details = verdicts.map((v) => `${v.command ?? "Check"}: ${v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}`).join("\n");
+        out.push({ ...base, who: <DudeMark size={32} />, text: <>The <b>{doer(e.runId)}</b>'s checks {p.skipped ? "were not model-checked" : p.waived ? "were waived" : p.verified ? "were verified" : "were not verified"}</>,
+          quote: [typeof p.message === "string" ? p.message : "", details].filter(Boolean).join("\n"), open: session(e.runId) });
+        break;
+      }
       case "run.steered":
         out.push({ ...base, who: p.by === "conductor" ? <AgentAvatar role="conductor" size="lg" /> : face,
           text: <>{p.by === "conductor" ? <b>The conductor</b> : person} steered the {doer(e.runId)}</>, quote: String(p.text ?? "") });

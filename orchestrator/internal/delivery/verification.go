@@ -796,7 +796,18 @@ func verificationText(ctx context.Context, tx pgx.Tx, st *State) (string, string
 	if err != nil {
 		return "", "", err
 	}
-	return verificationSection(v, st.Heads, link), link, nil
+	section := verificationSection(v, st.Heads, link)
+	checks, err := checksVerificationText(ctx, tx, st)
+	if err != nil {
+		return "", "", err
+	}
+	if checks != "" {
+		if section == "" {
+			section = "## Verification"
+		}
+		section += "\n\n" + checks
+	}
+	return section, link, nil
 }
 
 // replaceVerification puts section between dude's verification markers in
