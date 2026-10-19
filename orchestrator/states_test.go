@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"maps"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -358,7 +359,7 @@ func (w *world) prOpen(wi string, at prAt) string {
 			}
 			if r == test {
 				for _, name := range slices.Sorted(maps.Keys(r.step.Publish)) {
-					if err := w.publishedArtifact(ctx, tx, wi, r.id, name, r.step.Publish[name]); err != nil {
+					if err := w.publishedArtifact(ctx, tx, wi, r.id, name, r.step.Publish[name], fakeagent.Description(name)); err != nil {
 						return err
 					}
 				}
@@ -448,6 +449,12 @@ func (w *world) advanced() {
 	}
 }
 
+// pendingPhaseRuns returns task's pending phase Runs in the delivery's order.
+func (w *world) pendingPhaseRuns(task string) []string {
+	return w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND status = 'pending'
+		ORDER BY created_at, id`, task)
+}
+
 // ran is a delivery step's phase Runs done by agents: the delivery's next
 // steps run (advanced), each phase Run of task they left pending is finished
 // (finished), and the delivery runs on to its next wait. Returns the Runs
@@ -455,8 +462,7 @@ func (w *world) advanced() {
 func (w *world) ran(task string) []string {
 	w.t.Helper()
 	w.advanced()
-	pending := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND status = 'pending'
-		ORDER BY created_at, id`, task)
+	pending := w.pendingPhaseRuns(task)
 	if len(pending) == 0 {
 		w.t.Fatalf("no phase Run pending\n%s", w.describeRuns())
 	}
@@ -474,8 +480,7 @@ func (w *world) upTo(task, phase string) string {
 	w.t.Helper()
 	for range 20 {
 		w.advanced()
-		pending := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND status = 'pending'
-			ORDER BY created_at, id`, task)
+		pending := w.pendingPhaseRuns(task)
 		if len(pending) == 0 {
 			w.t.Fatalf("no phase Run pending before a %s\n%s", phase, w.describeRuns())
 		}
@@ -501,8 +506,7 @@ func (w *world) agentsDone(task, what string, cond func() bool) {
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(untilPoll) {
 		w.sync()
 		w.advanced()
-		for _, id := range w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND status = 'pending'
-			ORDER BY created_at, id`, task) {
+		for _, id := range w.pendingPhaseRuns(task) {
 			w.finished(id)
 		}
 		w.advanced()
@@ -513,28 +517,32 @@ func (w *world) agentsDone(task, what string, cond func() bool) {
 	w.t.Fatalf("never settled on %s\nruns:\n%s", what, w.describeRuns())
 }
 
-// finished writes what the syncer leaves once pending phase Run runID's
-// agent finished its turn as the fake lux plays it (w.lux.Decide, asked
-// with the Run's labels and checkouts as its spec gives them): its commits
-// pushed to the Run's branch (the task branch, or its own: a candidate's)
-// in the repositories it may write, the Run completed with what it
-// published there (runs.heads), its reply, files and commits in the
-// ledger, a review's or test's findings recorded by phases.RecordFindings,
-// then run.completed. The phase.finished signal is left to NotifyFinished.
+// finished writes what the syncer leaves once a pending phase Run's agent
+// finished its turn as the fake lux plays it (w.lux.Decide, asked with the
+// Run's labels and checkouts as its spec gives them): its commits pushed to
+// the Run's branch (the task branch, or its own: a candidate's) in the
+// repositories it may write, the Run completed with what it published there
+// (runs.heads), its reply, files and commits in the ledger, a review's or
+// test's findings recorded by phases.RecordFindings, then run.completed. The
+// phase.finished signal is left to NotifyFinished. agentsDone reads pull
+// request heads back through w.sync().
 //
 // Left out, as prOpen leaves them: the fake lux never holds the Run (its
 // lux_run_id is one it never issues, retired as RetireCompleted leaves it,
-// its exit collected),
-// the agent's lifecycle and tool events, and the per-Run push branch.
+// its exit collected), the agent's lifecycle and tool events, and the
+// per-Run push branch. Decide does not receive the workload prompt or
+// workdir, nor dude.model_tier, dude.effort, dude.harness, network or secrets.
 func (w *world) finished(runID string) {
 	w.t.Helper()
 	ctx := context.Background()
 	var task, phase, own, reviewOf string
+	var attempt int
 	var bases map[string]string
 	var findingIDs []string
+	var prFeedback json.RawMessage
 	if err := w.owner.QueryRow(ctx, `SELECT task_id, phase::text, COALESCE(branch, ''), base_refs, finding_ids,
-		COALESCE(review_range->>'of', '') FROM runs WHERE id = $1 AND status = 'pending'`, runID).
-		Scan(&task, &phase, &own, &bases, &findingIDs, &reviewOf); err != nil {
+		COALESCE(review_range->>'of', ''), attempt, pr_feedback FROM runs WHERE id = $1 AND status = 'pending'`, runID).
+		Scan(&task, &phase, &own, &bases, &findingIDs, &reviewOf, &attempt, &prFeedback); err != nil {
 		w.t.Fatalf("pending phase Run %s: %v", runID, err)
 	}
 	var repos []delivery.Repository
@@ -543,11 +551,30 @@ func (w *world) finished(runID string) {
 		if repos, err = delivery.TaskRepositories(ctx, tx, task); err != nil {
 			return err
 		}
-		tb, err := delivery.TaskBranchTx(ctx, tx, task, 0)
+		tb, err := delivery.TaskBranchTx(ctx, tx, task, attempt)
+		if err != nil {
+			return err
+		}
 		branch = tb.Branch
-		return err
+		return nil
 	}); err != nil {
 		w.t.Fatal(err)
+	}
+	if phase == delivery.PhaseFix {
+		var feedback []forge.ActionableFeedback
+		if err := json.Unmarshal(prFeedback, &feedback); err != nil {
+			w.t.Fatal(err)
+		}
+		for _, item := range feedback {
+			if strings.Contains(item.Body, "Base integration:") {
+				w.t.Fatal("finished refuses Base integration: feedback; drive the integration fixer on the real path")
+			}
+			for _, line := range strings.Split(item.Body, "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "tool:") {
+					w.t.Fatal("finished refuses tool: feedback; drive the fixer's tool calls on the real path")
+				}
+			}
+		}
 	}
 	if own != "" {
 		branch = own
@@ -584,12 +611,19 @@ func (w *world) finished(runID string) {
 	}
 	if phase == delivery.PhaseTest {
 		var criteria []string
-		_ = w.owner.QueryRow(ctx, `SELECT acceptance_criteria FROM tasks WHERE id = $1`, task).Scan(&criteria)
+		if err := w.owner.QueryRow(ctx, `SELECT acceptance_criteria FROM tasks WHERE id = $1`, task).Scan(&criteria); err != nil {
+			w.t.Fatal(err)
+		}
 		labels["dude.criteria"] = strconv.Itoa(len(criteria))
 	}
 	step := w.lux.Decide(map[string]any{"labels": labels, "git": map[string]any{"repositories": specRepos}})
-	if step.Hang || step.Crash || step.FailToStart || step.Ask != "" || step.Machine != "" || len(step.CallTools) > 0 {
-		w.t.Fatalf("the %s Run's agent does not just finish its turn: %+v", phase, step)
+	unsupported := step
+	unsupported.Reply, unsupported.Message = "", ""
+	unsupported.Commit, unsupported.Publish, unsupported.Descriptions = nil, nil, nil
+	// These fields only emit lifecycle/tool/network events, omitted by this state.
+	unsupported.Tools, unsupported.ToolOutput, unsupported.Thought, unsupported.Lookups = nil, nil, "", nil
+	if !reflect.DeepEqual(unsupported, reflect.Zero(reflect.TypeOf(unsupported)).Interface()) {
+		w.t.Fatalf("the %s Run's agent does not just finish its turn: %+v", phase, unsupported)
 	}
 
 	// Its commit, as the fake lux writes it, by repository: "<repo>:<path>"
@@ -667,7 +701,7 @@ func (w *world) finished(runID string) {
 		if pending, err := delivery.PendingResolutionsTx(ctx, tx, runID); err != nil || len(pending) > 0 {
 			return fmt.Errorf("the Run resolved feedback with a commit (%d), or: %v", len(pending), err)
 		}
-		if _, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', base_shas = $2::jsonb, heads = $3::jsonb,
+		if _, err := tx.Exec(ctx, `UPDATE runs r SET base_shas = $2::jsonb, heads = $3::jsonb,
 				branch = COALESCE($4, r.branch), lux_run_id = 'lrun_prepared_' || r.id, lux_state = 'running', lux_stop_reason = 'cancel',
 				lux_pushes = $5, lux_repositories = $6, push_branch = $7, push_request_id = $8, push_result = $9::jsonb,
 				harness = $10, harness_state = jsonb_build_object('sessionId', 'ses_' || r.id), model = $11, model_tier = $12,
@@ -683,15 +717,6 @@ func (w *world) finished(runID string) {
 			harness, tier.Model, tier.Name, tier.Effort); err != nil {
 			return err
 		}
-		// Its exit collected (phases.Artifacts.Sweep): the status change
-		// above made it due (runs_artifacts_due).
-		if _, err := tx.Exec(ctx, `UPDATE runs SET artifacts_due_at = NULL, artifacts_next_at = NULL WHERE id = $1`, runID); err != nil {
-			return err
-		}
-		if err := delivery.FailUnreadTx(ctx, tx, delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: runID},
-			time.Now(), phases.UnreadRunFinished); err != nil {
-			return err
-		}
 		ev := func(typ, actorType string, payload map[string]any) error {
 			_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: w.org, ProjectID: w.project, TaskID: task,
 				RunID: runID, ActorType: actorType, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: task, Payload: payload})
@@ -703,7 +728,7 @@ func (w *world) finished(runID string) {
 			}
 		}
 		for _, name := range slices.Sorted(maps.Keys(step.Publish)) {
-			if err := w.publishedArtifact(ctx, tx, task, runID, name, step.Publish[name]); err != nil {
+			if err := w.publishedArtifact(ctx, tx, task, runID, name, step.Publish[name], step.Descriptions[name]); err != nil {
 				return err
 			}
 		}
@@ -714,14 +739,6 @@ func (w *world) finished(runID string) {
 			}
 			if err := ev(delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{"repo": name, "branch": branch,
 				"baseSha": starts[name], "headSha": sha, "changedPaths": paths[name]}); err != nil {
-				return err
-			}
-			// A pull request open on the branch now has this head
-			// (phases.Syncer.publish).
-			if _, err := tx.Exec(ctx, `UPDATE pull_requests p SET head_sha = $3, head_seen_at = now(), checks_pending_since = NULL,
-				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
-				FROM repositories r WHERE r.id = p.repository_id AND p.task_id = $1 AND r.name = $2 AND p.head_branch = $4
-				AND p.state IN ('open', 'draft') AND p.head_sha IS DISTINCT FROM $3`, task, name, sha, branch); err != nil {
 				return err
 			}
 		}
@@ -741,6 +758,17 @@ func (w *world) finished(runID string) {
 		}
 	}
 	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed' WHERE id = $1`, runID); err != nil {
+			return err
+		}
+		// Its exit collected (phases.Artifacts.Sweep), after completion makes it due.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET artifacts_due_at = NULL, artifacts_next_at = NULL WHERE id = $1`, runID); err != nil {
+			return err
+		}
+		if err := phases.FailUnreadTx(ctx, tx, delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: runID},
+			time.Now(), phases.UnreadRunFinished); err != nil {
+			return err
+		}
 		_, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: w.org, ProjectID: w.project, TaskID: task,
 			RunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: task,
 			Payload: map[string]any{"status": "completed"}})
@@ -810,7 +838,7 @@ func tierModel(ctx context.Context, tx pgx.Tx, role string, layers ...json.RawMe
 // publishedArtifact records a file a Run published, as the artifact
 // collector does (phases.recordArtifact), under a storage key the fake lux
 // never issues: its bytes are not on lux.
-func (w *world) publishedArtifact(ctx context.Context, tx pgx.Tx, wi, runID, name, content string) error {
+func (w *world) publishedArtifact(ctx context.Context, tx pgx.Tx, wi, runID, name, content, description string) error {
 	ctype := "text/markdown; charset=utf-8"
 	if strings.HasSuffix(name, ".webm") {
 		ctype = "video/webm"
@@ -819,12 +847,12 @@ func (w *world) publishedArtifact(ctx context.Context, tx pgx.Tx, wi, runID, nam
 	if _, err := tx.Exec(ctx, `INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type,
 			size_bytes, storage_key, sha256, epoch, description)
 		VALUES ($1, $2, $3, 'published', $4, $5, $6, $7, '', 1, $8)`,
-		id, w.org, runID, name, ctype, len(content), "prepared_"+id, fakeagent.Description(name)); err != nil {
+		id, w.org, runID, name, ctype, len(content), "prepared_"+id, description); err != nil {
 		return err
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: "artifact.created", OrganizationID: w.org, ProjectID: w.project,
 		TaskID: wi, RunID: runID, ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: wi,
 		Payload: map[string]any{"artifactId": id, "name": name, "contentType": ctype, "sizeBytes": len(content),
-			"sha256": "", "description": fakeagent.Description(name)}})
+			"sha256": "", "description": description}})
 	return err
 }
