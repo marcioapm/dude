@@ -86,6 +86,10 @@ a pull request: github_pull_request reads its reviews, threads, checks and files
 
 …cut: the first 300 changed files
 
+## pr-more-comments
+
+…cut: the newest 50 of 73 comments
+
 ## pr-no-diff
 
 GitHub shows no diff for it (binary, or too large)

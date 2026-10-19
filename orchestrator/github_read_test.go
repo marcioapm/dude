@@ -134,6 +134,7 @@ func TestABrainstormReadsItsLinkedRepositorysIssuesAndPullRequests(t *testing.T)
 	s.gh.WriteFile("feature/dedupe", "rollup.go", "package rollup\n\nfunc Count() int { return 1 }\n", "Count once")
 	s.gh.ReviewSaying(pr, "bo", "CHANGES_REQUESTED", "Name the key.")
 	s.gh.LineCommentAt(pr, "cy", "rollup.go", 3, "Why one?")
+	s.gh.Comment(pr, "dee", "Ship it, but the metric name is wrong.")
 	s.gh.SetChecks("run:failure")
 
 	found := s.read(run, "github_search", `{"repo":"acme/target","query":"rollup","kind":"issue","state":"open"}`)
@@ -187,6 +188,15 @@ func TestABrainstormReadsItsLinkedRepositorysIssuesAndPullRequests(t *testing.T)
 	}
 	if path != "rollup.go" || field(p, "files", 0, "additions") != float64(3) || !strings.Contains(diff, "+func Count() int { return 1 }") {
 		t.Errorf("files %v", field(p, "files"))
+	}
+	said = nil
+	for _, c := range field(p, "comments").([]any) {
+		body, _ := quoted(field(c, "body").(string))
+		author, _ := quoted(field(c, "author").(string))
+		said = append(said, author+": "+body)
+	}
+	if strings.Join(said, " | ") != "dee: Ship it, but the metric name is wrong." {
+		t.Errorf("conversation %v", field(p, "comments"))
 	}
 	// Without files, no diff.
 	bare := s.read(run, "github_pull_request", fmt.Sprintf(`{"repo":"acme/target","number":%d}`, pr))

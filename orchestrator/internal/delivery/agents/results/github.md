@@ -25,6 +25,8 @@
 
 {{- define "results/github/comments-cut"}}{{.Cut}}: the first {{.Shown}} of {{.Total}} comments{{end}}
 
+{{- define "results/github/comments-newest-cut"}}{{.Cut}}: the newest {{.Shown}} of {{.Total}} comments{{end}}
+
 {{- define "results/github/no-diff"}}GitHub shows no diff for it (binary, or too large){{end}}
 
 {{- define "results/github/checks-cut"}}{{.}}: check runs incomplete{{end}}

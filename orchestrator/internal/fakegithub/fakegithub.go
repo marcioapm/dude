@@ -968,7 +968,7 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
 		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
-		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels),
+		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels), "comments": len(p.Comments),
 	}
 }
 
@@ -1161,7 +1161,7 @@ func (s *Server) comments(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	write(w, 200, s.commentsJSON(p, p.Comments, "issuecomment"))
+	write(w, 200, page(r, s.commentsJSON(p, p.Comments, "issuecomment")))
 }
 
 func (s *Server) lineComments(w http.ResponseWriter, r *http.Request) {

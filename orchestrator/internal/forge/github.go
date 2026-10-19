@@ -1651,6 +1651,10 @@ type PullRequestRead struct {
 	// ChecksCut: the agent read's cap left checks out.
 	ChecksCut bool
 	Files     []FileRead
+	// The conversation's newest comments, oldest first (see
+	// PullRequestRead); CommentCount is how many it has.
+	Comments     []IssueComment
+	CommentCount int
 }
 
 type ghLabel struct {
@@ -1787,9 +1791,9 @@ func (g *GitHub) Issue(ctx context.Context, slug string, number, maxComments int
 
 // PullRequestRead reads a pull request whole: its text, head and base,
 // every review with its text, the threads nobody resolved, the checks on
-// its head and the files it changes (at most maxFiles), each file's diff
-// with it.
-func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles int, requested ...string) (_ PullRequestRead, err error) {
+// its head, the files it changes (at most maxFiles), each file's diff
+// with it, and the newest maxComments comments of its conversation.
+func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFiles, maxComments int, requested ...string) (_ PullRequestRead, err error) {
 	ctx = agentReadContext(ctx)
 	defer func() { err = g.itemMoved(ctx, slug, err) }()
 	if err := g.readBudget(ctx, slug, "core", "graphql"); err != nil {
@@ -1800,6 +1804,8 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 		Body      string    `json:"body"`
 		UpdatedAt string    `json:"updated_at"`
 		Labels    []ghLabel `json:"labels"`
+		// The conversation's comments; nil when GitHub's answer has none.
+		Comments *int `json:"comments"`
 	}
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
 		return PullRequestRead{}, err
@@ -1856,7 +1862,64 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 	for _, f := range files[:min(len(files), maxFiles)] {
 		out.Files = append(out.Files, FileRead{Path: f.Filename, Status: f.Status, Additions: f.Additions, Deletions: f.Deletions, Patch: f.Patch})
 	}
+	if out.Comments, out.CommentCount, err = g.conversationTail(ctx, slug, number, p.Comments, maxComments); err != nil {
+		return PullRequestRead{}, err
+	}
 	return out, nil
+}
+
+// conversationTail is a pull request's newest keep conversation comments,
+// oldest first, and how many it has. A pull request's conversation is its
+// issue's comments, listed oldest first; reading them needs Pull requests:
+// Read only, where GET /issues/{n} needs Issues: Read. count, the pull
+// request's own comment count, names the last page: it is read, the pages
+// after it while each is full (the count was behind), and the pages before
+// it until keep are held. With no count every page is read, as pages does.
+func (g *GitHub) conversationTail(ctx context.Context, slug string, number int, count *int, keep int) ([]IssueComment, int, error) {
+	path := fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number)
+	if keep <= 0 || count != nil && *count == 0 {
+		return []IssueComment{}, 0, nil
+	}
+	var all []ghComment
+	first := 1
+	if count == nil {
+		var err error
+		if all, err = pages[ghComment](ctx, g, path); err != nil {
+			return nil, 0, err
+		}
+	} else {
+		read := func(page int) ([]ghComment, error) {
+			var batch []ghComment
+			err := g.do(ctx, "GET", fmt.Sprintf("%s?per_page=100&page=%d", path, page), nil, &batch)
+			return batch, err
+		}
+		first = (*count + 99) / 100
+		// At most pages' 50 pages, so an endpoint that ignores paging cannot loop.
+		for page := first; page < first+50; page++ {
+			batch, err := read(page)
+			if err != nil {
+				return nil, 0, err
+			}
+			all = append(all, batch...)
+			if len(batch) < 100 {
+				break
+			}
+		}
+		for first > 1 && len(all) < keep {
+			first--
+			batch, err := read(first)
+			if err != nil {
+				return nil, 0, err
+			}
+			all = append(batch, all...)
+		}
+	}
+	out := []IssueComment{}
+	for _, c := range all[max(0, len(all)-keep):] {
+		out = append(out, IssueComment{Author: login(c.User), Body: c.Body, CreatedAt: c.CreatedAt})
+	}
+	// Every page before the first read is full.
+	return out, (first-1)*100 + len(all), nil
 }
 
 // openThreads is a pull request's unresolved review threads with their

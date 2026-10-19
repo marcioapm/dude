@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -74,7 +75,7 @@ func TestAPullRequestReadIsWhatAReaderSees(t *testing.T) {
 	target.Set(func(s *fakegithub.Server) { s.ResolvedThreads = map[string]bool{s.ThreadID(resolved): true} })
 	target.SetChecks("run:failure")
 
-	p, err := gh.PullRequestRead(ctx, "acme/target", 1, 100, "rollup.go")
+	p, err := gh.PullRequestRead(ctx, "acme/target", 1, 100, 50, "rollup.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,12 +91,108 @@ func TestAPullRequestReadIsWhatAReaderSees(t *testing.T) {
 	if len(p.Checks) != 1 || p.Checks[0].Name != "e2e" || p.Checks[0].Conclusion != "failure" {
 		t.Errorf("checks %+v", p.Checks)
 	}
-	pWithoutPatch, err := gh.PullRequestRead(ctx, "acme/target", 1, 100)
+	pWithoutPatch, err := gh.PullRequestRead(ctx, "acme/target", 1, 100, 50)
 	if err != nil || len(pWithoutPatch.Files) != 1 || pWithoutPatch.Files[0].Patch != "" {
 		t.Fatalf("unrequested patches retained: %+v err=%v", pWithoutPatch.Files, err)
 	}
 	if len(p.Files) != 1 || p.Files[0].Path != "rollup.go" || p.Files[0].Additions != 3 || !strings.Contains(p.Files[0].Patch, "+func Count()") {
 		t.Errorf("files %+v", p.Files)
+	}
+	if p.CommentCount != 0 || p.Comments == nil || len(p.Comments) != 0 {
+		t.Errorf("comments %+v (count %d), want none", p.Comments, p.CommentCount)
+	}
+	target.Comment(1, "dee", "Ship it, but the metric name is wrong.")
+	p, err = gh.PullRequestRead(ctx, "acme/target", 1, 100, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := p.Comments; p.CommentCount != 1 || len(c) != 1 || c[0].Author != "dee" ||
+		c[0].Body != "Ship it, but the metric name is wrong." || c[0].CreatedAt == "" {
+		t.Errorf("conversation %+v (count %d)", c, p.CommentCount)
+	}
+}
+
+// A pull request's conversation keeps its newest comments, oldest first,
+// with how many it has. The pull request's own count says which page is the
+// last, so the pages before the newest are not read.
+func TestAPullRequestReadKeepsTheNewestConversation(t *testing.T) {
+	for _, tc := range []struct {
+		comments  int
+		wantPages []string
+	}{
+		{1, []string{"1"}},
+		{73, []string{"1"}},
+		{120, []string{"2", "1"}},
+		{250, []string{"3"}},
+	} {
+		t.Run(strconv.Itoa(tc.comments), func(t *testing.T) {
+			target, _, gh := readsWorld(t)
+			n := target.OpenAsPerson("ana", "feature/talk", "main", "Talk")
+			for i := 1; i <= tc.comments; i++ {
+				target.Comment(n, "bo", fmt.Sprintf("comment %d", i))
+			}
+			var pages []string
+			target.Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if strings.HasSuffix(r.URL.Path, "/issues/1/comments") {
+						pages = append(pages, r.URL.Query().Get("page"))
+					}
+					return 0
+				}
+			})
+			p, err := gh.PullRequestRead(context.Background(), "acme/target", n, 100, 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keep := min(tc.comments, 50)
+			if p.CommentCount != tc.comments || len(p.Comments) != keep {
+				t.Fatalf("%d comments of %d, want %d of %d", len(p.Comments), p.CommentCount, keep, tc.comments)
+			}
+			for i, c := range p.Comments {
+				if want := fmt.Sprintf("comment %d", tc.comments-keep+1+i); c.Body != want || c.Author != "bo" {
+					t.Fatalf("comment %d: %+v, want %q by bo", i, c, want)
+				}
+			}
+			if !slices.Equal(pages, tc.wantPages) {
+				t.Errorf("pages read %v, want %v", pages, tc.wantPages)
+			}
+		})
+	}
+}
+
+// A pull request whose answer has no comment count has its conversation
+// read page by page to the end.
+func TestAPullRequestReadWithNoCountReadsEveryPage(t *testing.T) {
+	var pages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/issues/1/comments"):
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			pages = append(pages, strconv.Itoa(page))
+			batch := []map[string]any{}
+			for i := (page-1)*100 + 1; i <= min(page*100, 130); i++ {
+				batch = append(batch, map[string]any{"body": fmt.Sprintf("comment %d", i), "user": map[string]string{"login": "bo"},
+					"created_at": "2026-01-01T00:00:00Z"})
+			}
+			_ = json.NewEncoder(w).Encode(batch)
+		case strings.HasSuffix(r.URL.Path, "/reviews"), strings.HasSuffix(r.URL.Path, "/files"):
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/graphql":
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`))
+		default:
+			_, _ = w.Write([]byte(`{"number":1}`))
+		}
+	}))
+	defer srv.Close()
+	p, err := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL}).PullRequestRead(context.Background(), "acme/allowed", 1, 300, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.CommentCount != 130 || len(p.Comments) != 50 || p.Comments[0].Body != "comment 81" || p.Comments[49].Body != "comment 130" {
+		t.Fatalf("%d comments of %d: first %+v", len(p.Comments), p.CommentCount, p.Comments[:min(1, len(p.Comments))])
+	}
+	if !slices.Equal(pages, []string{"1", "2"}) {
+		t.Errorf("pages read %v", pages)
 	}
 }
 
@@ -189,13 +286,13 @@ func TestAMovedItemIsNotAMovedRepository(t *testing.T) {
 		{"transferred issue", false, func(gh *GitHub) error { _, err := gh.Issue(context.Background(), "acme/old", 7, 50); return err },
 			RefusalMovedItem, "/repos/acme/old/issues/7"},
 		{"transferred pull request's path", false, func(gh *GitHub) error {
-			_, err := gh.PullRequestRead(context.Background(), "acme/old", 7, 300)
+			_, err := gh.PullRequestRead(context.Background(), "acme/old", 7, 300, 50)
 			return err
 		}, RefusalMovedItem, "/repos/acme/old/pulls/7"},
 		{"renamed repository, issue", true, func(gh *GitHub) error { _, err := gh.Issue(context.Background(), "acme/old", 7, 50); return err },
 			RefusalMoved, "/repos/acme/old/issues/7"},
 		{"renamed repository, pull request", true, func(gh *GitHub) error {
-			_, err := gh.PullRequestRead(context.Background(), "acme/old", 7, 300)
+			_, err := gh.PullRequestRead(context.Background(), "acme/old", 7, 300, 50)
 			return err
 		}, RefusalMoved, "/repos/acme/old/pulls/7"},
 	} {
@@ -442,7 +539,7 @@ func TestAgentReviewsFetchOnlyBoundedHistory(t *testing.T) {
 				batch = append(batch, map[string]any{"state": "COMMENTED", "body": "review", "submitted_at": "2026-01-01T00:00:00Z"})
 			}
 			_ = json.NewEncoder(w).Encode(batch)
-		case strings.HasSuffix(r.URL.Path, "/files"):
+		case strings.HasSuffix(r.URL.Path, "/files"), strings.HasSuffix(r.URL.Path, "/comments"):
 			_, _ = w.Write([]byte(`[]`))
 		case r.URL.Path == "/graphql":
 			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`))
@@ -452,7 +549,7 @@ func TestAgentReviewsFetchOnlyBoundedHistory(t *testing.T) {
 	}))
 	defer srv.Close()
 	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
-	p, err := gh.PullRequestRead(context.Background(), "acme/allowed", 1, 300)
+	p, err := gh.PullRequestRead(context.Background(), "acme/allowed", 1, 300, 50)
 	if err != nil || pages > 2 || len(p.Reviews) != 50 || !p.ReviewsCut {
 		t.Fatalf("reviews=%d pages=%d err=%v", len(p.Reviews), pages, err)
 	}

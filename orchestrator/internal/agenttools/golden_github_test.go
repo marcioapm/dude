@@ -41,7 +41,8 @@ func TestGoldenGitHubAndMachineWords(t *testing.T) {
 	issue := w.issue(forge.IssueRead{IssueLine: forge.IssueLine{Number: 2, PullRequest: true}, CommentCount: 60,
 		Comments: make([]forge.IssueComment, 50)})
 	pr := w.pullRequest(forge.PullRequestRead{ChecksCut: true, ReviewsCut: true, ThreadsUnknown: true,
-		Files: append(make([]forge.FileRead, filesMax-1), forge.FileRead{Path: "bin"})}, []string{"bin"})
+		Files: append(make([]forge.FileRead, filesMax-1), forge.FileRead{Path: "bin"}), CommentCount: 73,
+		Comments: make([]forge.IssueComment, commentsMax)}, []string{"bin"})
 	lines = append(lines,
 		[2]string{"search-more", fmt.Sprint(search["more"])},
 		[2]string{"whose-task", whoseTask},
@@ -53,6 +54,7 @@ func TestGoldenGitHubAndMachineWords(t *testing.T) {
 		[2]string{"pr-more-reviews", fmt.Sprint(pr["moreReviews"])},
 		[2]string{"pr-threads-unknown", fmt.Sprint(pr["threadsUnknown"])},
 		[2]string{"pr-more-files", fmt.Sprint(pr["moreFiles"])},
+		[2]string{"pr-more-comments", fmt.Sprint(pr["moreComments"])},
 		[2]string{"pr-no-diff", pr["files"].([]ghFileOut)[filesMax-1].Diff},
 		[2]string{"cut", cutMark},
 		[2]string{"text-cut", strings.TrimPrefix(w.text("abcdefghij", 4), w.text("abcd", 4))},
