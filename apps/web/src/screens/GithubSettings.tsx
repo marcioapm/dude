@@ -216,6 +216,10 @@ export function GithubBehaviour({ client, admin }: { client: ApiClient; admin: b
           <Input aria-label="Fix rounds per pull request" type="number" min={0} max={50} value={draft.fixRoundsPerPr}
             onChange={(e) => set("fixRoundsPerPr", Number(e.target.value))} data-testid="setting-fix-rounds" />
         </SettingRow>
+        <SettingRow label="Checks report rounds" help="Send an unbacked checks report back to its agent this many times, then ask the owner. 0 asks immediately.">
+          <Input aria-label="Checks report rounds" type="number" min={0} max={20} value={draft.checksFixRounds}
+            onChange={(e) => set("checksFixRounds", Number(e.target.value))} data-testid="setting-checks-rounds" />
+        </SettingRow>
         <SettingRow label="Ask when CI is stuck after" help="Minutes checks may stay pending on one commit.">
           <Input aria-label="Minutes before CI is stuck" type="number" min={1} value={draft.ciStuckMinutes}
             onChange={(e) => set("ciStuckMinutes", Number(e.target.value))} />
