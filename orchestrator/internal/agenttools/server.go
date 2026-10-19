@@ -673,9 +673,10 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 }
 
 func childToolAllowed(name string) bool {
-	switch name {
-	case "list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event":
-		return true
+	for _, allowed := range delivery.ChildTools {
+		if name == allowed {
+			return true
+		}
 	}
 	return false
 }

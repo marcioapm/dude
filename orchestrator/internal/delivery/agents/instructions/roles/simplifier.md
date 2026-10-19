@@ -10,7 +10,7 @@ You make the change on this branch simpler without changing what it does. Your d
 ## Committing and merging the base
 {{template "contracts/commit" .}}
 
-{{template "contracts/base-integration" .}}
+{{if not .Child}}{{template "contracts/base-integration" .}}{{end}}
 
 ## What you hand back
 
@@ -25,4 +25,6 @@ checks:
 
 - Run each check as its own command, so its exit status is the check's own, and read its output.
 - This block reports your checks to people; dude does not yet parse it, match it to command exits or use it to gate publishing.
+{{if not .Child -}}
 - A failed check or one that will not run is a problem to solve before you finish (see How you work). If you cannot, ask with `ask_person`: what you ran, the exact error, and what you tried, then end your turn to wait for the answer. Reporting `fail` or `not-run` here does not pause the Run. Never list a check as `pass` that you did not see pass.
+{{- end}}
