@@ -105,6 +105,62 @@ func TestChecksRestartRetainsOnlyAcceptedCurrentTurn(t *testing.T) {
 		t.Fatalf("restart: %v %v", ok, err)
 	}
 }
+
+// interruptingJudge stands for an orchestrator stopped mid-judgement: its
+// context ends while the model thinks.
+type interruptingJudge struct {
+	calls int
+	stop  context.CancelFunc
+}
+
+func (j *interruptingJudge) Judge(ctx context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
+	j.calls++
+	j.stop()
+	return judge.Judgement{}, ctx.Err()
+}
+
+// A restart between a turn's end and its judgement never passes it: what
+// was judged is read back, a rejection staying one, and a judgement cut
+// short records nothing, so the next process judges the turn again.
+func TestChecksARestartNeverPassesAnUnjudgedOrRejectedTurn(t *testing.T) {
+	w := newHarnessWorld(t)
+	checksReply(w, passingChecks)
+	w.feed(map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "busy"}},
+		map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "idle"}})
+	// Cut short: no verdict is recorded and nothing passes.
+	ctx, stop := context.WithCancel(context.Background())
+	cut := &interruptingJudge{stop: stop}
+	w.s.Judge = cut
+	if ok, _, err := w.s.checksBeforePush(ctx, w.run); ok || err == nil || cut.calls == 0 {
+		t.Fatalf("an interrupted judgement: pass %v, %v", ok, err)
+	}
+	if n := w.countEvents(checksJudgedEvent); n != 0 {
+		t.Fatalf("%d verdicts recorded for an interrupted judgement", n)
+	}
+	// The next process judges it again, here rejecting it...
+	again := &Syncer{DB: w.s.DB, Judge: &checksFake{backed: judge.No, missing: judge.No}}
+	if ok, _, err := again.checksBeforePush(context.Background(), w.run); ok || err != nil {
+		t.Fatalf("judged again: pass %v, %v", ok, err)
+	}
+	// ...and one after that reads the rejection, asking nobody.
+	after := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
+	if ok, _, err := after.checksBeforePush(context.Background(), w.run); ok || err != nil {
+		t.Fatalf("after the rejection: pass %v, %v", ok, err)
+	}
+	if n := w.countEvents(checksJudgedEvent); n != 1 {
+		t.Fatalf("%d verdicts, want the one rejection", n)
+	}
+}
+
+func (w *harnessWorld) countEvents(typ string) int {
+	w.t.Helper()
+	var n int
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`,
+		w.run.ID, typ).Scan(&n); err != nil {
+		w.t.Fatal(err)
+	}
+	return n
+}
 func TestChecksNonGatedPhaseDeclaration(t *testing.T) {
 	if delivery.ChecksGated[delivery.PhaseReview] {
 		t.Fatal("review is gated")

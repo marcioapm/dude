@@ -172,6 +172,11 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			d.Message = checksSkip.Render(nil)
 			return d, nil
 		}
+		if err != nil && ctx.Err() != nil {
+			// The orchestrator is stopping: no judgement was made, and the
+			// next process judges the turn again.
+			return d, err
+		}
 		v := checksVerdict{Command: name, Decision: j.Decision, Reason: j.Reasoning, CallID: j.CallID}
 		if err != nil {
 			v.Reason = err.Error()
