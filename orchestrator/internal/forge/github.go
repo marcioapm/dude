@@ -538,11 +538,14 @@ func lastPage(link string) int {
 		if !ok || !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
 			continue
 		}
-		// rel is a space-separated list of relation types (RFC 8288).
+		// rel is a space-separated list of relation types, compared, like
+		// the parameter name, case-insensitively (RFC 8288).
 		last := false
 		for _, p := range strings.Split(params, ";") {
-			if rels, ok := strings.CutPrefix(strings.TrimSpace(p), "rel="); ok {
-				last = last || slices.Contains(strings.Fields(strings.Trim(rels, `"`)), "last")
+			if name, rels, ok := strings.Cut(strings.TrimSpace(p), "="); ok && strings.EqualFold(name, "rel") {
+				last = last || slices.ContainsFunc(strings.Fields(strings.Trim(rels, `"`)), func(r string) bool {
+					return strings.EqualFold(r, "last")
+				})
 			}
 		}
 		if !last {

@@ -210,6 +210,9 @@ func TestAPullRequestConversationIsCountedByItsPages(t *testing.T) {
 		// A relation list naming last among others (RFC 8288 section 3.3).
 		{name: "link rel list", reported: 1, comments: 250, afterFirst: 250, link: `<https://api.github.com/x?page=2>; rel="next", <https://api.github.com/x?page=3>; rel="next last"`,
 			wantPages: []string{"1", "3"}, wantTotal: 250, wantFirstBody: 201, wantLastBody: 250},
+		// Parameter names and relation types compare case-insensitively.
+		{name: "link rel mixed case", reported: 1, comments: 250, afterFirst: 250, link: `<https://api.github.com/x?page=3>; REL="next Last"`,
+			wantPages: []string{"1", "3"}, wantTotal: 250, wantFirstBody: 201, wantLastBody: 250},
 		{name: "link rel lookalike", reported: 250, comments: 250, afterFirst: 250, link: `<https://api.github.com/x?page=3>; rel="lastly"`,
 			wantPages: []string{"1"}, wantTotal: 100, wantFirstBody: 51, wantLastBody: 100},
 		{name: "link unbracketed", reported: 250, comments: 250, afterFirst: 250, link: `https://api.github.com/x?page=3; rel="last"`,
