@@ -768,11 +768,18 @@ func (w *world) agentTurn(runID, task, phase, reviewOf string, tier delivery.Tie
 	step := w.lux.Decide(map[string]any{"labels": labels, "git": map[string]any{"repositories": specRepos}})
 	unsupported := step
 	unsupported.Reply, unsupported.Message = "", ""
+	// The checks report is part of the reply; ChecksModel is label metadata.
+	unsupported.Checks, unsupported.ChecksModel, unsupported.NoChecksReport = "", "", false
 	unsupported.Commit, unsupported.Publish, unsupported.Descriptions = nil, nil, nil
 	// These fields only emit lifecycle/tool/network events, omitted by finished.
 	unsupported.Tools, unsupported.ToolOutput, unsupported.Thought, unsupported.Lookups = nil, nil, "", nil
+	unsupported.Commands = nil
 	if !reflect.DeepEqual(unsupported, reflect.Zero(reflect.TypeOf(unsupported)).Interface()) {
 		w.t.Fatalf("the %s Run's agent does not just finish its turn: %+v", phase, unsupported)
+	}
+	// The reply as the fake lux plays it: ending with its checks report.
+	if step.Checks != "" {
+		step.Reply = strings.TrimSpace(step.Reply + "\n\n" + step.Checks)
 	}
 	return step
 }
