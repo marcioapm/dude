@@ -1710,6 +1710,14 @@ func (s *Server) turn(run *Run) {
 	if len(run.Inputs) == 0 {
 		s.lookUp(run, b.Lookups)
 		s.playSubagent(run, b.Subagent)
+		// A writer kept in its turn says its checks report before it acts,
+		// so however that turn ends (EndTurn, an interrupt, a test marking
+		// it done) the checks gate has one; its tool calls flush it.
+		if b.Hang && b.Checks != "" && !b.Conductor && b.Ask == "" {
+			for _, chunk := range chunks(b.Checks, 7) {
+				s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": chunk}})
+			}
+		}
 	}
 	for i, tool := range b.Tools {
 		id := fmt.Sprintf("call_%d", i)
