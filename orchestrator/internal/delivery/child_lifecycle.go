@@ -227,6 +227,9 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 		if !c.Actionable {
 			return refuseText(rChildParentNotLive)
 		}
+		// The delivery a writer is admitted under; createPhaseRunTx refuses an
+		// implementer whose delivery a Close or Archive has since ended.
+		var workflowID string
 		if Publishes[c.Phase] {
 			d, err := LoadDelivery(ctx, tx, taskID)
 			if err != nil {
@@ -242,9 +245,10 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 			if err := refuseWriterAdmissionTx(ctx, tx, taskID, childID, d); err != nil {
 				return err
 			}
+			workflowID = d.WorkflowID
 		}
 		encoded, _ := json.Marshal([]string{childID, key})
-		id, err = createPhaseRunTx(ctx, tx, org, PhaseRun{TaskID: taskID, Phase: c.Phase,
+		id, err = createPhaseRunTx(ctx, tx, org, PhaseRun{TaskID: taskID, Phase: c.Phase, WorkflowID: workflowID,
 			BaseRefs: c.BaseRefs, ParentRunID: c.ParentID, Attempt: c.Attempt, ConductorRunID: c.ParentID,
 			ConductorNote: c.Note, Tier: c.Tier, Branch: c.Branch, Key: "child-restart:" + string(encoded), Child: true})
 		if err != nil {
