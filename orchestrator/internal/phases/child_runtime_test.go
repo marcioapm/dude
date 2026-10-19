@@ -660,6 +660,14 @@ func TestSessionChildArtifactsAreSessionOwnedAndVersioned(t *testing.T) {
 	}
 	record("run_art_one", "artifact_one", "sha-one")
 	record("run_art_two", "artifact_two", "sha-two")
+	var eventSession *string
+	var correlation string
+	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, "run_art_one").Scan(&eventSession, &correlation); err != nil {
+		t.Fatal(err)
+	}
+	if eventSession == nil || *eventSession != "ssn_artifacts" || correlation != "ssn_artifacts" {
+		t.Fatalf("session artifact event attribution: session=%v correlation=%q", eventSession, correlation)
+	}
 	var count int
 	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE r.session_id='ssn_artifacts' AND a.name='design.md'`).Scan(&count); err != nil {
 		t.Fatal(err)
@@ -672,13 +680,18 @@ func TestSessionChildArtifactsAreSessionOwnedAndVersioned(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var sessionID *string
-	var taskID *string
-	if err := w.owner.QueryRow(w.ctx, `SELECT a.session_id, r.task_id FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE a.storage_key='task_storage'`).Scan(&sessionID, &taskID); err != nil {
+	var artifactSessionID, artifactTaskID *string
+	if err := w.owner.QueryRow(w.ctx, `SELECT a.session_id, r.task_id FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE a.storage_key='task_storage'`).Scan(&artifactSessionID, &artifactTaskID); err != nil {
 		t.Fatal(err)
 	}
-	if sessionID != nil || taskID == nil || *taskID != w.run.TaskID {
-		t.Fatalf("task artifact ownership: session=%v task=%v", sessionID, taskID)
+	if artifactSessionID != nil || artifactTaskID == nil || *artifactTaskID != w.run.TaskID {
+		t.Fatalf("task artifact ownership: session=%v task=%v", artifactSessionID, artifactTaskID)
+	}
+	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, "run_task_art").Scan(&eventSession, &correlation); err != nil {
+		t.Fatal(err)
+	}
+	if eventSession != nil || correlation != w.run.TaskID {
+		t.Fatalf("task artifact event attribution: session=%v correlation=%q", eventSession, correlation)
 	}
 }
 
