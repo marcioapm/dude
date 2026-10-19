@@ -371,6 +371,20 @@ describe("a brainstorm session's images", () => {
     expect((await call(anaKey, "DELETE", `/v1/attachments/${id}`)).status).toBe(204);
   });
 
+  test("a session's image is never cached, since membership can end; a task's stays cached for a year", async () => {
+    await as("chat");
+    const id = ((await (await toSession(anaKey)).json()) as Json).id;
+    for (const variant of ["delivered", "original"]) {
+      const res = await call(boKey, "GET", `/v1/attachments/${id}?variant=${variant}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+    }
+    const task = ((await (await upload(anaKey, taskId, form(png(5, 5), "image/png", png(5, 5), "image/png"))).json()) as Json).id;
+    const res = await call(boKey, "GET", `/v1/attachments/${task}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+  });
+
   test("deleting the session takes its images and queues their objects", async () => {
     const id = ((await (await toSession(anaKey)).json()) as Json).id;
     const [row] = await owner`SELECT object_key FROM attachments WHERE id = ${id}`;

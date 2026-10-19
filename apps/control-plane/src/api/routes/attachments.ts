@@ -143,10 +143,10 @@ async function serve(ctx: RequestContext): Promise<Response> {
   const variant = ctx.url.searchParams.get("variant") ?? "delivered";
   if (variant !== "delivered" && variant !== "original") throw badRequest("variant is delivered or original");
   const row = await withOrg(ctx.principal.organizationId, async ({ sql }) => (await sql`
-    SELECT name, content_type, object_key, original_content_type, original_key,
+    SELECT name, content_type, object_key, original_content_type, original_key, session_id IS NOT NULL AS in_session,
       CASE WHEN session_id IS NULL THEN true ELSE session_role(session_id, ${ctx.principal.personId}) IS NOT NULL END AS visible
     FROM attachments WHERE id = ${ctx.params.id!}`)[0] as
-    { name: string; content_type: string; object_key: string; original_content_type: string; original_key: string; visible: boolean } | undefined);
+    { name: string; content_type: string; object_key: string; original_content_type: string; original_key: string; in_session: boolean; visible: boolean } | undefined);
    if (!row || !row.visible) throw notFound("no such attachment");
   const [key, type] = variant === "original" ? [row.original_key, row.original_content_type] : [row.object_key, row.content_type];
   // The row admits only the four raster types; never anything a browser would run.
@@ -161,8 +161,9 @@ async function serve(ctx: RequestContext): Promise<Response> {
       "content-disposition": disposition(ctx.url.searchParams.get("download") ? "attachment" : "inline", name),
       "x-content-type-options": "nosniff",
       "content-security-policy": "default-src 'none'",
-      // An attachment's bytes never change.
-      "cache-control": "private, max-age=31536000, immutable",
+      // An attachment's bytes never change, but a session's membership does:
+      // a cached copy would outlive a member's removal from the session.
+      "cache-control": row.in_session ? "private, no-store" : "private, max-age=31536000, immutable",
     },
   });
 }
