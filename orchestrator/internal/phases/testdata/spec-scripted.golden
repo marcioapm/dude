@@ -19,7 +19,7 @@
     "command": [
       "lux-fake"
     ],
-    "prompt": "append FACTORY.md Written by run run_1\nwrite /tmp/dude-publish/NOTES.md # What changed  Added FACTORY.md for run_1.\nsh /.lux/bin/lux-shim publish '/tmp/dude-publish/NOTES.md' --name 'NOTES.md' --description 'What NOTES.md is for'\ncommit Add FACTORY.md for run_1\necho Implemented it.",
+    "prompt": "append FACTORY.md Written by run run_1\nwrite /tmp/dude-publish/NOTES.md # What changed  Added FACTORY.md for run_1.\nsh /.lux/bin/lux-shim publish '/tmp/dude-publish/NOTES.md' --name 'NOTES.md' --description 'What NOTES.md is for'\ncommit Add FACTORY.md for run_1\necho Implemented it.\nappend /tmp/checks.yaml ```yaml\nappend /tmp/checks.yaml checks: []\nappend /tmp/checks.yaml ```\nread /tmp/checks.yaml",
     "workdir": "/workspace",
     "mcpServers": [
       {

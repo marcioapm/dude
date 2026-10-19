@@ -1991,10 +1991,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	// as lux was told, at submit or as a resume added one. Work on nothing
 	// it may change publishes only what it wrote for people.
 	pushes := r.PushBranch != "" && r.HoldsPushable
-	// A gated phase's checks report is judged before anything leaves the
-	// Run: before the push is asked for, or, for one that pushes nothing,
-	// before it completes.
-	if delivery.ChecksGated[r.Phase] && r.PushRequestID == "" && r.PushResult == nil {
+	// A gated phase's checks report is judged before its push is asked
+	// for: nothing leaves the Run unverified. A Run lux reports over is
+	// failed below, kept, as before; its report is judged when a person
+	// resumes it and its turn ends again.
+	if pushes && delivery.ChecksGated[r.Phase] && r.PushRequestID == "" && r.PushResult == nil && !lux.Terminal(r.LuxState) {
 		pass, acted, err := s.checksBeforePush(ctx, r)
 		if err != nil || !pass {
 			return acted, err

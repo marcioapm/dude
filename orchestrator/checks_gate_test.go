@@ -51,7 +51,7 @@ func (j *scriptedJudge) Judge(_ context.Context, _ string, a judge.Ask) (judge.J
 func lastCompletion(context string) string {
 	lines := strings.Split(context, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(lines[i], "agent.tool.completed ") {
+		if strings.HasPrefix(lines[i], "agent.tool.completed ") || strings.HasPrefix(lines[i], "  status:") {
 			return lines[i]
 		}
 	}
@@ -62,7 +62,7 @@ func lastCompletion(context string) string {
 // a failing call as status error, with its exit code when the harness
 // reports one.
 func failed(completion string) bool {
-	return strings.Contains(completion, `"status": "error"`) || strings.Contains(completion, `"status":"error"`)
+	return strings.Contains(completion, `"status": "error"`) || strings.Contains(completion, `"status":"error"`) || strings.Contains(completion, "status: error")
 }
 
 func (j *scriptedJudge) count() int {
