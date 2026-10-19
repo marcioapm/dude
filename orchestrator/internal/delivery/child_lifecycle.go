@@ -17,45 +17,58 @@ type ChildOutcome struct {
 }
 
 type lockedChild struct {
-	TaskID, ParentID, Profile, Phase, Status, StopReason, ReplacedBy string
-	Prompt, Note, Tier, Branch                                       string
-	Attempt, Generation                                              int
-	Capabilities                                                     ChildCapabilities
-	BaseRefs                                                         map[string]string
-	Actionable                                                       bool
-	ParentLive                                                       bool
+	TaskID, SessionID, ParentID, Profile, Phase, Status, StopReason, ReplacedBy string
+	Prompt, Note, Tier, Branch                                                  string
+	Attempt, Generation                                                         int
+	Capabilities                                                                ChildCapabilities
+	BaseRefs                                                                    map[string]string
+	Actionable                                                                  bool
+	ParentLive                                                                  bool
 }
 
 // Read attribution without a lock, then acquire parent-before-child locks.
 // Attribution is rechecked after locking; no request can select a different parent.
 func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, error) {
 	c := &lockedChild{}
-	err := tx.QueryRow(ctx, `SELECT task_id, parent_run_id FROM runs
-		WHERE id = $1 AND source_kind = 'task_conductor'`, childID).Scan(&c.TaskID, &c.ParentID)
+	var source string
+	err := tx.QueryRow(ctx, `SELECT COALESCE(task_id,''), COALESCE(session_id,''), parent_run_id, source_kind FROM runs
+		WHERE id = $1 AND source_kind IS NOT NULL`, childID).Scan(&c.TaskID, &c.SessionID, &c.ParentID, &source)
 	if db.IsNotFound(err) {
 		return nil, refuseText(rNotIndependentTaskChild)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := LockChat(ctx, tx, c.TaskID); err != nil {
+	if source == string(ChildParentSession) {
+		if err := LockSession(ctx, tx, c.SessionID); err != nil {
+			return nil, err
+		}
+	} else if err := LockChat(ctx, tx, c.TaskID); err != nil {
 		return nil, err
 	}
 	var live bool
-	err = tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.source_kind IS NULL AND r.phase IS NULL
+	if source == string(ChildParentSession) {
+		err = tx.QueryRow(ctx, `SELECT `+LiveBrainstorm+` AND r.replaced_by IS NULL
+			AND r.control <> 'abort' AND NOT COALESCE(`+Ending+`, false)
+			FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR UPDATE`, c.ParentID, c.SessionID).Scan(&live)
+	} else {
+		err = tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.source_kind IS NULL AND r.phase IS NULL
 		AND r.replaced_by IS NULL AND r.control <> 'abort' AND NOT COALESCE(`+Ending+`, false)
 		FROM runs r WHERE r.id = $1 AND r.task_id = $2 FOR UPDATE`, c.ParentID, c.TaskID).Scan(&live)
+	}
 	if err != nil {
 		return nil, err
 	}
 	var taskStatus string
-	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, c.TaskID).Scan(&taskStatus); err != nil {
-		return nil, err
+	if source != string(ChildParentSession) {
+		if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, c.TaskID).Scan(&taskStatus); err != nil {
+			return nil, err
+		}
 	}
 	err = tx.QueryRow(ctx, `SELECT child_profile, phase::text, status::text, attempt, child_generation,
 		COALESCE(child_stop_reason, ''), COALESCE(replaced_by, ''), COALESCE(child_prompt, ''),
 		COALESCE(conductor_note, ''), COALESCE(tier_override, ''), COALESCE(branch, ''), child_capabilities, base_refs
-		FROM runs WHERE id = $1 AND task_id = $2 AND parent_run_id = $3 AND source_kind = 'task_conductor' FOR UPDATE`, childID, c.TaskID, c.ParentID).
+		FROM runs WHERE id = $1 AND source_kind = $2 AND parent_run_id = $3 FOR UPDATE`, childID, source, c.ParentID).
 		Scan(&c.Profile, &c.Phase, &c.Status, &c.Attempt, &c.Generation, &c.StopReason, &c.ReplacedBy,
 			&c.Prompt, &c.Note, &c.Tier, &c.Branch, &c.Capabilities, &c.BaseRefs)
 	if db.IsNotFound(err) {
@@ -72,7 +85,7 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 	if err != nil {
 		return nil, err
 	}
-	c.ParentLive = live && !Ended(taskStatus) && d != nil && d.Live() && attempt == c.Attempt
+	c.ParentLive = live && (source == string(ChildParentSession) || (!Ended(taskStatus) && d != nil && d.Live() && attempt == c.Attempt))
 	c.Actionable = c.ParentLive && c.ReplacedBy == "" && c.StopReason != "parent-ended"
 	return c, nil
 }
@@ -111,9 +124,9 @@ func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcom
 		}
 		// Summaries contain counts and validated identifiers only, never finding,
 		// artifact, or agent prose. Bound lists independently of stored Run size.
-		_, err = tx.Exec(ctx, `INSERT INTO child_results (organization_id, task_id, parent_run_id, child_run_id,
+		_, err = tx.Exec(ctx, `INSERT INTO child_results (organization_id, task_id, session_id, parent_run_id, child_run_id,
 			generation, source_kind, profile, status, findings, verdicts, commits, artifact_ids, cost_usd, stale)
-			SELECT r.organization_id, r.task_id, r.parent_run_id, r.id, r.child_generation, r.source_kind, r.child_profile, $2,
+			SELECT r.organization_id, r.task_id, r.session_id, r.parent_run_id, r.id, r.child_generation, r.source_kind, r.child_profile, $2,
 			(SELECT count(*) FROM review_findings WHERE run_id = r.id),
 			(SELECT count(*) FROM acceptance_verdicts WHERE run_id = r.id),
 			COALESCE((SELECT jsonb_object_agg(k, v) FROM (SELECT k, v FROM (SELECT key AS k,
@@ -266,6 +279,30 @@ func RestartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 }
 
 func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string) error {
+	if taskID == "" {
+		return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			var sessionID string
+			if err := tx.QueryRow(ctx, `SELECT session_id FROM runs WHERE id=$1 AND role='brainstorm' AND source_kind IS NULL`, parentID).Scan(&sessionID); err != nil {
+				if db.IsNotFound(err) {
+					return refuseText(rChildWrongParent)
+				}
+				return err
+			}
+			if err := LockSession(ctx, tx, sessionID); err != nil {
+				return err
+			}
+			var live bool
+			if err := tx.QueryRow(ctx, `SELECT `+LiveBrainstorm+` FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR UPDATE`, parentID, sessionID).Scan(&live); err != nil {
+				return err
+			}
+			if live {
+				return refuseText(rChildParentStillLive)
+			}
+			_, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended', control='abort', control_requested_at=now(), keep=false
+				WHERE parent_run_id=$1 AND source_kind='session' AND status IN ('pending','scheduled','starting','running','paused')`, parentID)
+			return err
+		})
+	}
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		if err := LockChat(ctx, tx, taskID); err != nil {
 			return err
@@ -398,7 +435,7 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 	if err != nil {
 		return false, err
 	}
-	directive, _, err := QueueDirective(ctx, tx, RunRef{Org: p.Org, TaskID: c.TaskID, RunID: c.ParentID}, Directive{Text: text, Scope: "run"})
+	directive, _, err := QueueDirective(ctx, tx, RunRef{Org: p.Org, TaskID: c.TaskID, SessionID: c.SessionID, RunID: c.ParentID}, Directive{Text: text, Scope: "run"})
 	if err != nil {
 		return false, err
 	}

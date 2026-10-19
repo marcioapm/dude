@@ -1352,6 +1352,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
 		return spec, sizes, nil, nil, err
 	}
+	if r.SourceKind == string(delivery.ChildParentSession) {
+		return s.sessionChildSpec(ctx, r, stored, image)
+	}
 	var in specInput
 	var title, goal string
 	var repos []delivery.Repository
@@ -1449,7 +1452,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		// The project's secrets this phase is given; a resume's, only the
 		// names it was submitted with (lux ignores a name added since).
-		if recipient := SecretRecipientFor(r.Phase, r.Role); recipient != "" && !r.talker() {
+		if recipient := SecretRecipientFor(r.Phase, r.Role); recipient != "" && !r.talker() && r.SourceKind != string(delivery.ChildParentSession) {
 			var names []string
 			if stored != nil {
 				if err := tx.QueryRow(ctx, `SELECT project_secret_names FROM runs WHERE id = $1`, r.ID).Scan(&names); err != nil {
