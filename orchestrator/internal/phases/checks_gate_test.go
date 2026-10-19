@@ -209,6 +209,28 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 		}
 	})
+	// One message longer than checksReplyMax is read only for its end.
+	long := strings.Repeat(filler, checksReplyMax/len(filler)+1)
+	t.Run("a report at the start of one oversized message", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		checksReply(w, passingChecks+"\n"+long)
+		fake := &checksFake{backed: judge.Yes, missing: judge.No}
+		w.s.Judge = fake
+		got, err := w.s.judgeChecks(context.Background(), w.run)
+		if err != nil || got.Verified || fake.calls != 0 {
+			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		}
+	})
+	t.Run("a report at the end of one oversized message", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		checksReply(w, long+passingChecks)
+		fake := &checksFake{backed: judge.Yes, missing: judge.No}
+		w.s.Judge = fake
+		got, err := w.s.judgeChecks(context.Background(), w.run)
+		if err != nil || !got.Verified || fake.calls != 2 {
+			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		}
+	})
 }
 
 // A report of more than checksCountMax checks is sent back unjudged,

@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"go.yaml.in/yaml/v3"
@@ -63,11 +64,11 @@ func ParseChecks(reply string) ([]Check, bool) {
 	return doc.Checks, true
 }
 
-// RunReplyTailTx is the end of what a Run's agent said, joined as
-// RunReplyTx joins it: its newest whole messages, up to the first that
-// reaches budget bytes counted from the newest. The last report is in it
-// unless more than budget bytes followed it; then ParseChecks finds none
-// and the gate fails closed.
+// RunReplyTailTx is the last budget bytes of what a Run's agent said,
+// joined as RunReplyTx joins it, read from the newest messages up to the
+// first that reaches budget. A report starting before those bytes is cut
+// or gone, so ParseChecks finds none or a malformed one and the gate fails
+// closed.
 func RunReplyTailTx(ctx context.Context, tx pgx.Tx, runID string, budget int) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT t FROM (
 			SELECT cursor, payload->>'text' AS t,
@@ -89,5 +90,13 @@ func RunReplyTailTx(ctx context.Context, tx pgx.Tx, runID string, budget int) (s
 		}
 		b.WriteString("\n")
 	}
-	return b.String(), nil
+	tail := b.String()
+	if len(tail) > budget {
+		tail = tail[len(tail)-budget:]
+		// Drop the continuation bytes of a rune the cut split.
+		for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+			tail = tail[1:]
+		}
+	}
+	return tail, nil
 }
