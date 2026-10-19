@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -336,8 +337,8 @@ func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artif
 		return err
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{
-		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
-		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID,
+		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID, SessionID: r.SessionID,
+		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: cmp.Or(r.TaskID, r.SessionID),
 		Payload: map[string]any{"artifactId": id, "name": name, "contentType": ctype,
 			"sizeBytes": art.Size, "sha256": art.SHA256, "description": art.Description},
 	})
