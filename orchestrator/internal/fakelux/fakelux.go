@@ -53,6 +53,10 @@ type Behaviour struct {
 	// The scripted checks model whose commands and report each later turn
 	// plays (fakeagent.ChecksTurn); "" repeats Commands and Checks.
 	ChecksModel string
+	// It ends its reply with no checks report: by default a writer
+	// (implement, fix, simplify) whose Checks is empty reports none run
+	// (fakeagent.NoChecks), as its role tells it to.
+	NoChecksReport bool
 	// Files to commit, path → content; none means the agent changes nothing.
 	// "<repo>:<path>" commits in that repository, "*:<path>" in every one
 	// the Run may push, and a bare path in the first of those.
@@ -1552,6 +1556,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		run.behavior = Behaviour{}
 	} else {
 		run.behavior = s.Decide(spec)
+		run.behavior.withChecks(spec)
 	}
 	s.specServers(run, spec)
 	s.runs[run.ID] = run

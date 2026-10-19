@@ -1991,14 +1991,17 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	// as lux was told, at submit or as a resume added one. Work on nothing
 	// it may change publishes only what it wrote for people.
 	pushes := r.PushBranch != "" && r.HoldsPushable
+	// A gated phase's checks report is judged before anything leaves the
+	// Run: before the push is asked for, or, for one that pushes nothing,
+	// before it completes.
+	if delivery.ChecksGated[r.Phase] && r.PushRequestID == "" && r.PushResult == nil {
+		pass, acted, err := s.checksBeforePush(ctx, r)
+		if err != nil || !pass {
+			return acted, err
+		}
+	}
 	if pushes && r.PushResult == nil {
 		if r.PushRequestID == "" {
-			if delivery.ChecksGated[r.Phase] {
-				ok, err := s.checksBeforePush(ctx, r)
-				if err != nil || !ok {
-					return true, err
-				}
-			}
 			// lux's git.checkout, which says where each checkout started,
 			// trails the agent's records like any lifecycle event: a turn
 			// read before it waits for it, and nothing is pushed without it.

@@ -81,13 +81,13 @@ func TestChecksRestartRetainsOnlyAcceptedCurrentTurn(t *testing.T) {
 	checksReply(w, passingChecks)
 	fake := &checksFake{backed: judge.Yes, missing: judge.No}
 	w.s.Judge = fake
-	ok, err := w.s.checksBeforePush(context.Background(), w.run)
+	ok, _, err := w.s.checksBeforePush(context.Background(), w.run)
 	if err != nil || !ok {
 		t.Fatalf("%v %v", ok, err)
 	}
 	// An independent Syncer consults the ledger, not an in-memory result.
 	restarted := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
-	ok, err = restarted.checksBeforePush(context.Background(), w.run)
+	ok, _, err = restarted.checksBeforePush(context.Background(), w.run)
 	if err != nil || !ok {
 		t.Fatalf("restart: %v %v", ok, err)
 	}

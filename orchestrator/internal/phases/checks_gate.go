@@ -15,7 +15,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-const checksJudgedEvent = "run.checks.judged"
+const (
+	checksJudgedEvent  = delivery.EvRunChecksJudged
+	checksDecidedEvent = delivery.EvRunChecksDecided
+)
 
 var checksText = delivery.MustText("notices/checks")
 var backedQuestion = delivery.MustText("notices/checks/backed")
@@ -39,12 +42,20 @@ type checksDecision struct {
 	Message  string          `json:"message"`
 }
 
-func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (bool, error) {
+// checksBeforePush judges the report the Run's latest turn ended with,
+// once per turn, before anything leaves the Run. pass: the turn's report
+// was accepted, the judgement was skipped for want of a judgement tier, or
+// a person waived it; acted: it recorded a judgement this time. The model
+// is asked with no transaction held; its verdict, and the send-back or
+// escalation it leads to, are written in one transaction, only if the
+// Run's latest turn is still the one judged. A restart before that commit
+// judges the turn again; one after it reads the recorded verdict.
+func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted bool, err error) {
 	var turn int64
 	var previous *checksDecision
 	var rounds int
 	var rawSettings []byte
-	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor),0) FROM events WHERE run_id=$1 AND event_type='agent.session.stopped'`, r.ID).Scan(&turn); err != nil {
 			return err
 		}
@@ -57,7 +68,11 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (bool, error)
 		if !db.IsNotFound(err) {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id=$1 AND event_type=$2 AND payload->>'verified'='false'`, r.ID, checksJudgedEvent).Scan(&rounds); err != nil {
+		// Rounds are the send-backs since a person last decided on this
+		// Run's checks: a retry gives the agent the configured rounds again.
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id=$1 AND event_type=$2 AND payload->>'verified'='false'
+			AND cursor > COALESCE((SELECT max(cursor) FROM events WHERE run_id=$1 AND event_type=$3), 0)`,
+			r.ID, checksJudgedEvent, checksDecidedEvent).Scan(&rounds); err != nil {
 			return err
 		}
 		err = tx.QueryRow(ctx, `SELECT settings FROM forge_credentials WHERE forge='github' LIMIT 1`).Scan(&rawSettings)
@@ -67,14 +82,14 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (bool, error)
 		return err
 	})
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if previous != nil {
-		return previous.Verified, nil
+		return previous.Verified, false, nil
 	}
 	d, err := s.judgeChecks(ctx, r)
 	if err != nil {
-		return false, err
+		return false, true, err
 	}
 	d.Turn, d.Round = turn, rounds
 	maxRounds := forge.ReadSettings(rawSettings).ChecksFixRounds
@@ -82,10 +97,9 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (bool, error)
 		d.Message = checksText.Render(d.Verdicts)
 	}
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// Recheck the exact turn after the model's latency, before recording an
-		// acceptance or queuing input. A fresh turn must be judged independently.
 		var current int64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor),0) FROM events WHERE run_id=$1 AND event_type='agent.session.stopped'`, r.ID).Scan(&current); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor),0) FROM events WHERE run_id=$1 AND event_type='agent.session.stopped'`,
+			r.ID).Scan(&current); err != nil {
 			return err
 		}
 		if current != turn {
@@ -94,11 +108,14 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (bool, error)
 		raw, _ := json.Marshal(d)
 		var payload map[string]any
 		_ = json.Unmarshal(raw, &payload)
+		if d.Verified {
+			return s.event(ctx, tx, r, checksJudgedEvent, ledger.ActorSystem, payload)
+		}
+		if rounds >= maxRounds {
+			payload["escalated"] = true
+		}
 		if err := s.event(ctx, tx, r, checksJudgedEvent, ledger.ActorSystem, payload); err != nil {
 			return err
-		}
-		if d.Verified {
-			return nil
 		}
 		if rounds < maxRounds {
 			_, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: d.Message, Scope: "run"})
@@ -106,7 +123,10 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (bool, error)
 		}
 		return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds)
 	})
-	return d.Verified, err
+	if errors.Is(err, errRetry) {
+		return false, true, nil
+	}
+	return d.Verified, true, err
 }
 
 func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, error) {

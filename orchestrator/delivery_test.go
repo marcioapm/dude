@@ -39,6 +39,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
@@ -153,6 +154,9 @@ func newWorld(t *testing.T) *world {
 	store := &delivery.Store{DB: app}
 	w.runtime.Register(delivery.Workflow(store, forges))
 	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet, KeepFor: 7 * 24 * time.Hour,
+		// The organisation's judgement tier, as main wires it: off unless a
+		// test sets one, so the checks gate skips its questions.
+		Judge: &judge.Service{DB: app},
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}

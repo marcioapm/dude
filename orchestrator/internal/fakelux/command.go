@@ -1,6 +1,24 @@
 package fakelux
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+)
+
+// withChecks gives a writer's behaviour the checks report its role asks
+// for when the test that decided it named none (Behaviour.NoChecksReport).
+func (b *Behaviour) withChecks(spec map[string]any) {
+	labels, _ := spec["labels"].(map[string]any)
+	switch labels["dude.phase"] {
+	case "implement", "fix", "simplify":
+	default:
+		return
+	}
+	if b.Checks == "" && !b.NoChecksReport {
+		b.Checks = fakeagent.NoChecks
+	}
+}
 
 // command plays one shell command the agent runs, c = [command, output,
 // exit code], as its harness reports it: OpenCode over ACP with the exit
