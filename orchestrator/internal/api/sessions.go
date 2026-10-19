@@ -1209,7 +1209,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 			created = true
 			runID, _, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, sessionOpening(name, body.Text, body.AttachmentIDs))
 			out = map[string]any{"runId": runID, "created": true}
-			return attachmentRefused(err)
+			return err
 		}
 		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(name, body.Text), Scope: "run"})
 		if err != nil {
@@ -1243,7 +1243,8 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		return fail(http.StatusConflict, "conflict", "the session's agent was just started; send again")
 	}
 	if err != nil {
-		return err
+		// Whichever path sent the images, a refused one is 400 invalid_attachment.
+		return attachmentRefused(err)
 	}
 	s.kick()
 	status := http.StatusOK
@@ -1326,7 +1327,7 @@ func sessionOpening(name, text string, images []string) delivery.Opening {
 // transaction commits.
 func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr delivery.Writer, name, text string, images []string) (string, error) {
 	runID, _, err := delivery.StartBrainstorm(ctx, tx, org, sessionID, wr, sessionOpening(name, text, images))
-	return runID, attachmentRefused(err)
+	return runID, err
 }
 
 // settleSessionQuestion marks the agent's open question answered by p.
@@ -1383,7 +1384,7 @@ func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to 
 	next, attached, err := delivery.ReplaceBrainstorm(ctx, tx, ref, to, p.writer(),
 		delivery.Opening{Message: answer, Images: images, Answer: true})
 	if err != nil {
-		return "", attachmentRefused(err)
+		return "", err
 	}
 	payload := answeredPayload(questionID, "", a)
 	delete(payload, "directiveId")
