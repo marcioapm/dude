@@ -49,7 +49,7 @@ import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { WaitingForHost } from "../waiting.tsx";
-import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
+import { SetupOutput, StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
@@ -1279,15 +1279,17 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
     case "notice":
       return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at} by={dude}
         {...(turn.title ? { title: turn.title } : {})} />;
-    case "ended":
+    case "ended": {
       // Where the transcript stops, and why: a failure in its tone, not a
       // margin note (ChatNotice has no tones).
-      return (
+      const callout = (
         <Callout key={turn.id} data-testid="chat-ended" data-outcome={turn.outcome}
           tone={turn.outcome === "failed" ? "danger" : "neutral"}>
           {turn.outcome === "aborted" ? abortedBy(turn, people) : turn.text}
         </Callout>
       );
+      return turn.setup ? <Fragment key={turn.id}>{callout}<SetupOutput setup={turn.setup} /></Fragment> : callout;
+    }
     case "progress":
       // One row, updated in place as the agent reports.
       return (

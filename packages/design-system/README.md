@@ -1809,6 +1809,17 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   (its name and version; its line count and what won't build), and what is
   added after the text — the dude layer — read-only on the sunken shade
   under it, told apart by shade.
+- **A repository's setup script is its own document**, opened from
+  `Setup script…` in the repository's `RowMenu` or from the
+  `SetupScriptMark` after its name; the repository's own dialog stays its
+  four fields. The script is a `CodeEditor language="shell"` with a
+  `placeholder` and `maxLines`, its footer the line count, any warning
+  count and a `SizeMeter` against the server's limit; Save is disabled
+  over the limit, and a cleared script saves as none. A line that moves
+  git's hooks away from dude's (`core.hooksPath`, `--no-verify`,
+  `HUSKY=0`) is a warning diagnostic, never a block. A reader (no row
+  menu) opens the mark and reads it read-only with Close. Gallery:
+  Settings → Repository setup script (`#s-repository-setup-script`).
 - **The builder's queue is a `BuildQueueStrip`** over the images list, on
   the chrome shade: what builds now with the live dot, how many wait and
   which, Open, and the limits every build has on the right ("Rootless ·
@@ -1925,6 +1936,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<RelationChip kind="blocked-by" tasks={…} />` under a card's title; `<StartGate>` in the task header while blocked | `<Badge tone="attention">Blocked</Badge>`, or a disabled Deliver with no reason |
 | `<ImagePicker images={…} value={id} onChange={…} />` wherever an image is asked for | `<Input mono placeholder="ghcr.io/…">` for an image reference |
 | `<CodeEditor language="dockerfile" diagnostics={lint(text)} complete={…} />`, imported where it is used | a `Textarea` with a hand-rolled highlighter, or CodeMirror in the main bundle |
+| `<SetupScriptMark repository="api" lines={9} action="view" />` after the name, and `<SizeMeter bytes={n} limit={max} />` in the editor's footer | a wide Setup column, a coloured "has script" badge, or a byte count in a tone that never changes |
 | `<BuildStages stages={…} />` and figures only when measured | a progress bar that guesses |
 | `<ProposalCard items={…} />` and let it fold once nothing is yours to file; merge it into the Chat by instant | a card whose unfiled items are all someone else's kept full size, or placed by the text of its time; a "Nothing to file" button; an item nobody can file folded away as "for others" |
 | New session opens `Welcome`; its first send makes the session with the message and its links | a click that makes an empty, untitled session |
@@ -2241,6 +2253,21 @@ MarkdownCheatsheet.
 - **CodeEditor** — CodeMirror 6, lazy: `language`, `diagnostics`,
   `complete`, `header`, `after` (read-only, under the text) and `footer`.
   `CodeEditorCore` is the chunk it loads; nothing imports it directly.
+  `language` is `dockerfile`, `shell` or `plain`; `shell` uses the legacy
+  shell stream parser and is for short bash scripts. `placeholder` is muted
+  guidance, never a submitted value. `maxLines` caps the text viewport so a
+  long document keeps its header and footer visible; content scrolls inside
+  the frame after the cap.
+- **SetupScriptMark** — a repository that has a setup script: a terminal
+  glyph and `setup` on the raised shade after its name (shadow in light).
+  It is a button because it opens the script for both editors and readers;
+  its accessible label says the repository, the action (`edit` | `view`)
+  and the line count. It is not a status colour, and absent when there is
+  no script. `textLines` counts the lines it names.
+- **SizeMeter** — a code document footer's tabular byte count against a
+  caller-supplied `limit` ("284 B of 16 KB", `formatBytes`). It changes to
+  attention past 90% of the limit and danger over it (`sizeLevel`); the
+  caller owns validation and the save action.
 - **ImagePicker / ImageMark / ImageStatusBadge / CanRunContainersBadge** —
   the image combobox, an image's cube mark, a newer version's state as a
   badge, and "Can run containers" (`size` `sm` | `md`, `lower` for the

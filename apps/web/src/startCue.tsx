@@ -7,8 +7,8 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { FRESH_START_STAGES, MOVE_STAGES, RESUME_STAGES, type AgentRole, type StartStage } from "@dude/domain";
-import { AgentAvatar, StartChip, StartProgress, StatusMark, didNot, startSteps, type StartStep } from "@dude/design-system/components";
-import type { StartState } from "./api/conversation.ts";
+import { AgentAvatar, LogStream, StartChip, StartProgress, StatusMark, didNot, startSteps, type StartStep } from "@dude/design-system/components";
+import type { SetupFailure, StartState } from "./api/conversation.ts";
 import { ApiError } from "./api/client.ts";
 import { instant } from "./instant.ts";
 
@@ -76,6 +76,29 @@ function useSlowNote(start: StartState): string | null {
 /** A woken conductor's failed start: its reasons go back to dude, which wakes the next conductor with them. */
 export const WAKES_NEXT = "dude will wake a new conductor.";
 
+/** The marker line init writes before each script (setupRunningPrefix, orchestrator/internal/phases/setup.go). */
+const SETUP_RUNNING = "dude: running the setup script of ";
+/** How much of a failed script's output is shown: its end, where the failure is. */
+const SETUP_TAIL_LINES = 40;
+
+/**
+ * What a repository's setup script printed before it failed a Run: the end
+ * of its output under the failure, titled with the repository and exit code.
+ */
+export function SetupOutput({ setup }: { setup: SetupFailure }) {
+  const marker = `${SETUP_RUNNING}${setup.repository}\n`;
+  const markerAt = setup.output.lastIndexOf(marker);
+  const output = markerAt >= 0 ? setup.output.slice(markerAt + marker.length) : setup.output;
+  const lines = output.split("\n").filter((l) => !l.startsWith(SETUP_RUNNING));
+  while (lines.length && !lines.at(-1)!.trim()) lines.pop();
+  const tail = lines.slice(-SETUP_TAIL_LINES);
+  const title = `Output of ${setup.repository}’s setup script · exit ${setup.exitCode}${lines.length > tail.length ? " · the end" : ""}`;
+  return (
+    <LogStream data-testid="setup-output" title={title} lines={tail.map((text, seq) => ({ seq, text }))} lineNumbers maxHeight={320}
+      emptyMessage="It printed nothing." />
+  );
+}
+
 /** The row where the agent's first turn will be; failed, with Try again or why it is not offered. `quiet`: a pinned
  * callout already says why it waits, so the row keeps its stages and clock and omits the slow note. */
 export function StartRow({ start, role, onRetry, taken, woken, quiet }: {
@@ -99,6 +122,7 @@ export function StartRow({ start, role, onRetry, taken, woken, quiet }: {
         failure={start.failed ? { reason: start.failed.reason, plain: start.failed.source === "dude", onRetry: taken || woken ? undefined : onRetry } : undefined}
         data-testid="start-progress"
       />
+      {start.failed?.setup ? <SetupOutput setup={start.failed.setup} /> : null}
       {start.failed && taken ? <p className="muted" data-testid="start-retry-taken">{RETRY_TAKEN}</p>
         : start.failed && woken ? <p className="muted" data-testid="start-wakes-next">{WAKES_NEXT}</p> : null}
     </>

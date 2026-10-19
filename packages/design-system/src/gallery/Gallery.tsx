@@ -203,6 +203,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     "Settings",
     [
       ["s-layout", "Settings page"],
+      ["s-repository-setup-script", "Repository setup script"],
       ["s-network", "Agent network"],
       ["s-markdown", "MarkdownDocument"],
       ["s-history", "PromptHistory"],
