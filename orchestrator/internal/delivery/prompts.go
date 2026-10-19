@@ -13,6 +13,7 @@ import (
 // ledger already knows, rather than a model summarising work another model
 // already did.
 type PromptInput struct {
+	Child              bool
 	Title              string
 	Goal               string
 	AcceptanceCriteria []string
@@ -91,15 +92,15 @@ type PromptInput struct {
 var promptVariable = regexp.MustCompile(`\{\{\s*([\w.]+)\s*\}\}`)
 
 // fill puts the task and the Run into a saved prompt where it names them.
-// The task still follows in full, as every phase frames it: a prompt that
+// The task still follows in full in the first message: a prompt that
 // names one part of it must not cost the agent the rest.
-func (in PromptInput) fill(prompt string) string {
+func (v PromptVars) fill(prompt string) string {
 	values := map[string]string{
-		"task.title":    in.Title,
-		"task.goal":     in.Goal,
-		"task.criteria": CriteriaList(in.AcceptanceCriteria),
-		"run.branch":    in.Branch,
-		"run.base_ref":  in.BaseRef,
+		"task.title":    v.Title,
+		"task.goal":     v.Goal,
+		"task.criteria": CriteriaList(v.Criteria),
+		"run.branch":    v.Branch,
+		"run.base_ref":  v.BaseRef,
 	}
 	return promptVariable.ReplaceAllStringFunc(prompt, func(m string) string {
 		if v, ok := values[promptVariable.FindStringSubmatch(m)[1]]; ok {
@@ -119,13 +120,11 @@ type PromptRepo struct {
 	ReadOnly   bool
 }
 
-// workspaceNote says where the code is, when that is not simply "here".
-// A reviewer and a tester check work and change none of it, so neither is
-// told to commit.
+// workspaceNote says where each checkout is: the agent starts in
+// /workspace, beside its instruction file, not in a repository. A reviewer
+// and a tester check work and change none of it, so neither is told to
+// commit.
 func workspaceNote(repos []PromptRepo, phase string) string {
-	if len(repos) == 1 && !repos[0].ReadOnly {
-		return ""
-	}
 	return render(workspaceTmpl, struct {
 		Repos        []PromptRepo
 		Review, Test bool
@@ -159,13 +158,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // "look for problems" finds the same generic ones every time, and one told to
 // look along a specific axis reads the diff differently — which is the reason
 // for fanning out at all.
-// Each is agents/contracts/review-focus/<category>.md.
-var reviewFocus = agentTexts("contracts/review-focus/", reviewerOrder...)
-
-// reviewContract is how every reviewer works and what its reply carries,
-// whatever its instructions say: findings a fixer can act on and a person
-// can trust, and an account of what the review did and did not cover.
-var reviewContract = reviewContractFor(nil, "", 0)
+// Each is agents/aspects/reviewer/<category>.md.
+var reviewFocus = agentTexts("aspects/reviewer/", reviewerOrder...)
 
 // What a review limited to a range (ReviewRange) checks, by its Of.
 const (
@@ -177,11 +171,10 @@ const (
 // agents/contracts/review-range/<of>.md.
 var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix)
 
-// reviewContractFor is the review contract with the range the reviewer
-// establishes: the whole branch when base is empty, else the commits named,
-// per repository, to HEAD. With more than one checkout each range names its
-// repository.
-func reviewContractFor(base map[string]string, of string, checkouts int) string {
+// reviewScope is what this review covers, in its first message: the whole
+// branch when base is empty, else the commits named, per repository, to
+// HEAD. With more than one checkout each range names its repository.
+func reviewScope(base map[string]string, of string, checkouts int) string {
 	type reviewRange struct {
 		Repo, Base string
 		Named      bool
@@ -190,11 +183,15 @@ func reviewContractFor(base map[string]string, of string, checkouts int) string 
 	for _, repo := range slices.Sorted(maps.Keys(base)) {
 		ranges = append(ranges, reviewRange{repo, base[repo], len(base) > 1 || checkouts > 1})
 	}
-	return render(reviewTmpl, struct {
+	return render(reviewScopeTmpl, struct {
 		Ranges []reviewRange
 		Reason string
 	}{ranges, rangeReason[of]})
 }
+
+// reviewContract is how every reviewer works, whatever its saved prompts
+// say: the reviewer's "How you review".
+var reviewContract = render(mustTemplate("contracts/review"), nil)
 
 // reviewSummary closes a review's reply. Its fields sit indented under
 // `review_summary:`, so ParseFindings reads the document as one untitled
@@ -255,28 +252,6 @@ var testerContract = render(mustTemplate("contracts/tester"), nil)
 // published as files people open next to the task.
 var testerTools = render(mustTemplate("contracts/tester-tools"), nil)
 
-// publishNote tells an agent how to hand a person something that is not
-// code. Every phase may: an implementer's design notes, a reviewer's
-// reproduction, a tester's screenshots.
-var publishNote = render(mustTemplate("contracts/publish"), nil)
-
-// ask is how this agent stops for a person: dude's ask_person tool.
-// Without dude's tools it cannot ask, and decides for itself.
-func (in PromptInput) ask() []string {
-	if in.Tools {
-		return []string{askToolNote}
-	}
-	return nil
-}
-
-var askToolNote = render(mustTemplate("contracts/ask"), nil)
-
-// toolsNote tells an agent about dude's tools.
-var toolsNote = render(mustTemplate("contracts/tools"), nil)
-
-// cliNote tells an agent about the dude CLI.
-var cliNote = render(mustTemplate("contracts/cli"), nil)
-
 // fixerGitHubNote tells a fixer of pull request feedback how it answers
 // on GitHub: through dude, on the comments it was given only.
 var fixerGitHubNote = render(mustTemplate("contracts/fixer-github"), nil)
@@ -296,24 +271,6 @@ var PromptRoleForPhase = map[string]string{
 // PromptRoles are the prompts a person can edit, in the order they are
 // shown.
 var PromptRoles = []string{"conductor", "brainstorm", "implementer", "reviewer", "fixer", "simplifier", "qa_browser", "investigator"}
-
-// builtinInstructions is what each role is told to do, before the work it
-// is given: the part of a phase's prompt a person may rewrite (an
-// organization's prompt replaces it, a project's adds to or replaces that).
-// The rest — the task, findings, formats, tools, committing and the
-// tester's recording — is dude's, and every phase gets it whatever its
-// instructions say, because the workflow depends on it.
-//
-// Each is agents/roles/<role>.md, one paragraph per blank-line-separated
-// block.
-var builtinInstructions = mustLoad(loadRoles(agentFiles))
-
-// BuiltinPrompt is a role's instructions as dude ships them: what an
-// organization that never edits its prompt runs, and where the first
-// edit starts from.
-func BuiltinPrompt(role string) string {
-	return strings.Join(builtinInstructions[role], "\n\n")
-}
 
 // PromptRoleFor is whose prompt and settings a Run runs with: its phase's,
 // or the conductor's for a task's conductor, which is no phase.
@@ -335,117 +292,52 @@ func PhaseForPromptRole(role string) string {
 	return ""
 }
 
-// instructions is what the role is told to do: the organization's
-// prompt if it has one, else dude's; then the project's, added after it or
-// in its place. dude's own fixer instructions come in two parts, either
-// side of the feedback it is given (tail); a person's come in one piece,
-// before it.
-func (in PromptInput) instructions(role string) (lead, tail []string) {
-	lead = builtinInstructions[role]
-	custom := in.OrgPrompt != nil
-	if custom {
-		lead = []string{*in.OrgPrompt}
-	}
-	project := strings.TrimSpace(in.ProjectPrompt)
-	switch {
-	case in.ProjectPromptMode == "replace":
-		lead, custom = []string{project}, true
-	case in.ProjectPromptMode == "add" && project != "":
-		lead, custom = append(slices.Clone(lead), project), true
-	}
-	lead = slices.DeleteFunc(slices.Clone(lead), func(s string) bool { return strings.TrimSpace(s) == "" })
-	if !custom && role == "fixer" && len(lead) > 1 {
-		return lead[:1], lead[1:]
-	}
-	return lead, nil
-}
-
-// conductorToolsNote is the conductor's own tools: the read ones, its
-// decisions, and create_task for a change it is asked for.
-var conductorToolsNote = render(mustTemplate("contracts/conductor-tools"), struct{ ExternalTextNote string }{ExternalTextNote})
-
-// ConductorPrompt is a conductor's first prompt: dude's briefing and the
-// person's message (written once, when it was created), then how it works.
+// ConductorPrompt is a conductor's first message: dude's briefing and the
+// person's message (written once, when it was created), then its
+// checkouts. How it works is its instruction file (Instructions).
 //
 // The briefing quotes the task's goal and criteria as written: each image
 // reference in it reads as the image the Run is given (in.Images), as in a
-// phase's prompt, and a saved prompt's {{task.goal}} does too.
+// phase's prompt.
 func ConductorPrompt(briefing string, in PromptInput) string {
 	in = in.withImages()
-	sections := []string{ReplaceImageRefs(briefing, imageText(in.Images)), render(howYouWorkTmpl, nil)}
-	lead, _ := in.instructions(RoleConductor)
-	for _, s := range lead {
-		sections = append(sections, in.fill(s))
-	}
-	sections = append(sections, render(conductorCheckoutTmpl, struct {
+	return ReplaceImageRefs(briefing, imageText(in.Images)) + "\n\n" + render(conductorCheckoutTmpl, struct {
 		Repos      []PromptRepo
 		TaskBranch string
-	}{in.Repositories, in.TaskBranch}))
-	if len(in.Repositories) > 0 {
-		sections = append(sections, conductorBaseNote)
-	}
-	if in.Tools {
-		sections = append(sections, conductorToolsNote)
-	}
-	if c := strings.TrimSpace(in.Context); c != "" {
-		sections = append(sections, render(projectNotesTmpl, c))
-	}
-	return strings.Join(sections, "\n\n")
+	}{in.Repositories, in.TaskBranch})
 }
 
-// Prompt composes one phase's prompt.
+// Prompt is a phase Run's first message: its task and what this Run is
+// given, nothing standing. How it works, its role, its saved prompts and
+// its project's notes are its instruction file (Instructions).
 func Prompt(phase string, in PromptInput) string {
 	var sections []string
 	add := func(s ...string) { sections = append(sections, s...) }
-
-	// Before anything reads the goal or criteria: a saved prompt's
-	// {{task.goal}} reads them as the task section does.
 	in = in.withImages()
-	lead, tail := in.instructions(PromptRoleForPhase[phase])
-	for i, s := range lead {
-		lead[i] = in.fill(s)
-	}
 
 	switch phase {
-	case PhaseInvestigate:
-		add(lead...)
-		add(in.task())
-
 	case PhaseImplement:
-		add(lead...)
 		if in.Continues != nil {
 			add(continueNote(in.Continues))
 		}
-		add(implementContract, commitNote, baseIntegrationNote)
 		add(in.task())
 		if len(in.Feedback) > 0 {
 			add(FeedbackText(in.Feedback, in.CLI))
 		}
-		add(in.ask()...)
 
 	case PhaseReview:
-		category := in.Category
-		if reviewFocus[category] == "" {
-			category = "correctness"
-		}
-		add(render(reviewLeadTmpl, category), reviewFocus[category])
-		add(lead...)
-		add(render(taskUnderReviewTmpl, in.task()), reviewContractFor(in.ReviewBase, in.ReviewOf, len(in.Repositories)),
-			findingFormat, reviewSummary)
+		add(render(reviewLeadTmpl, reviewCategory(in.Category)))
+		add(render(taskUnderReviewTmpl, in.task()), reviewScope(in.ReviewBase, in.ReviewOf, len(in.Repositories)))
 		for _, f := range in.PRFeedback {
 			if f.Source == "integration" {
 				add(f.Body)
 			}
-		}
-		if note := severityNote(in.BlockingSeverities); note != "" {
-			add(note)
 		}
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
 		}
 
 	case PhaseFix:
-		add(lead...)
 		if len(in.Findings) > 0 {
 			add(render(reviewFindingsTmpl, in.Findings))
 		}
@@ -475,30 +367,24 @@ func Prompt(phase string, in PromptInput) string {
 		if len(in.Feedback) > 0 {
 			add(FeedbackText(in.Feedback, in.CLI))
 		}
-		add(tail...)
-		add(fixContract)
-		add(commitNote, baseIntegrationNote)
 		add(render(taskForContextTmpl, in.task()))
-		add(in.ask()...)
 
 	case PhaseSimplify:
-		add(lead...)
-		add(commitNote, baseIntegrationNote)
 		add(render(taskImplementedTmpl, in.task()))
 
 	case PhaseTest:
-		add(lead...)
-		add(testerContract, testerTools)
-		add(in.task(), findingFormat)
-		if note := severityNote(in.BlockingSeverities); note != "" {
-			add(note)
-		}
+		add(in.task())
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
 		}
 
 	default:
 		add(in.task())
+	}
+	if in.Child && in.OrgPrompt != nil {
+		if prompt := strings.TrimSpace(*in.OrgPrompt); prompt != "" {
+			add(prompt)
+		}
 	}
 
 	if n := strings.TrimSpace(in.ConductorNote); n != "" {
@@ -518,16 +404,6 @@ func Prompt(phase string, in PromptInput) string {
 	}
 	if phase == PhaseReview && in.Adopted != nil {
 		add(in.Adopted.note())
-	}
-	if in.Tools {
-		add(toolsNote)
-	}
-	if in.CLI {
-		add(cliNote)
-	}
-	add(publishNote)
-	if c := strings.TrimSpace(in.Context); c != "" {
-		add(render(projectNotesTmpl, c))
 	}
 	if in.Machine != "" {
 		add(in.Machine)

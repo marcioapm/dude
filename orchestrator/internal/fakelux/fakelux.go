@@ -40,6 +40,9 @@ import (
 // Behaviour is what a Run's agent does. Chosen per Run by the test, from the
 // spec it was submitted with.
 type Behaviour struct {
+	// Command executes in the workspace on every placement before the simulated
+	// agent runs; its output is buffered and emitted once on completion, and errors fail the Run.
+	Command []string
 	// The agent's reply, streamed as message chunks.
 	Reply string
 	// Files to commit, path → content; none means the agent changes nothing.
@@ -224,7 +227,8 @@ type Run struct {
 	assigning int
 	// The start lux accepted last (submit, resume or migrate), counted up:
 	// a start under way goes on only while it is still the latest one.
-	starts int
+	starts  int
+	command *workloadCommand
 	// Its next placement goes to another host (a migrate).
 	moveNext  bool
 	artifacts []*artifact
@@ -233,8 +237,11 @@ type Run struct {
 	published map[string]string
 
 	// Its checkout, a real git clone made when first needed: the
-	// container's /workspace.
-	workspace string
+	// container's /workspace. root is that directory before anything is
+	// cloned into it: init writes there without paying for a clone.
+	workspace, root string
+	// Placements that ran its spec's init (InitsOf).
+	inits int
 	// Edit tool calls made, so each has an id of its own.
 	edits int
 	// The agent's last sync_base did not bring every base in (pending,
@@ -559,7 +566,7 @@ type artifact struct {
 // deliverQueued hands queued input to an idle agent, which takes it as a
 // new turn. Callers hold s.mu.
 func (s *Server) deliverQueued(run *Run) {
-	if len(run.queued) == 0 || run.State != "running" {
+	if len(run.queued) == 0 || run.State != "running" || run.command != nil {
 		return
 	}
 	for i := range run.queued {
@@ -744,14 +751,16 @@ type Server struct {
 	failStarts map[string]int
 	failAs     map[string]string
 	// Test hooks for stream delivery, placement starts, and event pages.
-	beforeEvent    func(runID string, eventID int64, typ string)
-	beforeStart    func(runID string)
-	beforeAssign   func(runID string)
-	afterPlacement func(runID string, epoch int)
-	eventPages     func(runID string, after int64, ids []int64) int
+	beforeEvent         func(runID string, eventID int64, typ string)
+	beforeStart         func(runID string)
+	beforeAssign        func(runID string)
+	afterPlacement      func(runID string, epoch int)
+	beforeCommandResult func(epoch int)
+	eventPages          func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
 	closeOnce sync.Once
+	commands  sync.WaitGroup
 	// What exec and GET say of a Run's processes and usage (execPlay).
 	execPlay
 	// fakeagent.StallModel's and SilentModel's reviewers so far, by task.
@@ -787,7 +796,17 @@ func (s *Server) SetPS(ps func(luxRunID string) string, execFails string) {
 // Close is the fake lux shutting down: work held on InputGate is dropped,
 // so no goroutine outlives the test that served it.
 func (s *Server) Close() {
-	s.closeOnce.Do(func() { close(s.closed) })
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		close(s.closed)
+		for _, run := range s.runs {
+			if run.command != nil {
+				run.command.cancel()
+			}
+		}
+		s.mu.Unlock()
+		s.commands.Wait()
+	})
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
@@ -809,6 +828,9 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	str := func(k string) string { v, _ := labels[k].(string); return v }
 	// The fix is in if any repository the reviewer checked out holds it.
 	fixed := slices.ContainsFunc(specRepos(spec), func(r specRepo) bool {
+		if there, ok := hasPath(s.repoPath(r.URL), r.Ref, fakeagent.FixedFile); ok {
+			return there
+		}
 		return exec.Command("git", "-C", s.repoPath(r.URL), "cat-file", "-e", r.Ref+":"+fakeagent.FixedFile).Run() == nil
 	})
 	step := fakeagent.For(str("dude.phase"), str("dude.model"), str("dude.run"), fixed)
@@ -1608,11 +1630,15 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		s.applySync(run, run.pendingSync, "")
 		run.pendingSync = nil
 	}
+	// Init runs on every placement, before the servers and the workload.
 	if !s.runInit(run, spec) {
 		return
 	}
 	// Every start of the Run starts its spec's servers.
 	s.placementStarted(run)
+	if !s.behaviourCommand(run, spec, epoch, start) {
+		return
+	}
 	if generic(spec) {
 		// No agent: the workload (sleep infinity) runs until stopped.
 		return
@@ -2105,6 +2131,9 @@ func (s *Server) setStage(run *Run, stage string, since *time.Time, reason strin
 
 // setStateWith records a state with lux's reason for it. Callers hold s.mu.
 func (s *Server) setStateWith(run *Run, state, reason string) {
+	if (state == "stopping" || lux.Terminal(state)) && run.command != nil {
+		run.command.cancel()
+	}
 	run.State, run.StateReason = state, reason
 	if state == "running" {
 		p := run.currentPlacement()
@@ -2237,6 +2266,9 @@ func (s *Server) recordEvent(run *Run, typ string, data map[string]any) {
 func head(repo, ref string) string {
 	if ref == "" {
 		ref = "HEAD"
+	}
+	if sha, ok := resolved(repo, ref); ok {
+		return sha
 	}
 	out, err := exec.Command("git", "-C", repo, "rev-parse", ref).Output()
 	if err != nil {
@@ -2756,6 +2788,10 @@ func commit(repo, base, branch string, files map[string]string, message string) 
 	}
 	if len(files) == 0 {
 		return base, nil
+	}
+	if sha, ok := commitInProcess(repo, base, files, message); ok {
+		_, err := exec.Command("git", "-C", repo, "update-ref", "refs/heads/"+branch, sha).CombinedOutput()
+		return sha, err
 	}
 	env := []string{"GIT_AUTHOR_NAME=agent", "GIT_AUTHOR_EMAIL=a@x", "GIT_COMMITTER_NAME=agent", "GIT_COMMITTER_EMAIL=a@x",
 		"GIT_INDEX_FILE=" + repo + "/fakelux.index"}

@@ -32,6 +32,7 @@
 //	dude findings [ID...]                 a conductor's: the task's findings
 //	dude prs                              a conductor's: the task's pull requests
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
+//	dude agent start PROFILE [--prompt P] [--note N] [--tier T] [--key K]
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
 //	dude restart RUN NOTE [--tier T]      a conductor's: a fresh Run in its slot
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
@@ -61,6 +62,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -109,7 +111,7 @@ func run(args []string, out io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" ||
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" || cmd == "agent" ||
 		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation" || cmd == "machine" || cmd == "git" ||
 		cmd == "feedback" && (rest[0] == "reply" || rest[0] == "resolve")) {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
@@ -126,6 +128,19 @@ func run(args []string, out io.Writer) error {
 		}
 		_, err = out.Write(raw)
 		return err
+	case "agent start":
+		prompt := fs.String("prompt", "", "child prompt")
+		note := fs.String("note", "", "conductor note")
+		tier := fs.String("tier", "", "model tier")
+		key := fs.String("key", "", "idempotency key")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude agent start PROFILE [--prompt P] [--note N] [--tier T] [--key K]")
+		}
+		return show(out, *asJSON, call("start_agent", map[string]any{"profile": args[0], "prompt": *prompt, "note": *note, "tier": *tier, "key": *key}))
 	case "git coauthors":
 		if err := fs.Parse(rest); err != nil {
 			return err
@@ -833,6 +848,9 @@ func request(method, path string, body []byte) (json.RawMessage, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if path == "/tools/start_agent" {
+		req.Header.Set("X-Dude-Tool-Call-ID", rand.Text())
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

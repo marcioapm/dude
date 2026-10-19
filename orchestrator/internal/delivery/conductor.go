@@ -201,6 +201,10 @@ func EndConductor(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error 
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false
+		WHERE parent_run_id=$1 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, ref.RunID); err != nil {
+		return err
+	}
 	if _, err := ledger.Append(ctx, tx, ref.Event("run.completed", ledger.ActorSystem,
 		map[string]any{"status": "completed", "reason": why})); err != nil {
 		return err
@@ -319,11 +323,15 @@ func HandOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool) (string,
 // handOver is HandOver; a new conductor it starts names retries in its
 // run.created (startConductor).
 func handOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool, retries string) (string, error) {
+	if err := MarkChildParentEndedTx(ctx, tx, ref.TaskID, ref.RunID); err != nil {
+		return "", err
+	}
 	// The wake note it was started with and never heard is told again.
 	if err := BriefingUnheardTx(ctx, tx, ref.RunID); err != nil {
 		return "", err
 	}
-	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt OR EXISTS (SELECT 1 FROM conductor_wake_attempts a WHERE a.directive_id = d.id),
+	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt OR EXISTS (SELECT 1 FROM conductor_wake_attempts a WHERE a.directive_id = d.id)
+		OR EXISTS (SELECT 1 FROM child_result_outbox o WHERE o.directive_id=d.id),
 			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, '')
 		FROM directives d
 		LEFT JOIN LATERAL (SELECT e.actor_type, e.actor_id FROM events e WHERE e.run_id = d.run_id

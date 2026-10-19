@@ -1779,10 +1779,7 @@ func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredential
 // if a check turns red.
 func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 	w := newWorld(t)
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
@@ -1979,14 +1976,14 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 			var spec lux.Spec
 			_ = json.Unmarshal(r.Spec, &spec)
 			if spec.Labels["dude.phase"] == "review" {
-				prompt = spec.Workload.Prompt
+				prompt = w.instructionsOf(spec.Labels["dude.run"])
 				return true
 			}
 		}
 		return false
 	})
 	if !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
-		t.Errorf("the reviewer was not told the policy's blocking severities:\n%s", prompt)
+		t.Errorf("the reviewer's instructions do not say the policy's blocking severities:\n%s", prompt)
 	}
 }
 
@@ -2009,8 +2006,8 @@ func TestATesterIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
 	w.start(wi, policy)
 	w.until("a test to reach lux", func() bool { return w.specOf("test") != nil })
-	if prompt := w.specOf("test").Workload.Prompt; !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
-		t.Errorf("the tester was not told the policy's blocking severities:\n%s", prompt)
+	if prompt := w.instructionsOf(w.specOf("test").Labels["dude.run"]); !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
+		t.Errorf("the tester's instructions do not say the policy's blocking severities:\n%s", prompt)
 	}
 }
 
@@ -3261,10 +3258,7 @@ func TestAPauseIsNeverReadAsAFailure(t *testing.T) {
 func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("run:failure")
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 	w.gh.Review(1, "alice", "APPROVED")
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3284,10 +3278,7 @@ func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 // the fix's head has not been through CI: not ready until it has.
 func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 	w := newWorld(t)
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3330,9 +3321,7 @@ func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 	w := newWorld(t)
 	w.prs.CIGrace = time.Hour
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	wi := w.reviewing()
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3371,10 +3360,7 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 // on it, the task is ready, though the factory never pushed it.
 func TestACommitAPersonAddsCanBeReady(t *testing.T) {
 	w := newWorld(t)
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
+	wi := w.reviewing()
 	if w.gh.CommitOnTop(w.gh.Pull(1).Head, "Merge branch 'main' into the task") == "" {
 		t.Fatal("could not commit on top")
 	}
@@ -3580,15 +3566,6 @@ func TestAPersonAcceptsTheFindingsAReviewGotStuckOn(t *testing.T) {
 // have it do.
 func (w *world) sync() {
 	_, _ = w.prs.Reconcile(context.Background(), 0)
-}
-
-// reviewing delivers a task to an open pull request waiting on people.
-func (w *world) reviewing() string {
-	wi := w.task()
-	w.deliver(wi)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	w.until("review", func() bool { return w.taskStatus(wi) == "review" })
-	return wi
 }
 
 func (w *world) fixes(wi string) int {
@@ -3825,6 +3802,36 @@ func TestAFixerIsToldWhichCheckFailedAndWhy(t *testing.T) {
 	if !strings.Contains(checks, `"name": "e2e"`) || !strings.Contains(checks, `"durationMs": 252000`) {
 		t.Errorf("checks stored = %s", checks)
 	}
+}
+
+// Actions checks with no useful check output give the fixer their log tail.
+func TestAFixerIsToldAnActionsJobsFailureLog(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()} })
+	w.gh.SetJobLog(77, "2026-10-16T19:47:01.123Z =================================== FAILURES ===\n"+
+		"2026-10-16T19:47:02.123Z E       AssertionError: 3 != 2\n"+
+		"2026-10-16T19:47:03.123Z ##[error]Process completed with exit code 1.\n"+
+		"2026-10-16T19:47:04.123Z Post job cleanup.\n", downloads.URL)
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	w.until("the failure log to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "fix" && strings.Contains(spec.Workload.Prompt, "Pull request feedback") {
+				if !strings.Contains(spec.Workload.Prompt, "AssertionError: 3 != 2") || strings.Contains(spec.Workload.Prompt, "Post job cleanup.") {
+					t.Fatalf("fixer feedback: %s", spec.Workload.Prompt)
+				}
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // An approved pull request with a thread left unresolved is not ready.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -52,6 +53,8 @@ type PRActionCheck struct {
 	logins       []string
 	thread       string
 	checks       []forge.Check
+	// rerun_failed_checks: the event claiming the head.
+	claim string
 	// The line comments a fixer's batch names: the only threads it may
 	// resolve. nil for the conductor, which may resolve any of the PR's.
 	batch []int64
@@ -173,10 +176,14 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, refusef(rNoFailedCheckOnHeadThat, repo, number)
 		}
 		// Once per head, whoever asked: CI that fails again on the same
-		// commit is a fix's to answer, not another run's.
+		// commit is a fix's to answer, not another run's. A claim GitHub
+		// refused outright is released (DoPRAction) and counts no more.
 		var again bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
-			AND payload->>'action' = $3 AND payload->>'repo' = $4 AND (payload->>'number')::int = $5 AND payload->>'head' = $6)`,
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events e WHERE e.task_id = $1 AND e.event_type = $2
+			AND e.payload->>'action' = $3 AND e.payload->>'repo' = $4 AND (e.payload->>'number')::int = $5 AND e.payload->>'head' = $6
+			AND e.payload->>'released' IS NULL
+			AND NOT EXISTS (SELECT 1 FROM events r WHERE r.task_id = e.task_id AND r.event_type = e.event_type
+				AND r.payload->>'released' = e.id))`,
 			ref.TaskID, EvPullRequestAction, ActionRerunChecks, repo, number, c.head).Scan(&again); err != nil {
 			return c, err
 		}
@@ -184,12 +191,14 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, refusef(rFailedChecksOnWereRunAgain, repo, number)
 		}
 		// The claim commits before GitHub is called; Chat's lock serializes this check.
-		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
+		claim, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
 			TaskID: ref.TaskID, RunID: ref.RunID, ActorType: ledger.ActorAgent, ActorID: ref.RunID,
 			Source: ledger.SourceOrchestrator, CorrelationID: ref.TaskID, Payload: map[string]any{"action": ActionRerunChecks,
-				"repo": repo, "number": number, "head": c.head, "claimed": true}}); err != nil {
+				"repo": repo, "number": number, "head": c.head, "claimed": true}})
+		if err != nil {
 			return c, err
 		}
+		c.claim = claim
 	default:
 		return c, refusef(rNoPullRequestAction, in.Action)
 	}
@@ -209,7 +218,8 @@ type PRActionDone struct {
 }
 
 // DoPRAction does it on GitHub, with no transaction open. A refusal of
-// GitHub's is the agent's to hear; nothing is recorded.
+// GitHub's is the agent's to hear; nothing is recorded, but for a rerun
+// GitHub refused outright, whose claim the refusal's event releases.
 func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActionDone, error) {
 	var done PRActionDone
 	switch c.action {
@@ -262,6 +272,14 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 		}
 	case ActionRerunChecks:
 		n, err := gh.RerunFailed(ctx, c.slug, c.checks)
+		if err != nil && n == 0 && forge.Refused(err) {
+			// GitHub answered no and ran nothing (a workflow still running,
+			// a job too old): the head's rerun is not spent. The release is
+			// recorded by the caller as the refusal's event.
+			return done, Refusal{Msg: fmt.Sprintf(rGithubRefusedToRunFailedChecksOn, c.repo, c.number, err),
+				Event: &RefusalEvent{Type: EvPullRequestAction, Payload: map[string]any{"action": ActionRerunChecks,
+					"repo": c.repo, "number": c.number, "head": c.head, "released": c.claim}}}
+		}
 		if err != nil {
 			return done, refusef(rGithubReRunFailedChecksOn, c.repo, c.number, err)
 		}

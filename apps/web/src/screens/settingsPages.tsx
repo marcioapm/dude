@@ -421,6 +421,11 @@ function PromptSection({ scope, role, onHistory }: { scope: SettingsScope; role:
       }
     >
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      <SettingsMeta>
+        A saved prompt takes the place of dude’s “How you work as {SETTINGS_ROLE_LABEL[role].toLowerCase()}” section only. How
+        you work, How dude works, the role’s own sections{role === "reviewer" ? ", the review aspect" : ""} and what the role hands
+        back are always kept.
+      </SettingsMeta>
       {project && mode !== "replace" ? (
         <SettingsDisclosure
           summary={

@@ -36,4 +36,6 @@
 
 {{- define "refusals/delivery/pr-actions/github-re-run-failed-checks-on"}}GitHub's re-run of the failed checks on %s#%d may or may not have happened (%v); this head is not run again automatically{{end}}
 
+{{- define "refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on"}}GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished{{end}}
+
 {{- define "refusals/delivery/pr-actions/github-did-not-do"}}GitHub did not do it: %v{{end}}

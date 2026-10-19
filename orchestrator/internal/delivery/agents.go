@@ -11,16 +11,16 @@ import (
 )
 
 // What dude tells agents lives in Markdown under agents/ (its README says
-// how to edit it). roles/ holds each role's replaceable instructions as
-// plain text; every other directory holds text/template files, each
-// named by its path without ".md" ("contracts/commit"). A file's one
+// how to edit it): text/template files, each named by its path without
+// ".md" ("contracts/commit"); instructions/roles/<role>.md is split in
+// three (parseRole). A file's one
 // trailing newline is not part of its text. Every file is read and parsed
 // when the package initialises, and every name Go renders is resolved then
 // (mustTemplate, agentTexts' keys) as is every {{template}} a file
 // includes: a file that is missing, empty or does not parse panics at
 // startup instead of on the first prompt that needs it.
 //
-//go:embed agents/roles/*.md agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
+//go:embed agents/instructions agents/aspects agents/contracts agents/briefings agents/tools agents/results agents/wakes agents/notices agents/refusals
 var agentFiles embed.FS
 
 var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
@@ -50,22 +50,19 @@ var (
 	adoptedPrTmpl              = mustTemplate("contracts/adopted-pr")
 	baseTmpl                   = mustTemplate("contracts/base")
 	brainstormCheckoutsTmpl    = mustTemplate("contracts/brainstorm-checkouts")
-	brainstormNotesTmpl        = mustTemplate("contracts/brainstorm-notes")
 	conductorCheckoutTmpl      = mustTemplate("contracts/conductor-checkout")
 	continueTmpl               = mustTemplate("contracts/continue")
 	earlierFindingsTmpl        = mustTemplate("contracts/earlier-findings")
 	feedbackTmpl               = mustTemplate("contracts/feedback")
 	fromConductorTmpl          = mustTemplate("contracts/from-conductor")
-	howYouWorkTmpl             = mustTemplate("contracts/how-you-work")
 	machineTmpl                = mustTemplate("contracts/machine")
 	machineNothingTmpl         = mustTemplate("contracts/machine-nothing")
 	machineOfferTmpl           = mustTemplate("contracts/machine-offer")
 	prFeedbackTmpl             = mustTemplate("contracts/pr-feedback")
 	prFeedbackBotsTmpl         = mustTemplate("contracts/pr-feedback-bots")
 	prPhaseStartedTmpl         = mustTemplate("results/pr-phase-started")
-	projectNotesTmpl           = mustTemplate("contracts/project-notes")
 	restartedTmpl              = mustTemplate("contracts/restarted")
-	reviewTmpl                 = mustTemplate("contracts/review")
+	reviewScopeTmpl            = mustTemplate("contracts/review-scope")
 	reviewFindingsTmpl         = mustTemplate("contracts/review-findings")
 	reviewLeadTmpl             = mustTemplate("contracts/review-lead")
 	severityTmpl               = mustTemplate("contracts/severity")
@@ -164,12 +161,15 @@ func fileText(fsys fs.FS, name string) (string, error) {
 func parseAgentTemplates(fsys fs.FS) (*template.Template, error) {
 	root := template.New("").Option("missingkey=error").Funcs(agentFuncs)
 	err := fs.WalkDir(fsys, "agents", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || path.Ext(p) != ".md" || strings.HasPrefix(p, "agents/roles/") {
+		if err != nil || d.IsDir() || path.Ext(p) != ".md" {
 			return err
 		}
 		text, err := fileText(fsys, p)
 		if err != nil {
 			return err
+		}
+		if role, ok := strings.CutPrefix(p, "agents/instructions/roles/"); ok {
+			return parseRole(root, p, strings.TrimSuffix(role, ".md"), text)
 		}
 		if _, err := root.New(agentTemplateName(p)).Parse(text); err != nil {
 			return fmt.Errorf("%s: %w", p, err)
@@ -235,7 +235,7 @@ func render(t *template.Template, data any) string {
 	return b.String()
 }
 
-// agentTexts renders each template under prefix ("contracts/review-focus/")
+// agentTexts renders each template under prefix ("aspects/reviewer/")
 // once, keyed by the rest of its name. Each of want must be among them.
 func agentTexts(prefix string, want ...string) map[string]string {
 	return agentTextsIn(agentTemplates, prefix, want...)
@@ -298,20 +298,44 @@ func agentTextsIn(set *template.Template, prefix string, want ...string) map[str
 	return out
 }
 
-// loadRoles reads roles/<role>.md: a role's instructions, one paragraph
-// per blank-line-separated block (instructions keeps the fixer's apart).
-func loadRoles(fsys fs.FS) (map[string][]string, error) {
-	files, err := fs.Glob(fsys, "agents/roles/*.md")
-	if err != nil {
-		return nil, err
-	}
-	roles := map[string][]string{}
-	for _, f := range files {
-		text, err := fileText(fsys, f)
-		if err != nil {
-			return nil, err
+// stanceHeading opens the part of a role file a saved prompt may replace.
+const stanceHeading = "## How you work as "
+
+// parseRole splits instructions/roles/<role>.md into three templates: roles/<role>/head
+// (its title and purpose), roles/<role>/stance (the "How you work as …"
+// section, heading included: what a saved prompt in replace mode stands in
+// for) and roles/<role>/fixed (every later section, which no saved prompt
+// removes). A file without exactly one stance section is an error.
+func parseRole(root *template.Template, file, role, text string) error {
+	lines := strings.Split(text, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, stanceHeading) {
+			if start >= 0 {
+				return fmt.Errorf("%s has two %q sections", file, strings.TrimSpace(stanceHeading))
+			}
+			start = i
 		}
-		roles[strings.TrimSuffix(path.Base(f), ".md")] = strings.Split(text, "\n\n")
 	}
-	return roles, nil
+	if start < 0 {
+		return fmt.Errorf("%s has no %q section", file, strings.TrimSpace(stanceHeading)+" <role>")
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "# ") || strings.HasPrefix(lines[i], "## ") {
+			end = i
+			break
+		}
+	}
+	bodies := []string{strings.Join(lines[:start], "\n"), strings.Join(lines[start:end], "\n"), strings.Join(lines[end:], "\n")}
+	for i, part := range []string{"head", "stance", "fixed"} {
+		body := strings.Trim(bodies[i], "\n")
+		if part != "fixed" && strings.TrimSpace(body) == "" {
+			return fmt.Errorf("%s: its %s is empty", file, part)
+		}
+		if _, err := root.New("roles/" + role + "/" + part).Parse(body); err != nil {
+			return fmt.Errorf("%s: %w", file, err)
+		}
+	}
+	return nil
 }

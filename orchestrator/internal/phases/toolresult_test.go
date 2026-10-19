@@ -78,3 +78,16 @@ func TestANamedReadCountsDecodedStreamSizes(t *testing.T) {
 		t.Fatalf("withheld as %v, want 5100 bytes", payload)
 	}
 }
+
+// A failed check's log is a GitHub read too: whatever the harness called the
+// tool, its text never reaches the ledger, only its size.
+func TestACheckLogReadIsWithheldByName(t *testing.T) {
+	for _, name := range []string{"github_check_log", "dude_github_check_log"} {
+		payload := map[string]any{"output": capOutput("E   AssertionError: 3 != 2\n##[error]Process completed with exit code 1.")}
+		withholdGitHubRead([]string{name}, payload)
+		out, _ := payload["output"].(map[string]any)
+		if out["withheld"] != true || out["withheldBy"] != "name" || out["head"] != nil {
+			t.Errorf("%s: recorded %v, want only its size", name, payload)
+		}
+	}
+}

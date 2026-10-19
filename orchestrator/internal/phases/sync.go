@@ -151,6 +151,7 @@ const stopPause = "pause"
 // conductor's (Phase "", Role conductor), which the syncer drives the same
 // way except where conductor() says otherwise.
 type phaseRun struct {
+	SourceKind                                         string
 	ID, Org, ProjectID, TaskID, Phase, Status, Control string
 	// A session's agent: no task, no project.
 	SessionID                         string
@@ -271,7 +272,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
 	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
 	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
-	r.retry_failures, r.retry_due_at`
+	r.retry_failures, r.retry_due_at, COALESCE(r.source_kind, '')`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -470,7 +471,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
 		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs,
-		&r.RetryFailures, &r.RetryDueAt)
+		&r.RetryFailures, &r.RetryDueAt, &r.SourceKind)
 	if err != nil {
 		return r, err
 	}
@@ -563,7 +564,7 @@ var (
 	stuckBrainstorms = `runs r WHERE ` + stuckBrainstorm
 	silentTalkers    = `runs r WHERE ` + silentTalker
 	stalledRuns      = stallFrom + ` WHERE ` + noProgress + ` AND ` + stallDue
-	failedForWake    = `runs r WHERE ` + delivery.FailedForConductor
+	failedForWake    = `runs r WHERE r.source_kind IS NULL AND ` + delivery.FailedForConductor
 	wakeableWakes    = `conductor_wakes c WHERE ` + delivery.Wakeable
 )
 
@@ -606,6 +607,9 @@ func (s *Syncer) pending(ctx context.Context) pending {
 // earlier step ran: that one may have made work for it (a stall report is
 // a conductor's reason to wake).
 func (s *Syncer) beforeDue(ctx context.Context) error {
+	if _, err := (&delivery.Store{DB: s.DB}).EnqueueChildResults(ctx); err != nil {
+		return err
+	}
 	p, ran := s.pending(ctx), false
 	if p.brainstorms {
 		ran = true
@@ -816,6 +820,21 @@ func (s *Syncer) interruptSilentTalkers(ctx context.Context) error {
 // advance moves one Run on by whatever its state calls for. Returns whether
 // it did anything, so the sweeper keeps going while there is work.
 func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
+	if r.SourceKind != "" && r.Control != "abort" && r.Status != "failed" && r.Status != "aborted" {
+		if err := s.childExecutionAllowed(ctx, r); err != nil {
+			return false, err
+		}
+	}
+	if r.SourceKind != "" && r.Control == "abort" {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE runs SET status='aborted', ended_at=COALESCE(ended_at,now()), keep=false WHERE id=$1 AND source_kind IS NOT NULL AND status IN ('pending','scheduled','starting','running','paused')`, r.ID)
+			return err
+		}); err != nil {
+			return true, err
+		}
+		r.Status, r.Keep = "aborted", false
+		return true, s.end(ctx, r)
+	}
 	switch {
 	case r.Status == statusAborted || r.Status == "failed":
 		return true, s.end(ctx, r)
@@ -1134,6 +1153,9 @@ func (s *Syncer) handOverUnheardBrainstorms(ctx context.Context) error {
 // a library image waits, still pending, until its image has the current
 // dude layer, and fails before lux if it cannot have it.
 func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
+	if err := s.childExecutionAllowed(ctx, r); err != nil {
+		return err
+	}
 	image, got, nested, err := s.image(ctx, r)
 	var waiting images.Waiting
 	var refused images.Refused
@@ -1323,6 +1345,9 @@ const EvImagePreparing = "run.image_preparing"
 // transaction as its text: submit sends exactly these. And the project
 // secrets the spec declares (projectsecrets.go), with their values.
 func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, image chosenImage) (lux.Spec, runSizes, []delivery.SentAttachment, []lux.Secret, error) {
+	if err := s.childExecutionAllowed(ctx, r); err != nil {
+		return lux.Spec{}, runSizes{}, nil, nil, err
+	}
 	if r.brainstorm() {
 		spec, sizes, err := s.brainstormSpec(ctx, r, stored, image)
 		return spec, sizes, nil, nil, err
@@ -1341,6 +1366,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var sizes delivery.Sizes
 	var raised delivery.Raises
 	var recorded *delivery.Machine
+	var conductorIn delivery.PromptInput
 	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination string
 	var projectSecrets []lux.Secret
 	var tier delivery.Tier
@@ -1379,9 +1405,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		// A resume sends no prompt: lux keeps the submitted one.
 		if r.conductor() && stored == nil {
-			if conductorPrompt, err = s.talkerPrompt(ctx, tx, r, briefing, delivery.PromptImages(taskImages)); err != nil {
+			if conductorIn, err = s.talkerInput(ctx, tx, r, delivery.PromptImages(taskImages)); err != nil {
 				return err
 			}
+			conductorPrompt = delivery.ConductorPrompt(briefing, conductorIn)
 		}
 		if stored != nil {
 			// A resume goes on with what the Run was submitted with, whatever
@@ -1515,6 +1542,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		return lux.Spec{}, runSizes{}, nil, nil, err
 	}
 	promptIn := delivery.PromptInput{
+		Child: r.SourceKind != "",
 		Title: title, Goal: goal, AcceptanceCriteria: ac, Category: r.Category,
 		Findings: findings, PRFeedback: feedback, Feedback: peopleFeedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
@@ -1537,9 +1565,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	}
 	if stored == nil {
 		// A resume sends no prompt: only a submit's says where it runs.
-		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI)
+		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI && !promptIn.Child)
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
+	if stored == nil {
+		// Pinned to the Run: lux keeps the submitted spec, and its init,
+		// for every placement; a resume sends none.
+		instructionsIn := promptIn
+		if r.conductor() {
+			instructionsIn = conductorIn
+		}
+		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructionsIn.InstructionsInput())
+	}
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
 		// the machine's paragraph as a phase's does.
@@ -1585,7 +1622,10 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			return lux.Spec{}, runSizes{}, nil, nil, err
 		}
 	}
-	spec := buildSpec(s.Agent, in)
+	spec, err := runSpec(s.Agent, in)
+	if err != nil {
+		return lux.Spec{}, runSizes{}, nil, nil, err
+	}
 	given := withProjectSecrets(&spec, projectSecrets)
 	return spec, runSizes{Now: in.Machine, Recorded: recorded}, taskImages, given, nil
 }
@@ -1619,6 +1659,19 @@ func checkoutOf(r phaseRun, repo delivery.Repository, tb delivery.TaskBranch) (r
 // (sessionKept). images are those given with it, which the briefing's
 // image references are numbered against; the rest read as unavailable.
 func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefing string, images []delivery.PromptImage) (string, error) {
+	in, err := s.talkerInput(ctx, tx, r, images)
+	if err != nil {
+		return "", err
+	}
+	if r.brainstorm() {
+		return delivery.BrainstormPrompt(briefing, in), nil
+	}
+	return delivery.ConductorPrompt(briefing, in), nil
+}
+
+// talkerInput is what a conductor's or session agent's prompt and
+// instruction file are made from.
+func (s *Syncer) talkerInput(ctx context.Context, tx pgx.Tx, r phaseRun, images []delivery.PromptImage) (delivery.PromptInput, error) {
 	role := delivery.RoleConductor
 	if r.brainstorm() {
 		role = delivery.RoleBrainstorm
@@ -1628,16 +1681,16 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 	if r.brainstorm() {
 		var orgModels json.RawMessage
 		if err := tx.QueryRow(ctx, `SELECT o.default_agent_models FROM organizations o WHERE o.id = $1`, r.Org).Scan(&orgModels); err != nil {
-			return "", fmt.Errorf("load the session's organization: %w", err)
+			return in, fmt.Errorf("load the session's organization: %w", err)
 		}
 		var err error
 		if in.Anywhere, err = s.brainstormAnywhere(ctx, tx, r.ID); err != nil {
-			return "", err
+			return in, err
 		}
 		models = []json.RawMessage{orgModels}
 		repos, err := delivery.SessionRepositories(ctx, tx, r.SessionID)
 		if err != nil {
-			return "", err
+			return in, err
 		}
 		for _, repo := range repos {
 			in.Repositories = append(in.Repositories, delivery.PromptRepo{Name: repo.Key + "/" + repo.Name,
@@ -1648,17 +1701,17 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 		if err := tx.QueryRow(ctx, `SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			WHERE w.id = $1`, r.TaskID).Scan(&in.Title, &in.Goal, &criteria, &projectModels, &orgModels); err != nil {
-			return "", fmt.Errorf("load task: %w", err)
+			return in, fmt.Errorf("load task: %w", err)
 		}
 		_ = json.Unmarshal(criteria, &in.AcceptanceCriteria)
 		models = []json.RawMessage{projectModels, orgModels}
 		repos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
 		if err != nil {
-			return "", fmt.Errorf("load repositories: %w", err)
+			return in, fmt.Errorf("load repositories: %w", err)
 		}
 		tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
 		if err != nil {
-			return "", err
+			return in, err
 		}
 		for i, repo := range repos {
 			ref, readOnly := checkoutOf(r, repo, tb)
@@ -1678,13 +1731,10 @@ func (s *Syncer) talkerPrompt(ctx context.Context, tx pgx.Tx, r phaseRun, briefi
 	}
 	prompts, err := delivery.LoadPrompts(ctx, tx, r.ID, project, role)
 	if err != nil {
-		return "", err
+		return in, err
 	}
 	in.OrgPrompt, in.ProjectPrompt, in.ProjectPromptMode = prompts.Org, prompts.Project, prompts.ProjectMode
-	if r.brainstorm() {
-		return delivery.BrainstormPrompt(briefing, in), nil
-	}
-	return delivery.ConductorPrompt(briefing, in), nil
+	return in, nil
 }
 
 // toolsToken is the token for this start of the Run: the same however
@@ -1795,6 +1845,17 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 	var afterEvent int64
 	t := &translator{run: r}
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `UPDATE runs SET child_output_generation=child_output_generation+1
+			WHERE id=$1 AND source_kind IS NOT NULL AND NOT child_output_closed RETURNING child_output_generation`, r.ID).Scan(&t.childOutputGeneration); err != nil && !db.IsNotFound(err) {
+			return err
+		}
+		var closed bool
+		if err := tx.QueryRow(ctx, `SELECT child_output_closed FROM runs WHERE id=$1`, r.ID).Scan(&closed); err != nil {
+			return err
+		}
+		if closed {
+			return fmt.Errorf("child output is already collected")
+		}
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), lux_after_event FROM runs WHERE id = $1`, r.ID).
 			Scan(&cursor, &afterEvent); err != nil {
 			return err
@@ -1819,7 +1880,17 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 		close(frames)
 	}()
 
-	for f := range frames {
+	for {
+		var f lux.Frame
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case next, ok := <-frames:
+			if !ok {
+				return <-read
+			}
+			f = next
+		}
 		batch := []lux.Frame{f}
 	more:
 		for len(batch) < cap(frames) {
@@ -1844,7 +1915,6 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 			t.resumes = nil
 		}
 	}
-	return <-read
 }
 
 // applyBatch records a batch of the Run's frames in one transaction, with
@@ -1865,6 +1935,15 @@ func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Fram
 		// save updates the row at the batch's end anyway.
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID); err != nil {
 			return err
+		}
+		if t.childOutputGeneration != 0 {
+			var owns bool
+			if err := tx.QueryRow(ctx, `SELECT child_output_generation=$2 AND NOT child_output_closed FROM runs WHERE id=$1`, t.run.ID, t.childOutputGeneration).Scan(&owns); err != nil {
+				return err
+			}
+			if !owns {
+				return fmt.Errorf("child output follower was superseded")
+			}
 		}
 		var cursor string
 		var afterEvent int64
@@ -1887,6 +1966,21 @@ func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Fram
 // Idempotent end to end: each piece is recorded before the next is asked
 // for, so a restart resumes the sequence.
 func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
+	if r.SourceKind != "" {
+		if err := s.childExecutionAllowed(ctx, r); err != nil {
+			return false, err
+		}
+		if !delivery.Publishes[r.Phase] {
+			if err := s.ask(ctx, r, s.Lux.Stop); err != nil {
+				return true, err
+			}
+			s.unfollow(r.ID)
+			return true, s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `UPDATE runs SET status='completed', ended_at=now(), lux_stop_reason='complete', keep=false WHERE id=$1 AND status IN ('scheduled','starting','running') AND control <> 'abort'`, r.ID)
+				return err
+			})
+		}
+	}
 	// Pushed when it names a branch and holds a repository it may push —
 	// as lux was told, at submit or as a resume added one. Work on nothing
 	// it may change publishes only what it wrote for people.
@@ -1936,6 +2030,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		}
 		if err != nil {
 			return true, s.retryLater(ctx, r, err)
+		}
+		if r.SourceKind != "" {
+			if err := s.childExecutionAllowed(ctx, r); err != nil {
+				return false, err
+			}
 		}
 		if err := Push(ctx, s.Lux, s.Log, r.LuxRunID, reqID, creds); err != nil {
 			if le, ok := lux.AsError(err); ok && le.Code == "not_running" {
@@ -1991,6 +2090,15 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	}
 	completed := false
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if r.SourceKind != "" && len(heads) > 0 {
+			held, err := s.recordChildHeads(ctx, tx, r, heads)
+			if err != nil {
+				return err
+			}
+			if held {
+				return errRetry
+			}
+		}
 		// Read before the update below records the published branch on
 		// every Run: set already, it is a candidate Run's own.
 		var own string
@@ -2026,6 +2134,47 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		s.timeResumesLater(r)
 	}
 	return true, nil
+}
+
+func (s *Syncer) recordChildHeads(ctx context.Context, tx pgx.Tx, r phaseRun, heads map[string]delivery.RunHead) (bool, error) {
+	d, err := delivery.LoadDelivery(ctx, tx, r.TaskID)
+	if err != nil {
+		return false, err
+	}
+	if d == nil {
+		return false, nil
+	}
+	attempt, err := delivery.EffectiveChildAttemptTx(ctx, tx, r.TaskID, d)
+	if err != nil {
+		return false, err
+	}
+	if !d.Live() || attempt != r.Attempt {
+		return false, fmt.Errorf("child delivery attempt is no longer live")
+	}
+	held, err := delivery.StepHoldsForUpdate(ctx, tx, d.WorkflowID)
+	if err != nil {
+		return false, err
+	}
+	if held {
+		return true, nil
+	}
+	next := map[string]string{}
+	paths := []string{}
+	for repo, head := range heads {
+		next[repo] = head.SHA
+		for _, path := range head.ChangedPaths {
+			paths = append(paths, repo+"/"+path)
+		}
+	}
+	slices.Sort(paths)
+	rawHeads, _ := json.Marshal(next)
+	rawPaths, _ := json.Marshal(paths)
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(jsonb_set(state, '{heads}',
+		COALESCE(state->'heads', '{}'::jsonb) || $2::jsonb), '{changedPaths}',
+		(SELECT COALESCE(jsonb_agg(DISTINCT p ORDER BY p), '[]'::jsonb)
+		 FROM jsonb_array_elements_text(COALESCE(state->'changedPaths', '[]'::jsonb) || $3::jsonb) p))
+		WHERE id = $1`, d.WorkflowID, rawHeads, rawPaths)
+	return false, err
 }
 
 // baseWait is how long after its turn ended a Run waits for lux to say
@@ -2185,6 +2334,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	heads := map[string]delivery.RunHead{}
 	var gh *forge.GitHub
 	for _, res := range push.Results {
+		if r.SourceKind != "" {
+			if err := s.childExecutionAllowed(ctx, r); err != nil {
+				return nil, "", err
+			}
+		}
 		repo, known := byName[res.Repo]
 		switch {
 		case res.Status == "skipped" || known && repo.Access == "read":
@@ -2242,6 +2396,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		attempted := func() (bool, error) { return s.mergeAttempted(ctx, r, repo.Name, res.Commit) }
 		adv, err := advance.Branch(ctx, gh, slug, branch, baseBranch, base, res.Commit, attempted, func() error {
+			if r.SourceKind != "" {
+				if err := s.childExecutionAllowed(ctx, r); err != nil {
+					return err
+				}
+			}
 			return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 				return s.event(ctx, tx, r, delivery.EvGitMergeAttempted, ledger.ActorAgent,
 					map[string]any{"repo": repo.Name, "commit": res.Commit})
@@ -2598,7 +2757,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		parked := err == nil && last == evParked
-		if parked && taskStatus != "" && r.TaskID != "" {
+		if parked && taskStatus != "" && r.TaskID != "" && r.SourceKind == "" {
 			// The flag its idle park raised, lowered.
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", taskStatus,
 				"a person resumed the agent"); err != nil {
@@ -2607,7 +2766,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		}
 		// A phase agent taken back up, from a park or a person's pause, may
 		// have been the last thing the task waited on a person for.
-		if !r.talker() {
+		if !r.talker() && r.SourceKind == "" {
 			if err := delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID); err != nil {
 				return err
 			}
@@ -2803,7 +2962,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			return err
 		}
 		var taskStatus string
-		if kind == "idle" && !r.talker() {
+		if kind == "idle" && !r.talker() && r.SourceKind == "" {
 			// Raised for a person to look at, from whatever it was (running,
 			// in review); put back when the Run is taken up again. Not for a
 			// conductor's: it changes nothing about the task, and its park
@@ -3252,6 +3411,14 @@ func (s *Syncer) failKept(ctx context.Context, r phaseRun, reason string) error 
 
 func (s *Syncer) failed(ctx context.Context, r phaseRun, reason string, keep bool) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if r.conductor() {
+			if err := delivery.LockChat(ctx, tx, r.TaskID); err != nil {
+				return err
+			}
+			if err := delivery.MarkChildParentEndedTx(ctx, tx, r.TaskID, r.ID); err != nil {
+				return err
+			}
+		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 			WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted')`, r.ID, reason, keep)
 		if err != nil || tag.RowsAffected() == 0 {
@@ -3465,57 +3632,61 @@ func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor st
 func RecordFindings(ctx context.Context, database *db.DB, org, runID string, findings []delivery.Finding,
 	verdicts map[string]bool) error {
 	return database.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var projectID, taskID, phase, category string
-		if err := tx.QueryRow(ctx, `SELECT project_id, task_id, phase::text, COALESCE(category, '') FROM runs WHERE id = $1`, runID).
-			Scan(&projectID, &taskID, &phase, &category); err != nil {
-			return err
+		return recordFindingsTx(ctx, tx, org, runID, findings, verdicts)
+	})
+}
+
+func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, findings []delivery.Finding, verdicts map[string]bool) error {
+	var projectID, taskID, phase, category string
+	if err := tx.QueryRow(ctx, `SELECT project_id, task_id, phase::text, COALESCE(category, '') FROM runs WHERE id = $1`, runID).
+		Scan(&projectID, &taskID, &phase, &category); err != nil {
+		return err
+	}
+	// Only a review or test Run may report: a fixer reporting findings
+	// could manufacture the evidence that its own work is finished.
+	if phase != delivery.PhaseReview && phase != delivery.PhaseTest {
+		return fmt.Errorf("a %s run may not report findings", phase)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM review_findings WHERE run_id = $1`, runID); err != nil {
+		return err
+	}
+	// The reviewer's judgement of what it was shown: fixed is resolved;
+	// still stays open, for the next fix. One it said nothing about stays
+	// as it was.
+	for id, fixed := range verdicts {
+		if !fixed {
+			continue
 		}
-		// Only a review or test Run may report: a fixer reporting findings
-		// could manufacture the evidence that its own work is finished.
-		if phase != delivery.PhaseReview && phase != delivery.PhaseTest {
-			return fmt.Errorf("a %s run may not report findings", phase)
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM review_findings WHERE run_id = $1`, runID); err != nil {
-			return err
-		}
-		// The reviewer's judgement of what it was shown: fixed is resolved;
-		// still stays open, for the next fix. One it said nothing about stays
-		// as it was.
-		for id, fixed := range verdicts {
-			if !fixed {
-				continue
-			}
-			if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'resolved', resolved_by_run_id = $2,
+		if _, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'resolved', resolved_by_run_id = $2,
 				resolution_note = 'judged fixed by the re-review', updated_at = now()
 				WHERE id = $1 AND status = 'open'`, id, runID); err != nil {
-				return err
-			}
+			return err
 		}
-		counts := map[string]int{}
-		for _, f := range findings {
-			counts[f.Severity]++
-			// The category is the reviewer's flavour, what re-review routing
-			// groups by; a word of the reviewer's own is its topic. A test
-			// Run has no flavour: its word is the category.
-			cat, topic := f.Category, ""
-			if category != "" && f.Category != category {
-				cat, topic = category, f.Category
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
+	}
+	counts := map[string]int{}
+	for _, f := range findings {
+		counts[f.Severity]++
+		// The category is the reviewer's flavour, what re-review routing
+		// groups by; a word of the reviewer's own is its topic. A test
+		// Run has no flavour: its word is the category.
+		cat, topic := f.Category, ""
+		if category != "" && f.Category != category {
+			cat, topic = category, f.Category
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
 				severity, repo, file, line, title, description, suggested_fix)
 				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13)`,
-				ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
-				db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
-				return err
-			}
+			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
+			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
+			return err
 		}
-		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
-			ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
-			Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts},
-		})
-		return err
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{
+		Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
+		ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
+		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts},
 	})
+	return err
 }
 
 // NotifyFinished signals each workflow whose phase Run has finished but has
@@ -3526,6 +3697,10 @@ func RecordFindings(ctx context.Context, database *db.DB, org, runID string, fin
 // key names this finish, for the signal's idempotency: a Run taken back up
 // after it failed or was aborted finishes again, and that is a new signal.
 func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx context.Context, org, workflowRunID, runID, status, key string) error) (int, error) {
+	children, err := settleCollectedChildren(ctx, &delivery.Store{DB: database})
+	if err != nil {
+		return 0, err
+	}
 	type finished struct{ ID, Org, Status, WorkflowRunID, Key string }
 	var runs []finished
 	if err := database.InSystem(ctx, "phase-notifier", func(tx pgx.Tx) error {
@@ -3537,7 +3712,7 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 			-- before attempts were kept in its state is any attempt's.)
 			JOIN workflow_runs w ON w.task_id = r.task_id AND w.organization_id = r.organization_id
 			  AND COALESCE(NULLIF(w.state->>'attempt', '')::int, r.attempt) = r.attempt
-			WHERE r.phase IS NOT NULL AND r.status IN ('completed', 'failed', 'aborted')
+			WHERE r.phase IS NOT NULL AND r.source_kind IS NULL AND r.status IN ('completed', 'failed', 'aborted')
 			  AND r.phase_notified_at IS NULL AND w.status = 'waiting'
 			  -- Work that changes no code is judged by what it published, so
 			  -- that waits for lux to report it. Work on code is judged by its
@@ -3553,7 +3728,7 @@ func NotifyFinished(ctx context.Context, database *db.DB, signal func(ctx contex
 	}); err != nil {
 		return 0, err
 	}
-	handled := 0
+	handled := children
 	for _, r := range runs {
 		if err := signal(ctx, r.Org, r.WorkflowRunID, r.ID, r.Status, r.Key); err != nil {
 			// One workflow that cannot be signalled must not stall the rest.

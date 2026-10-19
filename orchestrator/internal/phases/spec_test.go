@@ -52,7 +52,13 @@ func TestTheSpecIsTheGoldenOne(t *testing.T) {
 				c.Egress = []string{"mirror.internal"}
 				in.Egress = []string{"pypi.org", "*.github.com", "10.0.0.5", "10.60.0.0/16", "mirror.internal"}
 			}
-			got, err := json.MarshalIndent(buildSpec(c, in), "", "  ")
+			// Its instruction file, written by the init.
+			in.Instructions = "# How you work\n\nCheck, then claim: `$HOME` stays as written.\n"
+			spec, err := runSpec(c, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := json.MarshalIndent(spec, "", "  ")
 			if err != nil {
 				t.Fatal(err)
 			}

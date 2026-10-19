@@ -29,6 +29,15 @@ type Refusal struct {
 	Blocked *BlockedError
 	// A start refused as archived or closed (path 4), recorded likewise.
 	Lifecycle string
+	// An event the caller records, by the calling Run, after the refused
+	// call rolls back: what the refusal changed (a rerun's claim released).
+	Event *RefusalEvent
+}
+
+// RefusalEvent is a Refusal's event: its type and payload.
+type RefusalEvent struct {
+	Type    string
+	Payload map[string]any
 }
 
 func (r Refusal) Error() string { return r.Msg }

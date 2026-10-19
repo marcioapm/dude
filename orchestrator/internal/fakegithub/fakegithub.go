@@ -8,6 +8,7 @@ package fakegithub
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakegit"
 )
 
 type Pull struct {
@@ -152,6 +155,17 @@ type Server struct {
 	// Requests left of GitHub's hourly limit, by resource (core, graphql,
 	// search): answers carry them as X-RateLimit headers. Unset, none.
 	RateRemaining map[string]int
+	// merge-tree's and diff's answers, by the commits they were asked of.
+	memo memo
+	// Check runs by id, as GitHub reports them (joblogs.go); one not named
+	// reports a failed test in its output.
+	CheckRuns map[int64]CheckRun
+	// Actions job logs by id, the download host they redirect to, and a
+	// status the logs endpoint answers instead (403: no permission).
+	JobLogs      map[int64]string
+	LogHost      string
+	LogStatus    int
+	downloadAuth []string
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -225,23 +239,13 @@ func (s *Server) git(args ...string) (string, error) {
 	return s.gitAs("", args...)
 }
 
-// gitWith runs git with stdin and extra environment.
-func (s *Server) gitWith(stdin string, env []string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
-	cmd.Stdin = strings.NewReader(stdin)
-	cmd.Env = append(cmd.Environ(), env...)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
 // gitAs runs git with the given person as a commit's author and committer:
 // commit-tree takes them from the environment, not from -c.
 func (s *Server) gitAs(name string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", s.Repo}, args...)...)
 	if name != "" {
-		email := strings.ToLower(strings.Fields(name)[0]) + "@example.com"
-		cmd.Env = append(cmd.Environ(), "GIT_AUTHOR_NAME="+name, "GIT_AUTHOR_EMAIL="+email,
-			"GIT_COMMITTER_NAME="+name, "GIT_COMMITTER_EMAIL="+email)
+		cmd.Env = append(cmd.Environ(), "GIT_AUTHOR_NAME="+name, "GIT_AUTHOR_EMAIL="+email(name),
+			"GIT_COMMITTER_NAME="+name, "GIT_COMMITTER_EMAIL="+email(name))
 	}
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
@@ -249,6 +253,16 @@ func (s *Server) gitAs(name string, args ...string) (string, error) {
 
 // SHA of a branch, or "".
 func (s *Server) SHA(branch string) string {
+	if r := s.repo(); r != nil {
+		h, err := r.Resolve("refs/heads/" + branch)
+		r.Close()
+		switch {
+		case err == nil:
+			return h.String()
+		case errors.Is(err, fakegit.ErrNotFound):
+			return ""
+		}
+	}
 	out, err := s.git("rev-parse", "--verify", "-q", "refs/heads/"+branch)
 	if err != nil {
 		return ""
@@ -259,8 +273,8 @@ func (s *Server) SHA(branch string) string {
 // CommitOnTop adds an empty commit to a branch, as a person on GitHub
 // does with "Update branch" or a committed suggestion; its SHA.
 func (s *Server) CommitOnTop(branch, message string) string {
-	tree, _ := s.git("rev-parse", "refs/heads/"+branch+"^{tree}")
-	sha, err := s.gitAs("Alice", "commit-tree", tree, "-p", "refs/heads/"+branch, "-m", message)
+	tree, _ := s.treeOf("refs/heads/" + branch)
+	sha, err := s.commitTree("Alice", tree, message, "refs/heads/"+branch)
 	if err != nil {
 		return ""
 	}
@@ -278,7 +292,7 @@ func (s *Server) CommitFiles(branch, message string, files map[string]string) st
 	if err != nil {
 		return ""
 	}
-	sha, err := s.gitAs("Alice", "commit-tree", tree, "-p", cur, "-m", message)
+	sha, err := s.commitTree("Alice", tree, message, cur)
 	if err != nil {
 		return ""
 	}
@@ -317,7 +331,7 @@ func (s *Server) MergeCommitResolved(branch, sha string, resolved map[string]str
 
 func (s *Server) mergeAs(name, branch, other, message string, resolved map[string]string) string {
 	head := s.SHA(branch)
-	out, err := s.git("merge-tree", "--write-tree", head, other)
+	out, err := s.mergeTree(head, other)
 	tree, _, _ := strings.Cut(out, "\n")
 	if err != nil && len(resolved) == 0 {
 		return ""
@@ -325,7 +339,7 @@ func (s *Server) mergeAs(name, branch, other, message string, resolved map[strin
 	if tree, err = s.treeWith(tree, resolved); err != nil {
 		return ""
 	}
-	sha, err := s.gitAs(name, "commit-tree", tree, "-p", head, "-p", other, "-m", message)
+	sha, err := s.commitTree(name, tree, message, head, other)
 	if err != nil {
 		return ""
 	}
@@ -337,6 +351,13 @@ func (s *Server) mergeAs(name, branch, other, message string, resolved map[strin
 
 // treeWith is the tree of treeish with files written over it.
 func (s *Server) treeWith(treeish string, files map[string]string) (string, error) {
+	if r := s.repo(); r != nil {
+		h, err := r.TreeWith(treeish, files)
+		r.Close()
+		if err == nil {
+			return h.String(), nil
+		}
+	}
 	index := s.Repo + "/index-" + strconv.FormatInt(nextID.Add(1), 10)
 	defer os.Remove(index)
 	env := []string{"GIT_INDEX_FILE=" + index}
@@ -371,6 +392,17 @@ func (s *Server) gitIn(stdin string, args ...string) (string, error) {
 
 // Parents lists a commit's parents, first parent first.
 func (s *Server) Parents(sha string) []string {
+	if r := s.repo(); r != nil {
+		c, err := r.Commit(sha)
+		r.Close()
+		if err == nil {
+			out := []string{}
+			for _, p := range c.ParentHashes {
+				out = append(out, p.String())
+			}
+			return out
+		}
+	}
 	out, err := s.git("rev-list", "--parents", "-n", "1", sha)
 	if err != nil {
 		return nil
@@ -547,16 +579,16 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 404, "Base not found")
 			return
 		}
-		if _, err := s.git("merge-base", "--is-ancestor", in.Head, from); err == nil {
+		if s.isAncestor(in.Head, from) {
 			w.WriteHeader(204)
 			return
 		}
-		tree, err := s.git("merge-tree", "--write-tree", from, in.Head)
+		tree, err := s.mergeTree(from, in.Head)
 		if err != nil {
 			fail(w, 409, "Merge conflict")
 			return
 		}
-		sha, err := s.gitAs("GitHub", "commit-tree", strings.TrimSpace(tree), "-p", from, "-p", in.Head, "-m", "Merge branch '"+in.Head+"' into "+in.Base)
+		sha, err := s.commitTree("GitHub", strings.TrimSpace(tree), "Merge branch '"+in.Head+"' into "+in.Base, from, in.Head)
 		if err == nil {
 			_, err = s.git("update-ref", "refs/heads/"+in.Base, sha, from)
 		}
@@ -697,7 +729,7 @@ func (s *Server) Handler() http.Handler {
 		write(w, 200, map[string]string{"permission": p, "role_name": p})
 	})
 	mux.HandleFunc("GET "+prefix+"/commits/{sha}", func(w http.ResponseWriter, r *http.Request) {
-		out, err := s.git("log", "-1", "--format=%an", r.PathValue("sha"))
+		out, err := s.authorOf(r.PathValue("sha"))
 		if err != nil {
 			fail(w, 404, "No commit found")
 			return
@@ -742,14 +774,13 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		base := s.SHA(p.Base)
-		tree, err := s.git("merge-tree", "--write-tree", head, base)
+		tree, err := s.mergeTree(head, base)
 		if err != nil {
 			fail(w, 422, "merge conflict between base and head")
 			return
 		}
 		// The old head guards the ref update even if it moves during the merge.
-		sha, err := s.gitAs("GitHub", "commit-tree", tree,
-			"-p", head, "-p", base, "-m", "Merge branch '"+p.Base+"' into "+p.Head)
+		sha, err := s.commitTree("GitHub", tree, "Merge branch '"+p.Base+"' into "+p.Head, head, base)
 		if err == nil {
 			_, err = s.git("update-ref", "refs/heads/"+p.Head, sha, head)
 		}
@@ -830,14 +861,9 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
 	})
-	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, map[string]any{"output": map[string]string{"title": "1 test failed",
-			"summary": "TestGreeting: expected hello, got hi", "text": ""}})
-	})
-	mux.HandleFunc("GET "+prefix+"/check-runs/{id}/annotations", func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, []any{map[string]any{"path": "greet.go", "start_line": 12, "annotation_level": "failure",
-			"message": "expected hello"}})
-	})
+	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}/logs", s.jobLogs)
+	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", s.checkRun)
+	mux.HandleFunc("GET "+prefix+"/check-runs/{id}/annotations", s.checkRunAnnotations)
 	mux.HandleFunc("GET "+prefix+"/hooks", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -922,7 +948,7 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	}
 	var mergeable any = true
 	state := "clean"
-	if _, err := s.git("merge-tree", "--write-tree", p.Head, p.Base); err != nil {
+	if _, err := s.mergeTree(p.Head, p.Base); err != nil {
 		mergeable, state = false, "dirty"
 	}
 	if s.Conflicting[p.Number] {
@@ -1343,13 +1369,16 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	// blob sha (the old one for a file removed), and a patch only where
 	// lines changed and git can show them: none for a binary file, nor for
 	// one whose content did not change.
-	spec := base + "..." + head
-	out, err := s.git("diff", "-z", "-M", "-C", "--numstat", spec)
+	repo := s.repo()
+	if repo != nil {
+		defer repo.Close()
+	}
+	out, err := s.diff(repo, base, head, "-z", "-M", "-C", "--numstat")
 	if err != nil {
 		fail(w, 404, out)
 		return
 	}
-	raw, _ := s.git("diff", "-z", "-M", "-C", "--raw", "--no-abbrev", spec)
+	raw, _ := s.diff(repo, base, head, "-z", "-M", "-C", "--raw", "--no-abbrev")
 	status, sha := map[string]string{}, map[string]string{}
 	for rt := strings.Split(raw, "\x00"); len(rt) > 1; {
 		// ":<mode> <mode> <old sha> <new sha> <status>", then its paths.
@@ -1400,14 +1429,14 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	}
 	// Commits on base that head lacks: how far behind head is; and the
 	// reverse.
-	behind, _ := s.git("rev-list", "--count", head+".."+base)
-	ahead, _ := s.git("rev-list", "--count", base+".."+head)
+	behind := s.count(head, base)
+	ahead := s.count(base, head)
 	n, _ := strconv.Atoi(behind)
 	a, _ := strconv.Atoi(ahead)
 	// Head's commits base lacks, oldest first, each with its parents: at
 	// most compareCommitCap, as GitHub lists them.
 	commits := []any{}
-	if out, _ := s.git("rev-list", "--reverse", "--parents", base+".."+head); out != "" {
+	if out := s.revList(base, head); out != "" {
 		for _, line := range strings.Split(out, "\n") {
 			f := strings.Fields(line)
 			parents := []any{}
@@ -1448,7 +1477,7 @@ func (s *Server) updateRef(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !in.Force {
-		if _, err := s.git("merge-base", "--is-ancestor", cur, in.SHA); err != nil {
+		if !s.isAncestor(cur, in.SHA) {
 			fail(w, 422, "Update is not a fast forward")
 			return
 		}

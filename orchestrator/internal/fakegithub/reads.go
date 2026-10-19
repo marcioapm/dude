@@ -3,7 +3,6 @@ package fakegithub
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -60,24 +59,11 @@ func (s *Server) LineCommentAt(number int, author, path string, line int, body s
 
 // WriteFile commits a file to a branch, as a person pushing does; its SHA.
 func (s *Server) WriteFile(branch, path, content, message string) string {
-	blob, err := s.gitWith(content, nil, "hash-object", "-w", "--stdin")
+	tree, err := s.treeWith("refs/heads/"+branch, map[string]string{path: content})
 	if err != nil {
 		return ""
 	}
-	index := s.Repo + "/fake-index-" + strconv.FormatInt(nextID.Add(1), 10)
-	defer os.Remove(index)
-	env := []string{"GIT_INDEX_FILE=" + index}
-	if _, err := s.gitWith("", env, "read-tree", "refs/heads/"+branch); err != nil {
-		return ""
-	}
-	if _, err := s.gitWith("", env, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+path); err != nil {
-		return ""
-	}
-	tree, err := s.gitWith("", env, "write-tree")
-	if err != nil {
-		return ""
-	}
-	sha, err := s.gitAs("Alice", "commit-tree", tree, "-p", "refs/heads/"+branch, "-m", message)
+	sha, err := s.commitTree("Alice", tree, message, "refs/heads/"+branch)
 	if err != nil {
 		return ""
 	}

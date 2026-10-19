@@ -1,1 +1,0 @@
-Look for missing authentication or authorization checks, data crossing a tenant boundary, injection, untrusted input treated as trusted, and credentials that reach somewhere they should not: logs, clients, other tenants.

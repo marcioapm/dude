@@ -2,18 +2,19 @@ package agenttools
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// Migrations 135 and 136 build their indexes over the events already
+// Migrations 147 through 150 rebuild their indexes over the events already
 // there: each is valid, on its scope and time, holds the GitHub read
 // attempts and nothing else, and the hourly counts checkGitHubRead runs
 // count each scope's reads of the last hour.
 func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "135")
+	owner, apply := dbtest.Upgrade(t, "147")
 	ctx := context.Background()
 	if _, err := owner.Exec(ctx, `INSERT INTO organizations (id, name, slug) VALUES ('org_g', 'G', 'g')`); err != nil {
 		t.Fatal(err)
@@ -26,6 +27,7 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		{"evt_s1", "agent.tool.attempted", "github_search", "ses_a", "", "1 minute", true},
 		{"evt_s2", "agent.tool.attempted", "github_issue", "ses_a", "", "30 minutes", true},
 		{"evt_s3", "agent.tool.attempted", "github_pull_request", "ses_a", "", "59 minutes", true},
+		{"evt_s4", "agent.tool.attempted", "github_check_log", "ses_a", "", "2 minutes", true},
 		{"evt_s_old", "agent.tool.attempted", "github_issue", "ses_a", "", "61 minutes", true},
 		{"evt_s_other_tool", "agent.tool.attempted", "pull_requests", "ses_a", "", "1 minute", false},
 		{"evt_s_result", "agent.tool.dude", "github_issue", "ses_a", "", "1 minute", false},
@@ -33,6 +35,7 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		{"evt_s_b", "agent.tool.attempted", "github_issue", "ses_b", "", "1 minute", true},
 		{"evt_t1", "agent.tool.attempted", "github_issue", "", "tsk_a", "5 minutes", true},
 		{"evt_t2", "agent.tool.attempted", "github_search", "", "tsk_a", "50 minutes", true},
+		{"evt_t3", "agent.tool.attempted", "github_check_log", "", "tsk_a", "5 minutes", true},
 		{"evt_t_old", "agent.tool.attempted", "github_search", "", "tsk_a", "2 hours", true},
 		{"evt_t_other_tool", "agent.tool.attempted", "request_review", "", "tsk_a", "5 minutes", false},
 		{"evt_t_b", "agent.tool.attempted", "github_pull_request", "", "tsk_b", "5 minutes", true},
@@ -50,6 +53,9 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		}
 	}
 	apply()
+	if _, err := owner.Exec(ctx, `VACUUM ANALYZE events`); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, ix := range []struct{ name, scope string }{
 		{"events_session_github_reads_idx", "session_id"},
@@ -97,16 +103,47 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		query, scope string
 		want         int
 	}{
-		{githubReadsBySession, "ses_a", 3},
+		{githubReadsBySession, "ses_a", 4},
 		{githubReadsBySession, "ses_b", 1},
 		{githubReadsBySession, "ses_none", 0},
-		{githubReadsByTask, "tsk_a", 2},
+		{githubReadsByTask, "tsk_a", 3},
 		{githubReadsByTask, "tsk_b", 1},
 		{githubReadsByTask, "tsk_none", 0},
 	} {
 		var n int
 		if err := owner.QueryRow(ctx, c.query, c.scope).Scan(&n); err != nil || n != c.want {
 			t.Errorf("reads of %s in the last hour: %d (%v), want %d", c.scope, n, err, c.want)
+		}
+		if _, err := owner.Exec(ctx, `SET enable_seqscan = off`); err != nil {
+			t.Fatal(err)
+		}
+		var plan []byte
+		if err := owner.QueryRow(ctx, `EXPLAIN (FORMAT JSON) `+c.query, c.scope).Scan(&plan); err != nil {
+			t.Fatal(err)
+		}
+		var nodes []struct{ Plan map[string]any }
+		if err := json.Unmarshal(plan, &nodes); err != nil {
+			t.Fatal(err)
+		}
+		want := "events_session_github_reads_idx"
+		if c.query == githubReadsByTask {
+			want = "events_task_github_reads_idx"
+		}
+		var uses func(map[string]any) bool
+		uses = func(node map[string]any) bool {
+			if node["Index Name"] == want {
+				return true
+			}
+			children, _ := node["Plans"].([]any)
+			for _, child := range children {
+				if uses(child.(map[string]any)) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(nodes) != 1 || !uses(nodes[0].Plan) {
+			t.Errorf("hourly read query did not use %s: %s", want, plan)
 		}
 	}
 }

@@ -152,6 +152,14 @@ type Prompts struct {
 // one takes the current versions, and records them.
 func LoadPrompts(ctx context.Context, tx pgx.Tx, runID, projectID, role string) (Prompts, error) {
 	var ps Prompts
+	var override *string
+	if err := tx.QueryRow(ctx, `SELECT child_prompt FROM runs WHERE id=$1`, runID).Scan(&override); err != nil {
+		return ps, err
+	}
+	if override != nil {
+		ps.Org = override
+		return ps, nil
+	}
 	if role == "" {
 		return ps, nil
 	}

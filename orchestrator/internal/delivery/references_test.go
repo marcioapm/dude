@@ -131,10 +131,10 @@ func TestAMissingImageReadsAsUnavailable(t *testing.T) {
 // A saved prompt's {{task.goal}} reads the goal as the task section does.
 func TestASavedPromptsGoalNamesImagesToo(t *testing.T) {
 	org := "Goal: {{task.goal}}"
-	got := Prompt(PhaseImplement, PromptInput{Title: "T", Goal: "![a](attachment:att_a)", OrgPrompt: &org,
-		Images: []PromptImage{{"att_a", "a.png"}}})
-	if !strings.HasPrefix(got, "Goal: [Image 1: a.png]") {
-		t.Errorf("prompt starts %q", got[:min(len(got), 60)])
+	in := PromptInput{Title: "T", Goal: "![a](attachment:att_a)", OrgPrompt: &org, Images: []PromptImage{{"att_a", "a.png"}}}
+	got := Instructions("implementer", "", in.InstructionsInput())
+	if !strings.Contains(got, "\n\nGoal: [Image 1: a.png]\n") {
+		t.Errorf("instructions:\n%s", got)
 	}
 }
 

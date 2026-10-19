@@ -4,6 +4,8 @@
 package agenttools
 
 const (
+	rChildProfileRequired                  = "an existing phase profile is required"
+	rChildToolsReadOnly                    = "independent report children cannot mutate workflow or start Runs"
 	rYourContainerNotRunningAsLux          = "your container is not running as lux sees it; call sync_base again in a moment"
 	rThisRunHoldsNoRepositoryMay           = "this Run holds no repository it may change: there is no base to bring in"
 	rThisDudeCannotAskLuxFor               = "this dude cannot ask lux for a sync: sync_base is not available here"
@@ -76,6 +78,7 @@ const (
 	rNumberIssueFrom1                      = "number is the issue's, from 1"
 	rNumberPullRequestFrom1                = "number is the pull request's, from 1"
 	rFilesAtMostPathsAtOnce                = "files: at most %d paths at once"
+	rCheckIdCheckRunFrom1                  = "checkId is the check run's id, from 1"
 	rSayWhatRanOutCommandIts               = "say what ran out: the command, its error or exit code (at most 2000 characters)"
 	rYouAreBeingMovedNowAsk                = "you are being moved to %s now; ask again once you are there, if it is still too small"
 	rThisRunHasMovedTimesLimit             = "This Run has moved %d times, the limit for one Run; a Reset does not give a move back. Carry on on %s, or say in your work what did not fit."

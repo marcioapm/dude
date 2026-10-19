@@ -18,6 +18,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // Event types this package writes. The string values are the contract with
@@ -149,6 +150,7 @@ type PhaseRun struct {
 	// request's fix (CandidateBranch) is checked before the pull request
 	// shows it.
 	Branch string
+	Child  bool
 }
 
 // ReviewRange is the range a review covers: from Base, per repository,
@@ -227,6 +229,18 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		// does a delivery a later start replaced.
 		if err := refuseEndedDeliveryTx(ctx, tx, locked, in.TaskID, in.WorkflowID); err != nil {
 			return "", err
+		}
+		if !in.Child {
+			var childWriter bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs w
+				WHERE w.task_id = $1 AND w.source_kind = 'task_conductor'
+				AND w.phase IN `+writerPhases+`
+				AND w.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))`, in.TaskID).Scan(&childWriter); err != nil {
+				return "", err
+			}
+			if childWriter {
+				return "", workflow.Wait{After: time.Second, Why: "the child writer is working on this task"}
+			}
 		}
 	}
 	var projectID string
@@ -631,6 +645,10 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 	}
 	if Ended(status) {
 		// Its peers waiting on a reply from it would wait for ever.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false
+			WHERE task_id=$1 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, taskID); err != nil {
+			return false, err
+		}
 		if _, err := PeerEndedTx(ctx, tx, org, taskID, status); err != nil {
 			return false, err
 		}

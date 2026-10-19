@@ -50,6 +50,24 @@ func (s *Server) restartRun(w http.ResponseWriter, r *http.Request, org string) 
 		if err := delivery.LockChat(r.Context(), tx, taskID); err != nil {
 			return err
 		}
+		var source string
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(source_kind,'') FROM runs WHERE id=$1`, runID).Scan(&source); err != nil {
+			return err
+		}
+		if source != "" {
+			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "restart"); err != nil {
+				return err
+			}
+			if body.Note != "" || body.Tier != "" {
+				return fail(http.StatusBadRequest, "invalid_request", "child restart note/tier overrides are not supported")
+			}
+			key := r.Header.Get("Idempotency-Key")
+			if key == "" {
+				return fail(http.StatusBadRequest, "invalid_request", "child restart requires Idempotency-Key")
+			}
+			newID, err = delivery.RestartChildTx(r.Context(), tx, org, taskID, runID, key)
+			return refusal(err)
+		}
 		// Who may: checked under the task's locks, which restart takes first.
 		if _, _, err := delivery.LockEscalationTx(r.Context(), tx, taskID); err != nil {
 			return escalationFailure(err)
