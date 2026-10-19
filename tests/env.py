@@ -160,6 +160,20 @@ def lux_env() -> dict:
     return env
 
 
+CHECKS_NOTICES = REPO_ROOT / "orchestrator" / "internal" / "delivery" / "agents" / "notices" / "checks.md"
+
+
+def _checks_questions() -> list[str]:
+    """The fixed opening of the checks gate's Backed and Missing questions:
+    each template's text up to its first action, as the orchestrator sends it."""
+    text = CHECKS_NOTICES.read_text()
+    out = []
+    for name in ("notices/checks/backed", "notices/checks/missing"):
+        start = text.index('{{define "' + name + '"}}') + len('{{define "' + name + '"}}')
+        out.append(text[start:text.index("{{", start)])
+    return out
+
+
 def llm_env() -> dict:
     """DUDE_LLM_URL / DUDE_LLM_KEY from this process, for an orchestrator
     that is to run a real model. Never printed: the key is a secret."""
@@ -224,9 +238,10 @@ class TestEnvironment:
     gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
     # Access mode's edge and backend, when a suite started them (start_access).
     _access_procs: list = field(default_factory=list, repr=False)
-    # The fake judgement proxy answers Backed yes unless the context has a
-    # recorded error; Missing is no. It is local and deterministic, never a
-    # real model call.
+    # The fake judgement proxy answers only the checks gate's questions:
+    # Backed yes unless the context has a recorded error; Missing is no.
+    # Every other request gets no answer, as from a proxy nothing answers.
+    # It is local and deterministic, never a real model call.
     judge_server: ThreadingHTTPServer | None = field(default=None, repr=False)
     judge_thread: threading.Thread | None = field(default=None, repr=False)
     workspace_root: str = field(init=False)
@@ -321,12 +336,21 @@ class TestEnvironment:
         self.lux_url = f"http://{addr_file.read_text()}"
 
     def _start_judge(self) -> None:
+        questions = _checks_questions()
+
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 length = int(self.headers.get("content-length", "0"))
                 body = json.loads(self.rfile.read(length) or b"{}")
                 messages = body.get("messages", [])
                 question = " ".join(str(m.get("content", "")) for m in messages)
+                if not any(q in question for q in questions):
+                    # Anything but the checks gate's own questions finds no
+                    # proxy: the connection closes with no answer, as an
+                    # unreachable host's does.
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
                 context = question.lower()
                 decision = "no" if "missing" in context else "yes"
                 if "status: error" in context or "fail: testgreeting" in context or "exit status 1" in context:
@@ -365,8 +389,8 @@ class TestEnvironment:
                 "DUDE_AGENT_IMAGE": "localhost/lux-fake:test" if self.real_lux else "dude-runtime:test",
                 "DUDE_LAYER_IMAGE": TEST_LAYER,
                 # No real agent credentials in the suite; fake models only,
-                # and memory searched by words. The URL is a host nothing
-                # answers: what a Run's network allows for its model.
+                # and memory searched by words. The URL is the fake
+                # judgement proxy, which answers the checks gate alone.
                 "DUDE_LLM_URL": self.judge_url,
                 "DUDE_LLM_KEY": "",
                 "DUDE_EMBEDDINGS_URL": "off",
