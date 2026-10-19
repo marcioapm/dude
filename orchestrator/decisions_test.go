@@ -53,8 +53,7 @@ func (w *world) talk(task string) string {
 func (w *world) reachGate(task string) {
 	w.t.Helper()
 	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.implemented(task)
 	w.must(task, "start_phase", `{"phase":"simplify"}`)
 	w.finishSimplifierReview(task)
 	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
@@ -319,8 +318,7 @@ func TestAReviewTheConductorStartsIsGivenTheTasksImages(t *testing.T) {
 	w.upload(b, "att_crit", task, "evidence.png", screenshot)
 	w.describe(task, "Make the page look right: ![goal.png](attachment:att_goal)", "Matches ![evidence.png](attachment:att_crit)")
 	conductor := w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.implemented(task)
 	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	var review string
 	w.until("the conductor's reviewer on lux", func() bool {
@@ -654,8 +652,7 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		task := w.task()
 		w.talk(task)
 		setPolicy(w, task, `{"maxReviewIterations":2}`)
-		w.must(task, "start_phase", `{"phase":"implement"}`)
-		w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+		w.implemented(task)
 		w.must(task, "decide", `{"action":"next"}`)
 		w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 		w.must(task, "start_phase", `{"phase":"fix"}`)
@@ -670,8 +667,7 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		task := w.task()
 		w.talk(task)
 		setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-		w.must(task, "start_phase", `{"phase":"implement"}`)
-		w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+		w.implemented(task)
 		w.must(task, "decide", `{"action":"next"}`)
 		w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 		// A is the reviewer's; B another blocking finding of the round.
@@ -754,8 +750,7 @@ func TestDismissAFinding(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
 	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(task) == delivery.PointImplemented })
+	w.implemented(task)
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	var id string

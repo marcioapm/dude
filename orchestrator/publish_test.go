@@ -226,8 +226,7 @@ func TestAPartlyMovedPublishRecordsWhatMoved(t *testing.T) {
 		VALUES ($1, $2, $3, 'write'), ($1, $2, $4, 'write')`, w.org, e.task, w.repoID, "repo_web_"+w.org)
 	e.cond = w.talk(e.task)
 	e.branch = delivery.BranchFor(e.task, 1)
-	w.must(e.task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool { return w.decisionAt(e.task) == delivery.PointImplemented })
+	w.implemented(e.task)
 	e.wokenWith(e.task, "after implement")
 	before := e.gh.SHA(e.branch)
 	mustExec(t, e.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,

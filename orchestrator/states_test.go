@@ -14,6 +14,7 @@ import (
 	"maps"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // reviewing is a new task with an open pull request waiting on people
@@ -399,6 +402,327 @@ func (w *world) prOpen(wi string, at prAt) string {
 		awaiting_signals, task_id) VALUES ($1, $2, $3, $4, 'waiting', 'awaitPullRequest', $5::jsonb, $6::jsonb, $7)`,
 		wfr, w.org, delivery.WorkflowType, "delivery:"+wi, state, signals, wi)
 	return wi
+}
+
+// implemented is a conducted task (talk) whose implementer the conductor
+// started and the scripted agent finished: the delivery parked on the
+// conductor's decision after implement, its wake recorded and not yet sent.
+func (w *world) implemented(task string) {
+	w.t.Helper()
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.ran(task)
+	if at := w.decisionAt(task); at != delivery.PointImplemented {
+		w.t.Fatalf("at %q, want after implement\n%s", at, w.describeRuns())
+	}
+}
+
+// advanced runs the delivery's steps on what is in the database now, as the
+// orchestrator's loops do between agents: finished Runs signalled
+// (phases.NotifyFinished), then every runnable step. No Run is submitted to
+// lux: a phase Run a step creates stays pending for ran.
+func (w *world) advanced() {
+	w.t.Helper()
+	ctx := context.Background()
+	if _, err := phases.NotifyFinished(ctx, w.app, func(ctx context.Context, org, wf, runID, status, key string) error {
+		return w.runtime.Signal(ctx, org, wf, delivery.SignalPhaseFinished, map[string]string{"runId": runID, "status": status}, key)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	for range 10 {
+		n, err := w.runtime.Tick(ctx, 10)
+		if err != nil {
+			w.t.Fatal(err)
+		}
+		if n == 0 {
+			return
+		}
+	}
+}
+
+// ran is a delivery step's phase Runs done by agents: the delivery's next
+// steps run (advanced), each phase Run of task they left pending is finished
+// (finished), and the delivery runs on to its next wait. Returns the Runs
+// finished.
+func (w *world) ran(task string) []string {
+	w.t.Helper()
+	w.advanced()
+	pending := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND status = 'pending'
+		ORDER BY created_at, id`, task)
+	if len(pending) == 0 {
+		w.t.Fatalf("no phase Run pending\n%s", w.describeRuns())
+	}
+	for _, id := range pending {
+		w.finished(id)
+	}
+	w.advanced()
+	return pending
+}
+
+// finished writes what the syncer leaves once pending phase Run runID's
+// agent finished its turn as the fake lux plays it (w.lux.Decide, asked
+// with the Run's labels and checkouts as its spec gives them): its commits
+// pushed to the Run's branch (the task branch, or its own: a candidate's)
+// in the repositories it may write, the Run completed with what it
+// published there (runs.heads), its reply, files and commits in the
+// ledger, a review's or test's findings recorded by phases.RecordFindings,
+// then run.completed. The phase.finished signal is left to NotifyFinished.
+//
+// Left out, as prOpen leaves them: the fake lux never holds the Run (its
+// lux_run_id is one it never issues, retired as RetireCompleted leaves it),
+// the agent's lifecycle and tool events, and the per-Run push branch.
+func (w *world) finished(runID string) {
+	w.t.Helper()
+	ctx := context.Background()
+	var task, phase, own, reviewOf string
+	var bases map[string]string
+	var findingIDs []string
+	if err := w.owner.QueryRow(ctx, `SELECT task_id, phase::text, COALESCE(branch, ''), base_refs, finding_ids,
+		COALESCE(review_range->>'of', '') FROM runs WHERE id = $1 AND status = 'pending'`, runID).
+		Scan(&task, &phase, &own, &bases, &findingIDs, &reviewOf); err != nil {
+		w.t.Fatalf("pending phase Run %s: %v", runID, err)
+	}
+	var repos []delivery.Repository
+	var branch string
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) (err error) {
+		if repos, err = delivery.TaskRepositories(ctx, tx, task); err != nil {
+			return err
+		}
+		tb, err := delivery.TaskBranchTx(ctx, tx, task, 0)
+		branch = tb.Branch
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	if own != "" {
+		branch = own
+	}
+	// Each repository's fake by its URL, as w.lux.RepoFor finds it; what
+	// lux reports is by its spec name (lux.SpecName).
+	servers, specName := map[string]*fakegithub.Server{}, map[string]string{}
+	// Where each checkout starts: the Run's base, else the default branch.
+	starts, specStarts := map[string]string{}, map[string]string{}
+	var names, writable []string
+	var specRepos []any
+	for _, r := range repos {
+		servers[r.Name], specName[r.Name] = w.gh, lux.SpecName(r.Name)
+		if strings.Contains(r.URL, "/web.git") {
+			servers[r.Name] = w.web
+		}
+		names = append(names, specName[r.Name])
+		if r.Access == "write" {
+			writable = append(writable, r.Name)
+		}
+		starts[r.Name] = bases[r.Name]
+		if starts[r.Name] == "" {
+			starts[r.Name] = servers[r.Name].SHA(r.DefaultBranch)
+		}
+		specStarts[specName[r.Name]] = starts[r.Name]
+		specRepos = append(specRepos, map[string]any{"name": specName[r.Name], "url": r.URL, "ref": starts[r.Name],
+			"push": r.Access == "write"})
+	}
+	tier := w.tierOf(phase)
+	labels := map[string]any{"dude.run": runID, "dude.task": task, "dude.phase": phase, "dude.role": delivery.RoleForPhase[phase],
+		"dude.model": tier.Model}
+	if reviewOf != "" {
+		labels["dude.review_range"] = reviewOf
+	}
+	if phase == delivery.PhaseTest {
+		var criteria []string
+		_ = w.owner.QueryRow(ctx, `SELECT acceptance_criteria FROM tasks WHERE id = $1`, task).Scan(&criteria)
+		labels["dude.criteria"] = strconv.Itoa(len(criteria))
+	}
+	step := w.lux.Decide(map[string]any{"labels": labels, "git": map[string]any{"repositories": specRepos}})
+	if step.Hang || step.Crash || step.FailToStart || step.Ask != "" || step.Machine != "" || len(step.CallTools) > 0 {
+		w.t.Fatalf("the %s Run's agent does not just finish its turn: %+v", phase, step)
+	}
+
+	// Its commit, as the fake lux writes it, by repository: "<repo>:<path>"
+	// in that one, "*:<path>" in every writable one, a bare path in the
+	// first writable one.
+	heads := map[string]any{}
+	published := map[string]string{}
+	paths := map[string][]string{}
+	if delivery.Publishes[phase] {
+		files := map[string]map[string]string{}
+		for path, content := range step.Commit {
+			repo, file, ok := strings.Cut(path, ":")
+			targets := []string{repo}
+			switch {
+			case !ok && len(writable) > 0:
+				targets, file = writable[:1], path
+			case repo == "*":
+				targets = writable
+			}
+			for _, name := range targets {
+				if files[name] == nil {
+					files[name] = map[string]string{}
+				}
+				files[name][file] = content
+			}
+		}
+		for _, name := range writable {
+			if len(files[name]) == 0 {
+				continue
+			}
+			sha := w.commitOn(servers[name].Repo, branch, starts[name], step.Message, files[name])
+			published[name] = sha
+			paths[name] = slices.Sorted(maps.Keys(files[name]))
+			heads[name] = map[string]any{"sha": sha, "changedPaths": paths[name], "base": starts[name]}
+		}
+	}
+	var pushBranch, pushRequest, pushResult any
+	if delivery.Publishes[phase] {
+		pushBranch, pushRequest = "dude/"+task+"/run-"+runID, "push-"+runID
+		var results []map[string]any
+		for _, name := range writable {
+			status, commit := "up-to-date", starts[name]
+			if sha, ok := published[name]; ok {
+				status, commit = "pushed", sha
+			}
+			results = append(results, map[string]any{"repo": specName[name], "branch": pushBranch, "commit": commit, "status": status})
+		}
+		raw, _ := json.Marshal(map[string]any{"requestId": pushRequest, "results": results})
+		pushResult = string(raw)
+	}
+	var pushed []string
+	for _, name := range writable {
+		pushed = append(pushed, specName[name])
+	}
+	var runBranch any
+	if len(heads) > 0 {
+		runBranch = branch
+	}
+	headsRaw, _ := json.Marshal(heads)
+	shas, _ := json.Marshal(specStarts)
+	harness := delivery.HarnessOpenCode
+	if fakeagent.Is(tier.Model) {
+		harness = "scripted"
+	}
+
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', base_shas = $2::jsonb, heads = $3::jsonb,
+				branch = COALESCE($4, r.branch), lux_run_id = 'lrun_prepared_' || r.id, lux_state = 'running', lux_stop_reason = 'cancel',
+				lux_pushes = $5, lux_repositories = $6, push_branch = $7, push_request_id = $8, push_result = $9::jsonb,
+				harness = $10, harness_state = jsonb_build_object('sessionId', 'ses_' || r.id), model = $11, model_tier = $12,
+				effort = NULLIF($13, ''), agent_session_epoch = 1, can_run_containers = false, agent_cost_usd = 0.01, context_tokens = 1000, input_tokens = 12,
+				output_tokens = 34, cache_read_tokens = 900, cache_write_tokens = 100,
+				machine = (SELECT jsonb_build_object('name', m.name, 'sizeId', m.id, 'cpus', m.cpus, 'memoryMiB', m.memory_mib,
+					'diskGiB', m.disk_gib, 'pool', NULL, 'poolId', m.pool_id, 'from', 'default')
+					FROM machine_sizes m WHERE m.organization_id = r.organization_id AND m.is_default),
+				started_at = now(), agent_busy_at = now(), agent_active_at = now(), turn_done_at = now(),
+				files_changed_at = CASE WHEN $3::jsonb <> '{}' THEN now() END, ended_at = now()
+			WHERE r.id = $1`,
+			runID, string(shas), string(headsRaw), runBranch, pushed, names, pushBranch, pushRequest, pushResult,
+			harness, tier.Model, tier.Name, tier.Effort); err != nil {
+			return err
+		}
+		ev := func(typ, actorType string, payload map[string]any) error {
+			_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: w.org, ProjectID: w.project, TaskID: task,
+				RunID: runID, ActorType: actorType, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: task, Payload: payload})
+			return err
+		}
+		if step.Reply != "" {
+			if err := ev("agent.message", ledger.ActorAgent, map[string]any{"contextTokens": 1000, "text": step.Reply}); err != nil {
+				return err
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(step.Publish)) {
+			if err := w.publishedArtifact(ctx, tx, task, runID, name, step.Publish[name]); err != nil {
+				return err
+			}
+		}
+		for _, name := range writable {
+			sha, ok := published[name]
+			if !ok {
+				continue
+			}
+			if err := ev(delivery.EvGitCommitCreated, ledger.ActorAgent, map[string]any{"repo": name, "branch": branch,
+				"baseSha": starts[name], "headSha": sha, "changedPaths": paths[name]}); err != nil {
+				return err
+			}
+			// A pull request open on the branch now has this head
+			// (phases.Syncer.publish).
+			if _, err := tx.Exec(ctx, `UPDATE pull_requests p SET head_sha = $3, head_seen_at = now(), checks_pending_since = NULL,
+				checks = CASE WHEN had_ci THEN 'pending' ELSE 'unknown' END::check_state, updated_at = now()
+				FROM repositories r WHERE r.id = p.repository_id AND p.task_id = $1 AND r.name = $2 AND p.head_branch = $4
+				AND p.state IN ('open', 'draft') AND p.head_sha IS DISTINCT FROM $3`, task, name, sha, branch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	if phase == delivery.PhaseReview || phase == delivery.PhaseTest {
+		verdicts := map[string]bool{}
+		for i, fixed := range delivery.ParseVerdicts(step.Reply) {
+			if i < len(findingIDs) {
+				verdicts[findingIDs[i]] = fixed
+			}
+		}
+		if err := phases.RecordFindings(ctx, w.app, w.org, runID, delivery.ParseFindings(step.Reply), verdicts); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: w.org, ProjectID: w.project, TaskID: task,
+			RunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: task,
+			Payload: map[string]any{"status": "completed"}})
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// commitOn commits files over from as the agent (fakelux.commit) and points
+// branch at it; returns the commit.
+func (w *world) commitOn(repo, branch, from, message string, files map[string]string) string {
+	w.t.Helper()
+	if message == "" {
+		message = "agent work"
+	}
+	var stream strings.Builder
+	now := time.Now().Unix()
+	fmt.Fprintf(&stream, "commit refs/heads/%s\nauthor agent <a@x> %d +0000\ncommitter agent <a@x> %d +0000\n", branch, now, now)
+	fmt.Fprintf(&stream, "data %d\n%s\nfrom %s\n", len(message), message, from)
+	for _, path := range slices.Sorted(maps.Keys(files)) {
+		content := files[path]
+		fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+	}
+	importer := exec.Command("git", "-C", repo, "fast-import", "--quiet", "--force")
+	importer.Stdin = strings.NewReader(stream.String())
+	if out, err := importer.CombinedOutput(); err != nil {
+		w.t.Fatalf("git fast-import: %v\n%s", err, out)
+	}
+	sha, err := exec.Command("git", "-C", repo, "rev-parse", "refs/heads/"+branch).Output()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return strings.TrimSpace(string(sha))
+}
+
+// tierOf is the tier phase's Runs run on, as the syncer resolves it.
+func (w *world) tierOf(phase string) delivery.Tier {
+	w.t.Helper()
+	ctx := context.Background()
+	var tier delivery.Tier
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		var projectModels, orgModels json.RawMessage
+		if err := tx.QueryRow(ctx, `SELECT p.agent_models, o.default_agent_models FROM projects p
+			JOIN organizations o ON o.id = p.organization_id WHERE p.id = $1`, w.project).Scan(&projectModels, &orgModels); err != nil {
+			return err
+		}
+		role := delivery.PromptRoleFor(phase, delivery.RoleForPhase[phase])
+		t, noTier, err := delivery.TierFor(ctx, tx, role, delivery.ResolveRole(role, projectModels, orgModels))
+		if err != nil || noTier != "" {
+			return fmt.Errorf("%s's tier: %v %s", phase, err, noTier)
+		}
+		tier = t
+		return nil
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return tier
 }
 
 // tierModel is the model role's Runs request, as the syncer resolves it.

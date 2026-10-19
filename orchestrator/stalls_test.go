@@ -114,11 +114,7 @@ func (w *world) stallOf(runID string) (stall map[string]any, text string) {
 func (w *world) conductedReview(task string) {
 	w.t.Helper()
 	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	w.until("after implement", func() bool {
-		return w.decisionAt(task) != "" && w.phaseRuns(task, "implement") == 1 &&
-			w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, task) == 1
-	})
+	w.implemented(task)
 	w.must(task, "start_phase", `{"phase":"review"}`)
 }
 
