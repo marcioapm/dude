@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -116,6 +119,50 @@ func TestTheChecksContextIsBoundedKeepingTheLatestCalls(t *testing.T) {
 	}
 	if strings.Contains(text, `"command":"step `+records[0]["data"].(map[string]any)["toolCallId"].(string)+`"`) {
 		t.Errorf("the first call was kept over the bound")
+	}
+}
+
+// A Run of more calls than the bound shows its newest whole calls, in
+// order, and counts exactly the earlier ones it left out.
+func TestTheChecksContextKeepsTheNewestCallsAndCountsTheRest(t *testing.T) {
+	const n = 200
+	w := newHarnessWorld(t)
+	var records []map[string]any
+	for i := range n {
+		id := fmt.Sprintf("call%03d", i)
+		records = append(records,
+			map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": "bash",
+				"kind": "execute", "status": "in_progress", "rawInput": map[string]any{"command": "step " + id}}},
+			map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id,
+				"status": "completed", "rawOutput": map[string]any{"output": strings.Repeat("ok\n", 300), "metadata": map[string]any{"exit": 0}}}})
+	}
+	w.feed(records...)
+	text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "pass"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`\n\((\d+) earlier calls left out for length`).FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("no omission count:\n%s", clip(text))
+	}
+	omitted, _ := strconv.Atoi(m[1])
+	var shown []int
+	for _, m := range regexp.MustCompile(`"command":"step call(\d{3})"`).FindAllStringSubmatch(text, -1) {
+		i, _ := strconv.Atoi(m[1])
+		shown = append(shown, i)
+	}
+	if len(shown) == 0 || omitted == 0 || omitted+len(shown) != n {
+		t.Fatalf("%d shown, %d said left out, of %d", len(shown), omitted, n)
+	}
+	for k, i := range shown {
+		if i != omitted+k {
+			t.Fatalf("call %d at position %d: want the newest %d in order", i, k, len(shown))
+		}
+	}
+	// The calls fill the bound: one more would not have fit.
+	_, calls, _ := strings.Cut(text, "for length; do not assume what they showed.)\n")
+	if per := len(calls) / len(shown); len(calls)+per <= checksCallsMax {
+		t.Fatalf("%d bytes of calls shown, room for another of %d under %d", len(calls), per, checksCallsMax)
 	}
 }
 

@@ -242,8 +242,10 @@ type checksStream struct {
 func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []delivery.Check) (string, error) {
 	report, _ := json.Marshal(checks)
 	var notes string
+	// Changes and calls are read only up to what their caps can show.
 	var changes strings.Builder
-	var calls []checksCall
+	var shown []string
+	var total int
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var p, o []byte
 		if err := tx.QueryRow(ctx, `SELECT p.agent_models, o.default_agent_models FROM projects p
@@ -251,12 +253,15 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 			return err
 		}
 		notes = delivery.ResolveRole(delivery.PromptRoleFor(r.Phase, r.Role), p, o).Context
+		// A row renders to at least checksChangeMinRow bytes, so this many
+		// rows exceed checksChangesMax whenever all of them would.
 		rows, err := tx.Query(ctx, `SELECT COALESCE(f->>'path', ''), COALESCE(f->>'additions', '?'), COALESCE(f->>'deletions', '?')
-			FROM run_diffs d CROSS JOIN LATERAL jsonb_array_elements(d.files) f WHERE d.run_id = $1`, r.ID)
+			FROM run_diffs d CROSS JOIN LATERAL jsonb_array_elements(d.files) f WHERE d.run_id = $1 LIMIT $2`,
+			r.ID, checksChangesMax/checksChangeMinRow+1)
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
+		for rows.Next() && changes.Len() <= checksChangesMax {
 			var path, added, removed string
 			if err := rows.Scan(&path, &added, &removed); err != nil {
 				rows.Close()
@@ -268,55 +273,92 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		calls, err = recordedCalls(ctx, tx, r.ID)
+		shown, total, err = newestCalls(ctx, tx, r.ID)
 		return err
 	})
 	if err != nil {
 		return "", err
 	}
-	// Newest first, whole calls, up to the bound; then back in order.
-	var shown []string
-	size := 0
-	for i := len(calls) - 1; i >= 0; i-- {
-		text := checksCallText.Render(calls[i])
-		if size+len(text) > checksCallsMax && len(shown) > 0 {
-			break
-		}
-		shown = append(shown, text)
-		size += len(text)
-	}
-	slices.Reverse(shown)
 	return checksContextText.Render(struct {
 		Report, Notes, Changes string
 		Calls                  []string
 		Omitted                int
 	}{boundHead(string(report), checksReportMax), boundHead(notes, checksNotesMax), boundHead(changes.String(), checksChangesMax),
-		shown, len(calls) - len(shown)}), nil
+		shown, total - len(shown)}), nil
 }
 
-// recordedCalls are the Run's own tool calls, each with its completion,
-// in the order they were made.
-func recordedCalls(ctx context.Context, tx pgx.Tx, runID string) ([]checksCall, error) {
-	rows, err := tx.Query(ctx, `SELECT event_type, payload FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor`,
-		runID, evToolCalled, evToolCompleted)
+// checksChangeMinRow is the length of the shortest rendered change row,
+// " +? -?\n"; checksCallsPage is how many calls newestCalls reads at once.
+const (
+	checksChangeMinRow = 7
+	checksCallsPage    = 32
+)
+
+// newestCalls renders the Run's newest whole calls up to checksCallsMax,
+// in the order they were made, reading checksCallsPage calls at a time
+// newest first, and counts every call the Run recorded.
+func newestCalls(ctx context.Context, tx pgx.Tx, runID string) (shown []string, total int, err error) {
+	if err := tx.QueryRow(ctx, `SELECT count(DISTINCT `+checksCallKey+`) FROM events WHERE run_id = $1 AND event_type IN ($2, $3)`,
+		runID, evToolCalled, evToolCompleted).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	size := 0
+	before := int64(-1)
+	for len(shown) < total {
+		calls, first, err := recordedCalls(ctx, tx, runID, before)
+		if err != nil || len(calls) == 0 {
+			return nil, 0, err
+		}
+		for _, c := range calls {
+			text := checksCallText.Render(c)
+			if size+len(text) > checksCallsMax && len(shown) > 0 {
+				slices.Reverse(shown)
+				return shown, total, nil
+			}
+			shown = append(shown, text)
+			size += len(text)
+		}
+		before = first
+	}
+	slices.Reverse(shown)
+	return shown, total, nil
+}
+
+// checksCallKey (SQL, over events) is the call a tool event belongs to:
+// its string callId, else "".
+const checksCallKey = `CASE WHEN jsonb_typeof(payload->'callId') = 'string' THEN payload->>'callId' ELSE '' END`
+
+// recordedCalls are up to checksCallsPage of the Run's tool calls, each
+// with its completion, newest first by their first event, made before the
+// one whose first event is at cursor before (-1: from the newest); first
+// is the oldest returned call's first cursor.
+func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, before int64) (calls []checksCall, first int64, err error) {
+	rows, err := tx.Query(ctx, `WITH c AS (
+			SELECT `+checksCallKey+` AS id, min(cursor) AS first FROM events
+			WHERE run_id = $1 AND event_type IN ($2, $3) GROUP BY 1),
+		page AS (SELECT id, first FROM c WHERE $4 < 0 OR first < $4 ORDER BY first DESC LIMIT $5)
+		SELECT page.first, e.event_type, e.payload FROM page
+		JOIN events e ON e.run_id = $1 AND e.event_type IN ($2, $3) AND `+strings.ReplaceAll(checksCallKey, "payload", "e.payload")+` = page.id
+		ORDER BY page.first DESC, e.cursor`,
+		runID, evToolCalled, evToolCompleted, before, checksCallsPage)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	var calls []checksCall
-	byID := map[string]int{}
+	byFirst := map[int64]int{}
 	for rows.Next() {
 		var typ string
 		var p map[string]any
-		if err := rows.Scan(&typ, &p); err != nil {
-			return nil, err
+		var at int64
+		if err := rows.Scan(&at, &typ, &p); err != nil {
+			return nil, 0, err
 		}
-		id, _ := p["callId"].(string)
-		i, seen := byID[id]
+		i, seen := byFirst[at]
 		if !seen {
 			calls = append(calls, checksCall{})
 			i = len(calls) - 1
-			byID[id] = i
+			byFirst[at] = i
+			first = at
 		}
 		c := &calls[i]
 		if tool, _ := p["tool"].(string); tool != "" && (c.Tool == "" || typ == evToolCalled) {
@@ -347,7 +389,7 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string) ([]checksCall, 
 			c.Streams = append(c.Streams, st)
 		}
 	}
-	return calls, rows.Err()
+	return calls, first, rows.Err()
 }
 
 // boundHead is s up to n bytes, saying so when it was cut.
