@@ -16,8 +16,9 @@ from playwright.sync_api import Page, expect
 
 from helpers import ApiClient, query, sign_in, toast, wait_until
 
-# The suite's orchestrator's model (env.py DUDE_LLM_URL): always reachable.
-LLM_HOST = "llm.dude.test"
+# The suite's orchestrator's model (env.py DUDE_LLM_URL, the scripted
+# judgement proxy): always reachable.
+LLM_HOST = "localhost"
 
 
 def _implementer_on(client: ApiClient, project: dict, model: str) -> None:

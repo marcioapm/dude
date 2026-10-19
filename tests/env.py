@@ -371,7 +371,9 @@ class TestEnvironment:
         self.judge_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.judge_thread = threading.Thread(target=self.judge_server.serve_forever, daemon=True)
         self.judge_thread.start()
-        self.judge_url = f"http://127.0.0.1:{self.judge_server.server_port}/v1"
+        # By name, not 127.0.0.1: a Run's network always lists the model's
+        # host, and test_network.py checks that rule by that name.
+        self.judge_url = f"http://localhost:{self.judge_server.server_port}/v1"
 
     def _start_orchestrator(self) -> None:
         self._start_judge()
