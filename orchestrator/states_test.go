@@ -467,6 +467,29 @@ func (w *world) ran(task string) []string {
 	return pending
 }
 
+// agentsDone runs task's delivery on, reading its pull requests from GitHub
+// before each pass (sync) and finishing each phase Run it starts as its
+// agent would (finished), until cond holds. What the delivery does with
+// GitHub — the pull request fix's candidate, its promotion, the refresh —
+// is the delivery's own code against the fake GitHub, and a step waiting
+// GitHub out (forgeWait) is waited for, as until does.
+func (w *world) agentsDone(task, what string, cond func() bool) {
+	w.t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(untilPoll) {
+		w.sync()
+		w.advanced()
+		for _, id := range w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IS NOT NULL AND status = 'pending'
+			ORDER BY created_at, id`, task) {
+			w.finished(id)
+		}
+		w.advanced()
+		if cond() {
+			return
+		}
+	}
+	w.t.Fatalf("never settled on %s\nruns:\n%s", what, w.describeRuns())
+}
+
 // finished writes what the syncer leaves once pending phase Run runID's
 // agent finished its turn as the fake lux plays it (w.lux.Decide, asked
 // with the Run's labels and checkouts as its spec gives them): its commits
@@ -477,7 +500,8 @@ func (w *world) ran(task string) []string {
 // then run.completed. The phase.finished signal is left to NotifyFinished.
 //
 // Left out, as prOpen leaves them: the fake lux never holds the Run (its
-// lux_run_id is one it never issues, retired as RetireCompleted leaves it),
+// lux_run_id is one it never issues, retired as RetireCompleted leaves it,
+// its exit collected),
 // the agent's lifecycle and tool events, and the per-Run push branch.
 func (w *world) finished(runID string) {
 	w.t.Helper()
@@ -573,6 +597,11 @@ func (w *world) finished(runID string) {
 			if len(files[name]) == 0 {
 				continue
 			}
+			// A branch moved under the Run is the syncer's merge or refusal
+			// (advance.Branch): such a Run is driven on the real path.
+			if at := servers[name].SHA(branch); at != "" && at != starts[name] {
+				w.t.Fatalf("%s moved under the %s Run in %s: at %.8s, the Run started at %.8s", branch, phase, name, at, starts[name])
+			}
 			sha := w.commitOn(servers[name].Repo, branch, starts[name], step.Message, files[name])
 			published[name] = sha
 			paths[name] = slices.Sorted(maps.Keys(files[name]))
@@ -609,6 +638,12 @@ func (w *world) finished(runID string) {
 	}
 
 	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		// Feedback a fixer resolved with a commit is weighed against GitHub's
+		// compare as it completes (phases.Syncer.resolutionsHeld): driven on
+		// the real path.
+		if pending, err := delivery.PendingResolutionsTx(ctx, tx, runID); err != nil || len(pending) > 0 {
+			return fmt.Errorf("the Run resolved feedback with a commit (%d), or: %v", len(pending), err)
+		}
 		if _, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', base_shas = $2::jsonb, heads = $3::jsonb,
 				branch = COALESCE($4, r.branch), lux_run_id = 'lrun_prepared_' || r.id, lux_state = 'running', lux_stop_reason = 'cancel',
 				lux_pushes = $5, lux_repositories = $6, push_branch = $7, push_request_id = $8, push_result = $9::jsonb,
@@ -619,10 +654,19 @@ func (w *world) finished(runID string) {
 					'diskGiB', m.disk_gib, 'pool', NULL, 'poolId', m.pool_id, 'from', 'default')
 					FROM machine_sizes m WHERE m.organization_id = r.organization_id AND m.is_default),
 				started_at = now(), agent_busy_at = now(), agent_active_at = now(), turn_done_at = now(),
-				files_changed_at = CASE WHEN $3::jsonb <> '{}' THEN now() END, ended_at = now()
+				files_changed_at = now(), ended_at = now()
 			WHERE r.id = $1`,
 			runID, string(shas), string(headsRaw), runBranch, pushed, names, pushBranch, pushRequest, pushResult,
 			harness, tier.Model, tier.Name, tier.Effort); err != nil {
+			return err
+		}
+		// Its exit collected (phases.Artifacts.Sweep): the status change
+		// above made it due (runs_artifacts_due).
+		if _, err := tx.Exec(ctx, `UPDATE runs SET artifacts_due_at = NULL, artifacts_next_at = NULL WHERE id = $1`, runID); err != nil {
+			return err
+		}
+		if err := delivery.FailUnreadTx(ctx, tx, delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: runID},
+			time.Now(), phases.UnreadRunFinished); err != nil {
 			return err
 		}
 		ev := func(typ, actorType string, payload map[string]any) error {

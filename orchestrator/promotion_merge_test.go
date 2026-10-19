@@ -95,7 +95,7 @@ func TestAPromotionAdmissibleInOneRepositoryButNotTheOtherMovesNeither(t *testin
 		theirs = w.web.CommitFiles(w.branch, "A person's own fix", map[string]string{"PERSON.md": "mine\n"})
 	}
 	w.comment("Please rename the greeting.")
-	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}
@@ -179,7 +179,7 @@ func TestAPromotionsMergeOntoAPersonsCommitIsNotAdopted(t *testing.T) {
 		x = w.gh.MergeInto(w.branch, "main", nil)
 	}
 	w.comment("Please rename the greeting.")
-	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}
@@ -264,8 +264,7 @@ func TestAPromotionsMergeWhoseAnswerWasLostIsAdoptedOnRetry(t *testing.T) {
 // delivery to stop for a person.
 func (w *prFixWorld) untilPromoted() {
 	w.t.Helper()
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
 		s := w.taskStatus(w.wi)
 		return s == "awaiting_input" || s == "review" && w.state("candidate") == "" && w.gh.SHA(w.branch) != w.before
 	})
@@ -276,7 +275,7 @@ func (w *prFixWorld) untilPromoted() {
 func (w *prFixWorld) refusedOver(found *string) {
 	w.t.Helper()
 	w.comment("Please rename the greeting.")
-	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		w.t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}

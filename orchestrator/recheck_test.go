@@ -441,8 +441,7 @@ func TestAFindingThePullRequestOpenedWithIsNeverSentToItsCandidatesFix(t *testin
 		FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range IS NULL ORDER BY created_at LIMIT 1`, w.wi)
 	w.play = findingOnTheCandidatesSimplification
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
 	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "fix", "review", "test"}) {
@@ -479,8 +478,7 @@ func TestAPullRequestFixThatFailsItsTestIsFixedOnTheCandidateAndCountsOnce(t *te
 		}
 	}
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
 	if shown := w.shownBeforeTheGate(); len(shown) > 0 || atFailure != w.before {
@@ -516,7 +514,7 @@ func TestAPullRequestFixThatFailsItsTestIsFixedOnTheCandidateAndCountsOnce(t *te
 	}
 	// A second comment in the same review round is past the one fix.
 	w.gh.Comment(1, "alice", "And the farewell.")
-	w.until("escalated", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "escalated", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != "pr_loop_exhausted" {
 		t.Errorf("escalated %q", r)
 	}
@@ -530,7 +528,7 @@ func TestAPushWhileAFixIsCheckedIsNeverOverwritten(t *testing.T) {
 	w.onTest = func() { theirs = w.gh.CommitOnTop(w.branch, "A person's own fix") }
 	bodyBefore := w.gh.Pull(1).Body
 	w.comment("Please rename the greeting.")
-	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonPullRequestMoved, w.describeRuns())
 	}
@@ -557,8 +555,7 @@ func TestAPushWhileAFixIsCheckedIsNeverOverwritten(t *testing.T) {
 	if code, body := w.decide(owner, w.wi, "retry", ""); code != 200 {
 		t.Fatalf("retry: %d %v", code, body)
 	}
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
 		return w.gh.SHA(w.branch) != theirs && w.taskStatus(w.wi) == "review"
 	})
 	if log := w.gh.Log(w.branch); !slices.Contains(log, "A person's own fix") {
@@ -578,7 +575,7 @@ func TestABlockedTestOfAPullRequestFixIsWaivedAndMoved(t *testing.T) {
 	w := newPRFixWorld(t, fakeagent.TestBlockedModel)
 	owner, _, _ := w.people(w.wi)
 	w.comment("Please rename the greeting.")
-	w.until("the gate to stop", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "the gate to stop", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonTestBlocked {
 		t.Fatalf("escalated %q", r)
 	}
@@ -588,8 +585,7 @@ func TestABlockedTestOfAPullRequestFixIsWaivedAndMoved(t *testing.T) {
 	if code, body := w.decide(owner, w.wi, delivery.ActionWaive, "Checked by hand on staging."); code != 200 {
 		t.Fatalf("waive: %d %v", code, body)
 	}
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
 	head := w.gh.SHA(w.branch)
@@ -756,8 +752,7 @@ func TestAPullRequestFixWithSimplifyOffIsReviewedAndTestedAlone(t *testing.T) {
 	w := newPRFixWorld(t)
 	setPolicy(w.world, w.wi, `{"simplify":false}`)
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
 	if shown := w.shownBeforeTheGate(); len(shown) > 0 {
@@ -780,7 +775,7 @@ func TestAPushToOnePullRequestMovesNeitherOfTwo(t *testing.T) {
 	var theirs string
 	w.onTest = func() { theirs = w.web.CommitOnTop(w.branch, "A person's own fix") }
 	w.comment("Please rename the greeting.")
-	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}
@@ -925,8 +920,7 @@ func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
 		}
 	}
 	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull requests", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull requests", func() bool {
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
 	if !slices.Equal(w.phases, []string{"fix", "review", "fix", "review", "fix", "review", "simplify", "review", "test"}) {
@@ -1064,7 +1058,7 @@ func TestAPushBeforeTheRefPatchEscalatesWithThePersonsHead(t *testing.T) {
 		}
 	})
 	w.comment("Please rename the greeting.")
-	w.until("a person asked", func() bool { w.sync(); return w.taskStatus(w.wi) == "awaiting_input" })
+	w.agentsDone(w.wi, "a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
 	person, _ := theirs.Load().(string)
 	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
@@ -1108,8 +1102,7 @@ func TestADeletionBeforeTheRefPatchKeepsTheCheckedCandidate(t *testing.T) {
 				}
 			})
 			w.comment("Please rename the greeting.")
-			w.until("promotion settled", func() bool {
-				w.sync()
+			w.agentsDone(w.wi, "promotion settled", func() bool {
 				return raced.Load() && (w.taskStatus(w.wi) == "awaiting_input" || len(w.gh.Pulls()) > 1)
 			})
 			if at := w.gh.SHA(w.branch); at != "" {
@@ -1164,12 +1157,11 @@ func TestARateLimitedPromotionWaitsAndMoves(t *testing.T) {
 			w.wi).Scan(&attempt, &waiting)
 		return attempt > 0 || waiting
 	}
-	w.until("the rate limit", func() bool { w.sync(); return limited.Load() >= 1 && settled() })
+	w.agentsDone(w.wi, "the rate limit", func() bool { return limited.Load() >= 1 && settled() })
 	if attempt != 0 || !waiting {
 		t.Errorf("after a rate limit: attempt %d, waiting %v; want a wait, not a failure", attempt, waiting)
 	}
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
+	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
 		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
 	})
 }
