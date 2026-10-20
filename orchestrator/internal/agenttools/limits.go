@@ -141,15 +141,14 @@ func readLimits(ctx context.Context, tx pgx.Tx, c Caller, _ limitsIn) (limitsOut
 	}
 	out.Reruns = map[string]any{
 		"perHead": heads, "perHeadNote": limitsText("rerun-head", nil),
-		"thisRun": limitOut{Source: limitsText("dude", nil), Limit: rerunsPerRun, Used: reruns, Remaining: max(0, rerunsPerRun-reruns)},
+		"thisRun": dudeLimit(rerunsPerRun, reruns),
 	}
 
 	reads, err := githubReadsThisHour(ctx, tx, c)
 	if err != nil {
 		return out, err
 	}
-	out.GitHubReads = limitOut{Source: limitsText("dude", nil), Limit: githubReadsPerHour, Used: reads,
-		Remaining: max(0, githubReadsPerHour-reads)}
+	out.GitHubReads = dudeLimit(githubReadsPerHour, reads)
 
 	out.Publish = map[string]any{"source": policy, "linesPerPublish": l.PublishLines, "filesPerPublish": l.PublishFiles}
 
@@ -157,9 +156,13 @@ func readLimits(ctx context.Context, tx pgx.Tx, c Caller, _ limitsIn) (limitsOut
 	if err != nil {
 		return out, err
 	}
-	out.MachineMoves = limitOut{Source: limitsText("dude", nil), Limit: machineMovesPerRun, Used: moves,
-		Remaining: max(0, machineMovesPerRun-moves)}
+	out.MachineMoves = dudeLimit(machineMovesPerRun, moves)
 	return out, nil
+}
+
+// dudeLimit is one of dude's own bounds, limit, with used spent of it.
+func dudeLimit(limit, used int) limitOut {
+	return limitOut{Source: limitsText("dude", nil), Limit: limit, Used: used, Remaining: max(0, limit-used)}
 }
 
 // limitsText renders results/limits.md's text name.
