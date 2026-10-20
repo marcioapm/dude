@@ -53,13 +53,16 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 	}
 	// Each repository of the project: linked, held by this Run's lux Run,
 	// its newest failed clone on the session, if any, and whether a member
-	// linked the project since, choosing its repositories again. The
-	// session's events are read once for each, not once per repository.
+	// unlinked the project since. A failed clone leaves its project linked,
+	// and every session.linked records the session's whole set, so only a
+	// set without the project is the member deciding on it: linking it again
+	// after that chooses its repositories anew. The session's events are
+	// read once for each, not once per repository.
 	rows, err := tx.Query(ctx, `WITH f AS (SELECT DISTINCT ON (e.payload->>'name') e.payload->>'name' AS name, e.occurred_at, e.payload
 			FROM events e WHERE e.session_id = $2 AND e.event_type = 'repository.clone_failed' AND e.payload->>'key' = $3
 			ORDER BY e.payload->>'name', e.occurred_at DESC),
 		l AS (SELECT max(e.occurred_at) AS at FROM events e WHERE e.session_id = $2 AND e.event_type = 'session.linked'
-			AND e.payload->'projects' @> jsonb_build_array(jsonb_build_object('projectId', $1::text)))
+			AND NOT e.payload->'projects' @> jsonb_build_array(jsonb_build_object('projectId', $1::text)))
 		SELECT repo.id, repo.name,
 			EXISTS (SELECT 1 FROM session_repositories sr WHERE sr.session_id = $2 AND sr.repository_id = repo.id),
 			lux_name($3 || '-' || repo.name) = ANY (r.lux_repositories),
@@ -102,7 +105,7 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 			line.Status = "pending"
 			names.Pending = append(names.Pending, p.Key+"/"+r.Name)
 		// A held, unlinked repository is one a member unlinked, and a failure
-		// followed by a link of its project was decided on by the member:
+		// followed by an unlink of its project was decided on by the member:
 		// either stays unlinked.
 		case r.FailedAt != nil && !r.Held && !r.Relinked:
 			line.Status = "requested"

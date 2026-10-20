@@ -419,6 +419,31 @@ func TestRefreshCheckoutKeepsAMembersUnlinkOfAHeldRepository(t *testing.T) {
 	}
 }
 
+// A member saving the session's links while the failed project stays
+// linked, as the Link dialog and a filed link_project do with the whole set,
+// has decided nothing about its failed repository: refresh_checkout still
+// asks for it again.
+func TestRefreshCheckoutAsksAgainAfterALinkThatKeepsTheProject(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWebAndFail(id, run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{}}}})
+	s.runningIdle(run)
+
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	repos := out["repositories"].([]any)
+	if len(repos) != 1 || repos[0].(map[string]any)["status"] != "requested" {
+		t.Errorf("repositories: %v", repos)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 1 {
+		t.Errorf("%d session.checkout.requested", n)
+	}
+}
+
 // A clone failure the owner has decided on since, by linking its project
 // again, is not asked for again: unlinked, then linked again with only api,
 // WC's web stays unlinked whatever refresh_checkout is asked.
