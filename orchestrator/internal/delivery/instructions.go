@@ -125,15 +125,19 @@ func joinList(items []string, sep, last string) string {
 	return strings.Join(items[:len(items)-1], sep) + last + items[len(items)-1]
 }
 
+// toolRoleOf is the role a Run calls its tools as: a fixer is the
+// implementer's Run, told something else.
+func toolRoleOf(role string) string {
+	if role == "fixer" {
+		return "implementer"
+	}
+	return role
+}
+
 func (in InstructionsInput) data(role string) instructionData {
 	grants := in.Grants
 	if grants == nil {
-		// A fixer is the implementer's Run, told something else.
-		toolRole := role
-		if role == "fixer" {
-			toolRole = "implementer"
-		}
-		g := capabilities.Default(toolRole)
+		g := capabilities.Default(toolRoleOf(role))
 		grants = &g
 	}
 	// dude's tools with none of them granted are none: the file says so.

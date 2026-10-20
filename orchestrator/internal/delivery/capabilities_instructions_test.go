@@ -228,13 +228,6 @@ func TestARunWithToolsButNoGrantsIsToldItHasNone(t *testing.T) {
 	}
 }
 
-func toolRoleOf(role string) string {
-	if role == "fixer" {
-		return "implementer"
-	}
-	return role
-}
-
 func capabilityUnlocking(tool string) capabilities.Key {
 	for _, c := range capabilities.All {
 		if slices.Contains(c.Tools, tool) {
