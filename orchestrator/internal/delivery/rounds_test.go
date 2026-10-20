@@ -2,6 +2,7 @@ package delivery_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -123,6 +124,32 @@ func TestARestartOfAContinuedRoundIsFresh(t *testing.T) {
 				t.Errorf("the restarted Run continues|range %q, want a fresh Run", got)
 			}
 		})
+	}
+}
+
+func TestRoundReplacementWaitsForCreatingStep(t *testing.T) {
+	w := newRoundWorld(t)
+	wf := w.delivery(t, "review", "policy", `[]`)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, category, continues_run_id, continues_how) VALUES ('run_creating', $1, $2, $3, 1, 'paused', 'review', 'reviewer', 'correctness', $4, 'resume')`, w.org, w.project, w.task, w.first)
+	w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload) VALUES ('ev_busy', $1, 'agent.message', $2, $3, 'agent', $2, 'test', '{"text":"Previous review"}')`, w.org, w.first, w.task)
+	for _, status := range []string{"running", "waiting"} {
+		w.exec(t, `UPDATE workflow_runs SET status = $2::workflow_run_status WHERE id = $1`, wf, status)
+		err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			_, err := delivery.RestartRunTx(context.Background(), tx, w.org, w.task, delivery.Restart{RunID: "run_creating", ByDude: true, Replays: w.first, Actor: delivery.Writer{ActorType: "system", ActorID: "dude"}})
+			return err
+		})
+		if !errors.Is(err, delivery.ErrStepRunning) {
+			t.Fatalf("creating step %s returned %v, want busy", status, err)
+		}
+	}
+	w.exec(t, `UPDATE workflow_runs SET step = 'awaitReview', state = jsonb_set(state, '{pendingRunIds}', '["run_creating"]') WHERE id = $1`, wf)
+	var fresh string
+	w.in(t, func(tx pgx.Tx) (err error) {
+		fresh, err = delivery.RestartRunTx(context.Background(), tx, w.org, w.task, delivery.Restart{RunID: "run_creating", ByDude: true, Replays: w.first, Actor: delivery.Writer{ActorType: "system", ActorID: "dude"}})
+		return err
+	})
+	if got := w.str(t, `SELECT continues_how FROM runs WHERE id = $1`, fresh); got != "replay" {
+		t.Fatalf("replacement = %s", got)
 	}
 }
 

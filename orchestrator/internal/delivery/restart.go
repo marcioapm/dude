@@ -76,6 +76,9 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 		return "", refusef(rNotPhaseRunOnlyPhaseRun, in.RunID)
 	case !slices.Contains([]string{"pending", "scheduled", "starting", "running", "paused"}, status):
 		return "", refusef(rHasEndedThereNothingRestart, in.RunID, status)
+	case d != nil && d.Live() && in.Replays != "" && (d.Step == phase || d.Status != "waiting" && slices.Contains(d.State.PendingRunIDs, in.RunID)):
+		// Fan-out can commit a Run before the creating step parks on its IDs.
+		return "", ErrStepRunning
 	case d == nil || !d.Live() || !slices.Contains(d.State.PendingRunIDs, in.RunID):
 		return "", refusef(rNotRunDeliveryWaitsOnOnly, in.RunID)
 	case d.Status != "waiting":
