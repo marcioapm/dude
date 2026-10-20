@@ -733,11 +733,12 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) f
 			}
 		}
 	case "link_project":
+		key := strings.ToUpper(strings.TrimSpace(item.Project))
 		// Linked since it was proposed: nothing left to do, by anyone.
-		if f.projects[strings.ToUpper(strings.TrimSpace(item.Project))] {
+		if f.projects[key] {
 			return fileBlock{why: fmt.Sprintf("project %s is linked already", item.Project), by: "linked"}
 		}
-		if f.orgProjects[strings.ToUpper(strings.TrimSpace(item.Project))] == "" {
+		if f.orgProjects[key] == "" {
 			return fileBlock{why: fmt.Sprintf("no project %s in this organisation", item.Project), by: "unknown"}
 		}
 		// setLinks would refuse the whole filing; only this item is refused.
@@ -952,10 +953,10 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				return err
 			}
 			done[n], made[n] = true, taskID
-			linkedOne = linkedOne || item.Kind == "link_project"
 			if item.Kind == "link_project" {
 				// Counted for the card's next link_project's limit.
 				facts.projects[key] = true
+				linkedOne = true
 			}
 			if item.Kind == "task" {
 				k, err := fileItemRelations(r.Context(), tx, org, proposalRunID, linked, items, n, made, p.Person)
