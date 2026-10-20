@@ -7,12 +7,16 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 type ChildParentKind string
 
-const ChildParentTaskConductor ChildParentKind = "task_conductor"
+const (
+	ChildParentTaskConductor ChildParentKind = "task_conductor"
+	ChildParentSession       ChildParentKind = "session"
+)
 
 type ChildParent struct {
 	Kind ChildParentKind
@@ -67,8 +71,14 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 	if err != nil {
 		return "", err
 	}
-	if in.Parent.Kind != ChildParentTaskConductor || in.Key == "" {
+	if in.Key == "" {
 		return "", refuseText(rChildParentKeyRequired)
+	}
+	if in.Parent.Kind == ChildParentSession {
+		return startSessionChildTx(ctx, tx, in, phase, betweenLocks)
+	}
+	if in.Parent.Kind != ChildParentTaskConductor {
+		return "", refuseText(rChildParentUnauthorized)
 	}
 	if in.Capabilities.PublishCode != Publishes[phase] {
 		return "", refuseText(rChildCapabilitiesMismatch)
@@ -155,6 +165,83 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 			child_prompt = $4, child_capabilities = $5::jsonb WHERE id = $1`,
 		id, string(in.Parent.Kind), in.Profile, db.Nullable(in.Prompt), capabilities); err != nil {
 		return "", err
+	}
+	ev := ref.Event("run.child_started", ledger.ActorAgent, map[string]any{
+		"parentRunId": ref.RunID, "profile": in.Profile, "sourceKind": string(in.Parent.Kind),
+	})
+	ev.RunID = id
+	_, err = ledger.Append(ctx, tx, ev)
+	return id, err
+}
+
+func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenProbe func()) (string, error) {
+	if in.Profile != "investigator" || in.Capabilities.PublishCode {
+		return "", refuseText(rChildSessionProfile)
+	}
+	ref := in.Parent.Run
+	if err := LockSession(ctx, tx, ref.SessionID); err != nil {
+		return "", err
+	}
+	var parent string
+	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.id=$1
+		AND r.organization_id=$2 AND r.session_id=$3 AND r.role='brainstorm' AND r.kind='agent'
+		AND `+LiveBrainstorm+` AND r.replaced_by IS NULL AND r.control <> 'abort'
+		AND NOT COALESCE(`+Ending+`, false) FOR UPDATE`, ref.RunID, ref.Org, ref.SessionID).Scan(&parent)
+	live := err == nil
+	if db.IsNotFound(err) {
+		err = nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !live {
+		return "", refuseText(rChildSessionParentEnded)
+	}
+	var id string
+	key := "child:" + ref.RunID + ":" + in.Key
+	err = tx.QueryRow(ctx, `SELECT id FROM runs WHERE session_id=$1 AND creation_key=$2`, ref.SessionID, key).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !db.IsNotFound(err) {
+		return "", err
+	}
+	// betweenProbe runs after the key probe misses and before the insert, so a
+	// test can commit a competing row there and reach the conflict re-read.
+	if betweenProbe != nil {
+		betweenProbe()
+	}
+	tier := ""
+	if in.Tier != "" {
+		tier, err = tierForRole(ctx, tx, in.Tier, PromptRoleForPhase[phase])
+		if err != nil {
+			return "", err
+		}
+	}
+	id = ids.New(ids.Run)
+	capabilities, _ := json.Marshal(in.Capabilities)
+	err = tx.QueryRow(ctx, `INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role,
+		parent_run_id, parent_session_id, source_kind, child_profile, child_prompt, child_capabilities, creation_key, base_refs)
+		VALUES ($1,$2,$3,1,'pending',$4::run_phase,$5::agent_role,$6,$3,'session',$7,$8,$9::jsonb,$10,'{}'::jsonb)
+		ON CONFLICT DO NOTHING RETURNING id`,
+		id, ref.Org, ref.SessionID, phase, RoleForPhase[phase], ref.RunID, in.Profile, db.Nullable(in.Prompt), capabilities, key).Scan(&id)
+	if err == pgx.ErrNoRows {
+		if err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE session_id=$1 AND creation_key=$2`, ref.SessionID, key).Scan(&id); err != nil {
+			return "", err
+		}
+		return id, nil
+	} else if err != nil {
+		return "", err
+	}
+	if in.Note != "" {
+		if _, err = tx.Exec(ctx, `UPDATE runs SET conductor_note=$2 WHERE id=$1`, id, in.Note); err != nil {
+			return "", err
+		}
+	}
+	if tier != "" {
+		if _, err = tx.Exec(ctx, `UPDATE runs SET tier_override=$2 WHERE id=$1`, id, tier); err != nil {
+			return "", err
+		}
 	}
 	ev := ref.Event("run.child_started", ledger.ActorAgent, map[string]any{
 		"parentRunId": ref.RunID, "profile": in.Profile, "sourceKind": string(in.Parent.Kind),
