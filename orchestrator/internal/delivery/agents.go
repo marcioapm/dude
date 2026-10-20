@@ -47,6 +47,8 @@ var (
 	runLineTmpl                = mustTemplate("briefings/run-line")
 	sessionTmpl                = mustTemplate("briefings/session")
 	sessionFirstMessageTmpl    = mustTemplate("briefings/session-first-message")
+	imagesFollowTmpl           = mustTemplate("briefings/session-images/follow")
+	imagesCarried              = render(mustTemplate("briefings/session-images/carried"), nil)
 	adoptedPrTmpl              = mustTemplate("contracts/adopted-pr")
 	baseTmpl                   = mustTemplate("contracts/base")
 	brainstormCheckoutsTmpl    = mustTemplate("contracts/brainstorm-checkouts")

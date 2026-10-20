@@ -105,6 +105,8 @@ let owner: SQL;
 let app: SQL;
 let router: Router;
 let anaKey: string;
+let anaPerson: string;
+let boPerson: string;
 let boKey: string;
 let otherKey: string;
 let taskId: string;
@@ -129,10 +131,10 @@ function form(original: Uint8Array, originalType: string, delivered: Uint8Array,
   return f;
 }
 
-async function upload(key: string, task: string, f: FormData): Promise<Response> {
+async function upload(key: string, task: string, f: FormData, route = "tasks"): Promise<Response> {
   // Encoded as a browser sends it: the boundary in the content type.
   const encoded = new Response(f);
-  return router.handle(new Request(`http://dude.test/v1/tasks/${task}/attachments`, {
+  return router.handle(new Request(`http://dude.test/v1/${route}/${task}/attachments`, {
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": encoded.headers.get("content-type")! },
     body: await encoded.arrayBuffer(),
@@ -165,8 +167,8 @@ beforeAll(async () => {
 
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
-  anaKey = (await createApiKey({ organizationId: ORG, name: "Ana" })).key;
-  boKey = (await createApiKey({ organizationId: ORG, name: "Bo" })).key;
+  ({ key: anaKey, personId: anaPerson } = await createApiKey({ organizationId: ORG, name: "Ana" }));
+  ({ key: boKey, personId: boPerson } = await createApiKey({ organizationId: ORG, name: "Bo" }));
   otherKey = (await createApiKey({ organizationId: OTHER, name: "Cy" })).key;
   configure(true);
 });
@@ -317,6 +319,78 @@ describe("serving", () => {
 
   test("an unknown variant is refused", async () => {
     expect((await call(anaKey, "GET", `/v1/attachments/${id}?variant=raw`)).status).toBe(400);
+  });
+});
+
+describe("a brainstorm session's images", () => {
+  // Ana owns the session; Bo is in the organisation and joins in each test as it needs.
+  const SESSION = "ssn_att";
+  const as = (role: "chat" | "read" | null) => owner.begin(async (tx) => {
+    await tx`DELETE FROM session_people WHERE session_id = ${SESSION} AND person_id = ${boPerson}`;
+    if (role) await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      VALUES (${SESSION}, ${boPerson}, ${ORG}, ${role}, now())`;
+  });
+  const toSession = (key: string) => upload(key, SESSION, form(png(5, 5), "image/png", png(5, 5), "image/png"), "brainstorms");
+  beforeAll(async () => {
+    await owner`INSERT INTO sessions (id, organization_id, title) VALUES (${SESSION}, ${ORG}, 'Billing')`;
+    await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      VALUES (${SESSION}, ${anaPerson}, ${ORG}, 'owner', now())`;
+  });
+
+  test("its owner and a member who can chat upload; the row is the session's and no task's", async () => {
+    await as("chat");
+    const mine = await toSession(anaKey);
+    expect(mine.status).toBe(201);
+    const theirs = await toSession(boKey);
+    expect(theirs.status).toBe(201);
+    const [row] = await owner`SELECT task_id, session_id FROM attachments WHERE id = ${((await mine.json()) as Json).id}`;
+    expect(row).toEqual({ task_id: null, session_id: SESSION });
+  });
+
+  test("a member who can only read is refused, and someone outside it is told it does not exist", async () => {
+    await as("read");
+    expect((await toSession(boKey)).status).toBe(403);
+    await as(null);
+    expect((await toSession(boKey)).status).toBe(404);
+    expect((await toSession(otherKey)).status).toBe(404);
+    expect((await upload(anaKey, "ssn_nowhere", form(png(5, 5), "image/png", png(5, 5), "image/png"), "brainstorms")).status).toBe(404);
+  });
+
+  test("only its members read or remove one; a task's image stays the organisation's to read", async () => {
+    await as("chat");
+    const id = ((await (await toSession(anaKey)).json()) as Json).id;
+    expect((await call(boKey, "GET", `/v1/attachments/${id}`)).status).toBe(200);
+    await as(null);
+    expect((await call(boKey, "GET", `/v1/attachments/${id}`)).status).toBe(404);
+    expect((await call(boKey, "GET", `/v1/attachments/${id}?variant=original`)).status).toBe(404);
+    expect((await call(boKey, "DELETE", `/v1/attachments/${id}`)).status).toBe(404);
+    expect((await call(otherKey, "GET", `/v1/attachments/${id}`)).status).toBe(404);
+    expect((await call(anaKey, "GET", `/v1/attachments/${id}`)).status).toBe(200);
+    const task = ((await (await upload(anaKey, taskId, form(png(5, 5), "image/png", png(5, 5), "image/png"))).json()) as Json).id;
+    expect((await call(boKey, "GET", `/v1/attachments/${task}`)).status).toBe(200);
+    expect((await call(anaKey, "DELETE", `/v1/attachments/${id}`)).status).toBe(204);
+  });
+
+  test("a session's image is never cached, since membership can end; a task's stays cached for a year", async () => {
+    await as("chat");
+    const id = ((await (await toSession(anaKey)).json()) as Json).id;
+    for (const variant of ["delivered", "original"]) {
+      const res = await call(boKey, "GET", `/v1/attachments/${id}?variant=${variant}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+    }
+    const task = ((await (await upload(anaKey, taskId, form(png(5, 5), "image/png", png(5, 5), "image/png"))).json()) as Json).id;
+    const res = await call(boKey, "GET", `/v1/attachments/${task}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+  });
+
+  test("deleting the session takes its images and queues their objects", async () => {
+    const id = ((await (await toSession(anaKey)).json()) as Json).id;
+    const [row] = await owner`SELECT object_key FROM attachments WHERE id = ${id}`;
+    await owner`DELETE FROM sessions WHERE id = ${SESSION}`;
+    expect((await owner`SELECT 1 FROM attachments WHERE id = ${id}`).length).toBe(0);
+    expect((await owner`SELECT 1 FROM attachment_object_deletions WHERE object_key = ${row.object_key}`).length).toBe(1);
   });
 });
 

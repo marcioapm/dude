@@ -4,6 +4,8 @@
 
 {{- define "refusals/domain/attachments/image-not-one-this-task"}}image %s is not one of this task's{{end}}
 
+{{- define "refusals/domain/attachments/image-not-one-this-session"}}image %s is not one of this session's{{end}}
+
 {{- define "refusals/domain/attachments/image-was-already-sent"}}image %s was already sent{{end}}
 
 {{- define "refusals/domain/attachments/message-images-are-at-most-mib"}}a message's images are at most %d MiB together{{end}}

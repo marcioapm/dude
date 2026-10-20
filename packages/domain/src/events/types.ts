@@ -474,9 +474,11 @@ export const EventTypes = {
    * (github_search, github_issue, github_pull_request, github_check_log), on its Run.
    * Payload: `{ tool, repo, number?, checkId?, query?, kind?, state?, files?, bytes }`:
    * what was asked and the result's size in bytes, never what GitHub said.
-   * A read refused once checked has `{ refused, status }` in place of
+   * A read refused once checked has `{ refused, status, permission? }` in place of
    * `bytes`: dude's kind (moved, moved_item, redirect, rate_reserve, rate_limited,
-   * not_found, too_large, forbidden, refused, unavailable) and the HTTP status.
+   * not_found, too_large, forbidden, refused, unavailable) and the HTTP status;
+   * a 403 whose X-Accepted-GitHub-Permissions named what it needs has it in
+   * `permission` (`issues=read`; alternatives split by `; `).
    */
   GitHubRead: "github.read",
   /**

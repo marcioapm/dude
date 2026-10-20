@@ -2345,7 +2345,12 @@ function takeRefusal(state: Projection, turn: ToolTurn): void {
  */
 function handedOn(state: Projection, payload: Record<string, unknown>, directiveId: string | null): boolean {
   const earlier = typeof payload.supersedes === "string" ? state.steersByDirective.get(payload.supersedes) : undefined;
-  if (!earlier || !state.retrying.delete(earlier)) return false;
+  if (!earlier) return false;
+  // Try again also carries a message whose images the hand-over could not pass on for want of an agent: it failed
+  // before the retry, and the copy is that turn again, no longer failed.
+  const refused = state.retryRun && earlier.failed !== null && earlier.deliveredAt === null;
+  if (!state.retrying.delete(earlier) && !refused) return false;
+  earlier.failed = null;
   earlier.directiveId = directiveId;
   earlier.heldFor = typeof payload.heldFor === "string" ? payload.heldFor : null;
   earlier.acceptedAt = null;

@@ -171,7 +171,7 @@ func (s *Server) issueComments(w http.ResponseWriter, r *http.Request) bool {
 		out = append(out, map[string]any{"id": c.ID, "body": c.Body, "created_at": c.CreatedAt, "updated_at": c.CreatedAt,
 			"user": map[string]string{"login": c.Author}, "html_url": fmt.Sprintf("%s#issuecomment-%d", s.issueURL(n, false), c.ID)})
 	}
-	write(w, 200, page(r, out))
+	write(w, 200, linkedPage(w, r, out))
 	return true
 }
 

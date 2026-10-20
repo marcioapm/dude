@@ -1217,13 +1217,22 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 }
 
 // beforePR goes to the pull request step, through the decision before it
-// (Open or Draft) — except for a pull request taken over, which is open
-// already and has nothing to decide.
+// (Open or Draft) — except for a pull request taken over, or open pull
+// requests with nothing new to open: nothing to decide.
 func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State, line string) (workflow.Result, error) {
 	if st.Integration != nil {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
 	if st.adoptedPR() || st.ActingOnPR {
+		return workflow.Result{Next: "openPullRequest", State: st}, nil
+	}
+	covered, err := w.prsCoverTheWork(ctx, sc, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	if covered {
+		// Nothing to open: back to the wait, with reviewers of an older head asked again (openPullRequest).
+		st.ActingOnPR = true
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
 	// A person's branch is never published as a pull request without their Open or Draft.
@@ -1827,6 +1836,25 @@ func (w *steps) openPRRepos(ctx context.Context, sc workflow.StepContext, st *St
 		}
 	}
 	return repos, nil
+}
+
+// prsCoverTheWork says whether one of the task's pull requests is open and
+// OpenPullRequests would open no new one (reposToOpen).
+func (w *steps) prsCoverTheWork(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
+	if len(st.PullRequestIDs) == 0 {
+		return false, nil
+	}
+	open, err := w.openPRRepos(ctx, sc, st)
+	if err != nil || len(open) == 0 {
+		return false, err
+	}
+	var todo []Repository
+	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		var err error
+		todo, _, _, err = reposToOpen(ctx, tx, st)
+		return err
+	})
+	return err == nil && len(todo) == 0, err
 }
 
 // feedbackRepos names the pull requests (by repository) feedback is on.

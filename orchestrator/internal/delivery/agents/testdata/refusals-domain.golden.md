@@ -254,3 +254,7 @@ a message sent again carries the images it had: send new images in a new message
 
 %s was closed: reopen it to pick it back up.
 
+## refusals/domain/attachments/image-not-one-this-session
+
+image %s is not one of this session's
+

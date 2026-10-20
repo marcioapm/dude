@@ -575,16 +575,22 @@ func insertDirective(ctx context.Context, tx pgx.Tx, org, runID string, ri runIn
 		delivery.Directive{Text: text, Scope: scope, Supersedes: supersedes, Interrupt: interrupt})
 }
 
-// attach sends the task's uploads ids with the directive (or, with
-// directiveID "", the task's prompt), refusing ids that are another
-// task's, already sent, or too many or too large together.
-func attach(ctx context.Context, tx pgx.Tx, taskID, directiveID string, ids []string) ([]json.RawMessage, error) {
-	attached, err := delivery.Attach(ctx, tx, taskID, directiveID, ids)
+// attach sends the task's or session's uploads ids with the directive,
+// refusing ids that are another owner's, already sent, or too many or too
+// large together.
+func attach(ctx context.Context, tx pgx.Tx, owner delivery.AttachOwner, directiveID string, ids []string) ([]json.RawMessage, error) {
+	attached, err := delivery.AttachOwnerImages(ctx, tx, owner, directiveID, ids)
+	return attached, attachmentRefused(err)
+}
+
+// attachmentRefused is err as the API answers it: 400 invalid_attachment
+// for a delivery.AttachmentError, else err itself.
+func attachmentRefused(err error) error {
 	var refused delivery.AttachmentError
 	if errors.As(err, &refused) {
-		return nil, fail(http.StatusBadRequest, "invalid_attachment", "%s", refused.Message)
+		return fail(http.StatusBadRequest, "invalid_attachment", "%s", refused.Message)
 	}
-	return attached, err
+	return err
 }
 
 // ownerOnly uses the first active ordered member, independent of credentials.
@@ -838,7 +844,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if err != nil {
 			return err
 		}
-		attached, err := attach(r.Context(), tx, ri.TaskID, directiveID, body.AttachmentIDs)
+		attached, err := attach(r.Context(), tx, delivery.AttachOwner{TaskID: ri.TaskID}, directiveID, body.AttachmentIDs)
 		if err != nil {
 			return err
 		}
