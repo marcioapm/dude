@@ -36,7 +36,7 @@ func (j gatedJudgement) status() string {
 
 // checksVerificationText is the checks gate's compact account for a PR:
 // each gated Run of the current attempt with its latest judgement, oldest Run
-// first, the earliest left out past checksRowsMax. The headline is the weakest
+// first, the earliest left out past checksRowsMax and the newest always shown. The headline is the weakest
 // of them all: a skip, else any waiver with each reason, else verified.
 func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT phase, payload FROM (
@@ -71,8 +71,15 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
+	return checksAccountText(runs), nil
+}
+
+var checksCompactTmpl = mustTemplate("notices/checks/account-compact")
+
+// checksAccountText is the account of runs, oldest first; "" for none.
+func checksAccountText(runs []gatedJudgement) string {
 	if len(runs) == 0 {
-		return "", nil
+		return ""
 	}
 	var skipped, unverified bool
 	var waivers []gatedJudgement
@@ -114,12 +121,19 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 	for i, j := range runs {
 		lines[i] = checksRow(j)
 	}
-	from := newestThatFit(lines, checksRowsMax)
+	// The newest Run decided publishing, so it is always shown: compactly
+	// when its full row would not fit.
+	newest := len(lines) - 1
+	if utf8.RuneCountInString(lines[newest]) > checksRowsMax {
+		j := runs[newest]
+		lines[newest] = render(checksCompactTmpl, map[string]any{"Role": j.Role, "Status": j.status(), "Count": len(j.Checks)}) + "\n"
+	}
+	from := newestThatFit(lines[:newest], checksRowsMax-utf8.RuneCountInString(lines[newest]))
 	writeOmitted(&b, from, "Run")
 	for _, row := range lines[from:] {
 		b.WriteString(row)
 	}
-	return strings.TrimRight(b.String(), "\n"), nil
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // A pull request body holds at most 65,536 characters. The checks account
@@ -135,9 +149,7 @@ const (
 )
 
 // newestThatFit is where the newest of lines that fit max characters
-// together start. A newest line longer than max is left out too: a row of
-// checksCountMax+1 checks fits checksRowsMax unless its commands are long
-// runs of backticks, whose code-span fences triple their length.
+// together start; it stops at the first that does not fit.
 func newestThatFit(lines []string, max int) int {
 	from, size := len(lines), 0
 	for from > 0 && size+utf8.RuneCountInString(lines[from-1]) <= max {

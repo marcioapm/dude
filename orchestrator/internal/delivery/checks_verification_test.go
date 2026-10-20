@@ -73,19 +73,58 @@ func TestAChecksRowKeepsItsMarkdownWhole(t *testing.T) {
 	if got := checksRow(j); got != want {
 		t.Errorf("row\n%s\nwant\n%s", got, want)
 	}
-	// A Run whose every check is a run of backticks fences to over
-	// checksRowsMax: it is left out, newest or not, and said to be.
+}
+
+// oversized is a Run whose every check is a run of backticks: its full row
+// fences to over checksRowsMax.
+func oversized(t *testing.T, j gatedJudgement) gatedJudgement {
+	t.Helper()
 	ticks := strings.Repeat("`", 400)
-	var c []struct{ Command, Result, Decision, Reason, CallID string }
 	for range 31 {
-		c = append(c, struct{ Command, Result, Decision, Reason, CallID string }{ticks, ticks, "", ticks, ticks})
+		j.Checks = append(j.Checks, struct{ Command, Result, Decision, Reason, CallID string }{ticks, ticks, "", ticks, ticks})
 	}
-	row := checksRow(gatedJudgement{Role: "Fixer", Checks: c})
-	if n := utf8.RuneCountInString(row); n <= checksRowsMax {
+	if n := utf8.RuneCountInString(checksRow(j)); n <= checksRowsMax {
 		t.Fatalf("the backtick row is %d characters, within checksRowsMax", n)
 	}
-	if from := newestThatFit([]string{"- **Implementer** — backed\n", row}, checksRowsMax); from != 2 {
-		t.Errorf("%d rows are left out, want both", from)
+	return j
+}
+
+// The newest Run is always in the account: a row too long to fit is shown
+// compactly, its role, status and how many checks it reported, so the
+// headline never stands without the Run that decided publishing.
+func TestTheNewestRunIsAlwaysInTheChecksAccount(t *testing.T) {
+	compact := func(role, status string) string {
+		return "- **" + role + "** — " + status + "\n" +
+			"  - 31 checks reported; checks omitted from this account: see the task's Activity."
+	}
+	for _, c := range []struct {
+		name string
+		runs []gatedJudgement
+		want string
+	}{{
+		"a sole oversized verified Run",
+		[]gatedJudgement{oversized(t, gatedJudgement{Role: "Implementer", Verified: true})},
+		"### Checks\nChecks were verified against the Run's recorded commands.\n\n" + compact("Implementer", "backed"),
+	}, {
+		"an oversized unverified Run after a verified one",
+		[]gatedJudgement{{Role: "Implementer", Verified: true}, oversized(t, gatedJudgement{Role: "Fixer"})},
+		"### Checks\nChecks were not verified; the work was sent back or awaits a person.\n\n" +
+			"- **Implementer** — backed\n" + compact("Fixer", "not backed"),
+	}, {
+		"older Runs newest-first while they fit, behind a compact newest",
+		[]gatedJudgement{
+			{Role: "Implementer", Verified: true, Waived: true, Message: "CI hardware."},
+			oversized(t, gatedJudgement{Role: "Fixer", Verified: true}),
+			{Role: "Fixer", Checks: []struct{ Command, Result, Decision, Reason, CallID string }{{Command: "make check", Result: "pass", Decision: "no"}}},
+			oversized(t, gatedJudgement{Role: "Simplifier", Verified: true}),
+		},
+		"### Checks\nChecks were waived by a person:\n- Implementer: CI hardware.\n\n" +
+			"2 earlier Runs omitted.\n" +
+			"- **Fixer** — not backed\n  - `make check` — **pass**\n" + compact("Simplifier", "backed"),
+	}} {
+		if got := checksAccountText(c.runs); got != c.want {
+			t.Errorf("%s: the checks account is\n%s\nwant\n%s", c.name, got, c.want)
+		}
 	}
 }
 
