@@ -101,10 +101,10 @@ func (in InstructionsInput) data(role string) instructionData {
 }
 
 var (
-	charterTmpl    = mustTemplate("instructions/charter")
-	dudeTmpl       = mustTemplate("instructions/dude")
-	savedTmpl      = mustTemplate("instructions/saved")
-	roleNotesTmpl  = mustTemplate("instructions/notes")
+	charterTmpl     = mustTemplate("instructions/charter")
+	dudeTmpl        = mustTemplate("instructions/dude")
+	savedTmpl       = mustTemplate("instructions/saved")
+	roleNotesTmpl   = mustTemplate("instructions/notes")
 	childToolsTmpl  = mustTemplate("contracts/child-tools")
 	childWriterTmpl = mustTemplate("contracts/child-writer")
 )
