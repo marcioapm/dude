@@ -176,6 +176,32 @@ describe("event API", () => {
     expect(body.events.length).toBeGreaterThan(0);
     expect(body.nextCursor).toBe(body.events[body.events.length - 1]!.cursor);
   });
+
+  test("filters session artifact events by membership", async () => {
+    const sessionId = `ssn_event_visibility_${Bun.randomUUIDv7("hex").slice(0, 8)}`;
+    const member = await createApiKey({ organizationId: ORG_A, name: "session member" });
+    const outsider = await createApiKey({ organizationId: ORG_A, name: "session outsider" });
+    await owner`INSERT INTO sessions (id, organization_id, title) VALUES (${sessionId}, ${ORG_A}, 'Private')`;
+    await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      VALUES (${sessionId}, ${member.personId}, ${ORG_A}, 'owner', now())`;
+    const artifact = await ledger.append(eventInput(ORG_A, "artifact.created", {
+      sessionId,
+      runId: `run_visibility_${Bun.randomUUIDv7("hex").slice(0, 8)}`,
+      payload: { artifactId: "artifact_visibility", name: "private.md" },
+    }));
+
+    const read = async (key: string) => {
+      const response = await fetch(`${baseUrl}/v1/events?after=${artifact.cursor - 1}`, {
+        headers: { authorization: `Bearer ${key}` },
+      });
+      expect(response.status).toBe(200);
+      return (await response.json() as { events: PersistedEvent[] }).events;
+    };
+    const memberEvents = await read(member.key);
+    const outsiderEvents = await read(outsider.key);
+    expect(memberEvents.some((event) => event.eventId === artifact.eventId && event.sessionId === sessionId)).toBe(true);
+    expect(outsiderEvents.some((event) => event.eventId === artifact.eventId)).toBe(false);
+  });
 });
 
 describe("SSE stream", () => {

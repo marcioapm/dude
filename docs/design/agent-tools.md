@@ -85,6 +85,7 @@ definition answers it where there is one.
 | `delivery.read` | `findings`, `pull_requests` |
 | `conduct` | `start_phase`, `start_agent`, `steer`, `restart_run`, `decide`, `dismiss_finding`, `decide_escalation`, `update_task`, `publish`, `request_review`, `mark_ready`, `rerun_failed_checks` |
 | `session` | `propose`, `relate`, `name_session` |
+| `session.agents` | `start_agent` (a brainstorm's: read-only investigator children of its session) |
 | `runs.read` | `run_chat` |
 | `pr.refresh` | `refresh_pull_requests` |
 | `limits.read` | `limits` |
@@ -103,7 +104,7 @@ role none of these is):
 | role | capabilities |
 |---|---|
 | conductor | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `pr.act`, `base.sync`, `github.read`, `delivery.read`, `conduct`, `runs.read`, `pr.refresh`, `limits.read`, `web_search`, `web_fetch` |
-| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `runs.read`, `pr.refresh`, `web_search`, `web_fetch` |
+| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.agents`, `runs.read`, `pr.refresh`, `web_search`, `web_fetch` |
 | implementer | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `feedback.resolve`, `pr.act`, `base.sync`, `web_search`, `web_fetch` |
 | reviewer, fixer, qa_browser | `tasks.read`, `memory`, `run.basics`, `machines`, `web_search`, `web_fetch` |
 | simplifier | `tasks.read`, `memory`, `run.basics`, `machines`, `base.sync`, `web_search`, `web_fetch` |

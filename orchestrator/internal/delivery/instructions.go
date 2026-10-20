@@ -13,7 +13,8 @@ import (
 // Nothing in it changes during a Run, so a resume assembles the same file.
 type InstructionsInput struct {
 	// An independent child receives the report-only contract.
-	Child bool
+	Child        bool
+	SessionChild bool
 	// The Run has dude's tools, and the dude CLI on its shell.
 	Tools, CLI bool
 	// The Run's capabilities (capabilities.Resolve): which tools the file
@@ -49,7 +50,7 @@ type PromptVars struct {
 func (in PromptInput) InstructionsInput() InstructionsInput {
 	in = in.withImages()
 	return InstructionsInput{
-		Child: in.Child, Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
+		Child: in.Child, SessionChild: in.SessionChild, Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
 		Context: in.Context,
 		Vars:    PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},

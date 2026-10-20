@@ -28,7 +28,7 @@ const (
 // The events a Run's Chat shows as its conversation, in apps/web's
 // conversation.ts terms: the agent's messages (but one with no words, no
 // turn in its Chat either), and the person's, the conductor's and GitHub's
-// messages to it. The WHERE of events_run_chat_idx (migration 165), written
+// messages to it. The WHERE of events_run_chat_idx (migration 168), written
 // with literals, as a parameter would not prove the index's WHERE.
 const (
 	runChatShown = `run_id = $1 AND event_type IN ('agent.message', 'chat.message', 'run.steered', 'question.answered')

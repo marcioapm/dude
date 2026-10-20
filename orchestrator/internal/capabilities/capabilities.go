@@ -32,6 +32,7 @@ const (
 	DeliveryRead    Key = "delivery.read"
 	Conduct         Key = "conduct"
 	Session         Key = "session"
+	SessionAgents   Key = "session.agents"
 	RunsRead        Key = "runs.read"
 	PRRefresh       Key = "pr.refresh"
 	LimitsRead      Key = "limits.read"
@@ -91,6 +92,8 @@ var All = []Capability{
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
 	{Key: Session, Description: "Propose tasks and relations for a member to file, and name the session.",
 		Tools: []string{"propose", "relate", "name_session"}},
+	{Key: SessionAgents, Description: "Start read-only investigator agents to research the linked repositories.",
+		Tools: []string{"start_agent"}},
 	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
 		Tools: []string{"run_chat"}},
 	{Key: PRRefresh, Description: "Read the task's pull requests from GitHub now, rather than dude's last poll; counts against the hourly GitHub reads.",
@@ -108,7 +111,8 @@ var All = []Capability{
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
 		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, RunsRead, PRRefresh, WebSearch, WebFetch},
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, RunsRead, PRRefresh,
+		WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},

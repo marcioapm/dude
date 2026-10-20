@@ -1,4 +1,4 @@
--- 166_recover_events_run_chat_idx.sql — as 164 for 165's index: a cancelled
+-- 169_recover_events_run_chat_idx.sql — as 167 for 168's index: a cancelled
 -- concurrent build leaves an INVALID index that IF NOT EXISTS skips; rebuild
 -- only an interrupted one. Transactional: the rebuild is conditional, which
 -- needs a DO block, where REINDEX CONCURRENTLY cannot run.
