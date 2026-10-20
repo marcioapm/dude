@@ -200,6 +200,32 @@ func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	}
 }
 
+// A repository the agent asked for again, whose clone failed again, then
+// linked again by a member is told as the member's link, not the agent's ask.
+func TestAMembersLinkAfterAnAskIsToldAsTheMembers(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWebAndFail(id, run)
+	s.runningIdle(run)
+	if status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`); status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	s.until("the second clone failed", func() bool {
+		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'`, run) == 2
+	})
+	s.runningIdle(run)
+
+	s.lux.CloneError = nil
+	s.linkWeb(id)
+	s.until("web checked out", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
+	})
+	resumes := s.luxRun(run).resumes
+	last := resumes[len(resumes)-1]
+	if !strings.Contains(last, "A member linked WC/web") || strings.Contains(last, "as you asked") {
+		t.Errorf("the member's link was told as %q", last)
+	}
+}
+
 // latestTool calls a tool as run with the token its newest placement holds:
 // a resume supplies a new one.
 func (s *sessionWorld) latestTool(run, name, args string) (int, map[string]any) {
