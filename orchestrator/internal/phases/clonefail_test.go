@@ -8,7 +8,7 @@ import "testing"
 func TestAFailedCloneIsSaidInPlainWords(t *testing.T) {
 	const auth = "git clone: exit status 128: error: unable to read askpass response from '/bin/false'\n" +
 		"fatal: could not read Username for 'https://github.com': terminal prompts disabled"
-	if got, want := cloneFailedNote("BILL/billing", auth, sessionCloneRemedy),
+	if got, want := cloneFailedNote("BILL/billing", auth, sessionRemedy(false)),
 		"BILL/billing could not be checked out (could not read Username for 'https://github.com': terminal prompts disabled). "+
 			"It is not in /workspace; a member can check the repository's URL and access and link it again."; got != want {
 		t.Errorf("note:\n got %s\nwant %s", got, want)

@@ -79,3 +79,58 @@ func TestLimitsReadsEachPullRequestsRerunClaimAsTheCheckDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An ended delivery's limits are what the checks still read of it: its
+// rerun grants, which RerunClaimedTx honours on a head, and none of its
+// per-round grants or spent rounds, which a new delivery starts without;
+// its fix rounds per review round are today's policy, not the one it froze.
+func TestAnEndedDeliverysLimitsKeepOnlyItsRerunGrants(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	exec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, delivery_policy)
+		VALUES ('prj_e', $1, 'P', 'p', 'END', '{"maxPrFixIterations":4}')`, org)
+	exec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_e', $1, 'prj_e', 'api', 'https://github.com/acme/api.git')`, org)
+	exec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_e', $1, 'prj_e', 1, 'T', 'G')`, org)
+	exec(t, owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+		VALUES ('pr_e', $1, 'prj_e', 'wi_e', 'repo_e', 1, 'https://x/1', 'b', 'main', 'h1', 'T')`, org)
+	exec(t, owner, `INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+		VALUES ('wf_e', $1, 'wi_e', 'task.delivery', 'ended-fixture', 'completed', 'done',
+		'{"taskId":"wi_e","projectId":"prj_e","prIteration":2,"prFixesByRepo":{"api":2},"policy":{"maxPrFixIterations":2},"limitGrants":[
+		  {"limit":"rerun","extra":1,"repo":"api","number":1,"head":"h1","by":"p_ana","byName":"Ana","questionId":"q1","at":"2026-01-01T00:00:00Z"},
+		  {"limit":"perReviewRound","extra":1,"by":"p_cy","byName":"Cy","questionId":"q2","at":"2026-01-01T00:00:00Z"}]}')`, org)
+	exec(t, owner, `INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+		VALUES ('evt_e1', $1, $2, 'wi_e', 'agent', 'run_x', 'test', $3)`, org, delivery.EvPullRequestAction,
+		map[string]any{"action": delivery.ActionRerunChecks, "repo": "api", "number": 1, "head": "h1"})
+
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		l, err := delivery.TaskLimitsTx(ctx, tx, "wi_e")
+		if err != nil {
+			return err
+		}
+		_, now, err := delivery.PolicyFor(ctx, tx, "wi_e")
+		if err != nil {
+			return err
+		}
+		if l.Delivery != delivery.DeliveryEnded || len(l.Grants) != 1 || l.Grants[0].Limit != delivery.LimitRerun {
+			t.Errorf("delivery %q, grants %+v", l.Delivery, l.Grants)
+		}
+		if l.RoundFixLimit() != now.MaxPRFixIterations || now.MaxPRFixIterations != 4 || l.PRIteration != 0 || l.RoundFixesSpent() {
+			t.Errorf("fix rounds per review round: limit %d (policy now %d), spent %d", l.RoundFixLimit(), now.MaxPRFixIterations, l.PRIteration)
+		}
+		claimed, err := delivery.RerunClaimedTx(ctx, tx, "wi_e", "api", 1, "h1")
+		if err != nil {
+			return err
+		}
+		if len(l.PullRequests) != 1 {
+			t.Fatalf("pull requests %+v", l.PullRequests)
+		}
+		p := l.PullRequests[0]
+		if p.Reruns != 1 || p.RerunsAllowed != 2 || p.RerunClaimed || claimed {
+			t.Errorf("api#1 at h1: limits %+v, the check claimed %v; want 1 of 2, not claimed", p, claimed)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

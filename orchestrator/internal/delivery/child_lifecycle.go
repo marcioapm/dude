@@ -138,11 +138,23 @@ func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcom
 		if c.StopReason != "" {
 			status = "aborted"
 		}
+		var verify []byte
+		if c.Capabilities.Verify != nil {
+			rep, err := verifyReportTx(ctx, tx, childID, status, *c.Capabilities.Verify)
+			if err != nil {
+				return err
+			}
+			if verify, err = json.Marshal(rep); err != nil {
+				return err
+			}
+		}
 		// Summaries contain counts and validated identifiers only, never finding,
 		// artifact, or agent prose. Bound lists independently of stored Run size.
+		// A verifier's report holds its commands' output tails, bounded by
+		// ParseVerify and quoted as external text when told.
 		// The child's final reply is quoted beside it at delivery (deliverChildResultTx).
 		_, err = tx.Exec(ctx, `INSERT INTO child_results (organization_id, task_id, session_id, parent_run_id, child_run_id,
-			generation, source_kind, profile, status, findings, verdicts, commits, artifact_ids, cost_usd, stale)
+			generation, source_kind, profile, status, findings, verdicts, commits, artifact_ids, cost_usd, stale, verify)
 			SELECT r.organization_id, r.task_id, r.session_id, r.parent_run_id, r.id, r.child_generation, r.source_kind, r.child_profile, $2,
 			(SELECT count(*) FROM review_findings WHERE run_id = r.id),
 			(SELECT count(*) FROM acceptance_verdicts WHERE run_id = r.id),
@@ -150,8 +162,8 @@ func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcom
 			  CASE jsonb_typeof(value) WHEN 'object' THEN value->>'sha' ELSE value #>> '{}' END AS v FROM jsonb_each(r.heads)) normalized
 			  WHERE k ~ '^[A-Za-z0-9_.-]{1,100}$' AND v ~ '^[0-9a-f]{40,64}$' ORDER BY k LIMIT 100) refs), '{}'),
 			ARRAY(SELECT id FROM artifacts WHERE run_id = r.id ORDER BY id LIMIT 100),
-			GREATEST(0, run_model_usd(r))::double precision, $3
-			FROM runs r WHERE r.id = $1`, childID, status, !c.Actionable)
+			GREATEST(0, run_model_usd(r))::double precision, $3, $4::jsonb
+			FROM runs r WHERE r.id = $1`, childID, status, !c.Actionable, verify)
 		if err != nil {
 			return err
 		}
@@ -453,10 +465,10 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 		}
 		return false, nil
 	}
-	var summary []byte
+	var summary, verify []byte
 	if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('childId',child_run_id,'profile',profile,'status',status,
-		'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale)
-		FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND NOT stale`, p.Parent, p.Child, p.Generation).Scan(&summary); err != nil {
+		'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale), verify
+		FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND NOT stale`, p.Parent, p.Child, p.Generation).Scan(&summary, &verify); err != nil {
 		return false, err
 	}
 	reply, err := childFinalReplyTx(ctx, tx, p.Child)
@@ -466,6 +478,11 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 	text, err := childResultText(summary, reply)
 	if err != nil {
 		return false, err
+	}
+	if verify != nil {
+		if text, err = verifyResultText(p.Child, verify); err != nil {
+			return false, err
+		}
 	}
 	directive, _, err := QueueDirective(ctx, tx, RunRef{Org: p.Org, TaskID: c.TaskID, SessionID: c.SessionID, RunID: c.ParentID}, Directive{Text: text, Scope: "run"})
 	if err != nil {

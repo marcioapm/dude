@@ -110,6 +110,11 @@ type State struct {
 	// Fix attempts per finding a person granted beyond the policy's, by
 	// sending a stuck review back to try again.
 	ExtraFixAttempts int `json:"extraFixAttempts,omitempty"`
+	// Limits people raised for this delivery on the conductor's
+	// request_limit, and its requests still waiting on an answer. Written
+	// only from outside the steps (Owned).
+	LimitGrants   []LimitGrant   `json:"limitGrants,omitempty"`
+	LimitRequests []LimitRequest `json:"limitRequests,omitempty"`
 	// The test Run whose verdict the gate weighs (testVerdict).
 	TestRunID string `json:"testRunId,omitempty"`
 	// Fixes a failed test sent this attempt back for: bounded by
@@ -443,7 +448,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	return &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "gateAt"},
+		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -1777,7 +1782,7 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 	}
 	if roundSpent || len(spent) > 0 {
 		res, err := w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
-			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
+			"perRound": st.RoundFixLimit(), "total": st.PullRequestFixLimit(total), "spent": db.NonNil(spent)})
 		return res, true, err
 	}
 	return workflow.Result{}, false, nil

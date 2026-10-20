@@ -474,6 +474,11 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			spec.Workload.Prompt = fakeagent.TesterScript(in.Model, criteria)
 			spec.Labels["dude.criteria"] = strconv.Itoa(criteria)
 		}
+		// A scripted verifier runs the brief's commands (the fake lux only).
+		if commands, ok := fakeagent.VerifyCommands(in.Prompt); ok {
+			raw, _ := json.Marshal(commands)
+			spec.Labels[fakeagent.VerifyLabel] = string(raw)
+		}
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
@@ -591,6 +596,44 @@ func harnessHosts(harness string, webSearch bool) []string {
 		return nil
 	}
 	return []string{"mcp.exa.ai"}
+}
+
+// runWeb is what a Run on a real harness reaches of the web, as its spec
+// configures it: search as each harness turns it on (Codex's pin, which a
+// tier may replace on a restricted Run), and fetch on a harness that has a
+// fetch tool, reaching any host on an unrestricted network or else the
+// hosts on its list that are not the model's, dude's tools or the harness's
+// own.
+func runWeb(c AgentConfig, in specInput) delivery.Web {
+	search := in.native(capabilities.NativeWebSearch)
+	web := delivery.Web{Search: search, Fetch: in.native(capabilities.NativeWebFetch) && in.Harness != delivery.HarnessCodex}
+	if search && in.Harness == delivery.HarnessCodex {
+		settings, _ := codexSettings(c, in)
+		web.Search = slices.Contains(settings, "web_search="+tomlString("live")) ||
+			slices.Contains(settings, "web_search="+tomlString("cached"))
+	}
+	network := runNetwork(c, in)
+	if network.Unrestricted {
+		web.AnyHost = true
+		return web
+	}
+	var skip []lux.EgressRule
+	for _, h := range harnessHosts(in.Harness, search) {
+		r, _ := lux.ParseEgressRule(h)
+		skip = append(skip, r)
+	}
+	for _, raw := range []string{c.LLMURL, c.ToolsURL} {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			r, _ := lux.ParseEgressRule(strings.ToLower(u.Hostname()))
+			skip = append(skip, r)
+		}
+	}
+	for _, e := range network.Egress {
+		if !slices.Contains(skip, e) {
+			web.Hosts = append(web.Hosts, e.Host+e.CIDR)
+		}
+	}
+	return web
 }
 
 // openCodeWorkload: the image's OpenCode config defines the two providers,

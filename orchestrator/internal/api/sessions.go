@@ -231,12 +231,15 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org strin
 	return nil
 }
 
+// linksMax is the most projects a session links.
+const linksMax = 50
+
 // setLinks makes the session's linked projects and repositories exactly
 // those given: projects the caller's organisation has, and only their own
 // repositories.
 func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []linkInput) error {
-	if len(projects) > 50 {
-		return fail(http.StatusBadRequest, "bad_request", "at most 50 projects")
+	if len(projects) > linksMax {
+		return fail(http.StatusBadRequest, "bad_request", "at most %d projects", linksMax)
 	}
 	var projectIDs, repoIDs []string
 	for _, l := range projects {
@@ -275,6 +278,42 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 	_, err := tx.Exec(ctx, `INSERT INTO session_repositories (session_id, repository_id, organization_id)
 		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(repoIDs), org)
 	return err
+}
+
+// addLink links one more project, with every repository of it, to the
+// session through setLinks, beside what it links now, recorded as
+// linkSession records a link (session.linked with the session's whole set).
+func addLink(ctx context.Context, tx pgx.Tx, org, sessionID, projectID string, f delivery.Filer) error {
+	rows, err := tx.Query(ctx, `SELECT sp.project_id, COALESCE(array_agg(sr.repository_id ORDER BY sr.repository_id)
+			FILTER (WHERE sr.repository_id IS NOT NULL), '{}')
+		FROM session_projects sp LEFT JOIN repositories r ON r.project_id = sp.project_id
+		LEFT JOIN session_repositories sr ON sr.session_id = sp.session_id AND sr.repository_id = r.id
+		WHERE sp.session_id = $1 GROUP BY sp.project_id ORDER BY sp.project_id`, sessionID)
+	if err != nil {
+		return err
+	}
+	links, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (linkInput, error) {
+		var l linkInput
+		err := row.Scan(&l.ProjectID, &l.RepositoryIDs)
+		return l, err
+	})
+	if err != nil {
+		return err
+	}
+	rows, err = tx.Query(ctx, `SELECT id FROM repositories WHERE project_id = $1 ORDER BY id`, projectID)
+	if err != nil {
+		return err
+	}
+	repoIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	links = append(links, linkInput{ProjectID: projectID, RepositoryIDs: db.NonNil(repoIDs)})
+	if err := setLinks(ctx, tx, org, sessionID, links); err != nil {
+		return err
+	}
+	return delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, sessionID), delivery.EvSessionLinked, f.ActorType, f.ActorID,
+		map[string]any{"projects": links})
 }
 
 // linkSession sets what the session reads. Repositories added reach a
@@ -549,7 +588,9 @@ func linkedProjectIDs(ctx context.Context, tx pgx.Tx, sessionID string) ([]strin
 // with its owner and whether it has started.
 type fileFacts struct {
 	projects map[string]bool // linked projects, by upper-case key
-	tasks    map[string]taskFacts
+	// The organisation's projects' ids, by upper-case key (link_project).
+	orgProjects map[string]string
+	tasks       map[string]taskFacts
 }
 
 type taskFacts struct {
@@ -561,7 +602,7 @@ type taskFacts struct {
 // readFileFacts reads the facts for items in three queries. lock takes the
 // named tasks' rows FOR UPDATE, as filing must before it edits one.
 func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []delivery.ProposalItem, lock bool) (fileFacts, error) {
-	f := fileFacts{projects: map[string]bool{}, tasks: map[string]taskFacts{}}
+	f := fileFacts{projects: map[string]bool{}, orgProjects: map[string]string{}, tasks: map[string]taskFacts{}}
 	rows, err := tx.Query(ctx, `SELECT upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
 		WHERE sp.session_id = $1`, sessionID)
 	if err != nil {
@@ -573,6 +614,23 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	}
 	for _, k := range keys {
 		f.projects[k] = true
+	}
+	var linking []string
+	for _, it := range items {
+		if it.Kind == "link_project" {
+			linking = append(linking, strings.ToUpper(strings.TrimSpace(it.Project)))
+		}
+	}
+	if len(linking) > 0 {
+		// Row security keeps the read to the caller's organisation.
+		rows, err := tx.Query(ctx, `SELECT upper(key_prefix), id FROM projects WHERE upper(key_prefix) = ANY($1)`, linking)
+		if err != nil {
+			return f, err
+		}
+		var k, id string
+		if _, err := pgx.ForEachRow(rows, []any{&k, &id}, func() error { f.orgProjects[k] = id; return nil }); err != nil {
+			return f, err
+		}
 	}
 	var prefixes []string
 	var numbers []int32
@@ -674,11 +732,28 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) f
 				return fileBlock{why: fmt.Sprintf("%s is not a task of a linked project", k), by: "not_a_task"}
 			}
 		}
+	case "link_project":
+		key := strings.ToUpper(strings.TrimSpace(item.Project))
+		// Linked since it was proposed: nothing left to do, by anyone.
+		if f.projects[key] {
+			return fileBlock{why: fmt.Sprintf("project %s is linked already", item.Project), by: "linked"}
+		}
+		if f.orgProjects[key] == "" {
+			return fileBlock{why: fmt.Sprintf("no project %s in this organisation", item.Project), by: "unknown"}
+		}
+		// setLinks would refuse the whole filing; only this item is refused.
+		if len(f.projects) >= linksMax {
+			return fileBlock{why: fmt.Sprintf("the session links %d projects already, the most it can", linksMax), by: "limit"}
+		}
 	default:
 		return fileBlock{why: "unknown item", by: "unknown"}
 	}
 	if role == delivery.SessionRead {
 		return fileBlock{why: "readers can't file", by: "reader"}
+	}
+	// What the session reads is its owner's to change, as the link API says.
+	if item.Kind == "link_project" && role != delivery.SessionOwner {
+		return fileBlock{why: "only the session's owner can link a project", by: "session_owner"}
 	}
 	if item.Kind == "edit" && t.OwnerID != "" && t.OwnerID != person {
 		return fileBlock{why: fmt.Sprintf("only %s can file this: it's their task", t.OwnerName), by: "owner", owner: t.Owner}
@@ -796,6 +871,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 		f.ActorType = ledger.ActorHuman
 	}
 	var results []map[string]any
+	linkedOne := false
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		role, err := lockedWriter(r.Context(), tx, id, p.Person, "file work")
 		if err != nil {
@@ -877,6 +953,11 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				return err
 			}
 			done[n], made[n] = true, taskID
+			if item.Kind == "link_project" {
+				// Counted for the card's next link_project's limit.
+				facts.projects[key] = true
+				linkedOne = true
+			}
 			if item.Kind == "task" {
 				k, err := fileItemRelations(r.Context(), tx, org, proposalRunID, linked, items, n, made, p.Person)
 				if err != nil {
@@ -904,6 +985,10 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 	})
 	if err != nil {
 		return err
+	}
+	if linkedOne {
+		// The repositories reach a live agent at its next resume.
+		s.kick()
 	}
 	write(w, http.StatusOK, map[string]any{"results": results})
 	return nil
@@ -992,6 +1077,11 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 			Other: delivery.RelatedTask{ID: to.ID, Key: tk, ProjectID: to.ProjectID},
 			Side:  side, Person: f.Person, ProposedByRun: runID, Why: item.Why})
 		return fk + " " + item.RelationKind + " " + tk, "", "", err
+	case "link_project":
+		// Through the session-link API's own write, adding this project beside
+		// what the session links (setLinks replaces the whole set).
+		k := strings.ToUpper(strings.TrimSpace(item.Project))
+		return k, "", "", addLink(ctx, tx, org, sessionID, facts.orgProjects[k], f)
 	}
 	return "", "", "", fmt.Errorf("unknown item kind %q", item.Kind)
 }

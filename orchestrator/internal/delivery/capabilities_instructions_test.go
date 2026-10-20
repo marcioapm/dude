@@ -59,6 +59,11 @@ func sectionsFor(tool, role string) []string {
 		case RoleConductor:
 			return []string{"## Merging the base\n" + conductorBaseNote}
 		}
+	case "request_limit":
+		if role == RoleConductor {
+			return []string{"When a fix round or a rerun is refused at its bound and the work needs more, ask a person to raise it " +
+				"for this task with `request_limit`"}
+		}
 	}
 	return nil
 }
@@ -98,6 +103,26 @@ func TestEachToolSectionIsInTheFileExactlyWhenItsToolIsGranted(t *testing.T) {
 	}
 }
 
+// The conductor's contract names the tools of its capabilities that act:
+// request_limit only with limits.request.
+func TestTheConductorsContractNamesOnlyGrantedActions(t *testing.T) {
+	for _, c := range []struct {
+		key  capabilities.Key
+		tool string
+	}{{capabilities.LimitsRequest, "`request_limit`"}, {capabilities.Verify, "`verify`"}} {
+		with := capabilities.Default(RoleConductor)
+		without := with.Without(c.key)
+		in := InstructionsInput{Tools: true, CLI: true, Grants: &with}
+		if got := Instructions(RoleConductor, "", in); !strings.Contains(got, c.tool) {
+			t.Errorf("with %s the contract does not name %s", c.key, c.tool)
+		}
+		in.Grants = &without
+		if got := Instructions(RoleConductor, "", in); strings.Contains(got, c.tool) {
+			t.Errorf("without %s the contract names %s", c.key, c.tool)
+		}
+	}
+}
+
 // The shell form of each dude tool the instruction files show, as
 // cmd/dude parses it.
 var toolCommands = map[string][]string{
@@ -113,6 +138,7 @@ var toolCommands = map[string][]string{
 	"dismiss_finding": {"dude finding dismiss"}, "decide_escalation": {"dude escalation decide"},
 	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},
 	"refresh_pull_requests": {"dude prs --refresh", "--refresh"}, "run_chat": {"dude chat"}, "limits": {"dude limits"},
+	"request_limit": {"dude limit request"}, "verify": {"dude verify"},
 }
 
 // Prose in which a tool's name is an ordinary word, or a flag of another
@@ -131,11 +157,12 @@ var notTheTool = map[string][]string{
 		"structured findings and tester verdicts", "Your findings go", "risks new findings", "after any findings",
 		"are findings.", "role's findings or verdict", "on earlier findings", "Your output is findings", "resolve the findings", "report and findings"},
 	"message": {"first message lists them", "default merge message", "a Chat message", "your next message", "--message M",
-		"Each message reaches you"},
+		"Each message reaches you", "comes to you as a message"},
 	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
-		"`low` or `note`", "`note` is an observation", "| low | note", "is a `note`", "a design note"},
+		"`low` or `note`", "`note` is an observation", "| low | note", "is a `note`", "a design note", "and a note)"},
 	"propose": {"before you propose anything"},
 	"publish": {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code"},
+	"verify":  {"could not verify", "`--no-verify`", "a reason a person could verify"},
 }
 
 // Mentions of a tool the role's defaults never grant, which the goldens

@@ -836,7 +836,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		if !isLive(ri.Status) {
 			return fail(http.StatusConflict, "conflict", "run %s is %s and can no longer be answered", runID, ri.Status)
 		}
-		if err := ownerOnly(r.Context(), tx, ri.TaskID, principalOf(r).Person, "answer"); err != nil {
+		if err := mayAnswer(r.Context(), tx, ri.TaskID, questionID, principalOf(r), answered); err != nil {
 			return err
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
@@ -954,8 +954,32 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, q
 		// The owner picked a choice of the conductor's question about the
 		// escalation: decided, as from the banner.
 		return "", escalationFailure(err)
+	} else if err := delivery.LimitAnswerTx(ctx, tx, ref, questionID, a,
+		delivery.Approver{Person: p.Person, ActorType: p.ActorType, ActorID: p.Actor, Admin: p.Admin}); err != nil {
+		var refused delivery.LimitApprovalError
+		if errors.As(err, &refused) {
+			return "", fail(http.StatusForbidden, "not_admin", "%s", refused.Msg)
+		}
+		return "", err
 	}
 	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
+}
+
+// mayAnswer is who may answer a question: the task's owner, as for any; or,
+// for the conductor's request to raise a limit, also an organisation admin,
+// whom the setting's change belongs to (LimitAnswerTx checks the approval).
+// An admin who is not the owner answers only by picking a choice: their
+// words, a Chat message among them, are refused as anyone's but the owner's.
+func mayAnswer(ctx context.Context, tx pgx.Tx, taskID, questionID string, p principal, a delivery.Answered) error {
+	limit, err := delivery.IsLimitRequestTx(ctx, tx, taskID, questionID)
+	if err != nil {
+		return err
+	}
+	picked := len(a.Answers) == 1 && len(a.Answers[0].Choices) > 0 && a.Answers[0].Text == ""
+	if limit && picked {
+		return ownerOrAdmin(ctx, tx, taskID, p, "answer")
+	}
+	return ownerOnly(ctx, tx, taskID, p.Person, "answer")
 }
 
 // abort stops a Run and its task at once, and the Runs beside it. Their lux

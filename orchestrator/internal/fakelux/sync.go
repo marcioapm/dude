@@ -230,6 +230,43 @@ func (s *Server) localCall(run *Run, tool, args string) {
 	}
 }
 
+// verifyCommands is a scripted verifier's work: each command run with sh
+// in the Run's first checkout, as the bash tool call an agent makes, and
+// the reply reporting them (fakeagent.VerifyReply). Callers hold s.mu; a
+// command runs without it, for at most 30 s.
+func (s *Server) verifyCommands(run *Run, commands []string) string {
+	work, err := s.firstCheckout(run)
+	results := []fakeagent.VerifyResult{}
+	for i, c := range commands {
+		id := fmt.Sprintf("verify_%d", i)
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": "bash", "kind": "execute",
+			"status": "in_progress", "rawInput": map[string]any{"cmd": c}})
+		res := fakeagent.VerifyResult{Command: c, Exit: 127}
+		if err != nil {
+			res.Tail = err.Error()
+		} else {
+			s.mu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			cmd := exec.CommandContext(ctx, "sh", "-c", c)
+			cmd.Dir = work
+			out, runErr := cmd.CombinedOutput()
+			cancel()
+			s.mu.Lock()
+			res.Tail, res.Exit = string(out), 0
+			var exit *exec.ExitError
+			switch {
+			case errors.As(runErr, &exit):
+				res.Exit = exit.ExitCode()
+			case runErr != nil:
+				res.Exit, res.Tail = 127, res.Tail+runErr.Error()
+			}
+		}
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"})
+		results = append(results, res)
+	}
+	return fakeagent.VerifyReply(results)
+}
+
 // workspaceWrite writes a file in the Run's first checkout; why it could
 // not, or "". workspaceGit runs git there and answers what it printed.
 // Callers hold s.mu.

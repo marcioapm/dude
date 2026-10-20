@@ -120,6 +120,10 @@ type Behaviour struct {
 	// [title, kind, raw input as JSON]. They stay open, as a call that
 	// never settles does.
 	OpenCalls [][3]string
+	// A verifier: commands run with sh in its first checkout, each
+	// reported as a bash call, then its reply is fakeagent.VerifyReply of
+	// their exit codes and outputs.
+	Verify []string
 	// Names the agent looks up in its first turn, before its tools: each
 	// distinct one is a dns event, as lux's resolver records it.
 	Lookups []Lookup
@@ -862,6 +866,11 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		_ = json.Unmarshal([]byte(raw), &calls)
 		step.Tools = append(step.Tools, calls...)
 	}
+	var verify []string
+	if raw := str(fakeagent.VerifyLabel); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &verify)
+		verify = append([]string{}, verify...)
+	}
 	if str("dude.phase") == "review" && len(specRepos(spec)) == 0 {
 		// No checkout: the reviewer reads what was published, and the
 		// scripted one is content with it.
@@ -938,7 +947,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
-		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open}
+		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open,
+		Verify: verify}
 }
 
 // envSecretsOf are a submitted spec's env secrets, name and value, in the
@@ -1774,6 +1784,9 @@ func (s *Server) turn(run *Run) {
 		s.edit(run, b.FinishEdits)
 	}
 	reply := b.Reply
+	if b.Verify != nil && first {
+		reply = s.verifyCommands(run, b.Verify)
+	}
 	if b.Conductor {
 		reply = run.Prompt()[strings.LastIndex(run.Prompt(), "echo ")+len("echo "):]
 		if !first {

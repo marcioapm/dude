@@ -23,6 +23,10 @@ type InstructionsInput struct {
 	Grants *capabilities.Grants
 	// A brainstorm that may reach any host.
 	Anywhere bool
+	// What a brainstorm's harness reaches of the web, as its spec configures
+	// it (phases.runWeb). nil: its grants on a harness with both tools, any
+	// host when Anywhere, else none.
+	Web *Web
 	// A conductor with a checkout, which merges the base itself.
 	Checkouts bool
 	// The severities that send a change back (a reviewer's and a tester's).
@@ -37,6 +41,49 @@ type InstructionsInput struct {
 	Context string
 	// What a saved prompt's {{task.*}} and {{run.*}} variables say.
 	Vars PromptVars
+}
+
+// Web is what a Run reaches of the web with its harness's own tools.
+type Web struct {
+	Search bool `json:"search"`
+	// Fetch: the harness has a fetch tool, which reaches any host when
+	// AnyHost, else Hosts alone (the egress lists dude was given).
+	Fetch   bool     `json:"fetch"`
+	AnyHost bool     `json:"anyHost"`
+	Hosts   []string `json:"hosts,omitempty"`
+}
+
+// Fetches says the fetch tool can reach some host.
+func (w Web) Fetches() bool { return w.Fetch && (w.AnyHost || len(w.Hosts) > 0) }
+
+// HostList is Hosts as a sentence names them.
+func (w Web) HostList() string { return joinList(w.Hosts, ", ", ", and ") }
+
+// Equal says w and o give the agent the same web.
+func (w Web) Equal(o Web) bool {
+	return w.Search == o.Search && w.Fetches() == o.Fetches() &&
+		(!w.Fetches() || (w.AnyHost == o.AnyHost && slices.Equal(w.Hosts, o.Hosts)))
+}
+
+// WebChanged is what a session's new agent is told when the agent before
+// it had another web: the replayed conversation shows that one's searches
+// and fetches.
+func WebChanged(before, now Web) string {
+	return webChangedTmpl.Render(struct{ Before, Now Web }{before, now})
+}
+
+var webChangedTmpl = MustText("notices/web-changed")
+
+// webOf is the web a Run's file describes: in.Web, or its defaults, with
+// what grants do not unlock taken away.
+func (in InstructionsInput) webOf(grants capabilities.Grants) Web {
+	w := Web{Search: true, Fetch: true, AnyHost: in.Anywhere}
+	if in.Web != nil {
+		w = *in.Web
+	}
+	w.Search = w.Search && grants.Native(capabilities.NativeWebSearch)
+	w.Fetch = w.Fetch && grants.Native(capabilities.NativeWebFetch)
+	return w
 }
 
 // PromptVars are the values a saved prompt's variables are filled with.
@@ -61,7 +108,7 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 // InstructionTools are the tools the instruction file can name; a Run's
 // file names those its capabilities grant.
 var InstructionTools = []string{"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository",
-	"run_diff", "request_machine", "sync_base"}
+	"run_diff", "request_machine", "sync_base", "request_limit"}
 
 // ChildTools are the tools a conductor-started child may call.
 var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}
@@ -75,7 +122,9 @@ type instructionData struct {
 	ChildToolNames                                                                                string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
-	grants           capabilities.Grants
+	// What the Run reaches of the web (webOf).
+	Reach  Web
+	grants capabilities.Grants
 }
 
 // Granted says the Run's capabilities grant every one of tools, with or
@@ -164,7 +213,7 @@ func (in InstructionsInput) data(role string) instructionData {
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
 		SearchMemory: has["search_memory"], Remember: has["remember"], RequestMachine: has["request_machine"],
 		ChildToolNames:   joinList(childTools, ", ", ", and "),
-		ExternalTextNote: ExternalTextNote, grants: *grants}
+		ExternalTextNote: ExternalTextNote, Reach: in.webOf(*grants), grants: *grants}
 }
 
 var (

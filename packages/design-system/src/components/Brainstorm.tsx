@@ -118,7 +118,7 @@ export function SessionTitle({ title, untitled = "Untitled session", onRename, m
 // The proposal card
 // ---------------------------------------------------------------------------
 
-export type ProposalKind = "epic" | "task" | "edit" | "comment" | "note" | "relation";
+export type ProposalKind = "epic" | "task" | "edit" | "comment" | "note" | "relation" | "link_project";
 
 /** A relation an item proposes: to another item of the card by number, or to an existing task by key and status. */
 export interface ProposalRelation {
@@ -187,11 +187,12 @@ export interface ProposalCardProps extends Omit<HTMLAttributes<HTMLElement>, "ti
 
 const KIND_WORD: Record<ProposalKind, [string, string]> = {
   epic: ["epic", "epics"], task: ["task", "tasks"], edit: ["edit", "edits"], comment: ["comment", "comments"], note: ["note", "notes"], relation: ["relation", "relations"],
+  link_project: ["project to link", "projects to link"],
 };
 
 /** "2 tasks, 1 edit": what a set of items is, by kind, in the card's order. */
 export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
-  const order: ProposalKind[] = ["epic", "task", "edit", "comment", "note", "relation"];
+  const order: ProposalKind[] = ["link_project", "epic", "task", "edit", "comment", "note", "relation"];
   return order
     .map((k) => [k, kinds.filter((x) => x === k).length] as const)
     .filter(([, n]) => n > 0)
@@ -385,6 +386,7 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
                 <div className={styles["itemTitle"]}>
                   {item.kind === "epic" ? <span className={styles["kind"]}>Epic</span> : null}
                   {item.kind === "note" ? <span className={styles["kind"]}><Icon name="pin" size={12} /> Note</span> : null}
+                  {item.kind === "link_project" ? <span className={styles["kind"]}><Icon name="link" size={12} /> Link</span> : null}
                   {item.title}
                   {item.tag ? <span className={styles["tag"]}>{item.tag}</span> : null}
                 </div>
