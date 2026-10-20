@@ -8,7 +8,7 @@ import (
 )
 
 func TestSessionChildCreationKeyIndexIsUnique(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "160")
+	owner, apply := dbtest.Upgrade(t, "161")
 	mustExec(t, owner, `INSERT INTO organizations (id, name, slug) VALUES ('org_159', 'O', 'o')`)
 	mustExec(t, owner, `INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_159', 'org_159', 'S')`)
 	apply()

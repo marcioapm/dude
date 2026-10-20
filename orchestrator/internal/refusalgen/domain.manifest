@@ -20,6 +20,7 @@ mYouCanRemoveOnlyRelationThis         refusals/domain/relations-write/you-can-re
 mMessageCarriesAtMostImages           refusals/domain/attachments/message-carries-at-most-images
 mImageNamedTwice                      refusals/domain/attachments/image-named-twice
 mImageNotOneThisTask                  refusals/domain/attachments/image-not-one-this-task
+mImageNotOneThisSession               refusals/domain/attachments/image-not-one-this-session
 mImageWasAlreadySent                  refusals/domain/attachments/image-was-already-sent
 mMessageImagesAreAtMostMib            refusals/domain/attachments/message-images-are-at-most-mib
 mImageAnotherTaskUploadThisOne        refusals/domain/attachments/image-another-task-upload-this-one

@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageImages, type ComposerAttachment, type SentImage } from "@dude/design-system/components";
 import { formatBytes } from "@dude/design-system";
 import { ATTACHMENT_LIMITS, type AttachmentInfo } from "@dude/domain";
-import { ApiError, type ApiClient, type AttachmentLimits } from "../api/client.ts";
+import { ApiError, type ApiClient, type AttachmentLimits, type UploadRoute } from "../api/client.ts";
 import { BUDGET_SPENT, ShrinkError, deliveredName, makeChip, sentChips, type Limits, type Prepared } from "../images.ts";
 
 interface Chip extends ComposerAttachment {
@@ -52,7 +52,7 @@ export function useAttachmentLimits(client: ApiClient): AttachmentLimits | null 
  * uploaded; the chip shows each step. With no task known, images are made
  * and kept, not uploaded.
  */
-export function useImageTray(client: ApiClient, taskId: string | undefined, limitsAnswer: AttachmentLimits | null): ImageTray {
+export function useImageTray(client: ApiClient, taskId: string | undefined, limitsAnswer: AttachmentLimits | null, route: UploadRoute = "tasks"): ImageTray {
   const [chips, setChips] = useState<Chip[]>([]);
   const chipsRef = useRef<Chip[]>([]);
   chipsRef.current = chips;
@@ -117,7 +117,7 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
         }
         update(chip.id, { name: made.name, deliveredBytes: made.delivered.size, progress: 0 });
         try {
-          const uploaded = await client.uploadAttachment(taskId, made, (p) => update(chip.id, { progress: p }));
+          const uploaded = await client.uploadAttachment(taskId, made, (p) => update(chip.id, { progress: p }), route);
           if (!chipsRef.current.some((c) => c.id === chip.id)) {
             void client.removeAttachment(uploaded.id).catch(() => {});
             continue;
@@ -128,7 +128,7 @@ export function useImageTray(client: ApiClient, taskId: string | undefined, limi
         }
       }
     })();
-  }, [client, taskId, limits, update, uploadFailed, dropPreview]);
+  }, [client, taskId, limits, route, update, uploadFailed, dropPreview]);
 
   const remove = useCallback((id: string) => {
     const chip = chipsRef.current.find((c) => c.id === id);

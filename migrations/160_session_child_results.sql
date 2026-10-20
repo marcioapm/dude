@@ -1,4 +1,4 @@
--- 159_session_child_results.sql: session-owned children have no task; their durable result is session-owned.
+-- 160_session_child_results.sql: session-owned children have no task; their durable result is session-owned.
 ALTER TABLE child_results ALTER COLUMN task_id DROP NOT NULL;
 ALTER TABLE child_results ADD COLUMN session_id text REFERENCES sessions(id) ON DELETE CASCADE;
 ALTER TABLE child_results DROP CONSTRAINT child_results_source_kind_check;
