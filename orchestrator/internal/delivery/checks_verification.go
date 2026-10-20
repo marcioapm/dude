@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -35,8 +36,8 @@ func (j gatedJudgement) status() string {
 
 // checksVerificationText is the checks gate's compact account for a PR:
 // each gated Run of the current attempt with its latest judgement, oldest Run
-// first. The headline is the weakest of them: a skip, else any waiver
-// with each reason, else verified.
+// first, the earliest left out past checksRowsMax. The headline is the weakest
+// of them all: a skip, else any waiver with each reason, else verified.
 func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT phase, payload FROM (
 		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, e.payload
@@ -101,18 +102,50 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 		b.WriteString("Checks were verified against the Run's recorded commands.\n")
 	}
 	b.WriteByte('\n')
-	for _, j := range runs {
-		fmt.Fprintf(&b, "- **%s** — %s\n", j.Role, j.status())
-		for _, c := range j.Checks {
-			fmt.Fprintf(&b, "  - `%s` — **%s**", c.Command, valueOr(c.Result, c.Decision))
-			if c.Reason != "" {
-				fmt.Fprintf(&b, " — %s", oneLine(c.Reason))
-			}
-			if c.CallID != "" {
-				fmt.Fprintf(&b, " (`%s`)", c.CallID)
-			}
-			b.WriteByte('\n')
-		}
+	lines := make([]string, len(runs))
+	for i, j := range runs {
+		lines[i] = checksRow(j)
+	}
+	// The newest rows that fit checksRowsMax, the newest always.
+	from, size := len(lines), 0
+	for from > 0 && (from == len(lines) || size+utf8.RuneCountInString(lines[from-1]) <= checksRowsMax) {
+		from--
+		size += utf8.RuneCountInString(lines[from])
+	}
+	switch from {
+	case 0:
+	case 1:
+		b.WriteString("1 earlier Run omitted.\n")
+	default:
+		fmt.Fprintf(&b, "%d earlier Runs omitted.\n", from)
+	}
+	for _, row := range lines[from:] {
+		b.WriteString(row)
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// A pull request body holds at most 65,536 characters. The rows get
+// checksRowsMax of them; each command and reason is clipped to
+// checksFieldMax, so one Run's row (at most checksCountMax+1 checks) fits.
+const (
+	checksRowsMax  = 40_000
+	checksFieldMax = 300
+)
+
+// checksRow is a gated Run's line and one line per check.
+func checksRow(j gatedJudgement) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "- **%s** — %s\n", j.Role, j.status())
+	for _, c := range j.Checks {
+		fmt.Fprintf(&b, "  - `%s` — **%s**", clip(c.Command, checksFieldMax), valueOr(c.Result, c.Decision))
+		if c.Reason != "" {
+			fmt.Fprintf(&b, " — %s", clip(oneLine(c.Reason), checksFieldMax))
+		}
+		if c.CallID != "" {
+			fmt.Fprintf(&b, " (`%s`)", c.CallID)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
