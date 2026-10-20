@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -193,6 +195,135 @@ func TestAVerifierIsToldItsCheckoutPathForARepositoryLuxRenames(t *testing.T) {
 	}
 	if !strings.Contains(brief, "checked out at `"+want+"`") || !strings.Contains(brief, "each from `"+want+"`") {
 		t.Fatalf("the brief does not name %s:\n%s", want, brief)
+	}
+}
+
+// What a verification of a task's head was settled as: its kept status
+// and reason.
+func (w *world) verifySettled(child string) (status, reason string) {
+	w.t.Helper()
+	w.until("the verifier's settlement", func() bool {
+		return w.count(`SELECT count(*) FROM child_results WHERE child_run_id = $1`, child) == 1
+	})
+	if err := w.owner.QueryRow(context.Background(), `SELECT verify->>'status', COALESCE(verify->>'reason', '')
+		FROM child_results WHERE child_run_id = $1`, child).Scan(&status, &reason); err != nil {
+		w.t.Fatal(err)
+	}
+	return status, reason
+}
+
+// passingReply is a verifier's reply reporting that "true" exited 0.
+var passingReply = fakeagent.VerifyReply([]fakeagent.VerifyResult{{Command: "true"}})
+
+// verifierHangingAfterAPass has every verifier print passingReply and
+// then work on, its turn never ending.
+func (w *world) verifierHangingAfterAPass() {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if b.Verify != nil {
+			b = fakelux.Behaviour{Command: []string{"printf", "%s", passingReply}, Hang: true}
+		}
+		return b
+	}
+}
+
+// reported waits for a verifier's passing report to be recorded.
+func (w *world) reported(child string) {
+	w.t.Helper()
+	w.until("the verifier to have reported", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message'
+			AND payload->>'text' LIKE '%"verify"%'`, child) > 0
+	})
+}
+
+// A verifier whose lux Run fails after it printed a passing report has
+// not passed: settlement goes by the child's status, not the report.
+func TestAVerifierWhoseRunFailsAfterAPassingReportFails(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	w.verifierHangingAfterAPass()
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	child, _ := w.must(task, "verify", `{"commands":["true"]}`)["runId"].(string)
+	w.reported(child)
+	w.lux.Crash(w.luxRunOf(child))
+	text := w.verifyResult(child)
+	if status, reason := w.verifySettled(child); status != "failed" || reason != "failed" {
+		t.Fatalf("settled %s %s", status, reason)
+	}
+	if !strings.Contains(text, " failed: the verifier's Run was failed.") {
+		t.Fatalf("the result:\n%s", text)
+	}
+}
+
+// A verifier aborted, or restarted, after it printed a passing report is
+// settled aborted, not passed.
+func TestAVerifierStoppedAfterAPassingReportIsAborted(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	w.verifierHangingAfterAPass()
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	running := w.reported
+
+	aborted, _ := w.must(task, "verify", `{"commands":["true"],"key":"abort"}`)["runId"].(string)
+	running(aborted)
+	if status, body := w.call("/internal/runs/"+aborted+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	if status, reason := w.verifySettled(aborted); status != "failed" || reason != "aborted" {
+		t.Fatalf("aborted: settled %s %s", status, reason)
+	}
+	if text := w.verifyResult(aborted); !strings.Contains(text, " failed: the verifier's Run was aborted.") {
+		t.Fatalf("the result:\n%s", text)
+	}
+
+	restarted, _ := w.must(task, "verify", `{"commands":["true"],"key":"restart"}`)["runId"].(string)
+	running(restarted)
+	if status, body := w.restartChild(restarted); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	if status, reason := w.verifySettled(restarted); status != "failed" || reason != "aborted" {
+		t.Fatalf("restarted: settled %s %s", status, reason)
+	}
+}
+
+// restartChild restarts a conductor's child as its owner does.
+func (w *world) restartChild(child string) (int, map[string]any) {
+	w.t.Helper()
+	req, _ := http.NewRequest("POST", w.api+"/internal/runs/"+child+"/restart", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer svc")
+	req.Header.Set("X-Dude-Organization", w.org)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "restart-"+child)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+// A verifier asked for the tests of paths, which runs nothing and reports
+// an empty list, has not passed: no-report.
+func TestAVerifierReportingNoResultsFails(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	child, _ := w.must(task, "verify", `{"paths":["internal/billing"]}`)["runId"].(string)
+	text := w.verifyResult(child)
+	if status, reason := w.verifySettled(child); status != "failed" || reason != "no-report" {
+		t.Fatalf("settled %s %s", status, reason)
+	}
+	if !strings.Contains(text, " failed: the verifier reported no results.") {
+		t.Fatalf("the result:\n%s", text)
 	}
 }
 
