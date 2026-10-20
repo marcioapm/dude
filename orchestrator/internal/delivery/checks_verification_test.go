@@ -185,11 +185,21 @@ func TestThePullRequestChecksAccountIsBounded(t *testing.T) {
 	if n := utf8.RuneCountInString(body); n > 65_536 {
 		t.Fatalf("the pull request body is %d characters, more than GitHub's 65,536", n)
 	}
-	section := v.text(prBodyMax)
-	if !strings.Contains(section, "## Verification\nTested at `0123456`.") {
-		t.Fatalf("no test gate section in:\n%.400s", section)
+	_, section, _ := strings.Cut(body, verificationStart+"\n")
+	section, _, _ = strings.Cut(section, "\n"+verificationEnd)
+	gate, got, _ := strings.Cut(section, "\n\n### Checks\n")
+	wantGate := "## Verification\nTested at `0123456`.\n\n"
+	for i := 1; i <= 6; i++ {
+		status := "pass"
+		if i == 6 {
+			status = "blocked, waived by a person: Checked on staging by hand."
+		}
+		wantGate += fmt.Sprintf("- **%s** — Criterion %d: %s\n", status, i, strings.TrimSpace(strings.Repeat("the page shows it ", 10)))
 	}
-	_, got, _ := strings.Cut(section, "\n\n### Checks\n")
+	wantGate += "\nThe evidence (video, screenshots, `acceptance.md`) is on the task in dude."
+	if gate != wantGate {
+		t.Fatalf("the test gate's section is\n%s\nwant\n%s", gate, wantGate)
+	}
 	head, rows, _ := strings.Cut(got, "\n\n")
 	// Every reason is clipped to checksFieldMax characters; 25 lines of 310 fit checksWaiversMax.
 	reason := strings.Repeat("ação ", 59) + "ação…"
