@@ -140,18 +140,24 @@ func clone() cloned {
 }
 
 // configure sets a new clone up; a variable so a test can make it fail.
+// Both settings are per database, since a clone does not inherit its
+// template's; Upgrade databases skip configure and keep the defaults.
 var configure = func(ctx context.Context, admin *pgx.Conn, name string) error {
 	// A test's commit need not wait for its WAL to reach the disk: a
 	// database that a crash would lose is dropped anyway, and what a commit
-	// makes visible to other sessions is the same. Per database, since a
-	// clone does not inherit its template's settings.
+	// makes visible to other sessions is the same.
 	//
-	// Generic plans: each test connects to a fresh database, so a prepared
-	// statement lives for a few dozen executions, and under the default
-	// plan_cache_mode (auto) the syncer's queries (phases.dueQuery and its
-	// probes) are custom-planned on most of them: ~5 ms to plan against
-	// ~0.1 ms to execute, a third of the server's CPU. A plan choice
-	// cannot change a query's result.
+	// force_generic_plan: a test's prepared statements live a few dozen
+	// executions on fresh connections, and under auto each connection
+	// custom-plans a statement's first five; the syncer's (phases.dueQuery
+	// and pending's probes) take ~5 ms to plan against ~0.1 ms to run.
+	// Production keeps auto, which goes generic after five executions on
+	// its long-lived pool, so tests run the plan production settles on.
+	// The plan can still matter: a generic plan cannot fold parameters into
+	// a CASE, so whether a query errors can differ, and rows in an order
+	// the query leaves open can differ. A test that depends on a custom
+	// plan sets force_custom_plan itself, as
+	// internal/phases/due_reference_test.go does.
 	for _, set := range []string{"synchronous_commit = off", "plan_cache_mode = force_generic_plan"} {
 		if _, err := admin.Exec(ctx, "ALTER DATABASE "+name+" SET "+set); err != nil {
 			return err

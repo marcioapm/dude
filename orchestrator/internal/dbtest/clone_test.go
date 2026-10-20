@@ -63,25 +63,38 @@ func TestACloneThatFailsToBeConfiguredIsDropped(t *testing.T) {
 	}
 }
 
-// A test's connections reuse one generic plan per prepared statement from
-// its first execution: none is custom-planned.
+// A test's connections, the owner's and the app pool's, reuse one generic
+// plan per prepared statement from its first execution: none is
+// custom-planned.
 func TestACloneReusesGenericPlans(t *testing.T) {
-	_, owner := Open(t)
+	app, owner := Open(t)
 	ctx := context.Background()
-	if _, err := owner.Prepare(ctx, "by_id", `SELECT count(*) FROM pg_class WHERE oid = $1`); err != nil {
+	pooled, err := app.Pool.Acquire(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for range 3 {
-		if _, err := owner.Exec(ctx, "by_id", 1259); err != nil {
-			t.Fatal(err)
+	defer pooled.Release()
+	for _, c := range []struct {
+		name string
+		conn *pgx.Conn
+	}{{"owner", owner}, {"app pool", pooled.Conn()}} {
+		// A statement without parameters is always planned generically:
+		// the $1 is what tells force_generic_plan from auto.
+		if _, err := c.conn.Prepare(ctx, "by_id", `SELECT count(*) FROM pg_class WHERE oid = $1`); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
 		}
-	}
-	var generic, custom int64
-	if err := owner.QueryRow(ctx, `SELECT generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'by_id'`).
-		Scan(&generic, &custom); err != nil {
-		t.Fatal(err)
-	}
-	if generic != 3 || custom != 0 {
-		t.Fatalf("generic plans %d, custom plans %d over 3 executions; want 3 and 0", generic, custom)
+		for range 3 {
+			if _, err := c.conn.Exec(ctx, "by_id", 1259); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+		}
+		var generic, custom int64
+		if err := c.conn.QueryRow(ctx, `SELECT generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'by_id'`).
+			Scan(&generic, &custom); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if generic != 3 || custom != 0 {
+			t.Errorf("%s connection: generic plans %d, custom plans %d over 3 executions; want 3 and 0", c.name, generic, custom)
+		}
 	}
 }
