@@ -805,11 +805,11 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
 	}
 	search := in.native(capabilities.NativeWebSearch)
+	webSearch := "disabled"
 	if search {
-		settings = append(settings, "web_search="+tomlString("live"))
-	} else {
-		settings = append(settings, "web_search="+tomlString("disabled"))
+		webSearch = "live"
 	}
+	settings = append(settings, "web_search="+tomlString(webSearch))
 	args := harnessArgs(in.Options)
 	for i := 0; i < len(args); i++ {
 		arg, override := args[i], ""
