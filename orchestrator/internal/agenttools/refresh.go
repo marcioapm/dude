@@ -14,7 +14,7 @@ import (
 
 // refresh_pull_requests (capabilities.PRRefresh) reads the task's open pull
 // requests from GitHub now, through prs.Syncer.Sync, and answers the
-// pull_requests listing. It is checked and its GitHub read spent in the
+// pull_requests listing. It is checked and its GitHub reads spent in the
 // call's transaction, synced with none open (Sync opens its own and retries
 // a sync another made at the same time), and listed in a second.
 
@@ -129,21 +129,14 @@ func listRefreshed(ctx context.Context, tx pgx.Tx, _ Caller, r refreshCheck, fai
 		if err != nil {
 			return nil, err
 		}
-		out["notRefreshed"] = refreshText("not-refreshed", strings.Join(names, ", "))
+		out["notRefreshed"] = notRefreshed.Render(strings.Join(names, ", "))
 	}
 	return out, nil
 }
 
-// refreshText renders results/refresh-pull-requests.md's text name.
-func refreshText(name string, data any) string { return refreshTexts[name].Render(data) }
-
-var refreshTexts = func() map[string]delivery.Text {
-	out := map[string]delivery.Text{}
-	for _, name := range []string{"not-refreshed"} {
-		out[name] = delivery.MustText("results/refresh-pull-requests/" + name)
-	}
-	return out
-}()
+// notRefreshed is results/refresh-pull-requests.md's line naming the pull
+// requests GitHub did not answer for.
+var notRefreshed = delivery.MustText("results/refresh-pull-requests/not-refreshed")
 
 var refreshTools = []tool{
 	around(define("refresh_pull_requests", refreshPullRequests).before(forgeFor).countingAttempts(), syncNow, listRefreshed),
