@@ -70,9 +70,7 @@ type instructionData struct {
 	Role string
 	// Which of the tools dude.md names this Run has.
 	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, SearchMemory, Remember, RequestMachine bool
-	// Which of the conductor's tools its contract names this Run has.
-	RequestLimit, Verify bool
-	ChildToolNames       string
+	ChildToolNames                                                                                string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
 	grants           capabilities.Grants
@@ -153,8 +151,6 @@ func (in InstructionsInput) data(role string) instructionData {
 				has[t] = true
 			}
 		}
-		// Not in InstructionTools: "verify" is a word every role's text uses.
-		has["verify"] = grants.Tool("verify") && !in.Child
 	}
 	var childTools []string
 	for _, t := range ChildTools {
@@ -165,7 +161,6 @@ func (in InstructionsInput) data(role string) instructionData {
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
 		SearchMemory: has["search_memory"], Remember: has["remember"], RequestMachine: has["request_machine"],
-		RequestLimit: has["request_limit"], Verify: has["verify"],
 		ChildToolNames:   joinList(childTools, ", ", ", and "),
 		ExternalTextNote: ExternalTextNote, grants: *grants}
 }
