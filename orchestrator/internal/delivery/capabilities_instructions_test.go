@@ -121,9 +121,9 @@ var toolCommands = map[string][]string{
 var notTheTool = map[string][]string{
 	"decide": {"**People decide**", "and what you decide", "read what you need with your tools, then decide.",
 		"start nothing and decide nothing", "whatever you decide", "only a person may decide", "the states that decide it"},
-	"feedback": {"reviews and feedback)", "reviews and feedback, as dude last read them", "reviews and feedback, read from GitHub now",
+	"feedback": {"reviews and feedback, as dude last read them", "reviews and feedback, read from GitHub now",
 		"come back as feedback.", "findings and feedback you are given",
-		// pull_requests' own feedback ids, not the feedback tool.
+		// pull_requests' feedback-id parameter, not the feedback tool.
 		"name feedback ids for their whole text", "`dude prs [--feedback ID]...`"},
 	// refresh_pull_requests' shell form is a flag of dude prs.
 	"pull_requests": {"`dude prs --refresh`"},
