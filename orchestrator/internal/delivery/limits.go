@@ -40,16 +40,17 @@ func GitHubSettingsTx(ctx context.Context, tx pgx.Tx) (forge.Settings, bool, err
 	return forge.ReadSettings(raw), true, nil
 }
 
+// rerunClaims are the task's ($1) rerun claims (event $2, action $3), as e:
+// a claim GitHub refused outright (released) does not count.
+const rerunClaims = `SELECT e.payload->>'repo' AS repo, (e.payload->>'number')::int AS number, e.payload->>'head' AS head
+	FROM events e WHERE e.task_id = $1 AND e.event_type = $2 AND e.payload->>'action' = $3 AND e.payload->>'released' IS NULL
+	AND NOT EXISTS (SELECT 1 FROM events r WHERE r.task_id = e.task_id AND r.event_type = e.event_type AND r.payload->>'released' = e.id)`
+
 // RerunClaimedTx says the failed checks of repo's pull request number at
-// head were already run again for the task, by any of its Runs: a claim
-// GitHub refused outright (released) does not count.
+// head were already run again for the task, by any of its Runs.
 func RerunClaimedTx(ctx context.Context, tx pgx.Tx, taskID, repo string, number int, head string) (bool, error) {
 	var claimed bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events e WHERE e.task_id = $1 AND e.event_type = $2
-		AND e.payload->>'action' = $3 AND e.payload->>'repo' = $4 AND (e.payload->>'number')::int = $5 AND e.payload->>'head' = $6
-		AND e.payload->>'released' IS NULL
-		AND NOT EXISTS (SELECT 1 FROM events r WHERE r.task_id = e.task_id AND r.event_type = e.event_type
-			AND r.payload->>'released' = e.id))`,
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM (`+rerunClaims+`) c WHERE c.repo = $4 AND c.number = $5 AND c.head = $6)`,
 		taskID, EvPullRequestAction, ActionRerunChecks, repo, number, head).Scan(&claimed)
 	return claimed, err
 }
@@ -128,23 +129,22 @@ func TaskLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (TaskLimits, er
 	if l.FixRoundsSetIn, err = policySetIn(ctx, tx, taskID, "maxPrFixIterations"); err != nil {
 		return l, err
 	}
-	rows, err := tx.Query(ctx, `SELECT r.name, pr.number, COALESCE(pr.head_sha, '')
+	// Each open pull request with its rerun claim at its head, in one query.
+	rows, err := tx.Query(ctx, `WITH claims AS (SELECT DISTINCT repo, number, head FROM (`+rerunClaims+`) c)
+		SELECT r.name, pr.number, COALESCE(pr.head_sha, ''), c.repo IS NOT NULL
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.task_id = $1 AND pr.state IN ('open', 'draft') ORDER BY pr.created_at, pr.id`, taskID)
+		LEFT JOIN claims c ON c.repo = r.name AND c.number = pr.number AND c.head = COALESCE(pr.head_sha, '')
+		WHERE pr.task_id = $1 AND pr.state IN ('open', 'draft') ORDER BY pr.created_at, pr.id`,
+		taskID, EvPullRequestAction, ActionRerunChecks)
 	if err != nil {
 		return l, err
 	}
 	prs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (LimitsPR, error) {
 		var p LimitsPR
-		return p, r.Scan(&p.Repo, &p.Number, &p.Head)
+		return p, r.Scan(&p.Repo, &p.Number, &p.Head, &p.RerunClaimed)
 	})
 	if err != nil {
 		return l, err
-	}
-	for i, p := range prs {
-		if prs[i].RerunClaimed, err = RerunClaimedTx(ctx, tx, taskID, p.Repo, p.Number, p.Head); err != nil {
-			return l, err
-		}
 	}
 	l.PullRequests = prs
 	return l, nil
