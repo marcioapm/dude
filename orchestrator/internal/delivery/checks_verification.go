@@ -46,27 +46,17 @@ func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, err
 	if err != nil {
 		return nil, err
 	}
-	var runs []gatedJudgement
-	for rows.Next() {
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (gatedJudgement, error) {
 		var phase string
 		var payload []byte
-		if err := rows.Scan(&phase, &payload); err != nil {
-			rows.Close()
-			return nil, err
-		}
 		var j gatedJudgement
-		if err := json.Unmarshal(payload, &j); err != nil {
-			rows.Close()
-			return nil, err
+		if err := row.Scan(&phase, &payload); err != nil {
+			return j, err
 		}
-		role := RoleForPhase[phase]
-		if phase == PhaseFix {
-			role = "fixer"
-		}
-		j.Role = RoleName(role)
-		runs = append(runs, j)
-	}
-	return runs, rows.Err()
+		err := json.Unmarshal(payload, &j)
+		j.Role = RoleName(PromptRoleForPhase[phase])
+		return j, err
+	})
 }
 
 var (
@@ -108,7 +98,7 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 		// the ledger. The newest waivers that fit beside a compact newest Run.
 		shown := make([]string, len(waivers))
 		for i, j := range waivers {
-			shown[i] = fmt.Sprintf("- %s: %s\n", j.Role, clip(oneLine(j.Message), checksFieldMax))
+			shown[i] = fmt.Sprintf("- %s: %s\n", j.Role, checksField(j.Message))
 		}
 		from := newestThatFit(shown, min(checksWaiversMax, room-checksFixedMax-utf8.RuneCountInString(compact)))
 		writeOmitted(&b, from, "waiver")

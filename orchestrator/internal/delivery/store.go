@@ -1102,9 +1102,6 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 		verification, _, err = readVerification(ctx, tx, st)
 		return err
 	})
-	if verification.empty() {
-		return title, prBody(goal, criteria, review, ""), err
-	}
 	return title, verification.fit(func(section string) string { return prBody(goal, criteria, review, section) }), err
 }
 

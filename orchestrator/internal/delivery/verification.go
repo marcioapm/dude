@@ -810,14 +810,14 @@ func readVerification(ctx context.Context, tx pgx.Tx, st *State) (verificationPa
 	return verificationParts{gate: verificationSection(v, st.Heads, link), runs: runs}, link, nil
 }
 
-func (v verificationParts) empty() bool { return v.gate == "" && len(v.runs) == 0 }
-
 // verificationParts is a Verification section before its checks account
 // is fitted: the test gate's section and the gated Runs.
 type verificationParts struct {
 	gate string
 	runs []gatedJudgement
 }
+
+func (v verificationParts) empty() bool { return v.gate == "" && len(v.runs) == 0 }
 
 // text is the section with its checks account in at most room characters.
 func (v verificationParts) text(room int) string {
