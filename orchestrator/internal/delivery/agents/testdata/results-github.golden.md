@@ -40,7 +40,19 @@ GitHub did not answer reading acme/api: try again later
 
 ## github-forbidden
 
+GitHub refused reading acme/api#7 (HTTP 403); a pull request's conversation is read with github_pull_request
+
+## github-forbidden-pull-request
+
 GitHub refused reading acme/api#7 (HTTP 403)
+
+## github-forbidden-lacks
+
+dude's GitHub connection lacks Issues: read, so GitHub refused reading acme/api#7 (HTTP 403); a pull request's conversation is read with github_pull_request
+
+## github-forbidden-lacks-either
+
+dude's GitHub connection lacks Pull requests: read and Contents: read, or Issues: read, so GitHub refused reading acme/api#7 (HTTP 403)
 
 ## github-refused
 
@@ -64,7 +76,7 @@ the projects linked to this session
 
 ## issue-pull-request
 
-a pull request: github_pull_request reads its reviews, threads, checks and files
+a pull request: github_pull_request reads its conversation comments, reviews, threads, checks and files
 
 ## issue-more-comments
 
@@ -85,6 +97,10 @@ a pull request: github_pull_request reads its reviews, threads, checks and files
 ## pr-more-files
 
 …cut: the first 300 changed files
+
+## pr-more-comments
+
+…cut: the newest 50 of 73 comments
 
 ## pr-no-diff
 
