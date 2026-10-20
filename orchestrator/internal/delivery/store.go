@@ -992,48 +992,12 @@ func FreezePublicationTx(ctx context.Context, tx pgx.Tx, taskID, branch string) 
 // acceptance criteria, what review found — rather than asking a model to
 // describe work it already finished (plan §13.2); each names its siblings.
 func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, forges Forges) ([]string, error) {
-	// The repositories the work moved that have no pull request yet.
 	var todo, changed []Repository
 	var ids []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		repos, err := TaskRepositories(ctx, tx, st.TaskID)
-		if err != nil {
-			return err
-		}
-		// An open one carries whatever the branch gets next. A merged or
-		// closed one covers only what it held: a later change in its
-		// repository needs a pull request of its own.
-		rows, err := tx.Query(ctx, `SELECT id, repository_id, state IN ('open', 'draft'), COALESCE(head_sha, '')
-			FROM pull_requests WHERE task_id = $1 AND head_branch = $2 ORDER BY created_at, id`, st.TaskID, st.Branch)
-		if err != nil {
-			return err
-		}
-		prs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
-			ID, RepositoryID string
-			Open             bool
-			HeadSHA          string
-		}])
-		if err != nil {
-			return err
-		}
-		covered := map[string]string{} // repository → the head its pull requests carry; "*" while one is open
-		for _, pr := range prs {
-			ids = append(ids, pr.ID)
-			if pr.Open {
-				covered[pr.RepositoryID] = "*"
-			} else if covered[pr.RepositoryID] != "*" {
-				covered[pr.RepositoryID] = pr.HeadSHA
-			}
-		}
-		for _, r := range repos {
-			if _, moved := st.Heads[r.Name]; moved && r.Access == "write" {
-				changed = append(changed, r)
-				if c, ok := covered[r.ID]; !ok || c != "*" && c != st.Heads[r.Name] {
-					todo = append(todo, r)
-				}
-			}
-		}
-		return nil
+		var err error
+		todo, changed, ids, err = reposToOpen(ctx, tx, st)
+		return err
 	})
 	if err != nil || len(todo) == 0 {
 		return ids, err
@@ -1072,6 +1036,50 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+// reposToOpen names the writable repositories the work moved (changed) and,
+// of those, the ones that would get a new pull request (todo), with the ids
+// of every pull request the task has on its branch, oldest first.
+func reposToOpen(ctx context.Context, tx pgx.Tx, st *State) (todo, changed []Repository, ids []string, err error) {
+	repos, err := TaskRepositories(ctx, tx, st.TaskID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// An open one carries whatever the branch gets next. A merged or
+	// closed one covers only what it held: a later change in its
+	// repository needs a pull request of its own.
+	rows, err := tx.Query(ctx, `SELECT id, repository_id, state IN ('open', 'draft'), COALESCE(head_sha, '')
+		FROM pull_requests WHERE task_id = $1 AND head_branch = $2 ORDER BY created_at, id`, st.TaskID, st.Branch)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	prs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		ID, RepositoryID string
+		Open             bool
+		HeadSHA          string
+	}])
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	covered := map[string]string{} // repository → the head its pull requests carry; "*" while one is open
+	for _, pr := range prs {
+		ids = append(ids, pr.ID)
+		if pr.Open {
+			covered[pr.RepositoryID] = "*"
+		} else if covered[pr.RepositoryID] != "*" {
+			covered[pr.RepositoryID] = pr.HeadSHA
+		}
+	}
+	for _, r := range repos {
+		if _, moved := st.Heads[r.Name]; moved && r.Access == "write" {
+			changed = append(changed, r)
+			if c, ok := covered[r.ID]; !ok || c != "*" && c != st.Heads[r.Name] {
+				todo = append(todo, r)
+			}
+		}
+	}
+	return todo, changed, ids, nil
 }
 
 // pullRequestText is a task's pull request title and body, rendered
