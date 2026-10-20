@@ -30,7 +30,8 @@
 //	dude feedback resolve ID --commit HEAD [--repo R]
 //	                                      the commit that fixed an item
 //	dude findings [ID...]                 a conductor's: the task's findings
-//	dude prs [--refresh]                  a conductor's: the task's pull requests
+//	dude prs [--refresh | --feedback ID...]
+//	                                      a conductor's: the task's pull requests
 //	dude chat RUN [--limit N]             a conductor's: a Run's Chat and open question
 //	dude limits                           a conductor's: the task's limits, and what is used
 //	dude limit request LIMIT [--to N] [--pr PR] --reason R
@@ -430,16 +431,24 @@ func run(args []string, out io.Writer) error {
 		return show(out, *asJSON, call("findings", body))
 	case "prs":
 		refresh := fs.Bool("refresh", false, "read the pull requests from GitHub now")
+		var feedback many
+		fs.Var(&feedback, "feedback", "a feedback item to read in full, by the id the list gives (repeatable)")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		if fs.NArg() > 0 {
-			return errors.New("usage: dude prs [--refresh]")
+		// refresh_pull_requests takes no feedback ids, and a full text is read
+		// from dude's record without GitHub: the two are separate calls.
+		if fs.NArg() > 0 || (*refresh && len(feedback) > 0) {
+			return errors.New("usage: dude prs [--refresh | --feedback ID...]")
 		}
 		if *refresh {
 			return show(out, *asJSON, call("refresh_pull_requests", map[string]any{}))
 		}
-		return show(out, *asJSON, call("pull_requests", map[string]any{}))
+		body := map[string]any{}
+		if len(feedback) > 0 {
+			body["feedback"] = []string(feedback)
+		}
+		return show(out, *asJSON, call("pull_requests", body))
 	case "chat":
 		limit := fs.Int("limit", 0, "messages, 1 to 100 (default 30)")
 		args, err := parse(fs, rest)
@@ -1021,9 +1030,10 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              holds until your work is published with that commit
   dude findings [ID...]                      a conductor's: the task's review findings and how each
                                              was settled; with IDs (fnd_…), those in full
-  dude prs [--refresh]                       a conductor's: the task's pull requests, their checks,
-                                             reviews and feedback, as dude last read them (lastPolledAt);
-                                             --refresh reads GitHub now, one of the hour's GitHub reads
+  dude prs [--refresh | --feedback ID...]    a conductor's: the task's pull requests, their checks,
+                                             reviews and feedback, as dude last read them (lastPolledAt),
+                                             each item an excerpt; --feedback IDs gives those items in
+                                             full; --refresh reads GitHub now, one of the hour's GitHub reads
   dude chat RUN [--limit N]                  a conductor's: a Run of this task's Chat, latest N (default 30,
                                              max 100) oldest first, and the question it waits on
   dude limits                                a conductor's: the limits the task is held to, where each

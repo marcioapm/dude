@@ -8,6 +8,8 @@ decides is unchanged. The scripted conductor carries out the tool call
 the comment names ("tool: reply_on_pull_request {...}"), as a real
 conductor would decide to; the fake GitHub then has dude's reply on the
 pull request, quoting the question, and read back it wakes nothing.
+The conductor then reads the conversation on GitHub, and a long comment
+in full from dude's own record (pull_requests, by the id it lists).
 """
 
 from __future__ import annotations
@@ -98,6 +100,41 @@ def test_a_mention_on_the_pull_request_is_answered_there(page: Page, web_url: st
     reads = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "github.read"]
     assert [(r["tool"], r["repo"], r["number"]) for r in reads] == [("github_pull_request", slug, number)], reads
 
+    # A long comment, by someone who may not wake a fixer, is listed by
+    # pull_requests as a cut excerpt; named by the id the listing gives, it
+    # is read whole from dude's own record, with no GitHub read spent.
+    fake_github.permissions["stranger"] = "none"
+    head = "The retry loop needs a cap. " * 11
+    tail = "but the meter must count every attempt, not only the last one."
+    long = head + tail
+    assert len(head) > 280
+    said_id = f"issue-comment-{fake_github.comment(number, long, author='stranger')}"
+    commented = lambda: [e["payload"] for e in client.events(taskId=task["id"], limit=1000)
+                         if e["eventType"] == "pull_request.commented" and e["payload"]["number"] == number]
+    wait_until(lambda: any(p["feedbackId"] == said_id for p in commented()), timeout=30, message="the long comment was not recorded")
+    at = [p["feedbackId"] for p in commented()].index(said_id)
+    said = len(_said(client, conductor))
+    resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "\n".join([
+        "what did the stranger say, in full?",
+        "tool: pull_requests {}",
+        f'tool: say {{"text": "Listed: {{{{last.pullRequests.0.feedback.{at}.id}}}} cut {{{{last.pullRequests.0.feedback.{at}.cut}}}}"}}',
+        f'tool: pull_requests {{"feedback": ["{{{{last.pullRequests.0.feedback.{at}.id}}}}"]}}',
+        'tool: say {"text": "In full: {{last.feedback.0.author}} said {{last.feedback.0.body}}"}',
+    ])})
+    assert resp.status_code == 200, resp.text
+    # One reply, a line per say.
+    lines = lambda: [line for t in _said(client, conductor)[said:] for line in t.splitlines()]
+    listed = wait_until(lambda: next((t for t in lines() if t.startswith("Listed: ")), None),
+                        timeout=60, message="the conductor never said what it listed")
+    assert listed == f"Listed: {said_id} cut true", listed
+    full = wait_until(lambda: next((t for t in lines() if t.startswith("In full: ")), None),
+                      timeout=60, message="the conductor never said the comment in full")
+    assert full.startswith("In full: stranger said ⟦external "), full
+    assert tail in full and f"⟧{long}⟦/external " in full, full
+    assert full.index(tail) - full.index("⟧") - 1 > 280, full
+    reads = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "github.read"]
+    assert len(reads) == 1, reads
+
     # Chat: gus's question, signed by his login and linked; the conductor's reply.
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
@@ -107,4 +144,6 @@ def test_a_mention_on_the_pull_request_is_answered_there(page: Page, web_url: st
     answer = page.locator("[data-testid=human-turn][data-by=conductor]")
     expect(answer).to_contain_text("Because the task asks for a greeting.")
     expect(answer.get_by_test_id("github-source")).to_contain_text(f"Replied on greeter#{number}")
+    # The conductor's reply in Chat holds the comment past its 280th character.
+    expect(page.get_by_test_id("conductor-turn").filter(has_text="In full: stranger said")).to_contain_text(tail)
     assert console_errors == []
