@@ -489,7 +489,12 @@ func defineFor[In, Out any](name string, session bool,
 	if err != nil {
 		panic(fmt.Sprintf("tool %s: %v", name, err))
 	}
-	key := toolKey(name, session)
+	// A session agent's tools share their names with the task agents', so
+	// their texts are under session/.
+	key := name
+	if session {
+		key = "session/" + name
+	}
 	describeParameters(key, schema)
 	return tool{name: name, description: delivery.ToolText(key, toolTextData), session: session, schema: schema,
 		run: func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error) {
@@ -507,15 +512,6 @@ func defineFor[In, Out any](name string, session bool,
 
 // toolTextData is what a tool's description may name: create_task's GoalMin.
 var toolTextData = struct{ GoalMin int }{GoalMin}
-
-// toolKey is the name of a tool's text: a session agent's tools share their
-// names with the task agents', so theirs are under session/.
-func toolKey(name string, session bool) string {
-	if session {
-		return "session/" + name
-	}
-	return name
-}
 
 // describeParameters gives schema's properties their descriptions from the
 // tool's text, each by its path ("questions.header" for a field of the
