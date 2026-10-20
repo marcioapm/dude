@@ -18,6 +18,7 @@ const (
 	rProjectNotLinkedThisSession           = "project %s is not linked to this session"
 	rNoTaskIn                              = "no task %s in %s"
 	rNameTaskReadFindingsInFull            = "name the task to read findings in full"
+	rNameTaskReadFeedbackInFull            = "name the task to read its feedback in full"
 	rNoMemory                              = "no memory %s"
 	rNotTaskOrEpicLinkedProjects           = "%q is not a task or epic of the linked projects"
 	rPropose130Items                       = "propose 1 to 30 items"

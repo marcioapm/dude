@@ -1,6 +1,6 @@
 # pull_requests
 
-A linked project's pull requests: with task, that task's in full (checks, reviews, feedback); without, the project's latest, one line each.
+A linked project's pull requests: with task, that task's in full (checks, reviews, feedback; name feedback ids to read those items' whole text); without, the project's latest, one line each.
 
 ```json
 {
@@ -23,6 +23,16 @@ A linked project's pull requests: with task, that task's in full (checks, review
         "type": "string"
       },
       "description": "findings: with task, those to read in full (fnd_…)"
+    },
+    "feedback": {
+      "type": [
+        "null",
+        "array"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "description": "with task, feedback items to read in full (at most 20), by the id its list gives"
     }
   },
   "additionalProperties": false

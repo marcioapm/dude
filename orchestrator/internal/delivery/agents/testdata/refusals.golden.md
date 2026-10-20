@@ -454,6 +454,10 @@ independent report children cannot mutate workflow or start Runs
 
 at most %d feedback items by id at once
 
+## refusals/tools/brainstorm/name-task-read-feedback-in-full
+
+name the task to read its feedback in full
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
