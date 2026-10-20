@@ -140,9 +140,10 @@ export interface ProposalItemStatus {
    * to someone else; `started`, `unlinked` and `not_a_task` block everyone, and
    * `blocker_unfiled` is an item that waits on another of the card's items
    * nobody can file. A link_project is the session owner's (`session_owner`),
-   * and nobody's once its project is `linked`.
+   * and nobody's once its project is `linked` or the session links the most
+   * projects it can (`limit`).
    */
-  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "session_owner" | "linked" | "unknown";
+  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "session_owner" | "linked" | "unknown" | "limit";
   owner?: PersonRef;
 }
 

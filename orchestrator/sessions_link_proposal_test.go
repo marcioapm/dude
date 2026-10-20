@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -136,5 +137,64 @@ func TestALinkProposalIsScopedToTheOrganisation(t *testing.T) {
 	_ = s.owner.QueryRow(context.Background(), `SELECT count(*) FROM session_projects WHERE session_id = $1`, id).Scan(&linked)
 	if linked != 1 {
 		t.Errorf("%d projects linked, want BL alone", linked)
+	}
+}
+
+// A proposal naming one project to link twice is refused: filing both
+// would fail the whole card.
+func TestALinkProposalNamesEachProjectOnce(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	run := s.started(id)
+	status, out := s.latestTool(run, "propose", `{"items":[{"kind":"link_project","project":"WC","reason":"web"},`+
+		`{"kind":"link_project","project":"web-console","reason":"again"}]}`)
+	if status == 200 || out["error"] != "item 2: project WC is item 1's already" {
+		t.Errorf("a project proposed twice: %d %v", status, out)
+	}
+	if n := s.count(`SELECT count(*) FROM session_proposals WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("a refused proposal was kept")
+	}
+}
+
+// A session linking the most projects it may (50) files a card's other
+// items; only its link_project is refused, saying why.
+func TestALinkBeyondTheSessionsLimitRefusesOnlyThatItem(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	links := []map[string]any{{"projectId": s.project, "repositoryIds": []string{}}}
+	for i := range 49 {
+		p := fmt.Sprintf("prj_more%02d_%s", i, s.org)
+		mustExec(t, s.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, $1, $1, $3)`,
+			p, s.org, fmt.Sprintf("M%02d", i))
+		links = append(links, map[string]any{"projectId": p, "repositoryIds": []string{}})
+	}
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": links})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	run := s.started(id)
+	status, out := s.latestTool(run, "propose", `{"items":[`+
+		`{"kind":"task","project":"BL","title":"Meter runs","goal":"Count experiment runs per org per day"},`+
+		`{"kind":"link_project","project":"WC","reason":"the console"}]}`)
+	if status != 200 {
+		t.Fatalf("propose: %d %v", status, out)
+	}
+	card := s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)["proposals"].([]any)[0].(map[string]any)
+	if st := card["status"].([]any)[1].(map[string]any); st["canFile"] != false || st["blockedBy"] != "limit" {
+		t.Errorf("the link's status %v", st)
+	}
+	results := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": out["proposalId"], "items": []int{0, 1}})["results"].([]any)
+	if r := results[0].(map[string]any); r["status"] != "filed" {
+		t.Errorf("the task: %v", r)
+	}
+	if r := results[1].(map[string]any); r["status"] != "refused" || r["why"] != "the session links 50 projects already, the most it can" {
+		t.Errorf("the link: %v", r)
+	}
+	if n := s.count(`SELECT count(*) FROM session_projects WHERE session_id = $1 AND project_id = $2`, id, s.webProject); n != 0 {
+		t.Errorf("WC was linked beyond the limit")
+	}
+	if n := s.count(`SELECT count(*) FROM tasks WHERE project_id = $1 AND title = 'Meter runs'`, s.project); n != 1 {
+		t.Errorf("the task was not filed")
 	}
 }

@@ -231,12 +231,15 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org strin
 	return nil
 }
 
+// linksMax is the most projects a session links.
+const linksMax = 50
+
 // setLinks makes the session's linked projects and repositories exactly
 // those given: projects the caller's organisation has, and only their own
 // repositories.
 func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []linkInput) error {
-	if len(projects) > 50 {
-		return fail(http.StatusBadRequest, "bad_request", "at most 50 projects")
+	if len(projects) > linksMax {
+		return fail(http.StatusBadRequest, "bad_request", "at most %d projects", linksMax)
 	}
 	var projectIDs, repoIDs []string
 	for _, l := range projects {
@@ -739,6 +742,10 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) f
 		if f.orgProjects[strings.ToUpper(strings.TrimSpace(item.Project))] == "" {
 			return fileBlock{why: fmt.Sprintf("no project %s in this organisation", item.Project), by: "unknown"}
 		}
+		// setLinks would refuse the whole filing; only this item is refused.
+		if len(f.projects) >= linksMax {
+			return fileBlock{why: fmt.Sprintf("the session links %d projects already, the most it can", linksMax), by: "limit"}
+		}
 	default:
 		return fileBlock{why: "unknown item", by: "unknown"}
 	}
@@ -948,6 +955,10 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 			}
 			done[n], made[n] = true, taskID
 			linkedOne = linkedOne || item.Kind == "link_project"
+			if item.Kind == "link_project" {
+				// Counted for the card's next link_project's limit.
+				facts.projects[key] = true
+			}
 			if item.Kind == "task" {
 				k, err := fileItemRelations(r.Context(), tx, org, proposalRunID, linked, items, n, made, p.Person)
 				if err != nil {

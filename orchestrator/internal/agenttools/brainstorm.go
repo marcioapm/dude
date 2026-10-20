@@ -515,6 +515,12 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 			if p.Linked {
 				return proposeOut{}, refuse(rItemProjectAlreadyLinked, n, p.Key)
 			}
+			// Filing one project twice would fail the whole card at setLinks.
+			if j := slices.IndexFunc(items[:i], func(o delivery.ProposalItem) bool {
+				return o.Kind == "link_project" && o.Project == p.Key
+			}); j >= 0 {
+				return proposeOut{}, refuse(rItemProjectProposedTwice, n, p.Key, j+1)
+			}
 			item.Project, item.ProjectName = p.Key, p.Name
 			if item.Reason = strings.TrimSpace(item.Reason); item.Reason == "" || utf8.RuneCountInString(item.Reason) > delivery.ReasonMax {
 				return proposeOut{}, refuse(rItemLinkReason, n, delivery.ReasonMax)
