@@ -85,14 +85,10 @@ type openQuestionOut struct {
 // one its session started; any other's, one of its task's.
 func runChatScope(ctx context.Context, tx pgx.Tx, c Caller, runID string) (chatRunOut, bool, error) {
 	var r chatRunOut
-	session := ""
-	if sessionAgent(c.Role) {
-		session = c.SessionID
-	}
 	err := tx.QueryRow(ctx, `SELECT r.id, COALESCE(r.role::text, ''), COALESCE(r.phase::text, ''), r.status::text, COALESCE(r.attempt, 0)
 		FROM runs r WHERE r.id = $1 AND r.kind = 'agent'
 		  AND CASE WHEN $4 THEN $2 <> '' AND r.source_kind = 'session' AND r.parent_session_id = $2
-		           ELSE $3 <> '' AND r.task_id = $3 END`, runID, session, c.TaskID, sessionAgent(c.Role)).
+		           ELSE $3 <> '' AND r.task_id = $3 END`, runID, c.SessionID, c.TaskID, sessionAgent(c.Role)).
 		Scan(&r.ID, &r.Role, &r.Phase, &r.Status, &r.Attempt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, false, nil
@@ -137,18 +133,16 @@ func runChat(ctx context.Context, tx pgx.Tx, c Caller, in runChatIn) (json.RawMe
 		return nil, err
 	}
 	w := newWrapper()
-	messages := []chatMessageOut{}
-	for rows.Next() {
+	messages, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (chatMessageOut, error) {
 		var typ, actorType, actorID, name string
 		var payload map[string]any
 		var at time.Time
-		if err := rows.Scan(&typ, &actorType, &actorID, &name, &payload, &at); err != nil {
-			rows.Close()
-			return nil, err
+		if err := r.Scan(&typ, &actorType, &actorID, &name, &payload, &at); err != nil {
+			return chatMessageOut{}, err
 		}
-		messages = append(messages, w.chatMessage(typ, actorType, actorID, name, payload, at))
-	}
-	if err := rows.Err(); err != nil {
+		return w.chatMessage(typ, actorType, actorID, name, payload, at), nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	out := map[string]any{"external": runChatNote(w.id), "run": run, "messages": messages, "total": total}
@@ -166,11 +160,13 @@ func runChat(ctx context.Context, tx pgx.Tx, c Caller, in runChatIn) (json.RawMe
 	// messages first and saying so.
 	for {
 		raw, err := delivery.GitHubReadJSON(out)
-		if err != nil || len(raw) <= resultCap || len(messages) <= 1 {
-			if err == nil && len(raw) > resultCap {
-				return w.fit(out)
-			}
-			return raw, err
+		switch {
+		case err != nil:
+			return nil, err
+		case len(raw) <= resultCap:
+			return raw, nil
+		case len(messages) <= 1:
+			return w.fit(out)
 		}
 		messages = messages[1:]
 		out["messages"] = messages
