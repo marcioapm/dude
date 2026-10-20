@@ -143,7 +143,7 @@ var agentFuncs = template.FuncMap{
 	"join":     strings.Join,
 	// quoteLines continues a Markdown quote over the text's lines.
 	"quoteLines": func(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ") },
-	"fenced": fenced,
+	"fenced":     fenced,
 }
 
 // fenced breaks each ``` in a text so it cannot close the fence around it.
