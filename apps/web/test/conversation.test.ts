@@ -1585,4 +1585,20 @@ describe("the checks gate's send-back", () => {
       ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" })])).toEqual([sentBack]);
     expect(told([held, retry, ev(EventTypes.DirectiveFailed, { directiveId: "dir_r", error: "lux could not deliver it" })])).toEqual([]);
   });
+
+  test("a receipt that arrives before its judgement still tells the send-back, once", () => {
+    // Built in cursor order: the projection skips an event older than one it folded.
+    const other = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_0" });
+    const delivered = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true });
+    const judged = ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId: "dir_1" });
+    expect(told([delivered, judged])).toEqual([sentBack]);
+    expect(told([delivered, judged, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true })])).toEqual([sentBack]);
+    // Another directive's receipt tells nothing.
+    expect(told([other, judged])).toEqual([]);
+    const held = ev(EventTypes.RunChecksJudged, { turn: 1, round: 2, verified: false, escalated: true, message: sentBack, checks: [] });
+    const early = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" });
+    const retry = ev(EventTypes.RunChecksDecided, { action: "retry", note: "", directiveId: "dir_r" });
+    expect(told([held, early, retry])).toEqual([sentBack]);
+    expect(told([held, early, retry, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" })])).toEqual([sentBack]);
+  });
 });

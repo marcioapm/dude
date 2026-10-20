@@ -746,6 +746,8 @@ export interface Projection {
   heldChecks: string | null;
   /** The checks send-back queued for the agent and not delivered yet, by its directive. */
   checksSend: { directiveId: string; text: string } | null;
+  /** Receipts no send-back or steer claimed yet, by directive: a judgement read after its own receipt is told at once. */
+  earlyReceipts: Map<string, string>;
   /**
    * A move's notice waiting for its resume's timing, by the epoch it resumed
    * into (`run.told`'s, else `run.resized`'s `machine.sinceEpoch`): the
@@ -828,6 +830,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     heldTold: null,
     heldChecks: null,
     checksSend: null,
+    earlyReceipts: new Map(),
     untimedMoves: new Map(),
     lastMove: null,
     refusedMove: false,
@@ -1278,14 +1281,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const text = payload.verified === false && typeof payload.message === "string" ? payload.message : "";
         if (!text.trim()) break;
         if (payload.escalated === true) state.heldChecks = text;
-        else if (typeof payload.directiveId === "string") state.checksSend = { directiveId: payload.directiveId, text };
+        else if (typeof payload.directiveId === "string") sendChecks(state, event, payload.directiveId, text);
         break;
       }
 
       case EventTypes.RunChecksDecided: {
         // Retry sends the held report back with the same words, as a directive of its own; waive and stop send nothing.
         if (payload.action === "retry" && state.heldChecks && typeof payload.directiveId === "string") {
-          state.checksSend = { directiveId: payload.directiveId, text: state.heldChecks };
+          sendChecks(state, event, payload.directiveId, state.heldChecks);
         }
         state.heldChecks = null;
         break;
@@ -1341,6 +1344,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           break;
         }
         const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
+        if (!steer && typeof payload.directiveId === "string") state.earlyReceipts.set(payload.directiveId, event.occurredAt);
         // Once: a re-sent steer (interrupt now) is the same turn under two ids.
         if (!steer || steer.deliveredAt !== null) break;
         steer.deliveredAt = event.occurredAt;
@@ -2212,6 +2216,20 @@ function moveToEnd(state: Projection, turn: Turn): void {
   turns.splice(from, 1);
   turns.push(turn);
   if (state.progressIndex !== null && state.progressIndex > from) state.progressIndex -= 1;
+}
+
+/**
+ * Queue a checks send-back for its directive, or tell it now (at its receipt's time) if that receipt was folded
+ * first. Each receipt tells at most one send-back.
+ */
+function sendChecks(state: Projection, event: PersistedEvent, directiveId: string, text: string): void {
+  const at = state.earlyReceipts.get(directiveId);
+  if (at === undefined) {
+    state.checksSend = { directiveId, text };
+    return;
+  }
+  state.earlyReceipts.delete(directiveId);
+  state.turns.push({ kind: "told", id: event.eventId, text, at });
 }
 
 /** The images an event carries (AttachmentInfo, as the orchestrator wrote them); anything malformed is left out. */
