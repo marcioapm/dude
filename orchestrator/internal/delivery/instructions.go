@@ -109,8 +109,7 @@ var (
 	childWriterTmpl = mustTemplate("contracts/child-writer")
 )
 
-// childContract is a child's closing contract: a child whose phase publishes
-// commits works and commits; any other reports only.
+// childContract selects the contract from the phase's publishing authority.
 func childContract(role string) *template.Template {
 	if Publishes[PhaseForPromptRole(role)] {
 		return childWriterTmpl
@@ -118,8 +117,7 @@ func childContract(role string) *template.Template {
 	return childToolsTmpl
 }
 
-// ChildWriterContract is the writer-child contract as role's instruction
-// file renders it from in, independent of which contract childContract picks.
+// ChildWriterContract renders the writer-child contract for a role.
 func ChildWriterContract(role string, in InstructionsInput) string {
 	return render(childWriterTmpl, in.data(role))
 }

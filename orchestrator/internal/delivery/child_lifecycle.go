@@ -124,9 +124,6 @@ func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcom
 		}
 		// Summaries contain counts and validated identifiers only, never finding,
 		// artifact, or agent prose. Bound lists independently of stored Run size.
-		// The child's final reply reaches the parent beside the summary, read
-		// from its events when the result is delivered (deliverChildResultTx):
-		// it is how a child that did nothing says why.
 		_, err = tx.Exec(ctx, `INSERT INTO child_results (organization_id, task_id, parent_run_id, child_run_id,
 			generation, source_kind, profile, status, findings, verdicts, commits, artifact_ids, cost_usd, stale)
 			SELECT r.organization_id, r.task_id, r.parent_run_id, r.id, r.child_generation, r.source_kind, r.child_profile, $2,
