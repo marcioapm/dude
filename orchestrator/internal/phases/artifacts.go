@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -77,7 +78,7 @@ const artifactsPatience = 24 * time.Hour
 const ArtifactEventType = "artifact.created"
 
 type dueRun struct {
-	ID, Org, ProjectID, TaskID, LuxRunID string
+	ID, Org, ProjectID, TaskID, SessionID, LuxRunID string
 	// dude's status for it: stopped, or running again after a resume.
 	Status string
 	DueAt  time.Time
@@ -89,7 +90,7 @@ type dueRun struct {
 func (a *Artifacts) Sweep(ctx context.Context) (int, error) {
 	var due []dueRun
 	if err := a.DB.InSystem(ctx, "artifacts", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, COALESCE(project_id, ''), COALESCE(task_id, ''), lux_run_id, status::text, artifacts_due_at,
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, COALESCE(project_id, ''), COALESCE(task_id, ''), COALESCE(session_id, ''), lux_run_id, status::text, artifacts_due_at,
 				artifacts_due_at < now() - make_interval(secs => $1)
 			FROM runs WHERE artifacts_due_at IS NOT NULL AND artifacts_next_at <= now()
 			ORDER BY artifacts_next_at LIMIT 50`, artifactsPatience.Seconds())
@@ -98,7 +99,7 @@ func (a *Artifacts) Sweep(ctx context.Context) (int, error) {
 		}
 		due, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (dueRun, error) {
 			var r dueRun
-			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.LuxRunID, &r.Status, &r.DueAt, &r.Overdue)
+			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.SessionID, &r.LuxRunID, &r.Status, &r.DueAt, &r.Overdue)
 		})
 		return err
 	}); err != nil {
@@ -242,7 +243,9 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 			if keys[art.ID] {
 				continue
 			}
-			if err := recordArtifact(ctx, tx, artifactRun{r.Org, r.ProjectID, r.TaskID, r.ID}, art); err != nil {
+			if err := recordArtifact(ctx, tx, artifactRun{
+				Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, SessionID: r.SessionID, ID: r.ID,
+			}, art); err != nil {
 				return err
 			}
 		}
@@ -307,7 +310,7 @@ func (a *Artifacts) settled(ctx context.Context, r dueRun) (bool, error) {
 }
 
 // artifactRun is the dude Run an artifact is recorded on.
-type artifactRun struct{ Org, ProjectID, TaskID, ID string }
+type artifactRun struct{ Org, ProjectID, TaskID, SessionID, ID string }
 
 // recordArtifact records one artifact lux can serve, with artifact.created,
 // once per lux artifact id: from the stream, a replay of it, or the sweep.
@@ -336,8 +339,8 @@ func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artif
 		return err
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{
-		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID,
-		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: r.TaskID,
+		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID, SessionID: r.SessionID,
+		ActorType: ledger.ActorAgent, ActorID: r.ID, Source: ledger.SourceRunner, CorrelationID: cmp.Or(r.TaskID, r.SessionID),
 		Payload: map[string]any{"artifactId": id, "name": name, "contentType": ctype,
 			"sizeBytes": art.Size, "sha256": art.SHA256, "description": art.Description},
 	})
