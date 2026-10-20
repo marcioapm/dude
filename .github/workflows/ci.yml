@@ -66,6 +66,22 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # The CI cluster holds only disposable dbtest databases. Each test drops
+      # its clone, forcing a checkpoint that otherwise serialises tests on fsync.
+      - name: Test Postgres without fsync
+        run: |
+          pg=${{ job.services.postgres.id }}
+          docker exec "$pg" psql -U dude -d dude -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET fsync = off" \
+            -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "ALTER SYSTEM SET full_page_writes = off" \
+            -c "SELECT pg_reload_conf()"
+          for setting in fsync synchronous_commit full_page_writes; do
+            value=$(docker exec "$pg" psql -U dude -d dude -At -c "SHOW $setting")
+            echo "$setting=$value"
+            [ "$value" = off ] || { echo "$setting is still $value" >&2; exit 1; }
+          done
+
       - name: gofmt
         working-directory: orchestrator
         run: |
