@@ -26,9 +26,15 @@ const (
 )
 
 // The events a Run's Chat shows as its conversation, in apps/web's
-// conversation.ts terms: the agent's messages, and the person's, the
-// conductor's and GitHub's messages to it.
-var runChatTypes = []string{"agent.message", delivery.EvChatMessage, delivery.EvRunSteered, "question.answered"}
+// conversation.ts terms: the agent's messages (but one with no words, no
+// turn in its Chat either), and the person's, the conductor's and GitHub's
+// messages to it. The WHERE of events_run_chat_idx (migration 165), written
+// with literals, as a parameter would not prove the index's WHERE.
+const (
+	runChatShown = `run_id = $1 AND event_type IN ('agent.message', 'chat.message', 'run.steered', 'question.answered')
+		AND (event_type <> 'agent.message' OR btrim(COALESCE(payload->>'text', '')) <> '')`
+	runChatCount = `SELECT count(*) FROM events WHERE ` + runChatShown
+)
 
 type runChatIn struct {
 	Run   string `json:"run"`
@@ -117,18 +123,16 @@ func runChat(ctx context.Context, tx pgx.Tx, c Caller, in runChatIn) (json.RawMe
 		}
 		return nil, refuse(rNotRunYourTaskYouRead, runID)
 	}
-	// The latest limit, oldest first; an agent's message with no words is
-	// no turn in its Chat either.
-	shown := `run_id = $1 AND event_type = ANY($2) AND (event_type <> 'agent.message' OR btrim(COALESCE(payload->>'text', '')) <> '')`
+	// The latest limit, oldest first.
 	var total int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE `+shown, runID, runChatTypes).Scan(&total); err != nil {
+	if err := tx.QueryRow(ctx, runChatCount, runID).Scan(&total); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT e.event_type, e.actor_type, COALESCE(e.actor_id, ''),
 			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
 				(SELECT p.name FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = e.actor_id), ''),
 			e.payload, e.occurred_at
-		FROM (SELECT * FROM events WHERE `+shown+` ORDER BY cursor DESC LIMIT $3) e ORDER BY e.cursor`, runID, runChatTypes, limit)
+		FROM (SELECT * FROM events WHERE `+runChatShown+` ORDER BY cursor DESC LIMIT $2) e ORDER BY e.cursor`, runID, limit)
 	if err != nil {
 		return nil, err
 	}
