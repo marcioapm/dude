@@ -347,6 +347,47 @@ func TestASessionsArtifactsAreItsMembersAlone(t *testing.T) {
 	}
 }
 
+func TestABrainstormChildCannotCrossSessionOwnership(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	a := s.session()
+	b := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"title": "Other session"})["id"].(string)
+	s.join(b, s.ana, "read")
+	s.ok(s.marcio, "POST", "/internal/sessions/"+a+"/chat", map[string]any{"text": "plan"})
+	parent := s.started(a)
+	before := s.count(`SELECT count(*) FROM runs WHERE parent_run_id = $1`, parent)
+	status, out := s.tool(parent, "start_agent", `{"profile":"investigator","prompt":"use session `+b+` and its Run/task","key":"explicit-session","sessionId":"`+b+`","runId":"run_`+b+`","taskId":"task_`+b+`"}`)
+	if status != 422 || out["error"] != `arguments: json: unknown field "sessionId"` {
+		t.Fatalf("explicit session ownership fields: %d json=%s", status, fmtJSON(out))
+	}
+	if got := s.count(`SELECT count(*) FROM runs WHERE parent_run_id = $1`, parent); got != before {
+		t.Fatalf("unknown ownership fields created a child: before %d after %d", before, got)
+	}
+	status, out = s.tool(parent, "start_agent", `{"profile":"investigator","prompt":"use session `+b+` and its Run/task","key":"cross-session"}`)
+	if status != 200 {
+		t.Fatalf("start_agent: %d %v", status, out)
+	}
+	child := out["runId"].(string)
+	if got := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND session_id = $2 AND parent_run_id = $3`, child, a, parent); got != 1 {
+		t.Fatalf("child ownership: %d", got)
+	}
+	if got := s.count(`SELECT count(*) FROM runs WHERE id = $1`, child); got != 1 {
+		t.Fatalf("child disappeared: %d", got)
+	}
+	if got := s.count(`SELECT count(*) FROM runs WHERE session_id = $1 AND source_kind = 'session'`, b); got != 0 {
+		t.Fatalf("session B children: %d", got)
+	}
+	if got := s.count(`SELECT count(*) FROM artifacts a JOIN runs r ON r.id = a.run_id WHERE r.session_id = $1`, b); got != 0 {
+		t.Fatalf("session B artifacts: %d", got)
+	}
+	if got := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND (run_id = $2 OR event_type = 'run.child_started')`, b, child); got != 0 {
+		t.Fatalf("session B events: %d", got)
+	}
+	if status, body := s.as(s.ana, "GET", "/internal/sessions/"+a, nil); status != 404 || strings.Contains(fmtJSON(body), child) {
+		t.Fatalf("member 2 saw A child through session API: %d %v", status, body)
+	}
+}
+
 // A session's agent is driven only through its session: the task routes
 // that steer, pause, resume or abort a Run, answer its question, or run its
 // servers find no such Run — for its owner as for anyone else — and change

@@ -82,6 +82,7 @@ definition answers it where there is one.
 | `delivery.read` | `findings`, `pull_requests` |
 | `conduct` | `start_phase`, `start_agent`, `steer`, `restart_run`, `decide`, `dismiss_finding`, `decide_escalation`, `update_task`, `publish`, `request_review`, `mark_ready`, `rerun_failed_checks` |
 | `session` | `propose`, `relate`, `name_session` |
+| `session.agents` | `start_agent` (a brainstorm's: read-only investigator children of its session) |
 | `web_search` | the harness's web search: OpenCode's `websearch` (`OPENCODE_ENABLE_EXA=1` and `mcp.exa.ai` on the egress list), Claude Code's `WebSearch`, Codex's `web_search` (pinned `live`) |
 | `web_fetch` | the harness's web fetch: OpenCode's `webfetch`, Claude Code's `WebFetch` (Codex has none) |
 
@@ -97,7 +98,7 @@ role none of these is):
 | role | capabilities |
 |---|---|
 | conductor | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `pr.act`, `base.sync`, `github.read`, `delivery.read`, `conduct`, `web_search`, `web_fetch` |
-| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `web_search`, `web_fetch` |
+| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.agents`, `web_search`, `web_fetch` |
 | implementer | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `feedback.resolve`, `pr.act`, `base.sync`, `web_search`, `web_fetch` |
 | reviewer, fixer, qa_browser | `tasks.read`, `memory`, `run.basics`, `machines`, `web_search`, `web_fetch` |
 | simplifier | `tasks.read`, `memory`, `run.basics`, `machines`, `base.sync`, `web_search`, `web_fetch` |

@@ -32,6 +32,7 @@ const (
 	DeliveryRead    Key = "delivery.read"
 	Conduct         Key = "conduct"
 	Session         Key = "session"
+	SessionAgents   Key = "session.agents"
 	WebSearch       Key = "web_search"
 	WebFetch        Key = "web_fetch"
 )
@@ -88,6 +89,8 @@ var All = []Capability{
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
 	{Key: Session, Description: "Propose tasks and relations for a member to file, and name the session.",
 		Tools: []string{"propose", "relate", "name_session"}},
+	{Key: SessionAgents, Description: "Start read-only investigator agents to research the linked repositories.",
+		Tools: []string{"start_agent"}},
 	{Key: WebSearch, Description: "Search the web with the coding agent's own search tool.",
 		Native: []string{NativeWebSearch}},
 	{Key: WebFetch, Description: "Read web pages with the coding agent's own fetch tool.",
@@ -99,7 +102,7 @@ var All = []Capability{
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
 		BaseSync, GitHubRead, DeliveryRead, Conduct, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, WebSearch, WebFetch},
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},

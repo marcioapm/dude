@@ -39,6 +39,7 @@ var brainstormTools = []tool{
 	defineSession("relate", relate).limit(createsPerRun),
 	defineSession("ask_person", sessionAsk),
 	defineSession("name_session", nameSession).limit(namesPerRun),
+	defineSession("start_agent", startAgent),
 }
 
 // namesPerRun bounds how often one Run renames its session.
