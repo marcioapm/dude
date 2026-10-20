@@ -18,10 +18,8 @@ import (
 // into its checkout as lux/<base> (a sync in mode fetch, with the
 // credentials a push takes), and nothing in the checkout moves. Merging it
 // is the agent's: git merge, never a rebase, since every move of the task
-// branch is a fast-forward.
-
-// baseSyncers may call it: the roles that commit to the task branch.
-var baseSyncers = []string{"implementer", "simplifier", delivery.RoleConductor}
+// branch is a fast-forward. The roles that commit to the task branch have
+// it (capabilities.BaseSync).
 
 // syncBaseWait bounds how long a call waits for lux's git.sync reports.
 const syncBaseWait = 20 * time.Second
@@ -260,5 +258,5 @@ func settleSyncBase(_ context.Context, _ pgx.Tx, _ Caller, _ baseAsk, out syncBa
 }
 
 var baseSyncTools = []tool{
-	around(define("sync_base", baseSyncers, checkSyncBase), fetchBase, settleSyncBase),
+	around(define("sync_base", checkSyncBase), fetchBase, settleSyncBase),
 }

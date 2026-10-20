@@ -21,15 +21,14 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// Read-only GitHub tools, the same for a session's agent and a task's
-// conductor: dude makes the reads with the organisation's GitHub
+// Read-only GitHub tools (capabilities.GitHubRead), the same for a
+// session's agent and a task's conductor: dude makes the reads with the organisation's GitHub
 // credential, which the agent never holds. Each is checked in the call's
 // transaction (the repository is one the caller may read, the Run's hourly
 // reads), made with no transaction open, and recorded as a github.read
 // event holding what was asked and how many bytes came back, never the
 // content. Everything people wrote on GitHub reaches the agent wrapped as
 // external text (delivery.ExternalText), within the byte caps below.
-var githubReaders = []string{delivery.RoleBrainstorm, delivery.RoleConductor}
 
 // EvGitHubRead is one read an agent's tool made on GitHub.
 const EvGitHubRead = "github.read"
@@ -740,12 +739,12 @@ func (w wrapper) recut(s string, n int) string {
 }
 
 var githubReadTools = []tool{
-	around(define("github_search", githubReaders, searchGitHub).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_search", searchGitHub).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_issue", githubReaders, readGitHubIssue).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_issue", readGitHubIssue).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_pull_request", githubReaders, readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_pull_request", readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
-	around(define("github_check_log", githubReaders, readGitHubCheckLog).before(forgeFor).countingAttempts().withholdingResult(),
+	around(define("github_check_log", readGitHubCheckLog).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
 }

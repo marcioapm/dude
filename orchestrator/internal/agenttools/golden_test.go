@@ -13,6 +13,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -63,7 +64,7 @@ func firstDifference(want, got string) string {
 // goldenToolName names a tool's golden: a session agent's tools share
 // their names with the task agents', so theirs are tool-session-<name>.
 func goldenToolName(t tool) string {
-	if len(t.roles) == 1 && t.roles[0] == delivery.RoleBrainstorm {
+	if t.session {
 		return "tool-session-" + t.name
 	}
 	return "tool-" + t.name
@@ -92,10 +93,8 @@ func TestGoldenToolLists(t *testing.T) {
 	roles := append(append([]string{}, delivery.PromptRoles...), "")
 	for _, role := range roles {
 		fmt.Fprintf(&b, "%q:", role)
-		for _, tl := range allTools() {
-			if tl.allowed(role) {
-				b.WriteString(" " + tl.name)
-			}
+		for _, tl := range granted(role, capabilities.Default(role)) {
+			b.WriteString(" " + tl.name)
 		}
 		b.WriteString("\n")
 	}
@@ -109,7 +108,7 @@ func serverInstructionsGolden(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()
-	ss, err := (&Server{}).serverFor(Caller{Role: "implementer"}).Connect(ctx, st, nil)
+	ss, err := (&Server{}).serverFor(Caller{Role: "implementer", grants: capabilities.Default("implementer")}).Connect(ctx, st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

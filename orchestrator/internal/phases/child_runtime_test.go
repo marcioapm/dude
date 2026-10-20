@@ -116,11 +116,9 @@ func assertChildContract(t *testing.T, agents string) {
 		allowed[tool] = true
 	}
 	forbiddenTools := map[string]bool{}
-	for _, tools := range delivery.InstructionTools {
-		for _, forbidden := range tools {
-			if !allowed[forbidden] {
-				forbiddenTools[forbidden] = true
-			}
+	for _, forbidden := range delivery.InstructionTools {
+		if !allowed[forbidden] {
+			forbiddenTools[forbidden] = true
 		}
 	}
 	var forbiddenNames []string
