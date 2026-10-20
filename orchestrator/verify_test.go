@@ -10,6 +10,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // The conductor's verify: a report-only child Run, publishing off, on the
@@ -126,6 +127,32 @@ func TestAVerificationOfTheHeadPasses(t *testing.T) {
 	}
 	if text := w.verifyResult(out["runId"].(string)); !strings.Contains(text, " passed: 1 of 1 commands exited 0.") {
 		t.Fatalf("the result:\n%s", text)
+	}
+}
+
+// A verifier of a repository whose name lux rewrites is told the checkout
+// path its spec gives that repository, not one built from the name.
+func TestAVerifierIsToldItsCheckoutPathForARepositoryLuxRenames(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	const name = "My.Repo"
+	mustExec(t, w.owner, `UPDATE repositories SET name = $2 WHERE id = $1`, w.repoID, name)
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	child, _ := w.must(task, "verify", `{"commands":["true"]}`)["runId"].(string)
+	w.verifyResult(child)
+	spec := w.specOfRun(child)
+	want := "/workspace/repos/" + lux.SpecName(name)
+	if spec.Git == nil || len(spec.Git.Repositories) != 1 || spec.Git.Repositories[0].Path != want {
+		t.Fatalf("the verifier's git: %+v", spec.Git)
+	}
+	var brief string
+	if err := w.owner.QueryRow(context.Background(), `SELECT child_prompt FROM runs WHERE id = $1`, child).Scan(&brief); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(brief, "checked out at `"+want+"`") || !strings.Contains(brief, "each from `"+want+"`") {
+		t.Fatalf("the brief does not name %s:\n%s", want, brief)
 	}
 }
 

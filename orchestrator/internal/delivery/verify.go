@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A conductor's verify: a report-only child (start_agent's machinery, the
@@ -116,7 +117,7 @@ func VerifyStart(ctx context.Context, tx pgx.Tx, ref RunRef, in VerifyAsk, key s
 		Repo, Path, Commit string
 		Commands, Paths    []string
 		ResultsMax         int
-	}{repo, "/workspace/repos/" + repo, commit, commands, paths, VerifyResultsMax})
+	}{repo, "/workspace/repos/" + lux.SpecName(repo), commit, commands, paths, VerifyResultsMax})
 	out := StartChildInput{Parent: ChildParent{Kind: ChildParentTaskConductor, Run: ref}, Profile: PromptRoleForPhase[PhaseInvestigate],
 		Prompt: brief, Note: in.Note, Key: key, Capabilities: ChildCapabilities{Verify: &VerifyTarget{Repo: repo, Commit: commit}}}
 	if commit != "" {
