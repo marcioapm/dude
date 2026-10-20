@@ -167,6 +167,43 @@ func TestAnAdminsPlainChatMessageDoesNotSettleALimitRequest(t *testing.T) {
 	}
 }
 
+// The fix rounds per pull request, the organisation's fixRoundsPerPr (1,
+// and spent): the owner, a member, may not approve; the admin's approval
+// grants one more, which limits shows on the setting's base and the fix
+// check allows, and not another. With the setting 0, no bound, there is
+// nothing to raise.
+func TestAnAdminRaisesTheFixRoundsPerPullRequest(t *testing.T) {
+	w, task, ana, cy := limitRequestAt(t)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = settings || '{"fixRoundsPerPr":1}' WHERE organization_id = $1`, w.org)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"prIteration":0,"prFixesByRepo":{"target":1}}' WHERE task_id = $1`, task)
+	w.refused(task, "start_phase", `{"phase":"fix","note":"Rename it."}`, "the pull request in target has had 1 fix rounds")
+
+	q, _ := w.must(task, "request_limit", `{"limit":"perPullRequest","to":2,"reason":"The reviewer's last finding needs one more round."}`)["questionId"].(string)
+	if status, body := w.pick(ana, q, 0); status != 403 || obj(body["error"])["code"] != "not_admin" {
+		t.Fatalf("the owner, a member, approved: %d %v", status, body)
+	}
+	if w.grants(task) != 0 {
+		t.Fatalf("a refused approval recorded %d grants", w.grants(task))
+	}
+	if status, body := w.pick(cy, q, 0); status != 200 {
+		t.Fatalf("the admin's approval: %d %v", status, body)
+	}
+	perPR := obj(field(w.limitsOf(task), "fixRounds", "perPullRequest"))
+	if num(perPR["base"]) != 1 || num(perPR["limit"]) != 2 || perPR["line"] != "organisation GitHub settings 1 + 1 granted by Cy for this task = 2" ||
+		obj(field(perPR, "granted", 0))["by"] != "Cy" {
+		t.Fatalf("limits after the grant: %v", perPR)
+	}
+	branch := w.gh.Pull(1).Head
+	before := w.gh.SHA(branch)
+	w.must(task, "start_phase", `{"phase":"fix","note":"Rename greet to welcome."}`)
+	w.until("the granted fix on the branch, and waiting again", func() bool { return w.gh.SHA(branch) != before && w.waitingOnPR(task) })
+	w.refused(task, "start_phase", `{"phase":"fix","note":"And another."}`, "the pull request in target has had 2 fix rounds")
+
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = settings || '{"fixRoundsPerPr":0}' WHERE organization_id = $1`, w.org)
+	w.refused(task, "request_limit", `{"limit":"perPullRequest","to":3,"reason":"x"}`,
+		"the organisation's fix rounds per pull request are not bounded (0): nothing to raise")
+}
+
 // "No" grants nothing: the limit and the check stay as they were, and the
 // request is closed, so another may be made.
 func TestNoToALimitRequestRecordsNothing(t *testing.T) {
