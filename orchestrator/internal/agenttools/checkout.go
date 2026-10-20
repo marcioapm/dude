@@ -52,11 +52,15 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 		return refreshCheckoutOut{}, err
 	}
 	// Each repository of the project: linked, held by this Run's lux Run,
-	// and its newest failed clone on the session, if any.
+	// its newest failed clone on the session, if any, and whether a member
+	// linked the project since, choosing its repositories again.
 	rows, err := tx.Query(ctx, `SELECT repo.id, repo.name,
 			EXISTS (SELECT 1 FROM session_repositories sr WHERE sr.session_id = $2 AND sr.repository_id = repo.id),
 			lux_name($3 || '-' || repo.name) = ANY (r.lux_repositories),
-			f.occurred_at, COALESCE(f.payload->>'reason', ''), COALESCE(f.payload->>'error', '')
+			f.occurred_at, COALESCE(f.payload->>'reason', ''), COALESCE(f.payload->>'error', ''),
+			EXISTS (SELECT 1 FROM events l WHERE l.session_id = $2 AND l.event_type = 'session.linked'
+				AND l.occurred_at > f.occurred_at
+				AND l.payload->'projects' @> jsonb_build_array(jsonb_build_object('projectId', $1::text)))
 		FROM repositories repo JOIN runs r ON r.id = $4
 		LEFT JOIN LATERAL (SELECT e.occurred_at, e.payload FROM events e
 			WHERE e.session_id = $2 AND e.event_type = 'repository.clone_failed'
@@ -71,6 +75,7 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 		Linked, Held   bool
 		FailedAt       *time.Time
 		Reason, GitErr string
+		Relinked       bool
 	}
 	repos, err := pgx.CollectRows(rows, pgx.RowToStructByPos[repoRow])
 	if err != nil {
@@ -95,8 +100,10 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 		case r.Linked:
 			line.Status = "pending"
 			names.Pending = append(names.Pending, p.Key+"/"+r.Name)
-		// A held, unlinked repository is one a member unlinked: it stays unlinked.
-		case r.FailedAt != nil && !r.Held:
+		// A held, unlinked repository is one a member unlinked, and a failure
+		// followed by a link of its project was decided on by the member:
+		// either stays unlinked.
+		case r.FailedAt != nil && !r.Held && !r.Relinked:
 			line.Status = "requested"
 			names.Requested = append(names.Requested, p.Key+"/"+r.Name)
 			requested = append(requested, map[string]any{"id": r.ID, "name": r.Name})

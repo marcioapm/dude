@@ -350,3 +350,41 @@ func TestRefreshCheckoutKeepsAMembersUnlinkOfAHeldRepository(t *testing.T) {
 		t.Errorf("%d session.checkout.requested", n)
 	}
 }
+
+// A clone failure the owner has decided on since, by linking its project
+// again, is not asked for again: unlinked, then linked again with only api,
+// WC's web stays unlinked whatever refresh_checkout is asked.
+func TestRefreshCheckoutKeepsTheOwnersLaterChoiceOfRepositories(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	api := "repo_api_" + s.org
+	mustExec(t, s.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'api', 'git://127.0.0.1/acme/api.git', 'main')`, api, s.org, s.webProject)
+	s.linkWebAndFail(id, run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}}}})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{api}}}})
+	s.until("api checked out", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-api') = ANY (lux_repositories)`, run) == 1
+	})
+	s.runningIdle(run)
+
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	got := map[string]any{}
+	for _, r := range out["repositories"].([]any) {
+		got[r.(map[string]any)["name"].(string)] = r.(map[string]any)["status"]
+	}
+	if got["api"] != "checked_out" || got["web"] != "not_linked" {
+		t.Errorf("repositories: %v", out["repositories"])
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1 AND repository_id = $2`, id, s.webRepo); n != 0 {
+		t.Errorf("web, which the owner left out, was linked again")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 0 {
+		t.Errorf("%d session.checkout.requested", n)
+	}
+}
