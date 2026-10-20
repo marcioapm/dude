@@ -118,3 +118,5 @@ rNameRunWhoseChatRead                  refusals/tools/runchat/name-run-whose-cha
 rLimit1Messages                        refusals/tools/runchat/limit-1-messages
 rNotRunYourTaskYouRead                 refusals/tools/runchat/not-run-your-task-you-read
 rNotRunThisSessionStarted              refusals/tools/runchat/not-run-this-session-started
+rNoOpenPullRequestRefresh              refusals/tools/refresh/no-open-pull-request-refresh
+rNameTaskWhosePullRequestsRefresh      refusals/tools/refresh/name-task-whose-pull-requests-refresh

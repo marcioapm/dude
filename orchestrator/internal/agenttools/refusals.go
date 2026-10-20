@@ -122,4 +122,6 @@ const (
 	rLimit1Messages                        = "limit is 1 to %d messages"
 	rNotRunYourTaskYouRead                 = "%s is not a Run of your task: you read only your task's Runs, its children and earlier attempts included"
 	rNotRunThisSessionStarted              = "%s is not a Run this session started: you read only the Runs your session started"
+	rNoOpenPullRequestRefresh              = "the task has no open pull request to refresh: pull_requests lists the ones it had"
+	rNameTaskWhosePullRequestsRefresh      = "name the task whose pull requests to refresh, by its key"
 )

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -186,19 +187,20 @@ func sessionPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (a
 		return pullRequests(ctx, tx, scoped, pullRequestsIn{})
 	}
 	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.state::text, pr.checks::text, pr.review::text,
-			COALESCE($2 || '-' || t.number, '')
+			COALESCE($2 || '-' || t.number, ''), pr.last_polled_at
 		FROM pull_requests pr JOIN repositories repo ON repo.id = pr.repository_id LEFT JOIN tasks t ON t.id = pr.task_id
 		WHERE repo.project_id = $1 ORDER BY pr.updated_at DESC LIMIT 50`, p.ID, p.Key)
 	if err != nil {
 		return nil, err
 	}
 	type line struct {
-		Repo   string `json:"repo"`
-		Number int    `json:"number"`
-		State  string `json:"state"`
-		Checks string `json:"checks"`
-		Review string `json:"review"`
-		Task   string `json:"task,omitempty"`
+		Repo         string     `json:"repo"`
+		Number       int        `json:"number"`
+		State        string     `json:"state"`
+		Checks       string     `json:"checks"`
+		Review       string     `json:"review"`
+		Task         string     `json:"task,omitempty"`
+		LastPolledAt *time.Time `json:"lastPolledAt"`
 	}
 	prs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[line])
 	return map[string]any{"pullRequests": db.NonNil(prs)}, err

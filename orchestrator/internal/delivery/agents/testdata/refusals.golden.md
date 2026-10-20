@@ -470,6 +470,14 @@ name the Run whose Chat to read, by its id (run_…)
 
 %s is not a Run of your task: you read only your task's Runs, its children and earlier attempts included
 
+## refusals/tools/refresh/name-task-whose-pull-requests-refresh
+
+name the task whose pull requests to refresh, by its key
+
+## refusals/tools/refresh/no-open-pull-request-refresh
+
+the task has no open pull request to refresh: pull_requests lists the ones it had
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
