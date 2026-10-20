@@ -587,8 +587,7 @@ func runNetwork(c AgentConfig, in specInput) *lux.Network {
 // (https://mcp.exa.ai/mcp), listed only for a Run granted web search.
 // Claude Code's and Codex's search go through the LLM proxy.
 func harnessHosts(harness string, webSearch bool) []string {
-	switch {
-	case harness == delivery.HarnessClaudeCode, harness == delivery.HarnessCodex, !webSearch:
+	if !webSearch || harness == delivery.HarnessClaudeCode || harness == delivery.HarnessCodex {
 		return nil
 	}
 	return []string{"mcp.exa.ai"}
