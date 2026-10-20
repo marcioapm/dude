@@ -97,7 +97,7 @@ func ReplaceBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, to SessionMod
 	}
 	if tag.RowsAffected() == 1 {
 		if err := StopSessionChildrenTx(ctx, tx, ref.RunID); err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if _, err := ledger.Append(ctx, tx, ref.Event("run.completed", ledger.ActorSystem,
 			map[string]any{"status": "aborted", "reason": why})); err != nil {

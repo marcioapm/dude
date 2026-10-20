@@ -71,8 +71,8 @@ func TestBrainstormTerminalPathsFenceSessionChildren(t *testing.T) {
 						return err
 					}
 					var err error
-					next, err = delivery.ReplaceBrainstorm(w.ctx, tx, parent.ref(), delivery.SessionModelApplied{Model: "fake/scripted", Harness: "opencode"},
-						delivery.Writer{}, "Continue the research", "")
+					next, _, err = delivery.ReplaceBrainstorm(w.ctx, tx, parent.ref(), delivery.SessionModelApplied{Model: "fake/scripted", Harness: "opencode"},
+						delivery.Writer{}, delivery.Opening{Message: "Continue the research", Shown: ""})
 					return err
 				})
 			case "fail":
@@ -119,7 +119,7 @@ func TestBrainstormTerminalPathsFenceSessionChildren(t *testing.T) {
 						return err
 					}
 					var err error
-					next, err = delivery.StartBrainstorm(w.ctx, tx, parent.Org, parent.SessionID, delivery.Writer{}, "Continue", "")
+					next, _, err = delivery.StartBrainstorm(w.ctx, tx, parent.Org, parent.SessionID, delivery.Writer{}, delivery.Opening{Message: "Continue"})
 					return err
 				})
 				if err != nil {
