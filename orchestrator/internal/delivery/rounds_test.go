@@ -101,23 +101,28 @@ func TestAFreshRoundReplaysItsPredecessorsChainAndReviewsSinceItsRound(t *testin
 // predecessor is a fresh Run, as any restart: it continues nothing and is
 // given no conversation.
 func TestARestartOfAContinuedRoundIsFresh(t *testing.T) {
-	w := newRoundWorld(t)
-	wf := w.delivery(t, "awaitReview", "policy", `["phase.finished"]`)
-	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category, base_refs,
+	for _, how := range []string{"resume", "replay"} {
+		t.Run(how, func(t *testing.T) {
+			w := newRoundWorld(t)
+			wf := w.delivery(t, "awaitReview", "policy", `["phase.finished"]`)
+			w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category, base_refs,
 			continues_run_id, continues_how)
 		VALUES ('run_rv2', $1, $2, $3, 1, 'running', 'review', 'reviewer', 'agent', 'correctness', '{"api":"bbb"}', $4, 'resume')`,
-		w.org, w.project, w.task, w.first)
-	w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+				w.org, w.project, w.task, w.first)
+			w.exec(t, `UPDATE runs SET continues_how = $1, review_range = '{"of":"since_last_round","base":{"api":"aaa"}}' WHERE id = 'run_rv2'`, how)
+			w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
 		VALUES ('ev_rs1', $1, 'agent.message', $2, $3, 'agent', $2, 'test', '{"text":"SAID BEFORE"}')`, w.org, w.first, w.task)
-	w.exec(t, `UPDATE workflow_runs SET state = jsonb_set(state, '{pendingRunIds}', '["run_rv2"]') WHERE id = $1`, wf)
-	var fresh string
-	w.in(t, func(tx pgx.Tx) (err error) {
-		fresh, err = delivery.RestartRunTx(context.Background(), tx, w.org, w.task, delivery.Restart{RunID: "run_rv2", Note: "stuck",
-			Actor: delivery.Writer{ActorType: "human", ActorID: w.ana}})
-		return err
-	})
-	if got := w.str(t, `SELECT COALESCE(continues_run_id, '') || '|' || COALESCE(review_range::text, '') FROM runs WHERE id = $1`, fresh); got != "|" {
-		t.Errorf("the restarted Run continues|range %q, want a fresh Run", got)
+			w.exec(t, `UPDATE workflow_runs SET state = jsonb_set(state, '{pendingRunIds}', '["run_rv2"]') WHERE id = $1`, wf)
+			var fresh string
+			w.in(t, func(tx pgx.Tx) (err error) {
+				fresh, err = delivery.RestartRunTx(context.Background(), tx, w.org, w.task, delivery.Restart{RunID: "run_rv2", Note: "stuck",
+					Actor: delivery.Writer{ActorType: "human", ActorID: w.ana}})
+				return err
+			})
+			if got := w.str(t, `SELECT COALESCE(continues_run_id, '') || '|' || COALESCE(review_range::text, '') FROM runs WHERE id = $1`, fresh); got != "|" {
+				t.Errorf("the restarted Run continues|range %q, want a fresh Run", got)
+			}
+		})
 	}
 }
 

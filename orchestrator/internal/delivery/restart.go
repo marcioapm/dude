@@ -104,6 +104,9 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	if err := FailUnreadTx(ctx, tx, ref, time.Time{}, UnreadRunAborted); err != nil {
 		return "", err
 	}
+	if in.Replays == "" && reviewRange != nil && reviewRange.Of == RangeSinceLastRound {
+		reviewRange = nil
+	}
 	var prFeedback []forge.ActionableFeedback
 	_ = json.Unmarshal(feedback, &prFeedback)
 	newID, err := createPhaseRunTx(ctx, tx, org, PhaseRun{
