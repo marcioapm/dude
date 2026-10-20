@@ -463,7 +463,17 @@ func TestMachineMoveSettlesAfterRestartFollowingAcceptedResume(t *testing.T) {
 	lost := &lostAnswer{Client: w.syncer.Lux}
 	lost.left.Store(1)
 	w.syncer.Lux = lost
-	w.until("settled", func() bool {
+	// The lost answer is a failed call, which retryLater backs off by
+	// phases.retryBase (5 s). The retry is meant for a Run lux runs again
+	// (its 409 not_resumable): one sent while lux still has it resuming is
+	// answered 202 as the same resume. So the back-off is skipped with the
+	// sweep's clock (retried) only once lux reports it running, not sat
+	// through in real time.
+	w.until("the lost answer backed off, lux running the Run", func() bool {
+		return lost.left.Load() == 0 && w.lux.State(live) == "running" &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND retry_failures=1 AND next_attempt_at=retry_due_at`, runID) == 1
+	})
+	w.retried(runID, 5*time.Second, func() bool {
 		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
 	})
 	if got := w.machineOf(runID); got["name"] != "Bigger" || got["from"] != "task" {
