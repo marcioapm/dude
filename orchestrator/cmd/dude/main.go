@@ -30,7 +30,9 @@
 //	dude feedback resolve ID --commit HEAD [--repo R]
 //	                                      the commit that fixed an item
 //	dude findings [ID...]                 a conductor's: the task's findings
-//	dude prs                              a conductor's: the task's pull requests
+//	dude prs [--refresh]                  a conductor's: the task's pull requests
+//	dude chat RUN [--limit N]             a conductor's: a Run's Chat and open question
+//	dude limits                           a conductor's: the task's limits, and what is used
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
 //	dude agent start PROFILE [--prompt P] [--note N] [--tier T] [--key K]
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
@@ -423,13 +425,39 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("findings", body))
 	case "prs":
+		refresh := fs.Bool("refresh", false, "read the pull requests from GitHub now")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		if fs.NArg() > 0 {
-			return errors.New("usage: dude prs")
+			return errors.New("usage: dude prs [--refresh]")
+		}
+		if *refresh {
+			return show(out, *asJSON, call("refresh_pull_requests", map[string]any{}))
 		}
 		return show(out, *asJSON, call("pull_requests", map[string]any{}))
+	case "chat":
+		limit := fs.Int("limit", 0, "messages, 1 to 100 (default 30)")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude chat RUN [--limit N]")
+		}
+		body := map[string]any{"run": args[0]}
+		if *limit != 0 {
+			body["limit"] = *limit
+		}
+		return show(out, *asJSON, call("run_chat", body))
+	case "limits":
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		if fs.NArg() > 0 {
+			return errors.New("usage: dude limits")
+		}
+		return show(out, *asJSON, call("limits", map[string]any{}))
 	case "phase start":
 		var categories, findings many
 		fs.Var(&categories, "category", "review: a reviewer to run (repeatable); none runs those the change warrants")
@@ -946,8 +974,13 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              holds until your work is published with that commit
   dude findings [ID...]                      a conductor's: the task's review findings and how each
                                              was settled; with IDs (fnd_…), those in full
-  dude prs                                   a conductor's: the task's pull requests, their checks,
-                                             reviews and feedback
+  dude prs [--refresh]                       a conductor's: the task's pull requests, their checks,
+                                             reviews and feedback, as dude last read them (lastPolledAt);
+                                             --refresh reads GitHub now, one of the hour's GitHub reads
+  dude chat RUN [--limit N]                  a conductor's: a Run of this task's Chat, latest N (default 30,
+                                             max 100) oldest first, and the question it waits on
+  dude limits                                a conductor's: the limits the task is held to, where each
+                                             is set, and how much is used
   dude phase start PHASE [--category C]... [--finding ID]... [--note N]
                                              a conductor's: take the decision the delivery waits on
                                              by starting implement, review, fix, simplify or test

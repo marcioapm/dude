@@ -64,6 +64,15 @@ func TestTheConductorsToolsFromTheShell(t *testing.T) {
 	if out := dude("prs"); !strings.Contains(out, `"pullRequests": []`) {
 		t.Errorf("dude prs:\n%s", out)
 	}
+	f.run(t, "run_sh_fixer", "implementer", "running")
+	mustExec(t, f.owner, `INSERT INTO questions (id, organization_id, run_id, prompt, items)
+		VALUES ('qst_sh', $1, 'run_sh_fixer', 'Keep the alias?', '[{"question":"Keep the alias?"}]')`, f.org)
+	if out := dude("chat", "run_sh_fixer", "--limit", "5"); !strings.Contains(out, `"Keep the alias?"`) || !strings.Contains(out, `"messages": []`) {
+		t.Errorf("dude chat:\n%s", out)
+	}
+	if out := dude("limits"); !strings.Contains(out, `"perReviewRound"`) || !strings.Contains(out, `"organisation GitHub settings"`) {
+		t.Errorf("dude limits:\n%s", out)
+	}
 }
 
 // The conductor's tools: the read ones every role has, ask_person,
