@@ -145,8 +145,19 @@ var configure = func(ctx context.Context, admin *pgx.Conn, name string) error {
 	// database that a crash would lose is dropped anyway, and what a commit
 	// makes visible to other sessions is the same. Per database, since a
 	// clone does not inherit its template's settings.
-	_, err := admin.Exec(ctx, "ALTER DATABASE "+name+" SET synchronous_commit = off")
-	return err
+	//
+	// Generic plans: each test connects to a fresh database, so a prepared
+	// statement lives for a few dozen executions, and under the default
+	// plan_cache_mode (auto) the syncer's queries (phases.dueQuery and its
+	// probes) are custom-planned on most of them: ~5 ms to plan against
+	// ~0.1 ms to execute, a third of the server's CPU. A plan choice
+	// cannot change a query's result.
+	for _, set := range []string{"synchronous_commit = off", "plan_cache_mode = force_generic_plan"} {
+		if _, err := admin.Exec(ctx, "ALTER DATABASE "+name+" SET "+set); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // cloneForTest is the clone made ahead for this test, if Main made one,
