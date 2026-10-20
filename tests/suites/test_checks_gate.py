@@ -83,6 +83,12 @@ def _wait_pr(client: ApiClient, fake_github: FakeGitHub, task_id: str) -> None:
     assert len(fake_github.pulls) == 1
 
 
+def _checks_section(body: str) -> str:
+    """The checks account inside the PR body's marked verification section."""
+    marked = body.split("<!-- dude:verification -->", 1)[1].split("<!-- /dude:verification -->", 1)[0]
+    assert "### Checks\n" in marked, body
+    return marked.split("### Checks\n", 1)[1]
+
 @pytest.mark.e2e
 def test_backed_report_judged_yes_publishes_and_is_visible(client: ApiClient, fake_github: FakeGitHub):
     _judge(client, fake_github)
@@ -97,7 +103,11 @@ def test_backed_report_judged_yes_publishes_and_is_visible(client: ApiClient, fa
     assert any(e["eventType"] == "run.checks.judged" for e in activity)
     assert any("checks" in str(e["payload"]).lower() for e in activity)
     body = fake_github.pulls[1].body
-    assert "Checks" in body and "verified" in body
+    checks = _checks_section(body)
+    assert "Checks were verified" in checks
+    # The implementer's backed command is listed, not only the last Run's verdict.
+    assert "**Implementer** — backed\n  - `make check` — **pass**" in checks
+    assert "**Simplifier** — backed" in checks
 
 
 @pytest.mark.e2e
@@ -130,7 +140,11 @@ def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClie
     accepted = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "waive", "note": "CI hardware was unavailable; owner reviewed the risk."})
     assert accepted.status_code == 200, accepted.text
     _wait_pr(client, fake_github, task["id"])
-    assert "Checks" in fake_github.pulls[1].body
+    checks = _checks_section(fake_github.pulls[1].body)
+    # Later backed fixer/simplifier reports do not hide the waiver or its reason.
+    assert "Checks were waived by a person" in checks
+    assert "Implementer: CI hardware was unavailable; owner reviewed the risk." in checks
+    assert "verified" not in checks
     assert any(e["eventType"] == "run.checks.decided" and e["payload"].get("action") == "waive" for e in client.events(taskId=task["id"]))
 
 
@@ -146,7 +160,9 @@ def test_no_judgement_tier_publishes_with_skip_advice(page: Page, web_url: str, 
     events = _checks_events(client, run["id"])
     assert events and events[-1]["payload"].get("skipped") is True
     body = fake_github.pulls[1].body
-    assert "not model-checked" in body and "set a judgement tier" in body
+    checks = _checks_section(body)
+    assert "not model-checked" in checks and "set a judgement tier" in checks
+    assert "verified" not in checks
 
     # The same outcome is visible in the actual task screen's Activity tab.
     sign_in(page, web_url, client.api_key, at=f"#/tasks/{task['id']}", board=False)

@@ -139,6 +139,28 @@ func TestAChecksReportTheJudgeBacksPublishes(t *testing.T) {
 	if asked != 2 {
 		t.Errorf("%d questions about the implementer, want Backed for one check and Missing", asked)
 	}
+	// The pull request accounts for every gated Run, the implementer's
+	// backed command included, not only the last Run judged.
+	body := w.gh.Pull(1).Body
+	for _, want := range []string{"Checks were verified against the Run's recorded commands.",
+		"- **Implementer** — backed\n  - `" + fakeagent.CheckCommand + "` — **pass**",
+		"- **Fixer** — backed", "- **Simplifier** — backed"} {
+		if !strings.Contains(checksSection(body), want) {
+			t.Errorf("the pull request's checks section has no %q:\n%s", want, body)
+		}
+	}
+}
+
+// checksSection is the checks account inside the body's marked
+// verification section, "" when there is none.
+func checksSection(body string) string {
+	_, after, ok := strings.Cut(body, "<!-- dude:verification -->")
+	if !ok {
+		return ""
+	}
+	section, _, _ := strings.Cut(after, "<!-- /dude:verification -->")
+	_, checks, _ := strings.Cut(section, "### Checks\n")
+	return checks
 }
 
 // A pass over a failing command is sent back in the same session, naming
@@ -225,6 +247,18 @@ func TestWaivingAnUnverifiedReportNeedsAReasonAndPublishes(t *testing.T) {
 	if n := w.implementerPushes(wi); n != 1 {
 		t.Errorf("%d pushes, want 1", n)
 	}
+	// The fixer's and simplifier's later reports are backed, yet the pull
+	// request says the implementer's checks were waived, and why.
+	checks := checksSection(w.gh.Pull(1).Body)
+	for _, want := range []string{"Checks were waived by a person:\n- Implementer: The check needs hardware CI has; it passed there.",
+		"- **Implementer** — waived", "- **Simplifier** — backed"} {
+		if !strings.Contains(checks, want) {
+			t.Errorf("the pull request's checks section has no %q:\n%s", want, checks)
+		}
+	}
+	if strings.Contains(checks, "verified") {
+		t.Errorf("the pull request calls waived checks verified:\n%s", checks)
+	}
 }
 
 // With no judgement tier the work publishes, and the skip is recorded.
@@ -234,6 +268,16 @@ func TestWithNoJudgementTierTheChecksAreSkippedAndPublished(t *testing.T) {
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if got := w.judged(wi); strings.Join(got, ",") != "skipped" {
 		t.Errorf("judged %v, want the skip recorded", got)
+	}
+	checks := checksSection(w.gh.Pull(1).Body)
+	for _, want := range []string{"Checks not model-checked, set a judgement tier in the organisation's settings.",
+		"- **Implementer** — not model-checked"} {
+		if !strings.Contains(checks, want) {
+			t.Errorf("the pull request's checks section has no %q:\n%s", want, checks)
+		}
+	}
+	if strings.Contains(checks, "verified") {
+		t.Errorf("the pull request calls unjudged checks verified:\n%s", checks)
 	}
 }
 
