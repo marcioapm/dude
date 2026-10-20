@@ -161,7 +161,7 @@ test("an admin who is not the owner may waive, and nothing else; a member only w
 });
 
 const checksDetail = { runId: "run_impl", rounds: 1,
-  message: "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- make check: exit 1 (judgement: no)\n\nRun the missing checks." };
+  message: "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- make check: exit 1 (judgement: no)\n\n- bun test: no call recorded (judgement: unsure)\n\nRun the missing checks." };
 const label = (page: HTMLElement) => {
   const field = page.querySelector<HTMLTextAreaElement>("[data-testid=escalation-note]")!;
   return page.querySelector(`label[for="${field.id}"]`)?.textContent ?? "";
@@ -171,7 +171,12 @@ test("unverified checks show the send-back naming each check, and a waiver is no
   const { page, sent } = await banner("checks_unverified", ["retry", "waive", "stop"], { detail: checksDetail });
   expect(page.textContent).toContain("Checks unverified.");
   expect(page.textContent).toContain("after 1 send-back");
-  expect(page.querySelector("[data-testid=escalation-checks]")?.textContent).toBe(checksDetail.message);
+  // The send-back is Markdown, as the Run's Told turn shows it: a list item per check.
+  const checks = page.querySelector("[data-testid=escalation-checks]")!;
+  expect([...checks.querySelectorAll("li")].map((li) => li.textContent))
+    .toEqual(["make check: exit 1 (judgement: no)", "bun test: no call recorded (judgement: unsure)"]);
+  expect(checks.textContent).not.toContain("- ");
+  expect(checks.textContent).toContain("Run the missing checks.");
   expect(label(page)).toContain("required to waive");
   expect(label(page)).not.toContain("optional");
   await click(page.querySelector("[data-testid=escalation-waive]")!);

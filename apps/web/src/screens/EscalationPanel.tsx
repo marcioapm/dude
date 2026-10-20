@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import { Button, Callout, Textarea } from "@dude/design-system/primitives";
+import { Markdown } from "@dude/design-system/components";
 import { runLabel } from "@dude/domain";
 import type { ApiClient, EscalationAction, Person, TaskDetail } from "../api/client.ts";
 import { checksMessage, escalationWords, needsReason, testCriteria } from "../escalation.ts";
@@ -115,7 +116,7 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
             ))}
           </ul>
         ) : null}
-        {sentBack ? <p className="escalationSentBack" data-testid="escalation-checks">{sentBack}</p> : null}
+        {sentBack ? <Markdown source={sentBack} unmeasured className="escalationSentBack" data-testid="escalation-checks" /> : null}
         {someoneElse && actions.length === 0 ? (
           <p className="escalationWaiting">Waiting for {owner.name} to decide.</p>
         ) : null}

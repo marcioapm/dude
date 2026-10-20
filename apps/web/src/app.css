@@ -316,9 +316,8 @@ body {
 .escalationCriterionStatus {
   color: var(--ds-color-text-secondary);
 }
-/* The checks send-back as the agent received it: its list of checks keeps its lines. */
+/* The checks send-back as the agent received it, rendered as Markdown. */
 .escalationSentBack {
-  white-space: pre-wrap;
   color: var(--ds-color-text-secondary);
 }
 
