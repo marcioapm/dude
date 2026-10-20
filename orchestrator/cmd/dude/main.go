@@ -30,7 +30,7 @@
 //	dude feedback resolve ID --commit HEAD [--repo R]
 //	                                      the commit that fixed an item
 //	dude findings [ID...]                 a conductor's: the task's findings
-//	dude prs [--refresh | --feedback ID...]
+//	dude prs [--refresh | [--feedback ID]...]
 //	                                      a conductor's: the task's pull requests
 //	dude chat RUN [--limit N]             a conductor's: a Run's Chat and open question
 //	dude limits                           a conductor's: the task's limits, and what is used
@@ -439,7 +439,7 @@ func run(args []string, out io.Writer) error {
 		// refresh_pull_requests takes no feedback ids, and a full text is read
 		// from dude's record without GitHub: the two are separate calls.
 		if fs.NArg() > 0 || (*refresh && len(feedback) > 0) {
-			return errors.New("usage: dude prs [--refresh | --feedback ID...]")
+			return errors.New(prsUsage)
 		}
 		if *refresh {
 			return show(out, *asJSON, call("refresh_pull_requests", map[string]any{}))
@@ -973,6 +973,9 @@ func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 	return nil
 }
 
+// prsUsage is dude prs's usage error: --feedback repeats, one ID each.
+const prsUsage = "usage: dude prs [--refresh | [--feedback ID]...]"
+
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
 
   dude task list [--text T] [--startable] [--archived | --closed]
@@ -1030,7 +1033,8 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              holds until your work is published with that commit
   dude findings [ID...]                      a conductor's: the task's review findings and how each
                                              was settled; with IDs (fnd_…), those in full
-  dude prs [--refresh | --feedback ID...]    a conductor's: the task's pull requests, their checks,
+  dude prs [--refresh | [--feedback ID]...]
+                                             a conductor's: the task's pull requests, their checks,
                                              reviews and feedback, as dude last read them (lastPolledAt),
                                              each item an excerpt; --feedback IDs gives those items in
                                              full; --refresh reads GitHub now, one of the hour's GitHub reads
