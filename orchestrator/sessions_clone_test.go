@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -197,6 +199,30 @@ func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	}
 	if _, status := s.brainstorm(id); status == "failed" {
 		t.Errorf("the session's agent failed")
+	}
+}
+
+// A session's agent without session.checkout is told a member's remedy
+// alone: refresh_checkout, which it does not have, is not named.
+func TestAFailedCloneNamesNoToolTheAgentLacks(t *testing.T) {
+	// Root tests run one at a time: the role's defaults are this test's alone.
+	was := capabilities.Defaults[delivery.RoleBrainstorm]
+	capabilities.Defaults[delivery.RoleBrainstorm] = slices.DeleteFunc(slices.Clone(was),
+		func(k capabilities.Key) bool { return k == capabilities.SessionCheckout })
+	t.Cleanup(func() { capabilities.Defaults[delivery.RoleBrainstorm] = was })
+
+	s, id, run := cloneFailingSession(t)
+	mustExec(t, s.owner, `UPDATE repositories SET url = 'https://github.com/acme/web.git' WHERE id = $1`, s.webRepo)
+	s.linkWebAndFail(id, run)
+	var told string
+	if err := s.owner.QueryRow(context.Background(), `SELECT text FROM directives WHERE run_id = $1 AND text LIKE 'WC/web could not be checked out%'`,
+		run).Scan(&told); err != nil {
+		t.Fatalf("no directive telling the agent: %v", err)
+	}
+	want := "WC/web could not be checked out (could not read Username for 'https://github.com': terminal prompts disabled). " +
+		"It is not in /workspace; a member can check the repository's URL and access and link it again."
+	if told != want {
+		t.Errorf("told:\n %s\nwant\n %s", told, want)
 	}
 }
 
