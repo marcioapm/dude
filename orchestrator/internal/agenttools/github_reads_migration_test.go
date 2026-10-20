@@ -9,7 +9,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// Migrations 147 through 164 rebuild their indexes over the events already
+// Migrations 147 through 167 rebuild their indexes over the events already
 // there: each is valid, on its scope and time, holds the GitHub read
 // attempts (refresh_pull_requests' included) and nothing else, the indexes
 // before refresh_pull_requests counted are gone, and the hourly counts

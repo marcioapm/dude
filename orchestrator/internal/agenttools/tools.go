@@ -82,8 +82,12 @@ func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (star
 	if key == "" {
 		key = "tool:" + c.CallID
 	}
+	parentKind := delivery.ChildParentTaskConductor
+	if c.Role == delivery.RoleBrainstorm {
+		parentKind = delivery.ChildParentSession
+	}
 	id, err := delivery.StartChildTx(ctx, tx, delivery.StartChildInput{
-		Parent: delivery.ChildParent{Kind: delivery.ChildParentTaskConductor, Run: c.run()}, Profile: in.Profile,
+		Parent: delivery.ChildParent{Kind: parentKind, Run: c.run()}, Profile: in.Profile,
 		Prompt: in.Prompt, Note: in.Note, Tier: in.Tier, Key: key,
 		Capabilities: delivery.ChildCapabilities{PublishCode: delivery.Publishes[phase]},
 	})

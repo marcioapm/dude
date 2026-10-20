@@ -73,13 +73,13 @@ func valid(t *testing.T, owner *pgx.Conn, index string) bool {
 	return ok
 }
 
-// Migration 165 indexes a Run's conversation: on a Run with thousands of
+// Migration 168 indexes a Run's conversation: on a Run with thousands of
 // tool calls and thoughts and a few messages, run_chat's count and page
 // read events_run_chat_idx and count only the messages, a blank agent
-// message not among them. 166 rebuilds the index a cancelled build left
+// message not among them. 169 rebuilds the index a cancelled build left
 // INVALID.
 func TestRunChatReadsItsConversationIndex(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "165")
+	owner, apply := dbtest.Upgrade(t, "168")
 	ctx := context.Background()
 	if _, err := owner.Exec(ctx, `INSERT INTO organizations (id, name, slug) VALUES ('org_c', 'C', 'c')`); err != nil {
 		t.Fatal(err)
@@ -115,25 +115,25 @@ func TestRunChatReadsItsConversationIndex(t *testing.T) {
 			t.Errorf("%s: run_chat's page does not read events_run_chat_idx", when)
 		}
 	}
-	check("after 165")
+	check("after 168")
 
 	invalidate(t, owner, "events_run_chat_idx")
-	if _, err := owner.Exec(ctx, `DELETE FROM schema_migrations WHERE version = '166'`); err != nil {
+	if _, err := owner.Exec(ctx, `DELETE FROM schema_migrations WHERE version = '169'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := owner.Exec(ctx, readMigration(t, "166_recover_events_run_chat_idx.sql")); err != nil {
+	if _, err := owner.Exec(ctx, readMigration(t, "169_recover_events_run_chat_idx.sql")); err != nil {
 		t.Fatal(err)
 	}
 	if !valid(t, owner, "events_run_chat_idx") {
-		t.Error("166 left events_run_chat_idx invalid")
+		t.Error("169 left events_run_chat_idx invalid")
 	}
-	check("after 166's recovery")
+	check("after 169's recovery")
 }
 
-// Migration 164 rebuilds a v2 GitHub reads index a cancelled 160 or 161
+// Migration 167 rebuilds a v2 GitHub reads index a cancelled 163 or 164
 // left INVALID, and the hourly counts read it again.
-func TestAnInvalidGitHubReadIndexIsRebuiltBy164(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "164")
+func TestAnInvalidGitHubReadIndexIsRebuiltBy167(t *testing.T) {
+	owner, apply := dbtest.Upgrade(t, "167")
 	ctx := context.Background()
 	if _, err := owner.Exec(ctx, `INSERT INTO organizations (id, name, slug) VALUES ('org_g', 'G', 'g')`); err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy164(t *testing.T) {
 		{"events_task_github_reads_v2_idx", githubReadsByTask, "tsk_0"},
 	} {
 		if !valid(t, owner, c.index) {
-			t.Errorf("164 left %s invalid", c.index)
+			t.Errorf("167 left %s invalid", c.index)
 		}
 		var n int
 		if err := owner.QueryRow(ctx, c.query, c.scope).Scan(&n); err != nil {

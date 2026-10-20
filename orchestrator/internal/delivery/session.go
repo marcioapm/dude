@@ -515,6 +515,9 @@ func EndBrainstorm(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error
 		map[string]any{"status": "completed", "reason": why})); err != nil {
 		return err
 	}
+	if err := StopSessionChildrenTx(ctx, tx, ref.RunID); err != nil {
+		return err
+	}
 	_, err = SessionHandOver(ctx, tx, ref)
 	return err
 }
