@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -66,6 +67,38 @@ func TestInstructionsKeepFixedSectionsUnderSavedPrompts(t *testing.T) {
 		added = Instructions(role, "correctness", in)
 		if strings.Count(added, BuiltinPrompt(role)) != 1 {
 			t.Errorf("%s: project add removed the built-in stance", role)
+		}
+	}
+}
+
+func TestChildContractFollowsPublishes(t *testing.T) {
+	in := InstructionsInput{Child: true, Tools: true, CLI: true}
+	contractOf := func(role string) string {
+		text := Instructions(role, "correctness", in)
+		writer, report := render(childWriterTmpl, in.data(role)), render(childToolsTmpl, in.data(role))
+		switch {
+		case strings.HasSuffix(text, writer+"\n") && !strings.Contains(text, report):
+			return "writer"
+		case strings.HasSuffix(text, report+"\n") && !strings.Contains(text, writer):
+			return "report"
+		}
+		return "neither"
+	}
+	saved := Publishes
+	t.Cleanup(func() { Publishes = saved })
+	for _, role := range []string{"investigator", "reviewer", "qa_browser", "implementer", "fixer", "simplifier"} {
+		phase := PhaseForPromptRole(role)
+		want := map[bool]string{true: "writer", false: "report"}
+		if got := contractOf(role); got != want[saved[phase]] {
+			t.Errorf("%s child: %s contract, publishes %v", role, got, saved[phase])
+		}
+		// The contract is the phase's publishing, not the role's name.
+		Publishes = maps.Clone(saved)
+		Publishes[phase] = !saved[phase]
+		got := contractOf(role)
+		Publishes = saved
+		if got != want[!saved[phase]] {
+			t.Errorf("%s child with publishing flipped: %s contract", role, got)
 		}
 	}
 }
