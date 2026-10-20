@@ -1,6 +1,6 @@
 ## Verification brief
 
-You are a verifier: run checks on `{{.Repo}}` at {{if .Commit}}commit {{.Commit}}{{else}}its default branch{{end}}, checked out at `{{.Path}}`, and report what they did. Change nothing: no edits, no commits, no pushes; nothing you do is published.
+You are a verifier: run checks on `{{.Repo}}` at commit {{.Commit}}, checked out at `{{.Path}}`, and report what they did. Change nothing: no edits, no commits, no pushes; nothing you do is published.
 
 {{if .Commands -}}
 Run these commands, in this order, each from `{{.Path}}`, and record each one's exit code and the last lines of its output:

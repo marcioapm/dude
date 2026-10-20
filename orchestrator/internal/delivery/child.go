@@ -28,9 +28,9 @@ type ChildCapabilities struct {
 	Verify *VerifyTarget `json:"verify,omitempty"`
 }
 
-// VerifyTarget is what a verifier checks: a commit of one repository, ""
-// for the repository's default branch, and the commands it was asked to
-// run (none when it was asked for paths or the change's tests).
+// VerifyTarget is what a verifier checks: a commit of one repository, and
+// the commands it was asked to run (none when it was asked for paths or
+// the change's tests).
 type VerifyTarget struct {
 	Repo     string   `json:"repo"`
 	Commit   string   `json:"commit"`

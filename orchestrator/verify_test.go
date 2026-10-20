@@ -370,22 +370,26 @@ func TestAVerifiersReportedCommandsAreQuotedAsExternalText(t *testing.T) {
 }
 
 // What verify refuses before any Run starts: a commit not named by its
-// SHA, a repository not the task's, too many commands; and its Runs are
-// bounded per conductor Run, as limits shows.
+// SHA, none named before the task has published one, a repository not the
+// task's, too many commands; and its Runs are bounded per conductor Run,
+// as limits shows.
 func TestVerifyIsBounded(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
 	w.talk(task)
 	w.refused(task, "verify", `{"commit":"HEAD"}`, "is not a commit")
+	w.refused(task, "verify", `{"commands":["true"]}`,
+		"target has no published commit for this task yet: publish first, or name the commit to verify by its full SHA")
 	w.refused(task, "verify", `{"repo":"web"}`, "is not one of this task's repositories")
 	w.refused(task, "verify", `{"commands":["a","b","c","d","e","f","g","h","i","j","k"]}`, "at most 10 commands")
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND source_kind IS NOT NULL`, task); n != 0 {
 		t.Fatalf("%d verifiers started by refused calls", n)
 	}
+	main := w.gh.SHA("main")
 	for i := range 10 {
-		w.must(task, "verify", fmt.Sprintf(`{"commands":["true"],"key":"v%d"}`, i))
+		w.must(task, "verify", fmt.Sprintf(`{"commit":%q,"commands":["true"],"key":"v%d"}`, main, i))
 	}
-	w.refused(task, "verify", `{"commands":["true"],"key":"v10"}`, "verify")
+	w.refused(task, "verify", fmt.Sprintf(`{"commit":%q,"commands":["true"],"key":"v10"}`, main), "verify")
 	if v := obj(field(w.limitsOf(task), "verifiesThisRun")); num(v["limit"]) != 10 || num(v["used"]) != 10 || num(v["remaining"]) != 0 {
 		t.Fatalf("limits' verifications: %v", v)
 	}

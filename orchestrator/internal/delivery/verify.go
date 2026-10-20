@@ -31,8 +31,9 @@ const (
 )
 
 // VerifyAsk is what verify asks: a commit of one repository (the task's
-// head there when empty), the commands to run or the paths whose tests
-// to run (the change's tests when neither), and a note.
+// head there when empty; refused when the task has none yet), the
+// commands to run or the paths whose tests to run (the change's tests
+// when neither), and a note.
 type VerifyAsk struct {
 	Repo, Commit string
 	Commands     []string
@@ -120,18 +121,18 @@ func VerifyStart(ctx context.Context, tx pgx.Tx, ref RunRef, in VerifyAsk, key s
 		if d != nil {
 			commit = d.State.Heads[repo]
 		}
+		if commit == "" {
+			return StartChildInput{}, refusef(rVerifyNoCommit, repo)
+		}
 	}
 	brief := render(verifyBriefTmpl, struct {
 		Repo, Path, Commit string
 		Commands, Paths    []string
 		ResultsMax         int
 	}{repo, "/workspace/repos/" + lux.SpecName(repo), commit, commands, paths, VerifyResultsMax})
-	out := StartChildInput{Parent: ChildParent{Kind: ChildParentTaskConductor, Run: ref}, Profile: PromptRoleForPhase[PhaseInvestigate],
-		Prompt: brief, Note: in.Note, Key: key, Capabilities: ChildCapabilities{Verify: &VerifyTarget{Repo: repo, Commit: commit, Commands: commands}}}
-	if commit != "" {
-		out.BaseRefs = map[string]string{repo: commit}
-	}
-	return out, nil
+	return StartChildInput{Parent: ChildParent{Kind: ChildParentTaskConductor, Run: ref}, Profile: PromptRoleForPhase[PhaseInvestigate],
+		Prompt: brief, Note: in.Note, Key: key, Capabilities: ChildCapabilities{Verify: &VerifyTarget{Repo: repo, Commit: commit, Commands: commands}},
+		BaseRefs: map[string]string{repo: commit}}, nil
 }
 
 // fencedJSON is a ```json fenced block's body.
