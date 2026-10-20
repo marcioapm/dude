@@ -35,6 +35,6 @@ checks:
 
 - Run each check as its own command, so its exit status is the check's own, and read its output.
 - This block reports your checks to people; dude does not yet parse it, match it to command exits or use it to gate publishing.
-{{if not .Child -}}
+{{if and (not .Child) (.Granted "ask_person") -}}
 - A failed check or one that will not run is a problem to solve before you finish (see How you work). If you cannot, ask with `ask_person`: what you ran, the exact error, and what you tried, then end your turn to wait for the answer. Reporting `fail` or `not-run` here does not pause the Run. Never list a check as `pass` that you did not see pass.
 {{- end}}

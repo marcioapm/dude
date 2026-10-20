@@ -1,6 +1,8 @@
 package delivery
 
 import (
+	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -61,26 +63,9 @@ func sectionsFor(tool, role string) []string {
 	return nil
 }
 
-// Lines that name a tool whatever the Run is granted: a role's prose or
-// its tool contract, not one of the file's tool sections. Pinned so that a
-// new unconditional mention is a failure to look at.
-var unconditionalMentions = map[string][]string{
-	"implementer/ask_person": {"- A failed check or one that will not run is a problem to solve"},
-	"fixer/ask_person":       {"- A failed check or one that will not run is a problem to solve"},
-	"conductor/ask_person": {"- Ask the pull-request question (`decide ask_person`)", "When the delivery escalates to a person",
-		"The dude tools read what dude knows about this task"},
-	"conductor/create_task":    {"When the delivery takes the decisions", "The dude tools read what dude knows about this task"},
-	"conductor/search_memory":  {"The dude tools read what dude knows about this task"},
-	"conductor/run_diff":       {"The dude tools read what dude knows about this task"},
-	"brainstorm/ask_person":    {"- Several people may write to you.", "The dude tools read the linked projects"},
-	"brainstorm/search_memory": {"The dude tools read the linked projects"},
-	"brainstorm/remember":      {"The dude tools read the linked projects"},
-}
-
-// Each tool the instruction file can name is named, in its own section,
-// exactly when the Run's capabilities grant it: for every role, taking
-// away the capability that unlocks it takes away that section and every
-// other mention of the tool but the pinned prose.
+// Each tool section of the instruction file is there exactly when the
+// Run's capabilities grant its tool: for every role, taking away the
+// capability that unlocks it takes away that section.
 func TestEachToolSectionIsInTheFileExactlyWhenItsToolIsGranted(t *testing.T) {
 	checked := map[string]bool{}
 	for _, role := range PromptRoles {
@@ -104,21 +89,104 @@ func TestEachToolSectionIsInTheFileExactlyWhenItsToolIsGranted(t *testing.T) {
 					t.Errorf("%s without %s: section %q", role, key, section)
 				}
 			}
-			var left []string
-			for _, line := range strings.Split(got, "\n") {
-				if strings.Contains(line, tool) && !slices.ContainsFunc(unconditionalMentions[role+"/"+tool],
-					func(prefix string) bool { return strings.HasPrefix(line, prefix) }) {
-					left = append(left, line)
-				}
-			}
-			if len(left) > 0 {
-				t.Errorf("%s without %s still names %s:\n%s", role, key, tool, strings.Join(left, "\n"))
-			}
 		}
 	}
 	for _, tool := range InstructionTools {
 		if !checked[tool] {
 			t.Errorf("%s: no role's file was checked for its section", tool)
+		}
+	}
+}
+
+// The shell form of each dude tool the instruction files show, as
+// cmd/dude parses it.
+var toolCommands = map[string][]string{
+	"list_tasks": {"dude task list"}, "list_epics": {"dude epic list"}, "list_repositories": {"dude repo list"},
+	"create_task": {"dude task create"}, "search_memory": {"dude memory search"}, "get_memory": {"dude memory show"},
+	"remember": {"dude memory add"}, "emit_event": {"dude event"}, "run_diff": {"dude diff"},
+	"request_repository": {"dude repo request"}, "ask_person": {"dude ask"}, "list_machine_sizes": {"dude machine sizes"},
+	"request_machine": {"dude machine request"}, "message": {"dude message"}, "wait_for_reply": {"dude wait"},
+	"note": {"dude note"}, "feedback": {"dude feedback"}, "feedback_reply": {"dude feedback reply"},
+	"feedback_resolve": {"dude feedback resolve"}, "reply_on_pull_request": {"dude pr reply"}, "findings": {"dude findings"},
+	"pull_requests": {"dude prs"}, "start_phase": {"dude phase start"}, "start_agent": {"dude agent start"},
+	"steer": {"dude steer"}, "restart_run": {"dude restart"}, "decide": {"dude decide"},
+	"dismiss_finding": {"dude finding dismiss"}, "decide_escalation": {"dude escalation decide"},
+	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},
+}
+
+// Prose in which a tool's name is an ordinary word, or a flag of another
+// command, pinned as the exact phrase it occurs in. A tool name anywhere
+// else in the file names the tool.
+var notTheTool = map[string][]string{
+	"decide": {"**People decide**", "and what you decide", "read what you need with your tools, then decide.",
+		"start nothing and decide nothing", "whatever you decide", "only a person may decide"},
+	"feedback": {"reviews and feedback)", "come back as feedback.", "findings and feedback you are given"},
+	"findings": {"triages findings", "(some or all findings)", "report findings with a severity",
+		"structured findings and tester verdicts"},
+	"message": {"first message lists them", "default merge message", "a Chat message", "your next message", "--message M"},
+	"note":    {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)"},
+	"publish": {"`dude publish FILE", "the files you publish"},
+}
+
+// toolMentions are the places text names tool, by its name as a whole
+// word or by its shell command, outside the notTheTool phrases.
+func toolMentions(text, tool string) []string {
+	var excused [][2]int
+	for _, phrase := range notTheTool[tool] {
+		for at := 0; ; {
+			i := strings.Index(text[at:], phrase)
+			if i < 0 {
+				break
+			}
+			excused = append(excused, [2]int{at + i, at + i + len(phrase)})
+			at += i + len(phrase)
+		}
+	}
+	var out []string
+	for _, word := range append([]string{tool}, toolCommands[tool]...) {
+		re := regexp.MustCompile(`(^|[^A-Za-z0-9_])(` + regexp.QuoteMeta(word) + `)($|[^A-Za-z0-9_])`)
+		for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
+			if slices.ContainsFunc(excused, func(e [2]int) bool { return e[0] <= m[4] && m[5] <= e[1] }) {
+				continue
+			}
+			out = append(out, fmt.Sprintf("%q in …%s…", word, text[max(0, m[4]-60):min(len(text), m[5]+40)]))
+		}
+	}
+	return out
+}
+
+// instructionRuns are the instruction files a role's Run can have with
+// dude's tools: its own, and an independent child's.
+func instructionRuns(role string, grants *capabilities.Grants) map[string]InstructionsInput {
+	in := InstructionsInput{Tools: true, CLI: true, Checkouts: true, Anywhere: role == RoleBrainstorm, Grants: grants,
+		BlockingSeverities: []string{"blocking", "high"}}
+	out := map[string]InstructionsInput{role: in}
+	if role != RoleConductor && role != RoleBrainstorm {
+		in.Child = true
+		out[role+" child"] = in
+	}
+	return out
+}
+
+// For every role and every capability it has, a Run without that
+// capability is never told of its tools: not by name, not by command,
+// anywhere in its instruction file.
+func TestAnInstructionFileNamesNoToolOfACapabilityItLacks(t *testing.T) {
+	for _, role := range PromptRoles {
+		defaults := capabilities.Default(toolRoleOf(role))
+		for _, c := range capabilities.All {
+			if !defaults.Has(c.Key) || len(c.Tools) == 0 {
+				continue
+			}
+			less := defaults.Without(c.Key)
+			for name, in := range instructionRuns(role, &less) {
+				got := Instructions(role, "correctness", in)
+				for _, tool := range c.Tools {
+					for _, m := range toolMentions(got, tool) {
+						t.Errorf("%s without %s names %s: %s", name, c.Key, tool, m)
+					}
+				}
+			}
 		}
 	}
 }
