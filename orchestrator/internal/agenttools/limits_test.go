@@ -47,15 +47,34 @@ func (f *fixture) limitsOf(t *testing.T, token string) map[string]any {
 
 func asInt(v any) int { f, _ := v.(float64); return int(f) }
 
+// refreshing is a fixture with a GitHub connection whose syncs record the
+// pull request they were asked for in synced and answer result.
+func refreshing(t *testing.T, result error) (f *fixture, synced *[]string) {
+	synced = &[]string{}
+	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: t.Name(), APIBaseURL: "http://127.0.0.1:1"})
+	f = setupWith(t, &agenttools.Server{Forges: forgesOf{gh}, SyncPullRequest: func(_ context.Context, _, id string) error {
+		*synced = append(*synced, id)
+		return result
+	}})
+	return f, synced
+}
+
+// attemptsCharged are the task's agent.tool.attempted events: the GitHub
+// reads a refresh charged.
+func (f *fixture) attemptsCharged(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.tool.attempted'`,
+		f.item).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 // A refresh charges only pull requests on GitHub, and one another sync
 // recorded first (prs.ErrRaced) was refreshed, not failed.
 func TestARefreshChargesGitHubPullRequestsAndCountsARacedSyncAsRefreshed(t *testing.T) {
-	var synced []string
-	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: t.Name(), APIBaseURL: "http://127.0.0.1:1"})
-	f := setupWith(t, &agenttools.Server{Forges: forgesOf{gh}, SyncPullRequest: func(_ context.Context, _, id string) error {
-		synced = append(synced, id)
-		return prs.ErrRaced
-	}})
+	f, synced := refreshing(t, prs.ErrRaced)
 	token := f.conductor(t)
 	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
 		('repo_t', $1, $2, 'target', 'https://github.com/acme/target.git'), ('repo_local', $1, $2, 'local', '/srv/git/local.git')`, f.org, f.project)
@@ -67,13 +86,11 @@ func TestARefreshChargesGitHubPullRequestsAndCountsARacedSyncAsRefreshed(t *test
 	if status := f.postAs(t, token, "refresh_pull_requests", `{}`, &out); status != 200 {
 		t.Fatalf("refresh: %d %v", status, out)
 	}
-	if strings.Join(synced, ",") != "pr_t" || asInt(out["refreshed"]) != 1 || out["notRefreshed"] != nil {
-		t.Errorf("synced %v; refreshed %v, notRefreshed %v", synced, out["refreshed"], out["notRefreshed"])
+	if strings.Join(*synced, ",") != "pr_t" || asInt(out["refreshed"]) != 1 || out["notRefreshed"] != nil {
+		t.Errorf("synced %v; refreshed %v, notRefreshed %v", *synced, out["refreshed"], out["notRefreshed"])
 	}
-	var reads int
-	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.tool.attempted'`,
-		f.item).Scan(&reads); err != nil || reads != 1 {
-		t.Errorf("%d GitHub reads charged (%v), want 1", reads, err)
+	if reads := f.attemptsCharged(t); reads != 1 {
+		t.Errorf("%d GitHub reads charged, want 1", reads)
 	}
 }
 
@@ -81,12 +98,7 @@ func TestARefreshChargesGitHubPullRequestsAndCountsARacedSyncAsRefreshed(t *test
 // all on repositories not on GitHub, are refused in their own words; GitHub
 // is not asked and no read is charged.
 func TestARefreshWithNothingOnGitHubIsRefused(t *testing.T) {
-	var synced []string
-	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: t.Name(), APIBaseURL: "http://127.0.0.1:1"})
-	f := setupWith(t, &agenttools.Server{Forges: forgesOf{gh}, SyncPullRequest: func(_ context.Context, _, id string) error {
-		synced = append(synced, id)
-		return nil
-	}})
+	f, synced := refreshing(t, nil)
 	token := f.conductor(t)
 	refused := func(want string) {
 		t.Helper()
@@ -102,13 +114,11 @@ func TestARefreshWithNothingOnGitHubIsRefused(t *testing.T) {
 			base_branch, head_sha, title) VALUES ('pr_local', $1, $2, $3, 'repo_local', 1, 'https://x/l1', 'b', 'main', 'abc', 'L')`,
 		f.org, f.project, f.item)
 	refused("none of the task's open pull requests is on GitHub: pull_requests lists them as dude has them")
-	if len(synced) != 0 {
-		t.Errorf("synced %v", synced)
+	if len(*synced) != 0 {
+		t.Errorf("synced %v", *synced)
 	}
-	var reads int
-	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.tool.attempted'`,
-		f.item).Scan(&reads); err != nil || reads != 0 {
-		t.Errorf("%d GitHub reads charged (%v), want 0", reads, err)
+	if reads := f.attemptsCharged(t); reads != 0 {
+		t.Errorf("%d GitHub reads charged, want 0", reads)
 	}
 }
 

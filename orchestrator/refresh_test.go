@@ -101,12 +101,19 @@ func TestABrainstormRefreshesALinkedTasksPullRequests(t *testing.T) {
 const githubReadsHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue',
 	'github_pull_request', 'github_check_log', 'refresh_pull_requests') AND occurred_at > now() - interval '1 hour'`
 
+// spendGitHubReads records n of the task's GitHub reads ten minutes ago,
+// as evt_spent_1…n.
+func (w *world) spendGitHubReads(task string, n int) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO events (id, organization_id, event_type, task_id, occurred_at, actor_type, actor_id, source, payload)
+		SELECT 'evt_spent_' || n, $1, 'agent.tool.attempted', $2, now() - interval '10 minutes', 'agent', 'run_x', 'runner',
+			jsonb_build_object('tool', 'github_issue') FROM generate_series(1, $3::int) n`, w.org, task, n)
+}
+
 // With the hour's 60 reads spent, a refresh is refused before GitHub is asked.
 func TestARefreshPastTheHoursReadsIsRefused(t *testing.T) {
 	w, task := refreshWorld(t)
-	mustExec(t, w.owner, `INSERT INTO events (id, organization_id, event_type, task_id, occurred_at, actor_type, actor_id, source, payload)
-		SELECT 'evt_spent_' || n, $1, 'agent.tool.attempted', $2, now() - interval '10 minutes', 'agent', 'run_x', 'runner',
-			jsonb_build_object('tool', 'github_issue') FROM generate_series(1, 60) n`, w.org, task)
+	w.spendGitHubReads(task, 60)
 	before := w.requests()
 	w.refused(task, "refresh_pull_requests", `{}`, "at most 60 GitHub reads an hour")
 	if w.requests() != before {
@@ -129,12 +136,7 @@ func (w *world) secondPullRequest(task string) {
 func TestARefreshSpendsAReadPerPullRequest(t *testing.T) {
 	w, task := refreshWorld(t)
 	w.secondPullRequest(task)
-	spend := func(n int, prefix string) {
-		mustExec(t, w.owner, `INSERT INTO events (id, organization_id, event_type, task_id, occurred_at, actor_type, actor_id, source, payload)
-			SELECT $4 || n, $1, 'agent.tool.attempted', $2, now() - interval '10 minutes', 'agent', 'run_x', 'runner',
-				jsonb_build_object('tool', 'github_issue') FROM generate_series(1, $3::int) n`, w.org, task, n, prefix)
-	}
-	spend(59, "evt_spent_")
+	w.spendGitHubReads(task, 59)
 	before := w.requests()
 	w.refused(task, "refresh_pull_requests", `{}`, "one GitHub read for each open pull request, 2 here, and 1 of the hour's 60 are left")
 	if w.requests() != before {
