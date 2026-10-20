@@ -45,8 +45,8 @@ func TestThePullRequestChecksAccountIsTheCurrentAttempts(t *testing.T) {
 	for _, attempt := range []int{0, 2} {
 		var got string
 		if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
-			var err error
-			got, err = checksVerificationText(ctx, tx, &State{TaskID: "wi_cv", ProjectID: "prj_cv", Attempt: attempt})
+			runs, err := gatedRuns(ctx, tx, &State{TaskID: "wi_cv", ProjectID: "prj_cv", Attempt: attempt})
+			got = checksAccountText(runs, prBodyMax)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -122,7 +122,7 @@ func TestTheNewestRunIsAlwaysInTheChecksAccount(t *testing.T) {
 			"2 earlier Runs omitted.\n" +
 			"- **Fixer** — not backed\n  - `make check` — **pass**\n" + compact("Simplifier", "backed"),
 	}} {
-		if got := checksAccountText(c.runs); got != c.want {
+		if got := checksAccountText(c.runs, prBodyMax); got != c.want {
 			t.Errorf("%s: the checks account is\n%s\nwant\n%s", c.name, got, c.want)
 		}
 	}
@@ -166,10 +166,10 @@ func TestThePullRequestChecksAccountIsBounded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var section string
+	var v verificationParts
 	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var err error
-		section, _, err = verificationText(ctx, tx, &State{TaskID: "wi_cb", ProjectID: "prj_cb", Attempt: 1,
+		v, _, err = readVerification(ctx, tx, &State{TaskID: "wi_cb", ProjectID: "prj_cb", Attempt: 1,
 			Heads: map[string]string{"api": "0123456789abcdef"}})
 		return err
 	}); err != nil {
@@ -181,10 +181,11 @@ func TestThePullRequestChecksAccountIsBounded(t *testing.T) {
 	for i := 1; i <= 6; i++ {
 		criteria = append(criteria, fmt.Sprintf("Criterion %d: %s", i, strings.Repeat("the page shows it ", 10)))
 	}
-	body := replaceVerification(prBody(goal, criteria, "", "## Verification\nNot tested yet."), section)
+	body := v.into(prBody(goal, criteria, "", "## Verification\nNot tested yet."))
 	if n := utf8.RuneCountInString(body); n > 65_536 {
 		t.Fatalf("the pull request body is %d characters, more than GitHub's 65,536", n)
 	}
+	section := v.text(prBodyMax)
 	if !strings.Contains(section, "## Verification\nTested at `0123456`.") {
 		t.Fatalf("no test gate section in:\n%.400s", section)
 	}

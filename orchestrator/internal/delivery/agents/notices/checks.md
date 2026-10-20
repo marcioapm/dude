@@ -11,6 +11,7 @@ Run the missing or unsuccessful checks as separate commands, read their output, 
 {{define "notices/checks/unestablished"}}the judgement did not establish verification{{end}}
 {{define "notices/checks/account-compact"}}- **{{.Role}}** — {{.Status}}
   - {{.Count}} {{if eq .Count 1}}check{{else}}checks{{end}} reported; checks omitted from this account: see the task's Activity.{{end}}
+{{define "notices/checks/account-omitted"}}Checks account omitted: see the task's Activity.{{end}}
 {{define "notices/checks/context"}}### The checks report
 {{.Report}}
 

@@ -34,11 +34,9 @@ func (j gatedJudgement) status() string {
 	return "not backed"
 }
 
-// checksVerificationText is the checks gate's compact account for a PR:
-// each gated Run of the current attempt with its latest judgement, oldest Run
-// first, the earliest left out past checksRowsMax and the newest always shown. The headline is the weakest
-// of them all: a skip, else any waiver with each reason, else verified.
-func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, error) {
+// gatedRuns is each gated Run of the current attempt with its latest
+// judgement, oldest Run first.
+func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, error) {
 	rows, err := tx.Query(ctx, `SELECT phase, payload FROM (
 		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, e.payload
 		FROM events e JOIN runs r ON r.id=e.run_id
@@ -46,7 +44,7 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)) ORDER BY r.id, e.cursor DESC) latest
 		ORDER BY created_at, id`, st.TaskID, st.Attempt, EvRunChecksJudged)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var runs []gatedJudgement
 	for rows.Next() {
@@ -54,12 +52,12 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 		var payload []byte
 		if err := rows.Scan(&phase, &payload); err != nil {
 			rows.Close()
-			return "", err
+			return nil, err
 		}
 		var j gatedJudgement
 		if err := json.Unmarshal(payload, &j); err != nil {
 			rows.Close()
-			return "", err
+			return nil, err
 		}
 		role := RoleForPhase[phase]
 		if phase == PhaseFix {
@@ -68,16 +66,20 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 		j.Role = RoleName(role)
 		runs = append(runs, j)
 	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-	return checksAccountText(runs), nil
+	return runs, rows.Err()
 }
 
-var checksCompactTmpl = mustTemplate("notices/checks/account-compact")
+var (
+	checksCompactTmpl = mustTemplate("notices/checks/account-compact")
+	checksOmittedTmpl = mustTemplate("notices/checks/account-omitted")
+)
 
-// checksAccountText is the account of runs, oldest first; "" for none.
-func checksAccountText(runs []gatedJudgement) string {
+// checksAccountText is the checks gate's compact account of runs (oldest
+// first) for a PR, in at most room characters as long as its headline fits:
+// the headline is the weakest of them all (a skip, else any waiver with each
+// reason, else verified), then the newest Run, compactly if its full row does
+// not fit, then older Runs newest-first while they fit. "" for no Runs.
+func checksAccountText(runs []gatedJudgement, room int) string {
 	if len(runs) == 0 {
 		return ""
 	}
@@ -93,6 +95,8 @@ func checksAccountText(runs []gatedJudgement) string {
 			unverified = true
 		}
 	}
+	newest := runs[len(runs)-1]
+	compact := render(checksCompactTmpl, map[string]any{"Role": newest.Role, "Status": newest.status(), "Count": len(newest.Checks)}) + "\n"
 	var b strings.Builder
 	b.WriteString("### Checks\n")
 	switch {
@@ -101,12 +105,12 @@ func checksAccountText(runs []gatedJudgement) string {
 	case len(waivers) > 0:
 		b.WriteString("Checks were waived by a person:\n")
 		// Each reason clipped, as the test gate's are; the whole one is in
-		// the ledger. The newest waivers that fit checksWaiversMax.
+		// the ledger. The newest waivers that fit beside a compact newest Run.
 		shown := make([]string, len(waivers))
 		for i, j := range waivers {
 			shown[i] = fmt.Sprintf("- %s: %s\n", j.Role, clip(oneLine(j.Message), checksFieldMax))
 		}
-		from := newestThatFit(shown, checksWaiversMax)
+		from := newestThatFit(shown, min(checksWaiversMax, room-checksFixedMax-utf8.RuneCountInString(compact)))
 		writeOmitted(&b, from, "waiver")
 		for _, line := range shown[from:] {
 			b.WriteString(line)
@@ -117,18 +121,23 @@ func checksAccountText(runs []gatedJudgement) string {
 		b.WriteString("Checks were verified against the Run's recorded commands.\n")
 	}
 	b.WriteByte('\n')
+	rowsRoom := min(checksRowsMax, room-utf8.RuneCountInString(b.String())-checksOmittedMax)
 	lines := make([]string, len(runs))
 	for i, j := range runs {
 		lines[i] = checksRow(j)
 	}
 	// The newest Run decided publishing, so it is always shown: compactly
-	// when its full row would not fit.
-	newest := len(lines) - 1
-	if utf8.RuneCountInString(lines[newest]) > checksRowsMax {
-		j := runs[newest]
-		lines[newest] = render(checksCompactTmpl, map[string]any{"Role": j.Role, "Status": j.status(), "Count": len(j.Checks)}) + "\n"
+	// when its full row would not fit. With no room even for that, the
+	// headline stands alone and says the account is omitted.
+	last := len(lines) - 1
+	if utf8.RuneCountInString(lines[last]) > rowsRoom {
+		lines[last] = compact
 	}
-	from := newestThatFit(lines[:newest], checksRowsMax-utf8.RuneCountInString(lines[newest]))
+	if utf8.RuneCountInString(lines[last]) > rowsRoom {
+		b.WriteString(render(checksOmittedTmpl, nil))
+		return b.String()
+	}
+	from := newestThatFit(lines[:last], rowsRoom-utf8.RuneCountInString(lines[last]))
 	writeOmitted(&b, from, "Run")
 	for _, row := range lines[from:] {
 		b.WriteString(row)
@@ -136,15 +145,17 @@ func checksAccountText(runs []gatedJudgement) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// A pull request body holds at most 65,536 characters. The checks account
-// takes at most checksWaiversMax for the waivers' lines, checksRowsMax for
-// the Runs' rows, and under 200 for its heading, headline sentence and the
-// two omitted lines: 48,200 in all, leaving over 17,000 for the markers,
-// the test gate's section and the task's description. Each field is
-// clipped to checksFieldMax before it is put in a code span.
+// The checks account takes at most checksWaiversMax for the waivers' lines,
+// checksRowsMax for the Runs' rows, and checksFixedMax for its heading,
+// headline sentence and the two omitted lines (checksOmittedMax each). A
+// pull request gives it less when the rest of its body leaves less
+// (verificationParts.fit). Each field is clipped to checksFieldMax before
+// it is put in a code span.
 const (
 	checksWaiversMax = 8_000
 	checksRowsMax    = 40_000
+	checksFixedMax   = 200
+	checksOmittedMax = 30
 	checksFieldMax   = 300
 )
 
