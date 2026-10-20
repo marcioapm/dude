@@ -46,7 +46,13 @@
 
 {{- define "refusals/tools/brainstorm/item-new-epic-has-no-note"}}item %d: a new epic has no note %d to replace{{end}}
 
-{{- define "refusals/tools/brainstorm/item-kind-epic-task-edit-comment"}}item %d: kind is epic, task, edit, comment or note{{end}}
+{{- define "refusals/tools/brainstorm/item-kind-epic-task-edit-comment"}}item %d: kind is epic, task, edit, comment, note or link_project{{end}}
+
+{{- define "refusals/tools/brainstorm/no-project-in-organisation"}}no project %s in this organisation; the projects you can propose to link are %s{{end}}
+
+{{- define "refusals/tools/brainstorm/item-project-already-linked"}}item %d: project %s is linked to this session already{{end}}
+
+{{- define "refusals/tools/brainstorm/item-link-reason"}}item %d: a link_project gives its reason, 1 to %d characters, for the member who confirms it{{end}}
 
 {{- define "refusals/tools/brainstorm/item-only-task-item-has-relations"}}item %d: only a task item has relations; relate existing tasks with relate{{end}}
 

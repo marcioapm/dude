@@ -116,7 +116,7 @@ item %d: a new epic has no note %d to replace
 
 ## refusals/tools/brainstorm/item-kind-epic-task-edit-comment
 
-item %d: kind is epic, task, edit, comment or note
+item %d: kind is epic, task, edit, comment, note or link_project
 
 ## refusals/tools/brainstorm/item-only-task-item-has-relations
 
@@ -485,6 +485,18 @@ a refresh takes one GitHub read for each open pull request, %d here, and %d of t
 ## refusals/tools/refresh/no-open-pull-request-on-github
 
 none of the task's open pull requests is on GitHub: pull_requests lists them as dude has them
+
+## refusals/tools/brainstorm/item-link-reason
+
+item %d: a link_project gives its reason, 1 to %d characters, for the member who confirms it
+
+## refusals/tools/brainstorm/item-project-already-linked
+
+item %d: project %s is linked to this session already
+
+## refusals/tools/brainstorm/no-project-in-organisation
+
+no project %s in this organisation; the projects you can propose to link are %s
 
 ## refusals/delivery/conduct/this-task-you-are-read-only
 

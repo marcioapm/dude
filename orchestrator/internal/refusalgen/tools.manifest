@@ -32,6 +32,9 @@ rItemReplacesNoteNumber                refusals/tools/brainstorm/item-replaces-n
 rItemNoteNamesItsEpic                  refusals/tools/brainstorm/item-note-names-its-epic
 rItemNewEpicHasNoNote                  refusals/tools/brainstorm/item-new-epic-has-no-note
 rItemKindEpicTaskEditComment           refusals/tools/brainstorm/item-kind-epic-task-edit-comment
+rNoProjectInOrganisation               refusals/tools/brainstorm/no-project-in-organisation
+rItemProjectAlreadyLinked              refusals/tools/brainstorm/item-project-already-linked
+rItemLinkReason                        refusals/tools/brainstorm/item-link-reason
 rItemOnlyTaskItemHasRelations          refusals/tools/brainstorm/item-only-task-item-has-relations
 rItemNamesTaskByKeyOr                  refusals/tools/brainstorm/item-names-task-by-key-or
 rItemNamesItself                       refusals/tools/brainstorm/item-names-itself

@@ -462,7 +462,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 </SessionRailBlock>
               ) : null}
               <SessionRailBlock label="It can">
-                <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits and comments · members file them"]}
+                <Capabilities can={["Read the linked projects' code, tasks, pull requests and findings", "Propose epics, tasks, edits, comments and projects to link · members file them, the owner links"]}
                   cannot={["Change code, push, start or steer work", "Read projects nobody linked"]} />
               </SessionRailBlock>
               {/* Every member may Reset, readers included (the API's rule, as for starting a task). */}
@@ -651,8 +651,9 @@ function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly
 function cardItem(item: ProposalItem, status: Proposal["status"][number], linked: ReadonlyMap<string, { key: string; name: string }>,
   epics: ReadonlySet<string | undefined>, you: string): ProposalCardItem {
   const project = item.project ? linked.get(item.project.toUpperCase()) : undefined;
-  // Someone else may file it: its task's owner (never you), or a member when you only read.
-  const theirs = (status.blockedBy === "owner" && status.owner?.id !== you) || status.blockedBy === "reader";
+  // Someone else may file it: its task's owner (never you), a member when you only read, or the session's owner.
+  const theirs = (status.blockedBy === "owner" && status.owner?.id !== you) || status.blockedBy === "reader" ||
+    status.blockedBy === "session_owner";
   const blockedFor: ProposalCardItem["blockedFor"] = theirs ? "you" : "everyone";
   const common = {
     canFile: Boolean(status.canFile),
@@ -677,6 +678,13 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
     case "relation":
       return { kind: "relation", title: `${item.from ?? ""} ${item.relationKind === "related" ? "related to" : "blocks"} ${item.to ?? ""}`,
         taskKey: item.to, detail: item.why ? `“${item.why}”` : undefined, ...common };
+    case "link_project": {
+      // Not linked yet: named as the agent proposed it, unless the session links it by now.
+      const key = (item.project ?? "").toUpperCase();
+      const named = project ?? { key, name: item.projectName ?? key };
+      return { kind: "link_project", title: `Link ${named.name} (${key}) to this session`, project: named,
+        detail: item.reason ? `“${item.reason}”` : undefined, ...common };
+    }
   }
 }
 

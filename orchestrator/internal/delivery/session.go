@@ -333,6 +333,10 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 		NamedByPerson bool
 		People        []person
 		Projects      []project
+		// The organisation's projects the session does not link, at most
+		// unlinkedListed of them, and how many more there are.
+		Unlinked []project
+		More     int
 	}{NamedByPerson: titledBy != nil && *titledBy == "person"}
 	if title != nil {
 		data.Title = *title
@@ -363,8 +367,24 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 		}
 		data.Projects = append(data.Projects, linked)
 	}
+	org, err := OrgProjects(ctx, tx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range org {
+		switch {
+		case p.Linked:
+		case len(data.Unlinked) < unlinkedListed:
+			data.Unlinked = append(data.Unlinked, project{Key: p.Key, Name: p.Name})
+		default:
+			data.More++
+		}
+	}
 	return render(sessionTmpl, data), nil
 }
+
+// unlinkedListed bounds the projects a briefing lists as not linked.
+const unlinkedListed = 50
 
 // Member is a person in a session, or invited to it.
 type Member struct {
@@ -588,9 +608,9 @@ func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string)
 // Proposal items (session_proposals.items), each one thing the card asks
 // a member to file.
 type ProposalItem struct {
-	// epic, task, edit, comment, note or relation.
+	// epic, task, edit, comment, note, relation or link_project.
 	Kind string `json:"kind"`
-	// The project, by key (epic, task, note).
+	// The project, by key (epic, task, note, link_project).
 	Project string `json:"project,omitempty"`
 	// A task's or note's epic: an existing one's title, or a new epic's of
 	// this proposal (by its title).
@@ -620,6 +640,33 @@ type ProposalItem struct {
 	To           string `json:"to,omitempty"`
 	RelationKind string `json:"relationKind,omitempty"`
 	Why          string `json:"why,omitempty"`
+	// link_project: why the session should read the project, for the
+	// member who confirms it, and the project's name as proposed, for the
+	// card (the session does not link it yet).
+	Reason      string `json:"reason,omitempty"`
+	ProjectName string `json:"projectName,omitempty"`
+}
+
+// ReasonMax bounds a link_project item's reason, in characters.
+const ReasonMax = 2000
+
+// OrgProject is a project of the session's organisation, by key, with
+// whether it is linked to the session.
+type OrgProject struct {
+	ID, Key, Name string
+	Linked        bool
+}
+
+// OrgProjects are the projects of the organisation tx is scoped to (row
+// security), by key, each saying whether sessionID links it.
+func OrgProjects(ctx context.Context, tx pgx.Tx, sessionID string) ([]OrgProject, error) {
+	rows, err := tx.Query(ctx, `SELECT p.id, p.key_prefix, p.name,
+			EXISTS (SELECT 1 FROM session_projects sp WHERE sp.session_id = $1 AND sp.project_id = p.id)
+		FROM projects p ORDER BY p.key_prefix`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[OrgProject])
 }
 
 // ProposalRef names a task a proposed item relates to: an existing one by

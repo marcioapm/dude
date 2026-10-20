@@ -92,7 +92,7 @@ var All = []Capability{
 	{Key: Conduct, Description: "Drive the task's delivery: start phases and agents, steer and restart Runs, decide, update the task, publish, and act on its pull requests.",
 		Tools: []string{"start_phase", "start_agent", "steer", "restart_run", "decide", "dismiss_finding",
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
-	{Key: Session, Description: "Propose tasks and relations for a member to file, and name the session.",
+	{Key: Session, Description: "Propose tasks, relations and projects to link for a member to file, and name the session.",
 		Tools: []string{"propose", "relate", "name_session"}},
 	{Key: SessionCheckout, Description: "Ask again for a linked repository whose checkout failed, and be told why it failed last; at most 3 a Run.",
 		Tools: []string{"refresh_checkout"}},
