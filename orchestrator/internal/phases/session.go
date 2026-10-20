@@ -96,6 +96,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, role, settings); err != nil || noTier != "" {
 			return err
 		}
+		// What the spec and the instruction file's web both read (runWeb).
+		in.Role, in.Grants, in.Harness = role, &grants, settings.HarnessName()
+		in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
@@ -109,8 +112,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 				return err
 			}
 			prompt = delivery.BrainstormPrompt(briefing, talker)
-			web := runWeb(s.Agent, specInput{Role: role, Harness: settings.HarnessName(), Options: tier.Options,
-				Anywhere: in.Anywhere, Egress: in.Egress, Grants: &grants})
+			web := runWeb(s.Agent, in)
 			instructions := talker.InstructionsInput()
 			instructions.Grants, instructions.Web = &grants, &web
 			in.Instructions = delivery.Instructions(role, "", instructions)
@@ -131,9 +133,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		in.Repos = append(in.Repos, specRepo{Name: repo.SpecName(), URL: repo.URL, Ref: repo.DefaultBranch, ReadOnly: true,
 			Path: delivery.SessionRepoPath(repo.Key, repo.Name), Setup: repo.SetupScript})
 	}
-	in.RunID, in.OrganizationID, in.SessionID, in.Role, in.Grants = r.ID, r.Org, r.SessionID, role, &grants
-	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
-	in.Harness = settings.HarnessName()
+	in.RunID, in.OrganizationID, in.SessionID = r.ID, r.Org, r.SessionID
 	s.logIgnoredOptions(r, in)
 	if m, ok := sizes.ForRole(role, raised, nil, orgModels); ok {
 		if m.Raised != nil {
