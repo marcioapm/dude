@@ -450,13 +450,49 @@ an existing phase profile is required
 
 independent report children cannot mutate workflow or start Runs
 
-## refusals/tools/conductor/at-most-feedback-items-by-id-at
+## refusals/tools/limits/limits-are-a-tasks
 
-at most %d feedback items by id at once
+limits are a task's: this Run has no task
+
+## refusals/tools/runchat/limit-1-messages
+
+limit is 1 to %d messages
+
+## refusals/tools/runchat/name-run-whose-chat-read
+
+name the Run whose Chat to read, by its id (run_…)
+
+## refusals/tools/runchat/not-run-this-session-started
+
+%s is not a Run this session started: you read only the Runs your session started
+
+## refusals/tools/runchat/not-run-your-task-you-read
+
+%s is not a Run of your task: you read only your task's Runs, its children and earlier attempts included
+
+## refusals/tools/refresh/name-task-whose-pull-requests-refresh
+
+name the task whose pull requests to refresh, by its key
+
+## refusals/tools/refresh/no-open-pull-request-refresh
+
+the task has no open pull request to refresh: pull_requests lists the ones it had
+
+## refusals/tools/refresh/refreshing-takes-github-reads
+
+a refresh takes one GitHub read for each open pull request, %d here, and %d of the hour's %d are left: wait, or work with what pull_requests last read
+
+## refusals/tools/refresh/no-open-pull-request-on-github
+
+none of the task's open pull requests is on GitHub: pull_requests lists them as dude has them
 
 ## refusals/tools/brainstorm/name-task-read-feedback-in-full
 
 name the task to read its feedback in full
+
+## refusals/tools/conductor/at-most-feedback-items-by-id-at
+
+at most %d feedback items by id at once
 
 ## refusals/delivery/conduct/this-task-you-are-read-only
 

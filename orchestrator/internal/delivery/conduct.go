@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -362,18 +361,17 @@ func prFixBound(ctx context.Context, tx pgx.Tx, st *State) error {
 
 // prFixBoundFor is prFixBound for a fix of the pull requests in repos.
 func prFixBoundFor(ctx context.Context, tx pgx.Tx, st *State, repos []string) error {
-	if st.PRIteration >= st.Policy.MaxPRFixIterations {
+	if st.RoundFixesSpent() {
 		return refusef(rPullRequestFixesAreAtTheir,
 			st.PRIteration, st.Policy.MaxPRFixIterations)
 	}
-	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT settings FROM forge_credentials WHERE forge = 'github' LIMIT 1`).Scan(&raw)
-	if err != nil && !db.IsNotFound(err) {
+	settings, err := GitHubSettingsTx(ctx, tx)
+	if err != nil {
 		return err
 	}
-	total := forge.ReadSettings(raw).FixRoundsPerPR
+	total := settings.FixRoundsPerPR
 	for _, repo := range repos {
-		if total > 0 && st.PRFixes[repo] >= total {
+		if st.PullRequestFixesSpent(repo, total) {
 			return refusef(rPullRequestInHasHadFix,
 				repo, st.PRFixes[repo])
 		}

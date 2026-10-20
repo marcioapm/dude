@@ -137,11 +137,13 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 	return slugs, nil
 }
 
-// A session's and a task's GitHub reads in the last hour. Both share one
-// predicate, the WHERE of their partial indexes (migrations 147-150),
-// written with literals, as a parameter would not prove the index's WHERE.
+// A session's and a task's GitHub reads in the last hour: the GitHub read
+// tools' and refresh_pull_requests' attempts (a refresh records one per pull
+// request it syncs). Both share one predicate, the WHERE of their partial
+// indexes (migrations 163-164), written with literals, as a parameter would
+// not prove the index's WHERE.
 const (
-	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log')
+	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'refresh_pull_requests')
 		AND occurred_at > now() - interval '1 hour'`
 	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1` + githubReadsInHour
 	githubReadsByTask    = `SELECT count(*) FROM events WHERE task_id = $1` + githubReadsInHour
@@ -174,23 +176,48 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, refuse(rNotRepositoryYouMayReadOnly, want, whose, strings.Join(slugs, ", "))
 	}
 	read.Slug = slugs[i]
-	// The session's (or, for a conductor with none, the task's) Runs share
-	// one budget, counted one caller at a time.
-	key, count, scope := "task:"+c.TaskID, githubReadsByTask, c.TaskID
-	if c.SessionID != "" {
-		key, count, scope = "session:"+c.SessionID, githubReadsBySession, c.SessionID
-	}
+	return read, checkGitHubBudget(ctx, tx, c, 1)
+}
+
+// checkGitHubBudget refuses a call needing more of the hourly GitHub reads
+// c's budget shares than are left, under its lock until tx ends.
+func checkGitHubBudget(ctx context.Context, tx pgx.Tx, c Caller, need int) error {
+	key := githubReadKey(c)
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('github_reads:' || $1))`, key); err != nil {
-		return read, err
+		return err
+	}
+	reads, err := githubReadsThisHour(ctx, tx, c)
+	if err != nil {
+		return err
+	}
+	switch {
+	case reads >= githubReadsPerHour:
+		return refuse(rAtMostGithubReadsHourThis, githubReadsPerHour)
+	case reads+need > githubReadsPerHour:
+		return refuse(rRefreshingTakesGithubReads, need, githubReadsPerHour-reads, githubReadsPerHour)
+	}
+	return nil
+}
+
+// githubReadKey names the budget c's reads share: the session's (or, for a
+// conductor with none, the task's) Runs share one, counted one caller at a
+// time under this key's lock.
+func githubReadKey(c Caller) string {
+	if c.SessionID != "" {
+		return "session:" + c.SessionID
+	}
+	return "task:" + c.TaskID
+}
+
+// githubReadsThisHour are the GitHub reads c's budget has spent in the last hour.
+func githubReadsThisHour(ctx context.Context, tx pgx.Tx, c Caller) (int, error) {
+	count, scope := githubReadsByTask, c.TaskID
+	if c.SessionID != "" {
+		count, scope = githubReadsBySession, c.SessionID
 	}
 	var reads int
-	if err := tx.QueryRow(ctx, count, scope).Scan(&reads); err != nil {
-		return read, err
-	}
-	if reads >= githubReadsPerHour {
-		return read, refuse(rAtMostGithubReadsHourThis, githubReadsPerHour)
-	}
-	return read, nil
+	err := tx.QueryRow(ctx, count, scope).Scan(&reads)
+	return reads, err
 }
 
 func searchGitHub(ctx context.Context, tx pgx.Tx, c Caller, in githubSearchIn) (githubRead, error) {

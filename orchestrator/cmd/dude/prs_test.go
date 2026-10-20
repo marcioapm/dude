@@ -49,3 +49,46 @@ func TestDudePrsPassesFeedbackIDs(t *testing.T) {
 		t.Error("an id without --feedback is taken")
 	}
 }
+
+// dude prs --refresh calls refresh_pull_requests with no arguments; with
+// --feedback as well it is a usage error and calls nothing, since the
+// refresh takes no ids.
+func TestDudePrsRefresh(t *testing.T) {
+	var paths []string
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		var args map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, args)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"pullRequests":[]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("LUX_SERVICE_DUDE", "")
+	t.Setenv("DUDE_TOOLS_URL", srv.URL)
+	var out bytes.Buffer
+	if err := run([]string{"prs", "--refresh"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(paths, []string{"/tools/refresh_pull_requests"}) || len(bodies[0]) != 0 {
+		t.Fatalf("--refresh: %v %v", paths, bodies)
+	}
+	err := run([]string{"prs", "--refresh", "--feedback", "issue-comment-7"}, &out)
+	if err == nil || err.Error() != "usage: dude prs [--refresh | [--feedback ID]...]" {
+		t.Errorf("--refresh with --feedback: %v", err)
+	}
+	if len(paths) != 1 {
+		t.Errorf("--refresh with --feedback called %v", paths[1:])
+	}
+	// The usage line is the form the parser takes: the flag repeated works,
+	// two ids after one flag do not.
+	if err := run([]string{"prs", "--feedback", "issue-comment-7", "--feedback", "line-comment-9"}, &out); err != nil {
+		t.Errorf("--feedback twice: %v", err)
+	}
+	if err := run([]string{"prs", "--feedback", "issue-comment-7", "line-comment-9"}, &out); err == nil {
+		t.Error("two ids after one --feedback are taken")
+	}
+}

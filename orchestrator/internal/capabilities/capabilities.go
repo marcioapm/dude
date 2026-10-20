@@ -33,6 +33,9 @@ const (
 	Conduct         Key = "conduct"
 	Session         Key = "session"
 	SessionAgents   Key = "session.agents"
+	RunsRead        Key = "runs.read"
+	PRRefresh       Key = "pr.refresh"
+	LimitsRead      Key = "limits.read"
 	WebSearch       Key = "web_search"
 	WebFetch        Key = "web_fetch"
 )
@@ -91,6 +94,12 @@ var All = []Capability{
 		Tools: []string{"propose", "relate", "name_session"}},
 	{Key: SessionAgents, Description: "Start read-only investigator agents to research the linked repositories.",
 		Tools: []string{"start_agent"}},
+	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
+		Tools: []string{"run_chat"}},
+	{Key: PRRefresh, Description: "Read the task's pull requests from GitHub now, rather than dude's last poll; counts against the hourly GitHub reads.",
+		Tools: []string{"refresh_pull_requests"}},
+	{Key: LimitsRead, Description: "See the limits the task's delivery is held to, where each is set, and how much is used.",
+		Tools: []string{"limits"}},
 	{Key: WebSearch, Description: "Search the web with the coding agent's own search tool.",
 		Native: []string{NativeWebSearch}},
 	{Key: WebFetch, Description: "Read web pages with the coding agent's own fetch tool.",
@@ -101,8 +110,9 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, WebSearch, WebFetch},
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, RunsRead, PRRefresh,
+		WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},

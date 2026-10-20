@@ -1,0 +1,10 @@
+# refresh_pull_requests
+
+Read your task's open pull requests from GitHub now — state, head, checks, reviews, threads and feedback — and list them as pull_requests does. pull_requests answers dude's last read of GitHub (lastPolledAt, which a webhook or the 15-minute poll updates); use this when that is too old for what you decide, such as whether CI has finished. Each open pull request it reads is one of the task's 60 GitHub reads an hour; with too few left for all of them, it reads none.
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false
+}
+```
