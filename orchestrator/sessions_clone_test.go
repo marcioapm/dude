@@ -57,6 +57,29 @@ func (s *sessionWorld) linkWeb(id string) {
 		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
 }
 
+// untilWebCheckedOut waits for run's lux Run to hold the web repository.
+func (s *sessionWorld) untilWebCheckedOut(run string) {
+	s.t.Helper()
+	s.until("web checked out", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
+	})
+}
+
+// keepWebWithoutRepositories links session id to BL and WC, neither with a
+// repository: WC stays linked, its web repository does not.
+func (s *sessionWorld) keepWebWithoutRepositories(id string) {
+	s.t.Helper()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{}}}})
+}
+
+// checkoutRequests counts session id's session.checkout.requested events.
+func (s *sessionWorld) checkoutRequests(id string) int {
+	s.t.Helper()
+	return s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id)
+}
+
 // resumedSecretNames are the secret names each resume of the dude Run carried.
 func (s *sessionWorld) resumedSecretNames(runID string) [][]string {
 	for _, r := range s.lux.Runs() {
@@ -242,9 +265,7 @@ func TestAMembersLinkAfterAnAskIsToldAsTheMembers(t *testing.T) {
 
 	s.lux.CloneError = nil
 	s.linkWeb(id)
-	s.until("web checked out", func() bool {
-		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
-	})
+	s.untilWebCheckedOut(run)
 	resumes := s.luxRun(run).resumes
 	last := resumes[len(resumes)-1]
 	if !strings.Contains(last, "A member linked WC/web") || strings.Contains(last, "as you asked") {
@@ -330,9 +351,7 @@ func TestRefreshCheckoutAsksAgainForAFailedClone(t *testing.T) {
 	if status, out := s.latestTool(run, "refresh_checkout", `{"project":"wc"}`); status != 200 {
 		t.Fatalf("refresh_checkout: %d %v", status, out)
 	}
-	s.until("web checked out", func() bool {
-		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
-	})
+	s.untilWebCheckedOut(run)
 	s.runningIdle(run)
 	status, out = s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
 	if status != 200 {
@@ -383,7 +402,7 @@ func TestRefreshCheckoutOfALinkNotClonedYetIsPending(t *testing.T) {
 	if web := out["repositories"].([]any)[0].(map[string]any); web["status"] != "pending" || web["lastFailure"] != nil {
 		t.Errorf("web: %v", web)
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 0 {
+	if n := s.checkoutRequests(id); n != 0 {
 		t.Errorf("%d session.checkout.requested", n)
 	}
 }
@@ -396,12 +415,8 @@ func TestRefreshCheckoutKeepsAMembersUnlinkOfAHeldRepository(t *testing.T) {
 	s.linkWebAndFail(id, run)
 	s.lux.CloneError = nil
 	s.linkWeb(id)
-	s.until("web checked out", func() bool {
-		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
-	})
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
-		{"projectId": s.project, "repositoryIds": []string{}},
-		{"projectId": s.webProject, "repositoryIds": []string{}}}})
+	s.untilWebCheckedOut(run)
+	s.keepWebWithoutRepositories(id)
 	s.runningIdle(run)
 
 	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
@@ -414,7 +429,7 @@ func TestRefreshCheckoutKeepsAMembersUnlinkOfAHeldRepository(t *testing.T) {
 	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1`, id); n != 0 {
 		t.Errorf("the repository the member unlinked was linked again")
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 0 {
+	if n := s.checkoutRequests(id); n != 0 {
 		t.Errorf("%d session.checkout.requested", n)
 	}
 }
@@ -426,9 +441,7 @@ func TestRefreshCheckoutKeepsAMembersUnlinkOfAHeldRepository(t *testing.T) {
 func TestRefreshCheckoutAsksAgainAfterALinkThatKeepsTheProject(t *testing.T) {
 	s, id, run := cloneFailingSession(t)
 	s.linkWebAndFail(id, run)
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
-		{"projectId": s.project, "repositoryIds": []string{}},
-		{"projectId": s.webProject, "repositoryIds": []string{}}}})
+	s.keepWebWithoutRepositories(id)
 	s.runningIdle(run)
 
 	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
@@ -439,7 +452,7 @@ func TestRefreshCheckoutAsksAgainAfterALinkThatKeepsTheProject(t *testing.T) {
 	if len(repos) != 1 || repos[0].(map[string]any)["status"] != "requested" {
 		t.Errorf("repositories: %v", repos)
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 1 {
+	if n := s.checkoutRequests(id); n != 1 {
 		t.Errorf("%d session.checkout.requested", n)
 	}
 }
@@ -477,7 +490,7 @@ func TestRefreshCheckoutKeepsTheOwnersLaterChoiceOfRepositories(t *testing.T) {
 	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1 AND repository_id = $2`, id, s.webRepo); n != 0 {
 		t.Errorf("web, which the owner left out, was linked again")
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 0 {
+	if n := s.checkoutRequests(id); n != 0 {
 		t.Errorf("%d session.checkout.requested", n)
 	}
 }
