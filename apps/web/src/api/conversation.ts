@@ -744,6 +744,8 @@ export interface Projection {
   heldTold: ToldTurn | null;
   /** The checks send-back an escalation held for a person: told once they send it back again (retry). */
   heldChecks: string | null;
+  /** The checks send-back queued for the agent and not delivered yet, by its directive. */
+  checksSend: { directiveId: string; text: string } | null;
   /**
    * A move's notice waiting for its resume's timing, by the epoch it resumed
    * into (`run.told`'s, else `run.resized`'s `machine.sinceEpoch`): the
@@ -825,6 +827,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     heldUnpark: null,
     heldTold: null,
     heldChecks: null,
+    checksSend: null,
     untimedMoves: new Map(),
     lastMove: null,
     refusedMove: false,
@@ -1269,19 +1272,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunChecksJudged: {
-        // An unbacked report goes back to the agent as these words (a directive with no event of its own);
-        // an escalated one waits for a person. A verified, skipped or waived report sends nothing.
+        // An unbacked report goes back to the agent as these words, told once their directive is delivered;
+        // an escalated one waits for a person. Any later judgement supersedes a send-back not delivered yet.
+        state.checksSend = null;
         const text = payload.verified === false && typeof payload.message === "string" ? payload.message : "";
         if (!text.trim()) break;
         if (payload.escalated === true) state.heldChecks = text;
-        else turns.push({ kind: "told", id: event.eventId, text, at: event.occurredAt });
+        else if (typeof payload.directiveId === "string") state.checksSend = { directiveId: payload.directiveId, text };
         break;
       }
 
       case EventTypes.RunChecksDecided: {
-        // Retry sends the held report back with the same words; waive and stop send nothing.
-        if (payload.action === "retry" && state.heldChecks) {
-          turns.push({ kind: "told", id: event.eventId, text: state.heldChecks, at: event.occurredAt });
+        // Retry sends the held report back with the same words, as a directive of its own; waive and stop send nothing.
+        if (payload.action === "retry" && state.heldChecks && typeof payload.directiveId === "string") {
+          state.checksSend = { directiveId: payload.directiveId, text: state.heldChecks };
         }
         state.heldChecks = null;
         break;
@@ -1328,6 +1332,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.DirectiveDelivered: {
+        // A checks send-back is told where the agent received it. A failure leaves it waiting: a receipt after it
+        // still delivers it, as for a steer.
+        const send = state.checksSend;
+        if (send && send.directiveId === payload.directiveId) {
+          turns.push({ kind: "told", id: event.eventId, text: send.text, at: event.occurredAt });
+          state.checksSend = null;
+          break;
+        }
         const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
         // Once: a re-sent steer (interrupt now) is the same turn under two ids.
         if (!steer || steer.deliveredAt !== null) break;

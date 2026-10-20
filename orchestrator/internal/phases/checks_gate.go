@@ -117,17 +117,22 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 		if escalate {
 			payload["escalated"] = true
 		}
+		if !d.Verified && !escalate {
+			// The judgement names its send-back, so its readers can tell
+			// when the agent received the words.
+			id, _, err := delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: d.Message, Scope: "run"})
+			if err != nil {
+				return err
+			}
+			payload["directiveId"] = id
+		}
 		if err := s.event(ctx, tx, r, delivery.EvRunChecksJudged, ledger.ActorSystem, payload); err != nil {
 			return err
 		}
-		switch {
-		case d.Verified:
-			return nil
-		case escalate:
+		if escalate {
 			return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds)
 		}
-		_, _, err = delivery.QueueDirective(ctx, tx, r.ref(), delivery.Directive{Text: d.Message, Scope: "run"})
-		return err
+		return nil
 	})
 	if errors.Is(err, errRetry) {
 		return false, true, nil

@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -181,6 +182,30 @@ func TestAnUnbackedReportIsSentBackAndPublishesOnceFixed(t *testing.T) {
 	}
 	if n := w.implementerPushes(wi); n != 1 {
 		t.Errorf("%d pushes, want 1, after the backed turn", n)
+	}
+	// The judgement names the directive that carried its words, so a reader
+	// can tell when the agent received them.
+	if got := w.ids(`SELECT d.text FROM events e JOIN directives d ON d.id = e.payload->>'directiveId'
+		WHERE e.task_id = $1 AND e.event_type = $2 AND d.delivered_at IS NOT NULL ORDER BY e.cursor`, wi, delivery.EvRunChecksJudged); !slices.Equal(got, back) {
+		t.Errorf("the judgements name delivered directives %q, want the send-back %q", got, back)
+	}
+}
+
+// A person's retry sends the held report back as a directive its decision
+// names, with the held words.
+func TestRetryingAnUnverifiedReportNamesTheDirectiveItSends(t *testing.T) {
+	w := newWorld(t)
+	wi := w.unbackedUntilEscalated(0)
+	owner, _, _ := w.people(wi)
+	held := w.ids(`SELECT payload->>'message' FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'escalated'`,
+		wi, delivery.EvRunChecksJudged)
+	if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
+		t.Fatalf("retry: %d %v", code, body)
+	}
+	got := w.ids(`SELECT d.text FROM events e JOIN directives d ON d.id = e.payload->>'directiveId'
+		WHERE e.task_id = $1 AND e.event_type = $2 AND e.payload->>'action' = 'retry'`, wi, delivery.EvRunChecksDecided)
+	if len(held) != 1 || !slices.Equal(got, held) {
+		t.Errorf("the retry names a directive saying %q, want the held %q", got, held)
 	}
 }
 

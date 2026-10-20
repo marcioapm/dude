@@ -1545,22 +1545,44 @@ describe("the checks gate's send-back", () => {
   const sentBack = "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- make check: exit 1 (judgement: no)";
   const told = (events: PersistedEvent[]) => project(events, "running").turns.filter((t) => t.kind === "told").map((t) => t.text);
 
-  test("a report sent back is the Told line the agent received, in order; a backed or skipped one adds none", () => {
+  test("a report sent back is the Told line the agent received, once its directive is delivered; a backed or skipped one adds none", () => {
     const { turns } = project([
       ev(EventTypes.AgentMessage, { text: "checks:\n- command: make check\n  result: pass" }),
-      ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [] }),
+      ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId: "dir_1" }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
       ev(EventTypes.AgentMessage, { text: "Fixed; checks pass." }),
       ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] }),
       ev(EventTypes.RunChecksJudged, { turn: 3, verified: true, skipped: true, message: "Checks not model-checked: no judgement tier.", checks: [] }),
     ], "running");
-    expect(turns.filter((t) => t.kind === "message" || t.kind === "told").map((t) => t.kind)).toEqual(["message", "told", "message"]);
-    expect(turns.find((t) => t.kind === "told")!.text).toBe(sentBack);
+    expect(turns.filter((t) => t.kind === "message" || t.kind === "told").map((t) => [t.kind, t.text])).toEqual([
+      ["message", "checks:\n- command: make check\n  result: pass"], ["told", sentBack], ["message", "Fixed; checks pass."],
+    ]);
   });
 
-  test("an escalated report is held for a person: told only once a person sends it back again", () => {
+  test("a send-back is not told before its directive is delivered, nor ever if it failed or a later turn superseded it", () => {
+    const judged = (turn: number, directiveId: string, message = sentBack) =>
+      ev(EventTypes.RunChecksJudged, { turn, round: turn - 1, verified: false, message, checks: [], directiveId });
+    const failed = ev(EventTypes.DirectiveFailed, { directiveId: "dir_1", error: "the Run ended" });
+    expect(told([judged(1, "dir_1")])).toEqual([]);
+    expect(told([judged(1, "dir_1"), failed])).toEqual([]);
+    // A consumed receipt after the failure says the agent read it after all, as for a steer.
+    expect(told([judged(1, "dir_1"), failed, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true })])).toEqual([sentBack]);
+    const later = "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- missing checks (judgement: yes)";
+    expect(told([judged(1, "dir_1"), judged(2, "dir_2", later),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }), ev(EventTypes.DirectiveDelivered, { directiveId: "dir_2" })])).toEqual([later]);
+    expect(told([judged(1, "dir_1"), ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" })])).toEqual([]);
+  });
+
+  test("an escalated report is held for a person: told only once a person's retry delivers it again", () => {
     const held = ev(EventTypes.RunChecksJudged, { turn: 1, round: 2, verified: false, escalated: true, message: sentBack, checks: [] });
+    const retry = ev(EventTypes.RunChecksDecided, { action: "retry", note: "", directiveId: "dir_r" });
     expect(told([held])).toEqual([]);
     expect(told([held, ev(EventTypes.RunChecksDecided, { action: "waive", note: "CI hardware." })])).toEqual([]);
-    expect(told([held, ev(EventTypes.RunChecksDecided, { action: "retry", note: "" })])).toEqual([sentBack]);
+    expect(told([held, retry])).toEqual([]);
+    expect(told([held, retry, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" })])).toEqual([sentBack]);
+    expect(told([held, retry, ev(EventTypes.DirectiveFailed, { directiveId: "dir_r", error: "lux could not deliver it" })])).toEqual([]);
   });
 });

@@ -17,8 +17,9 @@ const ReasonChecksUnverified = "checks_unverified"
 
 // Ledger events of the checks gate, on the Run: each judgement of a
 // turn's report (payload {turn, round, verified, checks, message,
-// skipped?, escalated?, waived?}), and each person's decision on a held
-// report ({action, note}).
+// skipped?, escalated?, waived?, directiveId?}), and each person's decision
+// on a held report ({action, note, directiveId?}). directiveId is the
+// directive carrying a send-back's message to the agent.
 const (
 	EvRunChecksJudged  = "run.checks.judged"
 	EvRunChecksDecided = "run.checks.decided"
@@ -72,8 +73,19 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, e *Escalation, action, note string) error {
 	id := e.RunID()
 	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: id}
-	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksDecided, ledger.ActorHuman,
-		map[string]any{"action": action, "note": note})); err != nil {
+	decided := map[string]any{"action": action, "note": note}
+	if action == "retry" {
+		var detail struct {
+			Message string `json:"message"`
+		}
+		e.decode(&detail)
+		directiveID, _, err := QueueDirective(ctx, tx, ref, Directive{Text: detail.Message, Scope: "run"})
+		if err != nil {
+			return err
+		}
+		decided["directiveId"] = directiveID
+	}
+	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksDecided, ledger.ActorHuman, decided)); err != nil {
 		return err
 	}
 	switch action {
@@ -84,13 +96,6 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		}
 		_, err = ledger.Append(ctx, tx, ref.Event(EvRunChecksJudged, ledger.ActorHuman,
 			map[string]any{"turn": turn, "verified": true, "waived": true, "message": note, "checks": []any{}}))
-		return err
-	case "retry":
-		var detail struct {
-			Message string `json:"message"`
-		}
-		e.decode(&detail)
-		_, _, err := QueueDirective(ctx, tx, ref, Directive{Text: detail.Message, Scope: "run"})
 		return err
 	case "stop":
 		_, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = $2
