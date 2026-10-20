@@ -74,6 +74,8 @@ type Server struct {
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
+	// Test hook: resolves a caller's capabilities; nil, capabilities.Resolve.
+	resolve func(context.Context, pgx.Tx, capabilities.Agent) (capabilities.Grants, error)
 }
 
 // Caller is the Run a token names: who is calling, and all it may reach.
@@ -278,11 +280,15 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	if role != nil {
 		c.Role = *role
 	}
+	resolve := s.resolve
+	if resolve == nil {
+		resolve = capabilities.Resolve
+	}
 	err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child); err != nil {
 			return err
 		}
-		c.grants, err = capabilities.Resolve(ctx, tx, c.agent())
+		c.grants, err = resolve(ctx, tx, c.agent())
 		return err
 	})
 	return c, err
