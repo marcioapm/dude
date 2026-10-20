@@ -217,8 +217,11 @@ func sameSpecTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (
 	role := PromptRoleFor(in.Phase, RoleForPhase[in.Phase])
 	settings := ResolveRole(role, p.ProjectModels, p.OrgModels)
 	tier, noTier, err := TierFor(ctx, tx, role, settings)
-	if err != nil || noTier != "" {
+	if err != nil {
 		return false, err
+	}
+	if noTier != "" {
+		return false, nil
 	}
 	harness := p.Harness
 	if !IsHarness(harness) {

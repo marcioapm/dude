@@ -145,8 +145,8 @@ func (c *Costs) store(ctx context.Context, r costRun, cost lux.RunCost) error {
 	compute, hasCompute := cost.FamilyUSD(lux.FamilyCompute)
 	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var changed bool
-		// A Run that took over its predecessor's lux Run is charged what lux
-		// reports beyond the base it took over at (migration 173).
+		// A Run that took over its predecessor's lux Run is charged only for
+		// the cost reported after its inherited base.
 		err := tx.QueryRow(ctx, `WITH old AS (
 				SELECT lux_ai_usd, lux_compute_usd, lux_cost_status FROM runs WHERE id = $1 FOR UPDATE)
 			UPDATE runs SET lux_ai_usd = CASE WHEN $2::numeric IS NOT NULL THEN GREATEST($2::numeric - lux_ai_base, 0) END,

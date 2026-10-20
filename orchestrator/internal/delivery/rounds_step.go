@@ -51,6 +51,8 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 		case forge.Transient(err):
 			return nil, forgeWait(err)
 		case forge.Refused(err):
+			// The production resolver returns a client or a database error;
+			// injected resolvers can still report a permanent forge refusal.
 			c.DeltaLines = MaxResumeDeltaLines + 1
 			return c, nil
 		case err != nil:

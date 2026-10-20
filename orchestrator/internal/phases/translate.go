@@ -255,8 +255,7 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 	var open []string
 	var state []byte
 	u := &t.usage
-	// agent_cost_usd is this row's share: the harness's running total less
-	// what the lux Run had cost when this row took it over (agent_cost_base).
+	// Store this row's share: the harness total less its inherited base.
 	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_message_buffer, agent_thought_buffer, open_tool_calls,
 		(agent_cost_usd + agent_cost_base)::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, harness_state,
 		cardinality(project_secret_names) = 0
