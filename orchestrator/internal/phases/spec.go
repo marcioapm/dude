@@ -474,6 +474,11 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			spec.Workload.Prompt = fakeagent.TesterScript(in.Model, criteria)
 			spec.Labels["dude.criteria"] = strconv.Itoa(criteria)
 		}
+		// A scripted verifier runs the brief's commands (the fake lux only).
+		if commands, ok := fakeagent.VerifyCommands(in.Prompt); ok {
+			raw, _ := json.Marshal(commands)
+			spec.Labels[fakeagent.VerifyLabel] = string(raw)
+		}
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}

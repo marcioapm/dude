@@ -1,0 +1,1 @@
+The verifier is starting: it runs the checks on that commit and changes nothing. Its result comes to you as a message — passed or failed, each command's exit code and the tail of its output — without taking a workflow decision. Carry on, or end your turn to wait for it.

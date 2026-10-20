@@ -12,6 +12,8 @@
 {{- else}}The task has no delivery yet: the delivery policy is what one would start with now, and nothing is spent.{{end}}
 {{- end}}
 
-{{- define "results/limits/fix-rounds-note"}}A pull request fix needs both: a fix left in this review round (the delivery policy's, counted again from 0 when a person submits a new review) and one left on its pull request (the organisation's GitHub settings, counted when a fix lands with commits; 0 there is no bound). binding names the one that stops a pull request's next fix first. Past either, dude asks the owner instead of fixing.{{end}}
+{{- define "results/limits/fix-rounds-note"}}A pull request fix needs both: a fix left in this review round (the delivery policy's, counted again from 0 when a person submits a new review) and one left on its pull request (the organisation's GitHub settings, counted when a fix lands with commits; 0 there is no bound). binding names the one that stops a pull request's next fix first. Past either, dude asks the owner instead of fixing{{if .}}; request_limit asks a person to raise either for this task{{end}}.{{end}}
 
-{{- define "results/limits/rerun-head"}}Each pull request head's failed checks are run again at most once, whoever asks: once used, CI failing again on that commit is a fix's to answer.{{end}}
+{{- define "results/limits/rerun-head"}}Each pull request head's failed checks are run again at most once, whoever asks, unless a person allowed more on that head{{if .}} (request_limit){{end}}: once used, CI failing again on that commit is a fix's to answer.{{end}}
+
+{{- define "results/limits/granted-line"}}{{.Source}} {{.Base}}{{range .Grants}} + {{.Extra}} granted by {{.By}}{{end}} for this task = {{.Total}}{{end}}

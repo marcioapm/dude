@@ -60,7 +60,7 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 // InstructionTools are the tools the instruction file can name; a Run's
 // file names those its capabilities grant.
 var InstructionTools = []string{"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository",
-	"run_diff", "request_machine", "sync_base"}
+	"run_diff", "request_machine", "sync_base", "request_limit"}
 
 // ChildTools are the tools an independent report child may call.
 var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}

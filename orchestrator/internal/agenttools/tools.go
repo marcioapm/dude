@@ -44,9 +44,11 @@ var tools = []tool{
 	define("findings", findings),
 	define("pull_requests", pullRequests),
 	define("limits", readLimits),
+	define("request_limit", requestLimit),
 	define("run_chat", runChat).withholdingResult(),
 	define("start_phase", startPhase),
 	define("start_agent", startAgent),
+	define("verify", verify).limit(verifiesPerRun),
 	define("steer", steer),
 	define("restart_run", restartRun),
 	define("decide", decide),
@@ -97,6 +99,53 @@ func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (star
 	}
 	return startAgentOut{RunID: id, Profile: in.Profile, Phase: phase}, nil
 }
+
+// verifiesPerRun bounds a conductor's verifications: each is a Run on a
+// machine running the repository's tests.
+const verifiesPerRun = 10
+
+type verifyIn struct {
+	Repo     string   `json:"repo,omitempty"`
+	Commit   string   `json:"commit,omitempty"`
+	Commands []string `json:"commands,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
+	Note     string   `json:"note,omitempty"`
+	Key      string   `json:"key,omitempty"`
+}
+
+type verifyOut struct {
+	RunID  string `json:"runId"`
+	Repo   string `json:"repo"`
+	Commit string `json:"commit"`
+	Next   string `json:"next"`
+}
+
+// verify (capabilities.Verify) starts a verifier: start_agent's report-only
+// child, publishing off, with a brief to run the checks on one commit
+// (delivery.VerifyStart). Its result wakes the caller with each command's
+// exit code and output.
+func verify(ctx context.Context, tx pgx.Tx, c Caller, in verifyIn) (verifyOut, error) {
+	key := in.Key
+	if key == "" {
+		key = "verify:" + c.CallID
+	}
+	start, err := conducted(delivery.VerifyStart(ctx, tx, c.run(), delivery.VerifyAsk{Repo: in.Repo, Commit: in.Commit,
+		Commands: in.Commands, Paths: in.Paths, Note: in.Note}, key))
+	if err != nil {
+		return verifyOut{}, err
+	}
+	id, err := delivery.StartChildTx(ctx, tx, start)
+	if err != nil {
+		if delivery.IsRefusal(err) {
+			return verifyOut{}, refuse("%s", err.Error())
+		}
+		return verifyOut{}, err
+	}
+	t := start.Capabilities.Verify
+	return verifyOut{RunID: id, Repo: t.Repo, Commit: t.Commit, Next: verifyNext}, nil
+}
+
+var verifyNext = delivery.MustText("results/verify").Render(nil)
 
 // ---- list_tasks --------------------------------------------------------------
 
