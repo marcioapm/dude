@@ -190,6 +190,14 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		if err := tx.QueryRow(ctx, `SELECT lux_repositories FROM runs WHERE id = $1`, r.ID).Scan(&have); err != nil {
 			return err
 		}
+		var err error
+		if repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID); err != nil {
+			return err
+		}
+		// Which wording an added repository gets is all again decides.
+		if !slices.ContainsFunc(repos, func(repo delivery.SessionRepo) bool { return !slices.Contains(have, repo.SpecName()) }) {
+			return nil
+		}
 		// Asked for again by the agent (refresh_checkout) after its clone
 		// failed on this session, and not linked by a member since: by spec name.
 		rows, err := tx.Query(ctx, `SELECT DISTINCT f.payload->>'repository' FROM events f
@@ -203,10 +211,7 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		if err != nil {
 			return err
 		}
-		if again, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
-			return err
-		}
-		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
+		again, err = pgx.CollectRows(rows, pgx.RowTo[string])
 		return err
 	}); err != nil {
 		return err

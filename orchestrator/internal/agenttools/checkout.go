@@ -53,19 +53,20 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 	}
 	// Each repository of the project: linked, held by this Run's lux Run,
 	// its newest failed clone on the session, if any, and whether a member
-	// linked the project since, choosing its repositories again.
-	rows, err := tx.Query(ctx, `SELECT repo.id, repo.name,
+	// linked the project since, choosing its repositories again. The
+	// session's events are read once for each, not once per repository.
+	rows, err := tx.Query(ctx, `WITH f AS (SELECT DISTINCT ON (e.payload->>'name') e.payload->>'name' AS name, e.occurred_at, e.payload
+			FROM events e WHERE e.session_id = $2 AND e.event_type = 'repository.clone_failed' AND e.payload->>'key' = $3
+			ORDER BY e.payload->>'name', e.occurred_at DESC),
+		l AS (SELECT max(e.occurred_at) AS at FROM events e WHERE e.session_id = $2 AND e.event_type = 'session.linked'
+			AND e.payload->'projects' @> jsonb_build_array(jsonb_build_object('projectId', $1::text)))
+		SELECT repo.id, repo.name,
 			EXISTS (SELECT 1 FROM session_repositories sr WHERE sr.session_id = $2 AND sr.repository_id = repo.id),
 			lux_name($3 || '-' || repo.name) = ANY (r.lux_repositories),
 			f.occurred_at, COALESCE(f.payload->>'reason', ''), COALESCE(f.payload->>'error', ''),
-			EXISTS (SELECT 1 FROM events l WHERE l.session_id = $2 AND l.event_type = 'session.linked'
-				AND l.occurred_at > f.occurred_at
-				AND l.payload->'projects' @> jsonb_build_array(jsonb_build_object('projectId', $1::text)))
-		FROM repositories repo JOIN runs r ON r.id = $4
-		LEFT JOIN LATERAL (SELECT e.occurred_at, e.payload FROM events e
-			WHERE e.session_id = $2 AND e.event_type = 'repository.clone_failed'
-			  AND e.payload->>'key' = $3 AND e.payload->>'name' = repo.name
-			ORDER BY e.occurred_at DESC LIMIT 1) f ON true
+			COALESCE(l.at > f.occurred_at, false)
+		FROM repositories repo JOIN runs r ON r.id = $4 CROSS JOIN l
+		LEFT JOIN f ON f.name = repo.name
 		WHERE repo.project_id = $1 ORDER BY repo.name`, p.ID, c.SessionID, p.Key, c.RunID)
 	if err != nil {
 		return refreshCheckoutOut{}, err
