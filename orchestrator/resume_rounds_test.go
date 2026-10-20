@@ -149,10 +149,14 @@ func resumingPolicy() delivery.Policy {
 	return p
 }
 
-// luxRunsOf are the fake lux's Runs of a dude phase, in submit order.
+// luxRunsOf are the fake lux's Runs of a dude phase, in submit order;
+// a Run lux forgot is not listed.
 func (w *world) luxRunsOf(phase string) []*fakelux.Run {
 	var out []*fakelux.Run
 	for _, r := range w.lux.Runs() {
+		if r == nil {
+			continue
+		}
 		var spec struct {
 			Labels map[string]string `json:"labels"`
 		}

@@ -1044,10 +1044,7 @@ func (s *Server) Runs() []*Run {
 	defer s.mu.Unlock()
 	out := make([]*Run, 0, len(s.runs))
 	for i := 1; i <= s.next; i++ {
-		// A Run ForgetRun dropped is no longer lux's.
-		if run := s.runs[fmt.Sprintf("lrun_%d", i)]; run != nil {
-			out = append(out, run)
-		}
+		out = append(out, s.runs[fmt.Sprintf("lrun_%d", i)])
 	}
 	return out
 }
