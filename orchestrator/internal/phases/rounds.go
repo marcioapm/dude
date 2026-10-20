@@ -85,6 +85,28 @@ func (s *Syncer) roundSecrets(ctx context.Context, r phaseRun) error {
 	return nil
 }
 
+// roundImage refuses a continuation's first resume when a fresh Run of its
+// role would now start on another image than lux stored for the lux Run.
+// A later resume (finishes > 0) is a person's pause/resume and is not
+// checked. An image still being prepared or refused also goes fresh: the
+// replacement's submit waits for it or reports it as any submit does.
+func (s *Syncer) roundImage(ctx context.Context, r phaseRun, stored lux.StoredSpec) error {
+	var continued bool
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT continues_how IS NOT DISTINCT FROM 'resume' AND finishes = 0 FROM runs WHERE id = $1`, r.ID).Scan(&continued)
+	}); err != nil || !continued {
+		return err
+	}
+	ref, _, _, err := s.image(ctx, r)
+	if err != nil {
+		return errCannotResume{err}
+	}
+	if ref != stored.Image.Ref {
+		return errCannotResume{errors.New("its runtime image changed")}
+	}
+	return nil
+}
+
 // syncedBase records a continuation's checkout moved by its resume: the
 // commit it now starts from is its base (what the round reviews from, and
 // what roundRefs compares with), as git.checkout records a submit's.

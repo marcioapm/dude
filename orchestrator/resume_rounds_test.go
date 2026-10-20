@@ -50,6 +50,48 @@ func TestDirectedResumedReviewReceivesConductorNote(t *testing.T) {
 	t.Fatal("resumed agent did not receive conductor note")
 }
 
+// A project image changed during the fix (A to B): the continuation is not
+// resumed on A; it is replaced by a replayed fresh Run submitted on B.
+func TestChangedImageReplacesContinuedReviewer(t *testing.T) {
+	w := resuming(t)
+	w.onModel("reviewer", "llm-review")
+	wi := w.task()
+	w.names(wi, w.repoID)
+	var once sync.Once
+	w.lux.BeforeStart(func(id string) {
+		if fix := w.luxRunsOf("fix"); len(fix) == 1 && fix[0].ID == id {
+			once.Do(func() {
+				mustExec(t, w.owner, `UPDATE projects SET runtime_image = 'agent:image-b' WHERE id=$1`, w.project)
+			})
+		}
+	})
+	w.start(wi, resumingPolicy())
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	reviews := w.reviewRows(wi)
+	if len(reviews) < 3 || reviews[1].How != delivery.ContinuesResume ||
+		reviews[2].Continues != reviews[0].ID || reviews[2].How != delivery.ContinuesReplay {
+		t.Fatalf("reviews: %+v; want the first, its continuation, and a replay of the first", reviews)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND replaced_by = $2`, reviews[1].ID, reviews[2].ID); n != 1 {
+		t.Fatal("the continuation on image A was not replaced")
+	}
+	luxReviews := w.luxRunsOf("review")
+	if len(luxReviews) != 2 || luxReviews[0].Resumed != 0 {
+		t.Fatalf("reviewers: %+v", luxReviews)
+	}
+	var spec struct {
+		Image struct {
+			Ref string `json:"ref"`
+		} `json:"image"`
+	}
+	if err := json.Unmarshal(luxReviews[1].Spec, &spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec.Image.Ref != "agent:image-b" {
+		t.Fatalf("fresh image %q", spec.Image.Ref)
+	}
+}
+
 func resumingPolicy() delivery.Policy {
 	p := scriptedPolicy()
 	p.ResumeRounds = true

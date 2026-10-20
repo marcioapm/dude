@@ -2887,6 +2887,9 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
+	if err := s.roundImage(ctx, r, lr.Spec); err != nil {
+		return lux.Run{}, 0, err
+	}
 	if err := s.roundSecrets(ctx, r); err != nil {
 		return lux.Run{}, 0, err
 	}
