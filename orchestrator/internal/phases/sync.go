@@ -106,8 +106,8 @@ type Syncer struct {
 	// For tests: called as each resume follow-up finishes, its placements
 	// recorded and its timing published.
 	followedUp func()
-	// For tests: the budget of a resume follow-up, its placement read and
-	// timing; zero is 30 s.
+	// For tests: the budget of a resume follow-up's placement reads; zero
+	// is 30 s. Its timing has a budget of its own (followUpTimingTimeout).
 	followUpTimeout time.Duration
 	// For tests: called as a publish looks up its Run's git.merge_attempted
 	// (mergeAttempted).

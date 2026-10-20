@@ -327,7 +327,8 @@ func (t *translator) unsettle(what string, epoch int) {
 // afterBatch notes a resume to follow up once the batch commits: its
 // placements read (read), then its timing written if it is complete. A
 // read is owed from here, inside the batch's transaction, so recovery
-// never sees the committed row without the mark; once per epoch a batch.
+// never sees the committed row without the mark; at most once per epoch
+// per batch, as the batch's follow-up pays it once.
 func (t *translator) afterBatch(s *Syncer, epoch int, read bool) {
 	if t.resumes == nil {
 		t.resumes = map[int]bool{}
@@ -367,13 +368,13 @@ func (s *Syncer) paid(runID string, epoch int) {
 }
 
 // owed is the epochs of the Run's resumes with a placement read to come.
-func (s *Syncer) owed(runID string) []int {
+func (s *Syncer) owed(runID string) map[int]bool {
 	s.owingMu.Lock()
 	defer s.owingMu.Unlock()
-	epochs := []int{}
+	epochs := map[int]bool{}
 	for k := range s.owing {
 		if k.runID == runID {
-			epochs = append(epochs, k.epoch)
+			epochs[k.epoch] = true
 		}
 	}
 	return epochs
@@ -400,6 +401,11 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
 	}
 }
 
+// followUpTimingTimeout is the budget of a follow-up's own timing, apart
+// from its placement read's: a read that ran out of time still leaves the
+// owner time to publish the resume, without the placements.
+const followUpTimingTimeout = 5 * time.Second
+
 func (s *Syncer) followUp(ctx context.Context, r phaseRun, epoch int, read bool) {
 	if read {
 		defer s.paid(r.ID, epoch)
@@ -407,6 +413,8 @@ func (s *Syncer) followUp(ctx context.Context, r phaseRun, epoch int, read bool)
 			s.logger().Warn("reading a resume's placements failed", "run", r.ID, "epoch", epoch, "error", err)
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), followUpTimingTimeout)
+	defer cancel()
 	if err := s.timeResumes(ctx, r, epoch); err != nil {
 		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "epoch", epoch, "error", err)
 	}

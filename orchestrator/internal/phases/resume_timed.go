@@ -25,25 +25,27 @@ type resumeTiming struct {
 
 // timeResumes writes run.resume.timed for each of the Run's resumes whose
 // first output is in, or whose first frames were missed (frames_missed),
-// and that has none yet — the one into epoch, or with epoch 0 every one.
-// Once each: timed_at is set in the same transaction. It is the owner's
-// call, made by a resume's follow-up after its placement read; recovery
-// goes through timeUnowned instead.
+// and that has none yet — the one into epoch. Once each: timed_at is set
+// in the same transaction. It is the owner's call, made by a resume's
+// follow-up after its placement read; recovery goes through timeUnowned
+// instead.
 func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int) error {
-	return s.timeResumesExcept(ctx, r, epoch, false)
+	return s.timeResumesSkippingOwed(ctx, r, epoch, false)
 }
 
-// timeUnowned is timeResumes for recovery: it leaves every resume a live
-// follow-up in this process has yet to read the placements of (owed) to
-// that follow-up, for its timing to carry them. owed is read after the
-// UPDATE, not before: a batch marks a resume before it commits it, so any
-// row the UPDATE's snapshot saw timeable is owed by then if it ever will
-// be, and such a row is put back untimed before this transaction commits.
+// timeUnowned is timeResumes for recovery, and with epoch 0 takes every
+// one of the Run's resumes. It leaves each resume a live follow-up in this
+// process has yet to read the placements of (owed) to that follow-up, for
+// its timing to carry them. owed is read after the UPDATE, not before: a
+// batch marks a resume before committing it, so every row the UPDATE saw
+// timeable is marked by the time owed is read, unless its follow-up has
+// already timed it. Such a row is put back untimed before this
+// transaction commits.
 func (s *Syncer) timeUnowned(ctx context.Context, r phaseRun, epoch int) error {
-	return s.timeResumesExcept(ctx, r, epoch, true)
+	return s.timeResumesSkippingOwed(ctx, r, epoch, true)
 }
 
-func (s *Syncer) timeResumesExcept(ctx context.Context, r phaseRun, epoch int, recovery bool) error {
+func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch int, skipOwed bool) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `UPDATE run_resumes SET timed_at = now()
 			WHERE run_id = $1 AND ($2 = 0 OR epoch = $2) AND timed_at IS NULL
@@ -57,7 +59,7 @@ func (s *Syncer) timeResumesExcept(ctx context.Context, r phaseRun, epoch int, r
 		if err != nil {
 			return err
 		}
-		if recovery {
+		if skipOwed {
 			if timed, err = s.leaveOwed(ctx, tx, r.ID, timed); err != nil {
 				return err
 			}
@@ -76,10 +78,7 @@ func (s *Syncer) timeResumesExcept(ctx context.Context, r phaseRun, epoch int, r
 // timed is locked by it, so that follow-up's own timing waits for this
 // commit and finds the row untimed.
 func (s *Syncer) leaveOwed(ctx context.Context, tx pgx.Tx, runID string, timed []resumeTiming) ([]resumeTiming, error) {
-	owed := map[int]bool{}
-	for _, e := range s.owed(runID) {
-		owed[e] = true
-	}
+	owed := s.owed(runID)
 	var keep []resumeTiming
 	var back []int
 	for _, rt := range timed {
