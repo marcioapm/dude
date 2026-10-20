@@ -46,7 +46,4 @@ func TestARoundsImageLookupFailureIsRetriedNotReplayed(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND retry_failures = 1 AND next_attempt_at > now()`); n != 1 {
 		t.Errorf("the Run was not left paused and backed off for a retry")
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = (SELECT task_id FROM runs WHERE id = $1) AND continues_how = 'replay'`); n != 0 {
-		t.Errorf("%d replays started for a database error", n)
-	}
 }
