@@ -486,6 +486,14 @@ a refresh takes one GitHub read for each open pull request, %d here, and %d of t
 
 none of the task's open pull requests is on GitHub: pull_requests lists them as dude has them
 
+## refusals/tools/brainstorm/name-task-read-feedback-in-full
+
+name the task to read its feedback in full
+
+## refusals/tools/conductor/at-most-feedback-items-by-id-at
+
+at most %d feedback items by id at once
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

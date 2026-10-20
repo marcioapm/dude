@@ -12,6 +12,8 @@
 
 {{- define "refusals/tools/brainstorm/name-task-read-findings-in-full"}}name the task to read findings in full{{end}}
 
+{{- define "refusals/tools/brainstorm/name-task-read-feedback-in-full"}}name the task to read its feedback in full{{end}}
+
 {{- define "refusals/tools/brainstorm/no-memory"}}no memory %s{{end}}
 
 {{- define "refusals/tools/brainstorm/not-task-or-epic-linked-projects"}}%q is not a task or epic of the linked projects{{end}}

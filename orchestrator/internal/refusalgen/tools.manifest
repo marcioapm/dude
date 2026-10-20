@@ -14,6 +14,7 @@ rNameProject                           refusals/tools/brainstorm/name-project
 rProjectNotLinkedThisSession           refusals/tools/brainstorm/project-not-linked-this-session
 rNoTaskIn                              refusals/tools/brainstorm/no-task-in
 rNameTaskReadFindingsInFull            refusals/tools/brainstorm/name-task-read-findings-in-full
+rNameTaskReadFeedbackInFull            refusals/tools/brainstorm/name-task-read-feedback-in-full
 rNoMemory                              refusals/tools/brainstorm/no-memory
 rNotTaskOrEpicLinkedProjects           refusals/tools/brainstorm/not-task-or-epic-linked-projects
 rPropose130Items                       refusals/tools/brainstorm/propose-1-30-items
@@ -46,6 +47,7 @@ rWhyAtMost2000Characters               refusals/tools/brainstorm/why-at-most-200
 rYouAlreadyHaveQuestionWaitingFor      refusals/tools/brainstorm/you-already-have-question-waiting-for
 rNamesOneMemberWhoCanChat              refusals/tools/brainstorm/names-one-member-who-can-chat
 rAtMostFindingsByIdAt                  refusals/tools/conductor/at-most-findings-by-id-at
+rAtMostFeedbackItemsByIdAt             refusals/tools/conductor/at-most-feedback-items-by-id-at
 rYouAreNoLongerThisTask                refusals/tools/conductor/you-are-no-longer-this-task
 rRelationKindBlockedByBlocksOr         refusals/tools/conductor/relation-kind-blocked-by-blocks-or
 rNoTaskInThisOrganisation              refusals/tools/conductor/no-task-in-this-organisation
