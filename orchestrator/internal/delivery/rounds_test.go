@@ -188,6 +188,36 @@ func TestLargeRoundClearsNarrowRanges(t *testing.T) {
 	}
 }
 
+// A kept predecessor is taken over only when it runs on the model the
+// project's reviewer runs on now; one whose model changed is let go and
+// its conversation replayed to a fresh reviewer.
+func TestAKeptReviewerOnAnotherModelIsReplayed(t *testing.T) {
+	for _, tc := range []struct{ model, how string }{{"old/model", "replay"}, {"fake/scripted", "resume"}} {
+		t.Run(tc.how, func(t *testing.T) {
+			w := newRoundWorld(t)
+			w.exec(t, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('tier_rv_'||$1, $1, 'Reviewing', 'fake/scripted')`, w.org)
+			w.exec(t, `UPDATE projects SET agent_models = jsonb_build_object('reviewer', jsonb_build_object('tier', 'tier_rv_'||$2::text)) WHERE id = $1`,
+				w.project, w.org)
+			w.exec(t, `UPDATE runs SET keep = true, kept_until = now() + interval '1 day', lux_run_id = 'lrun_k',
+				model = $2, model_tier = 'Reviewing', harness = 'opencode' WHERE id = $1`, w.first, tc.model)
+			// Its last exit's files are collected.
+			w.exec(t, `UPDATE runs SET artifacts_due_at = NULL WHERE id = $1`, w.first)
+			w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+				VALUES ('ev_spec', $1, 'agent.message', $2, $3, 'agent', $2, 'test', '{"text":"Earlier review"}')`, w.org, w.first, w.task)
+			id := w.next(t, "k1")
+			got := w.str(t, `SELECT COALESCE(continues_how, '') || '|' || status || '|' || COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, id)
+			kept := w.str(t, `SELECT keep::text || '|' || COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, w.first)
+			want, wantKept := "replay|pending|", "false|lrun_k"
+			if tc.how == "resume" {
+				want, wantKept = "resume|paused|lrun_k", "false|"
+			}
+			if got != want || kept != wantKept {
+				t.Fatalf("new how|status|lux = %q, predecessor keep|lux = %q; want %q, %q", got, kept, want, wantKept)
+			}
+		})
+	}
+}
+
 // A kept predecessor is let go when the task ends, and by a new attempt
 // or a decision past a stop (ReleaseKeptTx): RetireCompleted takes it up.
 func TestAKeptReviewerIsLetGoWhenItsTaskEnds(t *testing.T) {
