@@ -43,6 +43,8 @@ ACP `mcpServers` for OpenCode, `--mcp-config` for Claude Code).
 | `feedback` | people's feedback on the caller's task's current attempt (`dude feedback [ID...] [--all]`, migration 127): open and delivered items by default, `all` the handled ones too, each with its id, author, anchor (a code range of a Run's stored diff with its excerpt, a preview page, or none), status and fix attempts; with ids (at most 20) those with their history, `unknown` for any other id. A draft is nobody's here: never listed, never found by id | `feedback.handle` |
 | `feedback_reply` | answer an item without changing the code (`dude feedback reply ID TEXT`): status `replied`, which holds nothing; the person may reopen it. Refused for an item not open or delivered, another task's, an earlier attempt's | `feedback.handle` |
 | `feedback_resolve` | resolve an item with the commit that fixed it (`dude feedback resolve ID --commit HEAD [--repo R]`; the CLI resolves HEAD with `git rev-parse` in the checkout). Only a publishing phase's Run. The commit is tied to the item's anchor's repository, or the named one, or the task's only writable one. The resolution is pending — it still holds the pull request and the merge — until the Run completes: the syncer then asks GitHub whether the commit is in the published head (compare commit...head, `behind_by` 0) and new since the Run's base (compare base...commit, `ahead_by` > 0); otherwise, or if the Run fails or is aborted, the item is open again | `feedback.resolve` |
+| `refresh_checkout` | a session's agent asks again for a linked project's repositories whose clone failed on the session (`{project?}`, a session agent's own): each repository of the project with its `status` — `checked_out`, `requested` (its clone failed and it is asked for again), `pending` (linked, cloned at the next resume) or `not_linked` — and, for one not checked out, its `lastFailure` from the newest `repository.clone_failed`: `reason` in dude's words (the members' sign-in line, or that git refused it) and `git`, git's last fatal line quoted as external text under one random id with an `external` note. A requested one is linked to the session again (`session_repositories`), as a member's link does, and `session.checkout.requested` records it; the syncer adds it at the agent's next resume (`sessionRepoMissing`, `sessionResume`, the same path as a member's link) and `settleClone` settles its `git.clone`: the agent is told on the resume that it was asked for again, and told the failure again (`repository.clone_failed`, `session.told`) if it fails. It never links a repository no member linked, nor one of a project not linked. At most 3 a Run (refused with the bound, `limits` being a task's). A failed clone's notice tells a Run with the tool that it can ask again | `session.checkout` |
+| `propose` `link_project` | a session's agent proposes linking a project of its organisation the session does not link: `{kind: link_project, project, reason}` on the proposal card. Checked at `propose`: the project is one of the organisation's by key or name (row security keeps others out; the refusal lists the ones it can propose), not linked already, with a reason of 1 to 2,000 characters; the item keeps the project's name for the card. The session's briefing lists the organisation's other projects (at most 50, then how many more). Filing it is the session owner's alone, as the link API is (`blockedBy: session_owner` for anyone else; `linked` once something else links it). Filed, it links the project with all its repositories through the link API's own write (`setLinks` over the session's set plus it), records `session.linked` by the owner with the whole set, and kicks the syncer: a live agent gets the checkouts at its next resume, as from a member's link. The agent never links anything | `session` |
 
 A task's **conductor** (the agent people talk to in its Chat) reads with
 these. Its decisions (`start_phase`, `decide`, `dismiss_finding`,
@@ -88,6 +90,7 @@ definition answers it where there is one.
 | `conduct` | `start_phase`, `start_agent`, `steer`, `restart_run`, `decide`, `dismiss_finding`, `decide_escalation`, `update_task`, `publish`, `request_review`, `mark_ready`, `rerun_failed_checks` |
 | `session` | `propose`, `relate`, `name_session` |
 | `session.agents` | `start_agent` (a brainstorm's: read-only investigator children of its session) |
+| `session.checkout` | `refresh_checkout` |
 | `runs.read` | `run_chat` |
 | `pr.refresh` | `refresh_pull_requests` |
 | `limits.read` | `limits` |
@@ -102,13 +105,22 @@ Not granted, a harness's web tool is off its own way: OpenCode has no
 `--disallowedTools`; Codex's `web_search` is `disabled`, which a tier's
 `-c web_search` cannot override.
 
+A brainstorm's instruction file says what it has of the web, from its
+grants, its harness and its network as its spec configures them
+(`phases.runWeb`): search when granted and on (a Codex tier's
+`web_search=disabled` turns it off on a restricted Run), fetch of any host
+when unrestricted or of the list's own hosts when not (Codex: none), or one
+sentence that the session has no web access. A session's next agent whose
+web differs from the one before it is told so in its first message
+(`runs.web`).
+
 Default grants (a fixer's Run has role `implementer`; `""` is a Run whose
 role none of these is):
 
 | role | capabilities |
 |---|---|
 | conductor | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `pr.act`, `base.sync`, `github.read`, `delivery.read`, `conduct`, `runs.read`, `pr.refresh`, `limits.read`, `limits.request`, `verify`, `web_search`, `web_fetch` |
-| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.agents`, `runs.read`, `pr.refresh`, `web_search`, `web_fetch` |
+| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.agents`, `session.checkout`, `runs.read`, `pr.refresh`, `web_search`, `web_fetch` |
 | implementer | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `feedback.resolve`, `pr.act`, `base.sync`, `web_search`, `web_fetch` |
 | reviewer, fixer, qa_browser | `tasks.read`, `memory`, `run.basics`, `machines`, `web_search`, `web_fetch` |
 | simplifier | `tasks.read`, `memory`, `run.basics`, `machines`, `base.sync`, `web_search`, `web_fetch` |

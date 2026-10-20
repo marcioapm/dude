@@ -51,9 +51,16 @@ func TestGoldenRunNotices(t *testing.T) {
 		{"moved-back", movedBackTold("Standard", "Ana", "")},
 		{"moved-back-note", movedBackTold("Standard", "Ana", "the suite fits again")},
 		{"linked", linkedTold("GLD", "api", "/workspace/repos/GLD/api")},
+		{"checkout-again", checkoutAgain.Render(struct{ Key, Name, Path string }{"GLD", "api", "/workspace/repos/GLD/api"})},
 		{"clone-failed-task", cloneFailedNote("api", "Cloning…\nfatal: repository 'x' not found", taskCloneRemedy)},
-		{"clone-failed-session", cloneFailedNote("GLD/api", "", sessionCloneRemedy)},
+		{"clone-failed-session", cloneFailedNote("GLD/api", "", sessionRemedy(false))},
+		{"clone-failed-session-refresh", cloneFailedNote("GLD/api", "", sessionRemedy(true))},
 		{"clone-failed-long", cloneFailedNote("api", strings.Repeat("e", 250), taskCloneRemedy)},
+		{"web-changed-any-to-list", delivery.WebChanged(delivery.Web{Search: true, Fetch: true, AnyHost: true},
+			delivery.Web{Search: true, Fetch: true, Hosts: []string{"pypi.org", "*.github.com"}})},
+		{"web-changed-search-lost", delivery.WebChanged(delivery.Web{Search: true}, delivery.Web{})},
+		{"web-changed-hosts", delivery.WebChanged(delivery.Web{Fetch: true, Hosts: []string{"pypi.org"}},
+			delivery.Web{Fetch: true, Hosts: []string{"npmjs.org"}})},
 	})
 }
 

@@ -66,23 +66,60 @@ func TestTheBrainstormIsToldToNameItsSessionAndHowToPublish(t *testing.T) {
 	}
 }
 
-// A brainstorm that may reach any host is told it can read the web and to
-// cite its sources, with or without tools and whatever its saved prompts
-// say; one that may not is told nothing about the web.
-func TestOnlyABrainstormThatMayReachAnyHostIsToldItCanReadTheWeb(t *testing.T) {
+// Every brainstorm is told what it reaches of the web, once, whatever its
+// saved prompts say: any host is "You can read the web", a list names its
+// hosts, and nothing is one plain sentence that it has no web access.
+func TestEveryBrainstormIsToldWhatItReachesOfTheWeb(t *testing.T) {
+	const anyHost = "You can read the web: search for and fetch public pages"
+	const none = "This session has no web access"
 	for _, tools := range []bool{false, true} {
-		for _, anywhere := range []bool{false, true} {
-			for mode, got := range underEveryMode(RoleBrainstorm, "", InstructionsInput{Tools: tools, Anywhere: anywhere}) {
-				told := strings.Count(got, "You can read the web: search for and fetch public pages") == 1 &&
-					strings.Contains(got, "Say where each fact came from, with its URL.")
-				if told != anywhere || (!anywhere && strings.Contains(strings.ToLower(got), "the web")) {
-					t.Errorf("anywhere %v, tools %v, %s: told of the web %v:\n%s", anywhere, tools, mode, told, got)
+		for _, c := range []struct {
+			name string
+			in   InstructionsInput
+			want string
+		}{
+			{"anywhere", InstructionsInput{Anywhere: true}, anyHost},
+			{"a list", InstructionsInput{Web: &Web{Search: true, Fetch: true, Hosts: []string{"pypi.org"}}},
+				"You can search the web. You can fetch pages only from these hosts: pypi.org;"},
+			{"nothing", InstructionsInput{Web: &Web{}}, none},
+		} {
+			c.in.Tools = tools
+			for mode, got := range underEveryMode(RoleBrainstorm, "", c.in) {
+				if strings.Count(got, c.want) != 1 || strings.Count(got, "## The web") != 1 {
+					t.Errorf("%s, tools %v, %s: not told %q once:\n%s", c.name, tools, mode, c.want, got)
 				}
 			}
 		}
 	}
 	if msg := BrainstormPrompt("briefing", PromptInput{Anywhere: true}); strings.Contains(msg, "web") {
 		t.Errorf("the brainstorm's message says what its instructions say:\n%s", msg)
+	}
+}
+
+// Two webs are equal when the agent reaches the same: hosts a Run without
+// a fetch tool lists do not count, since it fetches from none of them and
+// the web-changed notice says "no fetching" of both.
+func TestWebEqualIsWhatTheAgentReaches(t *testing.T) {
+	pypi, npm := []string{"pypi.org"}, []string{"npmjs.org"}
+	for _, c := range []struct {
+		name string
+		a, b Web
+		want bool
+	}{
+		{"the same list", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Search: true, Fetch: true, Hosts: pypi}, true},
+		{"search differs", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Fetch: true, Hosts: pypi}, false},
+		{"search differs, no fetch", Web{Search: true}, Web{}, false},
+		{"hosts differ", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Search: true, Fetch: true, Hosts: npm}, false},
+		{"a list and none", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Search: true, Fetch: true}, false},
+		{"any host and a list", Web{Fetch: true, AnyHost: true}, Web{Fetch: true, Hosts: pypi}, false},
+		{"fetch off, hosts differ", Web{Search: true, Hosts: pypi}, Web{Search: true, Hosts: npm}, true},
+	} {
+		if got := c.a.Equal(c.b); got != c.want {
+			t.Errorf("%s: Equal = %v, want %v", c.name, got, c.want)
+		}
+		if got := c.b.Equal(c.a); got != c.want {
+			t.Errorf("%s, swapped: Equal = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

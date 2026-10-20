@@ -572,6 +572,34 @@ describe("a brainstorm session's page", () => {
     expect(page.querySelector("[data-testid=proposal-problem]")!.textContent).toContain("already filed");
   });
 
+  test("a project to link shows the agent's reason; the owner confirms it with File, a member who can chat sees it is the owner's", async () => {
+    const link = { kind: "link_project" as const, project: "WC", projectName: "web-console", reason: "the console's calls to billing live in web" };
+    const owner = new SessionClient(detail("owner", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [link], status: [{ canFile: true }] }],
+    }));
+    owner.fileResult = { results: [{ item: 0, status: "filed", key: "WC", kind: "link_project" }] };
+    const page = await sessionPage(owner);
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    const item = card.querySelector("[data-kind=link_project]")!;
+    expect(item.textContent).toContain("Link web-console (WC) to this session");
+    expect(item.textContent).toContain("“the console's calls to billing live in web”");
+    expect(card.textContent).toContain("Proposed work· 1 project to link");
+    expect(card.textContent).toContain("Filing as");
+    await click(card.querySelector("[data-testid=file-proposal]")!);
+    await settle();
+    expect(owner.filed).toEqual([[0]]);
+
+    const member = new SessionClient(detail("chat", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [link],
+        status: [{ canFile: false, why: "only the session's owner can link a project", blockedBy: "session_owner" }] }],
+    }));
+    const theirs = await sessionPage(member);
+    // The owner's to confirm, not blocked for everyone: the card folds to one line for the member.
+    const line = await until(() => theirs.querySelector("[data-testid=proposal-fold]"), "the folded line");
+    expect(line.textContent).toBe("Proposed work · 1 project to link · 1 for others to file");
+    expect(theirs.querySelectorAll("[data-testid=file-proposal]").length).toBe(0);
+  });
+
   test("ticking an item ticks what it waits on, and File sends both", async () => {
     const client = new SessionClient(detail("chat", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [
