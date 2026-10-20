@@ -187,8 +187,8 @@ func verifyReportTx(ctx context.Context, tx pgx.Tx, childID, status string, targ
 	}
 	results, ok := ParseVerify(reply)
 	for _, c := range target.Commands {
-		c = oneLine(c)
-		if !slices.ContainsFunc(results, func(r VerifyResult) bool { return r.Command == c }) {
+		line := oneLine(c)
+		if !slices.ContainsFunc(results, func(r VerifyResult) bool { return r.Command == line }) {
 			rep.Missing = append(rep.Missing, c)
 		}
 	}
