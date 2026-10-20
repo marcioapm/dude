@@ -103,33 +103,21 @@ func syncedBase(ctx context.Context, tx pgx.Tx, r phaseRun, data map[string]any)
 	return err
 }
 
-// blankRound marks a continuation whose harness could not reload its
-// session: its agent has none of its earlier rounds, so its report is not
-// taken (finish replaces it instead, replaceRound).
-func blankRound(ctx context.Context, tx pgx.Tx, r phaseRun, reason string) error {
-	if r.talker() || r.Phase == "" {
-		return nil
-	}
-	_, err := tx.Exec(ctx, `UPDATE runs SET harness_state = harness_state || jsonb_build_object('blankRound', $2::text)
-		WHERE id = $1 AND continues_how = 'resume'`, r.ID, reason)
-	return err
-}
-
-// roundLost is why a continuation's agent lost its earlier rounds
-// (blankRound), "" when it did not.
+// roundLost is why a continuation's agent lost its earlier rounds — the
+// harness could not reload its session on the resume (sessionKept
+// recorded agent.session.replaced) — "" when it did not.
 func (s *Syncer) roundLost(ctx context.Context, r phaseRun) (string, error) {
 	var why *string
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT harness_state->>'blankRound' FROM runs WHERE id = $1 AND continues_how = 'resume'`, r.ID).Scan(&why)
+		return tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(e.payload->>'reason', ''), 'the harness started a new session')
+			FROM runs r JOIN events e ON e.run_id = r.id AND e.event_type = $2
+			WHERE r.id = $1 AND r.continues_how = 'resume' ORDER BY e.cursor LIMIT 1`, r.ID, evSessionReplaced).Scan(&why)
 	})
 	if err != nil && !db.IsNotFound(err) {
 		return "", err
 	}
 	if why == nil {
 		return "", nil
-	}
-	if *why == "" {
-		return "the harness started a new session", nil
 	}
 	return *why, nil
 }
@@ -151,7 +139,7 @@ func (s *Syncer) replaceRound(ctx context.Context, r phaseRun, why string) (bool
 			return err
 		}
 		_, err := delivery.RestartRunTx(ctx, tx, r.Org, r.TaskID, delivery.Restart{RunID: r.ID, ByDude: true, Replays: predecessor,
-			Note:  "the previous round's agent could not be taken back up (" + why + "): you are given its conversation instead",
+			Note:  "The previous round's agent could not be taken back up (" + why + "); you are given its conversation instead.",
 			Actor: delivery.Writer{ActorType: ledger.ActorSystem, ActorID: "dude"}})
 		switch {
 		case errors.Is(err, delivery.ErrStepRunning):

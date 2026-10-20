@@ -1044,10 +1044,7 @@ func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id s
 		}
 		payload["directiveId"] = directiveID
 	}
-	if err := s.event(ctx, tx, t.run, evSessionReplaced, ledger.ActorSystem, payload); err != nil {
-		return err
-	}
-	return blankRound(ctx, tx, t.run, reason)
+	return s.event(ctx, tx, t.run, evSessionReplaced, ledger.ActorSystem, payload)
 }
 
 // activity tracks the agent's turn. Busy means it took its task; idle after
