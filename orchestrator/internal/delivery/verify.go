@@ -56,12 +56,20 @@ type VerifyReport struct {
 	// Why it failed without results: the child's own status, or that it
 	// reported none.
 	Reason string `json:"reason,omitempty"`
+	// The commands the conductor asked for, and those of them it reported
+	// no result for.
+	Asked   []string `json:"asked,omitempty"`
+	Missing []string `json:"missing,omitempty"`
 }
 
-// Verification statuses.
+// Verification statuses, and the reasons settlement gives beside the
+// child's own status.
 const (
 	VerifyPassed = "passed"
 	VerifyFailed = "failed"
+
+	verifyNoReport   = "no-report"
+	verifyIncomplete = "incomplete"
 )
 
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
@@ -119,7 +127,7 @@ func VerifyStart(ctx context.Context, tx pgx.Tx, ref RunRef, in VerifyAsk, key s
 		ResultsMax         int
 	}{repo, "/workspace/repos/" + lux.SpecName(repo), commit, commands, paths, VerifyResultsMax})
 	out := StartChildInput{Parent: ChildParent{Kind: ChildParentTaskConductor, Run: ref}, Profile: PromptRoleForPhase[PhaseInvestigate],
-		Prompt: brief, Note: in.Note, Key: key, Capabilities: ChildCapabilities{Verify: &VerifyTarget{Repo: repo, Commit: commit}}}
+		Prompt: brief, Note: in.Note, Key: key, Capabilities: ChildCapabilities{Verify: &VerifyTarget{Repo: repo, Commit: commit, Commands: commands}}}
 	if commit != "" {
 		out.BaseRefs = map[string]string{repo: commit}
 	}
@@ -168,19 +176,28 @@ func tail(s string, n int) string {
 }
 
 // verifyReportTx is a settling verifier's report on target: passed only
-// when it completed and every command it reported exited 0.
+// when it completed, reported a result for every command it was asked to
+// run (matched by their trimmed text), and every result exited 0.
 func verifyReportTx(ctx context.Context, tx pgx.Tx, childID, status string, target VerifyTarget) (VerifyReport, error) {
-	rep := VerifyReport{Repo: target.Repo, Commit: target.Commit, Status: VerifyFailed, Results: []VerifyResult{}}
+	rep := VerifyReport{Repo: target.Repo, Commit: target.Commit, Status: VerifyFailed, Results: []VerifyResult{}, Asked: target.Commands}
 	reply, err := RunReplyTx(ctx, tx, childID)
 	if err != nil {
 		return rep, err
 	}
 	results, ok := ParseVerify(reply)
+	for _, c := range target.Commands {
+		c = strings.TrimSpace(c)
+		if !slices.ContainsFunc(results, func(r VerifyResult) bool { return strings.TrimSpace(r.Command) == c }) {
+			rep.Missing = append(rep.Missing, c)
+		}
+	}
 	switch {
 	case status != "completed":
 		rep.Reason = status
 	case !ok || len(results) == 0:
-		rep.Reason = "no-report"
+		rep.Reason = verifyNoReport
+	case len(rep.Missing) > 0:
+		rep.Reason = verifyIncomplete
 	}
 	if ok {
 		rep.Results = results

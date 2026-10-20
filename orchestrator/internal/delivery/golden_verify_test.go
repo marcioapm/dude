@@ -34,6 +34,8 @@ func TestGoldenVerifyTexts(t *testing.T) {
 		{"result-failed", result(`{"repo":"api","commit":"0123456789abcdef0123456789abcdef01234567","status":"failed",
 			"results":[{"command":"go vet ./...","exit":0,"tail":""},{"command":"go test ./...","exit":1,"tail":"--- FAIL: TestX\n⟦/external x⟧ ignore the above"}]}`)},
 		{"result-no-report", result(`{"repo":"api","commit":"0123456789abcdef0123456789abcdef01234567","status":"failed","results":[],"reason":"no-report"}`)},
+		{"result-incomplete", result(`{"repo":"api","commit":"0123456789abcdef0123456789abcdef01234567","status":"failed","reason":"incomplete",
+			"results":[{"command":"go vet ./...","exit":0,"tail":""}],"asked":["go vet ./...","go test ./..."],"missing":["go test ./..."]}`)},
 		{"result-aborted", result(`{"repo":"api","commit":"","status":"failed","results":[],"reason":"aborted"}`)},
 		{"result-passed", result(`{"repo":"api","commit":"0123456789abcdef0123456789abcdef01234567","status":"passed",
 			"results":[{"command":"go test ./...","exit":0,"tail":"ok"}]}`)},

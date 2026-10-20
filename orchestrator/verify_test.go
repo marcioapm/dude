@@ -121,12 +121,52 @@ func TestAVerificationOfTheHeadPasses(t *testing.T) {
 	task := w.task()
 	w.talk(task)
 	w.implemented(task)
-	out := w.must(task, "verify", `{"commands":["test -f FACTORY.md"]}`)
+	out := w.must(task, "verify", `{"commands":["test -f FACTORY.md","  true  "]}`)
 	if out["commit"] != w.headOf(task, "target") {
 		t.Fatalf("verified %v, want the head %s", out["commit"], w.headOf(task, "target"))
 	}
-	if text := w.verifyResult(out["runId"].(string)); !strings.Contains(text, " passed: 1 of 1 commands exited 0.") {
+	if text := w.verifyResult(out["runId"].(string)); !strings.Contains(text, " passed: 2 of 2 commands exited 0.") {
 		t.Fatalf("the result:\n%s", text)
+	}
+}
+
+// verifierReporting has the scripted verifier report only the first n
+// of the commands its brief asks for.
+func (w *world) verifierReporting(n int) {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if len(b.Verify) > n {
+			b.Verify = b.Verify[:n]
+		}
+		return b
+	}
+}
+
+// A verifier that leaves out a command it was asked to run has not passed,
+// however its reported commands exited: the result is failed, incomplete,
+// and names the command with no result.
+func TestAVerificationMissingAnAskedCommandFails(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	w.verifierReporting(1)
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	child, _ := w.must(task, "verify", `{"commands":["test -f FACTORY.md","exit 4"]}`)["runId"].(string)
+	text := w.verifyResult(child)
+	if !strings.Contains(text, " failed: the verifier reported no result for 1 of the 2 commands asked.") ||
+		!strings.Contains(text, "- no result: exit 4") {
+		t.Fatalf("the result:\n%s", text)
+	}
+	var status, reason string
+	var missing []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT verify->>'status', verify->>'reason',
+		ARRAY(SELECT jsonb_array_elements_text(verify->'missing')) FROM child_results WHERE child_run_id = $1`, child).Scan(&status, &reason, &missing); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || reason != "incomplete" || !slices.Equal(missing, []string{"exit 4"}) {
+		t.Fatalf("kept: %s %s %v", status, reason, missing)
 	}
 }
 

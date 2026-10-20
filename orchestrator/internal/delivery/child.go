@@ -29,10 +29,12 @@ type ChildCapabilities struct {
 }
 
 // VerifyTarget is what a verifier checks: a commit of one repository, ""
-// for the repository's default branch.
+// for the repository's default branch, and the commands it was asked to
+// run (none when it was asked for paths or the change's tests).
 type VerifyTarget struct {
-	Repo   string `json:"repo"`
-	Commit string `json:"commit"`
+	Repo     string   `json:"repo"`
+	Commit   string   `json:"commit"`
+	Commands []string `json:"commands,omitempty"`
 }
 
 type StartChildInput struct {
