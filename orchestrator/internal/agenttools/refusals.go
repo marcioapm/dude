@@ -118,4 +118,8 @@ const (
 	rYouHaveRequestsWaitingForPerson       = "you have %d requests waiting for a person; wait for them first"
 	rYouAlreadyAskedForPersonHas           = "you already asked for %s; a person has not decided yet"
 	rLimitsAreATasks                       = "limits are a task's: this Run has no task"
+	rNameRunWhoseChatRead                  = "name the Run whose Chat to read, by its id (run_…)"
+	rLimit1Messages                        = "limit is 1 to %d messages"
+	rNotRunYourTaskYouRead                 = "%s is not a Run of your task: you read only your task's Runs, its children and earlier attempts included"
+	rNotRunThisSessionStarted              = "%s is not a Run this session started: you read only the Runs your session started"
 )

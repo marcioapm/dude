@@ -91,6 +91,8 @@ var All = []Capability{
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
 	{Key: Session, Description: "Propose tasks and relations for a member to file, and name the session.",
 		Tools: []string{"propose", "relate", "name_session"}},
+	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
+		Tools: []string{"run_chat"}},
 	{Key: LimitsRead, Description: "See the limits the task's delivery is held to, where each is set, and how much is used.",
 		Tools: []string{"limits"}},
 	{Key: WebSearch, Description: "Search the web with the coding agent's own search tool.",
@@ -103,8 +105,8 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, LimitsRead, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, LimitsRead, WebSearch, WebFetch},
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, RunsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},

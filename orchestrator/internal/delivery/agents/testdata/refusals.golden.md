@@ -454,6 +454,22 @@ independent report children cannot mutate workflow or start Runs
 
 limits are a task's: this Run has no task
 
+## refusals/tools/runchat/limit-1-messages
+
+limit is 1 to %d messages
+
+## refusals/tools/runchat/name-run-whose-chat-read
+
+name the Run whose Chat to read, by its id (run_…)
+
+## refusals/tools/runchat/not-run-this-session-started
+
+%s is not a Run this session started: you read only the Runs your session started
+
+## refusals/tools/runchat/not-run-your-task-you-read
+
+%s is not a Run of your task: you read only your task's Runs, its children and earlier attempts included
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
