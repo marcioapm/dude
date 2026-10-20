@@ -55,13 +55,21 @@ func RerunClaimedTx(ctx context.Context, tx pgx.Tx, taskID, repo string, number 
 	return claimed, err
 }
 
+// What a task's delivery is, for its limits.
+const (
+	DeliveryNone  = ""
+	DeliveryLive  = "live"
+	DeliveryEnded = "ended"
+)
+
 // TaskLimits are a task's delivery bounds and what of them is spent.
 type TaskLimits struct {
-	// The task has a delivery: Policy is the one it froze when it started,
-	// PRIteration and PRFixes what it has spent. Without one, Policy is
-	// what a delivery would start with now, and nothing is spent.
-	Delivered bool
-	Policy    Policy
+	// DeliveryLive: Policy is the one the delivery froze when it started,
+	// PRIteration and PRFixes what it has spent. With none, or one that
+	// ended, Policy is what a delivery would start with now, and nothing
+	// is spent.
+	Delivery string
+	Policy   Policy
 	// What a delivery starting now would get, when it differs from Policy.
 	PolicyNow *Policy
 	// The layer the policy's MaxPRFixIterations is set in now (SetIn…).
@@ -109,12 +117,15 @@ func TaskLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (TaskLimits, er
 	if err != nil {
 		return l, err
 	}
-	if d != nil {
-		l.Delivered, l.Policy, l.PRIteration, l.PRFixes = true, d.State.Policy, d.State.PRIteration, d.State.PRFixes
+	switch {
+	case d != nil && d.Live():
+		l.Delivery, l.Policy, l.PRIteration, l.PRFixes = DeliveryLive, d.State.Policy, d.State.PRIteration, d.State.PRFixes
 		if now.MaxPRFixIterations != l.Policy.MaxPRFixIterations {
 			l.PolicyNow = &now
 		}
-	} else {
+	case d != nil:
+		l.Delivery, l.Policy = DeliveryEnded, now
+	default:
 		l.Policy = now
 	}
 	if l.PRFixes == nil {

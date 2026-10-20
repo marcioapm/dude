@@ -7,7 +7,8 @@
 {{- define "results/limits/both"}}both{{end}}
 
 {{- define "results/limits/delivery"}}
-{{- if .}}The task's delivery froze its delivery policy when it started: these are the bounds it is held to.
+{{- if eq . "live"}}The task's delivery froze its delivery policy when it started: these are the bounds it is held to.
+{{- else if eq . "ended"}}The task's delivery has ended: the delivery policy is what a new one would start with now, and nothing of it is spent.
 {{- else}}The task has no delivery yet: the delivery policy is what one would start with now, and nothing is spent.{{end}}
 {{- end}}
 

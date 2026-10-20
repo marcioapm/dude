@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/prs"
 )
 
 // refresh_pull_requests (capabilities.PRRefresh) reads the task's open pull
@@ -38,14 +40,25 @@ func checkRefresh(ctx context.Context, tx pgx.Tx, c, scoped Caller) (refreshChec
 	if gh == nil || c.env.syncPR == nil {
 		return refreshCheck{}, refuseText(rThisOrganisationHasNoGithubConnection)
 	}
-	rows, err := tx.Query(ctx, `SELECT id FROM pull_requests WHERE task_id = $1 AND state IN ('open', 'draft') ORDER BY created_at, id`,
-		scoped.TaskID)
+	rows, err := tx.Query(ctx, `SELECT pr.id, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND pr.state IN ('open', 'draft') ORDER BY pr.created_at, pr.id`, scoped.TaskID)
 	if err != nil {
 		return refreshCheck{}, err
 	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	type openPR struct{ id, url string }
+	open, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (openPR, error) {
+		var p openPR
+		return p, r.Scan(&p.id, &p.url)
+	})
 	if err != nil {
 		return refreshCheck{}, err
+	}
+	// Sync reads nothing of a repository not on GitHub: not one to charge.
+	var ids []string
+	for _, p := range open {
+		if forge.SlugFromURL(p.url) != "" {
+			ids = append(ids, p.id)
+		}
 	}
 	if len(ids) == 0 {
 		return refreshCheck{}, refuseText(rNoOpenPullRequestRefresh)
@@ -77,11 +90,12 @@ func sessionRefreshPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in ses
 
 // syncNow syncs each pull request with no transaction open. One GitHub
 // would not answer is said beside the listing, which keeps dude's last
-// poll of it; a database failure is the call's.
+// poll of it; one another sync recorded first was refreshed by it; a
+// database failure is the call's.
 func syncNow(ctx context.Context, c Caller, r refreshCheck) ([]string, error) {
 	var failed []string
 	for _, id := range r.prIDs {
-		if err := c.env.syncPR(ctx, c.Org, id); err != nil {
+		if err := c.env.syncPR(ctx, c.Org, id); err != nil && !errors.Is(err, prs.ErrRaced) {
 			if ctx.Err() != nil {
 				return nil, err
 			}

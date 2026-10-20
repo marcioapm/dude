@@ -38,8 +38,9 @@ type prFixesOut struct {
 type fixRoundsOut struct {
 	// The delivery policy's fixes per review round (MaxPRFixIterations).
 	PerReviewRound limitOut `json:"perReviewRound"`
-	// What a delivery starting now would get: the task's froze its own.
-	PolicyNow *int `json:"policyNow,omitempty"`
+	// What a delivery starting now would get, and the layer of the policy
+	// it is set in: the task's delivery froze another.
+	PolicyNow *policyNowOut `json:"policyNow,omitempty"`
 	// The organisation's fix rounds per pull request (fixRoundsPerPr); 0 is no bound.
 	PerPullRequest struct {
 		Source string       `json:"source"`
@@ -47,6 +48,11 @@ type fixRoundsOut struct {
 		PRs    []prFixesOut `json:"pullRequests"`
 	} `json:"perPullRequest"`
 	Note string `json:"note"`
+}
+
+type policyNowOut struct {
+	Limit int    `json:"limit"`
+	SetIn string `json:"setIn"`
 }
 
 type settingOut struct {
@@ -83,26 +89,30 @@ func readLimits(ctx context.Context, tx pgx.Tx, c Caller, _ limitsIn) (limitsOut
 		return out, err
 	}
 	policy, settings := limitsText("policy", nil), limitsText("settings", nil)
-	out.Delivery = limitsText("delivery", l.Delivered)
+	out.Delivery = limitsText("delivery", l.Delivery)
 
+	// setIn is the layer today's policy takes the value from: beside
+	// policyNow when the delivery froze another, else beside the limit.
+	// Remaining is 0 where the checks' own getters say spent.
 	round := l.Policy.MaxPRFixIterations
-	out.FixRounds.PerReviewRound = limitOut{Source: policy, SetIn: l.FixRoundsSetIn, Limit: round, Used: l.PRIteration,
-		Remaining: max(0, round-l.PRIteration)}
+	out.FixRounds.PerReviewRound = limitOut{Source: policy, Limit: round, Used: l.PRIteration, Remaining: round - l.PRIteration}
+	if l.RoundFixesSpent() {
+		out.FixRounds.PerReviewRound.Remaining = 0
+	}
 	if l.PolicyNow != nil {
-		out.FixRounds.PolicyNow = &l.PolicyNow.MaxPRFixIterations
+		out.FixRounds.PolicyNow = &policyNowOut{Limit: l.PolicyNow.MaxPRFixIterations, SetIn: l.FixRoundsSetIn}
+	} else {
+		out.FixRounds.PerReviewRound.SetIn = l.FixRoundsSetIn
 	}
 	perPR := l.GitHub.FixRoundsPerPR
 	out.FixRounds.PerPullRequest.Source, out.FixRounds.PerPullRequest.Limit = settings, perPR
 	out.FixRounds.PerPullRequest.PRs = []prFixesOut{}
 	roundLeft := out.FixRounds.PerReviewRound.Remaining
-	if l.RoundFixesSpent() {
-		roundLeft = 0
-	}
 	for _, p := range l.PullRequests {
 		used := l.PRFixes[p.Repo]
 		pr := prFixesOut{Repo: p.Repo, Number: p.Number, Used: used, Binding: policy}
 		if perPR > 0 {
-			left := max(0, perPR-used)
+			left := perPR - used
 			if l.PullRequestFixesSpent(p.Repo) {
 				left = 0
 			}
