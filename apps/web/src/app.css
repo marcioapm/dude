@@ -316,6 +316,11 @@ body {
 .escalationCriterionStatus {
   color: var(--ds-color-text-secondary);
 }
+/* The checks send-back as the agent received it: its list of checks keeps its lines. */
+.escalationSentBack {
+  white-space: pre-wrap;
+  color: var(--ds-color-text-secondary);
+}
 
 /* The tester's verdict, above the findings: evidence names open the file. */
 .taskVerification {

@@ -100,7 +100,7 @@ test("a pull request's fix still being checked is labelled the candidate's, not 
 
 // -- the banner --
 
-async function banner(reason: string, actions: EscalationAction[], opts: { owner?: string; you?: string; admin?: boolean } = {}) {
+async function banner(reason: string, actions: EscalationAction[], opts: { owner?: string; you?: string; admin?: boolean; detail?: Record<string, unknown> } = {}) {
   const client = new FixtureClient("a");
   const sent: Array<[EscalationAction, string]> = [];
   client.decide = async (_task, action, note) => {
@@ -109,7 +109,7 @@ async function banner(reason: string, actions: EscalationAction[], opts: { owner
   };
   const task = { ...taskFor("a"), owner: { id: opts.owner ?? YOU, name: opts.owner ? "Ana" : "Márcio", photoUrl: null, online: false },
     escalation: { reason, actions, at: "2026-10-01T00:00:00Z",
-      detail: { runId: "run_test", criteria: [{ criterion: 2, text: "it pays", status: "blocked" }], findingIds: [] } } };
+      detail: opts.detail ?? { runId: "run_test", criteria: [{ criterion: 2, text: "it pays", status: "blocked" }], findingIds: [] } } };
   const { container, unmount } = await mount(
     <EscalationPanel client={client} task={task as Parameters<typeof EscalationPanel>[0]["task"]} you={opts.you ?? YOU}
       youAdmin={opts.admin ?? false} onOpenRun={() => {}} onDecided={() => {}} />,
@@ -158,4 +158,45 @@ test("an admin who is not the owner may waive, and nothing else; a member only w
   const member = await banner("test_blocked", ["retry", "waive", "stop"], { owner: "per_ana", you: "per_bo" });
   expect(count(member.page, "[data-testid=escalation-waive]")).toBe(0);
   expect(member.page.textContent).toContain("Waiting for Ana to decide.");
+});
+
+const checksDetail = { runId: "run_impl", rounds: 1,
+  message: "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- make check: exit 1 (judgement: no)\n\nRun the missing checks." };
+const label = (page: HTMLElement) => {
+  const field = page.querySelector<HTMLTextAreaElement>("[data-testid=escalation-note]")!;
+  return page.querySelector(`label[for="${field.id}"]`)?.textContent ?? "";
+};
+
+test("unverified checks show the send-back naming each check, and a waiver is not sent without a reason", async () => {
+  const { page, sent } = await banner("checks_unverified", ["retry", "waive", "stop"], { detail: checksDetail });
+  expect(page.textContent).toContain("Checks unverified.");
+  expect(page.textContent).toContain("after 1 send-back");
+  expect(page.querySelector("[data-testid=escalation-checks]")?.textContent).toBe(checksDetail.message);
+  expect(label(page)).toContain("required to waive");
+  expect(label(page)).not.toContain("optional");
+  await click(page.querySelector("[data-testid=escalation-waive]")!);
+  expect(sent).toEqual([]);
+  expect(page.querySelector<HTMLTextAreaElement>("[data-testid=escalation-note]")!.required).toBe(true);
+  expect(page.textContent).toContain("Say why");
+  await typeNote(page, "CI hardware was unavailable.");
+  await click(page.querySelector("[data-testid=escalation-waive]")!);
+  expect(sent).toEqual([["waive", "CI hardware was unavailable."]]);
+});
+
+test("sending unverified checks back needs no reason", async () => {
+  const { page, sent } = await banner("checks_unverified", ["retry", "waive", "stop"], { detail: checksDetail });
+  expect(page.querySelector("[data-testid=escalation-retry]")?.textContent).toBe("Send it back once more");
+  await click(page.querySelector("[data-testid=escalation-retry]")!);
+  expect(sent).toEqual([["retry", ""]]);
+});
+
+test("an admin who is not the owner may waive unverified checks, and nothing else", async () => {
+  const admin = await banner("checks_unverified", ["retry", "waive", "stop"], { owner: "per_ana", you: "per_cy", admin: true, detail: checksDetail });
+  expect([...admin.page.querySelectorAll("[data-testid^=escalation-]")].map((b) => b.getAttribute("data-testid"))
+    .filter((id) => ["escalation-retry", "escalation-waive", "escalation-stop"].includes(id!))).toEqual(["escalation-waive"]);
+  await click(admin.page.querySelector("[data-testid=escalation-waive]")!);
+  expect(admin.sent).toEqual([]);
+  await typeNote(admin.page, "Reviewed the risk.");
+  await click(admin.page.querySelector("[data-testid=escalation-waive]")!);
+  expect(admin.sent).toEqual([["waive", "Reviewed the risk."]]);
 });

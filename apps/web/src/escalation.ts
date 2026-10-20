@@ -46,9 +46,20 @@ function criteriaList(criteria: Array<{ criterion: number; text: string }>): str
   return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}` : shown[0]!;
 }
 
-/** An action that ships past a criterion nobody saw work: it needs the person's reason. */
+/**
+ * An action that ships past what nobody saw work (a failed criterion, a check the
+ * tester could not make, an unbacked checks report): it needs the person's reason.
+ * The orchestrator's delivery.NeedsReason refuses the same actions without one.
+ */
 export function needsReason(reason: string, action: string): boolean {
-  return (reason === "test_failed_criteria" && action === "accept") || (reason === "test_blocked" && action === "waive");
+  return (reason === "test_failed_criteria" && action === "accept")
+    || ((reason === "test_blocked" || reason === "checks_unverified") && action === "waive");
+}
+
+/** The send-back a checks escalation stopped at: each unbacked check and why, "" for any other. */
+export function checksMessage(e: Escalation): string {
+  const message = e.detail?.message;
+  return e.reason === "checks_unverified" && typeof message === "string" ? message.trim() : "";
 }
 
 export function escalationWords(e: Escalation): EscalationWords {
@@ -95,6 +106,18 @@ export function escalationWords(e: Escalation): EscalationWords {
       return {
         short: "Test blocked",
         sentence: `The tester could not check${named || " the change"}${findings ? ": it could not run the application" : ""}. Tell it how (the project's notes) and try again, or waive what could not be checked with your reason.`,
+        runId,
+      };
+    }
+    case "checks_unverified": {
+      // rounds: the send-backs the gate made before it stopped; the message, shown beside, names each check.
+      const rounds = num("rounds");
+      const after = rounds
+        ? `is still not backed by the Run's recorded commands after ${plural(rounds, "send-back")}.`
+        : "is not backed by the Run's recorded commands, and the organisation allows no send-back.";
+      return {
+        short: "Checks unverified",
+        sentence: `The checks report ${after} Send it back once more, or waive what could not be checked with your reason.`,
         runId,
       };
     }
