@@ -10,6 +10,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -89,7 +90,8 @@ func (s *Syncer) roundSecrets(ctx context.Context, r phaseRun) error {
 // role would now start on another image than lux stored for the lux Run.
 // A later resume (finishes > 0) is a person's pause/resume and is not
 // checked. An image still being prepared or refused also goes fresh: the
-// replacement's submit waits for it or reports it as any submit does.
+// replacement's submit waits for it or reports it as any submit does. Any
+// other failure to resolve it is returned, for the resume to be retried.
 func (s *Syncer) roundImage(ctx context.Context, r phaseRun, stored lux.StoredSpec) error {
 	var continued bool
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -98,8 +100,11 @@ func (s *Syncer) roundImage(ctx context.Context, r phaseRun, stored lux.StoredSp
 		return err
 	}
 	ref, _, _, err := s.image(ctx, r)
-	if err != nil {
+	if errors.As(err, new(images.Waiting)) || errors.As(err, new(images.Refused)) {
 		return errCannotResume{err}
+	}
+	if err != nil {
+		return err
 	}
 	if ref != stored.Image.Ref {
 		return errCannotResume{errors.New("its runtime image changed")}

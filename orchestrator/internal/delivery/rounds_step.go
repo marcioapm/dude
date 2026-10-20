@@ -42,12 +42,15 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 			return c, nil
 		}
 		gh, err := w.forges.For(ctx, sc.OrganizationID)
-		if err != nil {
-			if forge.Transient(err) {
-				return nil, forgeWait(err)
-			}
+		switch {
+		case forge.Transient(err):
+			return nil, forgeWait(err)
+		case forge.Refused(err):
 			c.DeltaLines = MaxResumeDeltaLines + 1
 			return c, nil
+		case err != nil:
+			// Not the forge's answer (a database error): the step retries.
+			return nil, err
 		}
 		if c.DeltaLines, err = w.s.DeltaLines(ctx, sc.OrganizationID, st.TaskID, gh, p.BaseRefs, st.Heads); err != nil {
 			return nil, err

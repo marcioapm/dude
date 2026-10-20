@@ -94,6 +94,43 @@ func TestRoundCompareFailuresAndCaching(t *testing.T) {
 	}
 }
 
+type forgeErr struct{ err error }
+
+func (f forgeErr) For(context.Context, string) (*forge.GitHub, error) { return nil, f.err }
+
+// A credential lookup that failed for another reason than the forge's
+// answer (the database) is the step's error, retried: it is not taken as
+// an unmeasurable change, which would let the kept predecessor go.
+func TestARoundsCredentialLookupFailureIsRetried(t *testing.T) {
+	f := newVerdictFixture(t)
+	for _, q := range []string{
+		`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES ('wfr_delta', $1, 'task.delivery', 'delta', 'running', 'review', '{}', 'wi_c')`,
+		`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_c', 'repo_c', $1)`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, category, base_refs, ended_at) VALUES ('run_correctness', $1, 'prj_c', 'wi_c', 1, 'completed', 'review', 'reviewer', 'correctness', '{"repo":"aaa"}', now())`,
+	} {
+		if _, err := f.owner.Exec(f.ctx, q, f.org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	down := errors.New("load forge credential: connection reset")
+	f.steps.forges = forgeErr{down}
+	st := &State{TaskID: "wi_c", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"repo": "bbb"}}
+	sc := workflow.StepContext{WorkflowRunID: "wfr_delta", OrganizationID: f.org}
+	c, err := f.steps.goesOn(f.ctx, sc, st, PhaseReview)("correctness")
+	if !errors.Is(err, down) {
+		t.Fatalf("decision = %+v, %v; want the lookup's error", c, err)
+	}
+	var cached int
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM workflow_runs, jsonb_object_keys(COALESCE(state->'roundDelta', '{}')) WHERE id = 'wfr_delta'`).Scan(&cached); err != nil || cached != 0 {
+		t.Fatalf("%d measurements cached (%v) after a failed lookup, want 0", cached, err)
+	}
+	// A refusal from GitHub itself is the forge's answer: the round goes fresh.
+	f.steps.forges = forgeErr{&forge.Error{Status: 401, Message: "Bad credentials"}}
+	if c, err := f.steps.goesOn(f.ctx, sc, st, PhaseReview)("correctness"); err != nil || c == nil || c.DeltaLines != MaxResumeDeltaLines+1 {
+		t.Fatalf("refused lookup decision = %+v, %v; want delta %d", c, err, MaxResumeDeltaLines+1)
+	}
+}
+
 func TestIntegrationRoundsStayFresh(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		for _, integration := range []bool{false, true} {
