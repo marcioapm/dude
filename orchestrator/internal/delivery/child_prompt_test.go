@@ -11,6 +11,11 @@ func TestChildResultPromptGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if *updateGoldens {
+		if err := os.WriteFile("testdata/child-result.golden", []byte(got+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	want, err := os.ReadFile("testdata/child-result.golden")
 	if err != nil {
 		t.Fatal(err)
