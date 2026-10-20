@@ -159,13 +159,14 @@ func TestTheRegistryHasNoDeadEntries(t *testing.T) {
 	}
 }
 
-// The tools a role's instruction file names are tools its default
-// capabilities give it (delivery.InstructionTools).
+// The instruction file names a tool when the Run's capabilities grant it
+// (delivery.InstructionTools): each such name is a tool the Run is given.
 func TestTheInstructionFileNamesOnlyGrantedTools(t *testing.T) {
-	for role, names := range delivery.InstructionTools {
-		for _, name := range names {
-			if _, ok := find(name, role, capabilities.Default(role)); !ok {
-				t.Errorf("%s's instructions name %s, which it is not given", role, name)
+	for _, role := range delivery.PromptRoles {
+		grants := capabilities.Default(role)
+		for _, name := range delivery.InstructionTools {
+			if _, ok := find(name, role, grants); grants.Tool(name) != ok {
+				t.Errorf("%s: %s granted %v, found %v", role, name, grants.Tool(name), ok)
 			}
 		}
 	}

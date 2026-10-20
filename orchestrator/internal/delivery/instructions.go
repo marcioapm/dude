@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 )
 
 // InstructionsInput is what a Run's instruction file (/workspace/AGENTS.md)
@@ -14,6 +16,9 @@ type InstructionsInput struct {
 	Child bool
 	// The Run has dude's tools, and the dude CLI on its shell.
 	Tools, CLI bool
+	// The Run's capabilities (capabilities.Resolve): which tools the file
+	// names. nil: its role's defaults, a fixer's being the implementer's.
+	Grants *capabilities.Grants
 	// A brainstorm that may reach any host.
 	Anywhere bool
 	// A conductor with a checkout, which merges the base itself.
@@ -51,18 +56,10 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 	}
 }
 
-// InstructionTools are the tools the instruction file names, by the role a
-// Run calls them as; agenttools' tests hold each list to the tools that
-// role is given.
-var InstructionTools = map[string][]string{
-	"implementer":  {"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository", "run_diff", "request_machine", "sync_base"},
-	"investigator": {"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository", "run_diff", "request_machine"},
-	"reviewer":     {"search_memory", "remember", "emit_event", "request_repository", "run_diff", "request_machine"},
-	"simplifier":   {"search_memory", "remember", "emit_event", "request_repository", "run_diff", "request_machine", "sync_base"},
-	"qa_browser":   {"search_memory", "remember", "emit_event", "request_repository", "run_diff", "request_machine"},
-	RoleConductor:  {"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository", "run_diff", "request_machine", "sync_base"},
-	RoleBrainstorm: {"ask_person", "search_memory", "remember", "request_machine"},
-}
+// InstructionTools are the tools the instruction file can name; a Run's
+// file names those its capabilities grant.
+var InstructionTools = []string{"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository",
+	"run_diff", "request_machine", "sync_base"}
 
 // ChildTools are the tools an independent report child may call.
 var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}
@@ -79,15 +76,20 @@ type instructionData struct {
 }
 
 func (in InstructionsInput) data(role string) instructionData {
-	// A fixer is the implementer's Run, told something else.
-	toolRole := role
-	if role == "fixer" {
-		toolRole = "implementer"
+	grants := in.Grants
+	if grants == nil {
+		// A fixer is the implementer's Run, told something else.
+		toolRole := role
+		if role == "fixer" {
+			toolRole = "implementer"
+		}
+		g := capabilities.Default(toolRole)
+		grants = &g
 	}
 	has := map[string]bool{}
 	if in.Tools {
-		for _, t := range InstructionTools[toolRole] {
-			if !in.Child || slices.Contains(ChildTools, t) {
+		for _, t := range InstructionTools {
+			if grants.Tool(t) && (!in.Child || slices.Contains(ChildTools, t)) {
 				has[t] = true
 			}
 		}
