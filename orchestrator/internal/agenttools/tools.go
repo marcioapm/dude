@@ -44,6 +44,7 @@ var tools = []tool{
 	define("findings", findings),
 	define("pull_requests", pullRequests),
 	define("limits", readLimits),
+	define("request_limit", requestLimit),
 	define("run_chat", runChat).withholdingResult(),
 	define("start_phase", startPhase),
 	define("start_agent", startAgent),

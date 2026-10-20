@@ -59,7 +59,7 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 // InstructionTools are the tools the instruction file can name; a Run's
 // file names those its capabilities grant.
 var InstructionTools = []string{"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository",
-	"run_diff", "request_machine", "sync_base"}
+	"run_diff", "request_machine", "sync_base", "request_limit"}
 
 // ChildTools are the tools an independent report child may call.
 var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}
@@ -70,7 +70,9 @@ type instructionData struct {
 	Role string
 	// Which of the tools dude.md names this Run has.
 	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, Remember, RequestMachine bool
-	ChildToolNames                                                                  string
+	// Which of the conductor's tools its contract names this Run has.
+	RequestLimit   bool
+	ChildToolNames string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
 }
@@ -96,7 +98,7 @@ func (in InstructionsInput) data(role string) instructionData {
 	}
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
-		Remember: has["remember"], RequestMachine: has["request_machine"],
+		Remember: has["remember"], RequestMachine: has["request_machine"], RequestLimit: has["request_limit"],
 		ChildToolNames:   strings.Join(ChildTools[:len(ChildTools)-1], ", ") + ", and " + ChildTools[len(ChildTools)-1],
 		ExternalTextNote: ExternalTextNote}
 }

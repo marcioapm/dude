@@ -32,3 +32,23 @@ func TestTheInstructionFileFollowsTheRunsCapabilities(t *testing.T) {
 		}
 	}
 }
+
+// The conductor's contract names the tools of its capabilities that act:
+// request_limit only with limits.request.
+func TestTheConductorsContractNamesOnlyGrantedActions(t *testing.T) {
+	for _, c := range []struct {
+		key  capabilities.Key
+		tool string
+	}{{capabilities.LimitsRequest, "`request_limit`"}} {
+		with := capabilities.Default(RoleConductor)
+		without := with.Without(c.key)
+		in := InstructionsInput{Tools: true, CLI: true, Grants: &with}
+		if got := Instructions(RoleConductor, "", in); !strings.Contains(got, c.tool) {
+			t.Errorf("with %s the contract does not name %s", c.key, c.tool)
+		}
+		in.Grants = &without
+		if got := Instructions(RoleConductor, "", in); strings.Contains(got, c.tool) {
+			t.Errorf("without %s the contract names %s", c.key, c.tool)
+		}
+	}
+}

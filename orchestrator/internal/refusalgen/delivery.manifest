@@ -145,3 +145,16 @@ rChildWrongParent                      refusals/delivery/child/wrong-parent
 rChildParentStillLive                  refusals/delivery/child/parent-still-live
 rChildTaskPublishing                   refusals/delivery/child/task-publishing
 rChildPositiveAttemptRequired          refusals/delivery/child/positive-attempt-required
+rLimitRequestUnknownLimit              refusals/delivery/limit-requests/unknown-limit
+rLimitRequestReasonRequired            refusals/delivery/limit-requests/reason-required
+rLimitRequestReasonTooLong             refusals/delivery/limit-requests/reason-too-long
+rLimitRequestNoDelivery                refusals/delivery/limit-requests/no-delivery
+rLimitRequestTaskEnded                 refusals/delivery/limit-requests/task-ended
+rLimitRequestAlreadyOpen               refusals/delivery/limit-requests/already-open
+rLimitRequestQuestionOpen              refusals/delivery/limit-requests/question-open
+rLimitRequestNoBound                   refusals/delivery/limit-requests/no-bound
+rLimitRequestToOutOfRange              refusals/delivery/limit-requests/to-out-of-range
+rLimitRequestRerunLeft                 refusals/delivery/limit-requests/rerun-left
+rLimitRequestNoPullRequest             refusals/delivery/limit-requests/no-pull-request
+rLimitRequestNamePullRequest           refusals/delivery/limit-requests/name-pull-request
+rLimitRequestNoHead                    refusals/delivery/limit-requests/no-head

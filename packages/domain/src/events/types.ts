@@ -594,6 +594,19 @@ export const EventTypes = {
    */
   QuestionClosed: "question.closed",
   /**
+   * The conductor asked the task's people to raise one of its delivery's
+   * limits for this task (request_limit), as its question `questionId`.
+   * Payload: `{ questionId, limit, from, to, reason, repo?, number?, head? }`,
+   * `limit` one of `perReviewRound`, `perPullRequest`, `rerun`.
+   */
+  LimitRequested: "limit.requested",
+  /**
+   * A person approved a limit request: the delivery's check allows `extra`
+   * more from now on, for this task alone. Payload: limit.requested's and
+   * `{ extra, by, byName }`; actor the approver.
+   */
+  LimitGranted: "limit.granted",
+  /**
    * A message in a task's Chat, on its conductor's Run. Payload:
    * `{ text, directiveId?, supersedes?, github?, by? }`. A person's: the first has no
    * `directiveId` (it is the conductor's briefing, with dude's note before

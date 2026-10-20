@@ -363,7 +363,7 @@ func prFixBound(ctx context.Context, tx pgx.Tx, st *State) error {
 func prFixBoundFor(ctx context.Context, tx pgx.Tx, st *State, repos []string) error {
 	if st.RoundFixesSpent() {
 		return refusef(rPullRequestFixesAreAtTheir,
-			st.PRIteration, st.Policy.MaxPRFixIterations)
+			st.PRIteration, st.RoundFixLimit())
 	}
 	settings, _, err := GitHubSettingsTx(ctx, tx)
 	if err != nil {

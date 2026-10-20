@@ -163,7 +163,7 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 		// through the form answer any.
 		if qerr == nil && (msg.Answers != nil || !msg.Aside && len(items) == 1) {
 			ri := runInfo{ProjectID: projectID, TaskID: taskID, Role: delivery.RoleConductor}
-			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
+			if err := mayAnswer(r.Context(), tx, taskID, questionID, p); err != nil {
 				return err
 			}
 			answered, err := answerBody{Text: text, Answers: msg.Answers, Note: msg.Note}.check(items)
