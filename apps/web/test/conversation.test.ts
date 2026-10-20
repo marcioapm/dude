@@ -1540,3 +1540,27 @@ describe("what happened to a talker's agent", () => {
     expect(turns).toEqual([expect.objectContaining({ kind: "ended", outcome: "failed", text: "Its turn failed: the agent's turn failed: overloaded" })]);
   });
 });
+
+describe("the checks gate's send-back", () => {
+  const sentBack = "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- make check: exit 1 (judgement: no)";
+  const told = (events: PersistedEvent[]) => project(events, "running").turns.filter((t) => t.kind === "told").map((t) => t.text);
+
+  test("a report sent back is the Told line the agent received, in order; a backed or skipped one adds none", () => {
+    const { turns } = project([
+      ev(EventTypes.AgentMessage, { text: "checks:\n- command: make check\n  result: pass" }),
+      ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [] }),
+      ev(EventTypes.AgentMessage, { text: "Fixed; checks pass." }),
+      ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] }),
+      ev(EventTypes.RunChecksJudged, { turn: 3, verified: true, skipped: true, message: "Checks not model-checked: no judgement tier.", checks: [] }),
+    ], "running");
+    expect(turns.filter((t) => t.kind === "message" || t.kind === "told").map((t) => t.kind)).toEqual(["message", "told", "message"]);
+    expect(turns.find((t) => t.kind === "told")!.text).toBe(sentBack);
+  });
+
+  test("an escalated report is held for a person: told only once a person sends it back again", () => {
+    const held = ev(EventTypes.RunChecksJudged, { turn: 1, round: 2, verified: false, escalated: true, message: sentBack, checks: [] });
+    expect(told([held])).toEqual([]);
+    expect(told([held, ev(EventTypes.RunChecksDecided, { action: "waive", note: "CI hardware." })])).toEqual([]);
+    expect(told([held, ev(EventTypes.RunChecksDecided, { action: "retry", note: "" })])).toEqual([sentBack]);
+  });
+});

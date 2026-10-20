@@ -159,8 +159,9 @@ export interface PromptTurn {
 
 /**
  * Words dude put in front of the agent's input that no one typed: what a
- * machine move's resume told it (`run.told`), or a session's line to its
- * agent (`session.told`). Shown as dude's, tagged Told.
+ * machine move's resume told it (`run.told`), a session's line to its
+ * agent (`session.told`), or the checks gate's send-back of an unbacked
+ * report (`run.checks.judged`). Shown as dude's, tagged Told.
  */
 export interface ToldTurn {
   kind: "told";
@@ -741,6 +742,8 @@ export interface Projection {
   heldUnpark: NoticeTurn | null;
   /** What a move's resume told the agent (`run.told`): shown just after the move's notice once the agent is up. */
   heldTold: ToldTurn | null;
+  /** The checks send-back an escalation held for a person: told once they send it back again (retry). */
+  heldChecks: string | null;
   /**
    * A move's notice waiting for its resume's timing, by the epoch it resumed
    * into (`run.told`'s, else `run.resized`'s `machine.sinceEpoch`): the
@@ -821,6 +824,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     standaloneTimings: new Map(),
     heldUnpark: null,
     heldTold: null,
+    heldChecks: null,
     untimedMoves: new Map(),
     lastMove: null,
     refusedMove: false,
@@ -1261,6 +1265,25 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // dude's line to a session's agent (who owns it now): dude's words, to the agent.
         const text = typeof payload.text === "string" ? payload.text : "";
         if (text.trim()) turns.push({ kind: "told", id: event.eventId, text, at: event.occurredAt });
+        break;
+      }
+
+      case EventTypes.RunChecksJudged: {
+        // An unbacked report goes back to the agent as these words (a directive with no event of its own);
+        // an escalated one waits for a person. A verified, skipped or waived report sends nothing.
+        const text = payload.verified === false && typeof payload.message === "string" ? payload.message : "";
+        if (!text.trim()) break;
+        if (payload.escalated === true) state.heldChecks = text;
+        else turns.push({ kind: "told", id: event.eventId, text, at: event.occurredAt });
+        break;
+      }
+
+      case EventTypes.RunChecksDecided: {
+        // Retry sends the held report back with the same words; waive and stop send nothing.
+        if (payload.action === "retry" && state.heldChecks) {
+          turns.push({ kind: "told", id: event.eventId, text: state.heldChecks, at: event.occurredAt });
+        }
+        state.heldChecks = null;
         break;
       }
 
