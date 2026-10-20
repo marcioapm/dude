@@ -23,6 +23,33 @@ func resuming(t *testing.T) *world {
 	return w
 }
 
+// A conductor's start_phase review whose reviewer is resumed gets the
+// conductor's note in its round message, as a fresh reviewer gets it in
+// its prompt.
+func TestDirectedResumedReviewReceivesConductorNote(t *testing.T) {
+	w := resuming(t)
+	w.onModel("conductor", "fake/scripted")
+	w.withTools()
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.start(wi, resumingPolicy())
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if status, out := w.chat(wi, "Look after the pull request."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on PR", func() bool { return w.waitingOnPR(wi) })
+	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"],"note":"Inspect rollback and reproduce the timeout before approving."}`)
+	w.until("directed review finished", func() bool { return w.decisionAt(wi) == "after_review" })
+	for _, lr := range w.luxRunsOf("review") {
+		for _, input := range w.lux.Inputs(lr.ID) {
+			if strings.Contains(input, "## A new round") && strings.Contains(input, "Inspect rollback and reproduce the timeout before approving.") {
+				return
+			}
+		}
+	}
+	t.Fatal("resumed agent did not receive conductor note")
+}
+
 func resumingPolicy() delivery.Policy {
 	p := scriptedPolicy()
 	p.ResumeRounds = true

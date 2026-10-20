@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -307,7 +308,11 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, from map[string
 	if in.ReviewRange != nil {
 		reason = rangeReason[in.ReviewRange.Of]
 	}
-	return RoundMessage(in.Phase, from, in.BaseRefs, reason, findings), nil
+	message := RoundMessage(in.Phase, from, in.BaseRefs, reason, findings)
+	if note := strings.TrimSpace(in.ConductorNote); note != "" {
+		message += "\n\n" + render(fromConductorTmpl, note)
+	}
+	return message, nil
 }
 
 // RoundMessage renders contracts/resume/round: from and to are each
