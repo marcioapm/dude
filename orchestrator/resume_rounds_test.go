@@ -119,7 +119,7 @@ func TestChangedImageReplacesContinuedReviewer(t *testing.T) {
 	w.start(wi, resumingPolicy())
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	reviews := w.reviewRows(wi)
-	if len(reviews) < 3 || reviews[1].How != delivery.ContinuesResume ||
+	if len(reviews) != 4 || reviews[1].How != delivery.ContinuesResume ||
 		reviews[2].Continues != reviews[0].ID || reviews[2].How != delivery.ContinuesReplay {
 		t.Fatalf("reviews: %+v; want the first, its continuation, and a replay of the first", reviews)
 	}
@@ -238,8 +238,10 @@ func TestARetestResumesThePreviousTester(t *testing.T) {
 		}
 	}
 	var status, resolvedBy string
-	_ = w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(resolved_by_run_id, '') FROM review_findings
-		WHERE task_id = $1 AND run_id = $2`, wi, tests[0].ID).Scan(&status, &resolvedBy)
+	if err := w.owner.QueryRow(context.Background(), `SELECT status::text, COALESCE(resolved_by_run_id, '') FROM review_findings
+		WHERE task_id = $1 AND run_id = $2`, wi, tests[0].ID).Scan(&status, &resolvedBy); err != nil {
+		t.Fatal(err)
+	}
 	if status != "resolved" || resolvedBy != tests[1].ID {
 		t.Errorf("the tester's finding is %s by %q, want resolved by the re-test %s", status, resolvedBy, tests[1].ID)
 	}
@@ -266,8 +268,8 @@ func TestAnUnresumableReviewerIsReplacedByAFreshRunGivenItsConversation(t *testi
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 
 	reviews := w.reviewRows(wi)
-	if len(reviews) < 3 {
-		t.Fatalf("%d review Runs, want the first, its continuation and the fresh one in its slot", len(reviews))
+	if len(reviews) != 4 {
+		t.Fatalf("%d review Runs, want the first, its continuation, the fresh one in its slot and the simplifier's range review", len(reviews))
 	}
 	first, cont, fresh := reviews[0], reviews[1], reviews[2]
 	if cont.Continues != first.ID || cont.How != delivery.ContinuesResume {
@@ -321,8 +323,8 @@ func TestABlankSessionOnResumeIsReplacedByAFreshRun(t *testing.T) {
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 
 	reviews := w.reviewRows(wi)
-	if len(reviews) < 3 {
-		t.Fatalf("%d review Runs, want the first, its continuation and the fresh one in its slot", len(reviews))
+	if len(reviews) != 4 {
+		t.Fatalf("%d review Runs, want the first, its continuation, the fresh one in its slot and the simplifier's range review", len(reviews))
 	}
 	first, cont, fresh := reviews[0], reviews[1], reviews[2]
 	if cont.How != delivery.ContinuesResume || fresh.Continues != first.ID || fresh.How != delivery.ContinuesReplay {
@@ -357,8 +359,8 @@ func TestALargeChangeGetsAFreshReviewerOfTheWholeBranch(t *testing.T) {
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 
 	reviews := w.reviewRows(wi)
-	if len(reviews) < 2 {
-		t.Fatalf("%d review Runs", len(reviews))
+	if len(reviews) != 3 {
+		t.Fatalf("%d review Runs, want the first, the fresh re-review and the simplifier's range review", len(reviews))
 	}
 	first, second := reviews[0], reviews[1]
 	if second.Continues != "" {
@@ -393,21 +395,29 @@ func TestALargeChangeGetsAFreshReviewerOfTheWholeBranch(t *testing.T) {
 // cost is counted once across the two rows.
 func TestASecondReviewRoundResumesTheFirstReviewer(t *testing.T) {
 	w := resuming(t)
+	w.lux.GrowingCost = true
 	wi := w.task()
 	w.names(wi, w.repoID)
 	w.start(wi, resumingPolicy())
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 
 	reviews := w.reviewRows(wi)
-	if len(reviews) < 2 {
-		t.Fatalf("%d review Runs, want the first round and its re-review", len(reviews))
+	if len(reviews) != 3 {
+		t.Fatalf("%d review Runs, want the first round, its re-review and the simplifier's range review", len(reviews))
 	}
 	first, second := reviews[0], reviews[1]
 	if second.Continues != first.ID || second.How != delivery.ContinuesResume {
 		t.Fatalf("the re-review %s continues %q (%s), want %s resumed", second.ID, second.Continues, second.How, first.ID)
 	}
-	if first.LuxRun == "" || second.LuxRun != "" && second.LuxRun != first.LuxRun {
-		t.Fatalf("lux Runs: first %q, re-review %q", first.LuxRun, second.LuxRun)
+	if third := reviews[2]; third.Continues != second.ID || third.How != delivery.ContinuesResume {
+		t.Fatalf("the simplifier's range review %s continues %q (%s), want %s resumed", third.ID, third.Continues, third.How, second.ID)
+	}
+	// The lux Run moves along the chain: only its last row holds it.
+	if first.LuxRun == "" || second.LuxRun != "" || reviews[2].LuxRun != first.LuxRun {
+		t.Fatalf("lux Runs: %q, %q, %q; want the first round's on the last row only", first.LuxRun, second.LuxRun, reviews[2].LuxRun)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND lux_run_id IS NULL`, []string{first.ID, second.ID}); n != 2 {
+		t.Fatalf("%d of the first two rounds gave up the lux Run, want both", n)
 	}
 	// Every round went on in the one lux Run: no second reviewer was
 	// submitted.
@@ -449,10 +459,20 @@ func TestASecondReviewRoundResumesTheFirstReviewer(t *testing.T) {
 		wi, first.ID); n != 1 {
 		t.Fatalf("the first round's finding is not resolved on its own id with one attempt")
 	}
-	// The agent's running cost is its lux Run's: split across the rows,
-	// never counted twice.
-	if n := w.count(`SELECT count(*) FROM (SELECT sum(agent_cost_usd) AS s FROM runs WHERE task_id = $1 AND phase = 'review') x
-		WHERE s = 0.01`, wi); n != 1 {
-		t.Fatal("the reviewers' agent cost is not the one lux Run's 0.01")
+	// The agent's running cost is its lux Run's cumulative total (0.01 per
+	// turn): each row holds only its own turn's share, never the total.
+	rows, err := w.owner.Query(context.Background(), `SELECT agent_cost_usd::float8 FROM runs
+		WHERE task_id = $1 AND phase = 'review' ORDER BY created_at, id`, wi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	costs, err := pgx.CollectRows(rows, pgx.RowTo[float64])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range costs {
+		if c < 0.0099 || c > 0.0101 {
+			t.Errorf("review %d's agent cost = %v, want its own turn's 0.01 (all: %v)", i+1, c, costs)
+		}
 	}
 }

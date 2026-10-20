@@ -57,7 +57,7 @@ func TestAFreshRoundWithNothingToReplayReviewsTheWholeBranch(t *testing.T) {
 	if got := w.str(t, `SELECT COALESCE(continues_run_id, '') || '|' || COALESCE(review_range::text, '') FROM runs WHERE id = $1`, id); got != "|" {
 		t.Fatalf("continues|range = %q, want neither", got)
 	}
-	if got := w.str(t, `SELECT payload->>'fresh' FROM events WHERE run_id = $1 AND event_type = 'run.created'`, id); got != "nothing_to_replay" {
+	if got := w.str(t, `SELECT COALESCE((SELECT payload->>'fresh' FROM events WHERE run_id = $1 AND event_type = 'run.created'), '')`, id); got != "nothing_to_replay" {
 		t.Errorf("run.created fresh = %q", got)
 	}
 }

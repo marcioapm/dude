@@ -789,6 +789,10 @@ type Server struct {
 	// $LUX_ARTIFACTS is collected when the container exits, and listed with
 	// no version or description.
 	LegacyArtifacts bool
+	// GrowingCost has each scripted turn report the Run's cumulative cost
+	// as 0.01 per turn ended so far, as a harness's running total does.
+	// Off: every turn reports a cumulative 0.01.
+	GrowingCost bool
 	// The stand-in lux-shim commands in a checkout run (publish.go).
 	shimOnce sync.Once
 	shimPath string
@@ -1902,7 +1906,11 @@ func (s *Server) turn(run *Run) {
 	if !asking {
 		s.save(run, b.Publish, b.Descriptions)
 	}
-	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01, "currency": "USD"}, "used": 1000, "size": 200000})
+	cost := 0.01
+	if s.GrowingCost {
+		cost = 0.01 * float64(run.turnsEnded+1)
+	}
+	s.agent(run, map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": cost, "currency": "USD"}, "used": 1000, "size": 200000})
 	// The prompt's response, as the ACP adapter relays it: with the turn's
 	// token usage.
 	s.turnEnd(run, map[string]any{"stopReason": "end_turn", "usage": map[string]any{
