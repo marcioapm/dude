@@ -38,7 +38,13 @@ func childFinalReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, er
 // marker saying how much was left out. The tail is kept because a writer's
 // checks block ends its reply.
 func childReplyExcerpt(reply string) string {
-	r := []rune(fenced(reply))
+	// One fenced pass leaves "```" inside a longer backtick run ("````" →
+	// "`\u200b```"), and a cut there would open the tail with a fence that
+	// closes the quote. With no "```" left, no cut can make one.
+	for strings.Contains(reply, "```") {
+		reply = fenced(reply)
+	}
+	r := []rune(reply)
 	if len(r) <= ChildReplyLimit {
 		return string(r)
 	}
