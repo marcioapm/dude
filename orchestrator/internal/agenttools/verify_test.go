@@ -2,6 +2,8 @@ package agenttools_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -40,12 +42,16 @@ func TestVerifyStartsAChildThatCannotPublish(t *testing.T) {
 	if status, _ := f.post(t, implementer, "verify", `{}`); status != 404 {
 		t.Fatalf("an implementer's verify: %d", status)
 	}
-	child := f.run(t, "run_verify_child", "investigator", "running")
-	mustExec(t, f.owner, `UPDATE runs SET phase='investigate',source_kind='task_conductor',parent_run_id='run_verify_parent',child_profile='investigator',
+	// A verifier whose role does hold verify, start_agent and publish (a
+	// conductor's): it is refused them because it is a child, not for want
+	// of a grant. (One live conductor a task: the parent's Run has ended.)
+	mustExec(t, f.owner, `UPDATE runs SET status='completed' WHERE id='run_verify_parent'`)
+	child := f.run(t, "run_verify_child", "conductor", "running")
+	mustExec(t, f.owner, `UPDATE runs SET phase=NULL,source_kind='task_conductor',parent_run_id='run_verify_parent',child_profile='investigator',
 		child_capabilities='{"publishCode":false,"verify":{"repo":"api","commit":"`+head+`"}}' WHERE id='run_verify_child'`)
 	for _, name := range []string{"verify", "start_agent", "publish"} {
-		if status, out := f.post(t, child, name, `{}`); status != 422 && status != 404 {
-			t.Fatalf("a verifier's %s: %d %v", name, status, out)
+		if status, out := f.post(t, child, name, `{}`); status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "cannot mutate workflow or start Runs") {
+			t.Errorf("a verifier's %s: %d %v", name, status, out)
 		}
 	}
 }

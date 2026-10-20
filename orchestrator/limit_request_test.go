@@ -238,8 +238,8 @@ func TestTheOwnerAllowsOneMoreRerunOnAHead(t *testing.T) {
 
 	q, _ := w.must(task, "request_limit", `{"limit":"rerun","pr":"1","reason":"The runner ran out of disk; nothing in the change."}`)["questionId"].(string)
 	labels, _ := w.questionOf(q)
-	if len(labels) != 2 || !strings.HasPrefix(labels[0], "Allow one more rerun on target#1 at ") {
-		t.Fatalf("rerun choices %q", labels)
+	if want := "Allow one more rerun on target#1 at " + w.gh.SHA(w.gh.Pull(1).Head)[:7]; len(labels) != 2 || labels[0] != want || labels[1] != "No" {
+		t.Fatalf("rerun choices %q, want %q and No", labels, want)
 	}
 	if status, body := w.pick(ana, q, 0); status != 200 {
 		t.Fatalf("the owner's approval: %d %v", status, body)

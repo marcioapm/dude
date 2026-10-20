@@ -389,7 +389,7 @@ func TestVerifyIsBounded(t *testing.T) {
 	for i := range 10 {
 		w.must(task, "verify", fmt.Sprintf(`{"commit":%q,"commands":["true"],"key":"v%d"}`, main, i))
 	}
-	w.refused(task, "verify", fmt.Sprintf(`{"commit":%q,"commands":["true"],"key":"v10"}`, main), "verify")
+	w.refused(task, "verify", fmt.Sprintf(`{"commit":%q,"commands":["true"],"key":"v10"}`, main), "verify is limited to 10 calls in a run; this run has used them")
 	if v := obj(field(w.limitsOf(task), "verifiesThisRun")); num(v["limit"]) != 10 || num(v["used"]) != 10 || num(v["remaining"]) != 0 {
 		t.Fatalf("limits' verifications: %v", v)
 	}
