@@ -149,6 +149,29 @@ func TestACommandWithInnerWhitespaceIsMatchedToItsResult(t *testing.T) {
 	}
 }
 
+// The verifier runs the command exactly as the conductor asked it: a
+// quoted literal keeps its inner spaces, though its result is matched on
+// one line. Collapsed, this check would fail.
+func TestAQuotedLiteralIsRunAsAsked(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	asked := `[ "$(printf 'a  b')" != "a b" ]`
+	body, _ := json.Marshal(map[string]any{"commands": []string{asked}})
+	out := w.must(task, "verify", string(body))
+	text := w.verifyResult(out["runId"].(string))
+	if !strings.Contains(text, " passed: 1 of 1 commands exited 0.") {
+		t.Fatalf("the result:\n%s", text)
+	}
+	if !strings.Contains(text, `"asked":`+jsonString(asked)) {
+		t.Fatalf("the asked command is not the conductor's exact text:\n%s", text)
+	}
+}
+
+func jsonString(s string) string { b, _ := json.Marshal(s); return string(b) }
+
 // verifierReporting has the scripted verifier report only the first n
 // of the commands its brief asks for.
 func (w *world) verifierReporting(n int) {

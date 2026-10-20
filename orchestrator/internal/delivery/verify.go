@@ -89,7 +89,7 @@ func VerifyStart(ctx context.Context, tx pgx.Tx, ref RunRef, in VerifyAsk, key s
 		return StartChildInput{}, refusef(rVerifyTooManyPaths, VerifyPathsMax)
 	}
 	for i, c := range commands {
-		commands[i] = oneLine(c)
+		commands[i] = strings.TrimSpace(c)
 		if utf8.RuneCountInString(c) > VerifyCommandMax || strings.ContainsAny(c, "\n\r") {
 			return StartChildInput{}, refusef(rVerifyCommandTooLong, i+1, VerifyCommandMax)
 		}
@@ -178,7 +178,7 @@ func tail(s string, n int) string {
 
 // verifyReportTx is a settling verifier's report on target: passed only
 // when it completed, reported a result for every command it was asked to
-// run (matched by their trimmed text), and every result exited 0.
+// run (matched to its asked command on one line, as ParseVerify reads it), and every result exited 0.
 func verifyReportTx(ctx context.Context, tx pgx.Tx, childID, status string, target VerifyTarget) (VerifyReport, error) {
 	rep := VerifyReport{Repo: target.Repo, Commit: target.Commit, Status: VerifyFailed, Results: []VerifyResult{}, Asked: target.Commands}
 	reply, err := RunReplyTx(ctx, tx, childID)
