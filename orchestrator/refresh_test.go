@@ -151,8 +151,8 @@ func TestARefreshSpendsAReadPerPullRequest(t *testing.T) {
 }
 
 // The refresh reads GitHub with no transaction open: while GitHub holds its
-// answer, the task's GitHub-reads lock its check took is free, and the
-// conductor's other tools answer.
+// answer, no backend is idle in a transaction, the task's GitHub-reads lock
+// is free, and the conductor's other tools answer.
 func TestARefreshHoldsNoTransactionWhileGitHubAnswers(t *testing.T) {
 	w, task := refreshWorld(t)
 	held, release := make(chan struct{}), make(chan struct{})
@@ -175,8 +175,40 @@ func TestARefreshHoldsNoTransactionWhileGitHubAnswers(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the refresh never asked GitHub")
 	}
-	// The check's transaction holds the task's GitHub-reads lock until it
-	// ends: free now, it has.
+	// No backend of this database sits in a transaction while GitHub holds
+	// the answer: one seen idle in the same transaction across samples a
+	// tenth of a second apart is one held open over the request.
+	inTx := func() map[string]bool {
+		rows, err := w.owner.Query(context.Background(), `SELECT pid || '@' || xact_start || ': ' || left(query, 200) FROM pg_stat_activity
+			WHERE datname = current_database() AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		open := map[string]bool{}
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				t.Fatal(err)
+			}
+			open[s] = true
+		}
+		return open
+	}
+	idle := inTx()
+	for range 3 {
+		time.Sleep(100 * time.Millisecond)
+		now := inTx()
+		for s := range idle {
+			if !now[s] {
+				delete(idle, s)
+			}
+		}
+	}
+	for s := range idle {
+		t.Errorf("a transaction is held while GitHub answers: %s", s)
+	}
+	// The budget: the check's GitHub-reads lock is free, so another read
+	// of the task's is not held behind the refresh.
 	tx := w.begin()
 	var free bool
 	if err := tx.QueryRow(context.Background(), `SELECT pg_try_advisory_xact_lock(hashtext('github_reads:' || $1))`, "task:"+task).Scan(&free); err != nil {
