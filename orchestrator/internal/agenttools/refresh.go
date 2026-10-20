@@ -53,6 +53,9 @@ func checkRefresh(ctx context.Context, tx pgx.Tx, c, scoped Caller) (refreshChec
 	if err != nil {
 		return refreshCheck{}, err
 	}
+	if len(open) == 0 {
+		return refreshCheck{}, refuseText(rNoOpenPullRequestRefresh)
+	}
 	// Sync reads nothing of a repository not on GitHub: not one to charge.
 	var ids []string
 	for _, p := range open {
@@ -61,7 +64,7 @@ func checkRefresh(ctx context.Context, tx pgx.Tx, c, scoped Caller) (refreshChec
 		}
 	}
 	if len(ids) == 0 {
-		return refreshCheck{}, refuseText(rNoOpenPullRequestRefresh)
+		return refreshCheck{}, refuseText(rNoOpenPullRequestOnGithub)
 	}
 	// One read per pull request synced (a sync makes several requests, which
 	// Sync does not report): the whole batch fits, or nothing is synced.

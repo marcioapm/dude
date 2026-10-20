@@ -77,6 +77,41 @@ func TestARefreshChargesGitHubPullRequestsAndCountsARacedSyncAsRefreshed(t *test
 	}
 }
 
+// A task with no open pull request, and one whose open pull requests are
+// all on repositories not on GitHub, are refused in their own words; GitHub
+// is not asked and no read is charged.
+func TestARefreshWithNothingOnGitHubIsRefused(t *testing.T) {
+	var synced []string
+	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: t.Name(), APIBaseURL: "http://127.0.0.1:1"})
+	f := setupWith(t, &agenttools.Server{Forges: forgesOf{gh}, SyncPullRequest: func(_ context.Context, _, id string) error {
+		synced = append(synced, id)
+		return nil
+	}})
+	token := f.conductor(t)
+	refused := func(want string) {
+		t.Helper()
+		var out map[string]any
+		if status := f.postAs(t, token, "refresh_pull_requests", `{}`, &out); status != 422 || out["error"] != want {
+			t.Errorf("refresh: %d %v, want %q", status, out, want)
+		}
+	}
+	refused("the task has no open pull request to refresh: pull_requests lists the ones it had")
+	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url)
+		VALUES ('repo_local', $1, $2, 'local', '/srv/git/local.git')`, f.org, f.project)
+	mustExec(t, f.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
+			base_branch, head_sha, title) VALUES ('pr_local', $1, $2, $3, 'repo_local', 1, 'https://x/l1', 'b', 'main', 'abc', 'L')`,
+		f.org, f.project, f.item)
+	refused("none of the task's open pull requests is on GitHub: pull_requests lists them as dude has them")
+	if len(synced) != 0 {
+		t.Errorf("synced %v", synced)
+	}
+	var reads int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.tool.attempted'`,
+		f.item).Scan(&reads); err != nil || reads != 0 {
+		t.Errorf("%d GitHub reads charged (%v), want 0", reads, err)
+	}
+}
+
 // A delivery holds the policy it started with: a person changing the
 // policy after shows as policyNow, with the layer it is set in now, while
 // the limit stays the frozen one and carries no layer of its own.

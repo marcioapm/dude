@@ -123,6 +123,7 @@ const (
 	rNotRunYourTaskYouRead                 = "%s is not a Run of your task: you read only your task's Runs, its children and earlier attempts included"
 	rNotRunThisSessionStarted              = "%s is not a Run this session started: you read only the Runs your session started"
 	rNoOpenPullRequestRefresh              = "the task has no open pull request to refresh: pull_requests lists the ones it had"
+	rNoOpenPullRequestOnGithub             = "none of the task's open pull requests is on GitHub: pull_requests lists them as dude has them"
 	rNameTaskWhosePullRequestsRefresh      = "name the task whose pull requests to refresh, by its key"
 	rRefreshingTakesGithubReads            = "a refresh takes one GitHub read for each open pull request, %d here, and %d of the hour's %d are left: wait, or work with what pull_requests last read"
 )
