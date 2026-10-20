@@ -254,6 +254,44 @@ func TestASessionsNextAgentOnAnotherWebIsToldWhatChanged(t *testing.T) {
 	}
 }
 
+// An agent whose submit lux refused never ran on its web: the session's
+// next agent compares its web with the last one that reached lux. A ran on
+// any host; B, restricted, was refused (its pool gone); C, restricted, is
+// told its web is not A's.
+func TestAnAgentThatNeverReachedLuxIsNotTheWebBefore(t *testing.T) {
+	s := newSessionWorld(t)
+	s.lux.Decide = hang
+	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = true WHERE id = $1`, s.org)
+	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "what do competitors charge?"})["id"].(string)
+	first, _, _, _ := s.submitted(id)
+
+	mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = false WHERE id = $1`, s.org)
+	mustExec(t, s.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
+		VALUES ('msz_large', $1, 'Large', 8, 16384, 80, $2)`, s.org, bigPool)
+	mustExec(t, s.owner, `UPDATE organizations SET default_agent_models = jsonb_set(default_agent_models, '{brainstorm}',
+		COALESCE(default_agent_models->'brainstorm', '{}'::jsonb) || '{"machineSize":"msz_large"}'::jsonb) WHERE id = $1`, s.org)
+	s.lux.Pools = slices.DeleteFunc(fakelux.DefaultPools(), func(p lux.Pool) bool { return p.ID == bigPool })
+	s.endRun(first)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "and their free tiers?"})
+	var second string
+	s.until("the second agent refused by lux", func() bool {
+		second, _ = s.brainstorm(id)
+		return second != first && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND web IS NOT NULL
+			AND lux_run_id IS NULL`, second) == 1
+	})
+
+	s.lux.Pools = fakelux.DefaultPools()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/retry", nil)
+	s.until("a third agent", func() bool { r, _ := s.brainstorm(id); return r != second && r != first })
+	third, _, _, _ := s.submitted(id)
+	want := "Your web access is not what this session's agent before you had. " +
+		"It had web search, fetching from any host; you have web search, fetching from pypi.org only."
+	if p := s.luxRun(third).spec.Workload.Prompt; !strings.Contains(p, want) {
+		t.Errorf("the third agent's first message does not say %q:\n%s", want, p)
+	}
+}
+
 // "*" in the organisation's or the operator's list makes a brainstorm
 // unrestricted with the setting off, and that counts as reaching any host
 // from its first prompt: it is told it can search the web (Codex fetches

@@ -256,9 +256,12 @@ func (s *Syncer) sessionWebChanged(ctx context.Context, tx pgx.Tx, r phaseRun, w
 	if _, err := tx.Exec(ctx, `UPDATE runs SET web = $2::jsonb WHERE id = $1`, r.ID, raw); err != nil {
 		return "", fmt.Errorf("record the brainstorm's web: %w", err)
 	}
+	// The agent before is the newest that reached lux: one whose submit was
+	// refused never ran on the web it recorded.
 	var before delivery.Web
 	err = tx.QueryRow(ctx, `SELECT p.web FROM runs p JOIN runs r ON r.id = $2
-		WHERE p.session_id = $1 AND p.id <> r.id AND p.role = 'brainstorm' AND p.web IS NOT NULL AND p.created_at <= r.created_at
+		WHERE p.session_id = $1 AND p.id <> r.id AND p.role = 'brainstorm' AND p.web IS NOT NULL AND p.lux_run_id IS NOT NULL
+		  AND p.created_at <= r.created_at
 		ORDER BY p.created_at DESC, p.id DESC LIMIT 1`, r.SessionID, r.ID).Scan(&before)
 	if db.IsNotFound(err) {
 		return "", nil
