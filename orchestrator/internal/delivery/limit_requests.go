@@ -124,7 +124,7 @@ func RequestLimitTx(ctx context.Context, tx pgx.Tx, ref RunRef, in LimitAsk) (st
 	case LimitRoundFixes, LimitPullRequestFixes:
 		req.From = st.RoundFixLimit()
 		if in.Limit == LimitPullRequestFixes {
-			settings, _, err := GitHubSettingsTx(ctx, tx)
+			settings, err := GitHubSettingsTx(ctx, tx)
 			if err != nil {
 				return "", err
 			}
