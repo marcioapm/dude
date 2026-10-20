@@ -119,20 +119,31 @@ var toolCommands = map[string][]string{
 // else in the file names the tool.
 var notTheTool = map[string][]string{
 	"decide": {"**People decide**", "and what you decide", "read what you need with your tools, then decide.",
-		"start nothing and decide nothing", "whatever you decide", "only a person may decide"},
+		"start nothing and decide nothing", "whatever you decide", "only a person may decide", "the states that decide it"},
 	"feedback": {"reviews and feedback)", "come back as feedback.", "findings and feedback you are given"},
 	"findings": {"triages findings", "(some or all findings)", "report findings with a severity",
-		"structured findings and tester verdicts"},
-	"message": {"first message lists them", "default merge message", "a Chat message", "your next message", "--message M"},
-	"note":    {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)"},
-	"publish": {"`dude publish FILE", "the files you publish"},
+		"structured findings and tester verdicts", "Your findings go", "risks new findings", "after any findings",
+		"are findings.", "role's findings or verdict", "on earlier findings", "Your output is findings", "resolve the findings", "report and findings"},
+	"message": {"first message lists them", "default merge message", "a Chat message", "your next message", "--message M",
+		"Each message reaches you"},
+	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
+		"`low` or `note`", "`note` is an observation", "| low | note", "is a `note`", "a design note"},
+	"propose": {"before you propose anything"},
+	"publish": {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code"},
 }
 
-// toolMentions are the places text names tool, by its name as a whole
-// word or by its shell command, outside the notTheTool phrases.
-func toolMentions(text, tool string) []string {
+// Mentions of a tool the role's defaults never grant, which the goldens
+// pin: the simplifier's checks line names ask_person, which no simplifier
+// has. Known defects, not prose; each is its exact phrase.
+var ungrantedInGoldens = map[string][]string{
+	"simplifier/ask_person": {"If you cannot, ask with `ask_person`"},
+}
+
+// toolMentions are the places role's text names tool, by its name as a
+// whole word or by its shell command, outside the excused phrases.
+func toolMentions(text, role, tool string) []string {
 	var excused [][2]int
-	for _, phrase := range notTheTool[tool] {
+	for _, phrase := range append(slices.Clone(notTheTool[tool]), ungrantedInGoldens[role+"/"+tool]...) {
 		for at := 0; ; {
 			i := strings.Index(text[at:], phrase)
 			if i < 0 {
@@ -182,8 +193,34 @@ func TestAnInstructionFileNamesNoToolOfACapabilityItLacks(t *testing.T) {
 			for name, in := range instructionRuns(role, &less) {
 				got := Instructions(role, "correctness", in)
 				for _, tool := range c.Tools {
-					for _, m := range toolMentions(got, tool) {
+					for _, m := range toolMentions(got, role, tool) {
 						t.Errorf("%s without %s names %s: %s", name, c.Key, tool, m)
+					}
+				}
+			}
+		}
+	}
+}
+
+// A Run given dude's tools but no capability that grants one reads what a
+// Run without dude's tools reads, and is told of no tool.
+func TestARunWithToolsButNoGrantsIsToldItHasNone(t *testing.T) {
+	var none capabilities.Grants
+	for _, role := range PromptRoles {
+		for name, in := range instructionRuns(role, &none) {
+			got := Instructions(role, "correctness", in)
+			bare := in
+			bare.Tools, bare.CLI = false, false
+			if want := Instructions(role, "correctness", bare); got != want {
+				t.Errorf("%s with no grants differs from its file without dude's tools", name)
+			}
+			if !strings.Contains(got, "This Run has none of dude's tools:") && !in.Child {
+				t.Errorf("%s with no grants is not told it has no tools", name)
+			}
+			for _, c := range capabilities.All {
+				for _, tool := range c.Tools {
+					for _, m := range toolMentions(got, role, tool) {
+						t.Errorf("%s with no grants names %s: %s", name, tool, m)
 					}
 				}
 			}

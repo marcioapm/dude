@@ -136,6 +136,10 @@ func (in InstructionsInput) data(role string) instructionData {
 		g := capabilities.Default(toolRole)
 		grants = &g
 	}
+	// dude's tools with none of them granted are none: the file says so.
+	if !slices.ContainsFunc(capabilities.All, func(c capabilities.Capability) bool { return len(c.Tools) > 0 && grants.Has(c.Key) }) {
+		in.Tools, in.CLI = false, false
+	}
 	has := map[string]bool{}
 	if in.Tools {
 		for _, t := range InstructionTools {
