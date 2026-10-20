@@ -7,16 +7,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ChildReplyLimit bounds, in characters, the child's final reply quoted in
-// its parent's result directive, the elision marker included.
+// ChildReplyLimit includes the elision marker.
 const ChildReplyLimit = 16000
 
 var childReplyElidedTmpl = mustTemplate("contracts/child-reply-elided")
 
-// childFinalReplyTx is the child's final reply: its agent.message events
-// after its last tool call, joined. A child's output is drained and closed
-// before it is settled (phases.Artifacts.collect), so every message the
-// translator buffered is an event by now.
+// childFinalReplyTx returns agent messages after the last tool call.
 func childFinalReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT payload->>'text' FROM events
 		WHERE run_id = $1 AND event_type = 'agent.message' AND payload->>'text' IS NOT NULL
@@ -33,10 +29,7 @@ func childFinalReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, er
 	return strings.TrimSpace(strings.Join(texts, "\n")), nil
 }
 
-// childReplyExcerpt is reply, its fences broken (fenced), within
-// ChildReplyLimit: whole when it fits, else its head and its tail around a
-// marker saying how much was left out. The tail is kept because a writer's
-// checks block ends its reply.
+// childReplyExcerpt bounds a reply while preserving its head and tail.
 func childReplyExcerpt(reply string) string {
 	// One fenced pass leaves "```" inside a longer backtick run ("````" →
 	// "`\u200b```"), and a cut there would open the tail with a fence that
