@@ -40,6 +40,11 @@ const actionLabel = (action: EscalationAction, reason: string) => {
   return ACTION_LABEL[action];
 };
 
+/** An action as the verb a reason is asked for: "waive", not "waive and go on". */
+function reasonVerb(action: EscalationAction, reason: string): string {
+  return actionLabel(action, reason).toLowerCase().replace(/ and go on$/, "");
+}
+
 export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun, onDecided }: {
   client: ApiClient;
   task: TaskDetail & { escalation: NonNullable<TaskDetail["escalation"]> };
@@ -92,9 +97,10 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
 
   const required = reasoning !== null;
   // Before one is picked, the label names the actions the note is required for.
-  const reasoned = actions.filter((a) => needsReason(reason, a)).map((a) => actionLabel(a, reason).toLowerCase().replace(/ and go on$/, ""));
-  let noteLabel = reasoned.length ? `A note for the agents (required to ${reasoned.join(" or ")})` : "A note for the agents (optional)";
-  if (required) noteLabel = `Why may it ${actionLabel(reasoning, reason).toLowerCase().replace(/ and go on$/, "")}? (required)`;
+  const reasoned = actions.filter((a) => needsReason(reason, a)).map((a) => reasonVerb(a, reason));
+  let noteLabel = "A note for the agents (optional)";
+  if (required) noteLabel = `Why may it ${reasonVerb(reasoning, reason)}? (required)`;
+  else if (reasoned.length) noteLabel = `A note for the agents (required to ${reasoned.join(" or ")})`;
   return (
     <Callout tone="attention" data-testid="escalation" data-reason={reason}>
       <div className="escalation">
