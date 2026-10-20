@@ -159,8 +159,9 @@ export interface PromptTurn {
 
 /**
  * Words dude put in front of the agent's input that no one typed: what a
- * machine move's resume told it (`run.told`), or a session's line to its
- * agent (`session.told`). Shown as dude's, tagged Told.
+ * machine move's resume told it (`run.told`), a session's line to its
+ * agent (`session.told`), or the checks gate's send-back of an unbacked
+ * report (`run.checks.judged`). Shown as dude's, tagged Told.
  */
 export interface ToldTurn {
   kind: "told";
@@ -741,6 +742,15 @@ export interface Projection {
   heldUnpark: NoticeTurn | null;
   /** What a move's resume told the agent (`run.told`): shown just after the move's notice once the agent is up. */
   heldTold: ToldTurn | null;
+  /** The checks send-back an escalation held for a person: told once they send it back again (retry). */
+  heldChecks: string | null;
+  /** The checks send-back queued for the agent and not delivered yet, by its directive. */
+  checksSend: { directiveId: string; text: string } | null;
+  /**
+   * Receipts no send-back or steer claimed yet, by directive, oldest first: a judgement read after its own receipt is
+   * told at once. At most EARLY_RECEIPTS_MAX, cleared by any judgement and at a Run boundary.
+   */
+  earlyReceipts: Map<string, string>;
   /**
    * A move's notice waiting for its resume's timing, by the epoch it resumed
    * into (`run.told`'s, else `run.resized`'s `machine.sinceEpoch`): the
@@ -821,6 +831,9 @@ export function emptyProjection(briefedBefore?: string): Projection {
     standaloneTimings: new Map(),
     heldUnpark: null,
     heldTold: null,
+    heldChecks: null,
+    checksSend: null,
+    earlyReceipts: new Map(),
     untimedMoves: new Map(),
     lastMove: null,
     refusedMove: false,
@@ -891,6 +904,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.startWoken = false;
         state.heldUnpark = null;
         state.heldTold = null;
+        // The last Run's receipts name directives this one never receives.
+        state.earlyReceipts.clear();
         // A move of the last Run never timed: this Run's epochs are its own, from 1 again.
         state.untimedMoves.clear();
         state.lastMove = null;
@@ -1264,6 +1279,29 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case EventTypes.RunChecksJudged: {
+        // An unbacked report goes back to the agent as these words, told once their directive is delivered;
+        // an escalated one waits for a person. Any later judgement supersedes a send-back not delivered yet,
+        // and with it every receipt held for an earlier one.
+        state.checksSend = null;
+        const text = payload.verified === false && typeof payload.message === "string" ? payload.message : "";
+        if (text.trim()) {
+          if (payload.escalated === true) state.heldChecks = text;
+          else if (typeof payload.directiveId === "string") sendChecks(state, event, payload.directiveId, text);
+        }
+        state.earlyReceipts.clear();
+        break;
+      }
+
+      case EventTypes.RunChecksDecided: {
+        // Retry sends the held report back with the same words, as a directive of its own; waive and stop send nothing.
+        if (payload.action === "retry" && state.heldChecks && typeof payload.directiveId === "string") {
+          sendChecks(state, event, payload.directiveId, state.heldChecks);
+        }
+        state.heldChecks = null;
+        break;
+      }
+
       case EventTypes.ChatMessage: {
         // A message to a task's conductor: the first is in its briefing;
         // each later one is delivered as a steer is (a directive). One from
@@ -1305,7 +1343,16 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.DirectiveDelivered: {
+        // A checks send-back is told where the agent received it. A failure leaves it waiting: a receipt after it
+        // still delivers it, as for a steer.
+        const send = state.checksSend;
+        if (send && send.directiveId === payload.directiveId) {
+          turns.push({ kind: "told", id: event.eventId, text: send.text, at: event.occurredAt });
+          state.checksSend = null;
+          break;
+        }
         const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
+        if (!steer && typeof payload.directiveId === "string") holdReceipt(state, payload.directiveId, event.occurredAt);
         // Once: a re-sent steer (interrupt now) is the same turn under two ids.
         if (!steer || steer.deliveredAt !== null) break;
         steer.deliveredAt = event.occurredAt;
@@ -2177,6 +2224,36 @@ function moveToEnd(state: Projection, turn: Turn): void {
   turns.splice(from, 1);
   turns.push(turn);
   if (state.progressIndex !== null && state.progressIndex > from) state.progressIndex -= 1;
+}
+
+/**
+ * Queue a checks send-back for its directive, or tell it now (at its receipt's time) if that receipt was folded
+ * first. Each receipt tells at most one send-back.
+ */
+function sendChecks(state: Projection, event: PersistedEvent, directiveId: string, text: string): void {
+  const at = state.earlyReceipts.get(directiveId);
+  if (at === undefined) {
+    state.checksSend = { directiveId, text };
+    return;
+  }
+  state.earlyReceipts.delete(directiveId);
+  state.turns.push({ kind: "told", id: event.eventId, text, at });
+}
+
+/**
+ * The most receipts held for a judgement not folded yet. A send-back's own receipt is at most a few events ahead of
+ * it; any other is a steer's or a directive nothing in this projection claims.
+ */
+export const EARLY_RECEIPTS_MAX = 32;
+
+/** Hold a receipt no send-back or steer claims yet, the oldest evicted past EARLY_RECEIPTS_MAX; the first time kept. */
+function holdReceipt(state: Projection, directiveId: string, at: string): void {
+  if (state.earlyReceipts.has(directiveId)) return;
+  state.earlyReceipts.set(directiveId, at);
+  if (state.earlyReceipts.size > EARLY_RECEIPTS_MAX) {
+    const oldest = state.earlyReceipts.keys().next().value;
+    if (oldest !== undefined) state.earlyReceipts.delete(oldest);
+  }
 }
 
 /** The images an event carries (AttachmentInfo, as the orchestrator wrote them); anything malformed is left out. */

@@ -6,16 +6,17 @@
  * which fit the reason (escalation.actions); only the task's owner decides,
  * and anyone else sees whom it waits on.
  *
- * Shipping past a test's failed criteria (accept) or a check it could not
- * make (waive) is also an organisation admin's to take, and needs a reason:
- * those two ask for it before they are sent.
+ * Shipping past a test's failed criteria (accept), a check it could not
+ * make or an unbacked checks report (waive) is also an organisation admin's
+ * to take, and needs a reason: those ask for it before they are sent.
  */
 
 import { useState } from "react";
 import { Button, Callout, Textarea } from "@dude/design-system/primitives";
+import { Markdown } from "@dude/design-system/components";
 import { runLabel } from "@dude/domain";
 import type { ApiClient, EscalationAction, Person, TaskDetail } from "../api/client.ts";
-import { escalationWords, needsReason, testCriteria } from "../escalation.ts";
+import { checksMessage, escalationWords, needsReason, testCriteria } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { MonoWords } from "../monoWords.tsx";
 
@@ -35,8 +36,14 @@ const actionLabel = (action: EscalationAction, reason: string) => {
   if (action === "accept" && reason === "test_failed_criteria") return "Accept the failure and go on";
   if (action === "retry" && reason === "test_failed_criteria") return "Fix it once more";
   if (action === "retry" && reason === "test_blocked") return "Test again";
+  if (action === "retry" && reason === "checks_unverified") return "Send it back once more";
   return ACTION_LABEL[action];
 };
+
+/** An action as the verb a reason is asked for: "waive", not "waive and go on". */
+function reasonVerb(action: EscalationAction, reason: string): string {
+  return actionLabel(action, reason).toLowerCase().replace(/ and go on$/, "");
+}
 
 export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun, onDecided }: {
   client: ApiClient;
@@ -54,6 +61,7 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
   const { reason, actions: all } = task.escalation;
   const words = escalationWords(task.escalation);
   const criteria = testCriteria(task.escalation);
+  const sentBack = checksMessage(task.escalation);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<EscalationAction | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -88,6 +96,11 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
   };
 
   const required = reasoning !== null;
+  // Before one is picked, the label names the actions the note is required for.
+  const reasoned = actions.filter((a) => needsReason(reason, a)).map((a) => reasonVerb(a, reason));
+  let noteLabel = "A note for the agents (optional)";
+  if (required) noteLabel = `Why may it ${reasonVerb(reasoning, reason)}? (required)`;
+  else if (reasoned.length) noteLabel = `A note for the agents (required to ${reasoned.join(" or ")})`;
   return (
     <Callout tone="attention" data-testid="escalation" data-reason={reason}>
       <div className="escalation">
@@ -109,6 +122,7 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
             ))}
           </ul>
         ) : null}
+        {sentBack ? <Markdown source={sentBack} unmeasured className="escalationSentBack" data-testid="escalation-checks" /> : null}
         {someoneElse && actions.length === 0 ? (
           <p className="escalationWaiting">Waiting for {owner.name} to decide.</p>
         ) : null}
@@ -118,9 +132,9 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
               <p className="escalationWaiting">Waiting for {owner!.name} to decide; as an admin you may also {actions.map((a) => actionLabel(a, reason).toLowerCase()).join(" or ")}.</p>
             ) : null}
             <Textarea
-              label={required ? `Why may it ${actionLabel(reasoning, reason).toLowerCase().replace(/ and go on$/, "")}? (required)` : "A note for the agents (optional)"}
+              label={noteLabel}
               rows={2} value={note} onChange={(e) => setNote(e.target.value)} required={required}
-              error={required && !note.trim() ? "Say why: it is kept with the test's verdict and on the pull request." : undefined}
+              error={required && !note.trim() ? `Say why: it is kept with the ${reason === "checks_unverified" ? "checks" : "test's"} verdict and on the pull request.` : undefined}
               hint="Kept with the task: every agent from here on is told it." data-testid="escalation-note" />
             <div className="escalationActions">
               {actions.map((action) => (

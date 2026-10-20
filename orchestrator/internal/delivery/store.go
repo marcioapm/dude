@@ -1085,7 +1085,8 @@ func reposToOpen(ctx context.Context, tx pgx.Tx, st *State) (todo, changed []Rep
 // pullRequestText is a task's pull request title and body, rendered
 // from what the ledger recorded.
 func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (string, string, error) {
-	var title, goal, review, verification string
+	var title, goal, review string
+	var verification verificationParts
 	var criteria []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var raw []byte
@@ -1098,10 +1099,10 @@ func (s *Store) pullRequestText(ctx context.Context, org string, st *State) (str
 		if review, err = reviewText(ctx, tx, st); err != nil {
 			return err
 		}
-		verification, _, err = verificationText(ctx, tx, st)
+		verification, _, err = readVerification(ctx, tx, st)
 		return err
 	})
-	return title, prBody(goal, criteria, review, verification), err
+	return title, verification.fit(func(section string) string { return prBody(goal, criteria, review, section) }), err
 }
 
 // reviewText is the pull request's Review section for the attempt's

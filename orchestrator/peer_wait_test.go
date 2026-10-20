@@ -176,7 +176,7 @@ func TestAWaitForReplyCarriesAcrossAMachineMoveAndTheReplyLandsOnce(t *testing.T
 	// The resumed turn on the new size ends with the wait still open.
 	w.until("the move settled and the resumed turn over", func() bool {
 		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id = $1 AND settled_at IS NOT NULL`, runID) == 1 &&
-			slices.Contains(w.said(runID), "Wired the client.")
+			slices.Contains(w.said(runID), "Wired the client.\n\n"+fakeagent.NoChecks)
 	})
 	for range 5 {
 		w.pump()

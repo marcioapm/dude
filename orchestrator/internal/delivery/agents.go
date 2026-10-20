@@ -144,6 +144,8 @@ var agentFuncs = template.FuncMap{
 	// quoteLines continues a Markdown quote over the text's lines.
 	"quoteLines": func(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ") },
 	"fenced":     fenced,
+	// indent indents each line of a text by four spaces.
+	"indent": func(s string) string { return "    " + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n    ") },
 }
 
 // fenced breaks each ``` in a text so it cannot close the fence around it.

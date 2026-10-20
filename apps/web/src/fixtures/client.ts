@@ -602,7 +602,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve(this.#restarted ? restartedMetrics(attempt) : METRICS);
   }
   override githubSettings() {
-    return Promise.resolve({ whoCanWake: "members" as const, openAs: "ready" as const, requestReviewFrom: "codeowners" as const, reviewLogins: [], mergeMethod: "squash" as const, whenBehind: "update" as const, fixRoundsPerPr: 5, ciStuckMinutes: 30 });
+    return Promise.resolve({ whoCanWake: "members" as const, openAs: "ready" as const, requestReviewFrom: "codeowners" as const, reviewLogins: [], mergeMethod: "squash" as const, whenBehind: "update" as const, fixRoundsPerPr: 5, checksFixRounds: 2, ciStuckMinutes: 30 });
   }
   override reviewerCandidates(_id: string | null, q: string): Promise<ReviewerCandidate[]> {
     const words = q.trim().toLowerCase();

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -55,7 +56,7 @@ const (
 // reason, and may be taken by an organization admin as well as the
 // task's owner: shipping past an unmet or unchecked criterion.
 func NeedsReason(reason, action string) bool {
-	return reason == ReasonTestFailedCriteria && action == "accept" || reason == ReasonTestBlocked && action == ActionWaive
+	return reason == ReasonTestFailedCriteria && action == "accept" || (reason == ReasonTestBlocked || reason == ReasonChecksUnverified) && action == ActionWaive
 }
 
 // RunReplyTx is everything a Run's agent said, its messages joined.
@@ -498,7 +499,6 @@ func (s *Store) commentVerdict(ctx context.Context, org string, st *State, forge
 	var prID, repo, repoURL, body string
 	var number int
 	var commentID int64
-	var section, link string
 	var err error
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.number
@@ -510,18 +510,20 @@ func (s *Store) commentVerdict(ctx context.Context, org string, st *State, forge
 			}
 			return err
 		}
-		section, link, err = verificationText(ctx, tx, st)
+		v, link, err := readVerification(ctx, tx, st)
 		if err != nil {
 			return err
 		}
-		if section == "" {
+		if v.empty() {
 			return nil
 		}
-		body = "dude's test verdict for this pull request"
+		intro := "dude's test verdict for this pull request"
 		if link != "" {
-			body += " — " + link
+			intro += " — " + link
 		}
-		body += "\n\n" + section + "\n\n" + forge.VerdictMarker(st.TaskID)
+		body = v.fit(func(section string) string {
+			return intro + "\n\n" + section + "\n\n" + forge.VerdictMarker(st.TaskID)
+		})
 		return tx.QueryRow(ctx, `SELECT COALESCE((SELECT (payload->>'commentId')::bigint FROM events
 			WHERE event_type = $1 AND payload->>'pullRequestId' = $2 AND payload ? 'commentId'
 			AND NOT payload ? 'error' ORDER BY cursor DESC LIMIT 1), 0)`, EvPullRequestVerdictCommented, prID).Scan(&commentID)
@@ -637,7 +639,8 @@ func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges
 		Number        int
 	}
 	var prs []target
-	var verification, reviewed string
+	var verification verificationParts
+	var reviewed string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.number
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
@@ -651,7 +654,7 @@ func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges
 		if err != nil || len(prs) == 0 {
 			return err
 		}
-		if verification, _, err = verificationText(ctx, tx, st); err != nil || !review {
+		if verification, _, err = readVerification(ctx, tx, st); err != nil || !review {
 			return err
 		}
 		reviewed, err = reviewText(ctx, tx, st)
@@ -661,15 +664,17 @@ func (s *Store) refreshBodies(ctx context.Context, org string, st *State, forges
 		slog.Warn("reading pull request verification failed", "task", st.TaskID, "error", err)
 		return
 	}
-	if verification == "" && reviewed == "" {
+	if verification.empty() && reviewed == "" {
 		return
 	}
 	merge := func(body string) string {
 		if reviewed != "" {
 			body = replaceReview(body, reviewed)
 		}
-		if verification != "" {
-			body = replaceVerification(body, verification)
+		if !verification.empty() {
+			// Its checks account fitted to what this body, a person's
+			// edits included, leaves under GitHub's limit.
+			body = verification.into(body)
 		}
 		return body
 	}
@@ -787,16 +792,76 @@ func markedVerification(section string) string {
 
 func markedReview(section string) string { return reviewStart + "\n" + section + "\n" + reviewEnd }
 
-func verificationText(ctx context.Context, tx pgx.Tx, st *State) (string, string, error) {
+// readVerification is the pull request's Verification section before its
+// checks account is fitted (verificationParts.fit), and the task's link.
+func readVerification(ctx context.Context, tx pgx.Tx, st *State) (verificationParts, string, error) {
 	v, err := latestVerification(ctx, tx, st)
 	if err != nil {
-		return "", "", err
+		return verificationParts{}, "", err
 	}
 	link, err := taskLink(ctx, tx, st.TaskID)
 	if err != nil {
-		return "", "", err
+		return verificationParts{}, "", err
 	}
-	return verificationSection(v, st.Heads, link), link, nil
+	runs, err := gatedRuns(ctx, tx, st)
+	if err != nil {
+		return verificationParts{}, "", err
+	}
+	return verificationParts{gate: verificationSection(v, st.Heads, link), runs: runs}, link, nil
+}
+
+// verificationParts is a Verification section before its checks account
+// is fitted: the test gate's section and the gated Runs.
+type verificationParts struct {
+	gate string
+	runs []gatedJudgement
+}
+
+func (v verificationParts) empty() bool { return v.gate == "" && len(v.runs) == 0 }
+
+// text is the section with its checks account in at most room characters.
+func (v verificationParts) text(room int) string {
+	section := v.gate
+	checks := checksAccountText(v.runs, room)
+	if checks != "" {
+		if section == "" {
+			section = "## Verification"
+		}
+		section += "\n\n" + checks
+	}
+	return section
+}
+
+// A pull request body or comment holds at most prBodyMax characters.
+// prBodyMargin is what the checks account may run past its room: the
+// "## Verification" heading it adds without a test, its separator, and a
+// headline left alone with the line saying the rest is omitted.
+const (
+	prBodyMax    = 65_536
+	prBodyMargin = 256
+)
+
+// fit is compose(section) with the checks account given the room the rest
+// leaves under prBodyMax; the test gate's section is never shortened. A
+// CRLF body spends two characters on each of the section's newlines, so an
+// account still over is rendered again in its room less the excess, then
+// headline only.
+func (v verificationParts) fit(compose func(section string) string) string {
+	limit := prBodyMax - prBodyMargin
+	room := limit - utf8.RuneCountInString(compose(v.gate))
+	out := compose(v.text(room))
+	if over := utf8.RuneCountInString(out) - limit; over > 0 {
+		out = compose(v.text(room - over))
+	}
+	if utf8.RuneCountInString(out) > limit {
+		out = compose(v.text(0))
+	}
+	return out
+}
+
+// into puts v between body's verification markers (fit).
+func (v verificationParts) into(body string) string {
+	return v.fit(func(section string) string { return replaceVerification(body, section) })
 }
 
 // replaceVerification puts section between dude's verification markers in

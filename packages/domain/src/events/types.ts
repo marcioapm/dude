@@ -361,6 +361,10 @@ export const EventTypes = {
   RunCreated: "run.created",
   RunStarted: "run.started",
   RunCompleted: "run.completed",
+  /** Checks-gate verdict for a Run turn: `{turn, round, verified, skipped?, waived?, checks, message}`. */
+  RunChecksJudged: "run.checks.judged",
+  /** A person's checks-gate decision: `{action, note}`. */
+  RunChecksDecided: "run.checks.decided",
   /**
    * The Run failed. Payload: `{ status, error, kept?, failedTurns?, stage?,
    * reason? }`. `stage`: a start that failed before the agent ran, the

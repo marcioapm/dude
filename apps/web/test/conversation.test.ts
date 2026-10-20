@@ -1540,3 +1540,88 @@ describe("what happened to a talker's agent", () => {
     expect(turns).toEqual([expect.objectContaining({ kind: "ended", outcome: "failed", text: "Its turn failed: the agent's turn failed: overloaded" })]);
   });
 });
+
+describe("the checks gate's send-back", () => {
+  const sentBack = "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- make check: exit 1 (judgement: no)";
+  const told = (events: PersistedEvent[]) => project(events, "running").turns.filter((t) => t.kind === "told").map((t) => t.text);
+
+  test("a report sent back is the Told line the agent received, once its directive is delivered; a backed or skipped one adds none", () => {
+    const { turns } = project([
+      ev(EventTypes.AgentMessage, { text: "checks:\n- command: make check\n  result: pass" }),
+      ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId: "dir_1" }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
+      ev(EventTypes.AgentMessage, { text: "Fixed; checks pass." }),
+      ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] }),
+      ev(EventTypes.RunChecksJudged, { turn: 3, verified: true, skipped: true, message: "Checks not model-checked: no judgement tier.", checks: [] }),
+    ], "running");
+    expect(turns.filter((t) => t.kind === "message" || t.kind === "told").map((t) => [t.kind, t.text])).toEqual([
+      ["message", "checks:\n- command: make check\n  result: pass"], ["told", sentBack], ["message", "Fixed; checks pass."],
+    ]);
+  });
+
+  test("a send-back is not told before its directive is delivered, nor ever if it failed or a later turn superseded it", () => {
+    const judged = (turn: number, directiveId: string, message = sentBack) =>
+      ev(EventTypes.RunChecksJudged, { turn, round: turn - 1, verified: false, message, checks: [], directiveId });
+    const failed = ev(EventTypes.DirectiveFailed, { directiveId: "dir_1", error: "the Run ended" });
+    expect(told([judged(1, "dir_1")])).toEqual([]);
+    expect(told([judged(1, "dir_1"), failed])).toEqual([]);
+    // A consumed receipt after the failure says the agent read it after all, as for a steer.
+    expect(told([judged(1, "dir_1"), failed, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true })])).toEqual([sentBack]);
+    const later = "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- missing checks (judgement: yes)";
+    expect(told([judged(1, "dir_1"), judged(2, "dir_2", later),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }), ev(EventTypes.DirectiveDelivered, { directiveId: "dir_2" })])).toEqual([later]);
+    expect(told([judged(1, "dir_1"), ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" })])).toEqual([]);
+  });
+
+  test("an escalated report is held for a person: told only once a person's retry delivers it again", () => {
+    const held = ev(EventTypes.RunChecksJudged, { turn: 1, round: 2, verified: false, escalated: true, message: sentBack, checks: [] });
+    const retry = ev(EventTypes.RunChecksDecided, { action: "retry", note: "", directiveId: "dir_r" });
+    expect(told([held])).toEqual([]);
+    expect(told([held, ev(EventTypes.RunChecksDecided, { action: "waive", note: "CI hardware." })])).toEqual([]);
+    expect(told([held, retry])).toEqual([]);
+    expect(told([held, retry, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" })])).toEqual([sentBack]);
+    expect(told([held, retry, ev(EventTypes.DirectiveFailed, { directiveId: "dir_r", error: "lux could not deliver it" })])).toEqual([]);
+  });
+
+  test("a receipt that arrives before its judgement still tells the send-back, once", () => {
+    // Built in cursor order: the projection skips an event older than one it folded.
+    const other = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_0" });
+    const delivered = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true });
+    const judged = ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId: "dir_1" });
+    expect(told([delivered, judged])).toEqual([sentBack]);
+    expect(told([delivered, judged, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true })])).toEqual([sentBack]);
+    // Another directive's receipt tells nothing.
+    expect(told([other, judged])).toEqual([]);
+    const held = ev(EventTypes.RunChecksJudged, { turn: 1, round: 2, verified: false, escalated: true, message: sentBack, checks: [] });
+    const early = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" });
+    const retry = ev(EventTypes.RunChecksDecided, { action: "retry", note: "", directiveId: "dir_r" });
+    expect(told([held, early, retry])).toEqual([sentBack]);
+    expect(told([held, early, retry, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" })])).toEqual([sentBack]);
+  });
+
+  test("an early receipt does not outlive a newer judgement or its Run", () => {
+    const early = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" });
+    const newer = ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: false, message: sentBack, checks: [], directiveId: "dir_2" });
+    const backed = ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] });
+    const boundary = ev(EventTypes.RunCreated, {});
+    const old = ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId: "dir_1" });
+    expect(told([early, newer, old])).toEqual([]);
+    expect(told([early, backed, old])).toEqual([]);
+    expect(told([early, boundary, old])).toEqual([]);
+  });
+
+  test("early receipts are bounded, the oldest evicted, and a repeated one is kept once", () => {
+    const judged = (directiveId: string) =>
+      ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId });
+    const receipts = Array.from({ length: 33 }, (_, i) => ev(EventTypes.DirectiveDelivered, { directiveId: `dir_${i}` }));
+    const state = apply(emptyProjection(), receipts);
+    expect([...state.earlyReceipts.keys()]).toEqual(Array.from({ length: 32 }, (_, i) => `dir_${i + 1}`));
+    expect(told([...receipts, judged("dir_0")])).toEqual([]);
+    expect(told([...receipts, judged("dir_1")])).toEqual([sentBack]);
+    const again = apply(emptyProjection(), Array.from({ length: 5 }, () => ev(EventTypes.DirectiveDelivered, { directiveId: "dir_x" })));
+    expect(again.earlyReceipts.size).toBe(1);
+  });
+});

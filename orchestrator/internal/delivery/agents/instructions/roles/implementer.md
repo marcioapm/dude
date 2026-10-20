@@ -34,7 +34,7 @@ checks:
 ```
 
 - Run each check as its own command, so its exit status is the check's own, and read its output.
-- This block reports your checks to people; dude does not yet parse it, match it to command exits or use it to gate publishing.
+- This block reports your checks to people; dude checks it against the commands this Run recorded before publishing. A report that is missing, unparseable or not backed comes back to you. A judgement tier may be off, in which case dude says it skipped model-checking; that is visible to people.
 {{if or .Child (.Granted "ask_person") -}}
 {{template "contracts/failed-check" .}}
 {{- end}}

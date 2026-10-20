@@ -20,3 +20,8 @@ func ReplayEventTypes(ctx context.Context, tx pgx.Tx, of Talker) ([]string, erro
 // BeforeReplayQuery has fn called in the replay's transaction just before
 // its ledger query starts; nil removes it.
 func BeforeReplayQuery(fn func(context.Context, pgx.Tx)) { beforeReplayQuery = fn }
+
+// PullRequestText is the title and body a pull request opens with.
+func (s *Store) PullRequestText(ctx context.Context, org string, st *State) (string, string, error) {
+	return s.pullRequestText(ctx, org, st)
+}

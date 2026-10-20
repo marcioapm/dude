@@ -150,7 +150,7 @@ const START_VARIANT = "secondary" as const;
 /** What changes the task's feedback, or where a batch submitted now would go. */
 const FEEDBACK_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.FeedbackSubmitted, EventTypes.FeedbackDelivered, EventTypes.FeedbackReplied, EventTypes.FeedbackResolved,
-  EventTypes.FeedbackReopened, EventTypes.FeedbackOutdated, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
+  EventTypes.FeedbackReopened, EventTypes.FeedbackOutdated, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed, EventTypes.RunChecksJudged, EventTypes.RunChecksDecided,
 ]);
 
 /** Under the pull request the task took over: dude works on it and opened none of its own. */
@@ -1395,6 +1395,11 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       case "workflow.transitioned":
         break;
+      case EventTypes.RunChecksJudged: {
+        const { outcome, quote } = checksJudgedLine(p);
+        out.push({ ...base, who: <DudeMark size={32} />, text: <>The <b>{doer(e.runId)}</b>'s checks {outcome}</>, quote, open: session(e.runId) });
+        break;
+      }
       case "run.steered":
         out.push({ ...base, who: p.by === "conductor" ? <AgentAvatar role="conductor" size="lg" /> : face,
           text: <>{p.by === "conductor" ? <b>The conductor</b> : person} steered the {doer(e.runId)}</>, quote: String(p.text ?? "") });
@@ -1604,6 +1609,20 @@ const AUTO_END: Record<string, string> = {
   closed: "closed it, which ends start when unblocked",
   archived: "archived it, which ends start when unblocked",
 };
+
+type ChecksVerdict = { command?: string; result?: string; reason?: string; decision?: string; callId?: string };
+
+/** A run.checks.judged event's outcome ("were verified") and its quote: the send-back message, then each verdict. */
+function checksJudgedLine(p: Record<string, unknown>): { outcome: string; quote: string } {
+  let outcome: string;
+  if (p.skipped) outcome = "were not model-checked";
+  else if (p.waived) outcome = "were waived";
+  else if (p.verified) outcome = "were verified";
+  else outcome = "were not verified";
+  const verdicts = Array.isArray(p.checks) ? p.checks as ChecksVerdict[] : [];
+  const details = verdicts.map((v) => `${v.command ?? "Check"}: ${v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}`).join("\n");
+  return { outcome, quote: [typeof p.message === "string" ? p.message : "", details].filter(Boolean).join("\n") };
+}
 
 /** "CP-41 and CP-43", or with their states: "CP-38 (failed)". */
 function blockerKeys(raw: unknown, states = false): string {

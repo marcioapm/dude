@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Escalation } from "@dude/domain";
-import { escalationWords as wordsFor, shortError } from "../src/escalation.ts";
+import { checksMessage, escalationWords as wordsFor, needsReason, shortError } from "../src/escalation.ts";
 
 const at = "2026-01-01T00:00:00Z";
 // The words read only reason and detail; the escalation's actions are left out.
@@ -34,6 +34,18 @@ describe("escalationWords", () => {
       sentence: "The frontend reviewer failed: timeout. The round is not complete without it: try it again, or go on without it.",
       runId: "run_r",
     });
+  });
+
+  test("unverified checks say how often they were sent back, and the message names each check", () => {
+    const message = "Your checks report was not verified. Nothing from this Run has been pushed.\n\n- make check: exit 1 (judgement: no)\n\nRun the missing checks.";
+    const words = escalationWords({ reason: "checks_unverified", detail: { runId: "run_i", message, rounds: 2 }, at });
+    expect(words.short).toBe("Checks unverified");
+    expect(words.sentence).toBe("The checks report is still not backed by the Run's recorded commands after 2 send-backs. Send it back once more, or waive what could not be checked with your reason.");
+    expect(words.runId).toBe("run_i");
+    expect(checksMessage({ reason: "checks_unverified", detail: { message }, at, actions: [] })).toBe(message);
+    const none = escalationWords({ reason: "checks_unverified", detail: { message, rounds: 0 }, at });
+    expect(none.sentence).toStartWith("The checks report is not backed by the Run's recorded commands, and the organisation allows no send-back. ");
+    expect(checksMessage({ reason: "test_blocked", detail: { message }, at, actions: [] })).toBe("");
   });
 
   test("no changes, and a reason it has no words for, still read as sentences", () => {
@@ -90,4 +102,14 @@ test("shortError keeps the first line, and cuts a long one", () => {
   expect(shortError("first\nsecond")).toBe("first");
   expect(shortError("x".repeat(10), 5)).toBe("xxxx…");
 
+});
+
+// The orchestrator's delivery.NeedsReason, case for case.
+test("needsReason asks for a reason to ship past a failed criterion, a blocked test or unverified checks", () => {
+  expect(needsReason("test_failed_criteria", "accept")).toBe(true);
+  expect(needsReason("test_blocked", "waive")).toBe(true);
+  expect(needsReason("checks_unverified", "waive")).toBe(true);
+  expect(needsReason("checks_unverified", "retry")).toBe(false);
+  expect(needsReason("checks_unverified", "stop")).toBe(false);
+  expect(needsReason("stuck", "accept")).toBe(false);
 });

@@ -42,16 +42,22 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/images"
+	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
+type ChecksJudge interface {
+	Judge(context.Context, string, judge.Ask) (judge.Judgement, error)
+}
+
 type Syncer struct {
 	DB     *db.DB
 	Lux    lux.Client
 	Forges delivery.Forges
+	Judge  ChecksJudge
 	Agent  AgentConfig
 	// The login for the registry agent images come from; nil for none.
 	Registry registry.Provider
@@ -1997,6 +2003,16 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	// as lux was told, at submit or as a resume added one. Work on nothing
 	// it may change publishes only what it wrote for people.
 	pushes := r.PushBranch != "" && r.HoldsPushable
+	// A gated phase's checks report is judged before its push is asked
+	// for: nothing leaves the Run unverified. A Run lux reports over is
+	// failed below, kept, as before; its report is judged when a person
+	// resumes it and its turn ends again.
+	if pushes && delivery.ChecksGated[r.Phase] && r.PushRequestID == "" && r.PushResult == nil && !lux.Terminal(r.LuxState) {
+		pass, acted, err := s.checksBeforePush(ctx, r)
+		if err != nil || !pass {
+			return acted, err
+		}
+	}
 	if pushes && r.PushResult == nil {
 		if r.PushRequestID == "" {
 			// lux's git.checkout, which says where each checkout started,
