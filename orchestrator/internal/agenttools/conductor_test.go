@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // conductor makes the fixture task's conductor (no phase), and returns its
@@ -343,11 +344,11 @@ func TestPullRequestsGivesStateChecksReviewsAndFeedback(t *testing.T) {
 		t.Fatalf("feedback: %+v", p.Feedback)
 	}
 	first := p.Feedback[0]
-	if first.Author != "tiago" || first.Kind != "line_comment" || first.ActedOnBy != "run_prfix" || len([]rune(first.Excerpt)) != 280 ||
-		!strings.HasPrefix(first.Excerpt, "browser tab will look hung") {
+	if first.Author != "tiago" || first.Kind != "line_comment" || first.ActedOnBy != "run_prfix" || len([]rune(delivery.Unquoted(first.Excerpt))) != 280 ||
+		!strings.HasPrefix(delivery.Unquoted(first.Excerpt), "browser tab will look hung") {
 		t.Errorf("tiago's: %+v", first)
 	}
-	if p.Feedback[1].Ignored != "not_permitted" || p.Feedback[1].ActedOnBy != "" || p.Feedback[2].Excerpt != "nice" {
+	if p.Feedback[1].Ignored != "not_permitted" || p.Feedback[1].ActedOnBy != "" || delivery.Unquoted(p.Feedback[2].Excerpt) != "nice" {
 		t.Errorf("the others: %+v", p.Feedback[1:])
 	}
 }
@@ -421,7 +422,7 @@ func TestPullRequestsGivesTheLatest50FeedbackItems(t *testing.T) {
 		t.Fatalf("sdk#88: total %d, returned %d; want 51 and 50", p.FeedbackTotal, len(p.Feedback))
 	}
 	for i, fb := range p.Feedback {
-		if want := fmt.Sprintf("comment %02d", i+1); fb.Excerpt != want {
+		if want := fmt.Sprintf("comment %02d", i+1); delivery.Unquoted(fb.Excerpt) != want {
 			t.Fatalf("feedback %d is %q, want %q: the latest 50, oldest first", i, fb.Excerpt, want)
 		}
 	}

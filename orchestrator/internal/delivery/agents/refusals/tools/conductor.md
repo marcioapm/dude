@@ -1,5 +1,7 @@
 {{define "refusals/tools/conductor/at-most-findings-by-id-at"}}at most %d findings by id at once{{end}}
 
+{{- define "refusals/tools/conductor/at-most-feedback-items-by-id-at"}}at most %d feedback items by id at once{{end}}
+
 {{- define "refusals/tools/conductor/you-are-no-longer-this-task"}}you are no longer this task's conductor: another took over from you. Restart nothing{{end}}
 
 {{- define "refusals/tools/conductor/relation-kind-blocked-by-blocks-or"}}a relation's kind is blocked_by, blocks or related, not %q{{end}}
