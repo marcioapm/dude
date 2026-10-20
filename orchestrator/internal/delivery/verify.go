@@ -89,7 +89,7 @@ func VerifyStart(ctx context.Context, tx pgx.Tx, ref RunRef, in VerifyAsk, key s
 		return StartChildInput{}, refusef(rVerifyTooManyPaths, VerifyPathsMax)
 	}
 	for i, c := range commands {
-		commands[i] = strings.TrimSpace(c)
+		commands[i] = oneLine(c)
 		if utf8.RuneCountInString(c) > VerifyCommandMax || strings.ContainsAny(c, "\n\r") {
 			return StartChildInput{}, refusef(rVerifyCommandTooLong, i+1, VerifyCommandMax)
 		}
@@ -187,8 +187,8 @@ func verifyReportTx(ctx context.Context, tx pgx.Tx, childID, status string, targ
 	}
 	results, ok := ParseVerify(reply)
 	for _, c := range target.Commands {
-		c = strings.TrimSpace(c)
-		if !slices.ContainsFunc(results, func(r VerifyResult) bool { return strings.TrimSpace(r.Command) == c }) {
+		c = oneLine(c)
+		if !slices.ContainsFunc(results, func(r VerifyResult) bool { return r.Command == c }) {
 			rep.Missing = append(rep.Missing, c)
 		}
 	}
@@ -242,7 +242,7 @@ func verifyResultText(childID string, raw []byte) (string, error) {
 	for i, r := range rep.Results {
 		t := toldResult{Command: ExternalText(id, r.Command), Exit: r.Exit, Tail: ExternalText(id, r.Tail),
 			Line: ExternalText(id, clip(r.Command, 200))}
-		if j := slices.IndexFunc(rep.Asked, func(a string) bool { return strings.TrimSpace(a) == strings.TrimSpace(r.Command) }); j >= 0 {
+		if j := slices.IndexFunc(rep.Asked, func(a string) bool { return oneLine(a) == r.Command }); j >= 0 {
 			t.Asked, t.Line = rep.Asked[j], clip(rep.Asked[j], 200)
 		}
 		told[i] = t

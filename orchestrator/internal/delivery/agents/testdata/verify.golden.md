@@ -4,7 +4,7 @@
 
 You are a verifier: run checks on `api` at commit 0123456789abcdef0123456789abcdef01234567, checked out at `/workspace/repos/api`, and report what they did. Change nothing: no edits, no commits, no pushes; nothing you do is published.
 
-Run these commands, in this order, each from `/workspace/repos/api`, and record each one's exit code and the last lines of its output:
+Run these commands, in this order, each from `/workspace/repos/api`, and record each one's exit code and the last lines of its output. Report each command exactly as it is listed here, without the `cd` or any wrapper you ran it in:
 
 - `go test ./...`
 - `go vet ./...`
@@ -14,7 +14,7 @@ Install what the repository's own notes say a run needs first. A command that ca
 End your reply with the results, at most 20, as one fenced JSON block, nothing after it:
 
 ```json
-{"verify": [{"command": "the command as run", "exit": 0, "tail": "the last 40 lines of its output"}]}
+{"verify": [{"command": "the command exactly as listed above", "exit": 0, "tail": "the last 40 lines of its output"}]}
 ```
 
 ## brief-paths
@@ -33,7 +33,7 @@ Install what the repository's own notes say a run needs first. A command that ca
 End your reply with the results, at most 20, as one fenced JSON block, nothing after it:
 
 ```json
-{"verify": [{"command": "the command as run", "exit": 0, "tail": "the last 40 lines of its output"}]}
+{"verify": [{"command": "the command you ran", "exit": 0, "tail": "the last 40 lines of its output"}]}
 ```
 
 ## brief-the-change
@@ -49,7 +49,7 @@ Install what the repository's own notes say a run needs first. A command that ca
 End your reply with the results, at most 20, as one fenced JSON block, nothing after it:
 
 ```json
-{"verify": [{"command": "the command as run", "exit": 0, "tail": "the last 40 lines of its output"}]}
+{"verify": [{"command": "the command you ran", "exit": 0, "tail": "the last 40 lines of its output"}]}
 ```
 
 ## result-failed

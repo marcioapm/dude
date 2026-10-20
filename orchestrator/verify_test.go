@@ -133,6 +133,22 @@ func TestAVerificationOfTheHeadPasses(t *testing.T) {
 	}
 }
 
+// A command asked with runs of spaces or a tab passes when the verifier
+// reports it as it ran it: the result is read on one line, so the asked
+// command is matched on one line too.
+func TestACommandWithInnerWhitespaceIsMatchedToItsResult(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	out := w.must(task, "verify", `{"commands":["test  -f FACTORY.md","true\t&& true"]}`)
+	text := w.verifyResult(out["runId"].(string))
+	if !strings.Contains(text, " passed: 2 of 2 commands exited 0.") || strings.Contains(text, "no result") {
+		t.Fatalf("the result:\n%s", text)
+	}
+}
+
 // verifierReporting has the scripted verifier report only the first n
 // of the commands its brief asks for.
 func (w *world) verifierReporting(n int) {
