@@ -1417,15 +1417,14 @@ func turnFailure(agentErr, tier, model string, produced bool) string {
 // from the recorded messages.
 func (s *Syncer) flushEnded(ctx context.Context, r phaseRun) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+		var pending bool
+		if err := tx.QueryRow(ctx, `SELECT agent_message_buffer <> '' OR agent_thought_buffer <> ''
+			FROM runs WHERE id = $1 FOR UPDATE`, r.ID).Scan(&pending); err != nil || !pending {
 			return err
 		}
 		t := &translator{run: r}
 		if err := t.load(ctx, tx); err != nil {
 			return err
-		}
-		if t.message.Len() == 0 && t.thought.Len() == 0 {
-			return nil
 		}
 		if err := t.flush(ctx, tx, s); err != nil {
 			return err
