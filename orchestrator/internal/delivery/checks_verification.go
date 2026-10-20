@@ -93,8 +93,16 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 		b.WriteString("Checks not model-checked, set a judgement tier in the organisation's settings.\n")
 	case len(waivers) > 0:
 		b.WriteString("Checks were waived by a person:\n")
-		for _, j := range waivers {
-			fmt.Fprintf(&b, "- %s: %s\n", j.Role, oneLine(j.Message))
+		// Each reason clipped, as the test gate's are; the whole one is in
+		// the ledger. The newest waivers that fit checksWaiversMax.
+		shown := make([]string, len(waivers))
+		for i, j := range waivers {
+			shown[i] = fmt.Sprintf("- %s: %s\n", j.Role, clip(oneLine(j.Message), checksFieldMax))
+		}
+		from := newestThatFit(shown, checksWaiversMax)
+		writeOmitted(&b, from, "waiver")
+		for _, line := range shown[from:] {
+			b.WriteString(line)
 		}
 	case unverified:
 		b.WriteString("Checks were not verified; the work was sent back or awaits a person.\n")
@@ -106,32 +114,48 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 	for i, j := range runs {
 		lines[i] = checksRow(j)
 	}
-	// The newest rows that fit checksRowsMax, the newest always.
-	from, size := len(lines), 0
-	for from > 0 && (from == len(lines) || size+utf8.RuneCountInString(lines[from-1]) <= checksRowsMax) {
-		from--
-		size += utf8.RuneCountInString(lines[from])
-	}
-	switch from {
-	case 0:
-	case 1:
-		b.WriteString("1 earlier Run omitted.\n")
-	default:
-		fmt.Fprintf(&b, "%d earlier Runs omitted.\n", from)
-	}
+	from := newestThatFit(lines, checksRowsMax)
+	writeOmitted(&b, from, "Run")
 	for _, row := range lines[from:] {
 		b.WriteString(row)
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-// A pull request body holds at most 65,536 characters. The rows get
-// checksRowsMax of them; each command and reason is clipped to
-// checksFieldMax, so one Run's row (at most checksCountMax+1 checks) fits.
+// A pull request body holds at most 65,536 characters. The checks account
+// takes at most checksWaiversMax for the waivers' lines, checksRowsMax for
+// the Runs' rows, and under 200 for its heading, headline sentence and the
+// two omitted lines: 48,200 in all, leaving over 17,000 for the markers,
+// the test gate's section and the task's description. Each command and
+// reason is clipped to checksFieldMax, so one Run's row (at most
+// checksCountMax+1 checks) fits.
 const (
-	checksRowsMax  = 40_000
-	checksFieldMax = 300
+	checksWaiversMax = 8_000
+	checksRowsMax    = 40_000
+	checksFieldMax   = 300
 )
+
+// newestThatFit is where the newest of lines that fit max characters
+// together start; the newest is always kept.
+func newestThatFit(lines []string, max int) int {
+	from, size := len(lines), 0
+	for from > 0 && (from == len(lines) || size+utf8.RuneCountInString(lines[from-1]) <= max) {
+		from--
+		size += utf8.RuneCountInString(lines[from])
+	}
+	return from
+}
+
+// writeOmitted says how many earlier things, if any, were left out.
+func writeOmitted(b *strings.Builder, n int, thing string) {
+	switch n {
+	case 0:
+	case 1:
+		fmt.Fprintf(b, "1 earlier %s omitted.\n", thing)
+	default:
+		fmt.Fprintf(b, "%d earlier %ss omitted.\n", n, thing)
+	}
+}
 
 // checksRow is a gated Run's line and one line per check.
 func checksRow(j gatedJudgement) string {

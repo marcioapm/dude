@@ -58,9 +58,11 @@ func TestThePullRequestChecksAccountIsTheCurrentAttempts(t *testing.T) {
 }
 
 // The most gated Runs an attempt can have (an implementer, FixRoundsPerPR's
-// 50 fixers and a simplifier), each reporting the most checks with long
-// commands and reasons, still fit a pull request body: the headline and its
-// waiver reason whole, the newest Runs, and how many earlier ones are left out.
+// 50 fixers and a simplifier) still fit a pull request body beside a task's
+// description and the test gate's section: 40 of them waived, the newest
+// with a reason of about 1 MiB, the rest reporting the most checks with long
+// commands and reasons. Each waiver's reason is clipped, the newest waivers
+// and Runs are shown, and how many earlier ones are left out is said.
 func TestThePullRequestChecksAccountIsBounded(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	ctx := context.Background()
@@ -73,32 +75,55 @@ func TestThePullRequestChecksAccountIsBounded(t *testing.T) {
 				(CASE g WHEN 0 THEN 'implement' WHEN 51 THEN 'simplify' ELSE 'fix' END)::run_phase, 'completed',
 				now() - (52 - g) * interval '1 minute'
 			FROM generate_series(0, 51) g`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status) VALUES('run_cbt',$1,'prj_cb','wi_cb',1,'test','completed')`,
+		`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, heads, decision, decision_note, decided_at)
+			SELECT $1, 'wi_cb', 'run_cbt', g, 'Criterion ' || g || ': ' || repeat('the page shows it ', 10),
+				CASE WHEN g = 6 THEN 'blocked' ELSE 'pass' END, '{"api":"0123456789abcdef"}',
+				CASE WHEN g = 6 THEN 'waived' END, CASE WHEN g = 6 THEN 'Checked on staging by hand.' END,
+				CASE WHEN g = 6 THEN now() END
+			FROM generate_series(1, 6) g`,
 		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
 			SELECT 'ev_cb' || r.id, $1, 'run.checks.judged', r.id, 'wi_cb', 'system', 'dude', 'test',
-				CASE WHEN r.phase = 'implement' THEN '{"turn":1,"verified":true,"waived":true,"message":"Hardware CI.","checks":[]}'::jsonb
+				CASE WHEN r.id < 'run_cb40' THEN jsonb_build_object('turn', 1, 'verified', true, 'waived', true, 'checks', '[]'::jsonb,
+					'message', repeat('ação ', CASE r.id WHEN 'run_cb39' THEN 149000 ELSE 2000 END))
 				ELSE jsonb_build_object('turn', 1, 'verified', true, 'checks', (SELECT jsonb_agg(jsonb_build_object(
 					'command', repeat('c', 5000), 'result', 'pass', 'decision', 'yes', 'reason', repeat('r ', 2500), 'callId', 'mcall_x'))
 					FROM generate_series(1, 30))) END
-			FROM runs r WHERE r.task_id = 'wi_cb'`,
+			FROM runs r WHERE r.task_id = 'wi_cb' AND r.phase <> 'test'`,
 	} {
 		if _, err := owner.Exec(ctx, q, org); err != nil {
 			t.Fatal(err)
 		}
 	}
-	var got string
+	var section string
 	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var err error
-		got, err = checksVerificationText(ctx, tx, &State{TaskID: "wi_cb", ProjectID: "prj_cb", Attempt: 1})
+		section, _, err = verificationText(ctx, tx, &State{TaskID: "wi_cb", ProjectID: "prj_cb", Attempt: 1,
+			Heads: map[string]string{"api": "0123456789abcdef"}})
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if n := utf8.RuneCountInString(got); n > 60_000 {
-		t.Fatalf("the checks account is %d characters", n)
+	// A task's description as people write one: a few paragraphs and its criteria.
+	goal := strings.Repeat("The settings page lets an admin choose the judgement tier, and the task page shows why checks were sent back. ", 30)
+	var criteria []string
+	for i := 1; i <= 6; i++ {
+		criteria = append(criteria, fmt.Sprintf("Criterion %d: %s", i, strings.Repeat("the page shows it ", 10)))
 	}
+	body := replaceVerification(prBody(goal, criteria, "", "## Verification\nNot tested yet."), section)
+	if n := utf8.RuneCountInString(body); n > 65_536 {
+		t.Fatalf("the pull request body is %d characters, more than GitHub's 65,536", n)
+	}
+	if !strings.Contains(section, "## Verification\nTested at `0123456`.") {
+		t.Fatalf("no test gate section in:\n%.400s", section)
+	}
+	_, got, _ := strings.Cut(section, "\n\n### Checks\n")
 	head, rows, _ := strings.Cut(got, "\n\n")
-	if want := "### Checks\nChecks were waived by a person:\n- Implementer: Hardware CI."; head != want {
-		t.Errorf("headline %q, want %q", head, want)
+	// Every reason is clipped to checksFieldMax characters; 25 lines of 310 fit checksWaiversMax.
+	reason := strings.Repeat("ação ", 59) + "ação…"
+	want := "Checks were waived by a person:\n15 earlier waivers omitted.\n" + strings.Repeat("- Fixer: "+reason+"\n", 25)
+	if head+"\n" != want {
+		t.Errorf("headline\n%.1000q\nwant\n%.1000q", head, want)
 	}
 	lines := strings.Split(rows, "\n")
 	var shown []string
