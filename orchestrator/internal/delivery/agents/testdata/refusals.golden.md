@@ -1142,3 +1142,7 @@ at most %d commands in one verification
 
 at most %d paths in one verification
 
+## refusals/delivery/verify/no-commit
+
+%s has no published commit for this task yet: publish first, or name the commit to verify by its full SHA
+

@@ -164,3 +164,4 @@ rVerifyCommandTooLong                  refusals/delivery/verify/command-too-long
 rVerifyNameRepository                  refusals/delivery/verify/name-repository
 rVerifyNoSuchRepository                refusals/delivery/verify/no-such-repository
 rVerifyCommitNotSHA                    refusals/delivery/verify/commit-not-sha
+rVerifyNoCommit                        refusals/delivery/verify/no-commit
