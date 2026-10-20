@@ -174,7 +174,7 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 	return id, err
 }
 
-func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenProbe func()) (string, error) {
+func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenLocks func()) (string, error) {
 	if in.Profile != "investigator" || in.Capabilities.PublishCode {
 		return "", refuseText(rChildSessionProfile)
 	}
@@ -206,8 +206,8 @@ func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, pha
 	if !db.IsNotFound(err) {
 		return "", err
 	}
-	if betweenProbe != nil {
-		betweenProbe()
+	if betweenLocks != nil {
+		betweenLocks()
 	}
 	tier := ""
 	if in.Tier != "" {

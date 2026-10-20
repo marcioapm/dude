@@ -27,7 +27,7 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 			return err
 		}
 		role := delivery.PromptRoleForPhase[r.Phase]
-		settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], models, models)
+		settings := delivery.ResolveRole(delivery.PromptRoleForPhase[r.Phase], models)
 		if tierOverride != "" {
 			settings.Tier = tierOverride
 		}

@@ -980,7 +980,7 @@ the parent conductor is ended, replaced, or itself a child
 
 ## refusals/delivery/child/parent-key-required
 
-a task conductor parent and idempotency key are required
+a parent and idempotency key are required
 
 ## refusals/delivery/child/parent-not-live
 
@@ -1029,10 +1029,6 @@ not this task's parent
 ## refusals/delivery/child/wrong-task
 
 child does not belong to this task
-
-## refusals/delivery/child/session-ended
-
-the brainstorm session has ended
 
 ## refusals/delivery/child/session-parent-ended
 

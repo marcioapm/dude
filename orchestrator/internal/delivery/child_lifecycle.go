@@ -35,9 +35,9 @@ func lockChild(ctx context.Context, tx pgx.Tx, childID string) (*lockedChild, er
 	return lockChildTx(ctx, tx, childID, nil)
 }
 
-// lockChildTx is lockChild with the delivery locked after the parent Run and
-// before the task's row (LockEscalationTx's order). betweenLocks runs between
-// those two locks for deterministic concurrency tests.
+// lockChildTx is lockChild with task-child delivery locked after the parent
+// Run and before the task row (LockEscalationTx's order). betweenLocks runs
+// between those two locks for deterministic concurrency tests.
 func lockChildTx(ctx context.Context, tx pgx.Tx, childID string, betweenLocks func()) (*lockedChild, error) {
 	c := &lockedChild{}
 	var source string

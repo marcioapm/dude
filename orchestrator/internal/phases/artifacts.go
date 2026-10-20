@@ -243,7 +243,9 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 			if keys[art.ID] {
 				continue
 			}
-			if err := recordArtifact(ctx, tx, artifactRun{r.Org, r.ProjectID, r.TaskID, r.SessionID, r.ID}, art); err != nil {
+			if err := recordArtifact(ctx, tx, artifactRun{
+				Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, SessionID: r.SessionID, ID: r.ID,
+			}, art); err != nil {
 				return err
 			}
 		}
