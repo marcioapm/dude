@@ -12,7 +12,8 @@ import (
 // is assembled from: what the Run has, and the saved prompts for its role.
 // Nothing in it changes during a Run, so a resume assembles the same file.
 type InstructionsInput struct {
-	// An independent child receives the report-only contract.
+	// A conductor-started child: a writer gets the writer-child contract,
+	// any other the report-only contract (childContract).
 	Child        bool
 	SessionChild bool
 	// The Run has dude's tools, and the dude CLI on its shell.
@@ -109,7 +110,7 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 var InstructionTools = []string{"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository",
 	"run_diff", "request_machine", "sync_base", "request_limit"}
 
-// ChildTools are the tools an independent report child may call.
+// ChildTools are the tools a conductor-started child may call.
 var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}
 
 // instructionData is what every instruction template is given.
@@ -216,12 +217,26 @@ func (in InstructionsInput) data(role string) instructionData {
 }
 
 var (
-	charterTmpl    = mustTemplate("instructions/charter")
-	dudeTmpl       = mustTemplate("instructions/dude")
-	savedTmpl      = mustTemplate("instructions/saved")
-	roleNotesTmpl  = mustTemplate("instructions/notes")
-	childToolsTmpl = mustTemplate("contracts/child-tools")
+	charterTmpl     = mustTemplate("instructions/charter")
+	dudeTmpl        = mustTemplate("instructions/dude")
+	savedTmpl       = mustTemplate("instructions/saved")
+	roleNotesTmpl   = mustTemplate("instructions/notes")
+	childToolsTmpl  = mustTemplate("contracts/child-tools")
+	childWriterTmpl = mustTemplate("contracts/child-writer")
 )
+
+// childContract selects the contract from the phase's publishing authority.
+func childContract(role string) *template.Template {
+	if Publishes[PhaseForPromptRole(role)] {
+		return childWriterTmpl
+	}
+	return childToolsTmpl
+}
+
+// ChildWriterContract renders the writer-child contract for a role.
+func ChildWriterContract(role string, in InstructionsInput) string {
+	return render(childWriterTmpl, in.data(role))
+}
 
 // roleParts are each role file's three parts (parseRole), resolved at init.
 var roleParts = func() map[string][3]*template.Template {
@@ -287,7 +302,7 @@ func Instructions(role, aspect string, in InstructionsInput) string {
 		sections = append(sections, render(roleNotesTmpl, c))
 	}
 	if in.Child {
-		sections = append(sections, render(childToolsTmpl, d))
+		sections = append(sections, render(childContract(role), d))
 	}
 	return strings.Join(sections, "\n\n") + "\n"
 }

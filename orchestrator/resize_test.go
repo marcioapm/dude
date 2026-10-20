@@ -463,9 +463,20 @@ func TestMachineMoveSettlesAfterRestartFollowingAcceptedResume(t *testing.T) {
 	lost := &lostAnswer{Client: w.syncer.Lux}
 	lost.left.Store(1)
 	w.syncer.Lux = lost
+	// The lost call backs off for phases.retryBase (5 s). Wait for lux to
+	// report running so the retry gets 409 not_resumable, not another 202
+	// for the same resume. RetryAhead selects the backed-off Run without
+	// waiting 5 s in real time.
+	w.until("the lost answer backed off, lux running the Run", func() bool {
+		return lost.left.Load() == 0 && w.lux.State(live) == "running" &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND retry_failures=1 AND next_attempt_at=retry_due_at`, runID) == 1
+	})
+	w.syncer.RetryAhead = 6 * time.Second
+	defer func() { w.syncer.RetryAhead = 0 }()
 	w.until("settled", func() bool {
 		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
 	})
+	w.syncer.RetryAhead = 0
 	if got := w.machineOf(runID); got["name"] != "Bigger" || got["from"] != "task" {
 		t.Fatalf("machine=%v", got)
 	}

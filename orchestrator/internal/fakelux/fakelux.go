@@ -117,6 +117,9 @@ type Behaviour struct {
 	TurnError string
 	// A Hang is woken by any input, not only one after a resume.
 	WakeOnInput bool
+	// A Hang is never woken, a resume's input included: fakeagent.HangModel,
+	// whose workload on lux sleeps until it is stopped (fakeagent.Script).
+	NeverWake bool
 	// dude tools to call each time the agent reads input, after reading it:
 	// {{inbox.last}} names the newest peer message among its inputs. Such an
 	// agent reads input at its next step even while its turn hangs.
@@ -591,8 +594,9 @@ func (s *Server) deliverQueued(run *Run) {
 	s.consume(run)
 	// Input after a resume is what a paused agent was waiting for: it
 	// finishes its work this time. Without input it waits, as a real one
-	// does. WakeOnInput has any input wake it, a nudge included.
-	run.woken = run.Resumed > 0 || run.behavior.WakeOnInput
+	// does. WakeOnInput has any input wake it, a nudge included; NeverWake
+	// none.
+	run.woken = (run.Resumed > 0 || run.behavior.WakeOnInput) && !run.behavior.NeverWake
 	s.turn(run)
 }
 
@@ -994,7 +998,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		ChecksModel: str("dude.model"), Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open,
-		Verify: verify}
+		Verify: verify, NeverWake: str("dude.model") == fakeagent.HangModel}
 }
 
 // envSecretsOf are a submitted spec's env secrets, name and value, in the

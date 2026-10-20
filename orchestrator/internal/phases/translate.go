@@ -1427,6 +1427,28 @@ func turnFailure(agentErr, tier, model string, produced bool) string {
 	return "the agent's turn failed: " + agentErr
 }
 
+// flushEnded records the reply or thought an ended Run's stream left
+// buffered: a stream that stops mid-message (no tool call, idle or turn end
+// after it) never flushes it, and a child's parent is sent its final reply
+// from the recorded messages.
+func (s *Syncer) flushEnded(ctx context.Context, r phaseRun) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var pending bool
+		if err := tx.QueryRow(ctx, `SELECT agent_message_buffer <> '' OR agent_thought_buffer <> ''
+			FROM runs WHERE id = $1 FOR UPDATE`, r.ID).Scan(&pending); err != nil || !pending {
+			return err
+		}
+		t := &translator{run: r}
+		if err := t.load(ctx, tx); err != nil {
+			return err
+		}
+		if err := t.flush(ctx, tx, s); err != nil {
+			return err
+		}
+		return t.save(ctx, tx, "", 0)
+	})
+}
+
 // flush records whatever reply or thought was streaming: something else
 // happening ends both.
 func (t *translator) flush(ctx context.Context, tx pgx.Tx, s *Syncer) error {

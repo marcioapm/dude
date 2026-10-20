@@ -152,6 +152,7 @@ func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcom
 		// artifact, or agent prose. Bound lists independently of stored Run size.
 		// A verifier's report holds its commands' output tails, bounded by
 		// ParseVerify and quoted as external text when told.
+		// The child's final reply is quoted beside it at delivery (deliverChildResultTx).
 		_, err = tx.Exec(ctx, `INSERT INTO child_results (organization_id, task_id, session_id, parent_run_id, child_run_id,
 			generation, source_kind, profile, status, findings, verdicts, commits, artifact_ids, cost_usd, stale, verify)
 			SELECT r.organization_id, r.task_id, r.session_id, r.parent_run_id, r.id, r.child_generation, r.source_kind, r.child_profile, $2,
@@ -470,7 +471,11 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 		FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND NOT stale`, p.Parent, p.Child, p.Generation).Scan(&summary, &verify); err != nil {
 		return false, err
 	}
-	text, err := childResultText(summary)
+	reply, err := childFinalReplyTx(ctx, tx, p.Child)
+	if err != nil {
+		return false, err
+	}
+	text, err := childResultText(summary, reply)
 	if err != nil {
 		return false, err
 	}
@@ -494,9 +499,15 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 	return true, nil
 }
 
-func childResultText(summary []byte) (string, error) {
+// childResultText is the parent's directive: the summary, then the child's
+// final reply quoted and bounded (childReplyExcerpt), when it said one.
+func childResultText(summary []byte, reply string) (string, error) {
+	data := struct{ Summary, Reply string }{Summary: string(summary)}
+	if reply != "" {
+		data.Reply = childReplyExcerpt(reply)
+	}
 	var out strings.Builder
-	err := mustTemplate("contracts/child-result").Execute(&out, string(summary))
+	err := mustTemplate("contracts/child-result").Execute(&out, data)
 	return out.String(), err
 }
 

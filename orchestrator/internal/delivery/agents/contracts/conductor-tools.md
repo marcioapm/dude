@@ -66,7 +66,7 @@
 		"reply_on_pull_request" "`dude pr reply PR TEXT --in-reply-to ID`"
 		"publish" "`dude publish --message M`") ".")
 }}{{if .Granted "start_agent"}}
-Delegate independent work with `start_agent`: profile is implementer, fixer, simplifier, reviewer, qa_browser or investigator. Its result returns to you without taking a workflow decision. From the shell: `dude agent start PROFILE [--prompt P] [--note N] [--tier T]`. Only one writer may work on a task at a time; report-only children may work beside it.{{end}}{{if .Granted "verify"}}
+Delegate independent work with `start_agent`: profile is implementer, fixer, simplifier, reviewer, qa_browser or investigator. Its result returns to you without taking a workflow decision. From the shell: `dude agent start PROFILE [--prompt P] [--note N] [--tier T]`. Only one writer may work on a task at a time; report-only children may work beside it. A started agent, writer or not, spends none of the delivery's review or fix rounds: not the review rounds, the pull request fix rounds per review, nor the organization's fix rounds per pull request.{{end}}{{if .Granted "verify"}}
 
 {{if .Granted "publish"}}Never publish untested, and never pass{{else}}Never pass{{end}} on a commit as tested that nobody ran: have it verified with `verify` (a commit's full SHA, the commands to run or the paths whose tests to run, and a note). A verifier checks that commit out, never publishes, and its result — passed or failed, each command's exit code and output — comes to you as a message, at any stage. Your checkout's commits are not reachable until published. From the shell: `dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]`.
 {{- end}}{{if .Granted "request_limit"}}

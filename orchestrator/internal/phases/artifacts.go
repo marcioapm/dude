@@ -155,6 +155,9 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 		if err := drainErr; err != nil && !lux.IsNotFound(err) {
 			return a.later(ctx, r, err)
 		}
+		if err := s.flushEnded(ctx, phaseRun{ID: r.ID, Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, SourceKind: "task_conductor"}); err != nil {
+			return err
+		}
 		luxErr, dbErr := (&Costs{DB: a.DB, Lux: a.Lux, Log: a.Log}).read(ctx, costRun{ID: r.ID, Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, LuxRunID: r.LuxRunID})
 		if dbErr != nil {
 			return dbErr

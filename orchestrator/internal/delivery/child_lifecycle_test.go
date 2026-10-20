@@ -612,7 +612,7 @@ func TestChildAtomicEnqueue(t *testing.T) {
 	if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object('childId',child_run_id,'profile',profile,'status',status,'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale) FROM child_results`).Scan(&summary); err != nil {
 		t.Fatal(err)
 	}
-	want, err := childResultText(summary)
+	want, err := childResultText(summary, "")
 	if err != nil || text != want {
 		t.Fatalf("directive mismatch %q %v", text, err)
 	}
