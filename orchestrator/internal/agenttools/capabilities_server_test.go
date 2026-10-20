@@ -76,7 +76,19 @@ func TestARunWithoutACapabilityIsNotGivenItsToolsOnAnySurface(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("MCP list_tasks: %v %+v", err, res)
 	}
-	if raw, _ := json.Marshal(res.StructuredContent); !strings.Contains(string(raw), `"key":"TEXT-1"`) {
-		t.Errorf("MCP list_tasks: %s", raw)
+	// The client hands the structured content back decoded as untyped JSON;
+	// a round-trip gives it the tool's result shape.
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tasks struct {
+		Tasks []struct{ Key, Title string }
+	}
+	if err := json.Unmarshal(raw, &tasks); err != nil {
+		t.Fatalf("MCP list_tasks: %v: %s", err, raw)
+	}
+	if len(tasks.Tasks) != 1 || tasks.Tasks[0].Key != "TEXT-1" {
+		t.Errorf("MCP list_tasks: tasks %+v, want TEXT-1 alone", tasks.Tasks)
 	}
 }
