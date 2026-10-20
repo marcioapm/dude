@@ -39,7 +39,7 @@ func TestTheConductorsContractNamesOnlyGrantedActions(t *testing.T) {
 	for _, c := range []struct {
 		key  capabilities.Key
 		tool string
-	}{{capabilities.LimitsRequest, "`request_limit`"}} {
+	}{{capabilities.LimitsRequest, "`request_limit`"}, {capabilities.Verify, "`verify`"}} {
 		with := capabilities.Default(RoleConductor)
 		without := with.Without(c.key)
 		in := InstructionsInput{Tools: true, CLI: true, Grants: &with}

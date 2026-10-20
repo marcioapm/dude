@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"maps"
 
 	"github.com/jackc/pgx/v5"
 
@@ -21,12 +22,25 @@ type ChildParent struct {
 
 type ChildCapabilities struct {
 	PublishCode bool `json:"publishCode"`
+	// A verifier (verify): the repository and commit it checks. Its
+	// reply's command results are read at settlement and given to the
+	// parent with its result.
+	Verify *VerifyTarget `json:"verify,omitempty"`
+}
+
+// VerifyTarget is what a verifier checks: a commit of one repository, ""
+// for the repository's default branch.
+type VerifyTarget struct {
+	Repo   string `json:"repo"`
+	Commit string `json:"commit"`
 }
 
 type StartChildInput struct {
 	Parent                           ChildParent
 	Profile, Prompt, Note, Tier, Key string
 	Capabilities                     ChildCapabilities
+	// Commits to check out in place of the task's heads, by repository.
+	BaseRefs map[string]string
 }
 
 func childPhase(profile string) (string, error) {
@@ -70,7 +84,7 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 	if in.Parent.Kind != ChildParentTaskConductor || in.Key == "" {
 		return "", refuseText(rChildParentKeyRequired)
 	}
-	if in.Capabilities.PublishCode != Publishes[phase] {
+	if in.Capabilities.PublishCode != Publishes[phase] || in.Capabilities.Verify != nil && Publishes[phase] {
 		return "", refuseText(rChildCapabilitiesMismatch)
 	}
 	if len([]rune(in.Note)) > 4000 {
@@ -142,8 +156,13 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 			return "", err
 		}
 	}
+	bases := maps.Clone(d.State.Heads)
+	if len(in.BaseRefs) > 0 && bases == nil {
+		bases = map[string]string{}
+	}
+	maps.Copy(bases, in.BaseRefs)
 	id, err = createPhaseRunTx(ctx, tx, ref.Org, PhaseRun{
-		TaskID: ref.TaskID, Phase: phase, WorkflowID: d.WorkflowID, BaseRefs: d.State.Heads, Attempt: attempt,
+		TaskID: ref.TaskID, Phase: phase, WorkflowID: d.WorkflowID, BaseRefs: bases, Attempt: attempt,
 		ParentRunID: ref.RunID, ConductorRunID: ref.RunID, ConductorNote: in.Note,
 		Key: key, Tier: tier, Branch: d.State.Branch, Child: true,
 	})

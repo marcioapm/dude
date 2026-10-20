@@ -36,6 +36,7 @@ const (
 	PRRefresh       Key = "pr.refresh"
 	LimitsRead      Key = "limits.read"
 	LimitsRequest   Key = "limits.request"
+	Verify          Key = "verify"
 	WebSearch       Key = "web_search"
 	WebFetch        Key = "web_fetch"
 )
@@ -100,6 +101,8 @@ var All = []Capability{
 		Tools: []string{"limits"}},
 	{Key: LimitsRequest, Description: "Ask the task's people to raise one of its limits for this task alone: fix rounds per review round or per pull request, or one more failed-check rerun on a head; only someone who may change the setting can approve.",
 		Tools: []string{"request_limit"}},
+	{Key: Verify, Description: "Have a commit's tests or named commands run by a report-only Run that never publishes, and be told each command's result; at most 10 a Run.",
+		Tools: []string{"verify"}},
 	{Key: WebSearch, Description: "Search the web with the coding agent's own search tool.",
 		Native: []string{NativeWebSearch}},
 	{Key: WebFetch, Description: "Read web pages with the coding agent's own fetch tool.",
@@ -110,7 +113,7 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, WebSearch, WebFetch},
 	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, RunsRead, PRRefresh, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},

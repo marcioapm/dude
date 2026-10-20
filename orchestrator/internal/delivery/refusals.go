@@ -162,4 +162,10 @@ const (
 	rLimitRequestNoPullRequest              = "no open pull request of this task by that name: a rerun is of an open pull request's head"
 	rLimitRequestNamePullRequest            = "this task has several open pull requests: name the one (pr, as repo#number)"
 	rLimitRequestNoHead                     = "dude has not read %s#%d's head yet: refresh_pull_requests, then ask again"
+	rVerifyTooManyCommands                  = "at most %d commands in one verification"
+	rVerifyTooManyPaths                     = "at most %d paths in one verification"
+	rVerifyCommandTooLong                   = "command %d: one line of at most %d characters"
+	rVerifyNameRepository                   = "this task has several repositories: name the one to verify (repo)"
+	rVerifyNoSuchRepository                 = "%s is not one of this task's repositories"
+	rVerifyCommitNotSHA                     = "%q is not a commit: name it by its full SHA (git rev-parse HEAD), as pushed; your checkout's unpublished commits are not reachable, publish them first"
 )

@@ -118,6 +118,8 @@ type limitsOut struct {
 	GitHubReads  limitOut     `json:"githubReadsThisHour"`
 	Publish      any          `json:"publish"`
 	MachineMoves limitOut     `json:"machineMovesThisRun"`
+	// With verify: this Run's verifications (verifiesPerRun).
+	Verifies *limitOut `json:"verifiesThisRun,omitempty"`
 }
 
 func readLimits(ctx context.Context, tx pgx.Tx, c Caller, _ limitsIn) (limitsOut, error) {
@@ -203,6 +205,14 @@ func readLimits(ctx context.Context, tx pgx.Tx, c Caller, _ limitsIn) (limitsOut
 	}
 	out.MachineMoves = limitOut{Source: limitsText("dude", nil), Limit: machineMovesPerRun, Used: moves,
 		Remaining: max(0, machineMovesPerRun-moves)}
+	if c.grants.Tool("verify") {
+		_, verifies, err := callsMade(ctx, tx, c.RunID, "verify")
+		if err != nil {
+			return out, err
+		}
+		out.Verifies = &limitOut{Source: limitsText("dude", nil), Limit: verifiesPerRun, Used: verifies,
+			Remaining: max(0, verifiesPerRun-verifies)}
+	}
 	return out, nil
 }
 

@@ -608,6 +608,57 @@ func integrationTarget(prompt string) (base, repo string, ok bool) {
 // IntegrationReply is what the scripted integration fixer says when done.
 const IntegrationReply = "Merged the base and resolved its conflicts, keeping both sides."
 
+// VerifyLabel is the lux label a scripted verifier's spec carries its
+// brief's commands in, as JSON; the fake lux runs each in the checkout.
+const VerifyLabel = "dude.verify"
+
+// verifyBrief and verifyCommandsLead are the verification brief's heading
+// and the line its commands follow (delivery's contracts/verify-brief).
+const (
+	verifyBrief        = "## Verification brief"
+	verifyCommandsLead = "Run these commands, in this order"
+)
+
+// VerifyCommands are the commands a verifier's prompt asks it to run, as
+// its brief lists them ("- `cmd`"); ok when the prompt is a verifier's.
+// A brief naming paths or nothing asks the scripted verifier for none.
+func VerifyCommands(prompt string) (commands []string, ok bool) {
+	_, brief, ok := strings.Cut(prompt, verifyBrief)
+	if !ok {
+		return nil, false
+	}
+	_, list, found := strings.Cut(brief, verifyCommandsLead)
+	if !found {
+		return []string{}, true
+	}
+	commands = []string{}
+	for _, line := range strings.Split(list, "\n")[1:] {
+		cmd, isItem := strings.CutPrefix(line, "- `")
+		if !isItem {
+			if strings.TrimSpace(line) == "" && len(commands) == 0 {
+				continue
+			}
+			break
+		}
+		commands = append(commands, strings.TrimSuffix(cmd, "`"))
+	}
+	return commands, true
+}
+
+// VerifyResult is one command a scripted verifier ran.
+type VerifyResult struct {
+	Command string `json:"command"`
+	Exit    int    `json:"exit"`
+	Tail    string `json:"tail"`
+}
+
+// VerifyReply is a scripted verifier's reply: what it ran, then the results
+// block its brief asks for.
+func VerifyReply(results []VerifyResult) string {
+	raw, _ := json.Marshal(map[string]any{"verify": results})
+	return fmt.Sprintf("Ran %d commands; changed nothing.\n\n```json\n%s\n```\n", len(results), raw)
+}
+
 // integrationResolve is the fake lux's integrateWorkspace in sh: merge the
 // fetched base; on a conflict, keep both sides of every conflicted file by
 // dropping git's marker lines, then commit with git's own merge message.

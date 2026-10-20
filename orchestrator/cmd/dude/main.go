@@ -35,6 +35,8 @@
 //	dude limits                           a conductor's: the task's limits, and what is used
 //	dude limit request LIMIT [--to N] [--pr PR] --reason R
 //	                                      a conductor's: ask the task's people to raise one
+//	dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]
+//	                                      a conductor's: checks on a commit, never published
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
 //	dude agent start PROFILE [--prompt P] [--note N] [--tier T] [--key K]
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
@@ -479,6 +481,30 @@ func run(args []string, out io.Writer) error {
 			body["pr"] = *pr
 		}
 		return show(out, *asJSON, call("request_limit", body))
+	case "verify":
+		var commands, paths many
+		fs.Var(&commands, "command", "a command to run from the repository's root (repeatable)")
+		fs.Var(&paths, "path", "without --command: a path whose tests to run (repeatable)")
+		repo := fs.String("repo", "", "the repository; the task's only one when left out")
+		note := fs.String("note", "", "what else the verifier should know")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) > 1 {
+			return errors.New("usage: dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]")
+		}
+		body := map[string]any{"repo": *repo, "note": *note}
+		if len(args) == 1 {
+			body["commit"] = args[0]
+		}
+		if len(commands) > 0 {
+			body["commands"] = []string(commands)
+		}
+		if len(paths) > 0 {
+			body["paths"] = []string(paths)
+		}
+		return show(out, *asJSON, call("verify", body))
 	case "phase start":
 		var categories, findings many
 		fs.Var(&categories, "category", "review: a reviewer to run (repeatable); none runs those the change warrants")
@@ -1005,6 +1031,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude limit request LIMIT [--to N] [--pr PR] --reason "…"
                                              a conductor's: ask the task's people to raise
                                              perReviewRound, perPullRequest or rerun for this task
+  dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]
+                                             a conductor's: run checks on a commit in a Run that
+                                             never publishes; its result comes as a message
   dude phase start PHASE [--category C]... [--finding ID]... [--note N]
                                              a conductor's: take the decision the delivery waits on
                                              by starting implement, review, fix, simplify or test

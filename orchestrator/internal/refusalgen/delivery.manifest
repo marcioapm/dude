@@ -158,3 +158,9 @@ rLimitRequestRerunLeft                 refusals/delivery/limit-requests/rerun-le
 rLimitRequestNoPullRequest             refusals/delivery/limit-requests/no-pull-request
 rLimitRequestNamePullRequest           refusals/delivery/limit-requests/name-pull-request
 rLimitRequestNoHead                    refusals/delivery/limit-requests/no-head
+rVerifyTooManyCommands                 refusals/delivery/verify/too-many-commands
+rVerifyTooManyPaths                    refusals/delivery/verify/too-many-paths
+rVerifyCommandTooLong                  refusals/delivery/verify/command-too-long
+rVerifyNameRepository                  refusals/delivery/verify/name-repository
+rVerifyNoSuchRepository                refusals/delivery/verify/no-such-repository
+rVerifyCommitNotSHA                    refusals/delivery/verify/commit-not-sha
