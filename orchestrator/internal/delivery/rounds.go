@@ -76,28 +76,19 @@ type Predecessor struct {
 func (s *Store) PreviousRound(ctx context.Context, org, taskID string, attempt int, phase, category string) (*Predecessor, error) {
 	var p *Predecessor
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var err error
-		p, err = previousRoundTx(ctx, tx, taskID, attempt, phase, category, false)
+		var found Predecessor
+		err := tx.QueryRow(ctx, `SELECT id, base_refs FROM runs
+			WHERE task_id = $1 AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1), 1)
+			  AND phase = $3::run_phase AND category IS NOT DISTINCT FROM $4 AND status = 'completed'
+			  AND replaced_by IS NULL AND source_kind IS NULL AND `+notIntegration+`
+			ORDER BY ended_at DESC, id DESC LIMIT 1`, taskID, attempt, phase, db.Nullable(category)).Scan(&found.ID, &found.BaseRefs)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		p = &found
 		return err
 	})
 	return p, err
-}
-
-func previousRoundTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, phase, category string, lock bool) (*Predecessor, error) {
-	q := `SELECT id, base_refs FROM runs
-		WHERE task_id = $1 AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1), 1)
-		  AND phase = $3::run_phase AND category IS NOT DISTINCT FROM $4 AND status = 'completed'
-		  AND replaced_by IS NULL AND source_kind IS NULL AND ` + notIntegration + `
-		ORDER BY ended_at DESC, id DESC LIMIT 1`
-	if lock {
-		q += ` FOR UPDATE`
-	}
-	var p Predecessor
-	err := tx.QueryRow(ctx, q, taskID, attempt, phase, db.Nullable(category)).Scan(&p.ID, &p.BaseRefs)
-	if db.IsNotFound(err) {
-		return nil, nil
-	}
-	return &p, err
 }
 
 // DeltaLines is how many lines changed (additions and deletions) from the
