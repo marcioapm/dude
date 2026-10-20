@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -310,6 +311,36 @@ func TestATesterThatCannotRunTheAppIsBlockedNotFixed(t *testing.T) {
 	if body := w.gh.Pull(1).Body; !strings.Contains(body, "Test environment: the application does not start _(waived)_") ||
 		strings.Contains(body, "_(accepted)_") {
 		t.Errorf("the pull request's Review does not show the finding waived:\n%s", body)
+	}
+}
+
+// An unverified checks report is an admin's to waive, with a reason, while
+// its task's owner is still active; never a member's.
+func TestAnAdminWhoIsNotTheOwnerWaivesUnverifiedChecks(t *testing.T) {
+	w := newWorld(t)
+	wi := w.unbackedUntilEscalated(0)
+	owner, admin, member := w.people(wi)
+	if owner == admin {
+		t.Fatal("the admin is the task's owner")
+	}
+	if code, body := w.decide(member, wi, delivery.ActionWaive, "It works on my machine."); code != 403 {
+		t.Fatalf("a member's waiver: %d %v", code, body)
+	}
+	if code, body := w.decide(admin, wi, delivery.ActionWaive, ""); code != 400 {
+		t.Fatalf("an admin's waiver without a reason: %d %v", code, body)
+	}
+	if got := w.judged(wi); strings.Join(got, ",") != "unverified" {
+		t.Fatalf("judged %v before a valid waiver, want the one unverified", got)
+	}
+	if code, body := w.decide(admin, wi, delivery.ActionWaive, "Verified on the hardware rig by hand."); code != 200 {
+		t.Fatalf("the admin's waiver: %d %v", code, body)
+	}
+	if got := w.judged(wi); strings.Join(got, ",") != "unverified,waived" {
+		t.Errorf("judged %v, want the admin's waiver recorded", got)
+	}
+	if got := w.ids(`SELECT payload->>'note' FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'action' = 'waive'`,
+		wi, delivery.EvRunChecksDecided); !slices.Equal(got, []string{"Verified on the hardware rig by hand."}) {
+		t.Errorf("waiver decisions %q, want the admin's one", got)
 	}
 }
 
