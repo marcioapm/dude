@@ -41,11 +41,17 @@ type LimitGrant struct {
 	At     time.Time `json:"at"`
 }
 
+// Raises says g raises limit (and, for a rerun, at repo's pull request
+// number at head).
+func (g LimitGrant) Raises(limit, repo string, number int, head string) bool {
+	return g.Limit == limit && (limit != LimitRerun || g.Repo == repo && g.Number == number && g.Head == head)
+}
+
 // granted is what grants add to limit (and, for a rerun, at head).
 func granted(grants []LimitGrant, limit, repo string, number int, head string) int {
 	n := 0
 	for _, g := range grants {
-		if g.Limit == limit && (limit != LimitRerun || g.Repo == repo && g.Number == number && g.Head == head) {
+		if g.Raises(limit, repo, number, head) {
 			n += g.Extra
 		}
 	}

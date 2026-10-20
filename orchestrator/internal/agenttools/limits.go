@@ -52,7 +52,7 @@ func grantsFor(grants []delivery.LimitGrant, limit, repo string, number int, hea
 	var out grantsOut
 	total := base
 	for _, g := range grants {
-		if g.Limit == limit && (limit != delivery.LimitRerun || g.Repo == repo && g.Number == number && g.Head == head) {
+		if g.Raises(limit, repo, number, head) {
 			out.Granted = append(out.Granted, grantedOut{Extra: g.Extra, By: g.ByName, At: g.At.UTC().Format(time.RFC3339)})
 			total += g.Extra
 		}
