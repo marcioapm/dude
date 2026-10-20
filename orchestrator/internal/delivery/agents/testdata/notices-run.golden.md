@@ -66,3 +66,15 @@ GLD/api could not be checked out (no reason given). It is not in /workspace; a m
 
 api could not be checked out (eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee…). It is not in /workspace; carry on without it, or ask a person to check the repository's URL and access.
 
+## web-changed-any-to-list
+
+Your web access is not what this session's agent before you had. It had web search, fetching from any host; you have web search, fetching from pypi.org and *.github.com only. A search or fetch earlier in the conversation was made with its tools, not yours.
+
+## web-changed-search-lost
+
+Your web access is not what this session's agent before you had. It had web search, no fetching; you have no web search, no fetching. A search or fetch earlier in the conversation was made with its tools, not yours.
+
+## web-changed-hosts
+
+Your web access is not what this session's agent before you had. It had no web search, fetching from pypi.org only; you have no web search, fetching from npmjs.org only. A search or fetch earlier in the conversation was made with its tools, not yours.
+

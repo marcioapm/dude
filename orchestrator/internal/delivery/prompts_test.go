@@ -96,6 +96,33 @@ func TestEveryBrainstormIsToldWhatItReachesOfTheWeb(t *testing.T) {
 	}
 }
 
+// Two webs are equal when the agent reaches the same: hosts a Run without
+// a fetch tool lists do not count, since it fetches from none of them and
+// the web-changed notice says "no fetching" of both.
+func TestWebEqualIsWhatTheAgentReaches(t *testing.T) {
+	pypi, npm := []string{"pypi.org"}, []string{"npmjs.org"}
+	for _, c := range []struct {
+		name string
+		a, b Web
+		want bool
+	}{
+		{"the same list", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Search: true, Fetch: true, Hosts: pypi}, true},
+		{"search differs", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Fetch: true, Hosts: pypi}, false},
+		{"search differs, no fetch", Web{Search: true}, Web{}, false},
+		{"hosts differ", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Search: true, Fetch: true, Hosts: npm}, false},
+		{"a list and none", Web{Search: true, Fetch: true, Hosts: pypi}, Web{Search: true, Fetch: true}, false},
+		{"any host and a list", Web{Fetch: true, AnyHost: true}, Web{Fetch: true, Hosts: pypi}, false},
+		{"fetch off, hosts differ", Web{Search: true, Hosts: pypi}, Web{Search: true, Hosts: npm}, true},
+	} {
+		if got := c.a.Equal(c.b); got != c.want {
+			t.Errorf("%s: Equal = %v, want %v", c.name, got, c.want)
+		}
+		if got := c.b.Equal(c.a); got != c.want {
+			t.Errorf("%s, swapped: Equal = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // Every agent publishes with dude publish alone: its instruction file says
 // how, and neither it nor a first message names lux's directory or
 // lux-shim, which dude publish hides.
