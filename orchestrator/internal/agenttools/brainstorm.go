@@ -179,13 +179,21 @@ func taskOf(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (Caller, delive
 	return scoped, p, true, nil
 }
 
-func sessionPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (any, error) {
-	scoped, p, one, err := taskOf(ctx, tx, c, in)
+type sessionPullRequestsIn struct {
+	taskIn
+	Feedback []string `json:"feedback,omitempty"`
+}
+
+func sessionPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in sessionPullRequestsIn) (any, error) {
+	scoped, p, one, err := taskOf(ctx, tx, c, in.taskIn)
 	if err != nil {
 		return nil, err
 	}
 	if one {
-		return pullRequests(ctx, tx, scoped, pullRequestsIn{})
+		return pullRequests(ctx, tx, scoped, pullRequestsIn{Feedback: in.Feedback})
+	}
+	if len(in.Feedback) > 0 {
+		return nil, refuseText(rNameTaskReadFeedbackInFull)
 	}
 	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.state::text, pr.checks::text, pr.review::text,
 			COALESCE($2 || '-' || t.number, '')

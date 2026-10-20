@@ -3,10 +3,12 @@ package agenttools_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // session makes a session with a live brainstorm Run on it, titled as
@@ -87,6 +89,27 @@ func TestNameSessionIsRefusedOnceAPersonNamedIt(t *testing.T) {
 	// A task's agent has no such tool.
 	if status, _ := f.post(t, f.run(t, "run_impl_name", "implementer", "running"), "name_session", `{"title":"x"}`); status != 404 {
 		t.Errorf("an implementer names sessions: %d", status)
+	}
+}
+
+// A session's agent reads a task's feedback in full through its own
+// pull_requests, naming the task; without one it is told to name it.
+func TestASessionReadsFeedbackInFullThroughPullRequests(t *testing.T) {
+	f, _ := pullRequestFixture(t)
+	token := f.session(t, "ssn_prs", "", "")
+	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_prs', $1, $2)`, f.project, f.org)
+	long := strings.Repeat("x", 300) + " the part past the excerpt"
+	f.comment(t, "issue-comment-3", "sdk", 88, "tiago", long, "")
+	var out fullFeedbackAnswer
+	if status := f.postAs(t, token, "pull_requests", `{"task":"TEXT-1","feedback":["issue-comment-3","issue-comment-404"]}`, &out); status != 200 {
+		t.Fatalf("pull_requests: %d %+v", status, out)
+	}
+	if len(out.Feedback) != 1 || delivery.Unquoted(out.Feedback[0].Body) != long || !slices.Equal(out.UnknownFeedback, []string{"issue-comment-404"}) {
+		t.Errorf("a session's read: %+v", out)
+	}
+	if status, refused := f.post(t, token, "pull_requests", `{"feedback":["issue-comment-3"]}`); status != 422 ||
+		!strings.Contains(fmt.Sprint(refused), "name the task to read its feedback in full") {
+		t.Errorf("without a task: %d %v", status, refused)
 	}
 }
 
