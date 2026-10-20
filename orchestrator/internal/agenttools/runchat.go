@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // run_chat (capabilities.RunsRead) reads another Run's conversation as its
@@ -189,6 +190,10 @@ func (w wrapper) chatMessage(typ, actorType, actorID, name string, p map[string]
 		return m
 	case p["by"] == delivery.RoleConductor:
 		m.From, m.Text = "conductor", w.own(text)
+		return m
+	case typ == delivery.EvChatMessage && actorType == ledger.ActorAgent:
+		// The Run's own reply on GitHub (reply_on_pull_request, by "fixer").
+		m.From, m.Text = "agent", w.own(text)
 		return m
 	case typ == "question.answered":
 		m.Kind = "answer"

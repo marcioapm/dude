@@ -184,6 +184,20 @@ func TestWhatPeopleToldARunReachesTheConductorQuoted(t *testing.T) {
 	}
 }
 
+// A fixer's own reply on its pull request (reply_on_pull_request, recorded
+// by delivery.RecordReplyTx) is the agent's words, not quoted as a person's.
+func TestAFixersReplyOnItsPullRequestIsItsOwnWords(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	f.run(t, "run_fixer", "implementer", "running")
+	f.say(t, "run_fixer", f.item, "chat.message", "agent", "run_fixer",
+		`{"text":"Fixed in the latest push.","by":"fixer","github":{"repo":"target","number":1,"feedbackId":"77","url":"https://github.test/acme/target/pull/1#issuecomment-77"}}`)
+	_, out, raw := f.chatOf(t, token, `{"run":"run_fixer"}`)
+	if got := strings.Join(texts(out), "|"); got != "agent/message:Fixed in the latest push." || field(out, "messages", 0, "who") != nil {
+		t.Errorf("the fixer's reply: %s", raw)
+	}
+}
+
 // field is the value at path in a decoded JSON value: keys and indexes.
 func field(v any, path ...any) any {
 	for _, p := range path {
