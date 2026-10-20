@@ -143,9 +143,11 @@ var agentFuncs = template.FuncMap{
 	"join":     strings.Join,
 	// quoteLines continues a Markdown quote over the text's lines.
 	"quoteLines": func(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ") },
-	// fenced breaks each ``` in a log so it cannot close the fence around it.
-	"fenced": func(s string) string { return strings.ReplaceAll(s, "```", "`\u200b``") },
+	"fenced": fenced,
 }
+
+// fenced breaks each ``` in a text so it cannot close the fence around it.
+func fenced(s string) string { return strings.ReplaceAll(s, "```", "`\u200b``") }
 
 // fileText is a file's text: its content less one trailing newline.
 func fileText(fsys fs.FS, name string) (string, error) {
