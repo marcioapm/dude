@@ -12,7 +12,8 @@ import (
 type InstructionsInput struct {
 	// A conductor-started child: a writer gets the writer-child contract,
 	// any other the report-only contract (childContract).
-	Child bool
+	Child        bool
+	SessionChild bool
 	// The Run has dude's tools, and the dude CLI on its shell.
 	Tools, CLI bool
 	// A brainstorm that may reach any host.
@@ -45,7 +46,7 @@ type PromptVars struct {
 func (in PromptInput) InstructionsInput() InstructionsInput {
 	in = in.withImages()
 	return InstructionsInput{
-		Child: in.Child, Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
+		Child: in.Child, SessionChild: in.SessionChild, Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
 		Context: in.Context,
 		Vars:    PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},

@@ -2,6 +2,7 @@ package agenttools_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -87,4 +88,60 @@ func TestNameSessionIsRefusedOnceAPersonNamedIt(t *testing.T) {
 	if status, _ := f.post(t, f.run(t, "run_impl_name", "implementer", "running"), "name_session", `{"title":"x"}`); status != 404 {
 		t.Errorf("an implementer names sessions: %d", status)
 	}
+}
+
+func TestBrainstormStartsOnlyInvestigatorChildren(t *testing.T) {
+	f := setup(t)
+	token := f.session(t, "ssn_child_tools", "Research", "person")
+
+	var started struct{ RunID string }
+	if status := f.postAs(t, token, "start_agent", `{"profile":"investigator","key":"same"}`, &started); status != 200 || started.RunID == "" {
+		t.Fatalf("investigator start: %d %+v", status, started)
+	}
+	var again struct{ RunID string }
+	if status := f.postAs(t, token, "start_agent", `{"profile":"investigator","key":"same"}`, &again); status != 200 || again.RunID != started.RunID {
+		t.Fatalf("idempotent start: %d %+v", status, again)
+	}
+	for _, profile := range []string{"reviewer", "qa_browser", "implementer", "fixer", "simplifier", "conductor", "brainstorm", "unknown"} {
+		if status, out := f.post(t, token, "start_agent", fmt.Sprintf(`{"profile":%q,"key":%q}`, profile, profile)); status != 422 {
+			t.Fatalf("%s: %d %v", profile, status, out)
+		}
+	}
+	if status, _ := f.post(t, token, "start_agent", `{"key":"profile-less"}`); status != 422 {
+		t.Fatalf("profile-less child: %d", status)
+	}
+	if status, _ := f.post(t, token, "start_agent", `{"profile":"investigator","sessionId":"ssn_child_tools","key":"forged"}`); status != 422 {
+		t.Fatalf("forged parent arguments: %d", status)
+	}
+	var session, task, source, parent string
+	if err := f.owner.QueryRow(context.Background(), `SELECT COALESCE(session_id,''), COALESCE(task_id,''), source_kind, parent_run_id FROM runs WHERE id=$1`, started.RunID).
+		Scan(&session, &task, &source, &parent); err != nil {
+		t.Fatal(err)
+	}
+	if session != "ssn_child_tools" || task != "" || source != "session" || parent != "run_ssn_child_tools" {
+		t.Fatalf("child ownership: %q %q %q %q", session, task, source, parent)
+	}
+
+	childToken := f.tokenForRun(t, started.RunID)
+	tools := f.getTools(t, childToken)
+	for _, name := range []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "emit_event"} {
+		if _, ok := tools[name]; !ok {
+			t.Errorf("child lacks %s", name)
+		}
+	}
+	for _, name := range []string{"start_agent", "github_check_log", "update_task", "relate", "create_task", "publish"} {
+		if _, ok := tools[name]; ok {
+			t.Errorf("child exposes %s", name)
+		}
+	}
+	if status, out := f.post(t, childToken, "start_agent", `{"profile":"investigator"}`); status != 404 && status != 422 {
+		t.Fatalf("child recursion: %d %v", status, out)
+	}
+}
+
+func (f *fixture) tokenForRun(t *testing.T, runID string) string {
+	t.Helper()
+	token, hash := agenttools.NewToken()
+	mustExec(t, f.owner, `UPDATE runs SET mcp_token_hash=$2 WHERE id=$1`, runID, hash)
+	return token
 }

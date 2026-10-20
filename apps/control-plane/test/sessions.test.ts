@@ -355,6 +355,43 @@ test("a name published hundreds of times leaves every other name listed, and its
   expect(notes.at(-1)!.version).toBe(551);
 });
 
+test("session children keep Files versions and ownership through the real API", async () => {
+  const childOne = "run_session_child_one";
+  const childTwo = "run_session_child_two";
+  const task = "wi_session_child_files";
+  await owner.begin(async (tx) => {
+    await tx`INSERT INTO runs (id, organization_id, session_id, attempt, role, kind, source_kind, parent_run_id, parent_session_id, child_profile, child_capabilities)
+      VALUES (${childOne}, ${ORG}, ${SESSION}, 1, 'investigator', 'agent', 'session', ${RUN}, ${SESSION}, 'investigator', '{}'::jsonb),
+             (${childTwo}, ${ORG}, ${SESSION}, 1, 'investigator', 'agent', 'session', ${RUN}, ${SESSION}, 'investigator', '{}'::jsonb)`;
+    await tx`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_session_child_files', ${ORG}, 'Files', 'files', 'F')`;
+    await tx`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES (${task}, ${ORG}, 'prj_session_child_files', 1, 'Files task', 'Keep files separate')`;
+    await tx`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind) VALUES ('run_task_child_files', ${ORG}, 'prj_session_child_files', ${task}, 1, 'investigator', 'agent')`;
+    await tx`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256, description)
+      VALUES ('art_session_child_one', ${ORG}, ${childOne}, 'file', 'design.md', 'text/markdown', 3, 'k/child-one', 'one', 'version one'),
+             ('art_session_child_two', ${ORG}, ${childTwo}, 'file', 'design.md', 'text/markdown', 3, 'k/child-two', 'two', 'version two'),
+             ('art_task_child_files', ${ORG}, 'run_task_child_files', 'file', 'design.md', 'text/markdown', 3, 'k/task', 'task', 'task file')`;
+  });
+  const member = await call(marcio, "GET", `/v1/artifacts?sessionId=${SESSION}`);
+  expect(member.status).toBe(200);
+  const listed = await member.json() as { artifacts: Array<{ id: string; name: string; version: number; versions: number; runId: string }> };
+  expect(listed.artifacts.filter((a) => a.name === "design.md").map((a) => [a.id, a.version, a.versions, a.runId]))
+    .toEqual([["art_session_child_two", 2, 2, childTwo], ["art_session_child_one", 1, 2, childOne]]);
+  const taskFiles = await call(marcio, "GET", `/v1/artifacts?taskId=${task}`);
+  expect(taskFiles.status).toBe(200);
+  const taskListed = await taskFiles.json() as { artifacts: Array<{ id: string }> };
+  expect(taskListed.artifacts.map((a) => a.id)).toEqual(["art_task_child_files"]);
+  const reader = await call(joao, "GET", `/v1/artifacts?sessionId=${SESSION}`);
+  expect(reader.status).toBe(200);
+  expect((await reader.json() as { artifacts: Array<{ id: string }> }).artifacts.map((a) => a.id)).toEqual([
+    "art_session_child_two", "art_session_child_one", ARTIFACT,
+  ]);
+  for (const [name, who] of outsiders) {
+    const denied = await call(who, "GET", `/v1/artifacts?sessionId=${SESSION}`);
+    expect([name, denied.status]).toEqual([name, 404]);
+    expect(await denied.text()).not.toContain("design.md");
+  }
+});
+
 test("a session Run's controls, answers and servers go only to the orchestrator, which refuses them as not a task's Run", async () => {
   // These change what runs: the control plane forwards them as the person,
   // and the orchestrator's run routes find no task Run by that id (they

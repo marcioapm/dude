@@ -980,7 +980,7 @@ the parent conductor is ended, replaced, or itself a child
 
 ## refusals/delivery/child/parent-key-required
 
-a task conductor parent and idempotency key are required
+a parent and idempotency key are required
 
 ## refusals/delivery/child/parent-not-live
 
@@ -1029,4 +1029,16 @@ not this task's parent
 ## refusals/delivery/child/wrong-task
 
 child does not belong to this task
+
+## refusals/delivery/child/session-parent-ended
+
+the brainstorm parent is no longer live
+
+## refusals/delivery/child/session-profile
+
+this profile is not available to a brainstorm session child
+
+## refusals/delivery/child/session-restart-unsupported
+
+session children cannot be restarted; start a new investigator child from the live brainstorm
 

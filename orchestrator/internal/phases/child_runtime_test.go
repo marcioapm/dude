@@ -2,17 +2,97 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSessionChildSubmitDoesNotRecordProjectSecrets(t *testing.T) {
+	w := newResumeWorld(t)
+	fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} })
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	t.Cleanup(fake.Close)
+	w.s.Lux = lux.New(srv.URL, "k")
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+	w.s.Agent.DefaultImage = "test/image:latest"
+	w.exec(`UPDATE organizations SET default_image_id=NULL WHERE id=$1`, w.run.Org)
+	w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('implementer', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1)), 'investigator', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
+
+	w.exec(`INSERT INTO project_secrets (project_id, organization_id, name, value, hint, recipients)
+		VALUES ($1, $2, 'SUBMIT_SECRET', 'submit-secret-value', 'test', '{implementer}')`, w.run.ProjectID, w.run.Org)
+	w.exec(`UPDATE runs SET status='pending', lux_run_id=NULL, lux_state=NULL, phase='implement', role='implementer', source_kind=NULL WHERE id=$1`, w.run.ID)
+	task := w.run
+	task.Status, task.LuxRunID, task.LuxState = statusPending, "", ""
+	task.Phase, task.Role, task.SourceKind = delivery.PhaseImplement, "implementer", ""
+	if err := w.s.submit(w.ctx, task); err != nil {
+		var reason string
+		_ = w.owner.QueryRow(w.ctx, `SELECT coalesce(error, '') FROM runs WHERE id=$1`, task.ID).Scan(&reason)
+		t.Fatalf("task submit: %v reason=%q", err, reason)
+	}
+	var taskState, taskLux, taskError string
+	if err := w.owner.QueryRow(w.ctx, `SELECT status::text, coalesce(lux_run_id, ''), coalesce(error, '') FROM runs WHERE id=$1`, task.ID).Scan(&taskState, &taskLux, &taskError); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Runs()) != 1 {
+		t.Fatalf("submitted runs: %d db status=%s lux=%s error=%s", len(fake.Runs()), taskState, taskLux, taskError)
+	}
+	var taskSpec lux.Spec
+	if err := json.Unmarshal(fake.Runs()[0].Spec, &taskSpec); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(taskSpec.Secrets, func(s lux.Secret) bool { return s.Name == "SUBMIT_SECRET" && s.Value != "" }) {
+		t.Fatalf("task submit did not carry the configured secret")
+	}
+	var rows int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM run_project_secrets WHERE run_id=$1`, task.ID).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("task secret rows: %d %v", rows, err)
+	}
+
+	old := secretRecipient["investigator"]
+	secretRecipient["investigator"] = "implementer"
+	t.Cleanup(func() { secretRecipient["investigator"] = old })
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_submit_child', $1, 'Research')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role)
+		VALUES ('run_brainstorm_submit', $1, 'ssn_submit_child', 1, 'running', 'agent', 'brainstorm')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, session_id, attempt, status, phase, role, source_kind,
+		parent_run_id, parent_session_id, child_profile, child_capabilities, child_prompt)
+		VALUES ('run_submit_child', $1, $2, 'ssn_submit_child', 1, 'pending', 'investigate', 'investigator', 'session',
+		'run_brainstorm_submit', 'ssn_submit_child', 'investigator', '{}'::jsonb, 'read')`, w.run.Org, w.run.ProjectID)
+	child := phaseRun{ID: "run_submit_child", Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, SessionID: "ssn_submit_child",
+		Phase: delivery.PhaseInvestigate, Role: "investigator", SourceKind: string(delivery.ChildParentSession), Status: statusPending}
+	if err := w.s.submit(w.ctx, child); err != nil {
+		t.Fatal(err)
+	}
+	var childState, childError string
+	if err := w.owner.QueryRow(w.ctx, `SELECT status::text, coalesce(error, '') FROM runs WHERE id=$1`, child.ID).Scan(&childState, &childError); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Runs()) != 2 {
+		t.Fatalf("submitted runs after child: %d db status=%s error=%s", len(fake.Runs()), childState, childError)
+	}
+	var childSpec lux.Spec
+	if err := json.Unmarshal(fake.Runs()[1].Spec, &childSpec); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(childSpec.Secrets, func(s lux.Secret) bool { return s.Name == "SUBMIT_SECRET" || s.Value != "" }) {
+		t.Fatal("session child submit carried a project secret")
+	}
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM run_project_secrets WHERE run_id=$1`, child.ID).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("session child secret rows: %d %v", rows, err)
+	}
+}
 
 func childInstructions(t *testing.T, spec lux.Spec) string {
 	t.Helper()
@@ -546,6 +626,118 @@ func TestChildWriterSpec(t *testing.T) {
 				t.Fatalf("instruction file does not end with the writer contract:\n%s", agents)
 			}
 		})
+	}
+}
+
+func TestSessionChildSpecUsesReadOnlyLinkedRepositoriesAndNoSecrets(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_spec', $1, 'Research')`, w.run.Org)
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_linked', $1, 'Linked', 'linked', 'L')`, w.run.Org)
+	w.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ('repo_linked', $1, 'prj_linked', 'linked-repo', 'https://github.com/test/linked', 'main')`, w.run.Org)
+	w.exec(`INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_spec', 'prj_linked', $1)`, w.run.Org)
+	w.exec(`INSERT INTO session_repositories (session_id, repository_id, organization_id) VALUES ('ssn_spec', 'repo_linked', $1)`, w.run.Org)
+	w.exec(`INSERT INTO project_secrets (project_id, organization_id, name, value, hint, recipients) VALUES ('prj_' || $1, $1, 'INVESTIGATOR_SECRET', 'secret-value-not-for-child', 'child', '{reviewer}')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role) VALUES ('run_brainstorm', $1, 'ssn_spec', 1, 'running', 'agent', 'brainstorm')`, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role, source_kind, parent_run_id, parent_session_id, child_profile, child_capabilities, child_prompt)
+		VALUES ('run_session_child', $1, 'ssn_spec', 1, 'running', 'investigate', 'investigator', 'session', 'run_brainstorm', 'ssn_spec', 'investigator', '{}', 'read the linked repository')`, w.run.Org)
+	w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+	w.exec(`UPDATE organizations SET agent_egress='{api.example.test}' WHERE id=$1`, w.run.Org)
+	w.exec(`UPDATE machine_sizes SET is_default=false WHERE organization_id=$1`, w.run.Org)
+	w.exec(`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, is_default) VALUES ('machine_session', $1, 'session-medium', 4, 8192, 80, true)`, w.run.Org)
+	w.exec(`INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, is_default) VALUES ('machine_raised', $1, 'session-large', 8, 16384, 160, false)`, w.run.Org)
+	w.exec(`UPDATE sessions SET agent_machine=jsonb_build_object('sizeId','machine_raised','moveId','move_session','askedBy','run_brainstorm','reason','OOM','at','2026-10-19T00:00:00Z') WHERE id='ssn_spec'`)
+	w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('investigator', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
+	w.run = phaseRun{ID: "run_session_child", Org: w.run.Org, SessionID: "ssn_spec", Phase: delivery.PhaseInvestigate, Role: delivery.RoleForPhase[delivery.PhaseInvestigate], SourceKind: string(delivery.ChildParentSession), Status: statusRunning}
+	w.s.Agent.ToolsURL = "http://tools.test"
+	w.s.Agent.ToolsService = true
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+	sp, _, _, secrets, err := w.s.spec(w.ctx, w.run, nil, chosenImage{Ref: "test/image:latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 0 {
+		t.Fatalf("session child received project secrets: %v", secrets)
+	}
+	for _, secret := range sp.Secrets {
+		if secret.Name == "INVESTIGATOR_SECRET" || secret.Value == "secret-value-not-for-child" {
+			t.Fatalf("project secret reached submitted spec: %v", secret.Name)
+		}
+	}
+	if sp.Git == nil || len(sp.Git.Repositories) != 1 || sp.Git.Repositories[0].Push == nil || *sp.Git.Repositories[0].Push || !strings.HasPrefix(sp.Git.Repositories[0].Name, "l-linked-repo") {
+		t.Fatalf("linked read-only repositories: %+v", sp.Git)
+	}
+	var rows int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM run_project_secrets WHERE run_id='run_session_child'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("session child secret rows: %d", rows)
+	}
+	if sp.Network == nil || !slices.Contains(sp.Network.Egress, lux.EgressRule{Host: "api.example.test"}) {
+		t.Fatalf("session child egress: %v", sp.Network)
+	}
+	if sp.Resources == nil || sp.Resources.CPUs != 8 || sp.Resources.Memory != 16384<<20 || sp.Resources.Disk != 160<<30 {
+		t.Fatalf("session child machine: %+v", sp.Resources)
+	}
+	if sp.Labels["dude.harness"] != delivery.HarnessOpenCode || sp.Labels["dude.model"] != "gpt-6-sol" {
+		t.Fatalf("session child runtime labels: %v", sp.Labels)
+	}
+}
+
+func TestSessionChildArtifactsAreSessionOwnedAndVersioned(t *testing.T) {
+	w := newResumeWorld(t)
+	session := "ssn_artifacts_" + w.run.Org
+	brainstorm := "run_brainstorm_art_" + w.run.Org
+	first, second, task := "run_art_one_"+w.run.Org, "run_art_two_"+w.run.Org, "run_task_art_"+w.run.Org
+	w.exec(`INSERT INTO sessions (id, organization_id, title) VALUES ($1, $2, 'Research')`, session, w.run.Org)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role) VALUES ($1, $2, $3, $4, 1, 'running', 'agent', 'brainstorm')`, brainstorm, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role, source_kind, parent_run_id, parent_session_id, child_profile, child_capabilities)
+		SELECT id, $1, $2, 1, 'running', 'investigate', 'investigator', 'session', $3, $2, 'investigator', '{}'::jsonb FROM unnest($4::text[]) id`, w.run.Org, session, brainstorm, []string{first, second})
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role) VALUES ($1, $2, $3, $4, 1, 'completed', 'investigate', 'investigator')`, task, w.run.Org, w.run.ProjectID, w.run.TaskID)
+	// Isolate recordArtifact's owner attribution from the legacy run-derived trigger.
+	w.exec(`ALTER TABLE events DISABLE TRIGGER events_session_of_run`)
+	record := func(run, storage, sha string) {
+		t.Helper()
+		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+			return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, SessionID: session, ID: run}, lux.Artifact{ID: storage, Path: lux.PublishedPrefix + "design.md", SHA256: sha, Available: true})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(first, "artifact_one_"+w.run.Org, "sha-one")
+	record(second, "artifact_two_"+w.run.Org, "sha-two")
+	var eventSession *string
+	var correlation string
+	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, first).Scan(&eventSession, &correlation); err != nil {
+		t.Fatal(err)
+	}
+	if eventSession == nil || *eventSession != session || correlation != session {
+		t.Fatalf("session artifact event attribution: session=%v correlation=%q", eventSession, correlation)
+	}
+	var count int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE r.session_id=$1 AND a.name='design.md'`, session).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("session artifact copies: %d", count)
+	}
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		return recordArtifact(w.ctx, tx, artifactRun{Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, ID: task}, lux.Artifact{ID: "task_storage_" + w.run.Org, Path: lux.PublishedPrefix + "design.md", SHA256: "task-sha", Available: true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var artifactSessionID, artifactTaskID *string
+	if err := w.owner.QueryRow(w.ctx, `SELECT a.session_id, r.task_id FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE a.storage_key=$1`, "task_storage_"+w.run.Org).Scan(&artifactSessionID, &artifactTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if artifactSessionID != nil || artifactTaskID == nil || *artifactTaskID != w.run.TaskID {
+		t.Fatalf("task artifact ownership: session=%v task=%v", artifactSessionID, artifactTaskID)
+	}
+	if err := w.owner.QueryRow(w.ctx, `SELECT session_id, correlation_id FROM events WHERE event_type=$1 AND run_id=$2 ORDER BY cursor DESC LIMIT 1`, ArtifactEventType, task).Scan(&eventSession, &correlation); err != nil {
+		t.Fatal(err)
+	}
+	if eventSession != nil || correlation != w.run.TaskID {
+		t.Fatalf("task artifact event attribution: session=%v correlation=%q", eventSession, correlation)
 	}
 }
 

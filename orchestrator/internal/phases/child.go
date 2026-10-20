@@ -23,6 +23,22 @@ func (s *Syncer) childExecutionAllowed(ctx context.Context, r phaseRun) error {
 		if source == "" {
 			return nil
 		}
+		if source == string(delivery.ChildParentSession) {
+			if replacedBy != "" || stopReason != "" || profile != "investigator" || phase != delivery.PhaseInvestigate || policy.PublishCode || control == "abort" {
+				return fmt.Errorf("child execution held: unsupported session child policy or stop request")
+			}
+			var parentLive bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs p JOIN sessions s ON s.id=p.session_id
+				WHERE p.id=r.parent_run_id AND p.session_id=r.parent_session_id AND p.role='brainstorm'
+				AND p.kind='agent' AND p.status IN ('pending','scheduled','starting','running','paused'))
+				FROM runs r WHERE r.id=$1`, r.ID).Scan(&parentLive); err != nil {
+				return err
+			}
+			if !parentLive {
+				return fmt.Errorf("child execution held: session parent is no longer live")
+			}
+			return nil
+		}
 		if source != string(delivery.ChildParentTaskConductor) || replacedBy != "" || stopReason != "" ||
 			policy.PublishCode != delivery.Publishes[phase] ||
 			profile != delivery.PromptRoleForPhase[phase] || phase == "" || control == "abort" {
@@ -74,13 +90,13 @@ func (s *Syncer) childExecutionAllowed(ctx context.Context, r phaseRun) error {
 // Terminal output is summarized only after the artifact sweep clears its exit.
 func settleCollectedChildren(ctx context.Context, database *delivery.Store) (int, error) {
 	type child struct {
-		ID, Org, Status, ProjectID, TaskID, Phase string
-		Attempt                                   int
+		ID, Org, Status, ProjectID, TaskID, SessionID, Phase string
+		Attempt                                              int
 	}
 	var children []child
 	err := database.DB.InSystem(ctx, "phase-notifier", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.status::text, r.project_id, r.task_id, r.phase::text, r.attempt
-			FROM runs r WHERE r.source_kind = 'task_conductor' AND r.status IN ('completed','failed','aborted')
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.status::text, COALESCE(r.project_id,''), COALESCE(r.task_id,''), COALESCE(r.session_id,''), r.phase::text, r.attempt
+			FROM runs r WHERE r.source_kind IN ('task_conductor','session') AND r.status IN ('completed','failed','aborted')
 			AND r.artifacts_due_at IS NULL AND NOT EXISTS (SELECT 1 FROM child_results c WHERE c.child_run_id = r.id)
 			ORDER BY r.ended_at, r.id LIMIT 50`)
 		if err != nil {
@@ -94,7 +110,7 @@ func settleCollectedChildren(ctx context.Context, database *delivery.Store) (int
 	}
 	n := 0
 	for _, c := range children {
-		r := phaseRun{ID: c.ID, Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, Phase: c.Phase, Attempt: c.Attempt}
+		r := phaseRun{ID: c.ID, Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, SessionID: c.SessionID, Phase: c.Phase, Attempt: c.Attempt}
 		won, err := database.SettleChildWith(ctx, c.Org, c.ID, delivery.ChildOutcome{Status: c.Status}, func(tx pgx.Tx) error {
 			if c.Phase == delivery.PhaseReview || c.Phase == delivery.PhaseTest {
 				reply, err := delivery.RunReplyTx(ctx, tx, c.ID)
