@@ -79,6 +79,8 @@ type Server struct {
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
+	// Test hook: resolves a caller's capabilities; nil, capabilities.Resolve.
+	resolve func(context.Context, pgx.Tx, capabilities.Agent) (capabilities.Grants, error)
 }
 
 // Caller is the Run a token names: who is calling, and all it may reach.
@@ -284,11 +286,15 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	if role != nil {
 		c.Role = *role
 	}
+	resolve := s.resolve
+	if resolve == nil {
+		resolve = capabilities.Resolve
+	}
 	err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child); err != nil {
 			return err
 		}
-		c.grants, err = capabilities.Resolve(ctx, tx, c.agent())
+		c.grants, err = resolve(ctx, tx, c.agent())
 		return err
 	})
 	return c, err
@@ -489,7 +495,12 @@ func defineFor[In, Out any](name string, session bool,
 	if err != nil {
 		panic(fmt.Sprintf("tool %s: %v", name, err))
 	}
-	key := toolKey(name, session)
+	// A session agent's tools share their names with the task agents', so
+	// their texts are under session/.
+	key := name
+	if session {
+		key = "session/" + name
+	}
 	describeParameters(key, schema)
 	return tool{name: name, description: delivery.ToolText(key, toolTextData), session: session, schema: schema,
 		run: func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error) {
@@ -507,15 +518,6 @@ func defineFor[In, Out any](name string, session bool,
 
 // toolTextData is what a tool's description may name: create_task's GoalMin.
 var toolTextData = struct{ GoalMin int }{GoalMin}
-
-// toolKey is the name of a tool's text: a session agent's tools share their
-// names with the task agents', so theirs are under session/.
-func toolKey(name string, session bool) string {
-	if session {
-		return "session/" + name
-	}
-	return name
-}
 
 // describeParameters gives schema's properties their descriptions from the
 // tool's text, each by its path ("questions.header" for a field of the
