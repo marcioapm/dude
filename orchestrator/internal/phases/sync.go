@@ -3676,6 +3676,11 @@ const retryWait = `GREATEST(LEAST(make_interval(secs => $2 * power(2, LEAST(` + 
 // the Run instead of retrying it forever.
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {
 	if lux.IsNotFound(cause) {
+		// The follower can see a lost lux Run before whilePaused does: a
+		// continuation is replaced in its slot by a replay all the same.
+		if replaced, err := s.replaceRound(ctx, r, "lux no longer has the run"); replaced || err != nil {
+			return err
+		}
 		return s.fail(ctx, r, "lux no longer has this Run")
 	}
 	s.Log.Info("lux call failed; retrying later", "run", r.ID, "error", cause)

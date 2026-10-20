@@ -1040,7 +1040,10 @@ func (s *Server) Runs() []*Run {
 	defer s.mu.Unlock()
 	out := make([]*Run, 0, len(s.runs))
 	for i := 1; i <= s.next; i++ {
-		out = append(out, s.runs[fmt.Sprintf("lrun_%d", i)])
+		// A Run ForgetRun dropped is no longer lux's.
+		if run := s.runs[fmt.Sprintf("lrun_%d", i)]; run != nil {
+			out = append(out, run)
+		}
 	}
 	return out
 }
@@ -1446,6 +1449,22 @@ func (s *Server) Forget() {
 	}
 	s.runs = map[string]*Run{}
 	s.byKey = map[string]string{}
+}
+
+// ForgetRun drops one Run, as a lux that lost it would: it answers 404.
+func (s *Server) ForgetRun(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.Forgotten = true
+		run.cond.Broadcast()
+		delete(s.runs, id)
+		for k, v := range s.byKey {
+			if v == id {
+				delete(s.byKey, k)
+			}
+		}
+	}
 }
 
 func (s *Server) Handler() http.Handler {

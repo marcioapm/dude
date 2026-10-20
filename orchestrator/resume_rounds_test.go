@@ -12,6 +12,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // resuming is the world with rounds going on from the last: its project's
@@ -48,6 +49,56 @@ func TestDirectedResumedReviewReceivesConductorNote(t *testing.T) {
 		}
 	}
 	t.Fatal("resumed agent did not receive conductor note")
+}
+
+// A continuation lux can no longer resume as it is — lux lost the Run
+// (404), or the reviewer's phase was given a project secret during the
+// fix — is replaced in its slot by a fresh Run replaying the first round;
+// the fresh Run carries the new secret.
+func TestAContinuationLuxCannotResumeIsReplayed(t *testing.T) {
+	for _, why := range []string{"lost", "secret"} {
+		t.Run(why, func(t *testing.T) {
+			w := resuming(t)
+			w.onModel("reviewer", "llm-review")
+			wi := w.task()
+			w.names(wi, w.repoID)
+			var once sync.Once
+			w.lux.BeforeStart(func(id string) {
+				if fix := w.luxRunsOf("fix"); len(fix) == 1 && fix[0].ID == id {
+					once.Do(func() {
+						if why == "lost" {
+							w.lux.ForgetRun(w.luxRunsOf("review")[0].ID)
+							return
+						}
+						w.grant("REVIEW_TOKEN", "review-test-not-a-real-token", "reviewer")
+					})
+				}
+			})
+			w.start(wi, resumingPolicy())
+			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			reviews := w.reviewRows(wi)
+			if len(reviews) != 4 {
+				t.Fatalf("%d review Runs, want the first, its continuation, the replay and the simplifier's range review", len(reviews))
+			}
+			first, cont, fresh := reviews[0], reviews[1], reviews[2]
+			if cont.How != delivery.ContinuesResume || fresh.Continues != first.ID || fresh.How != delivery.ContinuesReplay {
+				t.Fatalf("continuation %s (%s), then %s continues %q (%s)", cont.ID, cont.How, fresh.ID, fresh.Continues, fresh.How)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND replaced_by = $2`, cont.ID, fresh.ID); n != 1 {
+				t.Fatal("the continuation was not replaced by the fresh Run")
+			}
+			if why == "secret" {
+				luxReviews := w.luxRunsOf("review")
+				var spec lux.Spec
+				if err := json.Unmarshal(luxReviews[len(luxReviews)-1].Spec, &spec); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := projectSecretsOf(spec)["REVIEW_TOKEN"]; !ok {
+					t.Errorf("the fresh reviewer was not given the new secret: %v", projectSecretsOf(spec))
+				}
+			}
+		})
+	}
 }
 
 // A project image changed during the fix (A to B): the continuation is not
