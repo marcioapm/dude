@@ -323,6 +323,7 @@ test("063 makes waiting work due on any clock, and keeps a refusal's backoff", a
       "132_run_synced_bases.sql",
       "133_feedback_pictures_kept.sql", "134_review_range.sql", "135_events_session_github_reads_idx.sql", "136_events_task_github_reads_idx.sql", "137_events_fix_merge_attempted_idx.sql", "138_events_git_merge_attempted_idx.sql", "139_run_retry_backoff.sql", "140_tasks_id_org_idx.sql", "141_model_tiers_id_org_idx.sql", "142_model_calls.sql", "143_checks_pending_since.sql", "144_image_layers.sql", "145_repository_setup_script.sql", "146_run_sync_history.sql", "147_events_session_github_reads_idx.sql", "148_events_session_github_reads_idx.sql", "149_events_task_github_reads_idx.sql", "150_events_task_github_reads_idx.sql", "151_recover_github_read_indexes.sql", "152_child_admission.sql", "153_child_results.sql", "154_child_transport.sql", "155_child_output_fence.sql", "156_child_results_child_idx.sql", "157_task_lifecycle.sql", "158_task_lifecycle_rules.sql", "159_session_attachments.sql",
       "160_events_session_github_reads_v2_idx.sql", "161_events_task_github_reads_v2_idx.sql", "162_drop_events_session_github_reads_idx.sql", "163_drop_events_task_github_reads_idx.sql", "164_recover_github_read_v2_indexes.sql", "165_events_run_chat_idx.sql", "166_recover_events_run_chat_idx.sql",
+      "167_child_results_verify.sql",
     ]);
 
     // Due by the sweep's own test, on a clock behind the database's.
