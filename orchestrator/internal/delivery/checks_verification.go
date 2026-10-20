@@ -34,7 +34,7 @@ func (j gatedJudgement) status() string {
 }
 
 // checksVerificationText is the checks gate's compact account for a PR:
-// each gated Run of the attempt with its latest judgement, oldest Run
+// each gated Run of the current attempt with its latest judgement, oldest Run
 // first. The headline is the weakest of them: a skip, else any waiver
 // with each reason, else verified.
 func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, error) {
@@ -42,7 +42,7 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, e.payload
 		FROM events e JOIN runs r ON r.id=e.run_id
 		WHERE r.task_id=$1 AND r.phase IN ('implement','fix','simplify') AND e.event_type=$3
-		 AND ($2=0 OR r.attempt=$2) ORDER BY r.id, e.cursor DESC) latest
+		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)) ORDER BY r.id, e.cursor DESC) latest
 		ORDER BY created_at, id`, st.TaskID, st.Attempt, EvRunChecksJudged)
 	if err != nil {
 		return "", err
