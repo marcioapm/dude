@@ -144,6 +144,29 @@ func TestAnAdminApprovesALimitRequestInChat(t *testing.T) {
 	}
 }
 
+// An admin who does not own the task answers a limit request only by its
+// choices: their plain Chat message while it is open is refused as any
+// non-owner's is, and settles nothing; the Allow label written out exactly
+// approves it.
+func TestAnAdminsPlainChatMessageDoesNotSettleALimitRequest(t *testing.T) {
+	w, task, _, cy := limitRequestAt(t)
+	q, _ := w.must(task, "request_limit", `{"limit":"perReviewRound","to":3,"reason":"one more round"}`)["questionId"].(string)
+	status, body := w.callAs(cy, "/internal/tasks/"+task+"/chat", map[string]any{"text": "What is this round for?"})
+	if status != 403 || obj(body["error"])["code"] != "not_owner" {
+		t.Fatalf("the admin's message: %d %v", status, body)
+	}
+	if w.grants(task) != 0 || w.conductorQuestion(task) != q {
+		t.Fatalf("the admin's message settled it: %d grants, open question %q", w.grants(task), w.conductorQuestion(task))
+	}
+	labels, _ := w.questionOf(q)
+	if status, body := w.callAs(cy, "/internal/tasks/"+task+"/chat", map[string]any{"text": labels[0]}); status != 200 {
+		t.Fatalf("the admin's Allow, written: %d %v", status, body)
+	}
+	if w.grants(task) != 1 || w.conductorQuestion(task) != "" {
+		t.Fatalf("the written Allow: %d grants, open question %q", w.grants(task), w.conductorQuestion(task))
+	}
+}
+
 // "No" grants nothing: the limit and the check stay as they were, and the
 // request is closed, so another may be made.
 func TestNoToALimitRequestRecordsNothing(t *testing.T) {
