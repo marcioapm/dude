@@ -66,23 +66,22 @@ run() {
   return "$s"
 }
 
-declare -A pids
+names=() pids=()
 for ((i = 1; i <= SHARDS; i++)); do
   echo "shard$i: $(wc -l <"$work/shard$i.list") root tests"
   pattern="^($(paste -sd'|' "$work/shard$i.list"))\$"
   run "shard$i" limit 26m "$work/root.test" -test.run "$pattern" \
     -test.v -test.count=1 -test.timeout 25m -test.paniconexit0 &
-  pids[shard$i]=$!
+  names+=("shard$i") pids+=($!)
 done
 run others go test -p 4 -count=1 -timeout 25m -v "${others[@]}" &
-pids[others]=$!
+names+=(others) pids+=($!)
 
 failed=()
-for name in $(printf '%s\n' "${!pids[@]}" | LC_ALL=C sort); do
-  wait "${pids[$name]}" || failed+=("$name")
-done
-
-for ((i = 1; i <= SHARDS; i++)); do cat "$work/shard$i.log"; done | cat - "$work/others.log" >"$out/go-test.log"
+for k in "${!names[@]}"; do
+  wait "${pids[k]}" || failed+=("${names[k]}")
+  cat "$work/${names[k]}.log"
+done >"$out/go-test.log"
 
 status=0
 if ((${#failed[@]})); then
