@@ -203,7 +203,8 @@ func checksField(s string) string { return clip(oneLine(s), checksFieldMax) }
 
 // codeSpan is s as a CommonMark code span: fenced by one backtick more than
 // its longest run of them, and padded with a space where s starts or ends
-// with one, so nothing in s closes it early.
+// with one, so nothing in s closes it early. s never starts or ends with a
+// space (it is a checksField), so CommonMark's padding strip loses nothing.
 func codeSpan(s string) string {
 	longest, run := 0, 0
 	for _, r := range s {

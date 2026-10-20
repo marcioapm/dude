@@ -73,6 +73,10 @@ func TestAChecksRowKeepsItsMarkdownWhole(t *testing.T) {
 	if got := checksRow(j); got != want {
 		t.Errorf("row\n%s\nwant\n%s", got, want)
 	}
+	// What codeSpan is given never has an edge space to lose.
+	if got := checksField("  x  "); got != "x" {
+		t.Errorf(`checksField("  x  ") is %q, want "x"`, got)
+	}
 }
 
 // oversized is a Run whose every check is a run of backticks: its full row
