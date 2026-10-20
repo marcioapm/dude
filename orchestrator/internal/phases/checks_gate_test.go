@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -167,6 +168,46 @@ func (w *harnessWorld) countEvents(typ string) int {
 		w.t.Fatal(err)
 	}
 	return n
+}
+
+// The send-back lists only the checks that were not verified; the judged
+// event keeps every verdict, passed ones included.
+func TestChecksSendBackListsOnlyUnverifiedChecks(t *testing.T) {
+	w := newHarnessWorld(t)
+	checksReply(w, strings.ReplaceAll(passingChecks, "verify", "make check"))
+	// The fake answers Backed then Missing: make check unbacked, nothing missing.
+	w.s.Judge = &checksFake{backed: judge.No, missing: judge.No}
+	if ok, _, err := w.s.checksBeforePush(context.Background(), w.run); ok || err != nil {
+		t.Fatalf("pass %v, %v", ok, err)
+	}
+	var payload struct {
+		Message     string          `json:"message"`
+		DirectiveID string          `json:"directiveId"`
+		Checks      []checksVerdict `json:"checks"`
+	}
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload FROM events WHERE run_id = $1 AND event_type = $2`,
+		w.run.ID, delivery.EvRunChecksJudged).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n" +
+		"\n- make check: fixture evidence (judgement: no)\n" +
+		"\nRun the missing or unsuccessful checks as separate commands, read their output, and correct the report. " +
+		"End your next reply with a checks: YAML block. If you cannot proceed, ask a person what you need."
+	if payload.Message != want {
+		t.Fatalf("send-back:\n%q\nwant:\n%q", payload.Message, want)
+	}
+	var sent string
+	if err := w.owner.QueryRow(context.Background(), `SELECT text FROM directives WHERE id = $1`, payload.DirectiveID).Scan(&sent); err != nil || sent != want {
+		t.Fatalf("directive %q (%v)", sent, err)
+	}
+	if len(payload.Checks) != 2 || payload.Checks[0].Command != "make check" || payload.Checks[0].Result != "unverified" ||
+		payload.Checks[1].Command != "missing checks" || payload.Checks[1].Result != "pass" {
+		t.Fatalf("judged checks %+v", payload.Checks)
+	}
 }
 
 // The gate reads only the end of a long reply: the newest report after

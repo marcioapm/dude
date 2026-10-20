@@ -100,7 +100,10 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	d.Turn, d.Round = turn, rounds
 	maxRounds := forge.ReadSettings(rawSettings).ChecksFixRounds
 	if !d.Verified {
-		d.Message = checksText.Render(d.Verdicts)
+		// The send-back names only what the agent must fix; d.Verdicts,
+		// recorded below, keeps the passed checks too.
+		failed := slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return v.Result == "pass" })
+		d.Message = checksText.Render(failed)
 	}
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		current, err := delivery.LatestTurnTx(ctx, tx, r.ID)
