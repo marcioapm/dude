@@ -149,9 +149,6 @@ func (g Grants) Without(keys ...Key) Grants {
 	return Grants{keys: slices.DeleteFunc(slices.Clone(g.keys), func(k Key) bool { return slices.Contains(keys, k) })}
 }
 
-// Keys are the granted capabilities.
-func (g Grants) Keys() []Key { return slices.Clone(g.keys) }
-
 func (g Grants) Has(k Key) bool { return slices.Contains(g.keys, k) }
 
 // Tool says some granted capability unlocks the dude tool name.
