@@ -178,16 +178,13 @@ func taskOf(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (Caller, delive
 	return scoped, p, true, nil
 }
 
-// sessionPullRequestsIn is taskIn with the feedback items to read in full.
 type sessionPullRequestsIn struct {
-	Project  string   `json:"project,omitempty"`
-	Task     string   `json:"task,omitempty"`
-	IDs      []string `json:"ids,omitempty"`
+	taskIn
 	Feedback []string `json:"feedback,omitempty"`
 }
 
 func sessionPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in sessionPullRequestsIn) (any, error) {
-	scoped, p, one, err := taskOf(ctx, tx, c, taskIn{Project: in.Project, Task: in.Task, IDs: in.IDs})
+	scoped, p, one, err := taskOf(ctx, tx, c, in.taskIn)
 	if err != nil {
 		return nil, err
 	}
