@@ -127,6 +127,8 @@ rNoModelTierTiersAreOrganization        refusals/delivery/restart/no-model-tier-
 rTierNamesNoModelYetCannot              refusals/delivery/restart/tier-names-no-model-yet-cannot
 rChildProfileRequired                  refusals/delivery/child/profile-required
 rChildParentKeyRequired                refusals/delivery/child/parent-key-required
+rChildSessionProfile                   refusals/delivery/child/session-profile
+rChildSessionParentEnded               refusals/delivery/child/session-parent-ended
 rChildCapabilitiesMismatch             refusals/delivery/child/capabilities-mismatch
 rChildNoteTooLong                      refusals/delivery/child/note-too-long
 rChildParentUnauthorized               refusals/delivery/child/parent-unauthorized
@@ -139,6 +141,7 @@ rChildOwnershipChanged                 refusals/delivery/child/ownership-changed
 rChildTerminalOutcomeRequired          refusals/delivery/child/terminal-outcome-required
 rChildWrongTask                        refusals/delivery/child/wrong-task
 rChildRestartKeyRequired               refusals/delivery/child/restart-key-required
+rChildSessionRestartUnsupported        refusals/delivery/child/session-restart-unsupported
 rChildAlreadyReplaced                  refusals/delivery/child/already-replaced
 rChildParentNotLive                    refusals/delivery/child/parent-not-live
 rChildWrongParent                      refusals/delivery/child/wrong-parent
@@ -164,3 +167,4 @@ rVerifyCommandTooLong                  refusals/delivery/verify/command-too-long
 rVerifyNameRepository                  refusals/delivery/verify/name-repository
 rVerifyNoSuchRepository                refusals/delivery/verify/no-such-repository
 rVerifyCommitNotSHA                    refusals/delivery/verify/commit-not-sha
+rVerifyNoCommit                        refusals/delivery/verify/no-commit

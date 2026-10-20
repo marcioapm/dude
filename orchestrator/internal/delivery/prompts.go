@@ -14,6 +14,7 @@ import (
 // already did.
 type PromptInput struct {
 	Child              bool
+	SessionChild       bool
 	Title              string
 	Goal               string
 	AcceptanceCriteria []string

@@ -1,0 +1,1 @@
+Start a named investigator child to research the linked repositories. The child is read-only, has no project secrets, cannot start another child, and may publish report artifacts to this session's Files. Use an optional prompt, note, tier, or idempotency key when needed.

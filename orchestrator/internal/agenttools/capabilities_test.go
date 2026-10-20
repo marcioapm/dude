@@ -23,7 +23,7 @@ var toolsBeforeCapabilities = map[string]string{
 		"feedback feedback_reply limits run_chat refresh_pull_requests request_limit verify",
 	"brainstorm": "list_machine_sizes request_machine github_search github_issue github_pull_request github_check_log list_tasks " +
 		"list_epics list_repositories pull_requests findings search_memory get_memory remember propose relate ask_person name_session " +
-		"run_chat refresh_pull_requests refresh_checkout",
+		"start_agent run_chat refresh_pull_requests refresh_checkout",
 	"implementer": "list_machine_sizes request_machine list_tasks list_epics ask_person emit_event list_repositories request_repository " +
 		"create_task search_memory get_memory remember run_diff reply_on_pull_request resolve_thread sync_base message wait_for_reply " +
 		"note feedback feedback_reply feedback_resolve",
@@ -127,6 +127,12 @@ func TestTakingACapabilityAwayTakesItsTools(t *testing.T) {
 	}
 }
 
+// The tool names more than one capability unlocks, in capabilities.All's
+// order: a conductor starts task children, a brainstorm session children.
+var unlockedTwice = map[string][]capabilities.Key{
+	"start_agent": {capabilities.Conduct, capabilities.SessionAgents},
+}
+
 // Every tool the registry names exists, every tool is reachable through
 // some capability, and every capability is granted to some role.
 func TestTheRegistryHasNoDeadEntries(t *testing.T) {
@@ -134,7 +140,7 @@ func TestTheRegistryHasNoDeadEntries(t *testing.T) {
 	for _, tl := range allTools() {
 		names[tl.name] = true
 	}
-	unlocked := map[string]bool{}
+	unlocked := map[string][]capabilities.Key{}
 	seen := map[capabilities.Key]bool{}
 	for _, c := range capabilities.All {
 		if seen[c.Key] {
@@ -148,10 +154,7 @@ func TestTheRegistryHasNoDeadEntries(t *testing.T) {
 			if !names[name] {
 				t.Errorf("%s unlocks %s, which is no tool", c.Key, name)
 			}
-			if unlocked[name] {
-				t.Errorf("%s is unlocked by two capabilities", name)
-			}
-			unlocked[name] = true
+			unlocked[name] = append(unlocked[name], c.Key)
 		}
 		for _, n := range c.Native {
 			if n != capabilities.NativeWebSearch && n != capabilities.NativeWebFetch {
@@ -160,8 +163,25 @@ func TestTheRegistryHasNoDeadEntries(t *testing.T) {
 		}
 	}
 	for name := range names {
-		if !unlocked[name] {
+		if len(unlocked[name]) == 0 {
 			t.Errorf("tool %s is reachable through no capability", name)
+		}
+	}
+	for name, by := range unlocked {
+		if len(by) < 2 {
+			continue
+		}
+		// Only a name with a task and a session definition may be unlocked
+		// twice, once for each audience.
+		want, pinned := unlockedTwice[name]
+		if !pinned || !slices.Equal(by, want) || !hasSessionDefinition(name) ||
+			!slices.ContainsFunc(allTools(), func(tl tool) bool { return tl.name == name && !tl.session }) {
+			t.Errorf("%s is unlocked by %q", name, by)
+		}
+	}
+	for name := range unlockedTwice {
+		if len(unlocked[name]) < 2 {
+			t.Errorf("%s is pinned as unlocked twice, by %q", name, unlocked[name])
 		}
 	}
 	granted := map[capabilities.Key]bool{}

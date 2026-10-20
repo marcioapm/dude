@@ -133,6 +133,45 @@ func TestAVerificationOfTheHeadPasses(t *testing.T) {
 	}
 }
 
+// A command asked with runs of spaces or a tab passes when the verifier
+// reports it as it ran it: the result is read on one line, so the asked
+// command is matched on one line too.
+func TestACommandWithInnerWhitespaceIsMatchedToItsResult(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	out := w.must(task, "verify", `{"commands":["test  -f FACTORY.md","true\t&& true"]}`)
+	text := w.verifyResult(out["runId"].(string))
+	if !strings.Contains(text, " passed: 2 of 2 commands exited 0.") || strings.Contains(text, "no result") {
+		t.Fatalf("the result:\n%s", text)
+	}
+}
+
+// The verifier runs the command exactly as the conductor asked it: a
+// quoted literal keeps its inner spaces, though its result is matched on
+// one line. Collapsed, this check would fail.
+func TestAQuotedLiteralIsRunAsAsked(t *testing.T) {
+	w := conducting(t)
+	w.onModel("investigator", "fake/scripted")
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	asked := `[ "$(printf 'a  b')" != "a b" ]`
+	body, _ := json.Marshal(map[string]any{"commands": []string{asked}})
+	out := w.must(task, "verify", string(body))
+	text := w.verifyResult(out["runId"].(string))
+	if !strings.Contains(text, " passed: 1 of 1 commands exited 0.") {
+		t.Fatalf("the result:\n%s", text)
+	}
+	if !strings.Contains(text, `"asked":`+jsonString(asked)) {
+		t.Fatalf("the asked command is not the conductor's exact text:\n%s", text)
+	}
+}
+
+func jsonString(s string) string { b, _ := json.Marshal(s); return string(b) }
+
 // verifierReporting has the scripted verifier report only the first n
 // of the commands its brief asks for.
 func (w *world) verifierReporting(n int) {
@@ -148,7 +187,7 @@ func (w *world) verifierReporting(n int) {
 
 // A verifier that leaves out a command it was asked to run has not passed,
 // however its reported commands exited: the result is failed, incomplete,
-// and names the command with no result.
+// and names the command with no result as it was asked, inner spaces kept.
 func TestAVerificationMissingAnAskedCommandFails(t *testing.T) {
 	w := conducting(t)
 	w.onModel("investigator", "fake/scripted")
@@ -156,10 +195,10 @@ func TestAVerificationMissingAnAskedCommandFails(t *testing.T) {
 	task := w.task()
 	w.talk(task)
 	w.implemented(task)
-	child, _ := w.must(task, "verify", `{"commands":["test -f FACTORY.md","exit 4"]}`)["runId"].(string)
+	child, _ := w.must(task, "verify", `{"commands":["test -f FACTORY.md","exit  4"]}`)["runId"].(string)
 	text := w.verifyResult(child)
 	if !strings.Contains(text, " failed: the verifier reported no result for 1 of the 2 commands asked.") ||
-		!strings.Contains(text, "- no result: exit 4") {
+		!strings.Contains(text, "- no result: exit  4") {
 		t.Fatalf("the result:\n%s", text)
 	}
 	var status, reason string
@@ -168,7 +207,7 @@ func TestAVerificationMissingAnAskedCommandFails(t *testing.T) {
 		ARRAY(SELECT jsonb_array_elements_text(verify->'missing')) FROM child_results WHERE child_run_id = $1`, child).Scan(&status, &reason, &missing); err != nil {
 		t.Fatal(err)
 	}
-	if status != "failed" || reason != "incomplete" || !slices.Equal(missing, []string{"exit 4"}) {
+	if status != "failed" || reason != "incomplete" || !slices.Equal(missing, []string{"exit  4"}) {
 		t.Fatalf("kept: %s %s %v", status, reason, missing)
 	}
 }

@@ -550,7 +550,9 @@ func (t *translator) artifactPublished(ctx context.Context, tx pgx.Tx, f lux.Fra
 	}
 	art := ev.Artifact
 	art.ID, art.Epoch = ev.ID, cmp.Or(f.Epoch, 1)
-	return recordArtifact(ctx, tx, artifactRun{t.run.Org, t.run.ProjectID, t.run.TaskID, t.run.ID}, art)
+	return recordArtifact(ctx, tx, artifactRun{
+		Org: t.run.Org, ProjectID: t.run.ProjectID, TaskID: t.run.TaskID, SessionID: t.run.SessionID, ID: t.run.ID,
+	}, art)
 }
 
 // refused records a name lux would not resolve for the Run's agent: kept

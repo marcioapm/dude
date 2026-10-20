@@ -68,6 +68,7 @@ var (
 	limitChoicesTmpl  = mustTemplate("results/limit-request/choice")
 	limitQuestionTmpl = mustTemplate("results/limit-request/question")
 	limitNo           = render(mustTemplate("results/limit-request/no"), nil)
+	limitRefusedTmpl  = mustTemplate("results/limit-request/not-allowed")
 )
 
 // limitChoice is the approving choice's label for r.
@@ -284,17 +285,15 @@ func LimitAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, questionID string
 	if err != nil {
 		return err
 	}
-	g := LimitGrant{Limit: req.Limit, Extra: req.To - req.From, Repo: req.Repo, Number: req.Number, Head: req.Head,
+	g := LimitGrant{Limit: req.Limit, Extra: req.Extra(), Repo: req.Repo, Number: req.Number, Head: req.Head,
 		By: by.Person, ByName: name, Asked: questionID, At: time.Now().UTC()}
 	if err := setLimitState(ctx, tx, d.WorkflowID, append(slices.Clone(st.LimitGrants), g), requests); err != nil {
 		return err
 	}
 	p := req.payload()
 	p["extra"], p["by"], p["byName"] = g.Extra, g.By, g.ByName
-	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvLimitGranted, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
-		TaskID: ref.TaskID, RunID: ref.RunID, ActorType: by.ActorType, ActorID: by.ActorID, Source: ledger.SourceOrchestrator,
-		CorrelationID: ref.TaskID, Payload: p})
+	ev := ref.Event(EvLimitGranted, by.ActorType, p)
+	ev.ActorID = by.ActorID
+	_, err = ledger.Append(ctx, tx, ev)
 	return err
 }
-
-var limitRefusedTmpl = mustTemplate("results/limit-request/not-allowed")

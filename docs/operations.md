@@ -285,7 +285,7 @@ and the list's hosts it can fetch from (never the model's, dude's tools'
 or Exa's); on Codex, which has no fetch tool, that it cannot fetch; with
 neither, that the session has no web access and the person can paste the
 text. The web a session's agent was submitted with is kept on the Run
-(`runs.web`, migration 168); a later agent of the same session whose web
+(`runs.web`, migration 171); a later agent of the same session whose web
 differs (the setting changed, another harness, a tier's Codex
 `web_search`) is told so in its first message, since its briefing replays
 the earlier agent's searches and fetches.

@@ -1,4 +1,4 @@
--- 164_recover_github_read_v2_indexes.sql — as 151 for 160's and 161's
+-- 167_recover_github_read_v2_indexes.sql — as 151 for 163's and 164's
 -- indexes: a cancelled concurrent build leaves an INVALID index that IF NOT
 -- EXISTS skips; rebuild only an interrupted one.
 DO $$
