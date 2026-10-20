@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 )
 
 // InstructionsInput is what a Run's instruction file (/workspace/AGENTS.md)
@@ -16,6 +18,9 @@ type InstructionsInput struct {
 	SessionChild bool
 	// The Run has dude's tools, and the dude CLI on its shell.
 	Tools, CLI bool
+	// The Run's capabilities (capabilities.Resolve): which tools the file
+	// names. nil: its role's defaults, a fixer's being the implementer's.
+	Grants *capabilities.Grants
 	// A brainstorm that may reach any host.
 	Anywhere bool
 	// A conductor with a checkout, which merges the base itself.
@@ -53,18 +58,10 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 	}
 }
 
-// InstructionTools are the tools the instruction file names, by the role a
-// Run calls them as; agenttools' tests hold each list to the tools that
-// role is given.
-var InstructionTools = map[string][]string{
-	"implementer":  {"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository", "run_diff", "request_machine", "sync_base"},
-	"investigator": {"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository", "run_diff", "request_machine"},
-	"reviewer":     {"search_memory", "remember", "emit_event", "request_repository", "run_diff", "request_machine"},
-	"simplifier":   {"search_memory", "remember", "emit_event", "request_repository", "run_diff", "request_machine", "sync_base"},
-	"qa_browser":   {"search_memory", "remember", "emit_event", "request_repository", "run_diff", "request_machine"},
-	RoleConductor:  {"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository", "run_diff", "request_machine", "sync_base"},
-	RoleBrainstorm: {"ask_person", "search_memory", "remember", "request_machine"},
-}
+// InstructionTools are the tools the instruction file can name; a Run's
+// file names those its capabilities grant.
+var InstructionTools = []string{"ask_person", "search_memory", "remember", "emit_event", "create_task", "request_repository",
+	"run_diff", "request_machine", "sync_base"}
 
 // ChildTools are the tools a conductor-started child may call.
 var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}
@@ -74,31 +71,100 @@ type instructionData struct {
 	InstructionsInput
 	Role string
 	// Which of the tools dude.md names this Run has.
-	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, Remember, RequestMachine bool
-	ChildToolNames                                                                  string
+	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, SearchMemory, Remember, RequestMachine bool
+	ChildToolNames                                                                                string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
+	grants           capabilities.Grants
+}
+
+// Granted says the Run's capabilities grant every one of tools, with or
+// without dude's tools (Tools): a role's prose names its tools either way.
+// "!name" is satisfied when name is not granted.
+func (d instructionData) Granted(tools ...string) bool {
+	for _, t := range tools {
+		if name, not := strings.CutPrefix(t, "!"); d.grants.Tool(name) == not {
+			return false
+		}
+	}
+	return true
+}
+
+// List joins the texts of pairs (a Granted condition, space-separated, then
+// its text) whose condition holds and whose text is not empty: sep between
+// them, last before the final one ("" when none is left).
+func (d instructionData) List(sep, last string, pairs ...string) string {
+	var items []string
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if pairs[i+1] != "" && d.Granted(strings.Fields(pairs[i])...) {
+			items = append(items, pairs[i+1])
+		}
+	}
+	return joinList(items, sep, last)
+}
+
+// Wrap is s between before and after, or "" when s is.
+func (instructionData) Wrap(before, s, after string) string {
+	if s == "" {
+		return ""
+	}
+	return before + s + after
+}
+
+// joinList joins items with sep, and last before the final one; of two,
+// a last of ", and" loses its comma.
+func joinList(items []string, sep, last string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		if last != sep {
+			last = strings.TrimPrefix(last, ",")
+		}
+	}
+	return strings.Join(items[:len(items)-1], sep) + last + items[len(items)-1]
+}
+
+// toolRoleOf is the role a Run calls its tools as: a fixer is the
+// implementer's Run, told something else.
+func toolRoleOf(role string) string {
+	if role == "fixer" {
+		return "implementer"
+	}
+	return role
 }
 
 func (in InstructionsInput) data(role string) instructionData {
-	// A fixer is the implementer's Run, told something else.
-	toolRole := role
-	if role == "fixer" {
-		toolRole = "implementer"
+	grants := in.Grants
+	if grants == nil {
+		g := capabilities.Default(toolRoleOf(role))
+		grants = &g
+	}
+	// dude's tools with none of them granted are none: the file says so.
+	if !slices.ContainsFunc(capabilities.All, func(c capabilities.Capability) bool { return len(c.Tools) > 0 && grants.Has(c.Key) }) {
+		in.Tools, in.CLI = false, false
 	}
 	has := map[string]bool{}
 	if in.Tools {
-		for _, t := range InstructionTools[toolRole] {
-			if !in.Child || slices.Contains(ChildTools, t) {
+		for _, t := range InstructionTools {
+			if grants.Tool(t) && (!in.Child || slices.Contains(ChildTools, t)) {
 				has[t] = true
 			}
 		}
 	}
+	var childTools []string
+	for _, t := range ChildTools {
+		if grants.Tool(t) {
+			childTools = append(childTools, t)
+		}
+	}
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
-		Remember: has["remember"], RequestMachine: has["request_machine"],
-		ChildToolNames:   strings.Join(ChildTools[:len(ChildTools)-1], ", ") + ", and " + ChildTools[len(ChildTools)-1],
-		ExternalTextNote: ExternalTextNote}
+		SearchMemory: has["search_memory"], Remember: has["remember"], RequestMachine: has["request_machine"],
+		ChildToolNames:   joinList(childTools, ", ", ", and "),
+		ExternalTextNote: ExternalTextNote, grants: *grants}
 }
 
 var (

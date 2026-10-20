@@ -31,7 +31,7 @@ Your tools act on the work you are part of. Use them; do not work around them.
 {{- end}}
 {{- if .Remember}}
 - **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known; save what the next agent should know (`remember`), after searching so you do not save it twice.
-{{- else}}
+{{- else if .SearchMemory}}
 - **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known.
 {{- end}}
 {{- else -}}

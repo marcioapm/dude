@@ -30,7 +30,7 @@
 //	dude feedback resolve ID --commit HEAD [--repo R]
 //	                                      the commit that fixed an item
 //	dude findings [ID...]                 a conductor's: the task's findings
-//	dude prs                              a conductor's: the task's pull requests
+//	dude prs [--feedback ID]...           a conductor's: the task's pull requests
 //	dude phase start PHASE [--category C]... [--finding ID]... [--note N]
 //	dude agent start PROFILE [--prompt P] [--note N] [--tier T] [--key K]
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
@@ -423,13 +423,19 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("findings", body))
 	case "prs":
+		var feedback many
+		fs.Var(&feedback, "feedback", "a feedback item to read in full, by the id the list gives (repeatable)")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		if fs.NArg() > 0 {
-			return errors.New("usage: dude prs")
+			return errors.New("usage: dude prs [--feedback ID]...")
 		}
-		return show(out, *asJSON, call("pull_requests", map[string]any{}))
+		body := map[string]any{}
+		if len(feedback) > 0 {
+			body["feedback"] = []string(feedback)
+		}
+		return show(out, *asJSON, call("pull_requests", body))
 	case "phase start":
 		var categories, findings many
 		fs.Var(&categories, "category", "review: a reviewer to run (repeatable); none runs those the change warrants")
@@ -946,8 +952,8 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              holds until your work is published with that commit
   dude findings [ID...]                      a conductor's: the task's review findings and how each
                                              was settled; with IDs (fnd_…), those in full
-  dude prs                                   a conductor's: the task's pull requests, their checks,
-                                             reviews and feedback
+  dude prs [--feedback ID]...                a conductor's: the task's pull requests, their checks,
+                                             reviews and feedback; with IDs, those items in full
   dude phase start PHASE [--category C]... [--finding ID]... [--note N]
                                              a conductor's: take the decision the delivery waits on
                                              by starting implement, review, fix, simplify or test

@@ -18,43 +18,41 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// Who may create work: the roles whose job can turn up more of it.
-var creators = []string{"implementer", "investigator", "conductor"}
-
 // Who may ask to change another repository: the roles that change code.
 var writers = []string{"implementer"}
 
 // How many repository requests a Run may have waiting at once.
 const maxPendingRequests = 3
 
-// The tools, and which roles have them (docs/design/agent-tools.md).
+// The task agents' tools. Which agent has each is its capabilities'
+// (internal/capabilities, docs/design/agent-tools.md).
 var tools = []tool{
-	define("list_machine_sizes", machineRoles, listMachineSizes).
+	define("list_machine_sizes", listMachineSizes).
 		describe(machineOffer(false)),
-	define("request_machine", machineRoles, requestMachine).describe(machineOffer(true)),
-	define("list_tasks", nil, listTasks),
-	define("list_epics", nil, listEpics),
-	define("ask_person", []string{"implementer", "investigator", "conductor"}, askPerson),
-	define("emit_event", nil, emitEvent).limit(eventsPerRun),
-	define("list_repositories", nil, listRepositories),
-	define("request_repository", nil, requestRepository).limit(requestsPerRun),
-	define("create_task", creators, createTask).limit(createsPerRun),
-	define("search_memory", nil, searchMemory).before(embedQuery),
-	define("get_memory", nil, getMemory),
-	define("remember", nil, remember).limit(remembersPerRun),
-	define("run_diff", nil, runDiff),
-	define("findings", conductors, findings),
-	define("pull_requests", conductors, pullRequests),
-	define("start_phase", conductors, startPhase),
-	define("start_agent", conductors, startAgent),
-	define("steer", conductors, steer),
-	define("restart_run", conductors, restartRun),
-	define("decide", conductors, decide),
-	define("dismiss_finding", conductors, dismissFinding),
-	define("decide_escalation", conductors, decideEscalation),
-	define("update_task", conductors, updateTask),
-	around(define("reply_on_pull_request", prActors, replyOnPullRequest).before(forgeFor), postReply, recordReply),
-	define("publish", conductors, publish),
+	define("request_machine", requestMachine).describe(machineOffer(true)),
+	define("list_tasks", listTasks),
+	define("list_epics", listEpics),
+	define("ask_person", askPerson),
+	define("emit_event", emitEvent).limit(eventsPerRun),
+	define("list_repositories", listRepositories),
+	define("request_repository", requestRepository).limit(requestsPerRun),
+	define("create_task", createTask).limit(createsPerRun),
+	define("search_memory", searchMemory).before(embedQuery),
+	define("get_memory", getMemory),
+	define("remember", remember).limit(remembersPerRun),
+	define("run_diff", runDiff),
+	define("findings", findings),
+	define("pull_requests", pullRequests),
+	define("start_phase", startPhase),
+	define("start_agent", startAgent),
+	define("steer", steer),
+	define("restart_run", restartRun),
+	define("decide", decide),
+	define("dismiss_finding", dismissFinding),
+	define("decide_escalation", decideEscalation),
+	define("update_task", updateTask),
+	around(define("reply_on_pull_request", replyOnPullRequest).before(forgeFor), postReply, recordReply),
+	define("publish", publish),
 }
 
 type startAgentIn struct {

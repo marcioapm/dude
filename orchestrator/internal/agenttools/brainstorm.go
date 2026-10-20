@@ -24,23 +24,22 @@ import (
 // task; one naming a project refuses any not linked to the session now.
 // Nothing here creates, edits or comments on work, starts or steers a Run,
 // or decides anything: that is read-only by the tool list, not by the
-// instructions.
-var brainstorms = []string{delivery.RoleBrainstorm}
-
+// instructions. The names its capabilities grant are answered by these
+// definitions where one exists (find).
 var brainstormTools = []tool{
-	define("list_tasks", brainstorms, sessionListTasks),
-	define("list_epics", brainstorms, sessionListEpics),
-	define("list_repositories", brainstorms, sessionListRepositories),
-	define("pull_requests", brainstorms, sessionPullRequests),
-	define("findings", brainstorms, sessionFindings),
-	define("search_memory", brainstorms, sessionSearchMemory).before(embedQuery),
-	define("get_memory", brainstorms, sessionGetMemory),
-	define("remember", brainstorms, sessionRemember).limit(remembersPerRun),
-	define("propose", brainstorms, propose).limit(createsPerRun),
-	define("relate", brainstorms, relate).limit(createsPerRun),
-	define("ask_person", brainstorms, sessionAsk),
-	define("name_session", brainstorms, nameSession).limit(namesPerRun),
-	define("start_agent", brainstorms, startAgent),
+	defineSession("list_tasks", sessionListTasks),
+	defineSession("list_epics", sessionListEpics),
+	defineSession("list_repositories", sessionListRepositories),
+	defineSession("pull_requests", sessionPullRequests),
+	defineSession("findings", sessionFindings),
+	defineSession("search_memory", sessionSearchMemory).before(embedQuery),
+	defineSession("get_memory", sessionGetMemory),
+	defineSession("remember", sessionRemember).limit(remembersPerRun),
+	defineSession("propose", propose).limit(createsPerRun),
+	defineSession("relate", relate).limit(createsPerRun),
+	defineSession("ask_person", sessionAsk),
+	defineSession("name_session", nameSession).limit(namesPerRun),
+	defineSession("start_agent", startAgent),
 }
 
 // namesPerRun bounds how often one Run renames its session.
@@ -179,13 +178,21 @@ func taskOf(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (Caller, delive
 	return scoped, p, true, nil
 }
 
-func sessionPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in taskIn) (any, error) {
-	scoped, p, one, err := taskOf(ctx, tx, c, in)
+type sessionPullRequestsIn struct {
+	taskIn
+	Feedback []string `json:"feedback,omitempty"`
+}
+
+func sessionPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in sessionPullRequestsIn) (any, error) {
+	scoped, p, one, err := taskOf(ctx, tx, c, in.taskIn)
 	if err != nil {
 		return nil, err
 	}
 	if one {
-		return pullRequests(ctx, tx, scoped, pullRequestsIn{})
+		return pullRequests(ctx, tx, scoped, pullRequestsIn{Feedback: in.Feedback})
+	}
+	if len(in.Feedback) > 0 {
+		return nil, refuseText(rNameTaskReadFeedbackInFull)
 	}
 	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.state::text, pr.checks::text, pr.review::text,
 			COALESCE($2 || '-' || t.number, '')
