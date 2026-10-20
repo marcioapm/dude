@@ -84,19 +84,20 @@ func TestChildContractFollowsPublishes(t *testing.T) {
 		}
 		return "neither"
 	}
+	saved := Publishes
+	t.Cleanup(func() { Publishes = saved })
 	for _, role := range []string{"investigator", "reviewer", "qa_browser", "implementer", "fixer", "simplifier"} {
 		phase := PhaseForPromptRole(role)
 		want := map[bool]string{true: "writer", false: "report"}
-		if got := contractOf(role); got != want[Publishes[phase]] {
-			t.Errorf("%s child: %s contract, publishes %v", role, got, Publishes[phase])
+		if got := contractOf(role); got != want[saved[phase]] {
+			t.Errorf("%s child: %s contract, publishes %v", role, got, saved[phase])
 		}
 		// The contract is the phase's publishing, not the role's name.
-		saved := Publishes
 		Publishes = maps.Clone(saved)
 		Publishes[phase] = !saved[phase]
 		got := contractOf(role)
 		Publishes = saved
-		if got != want[!Publishes[phase]] {
+		if got != want[!saved[phase]] {
 			t.Errorf("%s child with publishing flipped: %s contract", role, got)
 		}
 	}
