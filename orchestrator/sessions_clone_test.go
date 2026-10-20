@@ -319,3 +319,34 @@ func TestRefreshCheckoutLinksNothingAMemberDidNot(t *testing.T) {
 		t.Errorf("an unlinked project: %d %v", status, out)
 	}
 }
+
+// A repository whose clone once failed, linked again and checked out, then
+// unlinked by a member while the Run still holds it, is not linked again by
+// refresh_checkout: the member's unlink stands.
+func TestRefreshCheckoutKeepsAMembersUnlinkOfAHeldRepository(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWebAndFail(id, run)
+	s.lux.CloneError = nil
+	s.linkWeb(id)
+	s.until("web checked out", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
+	})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{}}}})
+	s.runningIdle(run)
+
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	if web := out["repositories"].([]any)[0].(map[string]any); web["status"] != "not_linked" {
+		t.Errorf("web: %v", web)
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("the repository the member unlinked was linked again")
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 0 {
+		t.Errorf("%d session.checkout.requested", n)
+	}
+}

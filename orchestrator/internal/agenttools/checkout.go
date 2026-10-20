@@ -95,7 +95,8 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 		case r.Linked:
 			line.Status = "pending"
 			names.Pending = append(names.Pending, p.Key+"/"+r.Name)
-		case r.FailedAt != nil:
+		// A held, unlinked repository is one a member unlinked: it stays unlinked.
+		case r.FailedAt != nil && !r.Held:
 			line.Status = "requested"
 			names.Requested = append(names.Requested, p.Key+"/"+r.Name)
 			requested = append(requested, map[string]any{"id": r.ID, "name": r.Name})
