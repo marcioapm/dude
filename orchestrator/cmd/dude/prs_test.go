@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -78,10 +77,18 @@ func TestDudePrsRefresh(t *testing.T) {
 		t.Fatalf("--refresh: %v %v", paths, bodies)
 	}
 	err := run([]string{"prs", "--refresh", "--feedback", "issue-comment-7"}, &out)
-	if err == nil || !strings.Contains(err.Error(), "usage: dude prs") {
+	if err == nil || err.Error() != "usage: dude prs [--refresh | [--feedback ID]...]" {
 		t.Errorf("--refresh with --feedback: %v", err)
 	}
 	if len(paths) != 1 {
 		t.Errorf("--refresh with --feedback called %v", paths[1:])
+	}
+	// The usage line is the form the parser takes: the flag repeated works,
+	// two ids after one flag do not.
+	if err := run([]string{"prs", "--feedback", "issue-comment-7", "--feedback", "line-comment-9"}, &out); err != nil {
+		t.Errorf("--feedback twice: %v", err)
+	}
+	if err := run([]string{"prs", "--feedback", "issue-comment-7", "line-comment-9"}, &out); err == nil {
+		t.Error("two ids after one --feedback are taken")
 	}
 }
