@@ -26,6 +26,8 @@ const (
 	// Feedback items per pull request, newest last, and characters of each.
 	feedbackMax     = 50
 	feedbackExcerpt = 280
+	// Feedback items whose whole text one call returns.
+	feedbackTextMax = 20
 )
 
 // ---- findings ------------------------------------------------------------------
@@ -128,7 +130,9 @@ func settledAs(status, by string, attempts int, note string) string {
 
 // ---- pull_requests ----------------------------------------------------------
 
-type pullRequestsIn struct{}
+type pullRequestsIn struct {
+	Feedback []string `json:"feedback,omitempty"`
+}
 
 type checkOut struct {
 	Name       string `json:"name"`
@@ -137,16 +141,33 @@ type checkOut struct {
 }
 
 type feedbackOut struct {
+	// The comment's id on GitHub (issue-comment-…, line-comment-…, review-…).
+	ID     string `json:"id"`
 	Author string `json:"author"`
 	// comment, line_comment, review, changes_requested.
 	Kind    string `json:"kind"`
 	Path    string `json:"path,omitempty"`
 	Excerpt string `json:"excerpt"`
-	At      string `json:"at"`
+	// The excerpt left characters out: name the id for the whole text.
+	Cut bool   `json:"cut,omitempty"`
+	At  string `json:"at"`
 	// A fixer Run was sent it, by id; "" for none.
 	ActedOnBy string `json:"actedOnBy,omitempty"`
 	// Why it woke nobody: its author may not ("not_permitted").
 	Ignored string `json:"ignored,omitempty"`
+}
+
+// feedbackTextOut is one feedback item asked for by id, its body as last
+// edited.
+type feedbackTextOut struct {
+	ID     string `json:"id"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Author string `json:"author"`
+	Kind   string `json:"kind"`
+	Path   string `json:"path,omitempty"`
+	At     string `json:"at"`
+	Body   string `json:"body"`
 }
 
 type pullRequestOut struct {
@@ -168,7 +189,13 @@ type pullRequestOut struct {
 	Feedback          []feedbackOut     `json:"feedback"`
 }
 
-func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, _ pullRequestsIn) (any, error) {
+func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (any, error) {
+	ids := uniquePaths(in.Feedback)
+	if len(ids) > feedbackTextMax {
+		return nil, refuse(rAtMostFeedbackItemsByIdAt, feedbackTextMax)
+	}
+	// People's words on GitHub, quoted as external text under one id per call.
+	w := newWrapper()
 	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.url, pr.state::text, pr.head_branch, COALESCE(pr.head_sha, ''),
 			pr.base_branch, pr.checks::text, COALESCE(pr.checks_json, '[]'), pr.review::text, COALESCE(pr.reviews_json, '[]'),
 			COALESCE(pr.unresolved_threads, 0)
@@ -208,7 +235,7 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, _ pullRequestsIn) (a
 		// path. runs.pr_feedback keeps what woke each fixer, not the
 		// comment's id, so this is the closest match there is; a fix sent
 		// before repo was recorded (a one-repository task) matches by path.
-		frows, err := tx.Query(ctx, `SELECT COALESCE(e.payload->>'author', ''), COALESCE(e.payload->>'kind', ''),
+		frows, err := tx.Query(ctx, `SELECT COALESCE(e.payload->>'feedbackId', ''), COALESCE(e.payload->>'author', ''), COALESCE(e.payload->>'kind', ''),
 				COALESCE(e.payload->>'path', ''), COALESCE(e.payload->>'body', ''), e.occurred_at::text,
 				COALESCE((SELECT r.id FROM runs r, jsonb_array_elements(COALESCE(r.pr_feedback, '[]')) f
 					WHERE r.task_id = e.task_id AND f->>'source' = 'review' AND f->>'author' = e.payload->>'author'
@@ -226,11 +253,13 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, _ pullRequestsIn) (a
 		for frows.Next() {
 			var f feedbackOut
 			var body string
-			if err := frows.Scan(&f.Author, &f.Kind, &f.Path, &body, &f.At, &f.ActedOnBy, &f.Ignored); err != nil {
+			if err := frows.Scan(&f.ID, &f.Author, &f.Kind, &f.Path, &body, &f.At, &f.ActedOnBy, &f.Ignored); err != nil {
 				frows.Close()
 				return nil, err
 			}
-			f.Excerpt = excerpt(body, feedbackExcerpt)
+			var short string
+			short, f.Cut = excerpt(body, feedbackExcerpt)
+			f.Excerpt = w.text(short, textCap)
 			pr.Feedback = append(pr.Feedback, f)
 		}
 		if err := frows.Err(); err != nil {
@@ -238,16 +267,66 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, _ pullRequestsIn) (a
 		}
 		out = append(out, pr)
 	}
-	return map[string]any{"pullRequests": out}, nil
+	result := map[string]any{"pullRequests": out}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	texts, unknown, err := feedbackTexts(ctx, tx, c.TaskID, ids, w)
+	if err != nil {
+		return nil, err
+	}
+	result["feedback"] = texts
+	if len(unknown) > 0 {
+		result["unknownFeedback"] = unknown
+	}
+	return result, nil
 }
 
-// excerpt is s on one line, cut to n characters.
-func excerpt(s string, n int) string {
+// feedbackTexts are the task's feedback items ids names, in that order,
+// each with its body as last recorded (a later comment_edited carries the
+// new one), and the ids that name none of the task's.
+func feedbackTexts(ctx context.Context, tx pgx.Tx, task string, ids []string, w wrapper) ([]feedbackTextOut, []string, error) {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (l.payload->>'feedbackId') l.payload->>'feedbackId', COALESCE(l.payload->>'body', ''),
+			COALESCE(o.payload->>'repo', ''), COALESCE((o.payload->>'number')::int, 0), COALESCE(o.payload->>'author', ''),
+			COALESCE(o.payload->>'kind', ''), COALESCE(o.payload->>'path', ''), o.occurred_at::text
+		FROM events l JOIN events o ON o.task_id = l.task_id AND o.event_type = $3 AND o.payload->>'feedbackId' = l.payload->>'feedbackId'
+		WHERE l.task_id = $1 AND l.event_type IN ($3, $4) AND l.payload->>'feedbackId' = ANY($2)
+		ORDER BY l.payload->>'feedbackId', l.cursor DESC`,
+		task, ids, delivery.EvPullRequestCommented, delivery.EvPullRequestCommentEdited)
+	if err != nil {
+		return nil, nil, err
+	}
+	found := map[string]feedbackTextOut{}
+	for rows.Next() {
+		var f feedbackTextOut
+		if err := rows.Scan(&f.ID, &f.Body, &f.Repo, &f.Number, &f.Author, &f.Kind, &f.Path, &f.At); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		f.Body = w.text(f.Body, textCap)
+		found[f.ID] = f
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	texts, unknown := []feedbackTextOut{}, []string(nil)
+	for _, id := range ids {
+		if f, ok := found[id]; ok {
+			texts = append(texts, f)
+		} else {
+			unknown = append(unknown, id)
+		}
+	}
+	return texts, unknown, nil
+}
+
+// excerpt is s on one line, cut to n characters, and whether it was cut.
+func excerpt(s string, n int) (string, bool) {
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > n {
-		return string(r[:n-1]) + "…"
+		return string(r[:n-1]) + "…", true
 	}
-	return s
+	return s, false
 }
 
 // ---- the conductor's decisions ----------------------------------------------

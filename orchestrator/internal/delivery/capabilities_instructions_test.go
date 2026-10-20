@@ -120,7 +120,9 @@ var toolCommands = map[string][]string{
 var notTheTool = map[string][]string{
 	"decide": {"**People decide**", "and what you decide", "read what you need with your tools, then decide.",
 		"start nothing and decide nothing", "whatever you decide", "only a person may decide", "the states that decide it"},
-	"feedback": {"reviews and feedback)", "come back as feedback.", "findings and feedback you are given"},
+	"feedback": {"reviews and feedback)", "come back as feedback.", "findings and feedback you are given",
+		// pull_requests' own feedback ids (#234), not the feedback tool.
+		"reviews and feedback, each item an excerpt; name feedback ids", "`dude prs [--feedback ID]...`"},
 	"findings": {"triages findings", "(some or all findings)", "report findings with a severity",
 		"structured findings and tester verdicts", "Your findings go", "risks new findings", "after any findings",
 		"are findings.", "role's findings or verdict", "on earlier findings", "Your output is findings", "resolve the findings", "report and findings"},
