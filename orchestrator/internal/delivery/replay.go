@@ -20,8 +20,10 @@ import (
 // replayToolCap bounds a tool call's input, and its output, in bytes.
 const replayToolCap = 4096
 
-// Talker names whose conversation is replayed: a session, or a task.
-type Talker struct{ SessionID, TaskID string }
+// Talker names whose conversation is replayed: a session, a task, or a
+// phase Run's chain — the Run and the earlier rounds it continues
+// (runs.continues_run_id), whose next round is a fresh agent.
+type Talker struct{ SessionID, TaskID, RunID string }
 
 // replayEvent is one ledger event as the renderer reads it. Who is the
 // actor's name when a person wrote it; Heard is false for a message whose
@@ -63,10 +65,13 @@ const (
 // ledger. A session's: every event of the session (events_session_of_run
 // stamps the session on each event of its Runs). A task's: its conductor
 // Runs' events, never a phase Run's; every writer of a task's chat.message
-// puts it on a conductor Run.
+// puts it on a conductor Run. A phase Run's: its own events and those of
+// each Run it continues, back to the first round.
 const (
 	sessionScope = `e.session_id = $1`
 	taskScope    = `(e.task_id = $1 AND e.run_id IN (SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent'))`
+	chainScope   = `e.run_id IN (WITH RECURSIVE chain AS (SELECT id, continues_run_id FROM runs WHERE id = $1
+		UNION ALL SELECT r.id, r.continues_run_id FROM runs r JOIN chain c ON r.id = c.continues_run_id) SELECT id FROM chain)`
 )
 
 // heardDirective (SQL, over events e; key a literal payload key): the
@@ -277,7 +282,10 @@ func replayEvents(ctx context.Context, tx pgx.Tx, of Talker) ([]replayEvent, err
 	// A session renamed before its first Run has events and nothing to
 	// replay; a task's scope already requires a conductor Run.
 	scope, id, hadRun := sessionScope, of.SessionID, `EXISTS (SELECT 1 FROM runs WHERE session_id = $1 AND role = 'brainstorm' AND kind = 'agent')`
-	if of.SessionID == "" {
+	switch {
+	case of.RunID != "":
+		scope, id, hadRun = chainScope, of.RunID, `true`
+	case of.SessionID == "":
 		scope, id, hadRun = taskScope, of.TaskID, `true`
 	}
 	// The correlated heard probes inflate the plan's cost past

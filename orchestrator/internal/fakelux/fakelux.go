@@ -613,6 +613,9 @@ type event struct {
 }
 
 type Server struct {
+	// Decide is the scripted agent (New with no decide): a resumed
+	// reviewer or tester plays its step for its new tree (replay).
+	scriptedAgent bool
 	// NoNestedHost: no host in the pool offers nested containers, so a Run
 	// asking for them waits, submitted, saying so in its stateReason, as
 	// lux's scheduler does (internal/server/hostfit.go).
@@ -833,8 +836,34 @@ func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 	s.feedInit()
 	if decide == nil {
 		s.Decide = s.scripted
+		s.scriptedAgent = true
 	}
 	return s
+}
+
+// replay decides a resumed Run's behaviour again (scripted), from its spec
+// with each repository at the commit its checkout is at now. Only a
+// reviewer's or tester's: their step depends on the tree they check.
+// Callers hold s.mu.
+func (s *Server) replay(run *Run, spec map[string]any) {
+	labels, _ := spec["labels"].(map[string]any)
+	if phase, _ := labels["dude.phase"].(string); phase != "review" && phase != "test" {
+		return
+	}
+	raw, _ := json.Marshal(spec)
+	var now map[string]any
+	_ = json.Unmarshal(raw, &now)
+	git, _ := now["git"].(map[string]any)
+	list, _ := git["repositories"].([]any)
+	for _, item := range list {
+		r, _ := item.(map[string]any)
+		name, _ := r["name"].(string)
+		if at := run.at[name]; at != "" {
+			r["ref"] = at
+		}
+	}
+	run.behavior = s.Decide(now)
+	run.behavior.withChecks(now)
 }
 
 // scripted plays fakeagent's step for the Run's phase, deciding the
@@ -1047,6 +1076,17 @@ func (s *Server) ResumeInputs(id string) []string {
 	defer s.mu.Unlock()
 	if run := s.runs[id]; run != nil {
 		return slices.Clone(run.ResumeInputs)
+	}
+	return nil
+}
+
+// Inputs is each input the Run's agent was given after its prompt, in
+// order: a resume's, and each steer or directive.
+func (s *Server) Inputs(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.Inputs)
 	}
 	return nil
 }
@@ -1651,7 +1691,11 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	}
 	if resumed && run.pendingSync != nil {
 		// Restored checkouts move before init, as a resume's sync does.
-		s.applySync(run, run.pendingSync, "")
+		if s.applySync(run, run.pendingSync, "") && s.scriptedAgent {
+			// A scripted reviewer or tester taken over for a new round plays
+			// its step for the tree it now has, not the one it started on.
+			s.replay(run, spec)
+		}
 		run.pendingSync = nil
 	}
 	// Init runs on every placement, before the servers and the workload.

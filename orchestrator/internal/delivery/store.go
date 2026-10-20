@@ -151,6 +151,14 @@ type PhaseRun struct {
 	// shows it.
 	Branch string
 	Child  bool
+	// Go on from the previous round of this phase and category
+	// (continueOrCreateTx); nil starts fresh, as a restart always does.
+	Continue *Continue
+	// Set by continueOrCreateTx: the predecessor whose conversation a
+	// fresh Run is given (runs.continues_run_id, how 'replay'), and why a
+	// Run asked to go on starts fresh, for its run.created.
+	Replays     string
+	freshReason string
 }
 
 // ReviewRange is the range a review covers: from Base, per repository,
@@ -214,6 +222,16 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 			return runID, err
 		}
 	}
+	if in.Continue != nil {
+		return continueOrCreateTx(ctx, tx, org, in)
+	}
+	replays := false
+	if in.Replays != "" {
+		var err error
+		if replays, err = replayingTx(ctx, tx, &in, in.Replays); err != nil {
+			return "", err
+		}
+	}
 	var locked *Delivery
 	if Publishes[in.Phase] {
 		// A writer waits for the conductor's publish moving the task
@@ -257,18 +275,23 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		reviewRange, _ = json.Marshal(in.ReviewRange)
 	}
 	runID = ids.New(ids.Run)
+	var continues, how *string
+	if replays {
+		continues, how = &in.Replays, new(string)
+		*how = ContinuesReplay
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
 		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override,
-		                  review_range, branch, feedback_item_ids)
+		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18, $19::jsonb, $20, $21)`,
+		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
 		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
-		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs)); err != nil {
+		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {
@@ -302,11 +325,17 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 	if len(in.PRFeedback) > 0 {
 		payload["prFeedbackCount"] = len(in.PRFeedback)
 	}
+	if in.freshReason != "" {
+		payload["fresh"] = in.freshReason
+	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvRunCreated, OrganizationID: org, ProjectID: projectID, TaskID: in.TaskID, RunID: runID,
 		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 		CorrelationID: in.TaskID, Payload: payload,
 	})
+	if err == nil && replays {
+		err = continuesEventTx(ctx, tx, RunRef{Org: org, ProjectID: projectID, TaskID: in.TaskID, RunID: runID}, in.Replays, ContinuesReplay)
+	}
 	return runID, err
 }
 
@@ -650,6 +679,11 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 			return false, err
 		}
 		if _, err := PeerEndedTx(ctx, tx, org, taskID, status); err != nil {
+			return false, err
+		}
+		// No next round will go on from its reviewers and testers.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET keep = false, kept_until = now()
+			WHERE task_id = $1 AND status = 'completed' AND keep`, taskID); err != nil {
 			return false, err
 		}
 	}

@@ -37,6 +37,10 @@ type Restart struct {
 	// dude's own: a paused Run that cannot be resumed (a project secret it
 	// was given is no longer its phase's). Payload by "dude".
 	ByDude bool
+	// A next round that could not take its predecessor's agent over
+	// (phases' replaceRound): the predecessor whose conversation the fresh
+	// Run is given (PhaseRun.Replays).
+	Replays string
 }
 
 // RestartRunTx aborts a live phase Run the task's delivery waits on and
@@ -75,7 +79,11 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	case d == nil || !d.Live() || !slices.Contains(d.State.PendingRunIDs, in.RunID):
 		return "", refusef(rNotRunDeliveryWaitsOnOnly, in.RunID)
 	case d.Status != "waiting":
-		// A step running now writes the Runs it waits on as it read them.
+		// A step running now writes the Runs it waits on as it read them;
+		// dude's replacement of a next round (Replays) waits for it.
+		if in.Replays != "" {
+			return "", ErrStepRunning
+		}
 		return "", refusef(rDeliveryTakingStepNowRestartAgain, in.RunID)
 	}
 	note := clip(strings.TrimSpace(in.Note), noteChars)
@@ -105,7 +113,7 @@ func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 		ConductorRunID:  conductorRun, ConductorNote: conductorNote,
 		RestartNote: restartLine(in, note), Tier: tierID,
 		// Where it publishes and what it reviews, as the Run it replaces.
-		Branch: branch, ReviewRange: reviewRange,
+		Branch: branch, ReviewRange: reviewRange, Replays: in.Replays,
 	})
 	if err != nil {
 		return "", err

@@ -1377,7 +1377,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var conductorIn delivery.PromptInput
-	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination string
+	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination, replay string
 	var projectSecrets []lux.Secret
 	var tier delivery.Tier
 	var noTier string
@@ -1461,6 +1461,17 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if stored == nil && !r.conductor() {
 			if coordination, err = delivery.EpicBriefing(ctx, tx, r.Org, r.TaskID, r.ID, settingsRole); err != nil {
 				return err
+			}
+			// A next round started fresh: its predecessor's conversation.
+			var replays string
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(continues_run_id, '') FROM runs WHERE id = $1 AND continues_how = 'replay'`, r.ID).
+				Scan(&replays); err != nil && !db.IsNotFound(err) {
+				return err
+			}
+			if replays != "" {
+				if replay, err = delivery.Replay(ctx, tx, delivery.Talker{RunID: replays}); err != nil {
+					return err
+				}
 			}
 		}
 		// The project's secrets this phase is given; a resume's, only the
@@ -1564,7 +1575,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Bases: taskBranch.Bases, Adopted: adopted,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of
@@ -2090,6 +2101,17 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		}
 	}
 	if r.Phase == delivery.PhaseReview || r.Phase == delivery.PhaseTest {
+		// A next round whose agent came back without its earlier rounds
+		// judged with none of them: replaced, its report not taken.
+		why, err := s.roundLost(ctx, r)
+		if err != nil {
+			return true, err
+		}
+		if why != "" {
+			if replaced, err := s.replaceRound(ctx, r, why); replaced || err != nil {
+				return true, err
+			}
+		}
 		if err := s.reportFindings(ctx, r); err != nil {
 			return true, err
 		}
@@ -2133,10 +2155,15 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(branch, '') FROM runs WHERE id = $1`, r.ID).Scan(&own); err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
-			heads = $3::jsonb, branch = COALESCE(NULLIF($4, ''), branch)
-			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`,
-			r.ID, "complete", raw, branch)
+		// A reviewer's or tester's lux Run is kept, stopped, for its next
+		// round to take over (delivery.RoundContinues), until the keep
+		// window ends or the task lets it go (ReleaseKeptTx).
+		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), lux_stop_reason = $2,
+			heads = $3::jsonb, branch = COALESCE(NULLIF($4, ''), branch),
+			keep = `+keptForNextRound+`,
+			kept_until = CASE WHEN `+keptForNextRound+` THEN now() + make_interval(secs => $5) END
+			WHERE r.id = $1 AND r.status IN ('scheduled', 'starting', 'running')`,
+			r.ID, "complete", raw, branch, s.KeepFor.Seconds())
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -2640,7 +2667,17 @@ func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 // terminated, its last exit collected. Served by runs_retirable_idx (092).
 // 'cancel' is the lux_stop_reason recorded once dude has terminated a Run.
 const retirable = `(r.status = 'completed' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
-	AND r.artifacts_due_at IS NULL)`
+	AND r.artifacts_due_at IS NULL AND NOT (r.keep AND COALESCE(r.kept_until > now(), false)))`
+
+// keptForNextRound (SQL, over runs r): a completed reviewer or tester,
+// outside an integration, of a task whose delivery policy goes on from the
+// previous round (delivery.RoundContinues; resumeRounds, the project's over
+// its organization's over the factory's).
+var keptForNextRound = `(r.phase IN ('review', 'test') AND r.source_kind IS NULL AND r.lux_run_id IS NOT NULL
+	AND NOT (r.pr_feedback @> '[{"source":"integration"}]')
+	AND COALESCE((SELECT (p.delivery_policy->>'resumeRounds')::boolean FROM projects p WHERE p.id = r.project_id),
+		(SELECT (o.delivery_policy->>'resumeRounds')::boolean FROM organizations o WHERE o.id = r.organization_id), ` +
+	fmt.Sprint(delivery.DefaultPolicy().ResumeRounds) + `))`
 
 // pause stops the lux Run, keeping its state. Graceful and hard are the same
 // here: lux asks the agent to end its turn cleanly before the container stops.
@@ -2712,7 +2749,19 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	var cannot errCannotResume
 	var noLogin errLoginUnavailable
 	var gone errSecretsGone
+	// A next round that took over its predecessor's lux Run and cannot
+	// resume it starts fresh in its slot, given its conversation.
+	unresumable := func(why string) (bool, error) {
+		refused()
+		if replaced, err := s.replaceRound(ctx, r, why); replaced || err != nil {
+			return true, err
+		}
+		return true, s.fail(ctx, r, "cannot resume: "+why)
+	}
 	if errors.As(err, &gone) && r.TaskID != "" {
+		if replaced, rerr := s.replaceRound(ctx, r, gone.Error()); replaced || rerr != nil {
+			return true, rerr
+		}
 		if retired, rerr := s.retireForSecrets(ctx, r, gone); retired || rerr != nil {
 			return true, rerr
 		}
@@ -2725,7 +2774,7 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.retryLater(ctx, r, err)
 	}
 	if errors.As(err, &cannot) {
-		return true, s.fail(ctx, r, "cannot resume: "+cannot.Error())
+		return unresumable(cannot.Error())
 	}
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 		// Already resuming (an earlier attempt got through and its answer
@@ -2733,11 +2782,15 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		// all, ended in lux (or succeeded, on a lux from before succeeded
 		// resumed), which fails it.
 		if cur, gerr := s.Lux.Get(ctx, r.LuxRunID); gerr == nil && (lux.Terminated(cur.State) || cur.State == "succeeded") {
-			refused()
-			return true, s.fail(ctx, r, "cannot resume: lux says the run is "+cur.State)
+			return unresumable("lux says the run is " + cur.State)
 		}
 		err = nil
 		lr.State = "resuming"
+	}
+	if le, ok := lux.AsError(err); ok && le.Status == http.StatusNotFound {
+		if replaced, rerr := s.replaceRound(ctx, r, "lux no longer has the run"); replaced || rerr != nil {
+			return true, rerr
+		}
 	}
 	if err != nil {
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
@@ -2834,6 +2887,9 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 		return lux.Run{}, 0, err
 	}
 	RecordMemoryLimit(ctx, s.DB, s.Log, r.Org, r.ID, lr)
+	if err := s.roundSecrets(ctx, r); err != nil {
+		return lux.Run{}, 0, err
+	}
 	spec, sizes, _, given, err := s.spec(ctx, r, &lr.Spec, chosenImage{})
 	if passing(err) || forge.Transient(err) || errors.As(err, new(errLoginUnavailable)) || errors.As(err, new(errSecretsGone)) {
 		return lux.Run{}, 0, err
@@ -2868,6 +2924,8 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 				return lux.Run{}, 0, err
 			}
 		}
+	} else if in.Sync, err = s.roundRefs(ctx, r); err != nil {
+		return lux.Run{}, 0, err
 	}
 	foreseen = s.resumeAsked(ctx, r, lr)
 	// Added to the copy before lux starts the new process, whose first
