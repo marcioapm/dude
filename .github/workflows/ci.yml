@@ -95,20 +95,15 @@ jobs:
         working-directory: orchestrator
         run: go vet ./...
 
-      # dbtest skips a test when Postgres is unreachable; here that is broken
-      # setup, so a "no test database" skip fails the step.
+      # The root package's tests run one at a time and alone set the job's
+      # length (about 1,130 s, the next package at most 170 s), so the script
+      # splits them over 2 processes by sorted name, beside go test -p 4 over
+      # the other packages; the 25-minute limit per binary leaves room for a
+      # slow runner. It fails on any process's failure, on a root test with
+      # no result, and on a "no test database" skip: dbtest skips a test when
+      # Postgres is unreachable, which here is broken setup.
       - name: go test, and no test skipped for want of a database
-        working-directory: orchestrator
-        run: |
-          set -o pipefail
-          # The root package alone took 564 s (9.4 minutes) on a hosted runner
-          # (run 38484827348): close to go test's default 10-minute limit per
-          # binary, so the limit is raised with room for a slow runner.
-          go test -p 4 -count=1 -timeout 25m -v ./... 2>&1 | tee "$RUNNER_TEMP/go-test.log"
-          if grep -F 'no test database' "$RUNNER_TEMP/go-test.log"; then
-            echo "tests skipped without a database: Postgres was not reachable at localhost:5433" >&2
-            exit 1
-          fi
+        run: scripts/go-test.sh
 
       # forge's concurrency tests assert only under the race detector; phases runs its followers on goroutines of their own.
       - name: go test -race, forge and phases
