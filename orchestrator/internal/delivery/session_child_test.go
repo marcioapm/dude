@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 )
 
 func TestSessionChildAdmissionAndParentFence(t *testing.T) {
@@ -107,6 +108,63 @@ func TestSessionChildAdmissionAndParentFence(t *testing.T) {
 	newChild, err := s.StartChild(ctx, in)
 	if err != nil || newChild == id {
 		t.Fatalf("key leaked across parent Runs: %s %v", newChild, err)
+	}
+}
+
+func TestSessionChildAdmissionReReadsOnInsertConflict(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_race', $1, 'Research')`, org)
+	exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role)
+		VALUES ('run_race_parent', $1, 'ssn_race', 1, 'running', 'agent', 'brainstorm'),
+		('run_race_competitor_parent', $1, 'ssn_race', 1, 'running', 'agent', 'investigator')`, org)
+	exec(`INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('tier_race_child', $1, 'Race', 'fake/scripted')`, org)
+	in := StartChildInput{
+		Parent:  ChildParent{Kind: ChildParentSession, Run: RunRef{Org: org, SessionID: "ssn_race", RunID: "run_race_parent"}},
+		Profile: "investigator", Prompt: "loser prompt", Note: "loser note", Tier: "Race", Key: "same",
+	}
+	winner := ids.New(ids.Run)
+	hook := func() {
+		exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role, parent_run_id,
+			parent_session_id, source_kind, child_profile, child_prompt, child_capabilities, conductor_note, tier_override, creation_key, base_refs)
+			VALUES ($1, $2, 'ssn_race', 1, 'pending', 'investigate', 'investigator', 'run_race_competitor_parent',
+			'ssn_race', 'session', 'investigator', 'winner prompt', '{}'::jsonb, 'winner note', 'tier_race_child', 'child:run_race_parent:same', '{}'::jsonb)`, winner, org)
+		exec(`INSERT INTO events (id, organization_id, event_type, run_id, session_id, actor_type, actor_id, source, payload)
+			VALUES ($1, $2, 'run.child_started', $3, 'ssn_race', 'agent', 'race-test', 'control-plane', '{}'::jsonb)`, ids.New(ids.Event), org, winner)
+	}
+	var got string
+	err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var err error
+		got, err = startChildTx(ctx, tx, in, hook)
+		return err
+	})
+	if err != nil || got != winner {
+		t.Fatalf("conflict winner: got %q, want %q, err %v", got, winner, err)
+	}
+	var children, events int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM runs WHERE session_id = 'ssn_race' AND creation_key = 'child:run_race_parent:same'`).Scan(&children); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM events WHERE event_type = 'run.child_started' AND session_id = 'ssn_race'`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if children != 1 || events != 1 {
+		t.Fatalf("winner rows: children=%d events=%d", children, events)
+	}
+	var prompt, note, tier string
+	if err := owner.QueryRow(ctx, `SELECT child_prompt, conductor_note, tier_override FROM runs WHERE id = $1`, winner).
+		Scan(&prompt, &note, &tier); err != nil {
+		t.Fatal(err)
+	}
+	if prompt != "winner prompt" || note != "winner note" || tier != "tier_race_child" {
+		t.Fatalf("loser mutated winner: prompt=%q note=%q tier=%q", prompt, note, tier)
 	}
 }
 

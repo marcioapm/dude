@@ -75,7 +75,7 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 		return "", refuseText(rChildParentKeyRequired)
 	}
 	if in.Parent.Kind == ChildParentSession {
-		return startSessionChildTx(ctx, tx, in, phase)
+		return startSessionChildTx(ctx, tx, in, phase, betweenLocks)
 	}
 	if in.Parent.Kind != ChildParentTaskConductor {
 		return "", refuseText(rChildParentUnauthorized)
@@ -174,7 +174,7 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 	return id, err
 }
 
-func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string) (string, error) {
+func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenProbe func()) (string, error) {
 	if in.Profile != "investigator" || in.Capabilities.PublishCode {
 		return "", refuseText(rChildSessionProfile)
 	}
@@ -205,6 +205,9 @@ func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, pha
 	}
 	if !db.IsNotFound(err) {
 		return "", err
+	}
+	if betweenProbe != nil {
+		betweenProbe()
 	}
 	tier := ""
 	if in.Tier != "" {
