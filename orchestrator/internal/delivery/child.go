@@ -174,7 +174,7 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 	return id, err
 }
 
-func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenLocks func()) (string, error) {
+func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenProbe func()) (string, error) {
 	if in.Profile != "investigator" || in.Capabilities.PublishCode {
 		return "", refuseText(rChildSessionProfile)
 	}
@@ -206,8 +206,10 @@ func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, pha
 	if !db.IsNotFound(err) {
 		return "", err
 	}
-	if betweenLocks != nil {
-		betweenLocks()
+	// betweenProbe runs after the key probe misses and before the insert, so a
+	// test can commit a competing row there and reach the conflict re-read.
+	if betweenProbe != nil {
+		betweenProbe()
 	}
 	tier := ""
 	if in.Tier != "" {
