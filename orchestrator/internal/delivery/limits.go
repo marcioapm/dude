@@ -26,18 +26,17 @@ func (st *State) PullRequestFixesSpent(repo string, total int) bool {
 }
 
 // GitHubSettingsTx are the organisation's GitHub settings as dude applies
-// them (forge.ReadSettings), and whether it has a GitHub connection at all;
-// without one, the defaults.
-func GitHubSettingsTx(ctx context.Context, tx pgx.Tx) (forge.Settings, bool, error) {
+// them (forge.ReadSettings); without a GitHub connection, the defaults.
+func GitHubSettingsTx(ctx context.Context, tx pgx.Tx) (forge.Settings, error) {
 	var raw []byte
 	err := tx.QueryRow(ctx, `SELECT settings FROM forge_credentials WHERE forge = 'github' LIMIT 1`).Scan(&raw)
 	if db.IsNotFound(err) {
-		return forge.DefaultSettings(), false, nil
+		return forge.DefaultSettings(), nil
 	}
 	if err != nil {
-		return forge.Settings{}, false, err
+		return forge.Settings{}, err
 	}
-	return forge.ReadSettings(raw), true, nil
+	return forge.ReadSettings(raw), nil
 }
 
 // rerunClaims are the task's ($1) rerun claims (event $2, action $3), as e:
@@ -78,7 +77,6 @@ type TaskLimits struct {
 	PRIteration int
 	PRFixes     map[string]int
 	GitHub      forge.Settings
-	Connected   bool
 	// The task's open pull requests.
 	PullRequests []LimitsPR
 	// One conductor publish's bounds, from the policy as it is now.
@@ -131,7 +129,7 @@ func TaskLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (TaskLimits, er
 	if l.PRFixes == nil {
 		l.PRFixes = map[string]int{}
 	}
-	if l.GitHub, l.Connected, err = GitHubSettingsTx(ctx, tx); err != nil {
+	if l.GitHub, err = GitHubSettingsTx(ctx, tx); err != nil {
 		return l, err
 	}
 	if l.PublishLines, l.PublishFiles, err = PublishLimitsTx(ctx, tx, taskID); err != nil {
