@@ -1601,4 +1601,27 @@ describe("the checks gate's send-back", () => {
     expect(told([held, early, retry])).toEqual([sentBack]);
     expect(told([held, early, retry, ev(EventTypes.DirectiveDelivered, { directiveId: "dir_r" })])).toEqual([sentBack]);
   });
+
+  test("an early receipt does not outlive a newer judgement or its Run", () => {
+    const early = ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" });
+    const newer = ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: false, message: sentBack, checks: [], directiveId: "dir_2" });
+    const backed = ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] });
+    const boundary = ev(EventTypes.RunCreated, {});
+    const old = ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId: "dir_1" });
+    expect(told([early, newer, old])).toEqual([]);
+    expect(told([early, backed, old])).toEqual([]);
+    expect(told([early, boundary, old])).toEqual([]);
+  });
+
+  test("early receipts are bounded, the oldest evicted, and a repeated one is kept once", () => {
+    const judged = (directiveId: string) =>
+      ev(EventTypes.RunChecksJudged, { turn: 1, round: 0, verified: false, message: sentBack, checks: [], directiveId });
+    const receipts = Array.from({ length: 33 }, (_, i) => ev(EventTypes.DirectiveDelivered, { directiveId: `dir_${i}` }));
+    const state = apply(emptyProjection(), receipts);
+    expect([...state.earlyReceipts.keys()]).toEqual(Array.from({ length: 32 }, (_, i) => `dir_${i + 1}`));
+    expect(told([...receipts, judged("dir_0")])).toEqual([]);
+    expect(told([...receipts, judged("dir_1")])).toEqual([sentBack]);
+    const again = apply(emptyProjection(), Array.from({ length: 5 }, () => ev(EventTypes.DirectiveDelivered, { directiveId: "dir_x" })));
+    expect(again.earlyReceipts.size).toBe(1);
+  });
 });

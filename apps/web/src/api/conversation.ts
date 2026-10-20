@@ -746,7 +746,10 @@ export interface Projection {
   heldChecks: string | null;
   /** The checks send-back queued for the agent and not delivered yet, by its directive. */
   checksSend: { directiveId: string; text: string } | null;
-  /** Receipts no send-back or steer claimed yet, by directive: a judgement read after its own receipt is told at once. */
+  /**
+   * Receipts no send-back or steer claimed yet, by directive, oldest first: a judgement read after its own receipt is
+   * told at once. At most EARLY_RECEIPTS_MAX, cleared by any judgement and at a Run boundary.
+   */
   earlyReceipts: Map<string, string>;
   /**
    * A move's notice waiting for its resume's timing, by the epoch it resumed
@@ -901,6 +904,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         state.startWoken = false;
         state.heldUnpark = null;
         state.heldTold = null;
+        // The last Run's receipts name directives this one never receives.
+        state.earlyReceipts.clear();
         // A move of the last Run never timed: this Run's epochs are its own, from 1 again.
         state.untimedMoves.clear();
         state.lastMove = null;
@@ -1276,12 +1281,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case EventTypes.RunChecksJudged: {
         // An unbacked report goes back to the agent as these words, told once their directive is delivered;
-        // an escalated one waits for a person. Any later judgement supersedes a send-back not delivered yet.
+        // an escalated one waits for a person. Any later judgement supersedes a send-back not delivered yet,
+        // and with it every receipt held for an earlier one.
         state.checksSend = null;
         const text = payload.verified === false && typeof payload.message === "string" ? payload.message : "";
-        if (!text.trim()) break;
-        if (payload.escalated === true) state.heldChecks = text;
-        else if (typeof payload.directiveId === "string") sendChecks(state, event, payload.directiveId, text);
+        if (text.trim()) {
+          if (payload.escalated === true) state.heldChecks = text;
+          else if (typeof payload.directiveId === "string") sendChecks(state, event, payload.directiveId, text);
+        }
+        state.earlyReceipts.clear();
         break;
       }
 
@@ -1344,7 +1352,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           break;
         }
         const steer = state.steersByDirective.get(String(payload.directiveId ?? ""));
-        if (!steer && typeof payload.directiveId === "string") state.earlyReceipts.set(payload.directiveId, event.occurredAt);
+        if (!steer && typeof payload.directiveId === "string") holdReceipt(state, payload.directiveId, event.occurredAt);
         // Once: a re-sent steer (interrupt now) is the same turn under two ids.
         if (!steer || steer.deliveredAt !== null) break;
         steer.deliveredAt = event.occurredAt;
@@ -2230,6 +2238,22 @@ function sendChecks(state: Projection, event: PersistedEvent, directiveId: strin
   }
   state.earlyReceipts.delete(directiveId);
   state.turns.push({ kind: "told", id: event.eventId, text, at });
+}
+
+/**
+ * The most receipts held for a judgement not folded yet. A send-back's own receipt is at most a few events ahead of
+ * it; any other is a steer's or a directive nothing in this projection claims.
+ */
+export const EARLY_RECEIPTS_MAX = 32;
+
+/** Hold a receipt no send-back or steer claims yet, the oldest evicted past EARLY_RECEIPTS_MAX; the first time kept. */
+function holdReceipt(state: Projection, directiveId: string, at: string): void {
+  if (state.earlyReceipts.has(directiveId)) return;
+  state.earlyReceipts.set(directiveId, at);
+  if (state.earlyReceipts.size > EARLY_RECEIPTS_MAX) {
+    const oldest = state.earlyReceipts.keys().next().value;
+    if (oldest !== undefined) state.earlyReceipts.delete(oldest);
+  }
 }
 
 /** The images an event carries (AttachmentInfo, as the orchestrator wrote them); anything malformed is left out. */
