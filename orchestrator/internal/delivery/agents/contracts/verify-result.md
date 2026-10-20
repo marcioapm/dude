@@ -5,7 +5,7 @@ Your verification {{.Child}} of {{.Repo}}{{with .Commit}} at {{.}}{{end}} {{.Sta
 {{- else}}: {{.Passed}} of {{len .Results}} commands exited 0
 {{- end}}. Nothing was published; this does not advance the delivery.
 {{- range .Results}}
-- exit {{.Exit}}: {{clip .Command 200}}
+- exit {{.Exit}}: {{.Line}}
 {{- end}}
 {{- range .Missing}}
 - no result: {{clip . 200}}

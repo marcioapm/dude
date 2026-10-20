@@ -210,10 +210,24 @@ func verifyReportTx(ctx context.Context, tx pgx.Tx, childID, status string, targ
 
 var verifyResultTmpl = mustTemplate("contracts/verify-result")
 
+// toldResult is a result as the parent is told it: the command it asked
+// for that the result reports, if any, and the verifier's own text for
+// it quoted as external text, as its output is.
+type toldResult struct {
+	Asked   string `json:"asked,omitempty"`
+	Command string `json:"command"`
+	Exit    int    `json:"exit"`
+	Tail    string `json:"tail"`
+	// The summary's line for it: Asked, or the reported command clipped
+	// and quoted.
+	Line string `json:"-"`
+}
+
 // verifyResultText is what the parent is told of a verifier's report: its
 // verdict and each command's exit code in words, then the report as JSON,
-// every output's tail quoted as external text under one random id (the
-// commands ran the repository's code, whoever wrote it).
+// every reported command and output's tail quoted as external text under
+// one random id (the verifier wrote the one, the repository's code the
+// other).
 func verifyResultText(childID string, raw []byte) (string, error) {
 	var rep VerifyReport
 	if err := json.Unmarshal(raw, &rep); err != nil {
@@ -222,29 +236,35 @@ func verifyResultText(childID string, raw []byte) (string, error) {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	id := hex.EncodeToString(b[:])
-	for i := range rep.Results {
-		rep.Results[i].Tail = ExternalText(id, rep.Results[i].Tail)
+	told := make([]toldResult, len(rep.Results))
+	passed := 0
+	for i, r := range rep.Results {
+		t := toldResult{Command: ExternalText(id, r.Command), Exit: r.Exit, Tail: ExternalText(id, r.Tail),
+			Line: ExternalText(id, clip(r.Command, 200))}
+		if j := slices.IndexFunc(rep.Asked, func(a string) bool { return strings.TrimSpace(a) == strings.TrimSpace(r.Command) }); j >= 0 {
+			t.Asked, t.Line = rep.Asked[j], clip(rep.Asked[j], 200)
+		}
+		told[i] = t
+		if r.Exit == 0 {
+			passed++
+		}
 	}
 	body, err := json.Marshal(struct {
 		External string `json:"external"`
 		Child    string `json:"verifyRunId"`
 		VerifyReport
-	}{render(verifyExternalTmpl, ExternalText(id, "…")), childID, rep})
+		Results []toldResult `json:"results"`
+	}{render(verifyExternalTmpl, ExternalText(id, "…")), childID, rep, told})
 	if err != nil {
 		return "", err
-	}
-	passed := 0
-	for _, r := range rep.Results {
-		if r.Exit == 0 {
-			passed++
-		}
 	}
 	return render(verifyResultTmpl, struct {
 		Child string
 		VerifyReport
-		Passed int
-		JSON   string
-	}{childID, rep, passed, string(body)}), nil
+		Results []toldResult
+		Passed  int
+		JSON    string
+	}{childID, rep, told, passed, string(body)}), nil
 }
 
 var verifyExternalTmpl = mustTemplate("contracts/verify-external")
