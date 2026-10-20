@@ -46,6 +46,10 @@ Moved back to Standard by Ana: the suite fits again
 
 A member linked GLD/api; it is checked out at /workspace/repos/GLD/api (read only) unless dude tells you its clone failed.
 
+## checkout-again
+
+dude asked again for GLD/api, as you asked; it is checked out at /workspace/repos/GLD/api (read only) unless dude tells you its clone failed again.
+
 ## clone-failed-task
 
 api could not be checked out (repository 'x' not found). It is not in /workspace; carry on without it, or ask a person to check the repository's URL and access.
@@ -53,6 +57,10 @@ api could not be checked out (repository 'x' not found). It is not in /workspace
 ## clone-failed-session
 
 GLD/api could not be checked out (no reason given). It is not in /workspace; a member can check the repository's URL and access and link it again.
+
+## clone-failed-session-refresh
+
+GLD/api could not be checked out (no reason given). It is not in /workspace; a member can check the repository's URL and access and link it again, or you can ask for it again with `refresh_checkout` once the cause is fixed.
 
 ## clone-failed-long
 

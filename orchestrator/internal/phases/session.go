@@ -184,13 +184,26 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 // tells it where each is; and brings every checkout it holds to its
 // default branch, fast-forward only ("fetch the latest").
 func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, in *lux.ResumeInput) error {
-	var have []string
+	var have, again []string
 	var repos []delivery.SessionRepo
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT lux_repositories FROM runs WHERE id = $1`, r.ID).Scan(&have); err != nil {
 			return err
 		}
-		var err error
+		// Asked for again by the agent (refresh_checkout) after its clone
+		// failed on this session: by spec name.
+		rows, err := tx.Query(ctx, `SELECT DISTINCT f.payload->>'repository' FROM events f
+			WHERE f.session_id = $1 AND f.event_type = 'repository.clone_failed' AND EXISTS (SELECT 1 FROM events q
+				WHERE q.session_id = $1 AND q.event_type = $2 AND q.occurred_at > f.occurred_at
+				  AND q.payload->>'project' = f.payload->>'key'
+				  AND q.payload->'repositories' @> jsonb_build_array(jsonb_build_object('name', f.payload->>'name')))`,
+			r.SessionID, delivery.EvCheckoutRequested)
+		if err != nil {
+			return err
+		}
+		if again, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+			return err
+		}
 		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
 		return err
 	}); err != nil {
@@ -212,7 +225,11 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		if added, ok := bySpec[name]; ok {
 			in.AddRepositories = append(in.AddRepositories, added)
 			// Written before lux clones it, so hedged: settleClone tells a failure.
-			told = append(told, linkedTold(repo.Key, repo.Name, added.Path))
+			if slices.Contains(again, name) {
+				told = append(told, checkoutAgain.Render(struct{ Key, Name, Path string }{repo.Key, repo.Name, added.Path}))
+			} else {
+				told = append(told, linkedTold(repo.Key, repo.Name, added.Path))
+			}
 		}
 	}
 	if len(in.AddRepositories) > 0 {
@@ -261,4 +278,7 @@ func linkedTold(key, name, path string) string {
 	return linked.Render(struct{ Key, Name, Path string }{key, name, path})
 }
 
-var linked = delivery.MustText("notices/linked")
+var (
+	linked        = delivery.MustText("notices/linked")
+	checkoutAgain = delivery.MustText("notices/checkout-again")
+)

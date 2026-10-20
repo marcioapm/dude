@@ -12,6 +12,7 @@
 		"refresh_pull_requests pull_requests" "refresh_pull_requests reads a task's from GitHub now, as one of the hour's GitHub reads"
 		"refresh_pull_requests !pull_requests" "refresh_pull_requests reads a task's pull requests from GitHub now, as one of the hour's GitHub reads") ".")
 	"run_chat" "run_chat reads the Chat of a Run this session started, and the question it waits on."
+	"refresh_checkout" "refresh_checkout asks again for a linked repository whose checkout failed, and says why it failed last; it never links one a member did not."
 	"propose" "propose fills the session's proposal card — new epics and tasks, edits to tasks, comments, and epic notes (a new epic's notes, or a note on an existing epic) — for a member to file with a click, as themselves: you never create, edit or comment yourself."
 	"remember" "remember saves what is worth knowing next time."
 	"ask_person" "ask_person asks a member something and ends your turn; with to, only that member answers, and what others say meanwhile reaches you with the answer."

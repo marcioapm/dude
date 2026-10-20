@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -1185,7 +1186,13 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	payload := map[string]any{"repository": repo, "error": cloneErr, "reason": cloneReason(repoURL, cloneErr)}
 	if t.run.brainstorm() && name != "" {
 		// The session's agent was told it is checked out unless dude said otherwise.
-		if err := delivery.TellBrainstorm(ctx, tx, t.run.Org, t.run.SessionID, cloneFailedNote(key+"/"+name, cloneErr, sessionCloneRemedy)); err != nil {
+		grants, err := capabilities.Resolve(ctx, tx, capabilities.Agent{Role: delivery.RoleBrainstorm, Org: t.run.Org,
+			Run: t.run.ID, Session: t.run.SessionID})
+		if err != nil {
+			return err
+		}
+		remedy := sessionRemedy(grants.Tool("refresh_checkout"))
+		if err := delivery.TellBrainstorm(ctx, tx, t.run.Org, t.run.SessionID, cloneFailedNote(key+"/"+name, cloneErr, remedy)); err != nil {
 			return err
 		}
 		payload["key"], payload["name"] = key, name

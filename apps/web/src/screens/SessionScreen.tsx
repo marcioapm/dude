@@ -56,6 +56,8 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
   // lux dropped a linked repository: it is no longer linked.
   EventTypes.RepositoryCloneFailed,
+  // The agent asked for a dropped repository again: it is linked again.
+  EventTypes.BrainstormCheckoutRequested,
 ]);
 
 /** The detail with one member's open state as a session.open says it: the rest as it was. */
@@ -550,6 +552,11 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
     }
     case EventTypes.BrainstormLinked:
       return `${by} changed what the session reads.`;
+    case EventTypes.BrainstormCheckoutRequested: {
+      const repos = Array.isArray(p.repositories) ? p.repositories as Array<{ name?: unknown }> : [];
+      const names = repos.map((r) => `${typeof p.project === "string" ? p.project : ""}/${typeof r.name === "string" ? r.name : ""}`);
+      return `Brainstorm asked again for ${names.join(", ")}, whose checkout failed.`;
+    }
     case EventTypes.BrainstormRenamed: {
       const title = typeof p.title === "string" ? p.title : "";
       return p.by === "agent" ? `Named it “${title}”` : `${firstName(name(p.by))} renamed it “${title}”`;

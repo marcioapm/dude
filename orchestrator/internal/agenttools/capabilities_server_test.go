@@ -13,6 +13,32 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 )
 
+// A session's agent resolved without session.checkout has no
+// refresh_checkout: refused as a tool the Run does not have, and not
+// listed; with its defaults it lists it.
+func TestASessionAgentWithoutSessionCheckoutHasNoRefreshCheckout(t *testing.T) {
+	srv := &agenttools.Server{}
+	srv.ResolveCapabilitiesWith(func(_ context.Context, _ pgx.Tx, a capabilities.Agent) (capabilities.Grants, error) {
+		if a.Session == "ssn_nocheckout" {
+			return capabilities.Default(a.Role).Without(capabilities.SessionCheckout), nil
+		}
+		return capabilities.Default(a.Role), nil
+	})
+	f := setupWith(t, srv)
+	without := f.session(t, "ssn_nocheckout", "", "")
+	with := f.session(t, "ssn_checkout", "", "")
+	status, out := f.post(t, without, "refresh_checkout", `{}`)
+	if status != 404 || out["error"] != "no tool refresh_checkout for this Run" {
+		t.Errorf("without session.checkout: %d %v", status, out)
+	}
+	if _, ok := f.getTools(t, without)["refresh_checkout"]; ok {
+		t.Error("GET /tools lists refresh_checkout without session.checkout")
+	}
+	if _, ok := f.getTools(t, with)["refresh_checkout"]; !ok {
+		t.Error("GET /tools lacks refresh_checkout with the brainstorm's defaults")
+	}
+}
+
 // A Run resolved without memory is not given search_memory on any of the
 // server's surfaces (GET /tools, POST /tools/{name}, MCP tools/list and
 // tools/call), and is refused it as it is refused a tool its role never

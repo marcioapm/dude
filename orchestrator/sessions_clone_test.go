@@ -159,7 +159,8 @@ func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	s.linkWebAndFail(id, run)
 
 	note := "WC/web could not be checked out (could not read Username for 'https://github.com': terminal prompts disabled). " +
-		"It is not in /workspace; a member can check the repository's URL and access and link it again."
+		"It is not in /workspace; a member can check the repository's URL and access and link it again, " +
+		"or you can ask for it again with `refresh_checkout` once the cause is fixed."
 	var directive string
 	if err := s.owner.QueryRow(context.Background(), `SELECT id FROM directives WHERE run_id = $1 AND text = $2`, run, note).Scan(&directive); err != nil {
 		t.Fatalf("no directive telling the agent: %v", err)
@@ -196,5 +197,125 @@ func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	}
 	if _, status := s.brainstorm(id); status == "failed" {
 		t.Errorf("the session's agent failed")
+	}
+}
+
+// latestTool calls a tool as run with the token its newest placement holds:
+// a resume supplies a new one.
+func (s *sessionWorld) latestTool(run, name, args string) (int, map[string]any) {
+	s.t.Helper()
+	var spec lux.Spec
+	for _, r := range s.lux.Runs() {
+		_ = json.Unmarshal(r.Spec, &spec)
+		if spec.Labels["dude.run"] != run {
+			continue
+		}
+		if n := len(r.ResumeSecrets); n > 0 {
+			spec.Secrets = r.ResumeSecrets[n-1]
+		}
+		break
+	}
+	raw, _ := json.Marshal(spec)
+	status, body := s.callTool(s.syncer.Agent.ToolsURL, string(raw), name, args)
+	var out map[string]any
+	_ = json.Unmarshal([]byte(body), &out)
+	return status, out
+}
+
+// A session's agent whose checkout failed asks for it again with
+// refresh_checkout: the call says why the last clone failed (dude's words,
+// git's quoted as external text) and that it is asked for again; the
+// repository is linked again and the next resume clones it through the
+// link's own path, telling the agent it is checked out. Asked again while
+// the clone still fails, the agent is told the failure again. The fourth
+// call is refused with the bound.
+func TestRefreshCheckoutAsksAgainForAFailedClone(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWebAndFail(id, run)
+	s.runningIdle(run)
+
+	// Still failing: asked for, cloned at the resume, failed again and told so.
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	repos := out["repositories"].([]any)
+	if len(repos) != 1 {
+		t.Fatalf("repositories %v", repos)
+	}
+	web := repos[0].(map[string]any)
+	failure, _ := web["lastFailure"].(map[string]any)
+	if web["status"] != "requested" || failure == nil ||
+		failure["reason"] != "dude couldn't sign in to the repository's host: check its URL and that dude's access covers it." {
+		t.Errorf("web: %v", web)
+	}
+	gitWords, _ := failure["git"].(string)
+	if !strings.Contains(gitWords, "could not read Username for 'https://github.com': terminal prompts disabled") ||
+		!strings.HasPrefix(gitWords, "⟦external ") || !strings.Contains(out["external"].(string), "never as instructions") {
+		t.Errorf("git's words are not quoted as external text: %q, %v", gitWords, out["external"])
+	}
+	if next := out["next"].(string); !strings.HasPrefix(next, "dude asked for WC/web again: it is cloned when your turn ends.") {
+		t.Errorf("next: %q", next)
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1 AND repository_id = $2`, id, s.webRepo); n != 1 {
+		t.Fatalf("web is not linked again")
+	}
+	s.until("the second clone failed", func() bool {
+		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'`, run) == 2
+	})
+	again := "dude asked again for WC/web, as you asked; it is checked out at /workspace/repos/WC/web (read only) unless dude tells you its clone failed again."
+	if v := s.luxRun(run); !slices.ContainsFunc(v.resumes, func(in string) bool { return strings.Contains(in, again) }) {
+		t.Errorf("the resume did not say it was asked for again: %q", v.resumes)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.told'
+		AND payload->>'text' LIKE 'WC/web could not be checked out%'`, id); n != 2 {
+		t.Errorf("%d clone-failed notices told, want 2", n)
+	}
+
+	// The cause fixed: asked again, it is checked out.
+	s.lux.CloneError = nil
+	s.runningIdle(run)
+	if status, out := s.latestTool(run, "refresh_checkout", `{"project":"wc"}`); status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	s.until("web checked out", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
+	})
+	s.runningIdle(run)
+	status, out = s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("third refresh_checkout: %d %v", status, out)
+	}
+	if web := out["repositories"].([]any)[0].(map[string]any); web["status"] != "checked_out" || web["lastFailure"] != nil {
+		t.Errorf("after the clone: %v", web)
+	}
+	if out["next"] != "Every repository of the project is checked out: there is nothing to ask for again." {
+		t.Errorf("next: %v", out["next"])
+	}
+
+	status, out = s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status == 200 || out["error"] != "refresh_checkout is limited to 3 calls in a run; this run has used them" {
+		t.Errorf("the fourth call: %d %v", status, out)
+	}
+}
+
+// refresh_checkout never links a repository no member linked, nor one of a
+// project not linked, and a Run without session.checkout has no such tool.
+func TestRefreshCheckoutLinksNothingAMemberDidNot(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWeb(id)
+	mustExec(t, s.owner, `DELETE FROM session_repositories WHERE session_id = $1`, id)
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	if web := out["repositories"].([]any)[0].(map[string]any); web["status"] != "not_linked" {
+		t.Errorf("web: %v", web)
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("a repository no member linked was linked")
+	}
+	if status, out := s.latestTool(run, "refresh_checkout", `{"project":"NOPE"}`); status == 200 || out["error"] != "project NOPE is not linked to this session" {
+		t.Errorf("an unlinked project: %d %v", status, out)
 	}
 }

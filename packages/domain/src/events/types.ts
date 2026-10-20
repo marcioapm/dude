@@ -154,6 +154,12 @@ export const EventTypes = {
   BrainstormOwnerChanged: "session.owner_changed",
   /** Payload: `{ projects }`. */
   BrainstormLinked: "session.linked",
+  /**
+   * The session's agent asked again for repositories whose clone failed
+   * (refresh_checkout): linked again, cloned at its next resume.
+   * Payload: `{ project, repositories: [{ id, name }] }`.
+   */
+  BrainstormCheckoutRequested: "session.checkout.requested",
   /** The agent filled the proposal card. Payload: `{ proposalId, items }`. */
   BrainstormProposed: "session.proposed",
   /** A member filed items from the card. Payload: `{ proposalId, by, filed: [{ item, key, kind }] }`. */
