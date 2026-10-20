@@ -164,6 +164,9 @@ func TestPullRequestsReadsAtMost20FeedbackItemsByID(t *testing.T) {
 	for i := range ids {
 		ids[i] = fmt.Sprintf("issue-comment-%d", i)
 	}
+	// The first and the twentieth exist: all 20 are looked up, not only some.
+	f.comment(t, ids[0], "sdk", 88, "tiago", "the first of twenty", "")
+	f.comment(t, ids[19], "sdk", 88, "tiago", "the twentieth of twenty", "")
 	body, _ := json.Marshal(map[string]any{"feedback": ids})
 	var refused map[string]any
 	if status := f.postAs(t, token, "pull_requests", string(body), &refused); status != 422 ||
@@ -172,8 +175,15 @@ func TestPullRequestsReadsAtMost20FeedbackItemsByID(t *testing.T) {
 	}
 	body, _ = json.Marshal(map[string]any{"feedback": ids[:20]})
 	var out fullFeedbackAnswer
-	if status := f.postAs(t, token, "pull_requests", string(body), &out); status != 200 || len(out.UnknownFeedback) != 20 {
-		t.Errorf("20 ids: %d %+v", status, out)
+	if status := f.postAs(t, token, "pull_requests", string(body), &out); status != 200 {
+		t.Fatalf("20 ids: %d %+v", status, out)
+	}
+	if len(out.Feedback) != 2 || out.Feedback[0].ID != ids[0] || delivery.Unquoted(out.Feedback[0].Body) != "the first of twenty" ||
+		out.Feedback[1].ID != ids[19] || delivery.Unquoted(out.Feedback[1].Body) != "the twentieth of twenty" {
+		t.Errorf("20 ids, the two that exist: %+v", out.Feedback)
+	}
+	if !slices.Equal(out.UnknownFeedback, ids[1:19]) {
+		t.Errorf("20 ids, not found: %v; want %v", out.UnknownFeedback, ids[1:19])
 	}
 }
 
