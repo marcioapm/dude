@@ -310,20 +310,40 @@ func (g *holdCommit) TraceQueryStart(ctx context.Context, c *pgx.Conn, q pgx.Tra
 
 func (*holdCommit) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// Recovery's UPDATE runs once the first output is committed and while both
-// follow-ups wait on lux: it leaves the resume untimed, and the follow-up
-// that reads the placements first times it, complete.
-func testRecoveryLeavesAResumeItsFollowUpIsReadingToIt(t *testing.T) {
+// resumedOnHostA is a world whose Run is resumed from host 1 into epoch 2,
+// lux reporting it running on host-a; without imageReady, lux has yet to
+// report the image, so the first output reads the placements again.
+func resumedOnHostA(t *testing.T, imageReady bool) (*resumeWorld, time.Time) {
+	t.Helper()
 	w := newResumeWorld(t)
 	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
 	w.sessionOn(1)
 	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-a"), nil)
+	running := runningAgain(base, "host-a")
+	if !imageReady {
+		running.Placements[1].ImageReadyAt = nil
+	}
+	w.lux.set(running, nil)
+	return w, base
+}
 
+// closeOnce returns a func closing ch at most once, also run at the test's
+// end so nothing is left blocked on it.
+func closeOnce(t *testing.T, ch chan struct{}) func() {
+	var once sync.Once
+	release := func() { once.Do(func() { close(ch) }) }
+	t.Cleanup(release)
+	return release
+}
+
+// Recovery's UPDATE runs once the first output is committed and while both
+// follow-ups wait on lux: it leaves the resume untimed, and the follow-up
+// that reads the placements first times it, complete.
+func testRecoveryLeavesAResumeItsFollowUpIsReadingToIt(t *testing.T) {
+	w, _ := resumedOnHostA(t, true)
 	gate := &recoveryTimingGate{entered: make(chan struct{}), release: make(chan struct{}), ended: make(chan struct{})}
 	w.traced(gate)
-	var release sync.Once
-	t.Cleanup(func() { release.Do(func() { close(gate.release) }) })
+	release := closeOnce(t, gate.release)
 	finished := w.followedUp()
 	gated, st := w.gatedFollowing()
 	// The follower's own recovery, at its start, is the first timing UPDATE.
@@ -339,7 +359,7 @@ func testRecoveryLeavesAResumeItsFollowUpIsReadingToIt(t *testing.T) {
 		t.Fatalf("timed while recovery and both Gets were gated: %v", got)
 	}
 
-	release.Do(func() { close(gate.release) })
+	release()
 	waitGate(t, gate.ended, "recovery's transaction ending")
 	if got := w.timed(); len(got) != 0 {
 		t.Fatalf("recovery timed a resume a follow-up was still reading the placements of: %v", got)
@@ -358,20 +378,10 @@ func testRecoveryLeavesAResumeItsFollowUpIsReadingToIt(t *testing.T) {
 // follow-up finds the resume already owed, and leaves it; it times every
 // other resume, of the Run and of another Run, that nobody owes.
 func testRecoveryRightAfterTheCommitLeavesTheResume(t *testing.T) {
-	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
-	w.sessionOn(1)
-	w.resume(stoppedOnHost1(base))
-	// The first read finds the image not reported yet, so the first output
-	// reads again.
-	partial := runningAgain(base, "host-a")
-	partial.Placements[1].ImageReadyAt = nil
-	w.lux.set(partial, nil)
-
+	w, base := resumedOnHostA(t, false)
 	gate := &batchCommitGate{entered: make(chan struct{}), release: make(chan struct{})}
 	w.traced(gate)
-	var release sync.Once
-	t.Cleanup(func() { release.Do(func() { close(gate.release) }) })
+	release := closeOnce(t, gate.release)
 	finished := w.followedUp()
 	gated, st := w.gatedFollowing()
 	st.frames <- session(2)
@@ -418,7 +428,7 @@ func testRecoveryRightAfterTheCommitLeavesTheResume(t *testing.T) {
 	}
 
 	w.lux.set(runningAgain(base, "host-a"), nil)
-	release.Do(func() { close(gate.release) })
+	release()
 	gated.release(waitEntered(t, gated))
 	waitGate(t, finished, "the output batch's follow-up finishing")
 	w.assertTimedComplete()
@@ -429,18 +439,10 @@ func testRecoveryRightAfterTheCommitLeavesTheResume(t *testing.T) {
 // The first finishing leaves the resume owed to the second, which times
 // it, complete.
 func TestOverlappingFollowUpsOfOneResumeEachOweIt(t *testing.T) {
-	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
-	w.sessionOn(1)
-	w.resume(stoppedOnHost1(base))
-	partial := runningAgain(base, "host-a")
-	partial.Placements[1].ImageReadyAt = nil
-	w.lux.set(partial, nil)
-
+	w, base := resumedOnHostA(t, false)
 	hold := &holdCommit{match: timingOf(2), entered: make(chan struct{}), release: make(chan struct{})}
 	w.traced(hold)
-	var release sync.Once
-	t.Cleanup(func() { release.Do(func() { close(hold.release) }) })
+	release := closeOnce(t, hold.release)
 	finished := w.followedUp()
 	gated, st := w.gatedFollowing()
 	st.frames <- session(2)
@@ -452,7 +454,7 @@ func TestOverlappingFollowUpsOfOneResumeEachOweIt(t *testing.T) {
 	st.frames <- cursorFrame(spoke(2), "c2")
 	second := waitEntered(t, gated)
 	w.committed("c2", time.Second)
-	release.Do(func() { close(hold.release) })
+	release()
 	waitGate(t, finished, "the running state's follow-up finishing")
 
 	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
@@ -471,12 +473,7 @@ func TestOverlappingFollowUpsOfOneResumeEachOweIt(t *testing.T) {
 // the placement: the batch's one follow-up reads it, and its timing fails.
 // Nothing is left owed: recovery times the resume.
 func TestOneBatchWithTwoReadsOfAResumeOwesItOnce(t *testing.T) {
-	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
-	w.sessionOn(1)
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-a"), nil)
-
+	w, _ := resumedOnHostA(t, true)
 	locked := make(chan struct{}, 1)
 	var lockSeen atomic.Bool
 	fail := newFailNext(true, timingOf(2))
@@ -517,14 +514,7 @@ func TestOneBatchWithTwoReadsOfAResumeOwesItOnce(t *testing.T) {
 // records it again; that batch's follow-up reads the placements and its
 // timing fails. The failed batch owes nothing: recovery times the resume.
 func TestAFailedBatchOwesNothing(t *testing.T) {
-	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
-	w.sessionOn(1)
-	w.resume(stoppedOnHost1(base))
-	partial := runningAgain(base, "host-a")
-	partial.Placements[1].ImageReadyAt = nil
-	w.lux.set(partial, nil)
-
+	w, _ := resumedOnHostA(t, false)
 	failSave := newFailNext(false, func(q pgx.TraceQueryStartData) bool {
 		return strings.HasPrefix(q.SQL, "UPDATE runs SET agent_message_buffer")
 	})
@@ -700,11 +690,7 @@ func TestAFailedMissedFramesResumeOwesNothing(t *testing.T) {
 // A follow-up whose placement read runs out of time still times the
 // resume, as it stands, on a budget of its own.
 func TestAFollowUpWhoseReadTimesOutTimesTheResumeWithoutPlacements(t *testing.T) {
-	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
-	w.sessionOn(1)
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-a"), nil)
+	w, _ := resumedOnHostA(t, true)
 	w.s.followUpTimeout = 300 * time.Millisecond
 	finished := w.followedUp()
 	gated, st := w.gatedFollowing()
@@ -729,11 +715,7 @@ func TestAFollowUpWhoseReadTimesOutTimesTheResumeWithoutPlacements(t *testing.T)
 // A follow-up whose placement read runs out of time, and whose timing
 // fails, owes nothing after: recovery times the resume as it stands.
 func TestAFollowUpThatTimesOutLeavesTheResumeToRecovery(t *testing.T) {
-	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
-	w.sessionOn(1)
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-a"), nil)
+	w, _ := resumedOnHostA(t, true)
 	w.s.followUpTimeout = 300 * time.Millisecond
 	fail := newFailNext(false, timingOf(2))
 	w.traced(fail)
