@@ -62,3 +62,38 @@ func TestACloneThatFailsToBeConfiguredIsDropped(t *testing.T) {
 		t.Fatalf("%s is still on the server", configured)
 	}
 }
+
+// A test's connections, the owner's and the app pool's, reuse one generic
+// plan per prepared statement from its first execution: none is
+// custom-planned.
+func TestACloneReusesGenericPlans(t *testing.T) {
+	app, owner := Open(t)
+	ctx := context.Background()
+	pooled, err := app.Pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pooled.Release()
+	check := func(name string, conn *pgx.Conn) {
+		// A statement without parameters is always planned generically:
+		// the $1 is what tells force_generic_plan from auto.
+		if _, err := conn.Prepare(ctx, "by_id", `SELECT count(*) FROM pg_class WHERE oid = $1`); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for range 3 {
+			if _, err := conn.Exec(ctx, "by_id", 1259); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		var generic, custom int64
+		if err := conn.QueryRow(ctx, `SELECT generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'by_id'`).
+			Scan(&generic, &custom); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if generic != 3 || custom != 0 {
+			t.Errorf("%s connection: generic plans %d, custom plans %d over 3 executions; want 3 and 0", name, generic, custom)
+		}
+	}
+	check("owner", owner)
+	check("app pool", pooled.Conn())
+}
