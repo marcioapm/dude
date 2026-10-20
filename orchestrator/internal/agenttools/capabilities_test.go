@@ -59,17 +59,36 @@ func TestEachRolesToolsAreTheSameAsBeforeCapabilities(t *testing.T) {
 // agent's own where it has one, the task agents' otherwise.
 func TestASessionAgentsNameFindsItsOwnDefinition(t *testing.T) {
 	brainstorm := capabilities.Default(delivery.RoleBrainstorm)
-	for _, name := range []string{"list_tasks", "findings", "ask_person", "remember"} {
-		if tl, ok := find(name, delivery.RoleBrainstorm, brainstorm); !ok || !tl.session {
-			t.Errorf("brainstorm %s: found %v, session %v", name, ok, tl.session)
+	conductor := capabilities.Default(delivery.RoleConductor)
+	own := map[string]bool{}
+	for _, def := range brainstormTools {
+		own[def.name] = true
+		tl, ok := find(def.name, delivery.RoleBrainstorm, brainstorm)
+		if !ok || !tl.session || tl.description != def.description {
+			t.Errorf("brainstorm %s: found %v, session %v, its own description %v", def.name, ok, tl.session,
+				tl.description == def.description)
 		}
-		if tl, ok := find(name, delivery.RoleConductor, capabilities.Default(delivery.RoleConductor)); !ok || tl.session {
-			t.Errorf("conductor %s: found %v, session %v", name, ok, tl.session)
+		if tl, ok := find(def.name, delivery.RoleConductor, conductor); ok != conductor.Tool(def.name) || tl.session {
+			t.Errorf("conductor %s: found %v, granted %v, session %v", def.name, ok, conductor.Tool(def.name), tl.session)
 		}
 	}
-	// A shared definition answers a session agent where it has none of its own.
-	if tl, ok := find("github_search", delivery.RoleBrainstorm, brainstorm); !ok || tl.session {
-		t.Errorf("brainstorm github_search: found %v, session %v", ok, tl.session)
+	// A shared definition answers a session agent where it has none of its
+	// own (github_*, list_machine_sizes, request_machine).
+	shared := 0
+	for _, tl := range granted(delivery.RoleBrainstorm, brainstorm) {
+		if own[tl.name] {
+			continue
+		}
+		shared++
+		if tl.session {
+			t.Errorf("brainstorm %s: a session definition outside brainstormTools", tl.name)
+		}
+		if found, ok := find(tl.name, delivery.RoleBrainstorm, brainstorm); !ok || found.session {
+			t.Errorf("brainstorm %s: found %v, session %v", tl.name, ok, found.session)
+		}
+	}
+	if shared == 0 {
+		t.Error("brainstorm reaches no shared definition")
 	}
 	// A session agent's own tool is no one else's, whatever they are granted.
 	all := capabilities.Of(keys(capabilities.All)...)
