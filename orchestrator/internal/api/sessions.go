@@ -280,18 +280,17 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 	return err
 }
 
-// addLink links one more project to the session through setLinks, beside
-// what it links now: the project with every repository of it when add
-// names none, recorded as linkSession records a link (session.linked with
-// the session's whole set). Returns the set.
-func addLink(ctx context.Context, tx pgx.Tx, org, sessionID string, add linkInput, f delivery.Filer) ([]linkInput, error) {
+// addLink links one more project, with every repository of it, to the
+// session through setLinks, beside what it links now, recorded as
+// linkSession records a link (session.linked with the session's whole set).
+func addLink(ctx context.Context, tx pgx.Tx, org, sessionID, projectID string, f delivery.Filer) error {
 	rows, err := tx.Query(ctx, `SELECT sp.project_id, COALESCE(array_agg(sr.repository_id ORDER BY sr.repository_id)
 			FILTER (WHERE sr.repository_id IS NOT NULL), '{}')
 		FROM session_projects sp LEFT JOIN repositories r ON r.project_id = sp.project_id
 		LEFT JOIN session_repositories sr ON sr.session_id = sp.session_id AND sr.repository_id = r.id
 		WHERE sp.session_id = $1 GROUP BY sp.project_id ORDER BY sp.project_id`, sessionID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	links, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (linkInput, error) {
 		var l linkInput
@@ -299,22 +298,21 @@ func addLink(ctx context.Context, tx pgx.Tx, org, sessionID string, add linkInpu
 		return l, err
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if add.RepositoryIDs == nil {
-		rows, err := tx.Query(ctx, `SELECT id FROM repositories WHERE project_id = $1 ORDER BY id`, add.ProjectID)
-		if err != nil {
-			return nil, err
-		}
-		if add.RepositoryIDs, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
-			return nil, err
-		}
+	rows, err = tx.Query(ctx, `SELECT id FROM repositories WHERE project_id = $1 ORDER BY id`, projectID)
+	if err != nil {
+		return err
 	}
-	links = append(links, linkInput{ProjectID: add.ProjectID, RepositoryIDs: db.NonNil(add.RepositoryIDs)})
+	repoIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	links = append(links, linkInput{ProjectID: projectID, RepositoryIDs: db.NonNil(repoIDs)})
 	if err := setLinks(ctx, tx, org, sessionID, links); err != nil {
-		return nil, err
+		return err
 	}
-	return links, delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, sessionID), delivery.EvSessionLinked, f.ActorType, f.ActorID,
+	return delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, sessionID), delivery.EvSessionLinked, f.ActorType, f.ActorID,
 		map[string]any{"projects": links})
 }
 
@@ -1082,8 +1080,7 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 		// Through the session-link API's own write, adding this project beside
 		// what the session links (setLinks replaces the whole set).
 		k := strings.ToUpper(strings.TrimSpace(item.Project))
-		_, err := addLink(ctx, tx, org, sessionID, linkInput{ProjectID: facts.orgProjects[k]}, f)
-		return k, "", "", err
+		return k, "", "", addLink(ctx, tx, org, sessionID, facts.orgProjects[k], f)
 	}
 	return "", "", "", fmt.Errorf("unknown item kind %q", item.Kind)
 }
