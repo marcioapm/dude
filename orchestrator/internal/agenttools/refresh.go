@@ -50,11 +50,15 @@ func checkRefresh(ctx context.Context, tx pgx.Tx, c, scoped Caller) (refreshChec
 	if len(ids) == 0 {
 		return refreshCheck{}, refuseText(rNoOpenPullRequestRefresh)
 	}
-	if err := checkGitHubBudget(ctx, tx, c); err != nil {
+	// One read per pull request synced (a sync makes several requests, which
+	// Sync does not report): the whole batch fits, or nothing is synced.
+	if err := checkGitHubBudget(ctx, tx, c, len(ids)); err != nil {
 		return refreshCheck{}, err
 	}
 	return refreshCheck{scoped: scoped, prIDs: ids}, nil
 }
+
+func (r refreshCheck) githubReads() int { return len(r.prIDs) }
 
 func refreshPullRequests(ctx context.Context, tx pgx.Tx, c Caller, _ refreshIn) (refreshCheck, error) {
 	return checkRefresh(ctx, tx, c, c)

@@ -138,9 +138,10 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 }
 
 // A session's and a task's GitHub reads in the last hour: the GitHub read
-// tools' and refresh_pull_requests' attempts. Both share one predicate, the
-// WHERE of their partial indexes (migrations 160-161), written with
-// literals, as a parameter would not prove the index's WHERE.
+// tools' and refresh_pull_requests' attempts (a refresh records one per pull
+// request it syncs). Both share one predicate, the WHERE of their partial
+// indexes (migrations 160-161), written with literals, as a parameter would
+// not prove the index's WHERE.
 const (
 	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'refresh_pull_requests')
 		AND occurred_at > now() - interval '1 hour'`
@@ -175,12 +176,12 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, refuse(rNotRepositoryYouMayReadOnly, want, whose, strings.Join(slugs, ", "))
 	}
 	read.Slug = slugs[i]
-	return read, checkGitHubBudget(ctx, tx, c)
+	return read, checkGitHubBudget(ctx, tx, c, 1)
 }
 
-// checkGitHubBudget refuses a call past the hourly GitHub reads c's budget
-// shares, under its lock until tx ends.
-func checkGitHubBudget(ctx context.Context, tx pgx.Tx, c Caller) error {
+// checkGitHubBudget refuses a call needing more of the hourly GitHub reads
+// c's budget shares than are left, under its lock until tx ends.
+func checkGitHubBudget(ctx context.Context, tx pgx.Tx, c Caller, need int) error {
 	key := githubReadKey(c)
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('github_reads:' || $1))`, key); err != nil {
 		return err
@@ -189,8 +190,11 @@ func checkGitHubBudget(ctx context.Context, tx pgx.Tx, c Caller) error {
 	if err != nil {
 		return err
 	}
-	if reads >= githubReadsPerHour {
+	switch {
+	case reads >= githubReadsPerHour:
 		return refuse(rAtMostGithubReadsHourThis, githubReadsPerHour)
+	case reads+need > githubReadsPerHour:
+		return refuse(rRefreshingTakesGithubReads, need, githubReadsPerHour-reads, githubReadsPerHour)
 	}
 	return nil
 }

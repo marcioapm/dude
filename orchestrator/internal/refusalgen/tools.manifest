@@ -120,3 +120,4 @@ rNotRunYourTaskYouRead                 refusals/tools/runchat/not-run-your-task-
 rNotRunThisSessionStarted              refusals/tools/runchat/not-run-this-session-started
 rNoOpenPullRequestRefresh              refusals/tools/refresh/no-open-pull-request-refresh
 rNameTaskWhosePullRequestsRefresh      refusals/tools/refresh/name-task-whose-pull-requests-refresh
+rRefreshingTakesGithubReads            refusals/tools/refresh/refreshing-takes-github-reads

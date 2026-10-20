@@ -51,6 +51,10 @@ const EventType = "agent.tool.dude"
 // result's EventType event is marked attempted and not counted again.
 const AttemptEventType = "agent.tool.attempted"
 
+// githubReader is a checked call spending more than one GitHub read: its
+// attempt is recorded once per read, which the hourly count counts.
+type githubReader interface{ githubReads() int }
+
 // Server serves the tools over MCP streamable HTTP.
 type Server struct {
 	DB              *db.DB
@@ -676,8 +680,19 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 				if err := withinLimits(ctx, tx, c, t); err != nil {
 					return err
 				}
-				_, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "arguments": args}))
-				return err
+				if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "arguments": args})); err != nil {
+					return err
+				}
+				// The call's further GitHub reads: marked attempted, so
+				// withinLimits counts the call once.
+				if r, ok := result.(githubReader); ok {
+					for range r.githubReads() - 1 {
+						if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "attempted": true})); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
 			}
 			return nil
 		}

@@ -478,6 +478,10 @@ name the task whose pull requests to refresh, by its key
 
 the task has no open pull request to refresh: pull_requests lists the ones it had
 
+## refusals/tools/refresh/refreshing-takes-github-reads
+
+a refresh takes one GitHub read for each open pull request, %d here, and %d of the hour's %d are left: wait, or work with what pull_requests last read
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

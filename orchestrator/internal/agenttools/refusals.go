@@ -124,4 +124,5 @@ const (
 	rNotRunThisSessionStarted              = "%s is not a Run this session started: you read only the Runs your session started"
 	rNoOpenPullRequestRefresh              = "the task has no open pull request to refresh: pull_requests lists the ones it had"
 	rNameTaskWhosePullRequestsRefresh      = "name the task whose pull requests to refresh, by its key"
+	rRefreshingTakesGithubReads            = "a refresh takes one GitHub read for each open pull request, %d here, and %d of the hour's %d are left: wait, or work with what pull_requests last read"
 )

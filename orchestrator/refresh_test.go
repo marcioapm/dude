@@ -114,6 +114,42 @@ func TestARefreshPastTheHoursReadsIsRefused(t *testing.T) {
 	}
 }
 
+// secondPullRequest gives the task another open pull request, #2 of the same
+// repository, which GitHub does not have.
+func (w *world) secondPullRequest(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO pull_requests SELECT (jsonb_populate_record(NULL::pull_requests,
+		to_jsonb(pr) || jsonb_build_object('id', pr.id || '_2', 'number', 2, 'node_id', NULL, 'url', pr.url || '-2'))).*
+		FROM pull_requests pr WHERE task_id = $1`, task)
+}
+
+// A refresh spends one GitHub read per open pull request: with fewer left
+// than it has open, it syncs none and says how many it needs and has; with
+// enough, its attempt counts them all, in the hourly count and in limits.
+func TestARefreshSpendsAReadPerPullRequest(t *testing.T) {
+	w, task := refreshWorld(t)
+	w.secondPullRequest(task)
+	spend := func(n int, prefix string) {
+		mustExec(t, w.owner, `INSERT INTO events (id, organization_id, event_type, task_id, occurred_at, actor_type, actor_id, source, payload)
+			SELECT $4 || n, $1, 'agent.tool.attempted', $2, now() - interval '10 minutes', 'agent', 'run_x', 'runner',
+				jsonb_build_object('tool', 'github_issue') FROM generate_series(1, $3::int) n`, w.org, task, n, prefix)
+	}
+	spend(59, "evt_spent_")
+	before := w.requests()
+	w.refused(task, "refresh_pull_requests", `{}`, "one GitHub read for each open pull request, 2 here, and 1 of the hour's 60 are left")
+	if w.requests() != before {
+		t.Error("a refresh short of reads reached GitHub")
+	}
+	mustExec(t, w.owner, `DELETE FROM events WHERE id = 'evt_spent_1'`)
+	w.must(task, "refresh_pull_requests", `{}`)
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1`+githubReadsHour, task); n != 60 {
+		t.Errorf("%d GitHub reads this hour, want 58 and the refresh's 2", n)
+	}
+	if reads := field(w.limitsOf(task), "githubReadsThisHour"); num(field(reads, "used")) != 60 || num(field(reads, "remaining")) != 0 {
+		t.Errorf("limits' GitHub reads: %v", reads)
+	}
+}
+
 // The refresh reads GitHub with no transaction open: while GitHub holds its
 // answer, the task's GitHub-reads lock its check took is free, and the
 // conductor's other tools answer.
