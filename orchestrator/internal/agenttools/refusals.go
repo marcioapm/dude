@@ -50,6 +50,7 @@ const (
 	rYouAlreadyHaveQuestionWaitingFor      = "you already have a question waiting for an answer: end your turn and wait for it"
 	rNamesOneMemberWhoCanChat              = "to names one member who can chat; %q is %d of them"
 	rAtMostFindingsByIdAt                  = "at most %d findings by id at once"
+	rAtMostFeedbackItemsByIdAt             = "at most %d feedback items by id at once"
 	rYouAreNoLongerThisTask                = "you are no longer this task's conductor: another took over from you. Restart nothing"
 	rRelationKindBlockedByBlocksOr         = "a relation's kind is blocked_by, blocks or related, not %q"
 	rNoTaskInThisOrganisation              = "no task %s in this organisation"
