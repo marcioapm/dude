@@ -69,14 +69,21 @@ async function imagePart(form: FormData, field: string): Promise<{ bytes: Uint8A
   return { bytes, ...info, fileName: part.name };
 }
 
-async function upload(ctx: RequestContext): Promise<Response> {
+async function upload(ctx: RequestContext, target: "task" | "session"): Promise<Response> {
   // Before the body is read: nothing could be kept.
   if (!storageConfigured()) throw unconfigured();
-  const taskId = ctx.params.id!;
+  const id = ctx.params.id!;
   const { organizationId } = ctx.principal;
-  const task = await withOrg(organizationId, async ({ sql }) =>
-    (await sql`SELECT id FROM tasks WHERE id = ${taskId}`)[0]);
-  if (!task) throw notFound(`task ${taskId} not found`);
+  const owner = await withOrg(organizationId, async ({ sql }) =>
+    target === "task"
+      ? (await sql`SELECT id FROM tasks WHERE id = ${id}`)[0]
+      : (await sql`SELECT id, session_role(${id}, ${ctx.principal.personId}) AS role FROM sessions WHERE id = ${id}`)[0]);
+  if (!owner) throw notFound(`${target} ${id} not found`);
+  if (target === "session") {
+    const { role } = owner as { role: string | null };
+    if (role === null) throw notFound(`session ${id} not found`);
+    if (role === "read") throw forbidden("you can read this session; only its owner and members who can chat may upload images");
+  }
 
   const body = await readCapped(ctx.request, MAX_BODY, tooBig);
   let form: FormData;
@@ -99,9 +106,9 @@ async function upload(ctx: RequestContext): Promise<Response> {
   const rawName = form.get("name");
   const name = attachmentName(typeof rawName === "string" && rawName.trim() ? rawName : original.fileName, delivered.type);
 
-  const id = newId("attachment");
+  const attachmentId = newId("attachment");
   // A random part, so a key names nothing guessable; ids alone sort by time.
-  const prefix = `attachments/${organizationId}/${taskId}/${id}-${randomBytes(9).toString("base64url")}`;
+  const prefix = `attachments/${organizationId}/${id}/${attachmentId}-${randomBytes(9).toString("base64url")}`;
   const objectKey = `${prefix}-delivered.${EXTENSION[delivered.type]}`;
   const originalKey = `${prefix}-original.${EXTENSION[original.type]}`;
   await putObject(objectKey, delivered.bytes, delivered.type);
@@ -114,10 +121,10 @@ async function upload(ctx: RequestContext): Promise<Response> {
   const sha256 = createHash("sha256").update(delivered.bytes).digest("hex");
   try {
     const row = await withOrg(organizationId, async ({ sql }) => (await sql`
-      INSERT INTO attachments AS a (id, organization_id, task_id, uploaded_by, name,
+      INSERT INTO attachments AS a (id, organization_id, task_id, session_id, uploaded_by, name,
         content_type, width, height, bytes, sha256, object_key,
         original_content_type, original_width, original_height, original_bytes, original_key)
-      VALUES (${id}, ${organizationId}, ${taskId}, (SELECT id FROM people WHERE id = ${ctx.principal.personId}), ${name},
+      VALUES (${attachmentId}, ${organizationId}, ${target === "task" ? id : null}, ${target === "session" ? id : null}, (SELECT id FROM people WHERE id = ${ctx.principal.personId}), ${name},
         ${delivered.type}, ${delivered.width}, ${delivered.height}, ${delivered.bytes.length}, ${sha256}, ${objectKey},
         ${original.type}, ${original.width}, ${original.height}, ${original.bytes.length}, ${originalKey})
       RETURNING ${sql.unsafe(ATTACHMENT_JSON)} AS info`)[0] as { info: unknown });
@@ -139,10 +146,11 @@ async function serve(ctx: RequestContext): Promise<Response> {
   const variant = ctx.url.searchParams.get("variant") ?? "delivered";
   if (variant !== "delivered" && variant !== "original") throw badRequest("variant is delivered or original");
   const row = await withOrg(ctx.principal.organizationId, async ({ sql }) => (await sql`
-    SELECT name, content_type, object_key, original_content_type, original_key
+    SELECT name, content_type, object_key, original_content_type, original_key, session_id IS NOT NULL AS in_session,
+      CASE WHEN session_id IS NULL THEN true ELSE session_role(session_id, ${ctx.principal.personId}) IS NOT NULL END AS visible
     FROM attachments WHERE id = ${ctx.params.id!}`)[0] as
-    { name: string; content_type: string; object_key: string; original_content_type: string; original_key: string } | undefined);
-  if (!row) throw notFound("no such attachment");
+    { name: string; content_type: string; object_key: string; original_content_type: string; original_key: string; in_session: boolean; visible: boolean } | undefined);
+  if (!row || !row.visible) throw notFound("no such attachment");
   const [key, type] = variant === "original" ? [row.original_key, row.original_content_type] : [row.object_key, row.content_type];
   // The row admits only the four raster types; never anything a browser would run.
   if (!(ATTACHMENT_TYPES as readonly string[]).includes(type)) throw notFound("no such attachment");
@@ -156,8 +164,9 @@ async function serve(ctx: RequestContext): Promise<Response> {
       "content-disposition": disposition(ctx.url.searchParams.get("download") ? "attachment" : "inline", name),
       "x-content-type-options": "nosniff",
       "content-security-policy": "default-src 'none'",
-      // An attachment's bytes never change.
-      "cache-control": "private, max-age=31536000, immutable",
+      // An attachment's bytes never change, but a session's membership does:
+      // a cached copy would outlive a member's removal from the session.
+      "cache-control": row.in_session ? "private, no-store" : "private, max-age=31536000, immutable",
     },
   });
 }
@@ -166,9 +175,11 @@ async function serve(ctx: RequestContext): Promise<Response> {
 async function remove(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
   await withOrg(ctx.principal.organizationId, async ({ sql }) => {
-    const row = (await sql`SELECT uploaded_by, attached_at FROM attachments WHERE id = ${id} FOR UPDATE`)[0] as
-      { uploaded_by: string | null; attached_at: Date | null } | undefined;
-    if (!row) throw notFound("no such attachment");
+    const row = (await sql`SELECT uploaded_by, attached_at,
+        CASE WHEN session_id IS NULL THEN true ELSE session_role(session_id, ${ctx.principal.personId}) IS NOT NULL END AS visible
+      FROM attachments WHERE id = ${id} FOR UPDATE`)[0] as
+      { uploaded_by: string | null; attached_at: Date | null; visible: boolean } | undefined;
+    if (!row || !row.visible) throw notFound("no such attachment");
     if (row.attached_at) throw conflict("this image was sent; it stays with its message");
     if (row.uploaded_by !== ctx.principal.personId) throw forbidden("only who uploaded it can remove it");
     // The trigger queues its objects for the sweeper.
@@ -223,7 +234,8 @@ export async function syncTaskAttachments(scope: OrgScope, taskId: string, goal:
 
 export function registerAttachmentRoutes(router: Router): void {
   router.get("/v1/attachment-limits", limits);
-  router.post("/v1/tasks/:id/attachments", upload);
+  router.post("/v1/tasks/:id/attachments", (ctx) => upload(ctx, "task"));
+  router.post("/v1/brainstorms/:id/attachments", (ctx) => upload(ctx, "session"));
   router.get("/v1/attachments/:id", serve);
   router.delete("/v1/attachments/:id", remove);
 }

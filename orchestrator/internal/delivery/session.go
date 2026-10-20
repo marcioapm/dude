@@ -218,26 +218,47 @@ const HeldBack = `(d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq
 // hear a message — at most one (runs_live_brainstorm_idx).
 const LiveBrainstorm = `r.role = 'brainstorm' AND r.kind = 'agent' AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`
 
+// Opening is the member's message a fresh session agent starts on.
+// Message ends its briefing, already attributed (WithImages notes the
+// images); Shown is the chat.message's text. A briefing is the Run's
+// prompt and carries no images: Images, the session's uploads, go as a
+// directive queued on the new Run, delivered after the briefing, and Chat
+// shows them on the message's chat.message. An Answer gets no
+// chat.message: the caller shows it, with the images StartBrainstorm
+// returns, on its question.answered.
+type Opening struct {
+	Message, Shown string
+	Images         []string
+	Answer         bool
+}
+
+// WithImages is a message's words followed by the note that its images
+// come as the agent's next input; the note alone for an image alone.
+func WithImages(text string) string {
+	return render(imagesFollowTmpl, strings.TrimSpace(text))
+}
+
 // StartBrainstorm creates the session's agent, briefed by dude with the
-// member's message (already attributed).
-func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, message, shown string) (string, error) {
-	return startBrainstorm(ctx, tx, org, sessionID, w, message, shown, "", "")
+// member's message o. Returns the new Run and the metadata of the images
+// it was sent (AttachOwnerImages).
+func StartBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, o Opening) (string, []json.RawMessage, error) {
+	return startBrainstorm(ctx, tx, org, sessionID, w, o, "", "")
 }
 
 // With retries, the new Run is Try again on that failed one: its
 // run.created names it. With supersedes, the message is that directive of
 // an ended agent handed on: its chat.message and session.briefed name it,
 // so Chat shows it as that directive's turn.
-func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, message, shown, retries, supersedes string) (string, error) {
+func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Writer, o Opening, retries, supersedes string) (string, []json.RawMessage, error) {
 	id := ids.New(ids.Run)
-	briefing, err := sessionBriefing(ctx, tx, sessionID, message)
+	briefing, err := sessionBriefing(ctx, tx, sessionID, o.Message)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role, base_refs, prompt, started_by)
 		VALUES ($1, $2, $3, 1, 'pending', 'agent', 'brainstorm', '{}'::jsonb, $4, NULLIF($5, ''))`,
 		id, org, sessionID, briefing, w.Person); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	ref := RunRef{Org: org, SessionID: sessionID, RunID: id}
 	created := map[string]any{"role": RoleBrainstorm, "publishes": false}
@@ -245,22 +266,34 @@ func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 		created["retries"] = retries
 	}
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunCreated, ledger.ActorSystem, created)); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	if shown != "" {
-		msg := map[string]any{"text": shown}
+	var attached []json.RawMessage
+	msg := map[string]any{"text": o.Shown}
+	if len(o.Images) > 0 {
+		directiveID, _, err := QueueDirective(ctx, tx, ref, Directive{Text: imagesCarried, Scope: "run"})
+		if err != nil {
+			return "", nil, err
+		}
+		if attached, err = AttachOwnerImages(ctx, tx, AttachOwner{SessionID: sessionID}, directiveID, o.Images); err != nil {
+			return "", nil, err
+		}
+		// The message is read once its images are: Chat shows it as that directive's turn.
+		msg["directiveId"], msg["attachments"] = directiveID, attached
+	}
+	if !o.Answer && (o.Shown != "" || len(attached) > 0) {
 		if supersedes != "" {
 			msg["supersedes"] = supersedes
 		}
 		if err := ChatEvent(ctx, tx, ref, w, msg); err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
 	briefed := map[string]any{"text": briefing}
 	if supersedes != "" {
 		briefed["supersedes"] = supersedes
 	}
-	return id, SessionEvent(ctx, tx, ref, EvSessionBriefed, ledger.ActorSystem, "dude", briefed)
+	return id, attached, SessionEvent(ctx, tx, ref, EvSessionBriefed, ledger.ActorSystem, "dude", briefed)
 }
 
 // sessionBriefing is the brainstorm's first prompt before its
@@ -363,20 +396,27 @@ func BrainstormPrompt(briefing string, in PromptInput) string {
 // carried by a briefing; such a message fails saying to send it again.
 // The caller holds the session's lock.
 func SessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error) {
-	return sessionHandOver(ctx, tx, ref, "")
+	return sessionHandOver(ctx, tx, ref, "", false)
 }
 
+// imagesNotPassedOn is the error of a message with images an ended
+// brainstorm never read and no live agent took (sessionHandOver).
+const imagesNotPassedOn = "the session's agent stopped before reading it; its images were not passed on; send it again"
+
 // sessionHandOver is SessionHandOver; a new agent it starts names retries
-// in its run.created (startBrainstorm).
-func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string) (string, error) {
+// in its run.created (startBrainstorm). With refused, it also hands on
+// what an earlier hand-over failed as imagesNotPassedOn and nothing has
+// sent again since: Try again's new Run is live, so they reach it.
+func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string, refused bool) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
 			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, ''), COALESCE(e.payload->>'text', '')
 		FROM directives d
 		LEFT JOIN LATERAL (SELECT e.actor_type, e.actor_id, e.payload FROM events e WHERE e.run_id = d.run_id
 			AND e.event_type IN ('chat.message', 'question.answered') AND e.payload->>'directiveId' = d.id
 			ORDER BY e.cursor LIMIT 1) e ON true
-		WHERE d.run_id = $1 AND d.delivered_at IS NULL AND d.failed_at IS NULL
-		ORDER BY d.created_at, d.id FOR UPDATE OF d`, ref.RunID)
+		WHERE d.run_id = $1 AND d.delivered_at IS NULL AND (d.failed_at IS NULL
+			OR ($2 AND d.error = $3 AND NOT EXISTS (SELECT 1 FROM directives s WHERE s.supersedes = d.id)))
+		ORDER BY d.created_at, d.id FOR UPDATE OF d`, ref.RunID, refused, imagesNotPassedOn)
 	if err != nil {
 		return "", err
 	}
@@ -413,23 +453,33 @@ func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string)
 				return "", err
 			}
 			if len(images) > 0 {
-				failed[d.ID] = "the session's agent stopped before reading it; its images were not passed on; send it again"
+				failed[d.ID] = imagesNotPassedOn
 				continue
 			}
-			if next, err = startBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, d.Text, d.Shown, retries, d.ID); err != nil {
+			if next, _, err = startBrainstorm(ctx, tx, ref.Org, ref.SessionID, w, Opening{Message: d.Text, Shown: d.Shown}, retries, d.ID); err != nil {
 				return "", err
 			}
 			continue
 		}
 		to := RunRef{Org: ref.Org, SessionID: ref.SessionID, RunID: next}
+		// Superseding d with the same words, the copy carries d's images
+		// (DirectiveAttachments).
 		id, _, err := QueueDirective(ctx, tx, to, Directive{Text: d.Text, Scope: "run", Supersedes: d.ID})
+		if err != nil {
+			return "", err
+		}
+		images, err := directiveAttachmentInfo(ctx, tx, id)
 		if err != nil {
 			return "", err
 		}
 		if err := RequestResumeForMessage(ctx, tx, next, "a message handed on from the session's agent before"); err != nil {
 			return "", err
 		}
-		if err := ChatEvent(ctx, tx, to, w, map[string]any{"text": d.Shown, "directiveId": id, "supersedes": d.ID}); err != nil {
+		payload := map[string]any{"text": d.Shown, "directiveId": id, "supersedes": d.ID}
+		if len(images) > 0 {
+			payload["attachments"] = images
+		}
+		if err := ChatEvent(ctx, tx, to, w, payload); err != nil {
 			return "", err
 		}
 	}

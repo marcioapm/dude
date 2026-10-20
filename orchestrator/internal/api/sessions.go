@@ -184,7 +184,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 		if err != nil {
 			return err
 		}
-		runID, err = startSessionAgent(r.Context(), tx, org, id, p.writer(), name, *body.Message)
+		runID, err = startSessionAgent(r.Context(), tx, org, id, p.writer(), name, *body.Message, nil)
 		return err
 	})
 	if err != nil {
@@ -1107,7 +1107,9 @@ func relatedOf(ctx context.Context, tx pgx.Tx, taskID string) (delivery.RelatedT
 // starts one, briefed; with one, it is its next input, delivered at its
 // next step (a directive), resuming it if parked. While the agent waits on
 // a question, the person it is for answers it with their message; anyone
-// else's is held and goes with the answer, not as it.
+// else's is held and goes with the answer, not as it. A fresh agent (none
+// live, or a model change applied) is briefed with the words and sent the
+// images as its first directive (delivery.Opening).
 func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -1117,12 +1119,17 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		Text string `json:"text"`
 		// Written to the agent, not as the answer to its open question.
 		Aside bool `json:"aside"`
+		// Images uploaded to the session, sent with the words; they may be
+		// all there is, as a steer's may.
+		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
-	if err := checkChatText("text", body.Text); err != nil {
-		return err
+	if len(body.AttachmentIDs) == 0 || strings.TrimSpace(body.Text) != "" {
+		if err := checkChatText("text", body.Text); err != nil {
+			return err
+		}
 	}
 	id := r.PathValue("id")
 	wr := p.writer()
@@ -1152,7 +1159,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if db.IsNotFound(err) {
 			created = true
-			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text)
+			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text, body.AttachmentIDs)
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
@@ -1186,12 +1193,12 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 			if swap != nil {
-				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p)
+				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
 				out = map[string]any{"runId": next, "created": true, "questionId": questionID}
 				created = true
 				return err
 			}
-			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
+			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
 			if err != nil {
 				return err
 			}
@@ -1200,7 +1207,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if swap != nil {
 			created = true
-			runID, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, delivery.Attributed(name, body.Text), body.Text)
+			runID, _, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, sessionOpening(name, body.Text, body.AttachmentIDs))
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
@@ -1208,7 +1215,14 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		if err != nil {
 			return err
 		}
+		attached, err := attach(r.Context(), tx, delivery.AttachOwner{SessionID: id}, directiveID, body.AttachmentIDs)
+		if err != nil {
+			return err
+		}
 		payload := map[string]any{"text": body.Text, "directiveId": directiveID}
+		if len(attached) > 0 {
+			payload["attachments"] = attached
+		}
 		if qerr == nil && to != "" && to != p.Person {
 			// Waiting on another member's answer: held until it comes. The
 			// question's own person, or anyone when it names nobody, is
@@ -1229,7 +1243,8 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		return fail(http.StatusConflict, "conflict", "the session's agent was just started; send again")
 	}
 	if err != nil {
-		return err
+		// Whichever path sent the images, a refused one is 400 invalid_attachment.
+		return attachmentRefused(err)
 	}
 	s.kick()
 	status := http.StatusOK
@@ -1297,11 +1312,22 @@ func checkChatText(field, text string) error {
 	return nil
 }
 
+// sessionOpening is a member's message as a fresh agent's first: attributed
+// in its briefing, and with images, saying they follow (delivery.Opening).
+func sessionOpening(name, text string, images []string) delivery.Opening {
+	if len(images) == 0 {
+		return delivery.Opening{Message: delivery.Attributed(name, text), Shown: text}
+	}
+	return delivery.Opening{Message: delivery.Attributed(name, delivery.WithImages(text)), Shown: text, Images: images}
+}
+
 // startSessionAgent starts the brainstorm of a session with no live agent,
 // briefed with the writer's message attributed to them and shown in Chat as
-// written. The caller kicks the syncer once the transaction commits.
-func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr delivery.Writer, name, text string) (string, error) {
-	return delivery.StartBrainstorm(ctx, tx, org, sessionID, wr, delivery.Attributed(name, text), text)
+// written, its images queued for it. The caller kicks the syncer once the
+// transaction commits.
+func startSessionAgent(ctx context.Context, tx pgx.Tx, org, sessionID string, wr delivery.Writer, name, text string, images []string) (string, error) {
+	runID, _, err := delivery.StartBrainstorm(ctx, tx, org, sessionID, wr, sessionOpening(name, text, images))
+	return runID, err
 }
 
 // settleSessionQuestion marks the agent's open question answered by p.
@@ -1316,7 +1342,7 @@ func settleSessionQuestion(ctx context.Context, tx pgx.Tx, questionID string, a 
 // answerSessionQuestion settles the agent's open question with a member's
 // answer, queued as its next input, naming who answered.
 func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, questionID, prompt string,
-	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
+	items []delivery.QuestionItem, a delivery.Answered, name string, p principal, attachmentIDs []string) (string, error) {
 	if err := settleSessionQuestion(ctx, tx, questionID, a, p); err != nil {
 		return "", err
 	}
@@ -1325,7 +1351,15 @@ func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, 
 	if err != nil {
 		return "", err
 	}
-	ev := ref.Event("question.answered", p.writer().ActorType, answeredPayload(questionID, directiveID, a))
+	attached, err := attach(ctx, tx, delivery.AttachOwner{SessionID: ref.SessionID}, directiveID, attachmentIDs)
+	if err != nil {
+		return "", err
+	}
+	payload := answeredPayload(questionID, directiveID, a)
+	if len(attached) > 0 {
+		payload["attachments"] = attached
+	}
+	ev := ref.Event("question.answered", p.writer().ActorType, payload)
 	ev.ActorID = p.Actor
 	_, err = ledger.Append(ctx, tx, ev)
 	return directiveID, err
@@ -1334,20 +1368,29 @@ func answerSessionQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, 
 // answerByFreshAgent settles the agent's open question with a member's
 // answer when the session's model changed since it started: the answer is
 // the fresh agent's first message, its briefing's replay carrying the
-// question asked. The answer is recorded on the old Run after the
-// briefing, with no directive, so the briefing has it once and later
-// replays read it as heard. Returns the fresh agent.
+// question asked, and its images that agent's first directive. The answer
+// is recorded on the old Run after the briefing, with no directive, so the
+// briefing has it once and later replays read it as heard. Returns the
+// fresh agent.
 func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to delivery.SessionModelApplied, questionID, prompt string,
-	items []delivery.QuestionItem, a delivery.Answered, name string, p principal) (string, error) {
+	items []delivery.QuestionItem, a delivery.Answered, name string, p principal, images []string) (string, error) {
 	if err := settleSessionQuestion(ctx, tx, questionID, a, p); err != nil {
 		return "", err
 	}
-	next, err := delivery.ReplaceBrainstorm(ctx, tx, ref, to, p.writer(), delivery.AnswerDirective(prompt, items, a, name, true), "")
+	answer := delivery.AnswerDirective(prompt, items, a, name, true)
+	if len(images) > 0 {
+		answer = delivery.WithImages(answer)
+	}
+	next, attached, err := delivery.ReplaceBrainstorm(ctx, tx, ref, to, p.writer(),
+		delivery.Opening{Message: answer, Images: images, Answer: true})
 	if err != nil {
 		return "", err
 	}
 	payload := answeredPayload(questionID, "", a)
 	delete(payload, "directiveId")
+	if len(attached) > 0 {
+		payload["attachments"] = attached
+	}
 	ev := ref.Event("question.answered", p.writer().ActorType, payload)
 	ev.ActorID = p.Actor
 	_, err = ledger.Append(ctx, tx, ev)
@@ -1355,9 +1398,9 @@ func answerByFreshAgent(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, to 
 }
 
 // sessionAnswer is a member answering the session agent's open question
-// through its form: one answer per question, and a note (answerBody; no
-// images, which a session does not take). Only the member it is put to,
-// or with none named, anyone who can chat.
+// through its form: one answer per question, and a note (answerBody: the
+// form takes no images; a Chat message does, through sessionChat). Only the
+// member it is put to, or with none named, anyone who can chat.
 func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -1406,12 +1449,12 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		if swap != nil {
-			next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p)
+			next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p, nil)
 			out = map[string]any{"id": questionID, "runId": next, "status": "answered", "answer": answered.Text,
 				"answers": answered.Answers}
 			return err
 		}
-		directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p)
+		directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p, nil)
 		if err != nil {
 			return err
 		}

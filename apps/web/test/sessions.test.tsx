@@ -18,7 +18,7 @@ import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { App } from "../src/App.tsx";
-import { ApiError, type Artifact, type SentAnswer } from "../src/api/client.ts";
+import { ApiError, type Artifact, type SentAnswer, type UploadRoute } from "../src/api/client.ts";
 import { project } from "../src/api/conversation.ts";
 import { useState } from "react";
 import { allByRole, accessibleName } from "../../../packages/design-system/test/queries.ts";
@@ -372,6 +372,86 @@ describe("a brainstorm session's page", () => {
     // Only the owner shares or links.
     expect(page.querySelectorAll("[data-testid=share-open]").length).toBe(0);
     expect(page.querySelectorAll("[data-testid=link-open]").length).toBe(0);
+  });
+
+  test("a member's composer takes images; a message's images show on its turn", async () => {
+    const shot = { id: "att_shot", name: "shot.png", contentType: "image/png" as const, width: 10, height: 10, bytes: 100,
+      original: { contentType: "image/png" as const, width: 20, height: 20, bytes: 200 } };
+    const client = new SessionClient(detail("chat"), [
+      ev("chat.message", { text: "see this", directiveId: "dir_1", attachments: [shot] }, { type: "human", id: YOU }),
+    ]);
+    const page = await sessionPage(client);
+    const clip = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=attach-button]"), "the paperclip");
+    expect(clip.disabled).toBe(false);
+    const images = await until(() => page.querySelector("[data-testid=message-images]"), "the message's images");
+    expect([...images.querySelectorAll("[data-testid=message-image]")].map((b) => b.getAttribute("aria-label"))).toEqual(["Open shot.png"]);
+  });
+
+  test("a first message with an image is one turn: its words and its image, read with the image's directive", async () => {
+    const shot = { id: "att_first", name: "first.png", contentType: "image/png" as const, width: 10, height: 10, bytes: 100,
+      original: { contentType: "image/png" as const, width: 20, height: 20, bytes: 200 } };
+    const page = await sessionPage(new SessionClient(detail("owner"), [
+      ev("run.created", { role: "brainstorm" }),
+      ev("chat.message", { text: "look", directiveId: "dir_img", attachments: [shot] }, { type: "human", id: YOU }),
+      ev("session.briefed", { text: "Brainstorm, this is the session.\n\n## The first message\n\nMárcio: look\n\n[Images come with this message: they follow as your next input.]" }),
+      ev("run.directive.accepted", { directiveId: "dir_img", lands: "next_step", receipt: true }),
+      ev("run.directive.delivered", { directiveId: "dir_img", read: true }),
+    ]));
+    const images = await until(() => page.querySelector("[data-testid=message-images]"), "the message's image");
+    const humans = page.querySelectorAll("[data-testid=human-turn]");
+    expect(humans.length).toBe(1);
+    expect(humans[0]!.textContent).toContain("look");
+    expect(humans[0]!.contains(images)).toBe(true);
+    expect([...images.querySelectorAll("[data-testid=message-image]")].map((b) => b.getAttribute("aria-label"))).toEqual(["Open first.png"]);
+    expect(page.querySelector("[data-testid=chat-briefing]")!.textContent).not.toContain("Images come with this message");
+  });
+
+  test("before the agent has started the paperclip is on, and a first message sends its words and its image", async () => {
+    class Starting extends SessionClient {
+      attached: Array<ReadonlyArray<string>> = [];
+      override sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}) {
+        this.attached.push(opts.attachmentIds ?? []);
+        return super.sessionChat(id, text, opts);
+      }
+      routes: UploadRoute[] = [];
+      override uploadAttachment(id: string, image: { name: string; original: Blob; delivered: Blob },
+        _onProgress?: (fraction: number) => void, route: UploadRoute = "tasks") {
+        this.routes.push(route);
+        return super.uploadAttachment(id, image);
+      }
+    }
+    const g = globalThis as { createImageBitmap?: unknown };
+    const canvas = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
+    const saved = { bitmap: g.createImageBitmap, getContext: canvas["getContext"], toBlob: canvas["toBlob"] };
+    g.createImageBitmap = async () => ({ width: 40, height: 30, close() {} });
+    canvas["getContext"] = () => ({ fillRect() {}, drawImage() {} });
+    canvas["toBlob"] = (done: (b: Blob) => void, type: string) => done(new Blob([new Uint8Array(1024)], { type }));
+    try {
+      const fresh = detail("chat");
+      fresh.session.run = null;
+      const client = new Starting(fresh);
+      const page = await sessionPage(client);
+      expect(page.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(false);
+      const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])], "shot.png", { type: "image/png" });
+      const drop = new Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
+      drop.dataTransfer = { types: ["Files"], items: [png], files: [png], dropEffect: "" };
+      await act(async () => void page.querySelector("[data-testid=session-screen] textarea")!.dispatchEvent(drop));
+      await until(() => page.querySelector("[data-testid=attachment-chip][data-state=ready]"), "the uploaded image");
+      expect(client.routes).toEqual(["brainstorms"]);
+      await write(page, "look");
+      expect(client.sent).toEqual(["look"]);
+      expect(client.attached).toEqual([["att_fx1"]]);
+      await until(() => page.querySelectorAll("[data-testid=attachment-chip]").length === 0 || null, "the tray emptied");
+    } finally {
+      g.createImageBitmap = saved.bitmap;
+      canvas["getContext"] = saved.getContext;
+      canvas["toBlob"] = saved.toBlob;
+    }
+  });
+
+  test("a reader's paperclip is off", async () => {
+    const reader = await sessionPage(new SessionClient(detail("read")));
+    expect(reader.querySelector<HTMLButtonElement>("[data-testid=attach-button]")!.disabled).toBe(true);
   });
 
   test("a reader's composer is closed, with why, and the card files nothing", async () => {
@@ -1996,6 +2076,25 @@ describe("Try again hands each unread message on as the directive it replaces, n
       [ANA.id, "same", null, true, null],
       [YOU, "same", "dir_n2", true, null],
     ]);
+  });
+
+  test("a message whose images were not passed on, then Try again carrying them: one turn, no longer failed, read once", () => {
+    const image = { id: "att_1", name: "plan.png", width: 10, height: 10, original: { bytes: 1 } };
+    const IMAGES = "the session's agent stopped before reading it; its images were not passed on; send it again";
+    const ledger = [
+      ...failedWith(() => [], () => [ev("chat.message", { text: "look", directiveId: "dir_img", attachments: [image] }, by(YOU))]),
+      // The syncer's hand-over found no agent to take the images; Try again's fresh agent then takes them.
+      settled("dir_img", IMAGES),
+      retried(),
+      on(ev("session.briefed", { text: "Brainstorm, …" })),
+      on(ev("chat.message", { text: "look", directiveId: "dir_copy", supersedes: "dir_img", attachments: [image] }, by(YOU))),
+      settled("dir_img"),
+    ];
+    expect(humans(ledger)).toEqual([[YOU, "look", "dir_copy", false, null]]);
+    const read = [...ledger, on(ev("agent.session.started", { role: "brainstorm" })), on(ev("run.directive.delivered", { directiveId: "dir_copy", read: true }))];
+    expect(humans(read)).toEqual([[YOU, "look", "dir_copy", true, null]]);
+    const shown = project(read, "running").turns.flatMap((t) => (t.kind === "human" ? t.attachments.map((a) => a.id) : []));
+    expect(shown).toEqual(["att_1"]);
   });
 
   test("of two identical unread messages, the one refused for its images stays failed; the one handed on is read", () => {
