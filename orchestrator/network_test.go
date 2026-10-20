@@ -208,6 +208,26 @@ const webNote = "You can read the web: search for and fetch public pages"
 // no fetch tool, whatever its network.
 const codexWebNote = "You can search the web. You cannot fetch pages; when you need a page's text, ask the person to paste it."
 
+// webChangedNote opens what a session's agent on another web than the
+// agent before it is told; anyHostToPypi is all of it after an agent that
+// reached any host, on a list of pypi.org.
+const (
+	webChangedNote = "Your web access is not what this session's agent before you had."
+	anyHostToPypi  = webChangedNote + " It had web search, fetching from any host; you have web search, fetching from pypi.org only."
+)
+
+// anyHostSession is a session whose first agent, submitted and hanging,
+// reaches any host on an organisation whose list is pypi.org.
+func anyHostSession(t *testing.T) (s *sessionWorld, id, first string) {
+	s = newSessionWorld(t)
+	s.lux.Decide = hang
+	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
+	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = true WHERE id = $1`, s.org)
+	id = s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "what do competitors charge?"})["id"].(string)
+	first, _, _, _ = s.submitted(id)
+	return s, id, first
+}
+
 // The 10-12 loss: a session's first agent reached any host on OpenCode and
 // searched; the organisation's setting was turned off and the session's next
 // agent was submitted on the list. That agent is told what it has (search,
@@ -216,17 +236,11 @@ const codexWebNote = "You can search the web. You cannot fetch pages; when you n
 // fetches its briefing replays are not read as its own. A third agent on
 // the same web is told nothing of a change.
 func TestASessionsNextAgentOnAnotherWebIsToldWhatChanged(t *testing.T) {
-	s := newSessionWorld(t)
-	s.lux.Decide = hang
-	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
-	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = true WHERE id = $1`, s.org)
-	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "what do competitors charge?"})["id"].(string)
-	first, _, _, _ := s.submitted(id)
+	s, id, first := anyHostSession(t)
 	if !strings.Contains(specInstructions(t, s.luxRun(first).spec), webNote) {
 		t.Fatalf("the first agent is not told it can read the web")
 	}
-	const changed = "Your web access is not what this session's agent before you had."
-	if strings.Contains(s.luxRun(first).spec.Workload.Prompt, changed) {
+	if strings.Contains(s.luxRun(first).spec.Workload.Prompt, webChangedNote) {
 		t.Errorf("the session's first agent is told of a change")
 	}
 
@@ -240,16 +254,15 @@ func TestASessionsNextAgentOnAnotherWebIsToldWhatChanged(t *testing.T) {
 	if !strings.Contains(file, "You can search the web. You can fetch pages only from these hosts: pypi.org; a fetch of any other host is refused.") {
 		t.Errorf("the second agent is not told it searches and fetches pypi.org alone:\n%s", file)
 	}
-	want := changed + " It had web search, fetching from any host; you have web search, fetching from pypi.org only."
-	if !strings.Contains(v.spec.Workload.Prompt, want) {
-		t.Errorf("the second agent's first message does not say %q:\n%s", want, v.spec.Workload.Prompt)
+	if !strings.Contains(v.spec.Workload.Prompt, anyHostToPypi) {
+		t.Errorf("the second agent's first message does not say %q:\n%s", anyHostToPypi, v.spec.Workload.Prompt)
 	}
 
 	s.endRun(second)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "thanks"})
 	s.until("a third agent", func() bool { r, _ := s.brainstorm(id); return r != second })
 	third, _, _, _ := s.submitted(id)
-	if p := s.luxRun(third).spec.Workload.Prompt; strings.Contains(p, changed) {
+	if p := s.luxRun(third).spec.Workload.Prompt; strings.Contains(p, webChangedNote) {
 		t.Errorf("the third agent, on the second's web, is told of a change:\n%s", p)
 	}
 }
@@ -259,12 +272,7 @@ func TestASessionsNextAgentOnAnotherWebIsToldWhatChanged(t *testing.T) {
 // any host; B, restricted, was refused (its pool gone); C, restricted, is
 // told its web is not A's.
 func TestAnAgentThatNeverReachedLuxIsNotTheWebBefore(t *testing.T) {
-	s := newSessionWorld(t)
-	s.lux.Decide = hang
-	mustExec(t, s.owner, `UPDATE model_tiers SET model = 'claude-think' WHERE organization_id = $1 AND name = 'Thinker'`, s.org)
-	mustExec(t, s.owner, `UPDATE organizations SET agent_egress = '{pypi.org}', brainstorm_anywhere = true WHERE id = $1`, s.org)
-	id := s.ok(s.marcio, "POST", "/internal/sessions", map[string]any{"message": "what do competitors charge?"})["id"].(string)
-	first, _, _, _ := s.submitted(id)
+	s, id, first := anyHostSession(t)
 
 	mustExec(t, s.owner, `UPDATE organizations SET brainstorm_anywhere = false WHERE id = $1`, s.org)
 	mustExec(t, s.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib, pool_id)
@@ -285,10 +293,8 @@ func TestAnAgentThatNeverReachedLuxIsNotTheWebBefore(t *testing.T) {
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/retry", nil)
 	s.until("a third agent", func() bool { r, _ := s.brainstorm(id); return r != second && r != first })
 	third, _, _, _ := s.submitted(id)
-	want := "Your web access is not what this session's agent before you had. " +
-		"It had web search, fetching from any host; you have web search, fetching from pypi.org only."
-	if p := s.luxRun(third).spec.Workload.Prompt; !strings.Contains(p, want) {
-		t.Errorf("the third agent's first message does not say %q:\n%s", want, p)
+	if p := s.luxRun(third).spec.Workload.Prompt; !strings.Contains(p, anyHostToPypi) {
+		t.Errorf("the third agent's first message does not say %q:\n%s", anyHostToPypi, p)
 	}
 }
 
