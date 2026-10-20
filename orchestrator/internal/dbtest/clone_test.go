@@ -74,27 +74,26 @@ func TestACloneReusesGenericPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pooled.Release()
-	for _, c := range []struct {
-		name string
-		conn *pgx.Conn
-	}{{"owner", owner}, {"app pool", pooled.Conn()}} {
+	check := func(name string, conn *pgx.Conn) {
 		// A statement without parameters is always planned generically:
 		// the $1 is what tells force_generic_plan from auto.
-		if _, err := c.conn.Prepare(ctx, "by_id", `SELECT count(*) FROM pg_class WHERE oid = $1`); err != nil {
-			t.Fatalf("%s: %v", c.name, err)
+		if _, err := conn.Prepare(ctx, "by_id", `SELECT count(*) FROM pg_class WHERE oid = $1`); err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
 		for range 3 {
-			if _, err := c.conn.Exec(ctx, "by_id", 1259); err != nil {
-				t.Fatalf("%s: %v", c.name, err)
+			if _, err := conn.Exec(ctx, "by_id", 1259); err != nil {
+				t.Fatalf("%s: %v", name, err)
 			}
 		}
 		var generic, custom int64
-		if err := c.conn.QueryRow(ctx, `SELECT generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'by_id'`).
+		if err := conn.QueryRow(ctx, `SELECT generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'by_id'`).
 			Scan(&generic, &custom); err != nil {
-			t.Fatalf("%s: %v", c.name, err)
+			t.Fatalf("%s: %v", name, err)
 		}
 		if generic != 3 || custom != 0 {
-			t.Errorf("%s connection: generic plans %d, custom plans %d over 3 executions; want 3 and 0", c.name, generic, custom)
+			t.Errorf("%s connection: generic plans %d, custom plans %d over 3 executions; want 3 and 0", name, generic, custom)
 		}
 	}
+	check("owner", owner)
+	check("app pool", pooled.Conn())
 }

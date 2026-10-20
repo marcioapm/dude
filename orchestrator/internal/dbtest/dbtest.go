@@ -147,17 +147,14 @@ var configure = func(ctx context.Context, admin *pgx.Conn, name string) error {
 	// database that a crash would lose is dropped anyway, and what a commit
 	// makes visible to other sessions is the same.
 	//
-	// force_generic_plan: a test's prepared statements live a few dozen
-	// executions on fresh connections, and under auto each connection
-	// custom-plans a statement's first five; the syncer's (phases.dueQuery
-	// and pending's probes) take ~5 ms to plan against ~0.1 ms to run.
-	// Production keeps auto, which goes generic after five executions on
-	// its long-lived pool, so tests run the plan production settles on.
-	// The plan can still matter: a generic plan cannot fold parameters into
-	// a CASE, so whether a query errors can differ, and rows in an order
-	// the query leaves open can differ. A test that depends on a custom
-	// plan sets force_custom_plan itself, as
-	// internal/phases/due_reference_test.go does.
+	// force_generic_plan: the syncer's statements (phases.dueQuery, pending's
+	// probes) take ~5 ms to plan against ~0.1 ms to run, a test's live a few
+	// dozen executions on fresh connections, and auto custom-plans each
+	// connection's first five. Production keeps auto, which settles on the
+	// generic plan on its long-lived pool. A generic plan cannot fold
+	// parameters into a CASE, so whether a query errors, and the order of
+	// rows it leaves unordered, can differ; a test that needs a custom plan
+	// sets force_custom_plan, as internal/phases/due_reference_test.go does.
 	for _, set := range []string{"synchronous_commit = off", "plan_cache_mode = force_generic_plan"} {
 		if _, err := admin.Exec(ctx, "ALTER DATABASE "+name+" SET "+set); err != nil {
 			return err
