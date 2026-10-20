@@ -453,6 +453,11 @@ func TestADeliveryReachesAPullRequestAndAMergeFinishesIt(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi); n != 0 {
 		t.Errorf("%d findings still open", n)
 	}
+	// resumeRounds is off in this world: no finished reviewer or tester
+	// holds its lux Run for a next round.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('review', 'test') AND status = 'completed' AND keep`, wi); n != 0 {
+		t.Errorf("%d completed review/test Runs kept with resumeRounds off", n)
+	}
 
 	w.gh.Merge(1)
 	// No webhook in this test: the reconciler is the backstop that notices.
