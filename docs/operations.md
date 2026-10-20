@@ -274,11 +274,21 @@ Run's list, recorded in `runs.network` with the rest.
 **Brainstorm sessions** (Organisation settings → Network, owners and
 admins, off by default; `organizations.brainstorm_anywhere`, migration 109):
 on, a brainstorm Run of the organisation is submitted unrestricted,
-whatever its list or the operator's says, so it can read the web. Its
-instruction file (`/workspace/AGENTS.md`, which no saved prompt can cut
-short) also says: "You can read the web: search for and fetch public pages when the
-conversation needs facts from outside the linked repositories. Say where
-each fact came from, with its URL." Off, it is told nothing about the web.
+whatever its list or the operator's says, so it can read the web. Every
+brainstorm's instruction file (`/workspace/AGENTS.md`, which no saved
+prompt can cut short) says what its harness reaches of the web, from the
+same values its spec is built with (`phases.runWeb`): unrestricted, with
+both tools, "You can read the web: search for and fetch public pages when
+the conversation needs facts from outside the linked repositories. Say
+where each fact came from, with its URL."; on a list, whether it can search
+and the list's hosts it can fetch from (never the model's, dude's tools'
+or Exa's); on Codex, which has no fetch tool, that it cannot fetch; with
+neither, that the session has no web access and the person can paste the
+text. The web a session's agent was submitted with is kept on the Run
+(`runs.web`, migration 168); a later agent of the same session whose web
+differs (the setting changed, another harness, a tier's Codex
+`web_search`) is told so in its first message, since its briefing replays
+the earlier agent's searches and fetches.
 A brainstorm made unrestricted by `*` in the operator's or the
 organisation's list, with the setting off, gets the same (any host, the web
 line and Codex's search forced live). Every other role keeps the lists. The

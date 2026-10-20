@@ -66,17 +66,27 @@ func TestTheBrainstormIsToldToNameItsSessionAndHowToPublish(t *testing.T) {
 	}
 }
 
-// A brainstorm that may reach any host is told it can read the web and to
-// cite its sources, with or without tools and whatever its saved prompts
-// say; one that may not is told nothing about the web.
-func TestOnlyABrainstormThatMayReachAnyHostIsToldItCanReadTheWeb(t *testing.T) {
+// Every brainstorm is told what it reaches of the web, once, whatever its
+// saved prompts say: any host is "You can read the web", a list names its
+// hosts, and nothing is one plain sentence that it has no web access.
+func TestEveryBrainstormIsToldWhatItReachesOfTheWeb(t *testing.T) {
+	const anyHost = "You can read the web: search for and fetch public pages"
+	const none = "This session has no web access"
 	for _, tools := range []bool{false, true} {
-		for _, anywhere := range []bool{false, true} {
-			for mode, got := range underEveryMode(RoleBrainstorm, "", InstructionsInput{Tools: tools, Anywhere: anywhere}) {
-				told := strings.Count(got, "You can read the web: search for and fetch public pages") == 1 &&
-					strings.Contains(got, "Say where each fact came from, with its URL.")
-				if told != anywhere || (!anywhere && strings.Contains(strings.ToLower(got), "the web")) {
-					t.Errorf("anywhere %v, tools %v, %s: told of the web %v:\n%s", anywhere, tools, mode, told, got)
+		for _, c := range []struct {
+			name string
+			in   InstructionsInput
+			want string
+		}{
+			{"anywhere", InstructionsInput{Anywhere: true}, anyHost},
+			{"a list", InstructionsInput{Web: &Web{Search: true, Fetch: true, Hosts: []string{"pypi.org"}}},
+				"You can search the web. You can fetch pages only from these hosts: pypi.org;"},
+			{"nothing", InstructionsInput{Web: &Web{}}, none},
+		} {
+			c.in.Tools = tools
+			for mode, got := range underEveryMode(RoleBrainstorm, "", c.in) {
+				if strings.Count(got, c.want) != 1 || strings.Count(got, "## The web") != 1 {
+					t.Errorf("%s, tools %v, %s: not told %q once:\n%s", c.name, tools, mode, c.want, got)
 				}
 			}
 		}

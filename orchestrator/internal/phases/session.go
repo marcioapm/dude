@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -62,6 +63,8 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
 	var grants capabilities.Grants
+	// What a fresh agent is told of a web unlike its predecessor's; "" alike.
+	var webChanged string
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// A session spans projects: its organisation's list alone, or any
 		// host when the brainstorm may reach any (brainstormAnywhere).
@@ -106,9 +109,14 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 				return err
 			}
 			prompt = delivery.BrainstormPrompt(briefing, talker)
+			web := runWeb(s.Agent, specInput{Role: role, Harness: settings.HarnessName(), Options: tier.Options,
+				Anywhere: in.Anywhere, Egress: in.Egress, Grants: &grants})
 			instructions := talker.InstructionsInput()
-			instructions.Grants = &grants
+			instructions.Grants, instructions.Web = &grants, &web
 			in.Instructions = delivery.Instructions(role, "", instructions)
+			if webChanged, err = s.sessionWebChanged(ctx, tx, r, web); err != nil {
+				return err
+			}
 		}
 		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
 		return err
@@ -145,6 +153,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		// A session agent has no CLI: it calls request_machine itself.
 		if line := s.machineLine(ctx, in.Machine, sizes, orgName, false); line != "" {
 			in.Prompt += "\n\n" + line
+		}
+		if webChanged != "" {
+			in.Prompt += "\n\n" + webChanged
 		}
 	}
 	gh, err := s.Forges.For(ctx, r.Org)
@@ -214,6 +225,34 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		in.Input = strings.TrimSpace(strings.Join(told, " ") + "\n\n" + in.Input)
 	}
 	return nil
+}
+
+// sessionWebChanged records on r, a session's agent about to be submitted,
+// the web its spec gives it (runs.web), and is what it is told when the
+// session's agent before it had another: its briefing replays that one's
+// searches and fetches. "" when there was none before, or the same web.
+func (s *Syncer) sessionWebChanged(ctx context.Context, tx pgx.Tx, r phaseRun, web delivery.Web) (string, error) {
+	raw, err := json.Marshal(web)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET web = $2::jsonb WHERE id = $1`, r.ID, raw); err != nil {
+		return "", fmt.Errorf("record the brainstorm's web: %w", err)
+	}
+	var before delivery.Web
+	err = tx.QueryRow(ctx, `SELECT p.web FROM runs p JOIN runs r ON r.id = $2
+		WHERE p.session_id = $1 AND p.id <> r.id AND p.role = 'brainstorm' AND p.web IS NOT NULL AND p.created_at <= r.created_at
+		ORDER BY p.created_at DESC, p.id DESC LIMIT 1`, r.SessionID, r.ID).Scan(&before)
+	if db.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load the session's earlier web: %w", err)
+	}
+	if before.Equal(web) {
+		return "", nil
+	}
+	return delivery.WebChanged(before, web), nil
 }
 
 // linkedTold is what a session's agent is told of a repository a member

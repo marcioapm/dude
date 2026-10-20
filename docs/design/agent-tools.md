@@ -101,6 +101,15 @@ Not granted, a harness's web tool is off its own way: OpenCode has no
 `--disallowedTools`; Codex's `web_search` is `disabled`, which a tier's
 `-c web_search` cannot override.
 
+A brainstorm's instruction file says what it has of the web, from its
+grants, its harness and its network as its spec configures them
+(`phases.runWeb`): search when granted and on (a Codex tier's
+`web_search=disabled` turns it off on a restricted Run), fetch of any host
+when unrestricted or of the list's own hosts when not (Codex: none), or one
+sentence that the session has no web access. A session's next agent whose
+web differs from the one before it is told so in its first message
+(`runs.web`).
+
 Default grants (a fixer's Run has role `implementer`; `""` is a Run whose
 role none of these is):
 
