@@ -112,6 +112,7 @@ var toolCommands = map[string][]string{
 	"steer": {"dude steer"}, "restart_run": {"dude restart"}, "decide": {"dude decide"},
 	"dismiss_finding": {"dude finding dismiss"}, "decide_escalation": {"dude escalation decide"},
 	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},
+	"refresh_pull_requests": {"dude prs --refresh", "--refresh"}, "run_chat": {"dude chat"}, "limits": {"dude limits"},
 }
 
 // Prose in which a tool's name is an ordinary word, or a flag of another
@@ -120,9 +121,12 @@ var toolCommands = map[string][]string{
 var notTheTool = map[string][]string{
 	"decide": {"**People decide**", "and what you decide", "read what you need with your tools, then decide.",
 		"start nothing and decide nothing", "whatever you decide", "only a person may decide", "the states that decide it"},
-	"feedback": {"come back as feedback.", "findings and feedback you are given",
+	"feedback": {"reviews and feedback, as dude last read them", "reviews and feedback, read from GitHub now",
+		"come back as feedback.", "findings and feedback you are given",
 		// pull_requests' feedback-id parameter, not the feedback tool.
-		"reviews and feedback, each item an excerpt; name feedback ids", "`dude prs [--feedback ID]...`"},
+		"name feedback ids for their whole text", "`dude prs [--feedback ID]...`"},
+	// refresh_pull_requests' shell form is a flag of dude prs.
+	"pull_requests": {"`dude prs --refresh`"},
 	"findings": {"triages findings", "(some or all findings)", "report findings with a severity",
 		"structured findings and tester verdicts", "Your findings go", "risks new findings", "after any findings",
 		"are findings.", "role's findings or verdict", "on earlier findings", "Your output is findings", "resolve the findings", "report and findings"},

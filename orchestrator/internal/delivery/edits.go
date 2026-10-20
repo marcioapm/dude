@@ -372,17 +372,23 @@ func LoadPublishTarget(ctx context.Context, tx pgx.Tx, p PublishOf) (PublishTarg
 	}
 	t.WorkflowID, t.Branch, t.Heads, t.Settled = d.WorkflowID, d.Branch(p.TaskID), nonNilMap(d.State.Heads), !held
 	t.Adopted = d.State.Bases
+	t.MaxLines, t.MaxFiles, err = PublishLimitsTx(ctx, tx, p.TaskID)
+	return t, err
+}
+
+// PublishLimitsTx are the lines and files one conductor publish may change
+// in the task: its policy as it is now, not as its delivery froze it.
+func PublishLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (lines, files int, err error) {
 	var projectPolicy, orgPolicy []byte
 	if err := tx.QueryRow(ctx, `SELECT p.delivery_policy, o.delivery_policy FROM tasks t JOIN projects p ON p.id = t.project_id
-		JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, p.TaskID).Scan(&projectPolicy, &orgPolicy); err != nil {
-		return t, err
+		JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1`, taskID).Scan(&projectPolicy, &orgPolicy); err != nil {
+		return 0, 0, err
 	}
 	policy, err := ResolvePolicy(orgPolicy, projectPolicy)
 	if err != nil {
-		return t, err
+		return 0, 0, err
 	}
-	t.MaxLines, t.MaxFiles = policy.ConductorEditLines, policy.ConductorEditFiles
-	return t, nil
+	return policy.ConductorEditLines, policy.ConductorEditFiles, nil
 }
 
 // Move is one repository's part of a moving publish: its task branch from

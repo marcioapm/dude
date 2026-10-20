@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -187,6 +188,9 @@ type pullRequestOut struct {
 	UnresolvedThreads int               `json:"unresolvedThreads"`
 	FeedbackTotal     int               `json:"feedbackTotal"`
 	Feedback          []feedbackOut     `json:"feedback"`
+	// When dude last read it from GitHub; null for never. A webhook or the
+	// reconciler's poll reads it again; refresh_pull_requests does now.
+	LastPolledAt *time.Time `json:"lastPolledAt"`
 }
 
 func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (any, error) {
@@ -198,7 +202,7 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (
 	w := newWrapper()
 	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.url, pr.state::text, pr.head_branch, COALESCE(pr.head_sha, ''),
 			pr.base_branch, pr.checks::text, COALESCE(pr.checks_json, '[]'), pr.review::text, COALESCE(pr.reviews_json, '[]'),
-			COALESCE(pr.unresolved_threads, 0)
+			COALESCE(pr.unresolved_threads, 0), pr.last_polled_at
 		FROM pull_requests pr JOIN repositories repo ON repo.id = pr.repository_id
 		WHERE pr.task_id = $1 ORDER BY pr.created_at`, c.TaskID)
 	if err != nil {
@@ -212,7 +216,7 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (
 	for rows.Next() {
 		var p row
 		if err := rows.Scan(&p.Repo, &p.Number, &p.URL, &p.State, &p.HeadBranch, &p.Head, &p.BaseBranch, &p.Checks, &p.checks,
-			&p.Review, &p.reviews, &p.UnresolvedThreads); err != nil {
+			&p.Review, &p.reviews, &p.UnresolvedThreads, &p.LastPolledAt); err != nil {
 			return nil, err
 		}
 		prs = append(prs, p)

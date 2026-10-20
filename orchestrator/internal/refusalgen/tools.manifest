@@ -115,3 +115,12 @@ rNoRepositoryInThisProjectPerson       refusals/tools/tools/no-repository-in-thi
 rAlreadyCheckedOutForThisWork          refusals/tools/tools/already-checked-out-for-this-work
 rYouHaveRequestsWaitingForPerson       refusals/tools/tools/you-have-requests-waiting-for-person
 rYouAlreadyAskedForPersonHas           refusals/tools/tools/you-already-asked-for-person-has
+rLimitsAreATasks                       refusals/tools/limits/limits-are-a-tasks
+rNameRunWhoseChatRead                  refusals/tools/runchat/name-run-whose-chat-read
+rLimit1Messages                        refusals/tools/runchat/limit-1-messages
+rNotRunYourTaskYouRead                 refusals/tools/runchat/not-run-your-task-you-read
+rNotRunThisSessionStarted              refusals/tools/runchat/not-run-this-session-started
+rNoOpenPullRequestRefresh              refusals/tools/refresh/no-open-pull-request-refresh
+rNoOpenPullRequestOnGithub             refusals/tools/refresh/no-open-pull-request-on-github
+rNameTaskWhosePullRequestsRefresh      refusals/tools/refresh/name-task-whose-pull-requests-refresh
+rRefreshingTakesGithubReads            refusals/tools/refresh/refreshing-takes-github-reads

@@ -51,6 +51,10 @@ const EventType = "agent.tool.dude"
 // result's EventType event is marked attempted and not counted again.
 const AttemptEventType = "agent.tool.attempted"
 
+// githubReader is a checked call spending more than one GitHub read: its
+// attempt is recorded once per read, which the hourly count counts.
+type githubReader interface{ githubReads() int }
+
 // Server serves the tools over MCP streamable HTTP.
 type Server struct {
 	DB              *db.DB
@@ -65,7 +69,8 @@ type Server struct {
 	// reply on a pull request; nil, no forge.
 	Forges delivery.Forges
 	// SyncPullRequest is prs.Syncer.Sync: a pull request is read back after
-	// a PR action succeeded on it. nil skips it.
+	// a PR action succeeded on it, and refresh_pull_requests reads the
+	// task's now. nil skips the first and refuses the second.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
 	// SyncBase asks lux for sync_base's fetch; nil, sync_base is refused.
 	SyncBase SyncBaseFunc
@@ -101,6 +106,7 @@ type env struct {
 	forges          delivery.Forges
 	syncBase        SyncBaseFunc
 	syncBaseWait    time.Duration
+	syncPR          func(ctx context.Context, org, prID string) error
 	prepared        any
 }
 
@@ -421,11 +427,6 @@ func (t tool) allowed(role string, grants capabilities.Grants) bool {
 	return !sessionAgent(role) || !hasSessionDefinition(t.name)
 }
 
-// hasSessionDefinition says a session agent has its own tool called name.
-func hasSessionDefinition(name string) bool {
-	return slices.ContainsFunc(brainstormTools, func(t tool) bool { return t.name == name })
-}
-
 // granted are the tools an agent with grants, as role, is given, in
 // allTools' order.
 func granted(role string, grants capabilities.Grants) []tool {
@@ -465,7 +466,12 @@ func find(name, role string, grants capabilities.Grants) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, prActionTools, baseSyncTools, githubReadTools, coordinationTools, feedbackTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, baseSyncTools, githubReadTools, refreshTools, coordinationTools, feedbackTools, brainstormTools)
+}
+
+// hasSessionDefinition says a session agent has its own tool called name.
+func hasSessionDefinition(name string) bool {
+	return slices.ContainsFunc(allTools(), func(t tool) bool { return t.session && t.name == name })
 }
 
 // define makes a task agent's tool from a typed function: its input schema
@@ -615,7 +621,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
-		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait)}
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}
@@ -676,8 +682,19 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 				if err := withinLimits(ctx, tx, c, t); err != nil {
 					return err
 				}
-				_, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "arguments": args}))
-				return err
+				if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "arguments": args})); err != nil {
+					return err
+				}
+				// The call's further GitHub reads: marked attempted, so
+				// withinLimits counts the call once.
+				if r, ok := result.(githubReader); ok {
+					for range r.githubReads() - 1 {
+						if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "attempted": true})); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
 			}
 			return nil
 		}
@@ -761,12 +778,8 @@ func oldName(tool string) string {
 // ledger, where every call is, once (its attempt, or its result).
 func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	tool := t.name
-	var recent, sameTool int
-	if err := tx.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
-			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
-		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
-		c.RunID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool); err != nil {
+	recent, sameTool, err := callsMade(ctx, tx, c.RunID, tool)
+	if err != nil {
 		return err
 	}
 	limit := t.perRun
@@ -777,6 +790,18 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 		return refuse(rLimitedCallsInRunThisRun, tool, limit)
 	}
 	return nil
+}
+
+// callsMade are the Run's tool calls in the last minute, and its calls of
+// tool in its lifetime: counted from the ledger, where every call is, once
+// (its attempt, or its result).
+func callsMade(ctx context.Context, tx pgx.Tx, runID, tool string) (recent, sameTool int, err error) {
+	err = tx.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
+			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
+		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
+		runID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
+	return recent, sameTool, err
 }
 
 // refusal is a tool declining a request, optionally recorded after rollback.
