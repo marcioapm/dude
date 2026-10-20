@@ -372,6 +372,22 @@ func TestRefreshCheckoutLinksNothingAMemberDidNot(t *testing.T) {
 	}
 }
 
+// A repository linked and not cloned yet is pending: nothing is asked for.
+func TestRefreshCheckoutOfALinkNotClonedYetIsPending(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWeb(id)
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	if web := out["repositories"].([]any)[0].(map[string]any); web["status"] != "pending" || web["lastFailure"] != nil {
+		t.Errorf("web: %v", web)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id); n != 0 {
+		t.Errorf("%d session.checkout.requested", n)
+	}
+}
+
 // A repository whose clone once failed, linked again and checked out, then
 // unlinked by a member while the Run still holds it, is not linked again by
 // refresh_checkout: the member's unlink stands.
