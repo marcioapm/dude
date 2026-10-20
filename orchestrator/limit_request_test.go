@@ -62,6 +62,14 @@ func (w *world) pick(person, question string, i int) (int, map[string]any) {
 	return w.callAs(person, "/internal/questions/"+question+"/answer", map[string]any{"answers": []map[string]any{{"choices": []int{i}}}})
 }
 
+// pickInChat answers the conductor's question with its choice i, as person,
+// through the task's Chat as the web's question card does.
+func (w *world) pickInChat(person, task, question string, i int) (int, map[string]any) {
+	w.t.Helper()
+	return w.callAs(person, "/internal/tasks/"+task+"/chat", map[string]any{"questionId": question,
+		"answers": []map[string]any{{"choices": []int{i}}}})
+}
+
 func (w *world) grants(task string) int {
 	return w.count(`SELECT COALESCE(jsonb_array_length(state->'limitGrants'), 0) FROM workflow_runs WHERE task_id = $1`, task)
 }
@@ -113,6 +121,27 @@ func TestAnAdminRaisesTheFixRoundsForOneTask(t *testing.T) {
 	w.must(task, "start_phase", `{"phase":"fix","note":"Rename greet to welcome."}`)
 	w.until("the granted fix on the branch, and waiting again", func() bool { return w.gh.SHA(branch) != before && w.waitingOnPR(task) })
 	w.refused(task, "start_phase", `{"phase":"fix","note":"And another."}`, "3 of 3 this review round")
+}
+
+// The same approval through Chat, the route the web's question card
+// answers by: the owner, a member, is refused as an approver and nothing
+// is recorded; the admin, who does not own the task, approves.
+func TestAnAdminApprovesALimitRequestInChat(t *testing.T) {
+	w, task, ana, cy := limitRequestAt(t)
+	q, _ := w.must(task, "request_limit", `{"limit":"perReviewRound","to":3,"reason":"one more round"}`)["questionId"].(string)
+	if status, body := w.pickInChat(ana, task, q, 0); status != 403 || obj(body["error"])["code"] != "not_admin" {
+		t.Fatalf("the owner, a member, approved in Chat: %d %v", status, body)
+	}
+	if w.grants(task) != 0 || w.conductorQuestion(task) != q {
+		t.Fatalf("a refused approval recorded something: %d grants, open question %q", w.grants(task), w.conductorQuestion(task))
+	}
+	if status, body := w.pickInChat(cy, task, q, 0); status != 200 {
+		t.Fatalf("the admin's approval in Chat: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'limit.granted'
+		AND payload->>'limit' = 'perReviewRound' AND payload->>'byName' = 'Cy'`, task); n != 1 || w.grants(task) != 1 {
+		t.Fatalf("%d limit.granted events, %d grants", n, w.grants(task))
+	}
 }
 
 // "No" grants nothing: the limit and the check stay as they were, and the
