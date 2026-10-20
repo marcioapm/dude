@@ -57,6 +57,38 @@ func TestThePullRequestChecksAccountIsTheCurrentAttempts(t *testing.T) {
 	}
 }
 
+// A check's fields are clipped and then put in code spans no backtick of
+// theirs can close, so a recorded command never breaks the account's markdown.
+func TestAChecksRowKeepsItsMarkdownWhole(t *testing.T) {
+	long := strings.Repeat("ü", 400)
+	j := gatedJudgement{Role: "Fixer", Checks: []struct{ Command, Result, Decision, Reason, CallID string }{
+		{Command: "echo `date` ``x``", Result: "pass", CallID: "mcall_1"},
+		{Command: "`make check`", Decision: "no", Reason: "exit\n1"},
+		{Command: "`" + long, Result: strings.Repeat("é", 400), Reason: strings.Repeat("r", 400), CallID: strings.Repeat("i", 400)},
+	}}
+	want := "- **Fixer** — not backed\n" +
+		"  - ``` echo `date` ``x`` ``` — **pass** (`mcall_1`)\n" +
+		"  - `` `make check` `` — **no** — exit 1\n" +
+		"  - `` `" + strings.Repeat("ü", 298) + "… `` — **" + strings.Repeat("é", 299) + "…** — " + strings.Repeat("r", 299) + "… (`" + strings.Repeat("i", 299) + "…`)\n"
+	if got := checksRow(j); got != want {
+		t.Errorf("row\n%s\nwant\n%s", got, want)
+	}
+	// A Run whose every check is a run of backticks fences to over
+	// checksRowsMax: it is left out, newest or not, and said to be.
+	ticks := strings.Repeat("`", 400)
+	var c []struct{ Command, Result, Decision, Reason, CallID string }
+	for range 31 {
+		c = append(c, struct{ Command, Result, Decision, Reason, CallID string }{ticks, ticks, "", ticks, ticks})
+	}
+	row := checksRow(gatedJudgement{Role: "Fixer", Checks: c})
+	if n := utf8.RuneCountInString(row); n <= checksRowsMax {
+		t.Fatalf("the backtick row is %d characters, within checksRowsMax", n)
+	}
+	if from := newestThatFit([]string{"- **Implementer** — backed\n", row}, checksRowsMax); from != 2 {
+		t.Errorf("%d rows are left out, want both", from)
+	}
+}
+
 // The most gated Runs an attempt can have (an implementer, FixRoundsPerPR's
 // 50 fixers and a simplifier) still fit a pull request body beside a task's
 // description and the test gate's section: 40 of them waived, the newest

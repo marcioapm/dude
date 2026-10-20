@@ -126,9 +126,8 @@ func checksVerificationText(ctx context.Context, tx pgx.Tx, st *State) (string, 
 // takes at most checksWaiversMax for the waivers' lines, checksRowsMax for
 // the Runs' rows, and under 200 for its heading, headline sentence and the
 // two omitted lines: 48,200 in all, leaving over 17,000 for the markers,
-// the test gate's section and the task's description. Each command and
-// reason is clipped to checksFieldMax, so one Run's row (at most
-// checksCountMax+1 checks) fits.
+// the test gate's section and the task's description. Each field is
+// clipped to checksFieldMax before it is put in a code span.
 const (
 	checksWaiversMax = 8_000
 	checksRowsMax    = 40_000
@@ -136,10 +135,12 @@ const (
 )
 
 // newestThatFit is where the newest of lines that fit max characters
-// together start; the newest is always kept.
+// together start. A newest line longer than max is left out too: a row of
+// checksCountMax+1 checks fits checksRowsMax unless its commands are long
+// runs of backticks, whose code-span fences triple their length.
 func newestThatFit(lines []string, max int) int {
 	from, size := len(lines), 0
-	for from > 0 && (from == len(lines) || size+utf8.RuneCountInString(lines[from-1]) <= max) {
+	for from > 0 && size+utf8.RuneCountInString(lines[from-1]) <= max {
 		from--
 		size += utf8.RuneCountInString(lines[from])
 	}
@@ -162,14 +163,37 @@ func checksRow(j gatedJudgement) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "- **%s** — %s\n", j.Role, j.status())
 	for _, c := range j.Checks {
-		fmt.Fprintf(&b, "  - `%s` — **%s**", clip(c.Command, checksFieldMax), valueOr(c.Result, c.Decision))
+		fmt.Fprintf(&b, "  - %s — **%s**", codeSpan(checksField(c.Command)), checksField(valueOr(c.Result, c.Decision)))
 		if c.Reason != "" {
-			fmt.Fprintf(&b, " — %s", clip(oneLine(c.Reason), checksFieldMax))
+			fmt.Fprintf(&b, " — %s", checksField(c.Reason))
 		}
 		if c.CallID != "" {
-			fmt.Fprintf(&b, " (`%s`)", c.CallID)
+			fmt.Fprintf(&b, " (%s)", codeSpan(checksField(c.CallID)))
 		}
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// checksField is a recorded value as one line of at most checksFieldMax.
+func checksField(s string) string { return clip(oneLine(s), checksFieldMax) }
+
+// codeSpan is s as a CommonMark code span: fenced by one backtick more than
+// its longest run of them, and padded with a space where s starts or ends
+// with one, so nothing in s closes it early.
+func codeSpan(s string) string {
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		s = " " + s + " "
+	}
+	return fence + s + fence
 }
