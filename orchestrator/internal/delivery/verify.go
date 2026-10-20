@@ -176,9 +176,14 @@ func tail(s string, n int) string {
 	return "…" + s[i:]
 }
 
+// reports says a result's command is the asked one: a command is kept and
+// run exactly as asked, and read on one line only here, as ParseVerify
+// reads the reported one.
+func reports(reported, asked string) bool { return reported == oneLine(asked) }
+
 // verifyReportTx is a settling verifier's report on target: passed only
 // when it completed, reported a result for every command it was asked to
-// run (matched to its asked command on one line, as ParseVerify reads it), and every result exited 0.
+// run (reports), and every result exited 0.
 func verifyReportTx(ctx context.Context, tx pgx.Tx, childID, status string, target VerifyTarget) (VerifyReport, error) {
 	rep := VerifyReport{Repo: target.Repo, Commit: target.Commit, Status: VerifyFailed, Results: []VerifyResult{}, Asked: target.Commands}
 	reply, err := RunReplyTx(ctx, tx, childID)
@@ -187,8 +192,7 @@ func verifyReportTx(ctx context.Context, tx pgx.Tx, childID, status string, targ
 	}
 	results, ok := ParseVerify(reply)
 	for _, c := range target.Commands {
-		line := oneLine(c)
-		if !slices.ContainsFunc(results, func(r VerifyResult) bool { return r.Command == line }) {
+		if !slices.ContainsFunc(results, func(r VerifyResult) bool { return reports(r.Command, c) }) {
 			rep.Missing = append(rep.Missing, c)
 		}
 	}
@@ -242,7 +246,7 @@ func verifyResultText(childID string, raw []byte) (string, error) {
 	for i, r := range rep.Results {
 		t := toldResult{Command: ExternalText(id, r.Command), Exit: r.Exit, Tail: ExternalText(id, r.Tail),
 			Line: ExternalText(id, clip(r.Command, 200))}
-		if j := slices.IndexFunc(rep.Asked, func(a string) bool { return oneLine(a) == r.Command }); j >= 0 {
+		if j := slices.IndexFunc(rep.Asked, func(a string) bool { return reports(r.Command, a) }); j >= 0 {
 			t.Asked, t.Line = rep.Asked[j], clip(rep.Asked[j], 200)
 		}
 		told[i] = t
