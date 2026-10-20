@@ -306,7 +306,7 @@ func TestSavingSettingsRefusesWhatDudeDoesNotKnow(t *testing.T) {
 			t.Errorf("%s was accepted", bad)
 		}
 	}
-	if keys := SettingKeys(); len(keys) != 8 || keys[0] != "whoCanWake" {
+	if keys := SettingKeys(); len(keys) != 9 || keys[0] != "whoCanWake" {
 		t.Errorf("keys = %v", keys)
 	}
 }

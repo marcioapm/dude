@@ -62,7 +62,7 @@ func TestAScriptedDeliveryOnEachHarness(t *testing.T) {
 			var runID string
 			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&runID)
 			for typ, want := range map[string]string{
-				"agent.thought": fakeagent.ToolsThought, "agent.message": "Implemented it.",
+				"agent.thought": fakeagent.ToolsThought, "agent.message": "Implemented it.\n\n" + fakeagent.NoChecks,
 			} {
 				var text string
 				_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(payload->>'text', '|') FROM events WHERE run_id = $1 AND event_type = $2`,
@@ -125,7 +125,7 @@ func TestAScriptedAgentOnEachHarnessAsksAndCarriesOnWithTheAnswer(t *testing.T) 
 			var said string
 			_ = w.owner.QueryRow(context.Background(), `SELECT string_agg(payload->>'text', '|' ORDER BY cursor) FROM events
 				WHERE run_id = $1 AND event_type = 'agent.message'`, runID).Scan(&said)
-			if said != "I asked; waiting for the answer.|Sorted it." {
+			if said != "I asked; waiting for the answer.|Sorted it.\n\n"+fakeagent.NoChecks {
 				t.Errorf("messages = %q", said)
 			}
 		})

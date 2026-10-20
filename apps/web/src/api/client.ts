@@ -266,6 +266,7 @@ export interface GithubSettings {
   whenBehind: "update" | "tell";
   /** 0: no limit but each round's. */
   fixRoundsPerPr: number;
+  checksFixRounds: number;
   ciStuckMinutes: number;
 }
 

@@ -36,6 +36,8 @@ type Settings struct {
 	FixRoundsPerPR int `json:"fixRoundsPerPr"`
 	// Minutes checks may stay pending on a head before a person is asked.
 	CIStuckMinutes int `json:"ciStuckMinutes"`
+	// Times an unbacked checks report is sent back before a person decides.
+	ChecksFixRounds int `json:"checksFixRounds"`
 }
 
 func DefaultSettings() Settings {
@@ -48,6 +50,7 @@ func DefaultSettings() Settings {
 		WhenBehind:        "update",
 		FixRoundsPerPR:    5,
 		CIStuckMinutes:    60,
+		ChecksFixRounds:   2,
 	}
 }
 
@@ -75,6 +78,9 @@ func ReadSettings(raw []byte) Settings {
 	}
 	if s.CIStuckMinutes <= 0 {
 		s.CIStuckMinutes = d.CIStuckMinutes
+	}
+	if s.ChecksFixRounds < 0 || s.ChecksFixRounds > 20 {
+		s.ChecksFixRounds = d.ChecksFixRounds
 	}
 	if s.ReviewLogins == nil {
 		s.ReviewLogins = []string{}
@@ -114,6 +120,9 @@ func ParseSettings(raw []byte) (Settings, error) {
 	}
 	if s.FixRoundsPerPR < 0 || s.FixRoundsPerPR > 50 {
 		return Settings{}, fmt.Errorf("fixRoundsPerPr must be from 0 (no limit) to 50")
+	}
+	if s.ChecksFixRounds < 0 || s.ChecksFixRounds > 20 {
+		return Settings{}, fmt.Errorf("checksFixRounds must be from 0 to 20")
 	}
 	// Absent is the default; given, it is what the person chose, and 0
 	// would be read back as the default: refused, not saved as another.

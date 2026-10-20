@@ -144,5 +144,4 @@ after it (`add`) or replaces both it and the organisation's (`replace`). Saved t
 `# This organisation` / `# This project`. No saved prompt removes How you work, How dude works, the
 role's other sections, a reviewer's aspect, what the role hands back, or the project's notes.
 
-The `checks:` block the implementer, fixer and simplifier are asked to end with is described in their
-role files but not yet enforced: dude does not parse or gate on it until PR3.
+The `checks:` block the implementer, fixer and simplifier are asked to end with is enforced before their work is published: dude reads the last block, rejects missing, malformed or self-reported failed checks, and has the organisation's judgement tier compare reported passes with the commands the Run recorded. Unsupported work is sent back within the configured bound, then waits for a person's decision. When no judgement tier is configured, dude publishes and visibly says that checks were not model-checked.
