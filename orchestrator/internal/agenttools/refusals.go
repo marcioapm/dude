@@ -117,4 +117,5 @@ const (
 	rAlreadyCheckedOutForThisWork          = "%s is already checked out for this work"
 	rYouHaveRequestsWaitingForPerson       = "you have %d requests waiting for a person; wait for them first"
 	rYouAlreadyAskedForPersonHas           = "you already asked for %s; a person has not decided yet"
+	rLimitsAreATasks                       = "limits are a task's: this Run has no task"
 )

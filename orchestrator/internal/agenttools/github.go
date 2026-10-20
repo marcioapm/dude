@@ -174,23 +174,39 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 		return read, refuse(rNotRepositoryYouMayReadOnly, want, whose, strings.Join(slugs, ", "))
 	}
 	read.Slug = slugs[i]
-	// The session's (or, for a conductor with none, the task's) Runs share
-	// one budget, counted one caller at a time.
-	key, count, scope := "task:"+c.TaskID, githubReadsByTask, c.TaskID
-	if c.SessionID != "" {
-		key, count, scope = "session:"+c.SessionID, githubReadsBySession, c.SessionID
-	}
+	key := githubReadKey(c)
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('github_reads:' || $1))`, key); err != nil {
 		return read, err
 	}
-	var reads int
-	if err := tx.QueryRow(ctx, count, scope).Scan(&reads); err != nil {
+	reads, err := githubReadsThisHour(ctx, tx, c)
+	if err != nil {
 		return read, err
 	}
 	if reads >= githubReadsPerHour {
 		return read, refuse(rAtMostGithubReadsHourThis, githubReadsPerHour)
 	}
 	return read, nil
+}
+
+// githubReadKey names the budget c's reads share: the session's (or, for a
+// conductor with none, the task's) Runs share one, counted one caller at a
+// time under this key's lock.
+func githubReadKey(c Caller) string {
+	if c.SessionID != "" {
+		return "session:" + c.SessionID
+	}
+	return "task:" + c.TaskID
+}
+
+// githubReadsThisHour are the GitHub reads c's budget has spent in the last hour.
+func githubReadsThisHour(ctx context.Context, tx pgx.Tx, c Caller) (int, error) {
+	count, scope := githubReadsByTask, c.TaskID
+	if c.SessionID != "" {
+		count, scope = githubReadsBySession, c.SessionID
+	}
+	var reads int
+	err := tx.QueryRow(ctx, count, scope).Scan(&reads)
+	return reads, err
 }
 
 func searchGitHub(ctx context.Context, tx pgx.Tx, c Caller, in githubSearchIn) (githubRead, error) {

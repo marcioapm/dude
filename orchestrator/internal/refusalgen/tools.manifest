@@ -113,3 +113,4 @@ rNoRepositoryInThisProjectPerson       refusals/tools/tools/no-repository-in-thi
 rAlreadyCheckedOutForThisWork          refusals/tools/tools/already-checked-out-for-this-work
 rYouHaveRequestsWaitingForPerson       refusals/tools/tools/you-have-requests-waiting-for-person
 rYouAlreadyAskedForPersonHas           refusals/tools/tools/you-already-asked-for-person-has
+rLimitsAreATasks                       refusals/tools/limits/limits-are-a-tasks

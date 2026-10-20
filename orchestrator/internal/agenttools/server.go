@@ -759,12 +759,8 @@ func oldName(tool string) string {
 // ledger, where every call is, once (its attempt, or its result).
 func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	tool := t.name
-	var recent, sameTool int
-	if err := tx.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
-			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
-		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
-		c.RunID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool); err != nil {
+	recent, sameTool, err := callsMade(ctx, tx, c.RunID, tool)
+	if err != nil {
 		return err
 	}
 	limit := t.perRun
@@ -775,6 +771,18 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 		return refuse(rLimitedCallsInRunThisRun, tool, limit)
 	}
 	return nil
+}
+
+// callsMade are the Run's tool calls in the last minute, and its calls of
+// tool in its lifetime: counted from the ledger, where every call is, once
+// (its attempt, or its result).
+func callsMade(ctx context.Context, tx pgx.Tx, runID, tool string) (recent, sameTool int, err error) {
+	err = tx.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
+			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
+		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
+		runID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
+	return recent, sameTool, err
 }
 
 // refusal is a tool declining a request, optionally recorded after rollback.

@@ -1745,6 +1745,7 @@ func (st *State) candidateBranch() string {
 // pull requests' budget is spent only by a fix that lands with commits
 // (chargeLandedPRFix).
 func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *State, total int) (workflow.Result, bool, error) {
+	roundSpent := st.RoundFixesSpent()
 	st.PRIteration++
 	// A workflow from before rounds counted its fixes in PRIteration only.
 	st.PRFixKey = max(st.PRFixKey, st.PRIteration-1) + 1
@@ -1761,11 +1762,11 @@ func (w *steps) chargePRFix(ctx context.Context, sc workflow.StepContext, st *St
 	}
 	var spent []string // pull requests at the organization's budget
 	for _, repo := range repos {
-		if total > 0 && st.PRFixes[repo] >= total {
+		if st.PullRequestFixesSpent(repo, total) {
 			spent = append(spent, repo)
 		}
 	}
-	if st.PRIteration > st.Policy.MaxPRFixIterations || len(spent) > 0 {
+	if roundSpent || len(spent) > 0 {
 		res, err := w.escalate(ctx, sc, st, "pr_loop_exhausted", map[string]any{"iterations": st.PRIteration,
 			"perRound": st.Policy.MaxPRFixIterations, "total": total, "spent": db.NonNil(spent)})
 		return res, true, err

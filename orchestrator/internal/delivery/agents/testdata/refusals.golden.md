@@ -450,6 +450,10 @@ an existing phase profile is required
 
 independent report children cannot mutate workflow or start Runs
 
+## refusals/tools/limits/limits-are-a-tasks
+
+limits are a task's: this Run has no task
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

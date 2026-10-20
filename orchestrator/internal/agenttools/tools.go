@@ -43,6 +43,7 @@ var tools = []tool{
 	define("run_diff", runDiff),
 	define("findings", findings),
 	define("pull_requests", pullRequests),
+	define("limits", readLimits),
 	define("start_phase", startPhase),
 	define("start_agent", startAgent),
 	define("steer", steer),
