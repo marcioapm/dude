@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
@@ -178,6 +179,18 @@ type specInput struct {
 	// whose network is unrestricted (Syncer.brainstormAnywhere), from
 	// brainstorm_anywhere or "*" in either list.
 	Anywhere bool
+	// The Run's capabilities (capabilities.Resolve): which of its harness's
+	// native tools (web search, web fetch) it has. nil: its role's defaults.
+	Grants *capabilities.Grants
+}
+
+// native says the Run's capabilities grant the harness-native tool name
+// (capabilities.NativeWebSearch, NativeWebFetch).
+func (in specInput) native(name string) bool {
+	if in.Grants == nil {
+		return capabilities.Default(in.Role).Native(name)
+	}
+	return in.Grants.Native(name)
 }
 
 // MachineSpec puts a machine size on a lux spec: its resources, memory and
@@ -564,18 +577,18 @@ func runNetwork(c AgentConfig, in specInput) *lux.Network {
 	}
 	var harness []string
 	if !c.toolsOnly {
-		harness = harnessHosts(in.Harness)
+		harness = harnessHosts(in.Harness, in.native(capabilities.NativeWebSearch))
 	}
 	return egress(c, in.Egress, harness)
 }
 
 // harnessHosts are the hosts a harness reaches from the container on its
 // own: OpenCode's websearch tool calls Exa's MCP server
-// (https://mcp.exa.ai/mcp). Claude Code's and Codex's search go through
-// the LLM proxy.
-func harnessHosts(harness string) []string {
-	switch harness {
-	case delivery.HarnessClaudeCode, delivery.HarnessCodex:
+// (https://mcp.exa.ai/mcp), listed only for a Run granted web search.
+// Claude Code's and Codex's search go through the LLM proxy.
+func harnessHosts(harness string, webSearch bool) []string {
+	switch {
+	case harness == delivery.HarnessClaudeCode, harness == delivery.HarnessCodex, !webSearch:
 		return nil
 	}
 	return []string{"mcp.exa.ai"}
@@ -592,11 +605,17 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	if c.LLMURL != "" {
 		spec.Env["DUDE_LLM_URL"] = c.LLMURL
 	}
-	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfig(in.Model, in.Effort, in.Options, in.Headers)
+	var denied []string
+	if !in.native(capabilities.NativeWebFetch) {
+		denied = append(denied, "webfetch")
+	}
+	spec.Env["OPENCODE_CONFIG_CONTENT"] = openCodeConfigDenying(in.Model, in.Effort, in.Options, in.Headers, denied)
 	spec.Env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
 	// OpenCode's websearch tool exists only with Exa on; its host is on
-	// every OpenCode Run's list (harnessHosts).
-	spec.Env["OPENCODE_ENABLE_EXA"] = "1"
+	// the list of every OpenCode Run granted web search (harnessHosts).
+	if in.native(capabilities.NativeWebSearch) {
+		spec.Env["OPENCODE_ENABLE_EXA"] = "1"
+	}
 	if c.LLMKey != "" {
 		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
 	}
@@ -618,12 +637,20 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // check off; --settings takes it as inline JSON. Claude Code keeps only the
 // last --settings it is given, so a tier's own is merged into dude's
 // (claudeCodeArgs) rather than following it.
+//
+// WebSearch and WebFetch are Claude Code's own tools; one the Run's
+// capabilities do not grant is named in --disallowedTools, which removes
+// it from the model's tools in every permission mode. The flag takes a
+// variadic list, so it goes before --settings, which ends it.
 func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessClaudeCode
 	spec.Workload.Adapter = delivery.HarnessClaudeCode
 	settings, args, _ := claudeCodeArgs(in.Options)
-	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized",
-		"--settings", settings}
+	cmd := []string{"claude", "--model", in.Model, "--permission-mode", "bypassPermissions", "--thinking-display", "summarized"}
+	if denied := claudeCodeDisallowed(in); len(denied) > 0 {
+		cmd = append(append(cmd, "--disallowedTools"), denied...)
+	}
+	cmd = append(cmd, "--settings", settings)
 	switch in.Effort {
 	case "":
 	case "none":
@@ -692,6 +719,18 @@ func anthropicBaseURL(llmURL string) string {
 	return strings.TrimSuffix(strings.TrimRight(llmURL, "/"), "/v1")
 }
 
+// claudeCodeDisallowed are Claude Code's native tools the Run is not granted.
+func claudeCodeDisallowed(in specInput) []string {
+	var out []string
+	if !in.native(capabilities.NativeWebSearch) {
+		out = append(out, "WebSearch")
+	}
+	if !in.native(capabilities.NativeWebFetch) {
+		out = append(out, "WebFetch")
+	}
+	return out
+}
+
 // codexWorkload runs Codex on the tier's model through a provider of its
 // own, "dude": the proxy's Responses API (the only one the proxy passes
 // reasoning summaries on), keyed by OPENAI_API_KEY, which lux also writes
@@ -712,8 +751,11 @@ func anthropicBaseURL(llmURL string) string {
 // Codex's web search is the Responses API's hosted web_search tool: OpenAI
 // runs the search, through the proxy, so egress never sees it. Codex 0.144
 // sends it by default ("cached", which full access promotes to live); dude
-// pins "live" on every Run so a later default cannot turn it off. A tier's
-// -c web_search replaces the pin, except on a Run that may reach any host.
+// pins "live" on every Run granted web search so a later default cannot
+// turn it off, and "disabled" on one that is not. A tier's -c web_search
+// replaces the pin, except on a Run that may reach any host or is not
+// granted web search. Codex has no fetch tool of its own: web_fetch has
+// nothing to turn off there.
 func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	spec.Labels["dude.harness"] = delivery.HarnessCodex
 	spec.Workload.Adapter = delivery.HarnessCodex
@@ -737,7 +779,8 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 // a string, as Codex takes an unparseable value. An override inside or
 // above a table dude sets (model_providers.dude.*) would rewrite it, and is
 // dropped, as is web_search on a Run that may reach any host (live there
-// whatever the tier says) and every other argument.
+// whatever the tier says) or is not granted web search (disabled there),
+// and every other argument.
 func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	provider := "{name=" + tomlString("dude") + ", base_url=" + tomlString(c.LLMURL) +
 		", env_key=" + tomlString("OPENAI_API_KEY") + ", wire_api=" + tomlString("responses")
@@ -762,7 +805,12 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 	if in.Effort != "" && in.Effort != "none" {
 		settings = append(settings, "model_reasoning_effort="+tomlString(in.Effort))
 	}
-	settings = append(settings, "web_search="+tomlString("live"))
+	search := in.native(capabilities.NativeWebSearch)
+	if search {
+		settings = append(settings, "web_search="+tomlString("live"))
+	} else {
+		settings = append(settings, "web_search="+tomlString("disabled"))
+	}
 	args := harnessArgs(in.Options)
 	for i := 0; i < len(args); i++ {
 		arg, override := args[i], ""
@@ -784,7 +832,7 @@ func codexSettings(c AgentConfig, in specInput) (settings, dropped []string) {
 			k, _, _ := strings.Cut(s, "=")
 			return key == "model_providers.dude" || strings.HasPrefix(key, k+".") || strings.HasPrefix(k, key+".")
 		})
-		if !ok || !codexKey.MatchString(key) || nested || (in.Anywhere && key == "web_search") {
+		if !ok || !codexKey.MatchString(key) || nested || ((in.Anywhere || !search) && key == "web_search") {
 			dropped = append(dropped, arg+" "+override)
 			continue
 		}
@@ -932,14 +980,28 @@ var openCodePermissions = map[string]any{"*": "allow"}
 // AI SDK drops keys it does not know without a word); its headers in the
 // model's headers, likewise sent on every request.
 func openCodeConfig(model, effort string, options map[string]any, headers map[string]string) string {
+	return openCodeConfigDenying(model, effort, options, headers, nil)
+}
+
+// openCodeConfigDenying is openCodeConfig with OpenCode's permission
+// "deny" on each of denied (its tool names, "webfetch"): the "*" allow
+// sorts first in the JSON, and OpenCode's last matching rule wins.
+func openCodeConfigDenying(model, effort string, options map[string]any, headers map[string]string, denied []string) string {
 	provider := llm.Provider(model)
 	entry := map[string]any{"options": llm.ModelOptions(model, effort, options)}
 	if len(headers) > 0 {
 		entry["headers"] = headers
 	}
+	permission := openCodePermissions
+	if len(denied) > 0 {
+		permission = maps.Clone(openCodePermissions)
+		for _, name := range denied {
+			permission[name] = "deny"
+		}
+	}
 	config := map[string]any{
 		"model":      provider + "/" + model,
-		"permission": openCodePermissions,
+		"permission": permission,
 		"provider":   map[string]any{provider: map[string]any{"models": map[string]any{model: entry}}},
 	}
 	b, _ := json.Marshal(config)
