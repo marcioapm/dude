@@ -21,7 +21,13 @@ trap 'rm -f "$work/root.test"' EXIT
 echo "nproc: $(nproc); root shards: $SHARDS; logs: $work"
 
 go test -c -o "$work/root.test" .
-"$work/root.test" -test.list '^Test' | grep '^Test' | LC_ALL=C sort >"$work/listed"
+"$work/root.test" -test.list . >"$work/all"
+# Shards run Test functions only, so an Example or a Fuzz seed would go unrun.
+if grep -E '^(Example|Fuzz)' "$work/all" >&2; then
+  echo "the root package has the functions above, which this script does not run" >&2
+  exit 1
+fi
+grep '^Test' "$work/all" | LC_ALL=C sort >"$work/listed"
 for ((i = 0; i < SHARDS; i++)); do
   awk -v n="$SHARDS" -v i="$i" 'NR % n == i' "$work/listed" >"$work/shard$i"
 done
@@ -62,7 +68,11 @@ for ((i = 0; i < SHARDS; i++)); do cat "$work/shard$i.log"; done | cat - "$work/
 status=0
 if ((${#failed[@]})); then
   echo "failed: ${failed[*]}" >&2
-  for name in "${failed[@]}"; do grep -E '^(--- FAIL|FAIL|panic:)' "$work/$name.log" >&2 || true; done
+  for name in "${failed[@]}"; do
+    grep -E '^(--- FAIL|FAIL|panic:)' "$work/$name.log" >&2 || true
+    echo "$name ended with:" >&2
+    tail -n 3 "$work/$name.log" >&2
+  done
   status=1
 fi
 if grep -F 'no test database' "$out/go-test.log"; then
@@ -71,10 +81,12 @@ if grep -F 'no test database' "$out/go-test.log"; then
 fi
 # A top-level result has no '/' in its name; a subtest's has.
 grep -ohE -- '^--- (PASS|FAIL|SKIP): Test[^ /]+ \(' "$work"/shard*.log | awk '{print $3}' | LC_ALL=C sort >"$work/reported"
-if [[ "$(wc -l <"$work/reported")" -ne "$(wc -l <"$work/listed")" ]]; then
+if ! cmp -s "$work/listed" "$work/reported"; then
   echo "root tests listed: $(wc -l <"$work/listed"); results reported: $(wc -l <"$work/reported")" >&2
   echo "listed without a result:" >&2
   LC_ALL=C comm -23 "$work/listed" <(LC_ALL=C sort -u "$work/reported") >&2
+  echo "reported more than once:" >&2
+  uniq -d "$work/reported" >&2
   status=1
 fi
 exit "$status"
