@@ -76,9 +76,54 @@ type instructionData struct {
 	grants           capabilities.Grants
 }
 
-// Granted says the Run's capabilities grant tool, with or without dude's
-// tools (Tools): the base-merging sections name sync_base either way.
-func (d instructionData) Granted(tool string) bool { return d.grants.Tool(tool) }
+// Granted says the Run's capabilities grant every one of tools, with or
+// without dude's tools (Tools): a role's prose names its tools either way.
+// "!name" is satisfied when name is not granted.
+func (d instructionData) Granted(tools ...string) bool {
+	for _, t := range tools {
+		if name, not := strings.CutPrefix(t, "!"); d.grants.Tool(name) == not {
+			return false
+		}
+	}
+	return true
+}
+
+// List joins the texts of pairs (a Granted condition, space-separated, then
+// its text) whose condition holds and whose text is not empty: sep between
+// them, last before the final one ("" when none is left).
+func (d instructionData) List(sep, last string, pairs ...string) string {
+	var items []string
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if pairs[i+1] != "" && d.Granted(strings.Fields(pairs[i])...) {
+			items = append(items, pairs[i+1])
+		}
+	}
+	return joinList(items, sep, last)
+}
+
+// Wrap is s between before and after, or "" when s is.
+func (instructionData) Wrap(before, s, after string) string {
+	if s == "" {
+		return ""
+	}
+	return before + s + after
+}
+
+// joinList joins items with sep, and last before the final one; of two,
+// a last of ", and" loses its comma.
+func joinList(items []string, sep, last string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		if last != sep {
+			last = strings.TrimPrefix(last, ",")
+		}
+	}
+	return strings.Join(items[:len(items)-1], sep) + last + items[len(items)-1]
+}
 
 func (in InstructionsInput) data(role string) instructionData {
 	grants := in.Grants
@@ -99,10 +144,16 @@ func (in InstructionsInput) data(role string) instructionData {
 			}
 		}
 	}
+	var childTools []string
+	for _, t := range ChildTools {
+		if grants.Tool(t) {
+			childTools = append(childTools, t)
+		}
+	}
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
 		SearchMemory: has["search_memory"], Remember: has["remember"], RequestMachine: has["request_machine"],
-		ChildToolNames:   strings.Join(ChildTools[:len(ChildTools)-1], ", ") + ", and " + ChildTools[len(ChildTools)-1],
+		ChildToolNames:   joinList(childTools, ", ", ", and "),
 		ExternalTextNote: ExternalTextNote, grants: *grants}
 }
 

@@ -1,4 +1,63 @@
-The dude tools read what dude knows about this task: run_diff (what a Run changed: the files, then the lines of those you name), findings (the review findings and how each was settled; name ids for their text), pull_requests (state, checks, reviews and feedback), list_tasks, list_repositories, search_memory and get_memory. ask_person asks the person up to 4 questions at once and waits for the answer; end your turn after it. create_task records a change as a new task, for a person to deliver. While you take the decisions: update_task writes an agreed goal or acceptance criteria into the task, before the implementer; start_phase starts implement, review (some or all categories), fix (some or all findings), simplify or test; decide takes the decision waited on (next, ask_person, wait, open_pull_request); dismiss_finding leaves a finding as it is, with the reason. Each is refused, saying why, when it is not yours to take. decide_escalation decides an escalation the owner handed you with a free answer to your question about it. steer tells a running phase Run of this task something, whoever decides; restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier). reply_on_pull_request answers on one of the task's pull requests, whoever decides. github_search, github_issue and github_pull_request read the project's repositories on GitHub (issues, any pull request, its conversation, reviews, threads, checks and diffs), at most 60 reads an hour; reading another pull request lets you do nothing on it. {{.ExternalTextNote}} publish takes what you committed in your checkout to the task branch, while you decide. On an epic, list_tasks with peers and run_diff with task read the other tasks on it; message asks one of them something (never blocking; wait_for_reply ends your turn until its reply), and note pins a fact every agent on the epic must follow. What they said to each other reaches you in your next briefing or wake, never as a wake. People's feedback on the task (feedback) is theirs in their own words: it stays open until a worker resolves it or someone replies (feedback_reply), whatever you decide, and holds the pull request; pass items to a working fixer with steer's feedbackIds, which gives it their words, or start a fix, which is given every open one. From the shell: `dude diff [RUN] [PATH...]`, `dude findings [ID...]`, `dude feedback [ID...]`, `dude feedback reply ID TEXT`, `dude prs`, `dude task list`, `dude memory search QUERY`, `dude task create`, `dude task update`, `dude task list --peers`, `dude diff --task KEY`, `dude message KEY TEXT [--reply-to MSG]`, `dude wait MSG`, `dude note TEXT [--replaces N]`, `dude phase start PHASE`, `dude steer RUN TEXT` (`--feedback ID` passes an item), `dude restart RUN NOTE`, `dude decide ACTION`, `dude finding dismiss ID --reason R`, `dude escalation decide ACTION --note N`, `dude ask Q --choice C --action A` (one question; several at once: `dude ask --questions-json '[{"header":H,"question":Q,"choices":[{"label":L}]},...]'`), `dude pr reply PR TEXT --in-reply-to ID`, `dude publish --message M`.
-Delegate independent work with `start_agent`: profile is implementer, fixer, simplifier, reviewer, qa_browser or investigator. Its result returns to you without taking a workflow decision. From the shell: `dude agent start PROFILE [--prompt P] [--note N] [--tier T]`. Only one writer may work on a task at a time; report-only children may work beside it.
+{{.List " " " "
+	"" (.Wrap "The dude tools read what dude knows about this task: " (.List ", " " and "
+		"run_diff" "run_diff (what a Run changed: the files, then the lines of those you name)"
+		"findings" "findings (the review findings and how each was settled; name ids for their text)"
+		"pull_requests" "pull_requests (state, checks, reviews and feedback)"
+		"list_tasks" "list_tasks"
+		"list_repositories" "list_repositories"
+		"search_memory" "search_memory"
+		"get_memory" "get_memory") ".")
+	"ask_person" "ask_person asks the person up to 4 questions at once and waits for the answer; end your turn after it."
+	"create_task" "create_task records a change as a new task, for a person to deliver."
+	"" (.Wrap "While you take the decisions: " (.List "; " "; "
+		"update_task" "update_task writes an agreed goal or acceptance criteria into the task, before the implementer"
+		"start_phase" "start_phase starts implement, review (some or all categories), fix (some or all findings), simplify or test"
+		"decide" (.Wrap "decide takes the decision waited on (" (.List ", " ", " "" "next" "ask_person" "ask_person" "" "wait" "" "open_pull_request") ")")
+		"dismiss_finding" "dismiss_finding leaves a finding as it is, with the reason") ". Each is refused, saying why, when it is not yours to take.")
+	"decide_escalation" "decide_escalation decides an escalation the owner handed you with a free answer to your question about it."
+	"" (.Wrap "" (.List "; " "; "
+		"steer" "steer tells a running phase Run of this task something, whoever decides"
+		"restart_run" "restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier)") ".")
+	"reply_on_pull_request" "reply_on_pull_request answers on one of the task's pull requests, whoever decides."
+	"github_search github_issue github_pull_request" "github_search, github_issue and github_pull_request read the project's repositories on GitHub (issues, any pull request, its conversation, reviews, threads, checks and diffs), at most 60 reads an hour; reading another pull request lets you do nothing on it."
+	"" .ExternalTextNote
+	"publish" "publish takes what you committed in your checkout to the task branch, while you decide."
+	"" (.Wrap "On an epic, " (.List "; " ", and "
+		"list_tasks run_diff" "list_tasks with peers and run_diff with task read the other tasks on it"
+		"list_tasks !run_diff" "list_tasks with peers reads the other tasks on it"
+		"run_diff !list_tasks" "run_diff with task reads the other tasks on it"
+		"message wait_for_reply" "message asks one of them something (never blocking; wait_for_reply ends your turn until its reply)"
+		"note" "note pins a fact every agent on the epic must follow") ".")
+	"message" "What they said to each other reaches you in your next briefing or wake, never as a wake."
+	"" (.Wrap "" (.List "; " "; "
+		"feedback feedback_reply" "People's feedback on the task (feedback) is theirs in their own words: it stays open until a worker resolves it or someone replies (feedback_reply), whatever you decide, and holds the pull request"
+		"feedback feedback_reply steer" "pass items to a working fixer with steer's feedbackIds, which gives it their words, or start a fix, which is given every open one") ".")
+	"" (.Wrap "From the shell: " (.List ", " ", "
+		"run_diff" "`dude diff [RUN] [PATH...]`"
+		"findings" "`dude findings [ID...]`"
+		"feedback" "`dude feedback [ID...]`"
+		"feedback_reply" "`dude feedback reply ID TEXT`"
+		"pull_requests" "`dude prs`"
+		"list_tasks" "`dude task list`"
+		"search_memory" "`dude memory search QUERY`"
+		"create_task" "`dude task create`"
+		"update_task" "`dude task update`"
+		"list_tasks" "`dude task list --peers`"
+		"run_diff" "`dude diff --task KEY`"
+		"message" "`dude message KEY TEXT [--reply-to MSG]`"
+		"wait_for_reply" "`dude wait MSG`"
+		"note" "`dude note TEXT [--replaces N]`"
+		"start_phase" "`dude phase start PHASE`"
+		"steer feedback" "`dude steer RUN TEXT` (`--feedback ID` passes an item)"
+		"steer !feedback" "`dude steer RUN TEXT`"
+		"restart_run" "`dude restart RUN NOTE`"
+		"decide" "`dude decide ACTION`"
+		"dismiss_finding" "`dude finding dismiss ID --reason R`"
+		"decide_escalation" "`dude escalation decide ACTION --note N`"
+		"ask_person" "`dude ask Q --choice C --action A` (one question; several at once: `dude ask --questions-json '[{\"header\":H,\"question\":Q,\"choices\":[{\"label\":L}]},...]'`)"
+		"reply_on_pull_request" "`dude pr reply PR TEXT --in-reply-to ID`"
+		"publish" "`dude publish --message M`") ".")
+}}{{if .Granted "start_agent"}}
+Delegate independent work with `start_agent`: profile is implementer, fixer, simplifier, reviewer, qa_browser or investigator. Its result returns to you without taking a workflow decision. From the shell: `dude agent start PROFILE [--prompt P] [--note N] [--tier T]`. Only one writer may work on a task at a time; report-only children may work beside it.{{end}}{{if .Granted "github_check_log"}}
 
-Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.
+Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.{{end}}
