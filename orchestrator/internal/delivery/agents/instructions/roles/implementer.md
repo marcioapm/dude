@@ -15,7 +15,7 @@ You turn the task into working, tested code on the task's branch. Reviewers, a s
 ## Committing and merging the base
 {{template "contracts/commit" .}}
 
-{{if not .Child}}{{template "contracts/base-integration" .}}{{end}}
+{{if and (not .Child) (.Granted "sync_base")}}{{template "contracts/base-integration" .}}{{end}}
 {{- if .Ask}}
 
 ## Asking a person

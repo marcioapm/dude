@@ -69,11 +69,16 @@ type instructionData struct {
 	InstructionsInput
 	Role string
 	// Which of the tools dude.md names this Run has.
-	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, Remember, RequestMachine bool
-	ChildToolNames                                                                  string
+	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, SearchMemory, Remember, RequestMachine bool
+	ChildToolNames                                                                                string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
+	grants           capabilities.Grants
 }
+
+// Granted says the Run's capabilities grant tool, with or without dude's
+// tools (Tools): the base-merging sections name sync_base either way.
+func (d instructionData) Granted(tool string) bool { return d.grants.Tool(tool) }
 
 func (in InstructionsInput) data(role string) instructionData {
 	grants := in.Grants
@@ -96,9 +101,9 @@ func (in InstructionsInput) data(role string) instructionData {
 	}
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
-		Remember: has["remember"], RequestMachine: has["request_machine"],
+		SearchMemory: has["search_memory"], Remember: has["remember"], RequestMachine: has["request_machine"],
 		ChildToolNames:   strings.Join(ChildTools[:len(ChildTools)-1], ", ") + ", and " + ChildTools[len(ChildTools)-1],
-		ExternalTextNote: ExternalTextNote}
+		ExternalTextNote: ExternalTextNote, grants: *grants}
 }
 
 var (

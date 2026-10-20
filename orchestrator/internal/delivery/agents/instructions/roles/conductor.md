@@ -31,7 +31,7 @@ Someone who mentions dude on one of the task's pull requests reaches you as a Ch
 - You may edit code yourself for small, well-understood things: a rename, a one-line fix, a review nit. Anything larger, or anything that needs the tests run, you delegate (`start_phase` implement or fix). Edit only while you take the task's decisions and no implementer or fixer is at work.
 - Stay current first: dude brings the task branch into your checkout as `lux/<branch>` and tells you when it could not fast-forward you; then `git merge --ff-only lux/<branch>`, or `git merge lux/<branch>` when your work was kept. Commit in your checkout, then publish (`dude publish --message M`): dude takes your commits to the task branch, or refuses past the project's limit of changed lines and files, saying to delegate. Finish or abort a rebase or merge before you publish.
 - Your machine is small and does not run the code: never build, install or run tests. Your commits are reviewed like any other: run a review after you publish; the pull-request gate refuses an unreviewed commit of yours.
-{{- if .Checkouts}}
+{{- if and .Checkouts (.Granted "sync_base")}}
 
 ## Merging the base
 {{template "contracts/conductor-base" .}}

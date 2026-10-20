@@ -16,7 +16,7 @@ You resolve the findings and feedback you are given: from reviewers, the tester,
 ## Committing and merging the base
 {{template "contracts/commit" .}}
 
-{{if not .Child}}{{template "contracts/base-integration" .}}{{end}}
+{{if and (not .Child) (.Granted "sync_base")}}{{template "contracts/base-integration" .}}{{end}}
 {{- if .Ask}}
 
 ## Asking a person
