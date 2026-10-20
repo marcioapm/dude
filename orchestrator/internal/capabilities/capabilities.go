@@ -33,9 +33,12 @@ const (
 	Conduct         Key = "conduct"
 	Session         Key = "session"
 	SessionAgents   Key = "session.agents"
+	SessionCheckout Key = "session.checkout"
 	RunsRead        Key = "runs.read"
 	PRRefresh       Key = "pr.refresh"
 	LimitsRead      Key = "limits.read"
+	LimitsRequest   Key = "limits.request"
+	Verify          Key = "verify"
 	WebSearch       Key = "web_search"
 	WebFetch        Key = "web_fetch"
 )
@@ -90,16 +93,22 @@ var All = []Capability{
 	{Key: Conduct, Description: "Drive the task's delivery: start phases and agents, steer and restart Runs, decide, update the task, publish, and act on its pull requests.",
 		Tools: []string{"start_phase", "start_agent", "steer", "restart_run", "decide", "dismiss_finding",
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
-	{Key: Session, Description: "Propose tasks and relations for a member to file, and name the session.",
+	{Key: Session, Description: "Propose tasks, relations and projects to link for a member to file, and name the session.",
 		Tools: []string{"propose", "relate", "name_session"}},
 	{Key: SessionAgents, Description: "Start read-only investigator agents to research the linked repositories.",
 		Tools: []string{"start_agent"}},
+	{Key: SessionCheckout, Description: "Ask again for a linked repository whose checkout failed, and be told why it failed last; at most 3 a Run.",
+		Tools: []string{"refresh_checkout"}},
 	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
 		Tools: []string{"run_chat"}},
 	{Key: PRRefresh, Description: "Read the task's pull requests from GitHub now, rather than dude's last poll; counts against the hourly GitHub reads.",
 		Tools: []string{"refresh_pull_requests"}},
 	{Key: LimitsRead, Description: "See the limits the task's delivery is held to, where each is set, and how much is used.",
 		Tools: []string{"limits"}},
+	{Key: LimitsRequest, Description: "Ask the task's people to raise one of its limits for this task alone: fix rounds per review round or per pull request, or one more failed-check rerun on a head; only someone who may change the setting can approve.",
+		Tools: []string{"request_limit"}},
+	{Key: Verify, Description: "Have a commit's tests or named commands run by a report-only Run that never publishes, and be told each command's result; at most 10 a Run.",
+		Tools: []string{"verify"}},
 	{Key: WebSearch, Description: "Search the web with the coding agent's own search tool.",
 		Native: []string{NativeWebSearch}},
 	{Key: WebFetch, Description: "Read web pages with the coding agent's own fetch tool.",
@@ -110,9 +119,9 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, RunsRead, PRRefresh,
-		WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, WebSearch, WebFetch},
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, SessionCheckout, RunsRead,
+		PRRefresh, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},

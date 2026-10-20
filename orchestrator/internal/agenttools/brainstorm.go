@@ -40,6 +40,7 @@ var brainstormTools = []tool{
 	defineSession("relate", relate).limit(createsPerRun),
 	defineSession("ask_person", sessionAsk),
 	defineSession("name_session", nameSession).limit(namesPerRun),
+	defineSession("refresh_checkout", refreshCheckout).limit(checkoutsPerRun),
 	defineSession("start_agent", startAgent),
 }
 
@@ -95,6 +96,27 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 		}
 	}
 	return delivery.LinkedProject{}, refuse(rProjectNotLinkedThisSession, key)
+}
+
+// orgProject is the project of the session's organisation a link_project
+// item names, by key or name, linked or not, among projects (OrgProjects:
+// row security keeps any other organisation's out of the read).
+func orgProject(projects []delivery.OrgProject, key string) (delivery.OrgProject, error) {
+	key = strings.TrimSpace(key)
+	var unlinked []string
+	for _, p := range projects {
+		if key != "" && (strings.EqualFold(p.Key, key) || strings.EqualFold(p.Name, key)) {
+			return p, nil
+		}
+		if !p.Linked {
+			unlinked = append(unlinked, p.Key)
+		}
+	}
+	list := strings.Join(unlinked, ", ")
+	if list == "" {
+		list = "all linked already"
+	}
+	return delivery.OrgProject{}, refuse(rNoProjectInOrganisation, key, list)
 }
 
 // inProject is the caller as a tool for one project sees it.
@@ -378,6 +400,13 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 	for i, p := range projects {
 		linkedIDs[i] = p.ID
 	}
+	// The organisation's projects, read once for every link_project item.
+	var orgProjects []delivery.OrgProject
+	if slices.ContainsFunc(in.Items, func(it delivery.ProposalItem) bool { return strings.TrimSpace(it.Kind) == "link_project" }) {
+		if orgProjects, err = delivery.OrgProjects(ctx, tx, c.SessionID); err != nil {
+			return proposeOut{}, err
+		}
+	}
 	newEpics := map[string]bool{}
 	items := make([]delivery.ProposalItem, len(in.Items))
 	for i, item := range in.Items {
@@ -489,6 +518,24 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				}
 			} else if item.Replaces != 0 {
 				return proposeOut{}, refuse(rItemNewEpicHasNoNote, n, item.Replaces)
+			}
+		case "link_project":
+			p, err := orgProject(orgProjects, item.Project)
+			if err != nil {
+				return proposeOut{}, refuse(rItem, n, err)
+			}
+			if p.Linked {
+				return proposeOut{}, refuse(rItemProjectAlreadyLinked, n, p.Key)
+			}
+			// Filing one project twice would fail the whole card at setLinks.
+			if j := slices.IndexFunc(items[:i], func(o delivery.ProposalItem) bool {
+				return o.Kind == "link_project" && o.Project == p.Key
+			}); j >= 0 {
+				return proposeOut{}, refuse(rItemProjectProposedTwice, n, p.Key, j+1)
+			}
+			item.Project, item.ProjectName = p.Key, p.Name
+			if item.Reason = strings.TrimSpace(item.Reason); item.Reason == "" || utf8.RuneCountInString(item.Reason) > delivery.ReasonMax {
+				return proposeOut{}, refuse(rItemLinkReason, n, delivery.ReasonMax)
 			}
 		default:
 			return proposeOut{}, refuse(rItemKindEpicTaskEditComment, n)

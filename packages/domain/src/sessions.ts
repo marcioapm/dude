@@ -93,7 +93,8 @@ export interface ProposalRef {
 }
 
 export interface ProposalItem {
-  kind: "epic" | "task" | "edit" | "comment" | "note" | "relation";
+  kind: "epic" | "task" | "edit" | "comment" | "note" | "relation" | "link_project";
+  /** The project, by key: new work's, a note's, or the one a link_project asks to link. */
   project?: string;
   /** A task's or a note's epic: an existing one's title, or a new epic's of this proposal. */
   epic?: string;
@@ -119,6 +120,9 @@ export interface ProposalItem {
   to?: string;
   relationKind?: "blocks" | "related";
   why?: string;
+  /** A link_project item: why the session should read the project, and the project's name. */
+  reason?: string;
+  projectName?: string;
 }
 
 /** An item's state for the person looking. */
@@ -135,9 +139,11 @@ export interface ProposalItemStatus {
    * may, named in `owner`) and `reader` (a member who can chat may) leave it
    * to someone else; `started`, `unlinked` and `not_a_task` block everyone, and
    * `blocker_unfiled` is an item that waits on another of the card's items
-   * nobody can file.
+   * nobody can file. A link_project is the session owner's (`session_owner`),
+   * and nobody's once its project is `linked` or the session links the most
+   * projects it can (`limit`).
    */
-  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "unknown";
+  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "session_owner" | "linked" | "unknown" | "limit";
   owner?: PersonRef;
 }
 

@@ -1,4 +1,4 @@
--- 170_fake_checks_models.sql — the scripted agent's checks-gate models:
+-- 172_fake_checks_models.sql — the scripted agent's checks-gate models:
 -- fake/checks-honest (runs its check, sees it pass, reports it),
 -- fake/checks-unbacked (sees it fail and reports it passing) and
 -- fake/checks-fixed (does that once, then, sent back, runs it passing)

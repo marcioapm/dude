@@ -194,5 +194,10 @@ func TestGoldenToolResults(t *testing.T) {
 		{"sync-failed", baseLine("api", "main", "", lux.SyncResult{Status: "failed"}, false).Next},
 		{"sync-up-to-date", baseLine("api", "main", "", lux.SyncResult{Status: "up-to-date"}, false).Next},
 		{"sync-behind", baseLine("api", "main", "", sync, false).Next},
+		{"refresh-checkout-requested", checkoutText("next", struct{ Requested, Pending, Unlinked string }{"WC/web", "", ""})},
+		{"refresh-checkout-all", checkoutText("next", struct{ Requested, Pending, Unlinked string }{"WC/web", "WC/api", "WC/docs"})},
+		{"refresh-checkout-none", checkoutText("next", struct{ Requested, Pending, Unlinked string }{})},
+		{"refresh-checkout-git-refused", cloneFailureReason("git said: ref not found.")},
+		{"refresh-checkout-external", checkoutText("external", delivery.ExternalText("abcd1234", "…"))},
 	})
 }

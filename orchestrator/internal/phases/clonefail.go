@@ -26,22 +26,13 @@ const (
 	cloneHostSignInReason = "dude couldn't sign in to the repository's host: check its URL and that dude's access covers it."
 )
 
-// shortCloneError is lux's clone error as one line: git's last fatal
-// message when it has one (lux joins git's stderr after "git clone: exit
-// status N: "), else the whole of it, bounded to 200 characters.
+// shortCloneError is lux's clone error as one line (delivery.ShortCloneError),
+// or dude's words for none.
 func shortCloneError(err string) string {
-	short := strings.TrimSpace(err)
-	if i := strings.LastIndex(short, "fatal: "); i >= 0 {
-		short = short[i+len("fatal: "):]
+	if short := delivery.ShortCloneError(err); short != "" {
+		return short
 	}
-	short = strings.Join(strings.Fields(short), " ")
-	if r := []rune(short); len(r) > 200 {
-		short = string(r[:199]) + "…"
-	}
-	if short == "" {
-		return cloneErrorUnknown
-	}
-	return short
+	return cloneErrorUnknown
 }
 
 // cloneReason is why the clone of the repository at repoURL failed, in
@@ -84,6 +75,10 @@ func cloneFailedNote(repository, err, remedy string) string {
 var (
 	cloneFailed        = delivery.MustText("notices/clone-failed")
 	cloneErrorUnknown  = delivery.MustText("notices/clone-error-unknown").Render(nil)
-	sessionCloneRemedy = delivery.MustText("notices/clone-remedy-session").Render(nil)
+	sessionCloneRemedy = delivery.MustText("notices/clone-remedy-session")
 	taskCloneRemedy    = delivery.MustText("notices/clone-remedy-task").Render(nil)
 )
+
+// sessionRemedy is what a session's agent can do of a failed clone: with
+// refresh_checkout granted, ask for it again itself.
+func sessionRemedy(refresh bool) string { return sessionCloneRemedy.Render(refresh) }

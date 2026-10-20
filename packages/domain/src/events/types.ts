@@ -154,6 +154,12 @@ export const EventTypes = {
   BrainstormOwnerChanged: "session.owner_changed",
   /** Payload: `{ projects }`. */
   BrainstormLinked: "session.linked",
+  /**
+   * The session's agent asked again for repositories whose clone failed
+   * (refresh_checkout): linked again, cloned at its next resume.
+   * Payload: `{ project, repositories: [{ id, name }] }`.
+   */
+  BrainstormCheckoutRequested: "session.checkout.requested",
   /** The agent filled the proposal card. Payload: `{ proposalId, items }`. */
   BrainstormProposed: "session.proposed",
   /** A member filed items from the card. Payload: `{ proposalId, by, filed: [{ item, key, kind }] }`. */
@@ -597,6 +603,19 @@ export const EventTypes = {
    * "decision", action }`.
    */
   QuestionClosed: "question.closed",
+  /**
+   * The conductor asked the task's people to raise one of its delivery's
+   * limits for this task (request_limit), as its question `questionId`.
+   * Payload: `{ questionId, limit, from, to, reason, repo?, number?, head? }`,
+   * `limit` one of `perReviewRound`, `perPullRequest`, `rerun`.
+   */
+  LimitRequested: "limit.requested",
+  /**
+   * A person approved a limit request: the delivery's check allows `extra`
+   * more from now on, for this task alone. Payload: limit.requested's and
+   * `{ extra, by, byName }`; actor the approver.
+   */
+  LimitGranted: "limit.granted",
   /**
    * A message in a task's Chat, on its conductor's Run. Payload:
    * `{ text, directiveId?, supersedes?, github?, by? }`. A person's: the first has no
