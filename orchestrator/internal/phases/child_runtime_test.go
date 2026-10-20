@@ -510,6 +510,45 @@ func TestChildReportSpec(t *testing.T) {
 	}
 }
 
+func TestChildWriterSpec(t *testing.T) {
+	for _, profile := range []string{"implementer", "fixer", "simplifier"} {
+		t.Run(profile, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+			w.s.Agent.ToolsURL = "http://tools.test"
+			w.s.Agent.ToolsService = true
+			phase := delivery.PhaseForPromptRole(profile)
+			w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status,kind,source_kind)
+				VALUES('run_parent',$1,$2,$3,1,'conductor','running','agent',NULL)`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+			w.exec(`UPDATE tasks SET status='running' WHERE id=$1`, w.run.TaskID)
+			w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state)
+				VALUES('wf_child_writer',$1,$2,'task.delivery','child-writer','waiting','awaitPullRequest',
+				jsonb_build_object('attempt',1,'taskId',$2::text,'projectId',$3::text))`, w.run.Org, w.run.TaskID, w.run.ProjectID)
+			w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id='run_parent',phase=$2::run_phase,role=$3::agent_role,
+			child_profile=$4,child_capabilities='{"publishCode":true}',child_prompt='Make the exact change.',lux_run_id=NULL WHERE id=$1`, w.run.ID, phase, delivery.RoleForPhase[phase], profile)
+			w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+			w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object($2::text,jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org, profile)
+			r := w.run
+			r.SourceKind = "task_conductor"
+			r.Phase = phase
+			r.Role = delivery.RoleForPhase[phase]
+			r.Attempt = 1
+			r.LuxRunID = ""
+			spec, _, _, _, err := w.s.spec(w.ctx, r, nil, chosenImage{Ref: "test/image:latest"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.Git == nil || spec.Git.Push == nil || spec.Git.Push.Branch != runBranch(r) {
+				t.Fatalf("writer child lacks push authority to %s: %+v", runBranch(r), spec.Git)
+			}
+			contract := delivery.ChildWriterContract(profile, delivery.InstructionsInput{Child: true, Tools: true, CLI: true})
+			if agents := childInstructions(t, spec); !strings.HasSuffix(agents, "\n\n"+contract+"\n") {
+				t.Fatalf("instruction file does not end with the writer contract:\n%s", agents)
+			}
+		})
+	}
+}
+
 func TestChildResumeSpecReturnsNoInitAndTheChildPromptOverride(t *testing.T) {
 	w := newResumeWorld(t)
 	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })

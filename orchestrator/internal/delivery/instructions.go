@@ -118,6 +118,12 @@ func childContract(role string) *template.Template {
 	return childToolsTmpl
 }
 
+// ChildWriterContract is the writer-child contract as role's instruction
+// file renders it from in, independent of which contract childContract picks.
+func ChildWriterContract(role string, in InstructionsInput) string {
+	return render(childWriterTmpl, in.data(role))
+}
+
 // roleParts are each role file's three parts (parseRole), resolved at init.
 var roleParts = func() map[string][3]*template.Template {
 	out := map[string][3]*template.Template{}
