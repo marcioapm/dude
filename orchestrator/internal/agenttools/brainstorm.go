@@ -24,22 +24,21 @@ import (
 // task; one naming a project refuses any not linked to the session now.
 // Nothing here creates, edits or comments on work, starts or steers a Run,
 // or decides anything: that is read-only by the tool list, not by the
-// instructions.
-var brainstorms = []string{delivery.RoleBrainstorm}
-
+// instructions. The names its capabilities grant are answered by these
+// definitions where one exists (find).
 var brainstormTools = []tool{
-	define("list_tasks", brainstorms, sessionListTasks),
-	define("list_epics", brainstorms, sessionListEpics),
-	define("list_repositories", brainstorms, sessionListRepositories),
-	define("pull_requests", brainstorms, sessionPullRequests),
-	define("findings", brainstorms, sessionFindings),
-	define("search_memory", brainstorms, sessionSearchMemory).before(embedQuery),
-	define("get_memory", brainstorms, sessionGetMemory),
-	define("remember", brainstorms, sessionRemember).limit(remembersPerRun),
-	define("propose", brainstorms, propose).limit(createsPerRun),
-	define("relate", brainstorms, relate).limit(createsPerRun),
-	define("ask_person", brainstorms, sessionAsk),
-	define("name_session", brainstorms, nameSession).limit(namesPerRun),
+	defineSession("list_tasks", sessionListTasks),
+	defineSession("list_epics", sessionListEpics),
+	defineSession("list_repositories", sessionListRepositories),
+	defineSession("pull_requests", sessionPullRequests),
+	defineSession("findings", sessionFindings),
+	defineSession("search_memory", sessionSearchMemory).before(embedQuery),
+	defineSession("get_memory", sessionGetMemory),
+	defineSession("remember", sessionRemember).limit(remembersPerRun),
+	defineSession("propose", propose).limit(createsPerRun),
+	defineSession("relate", relate).limit(createsPerRun),
+	defineSession("ask_person", sessionAsk),
+	defineSession("name_session", nameSession).limit(namesPerRun),
 }
 
 // namesPerRun bounds how often one Run renames its session.

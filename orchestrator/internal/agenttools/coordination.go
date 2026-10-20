@@ -17,15 +17,11 @@ import (
 // (delivery/peers.go); delivery and waiting reuse the steer's directives
 // and the ask's wait (delivery/coordination.go, notes.go).
 
-// Who may write to peers and pin notes: the roles that build or plan.
-// Reviewers, the simplifier and QA read their peers, never write: a
-// reviewer that messages would be deciding. A fixer runs as implementer.
-var coordinators = []string{"implementer", "investigator", "conductor"}
-
+// Who may write to peers and pin notes is capabilities.Coordination's.
 var coordinationTools = []tool{
-	define("message", coordinators, message),
-	define("wait_for_reply", coordinators, waitForReply),
-	define("note", coordinators, note),
+	define("message", message),
+	define("wait_for_reply", waitForReply),
+	define("note", note),
 }
 
 // ---- message -------------------------------------------------------------------

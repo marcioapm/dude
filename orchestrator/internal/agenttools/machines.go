@@ -19,9 +19,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// Every role with a machine of its own may move; its permission key is
-// runs.role (a fixer is an implementer), which PromptRoles covers.
-var machineRoles = delivery.PromptRoles
+// Every role with a machine of its own may move (capabilities.Machines);
+// its permission key is runs.role (a fixer is an implementer).
 
 const machineMovesPerRun = 3
 

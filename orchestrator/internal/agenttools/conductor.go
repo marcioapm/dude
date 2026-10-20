@@ -17,7 +17,6 @@ import (
 // The conductor's read tools: what the delivery workflow recorded about the
 // caller's task, read the way the briefing names it — ids, one line each —
 // with the text only when asked for by id.
-var conductors = []string{"conductor"}
 
 const (
 	// Findings listed per call; a task with more says so (total).
