@@ -108,6 +108,30 @@ func TestGitHubAuthorsAreExternalText(t *testing.T) {
 	}
 }
 
+// A pull request's conversation comments reach the agent as external text,
+// and a conversation longer than the read keeps says it holds the newest.
+func TestAPullRequestReadCarriesItsConversation(t *testing.T) {
+	w := wrapper{id: "talk"}
+	p := forge.PullRequestRead{CommentCount: 1, Comments: []forge.IssueComment{{Author: "dee", Body: "but the metric name is wrong",
+		CreatedAt: "2026-10-19T09:00:00Z"}}}
+	out := w.pullRequest(p, nil)
+	comments, _ := out["comments"].([]ghCommentOut)
+	if len(comments) != 1 || comments[0].Body != "⟦external talk⟧but the metric name is wrong⟦/external talk⟧" ||
+		comments[0].Author != "⟦external talk⟧dee⟦/external talk⟧" || comments[0].CreatedAt != "2026-10-19T09:00:00Z" {
+		t.Fatalf("comments %+v", out["comments"])
+	}
+	if _, ok := out["moreComments"]; ok {
+		t.Fatalf("a whole conversation said it was cut: %v", out["moreComments"])
+	}
+	p.CommentCount, p.Comments = 73, make([]forge.IssueComment, commentsMax)
+	if got := w.pullRequest(p, nil)["moreComments"]; got != cutMark+": the newest 50 of 73 comments" {
+		t.Fatalf("moreComments %q", got)
+	}
+	if got := w.pullRequest(forge.PullRequestRead{}, nil)["comments"]; got == nil || len(got.([]ghCommentOut)) != 0 {
+		t.Fatalf("no conversation: comments %#v, want an empty list", got)
+	}
+}
+
 func threadShape() forge.PullRequestRead {
 	p := forge.PullRequestRead{}
 	for range 250 {
@@ -194,6 +218,10 @@ func TestFitKeepsIdentityNoteAndFlagsBeforeBodies(t *testing.T) {
 	for range 300 {
 		pr.Files = append(pr.Files, forge.FileRead{Path: strings.Repeat("dir/", 40) + "file.go"})
 	}
+	pr.CommentCount = 80
+	for range 50 {
+		pr.Comments = append(pr.Comments, forge.IssueComment{Author: "dee", Body: long})
+	}
 	for _, tc := range []struct {
 		name string
 		v    map[string]any
@@ -203,8 +231,9 @@ func TestFitKeepsIdentityNoteAndFlagsBeforeBodies(t *testing.T) {
 	}{
 		{"issue", w.issue(issue), []string{"external", "issue", "moreComments"}, []string{"comments"}},
 		{"pull request", w.pullRequest(pr, []string{"missing.go"}),
-			[]string{"external", "pullRequest", "draft", "head", "base", "moreReviews", "threadsUnknown", "moreChecks", "moreFiles", "notListed"},
-			[]string{"reviews", "files"}},
+			[]string{"external", "pullRequest", "draft", "head", "base", "moreReviews", "threadsUnknown", "moreChecks", "moreFiles", "notListed",
+				"moreComments"},
+			[]string{"comments", "reviews", "files"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			whole, _ := json.Marshal(tc.v)

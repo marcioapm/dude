@@ -1199,8 +1199,21 @@ class FakeGitHub:
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", path):
                     return self._send(200, self.github.pulls[int(m[1])].reviews)
                 if m := re.fullmatch(rf"{prefix}/issues/(\d+)/comments", path):
-                    comments = [c for c in self.github.pulls[int(m[1])].comments if not c["path"]]
-                    return self._send(200, after_since(comments))
+                    # Paged as GitHub pages it, with its Link header: dude reads
+                    # page 1, then the last page it names.
+                    from urllib.parse import parse_qs, urlencode
+                    q = {k: v[0] for k, v in parse_qs(query).items()}
+                    per_page, page = min(int(q.get("per_page", 30)), 100), max(int(q.get("page", 1)), 1)
+                    comments = after_since([c for c in self.github.pulls[int(m[1])].comments if not c["path"]])
+                    last = max(1, -(-len(comments) // per_page))
+                    host = self.headers.get("host", "")
+
+                    def at(n: int, rel: str) -> str:
+                        return f'<http://{host}{path}?{urlencode({**q, "per_page": per_page, "page": n})}>; rel="{rel}"'
+                    links = ([at(page - 1, "prev"), at(1, "first")] if page > 1 else []) + \
+                        ([at(page + 1, "next"), at(last, "last")] if page < last else [])
+                    return self._send(200, comments[(page - 1) * per_page:page * per_page],
+                                      {"link": ", ".join(links)} if links else None)
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/comments", path):
                     comments = [c for c in self.github.pulls[int(m[1])].comments if c["path"]]
                     return self._send(200, after_since(comments))

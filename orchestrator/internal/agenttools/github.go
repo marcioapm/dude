@@ -65,7 +65,7 @@ func githubText(name string, data any) string { return githubTexts[name].Render(
 var githubTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
 	for _, name := range []string{"refused", "whose-task", "whose-session", "cut", "search-more", "issue-pull-request",
-		"comments-cut", "no-diff", "checks-cut", "reviews-cut", "threads-unknown", "files-cut", "budget-cut", "text-cut"} {
+		"comments-cut", "comments-newest-cut", "no-diff", "checks-cut", "reviews-cut", "threads-unknown", "files-cut", "budget-cut", "text-cut"} {
 		out[name] = delivery.MustText("results/github/" + name)
 	}
 	return out
@@ -270,7 +270,7 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 		}
 		out = w.issue(issue)
 	case "github_pull_request":
-		pr, err := gh.PullRequestRead(ctx, read.Slug, read.Number, filesMax, read.Files...)
+		pr, err := gh.PullRequestRead(ctx, read.Slug, read.Number, filesMax, commentsMax, read.Files...)
 		if err != nil {
 			return nil, githubRefusal(read, err)
 		}
@@ -311,16 +311,45 @@ func githubRefusal(read githubRead, err error) error {
 		wait = max(d, time.Minute).Round(time.Minute).String()
 	}
 	kind := refusalKind(err)
+	var lacks [][]string
+	if kind == "forbidden" {
+		lacks = permissionSets(e.AcceptedPermissions)
+	}
 	msg := githubText("refused", struct {
 		Kind, Slug, What, Wait string
 		Status                 int
-	}{kind, read.Slug, what, wait, status})
+		Lacks                  [][]string
+		Issue                  bool
+	}{kind, read.Slug, what, wait, status, lacks, read.Tool == "github_issue"})
 	payload := readPayload(read)
 	payload["refused"] = kind
 	if e != nil {
 		payload["status"] = e.Status
 	}
+	if len(lacks) > 0 {
+		payload["permission"] = e.AcceptedPermissions
+	}
 	return refuseRecorded(EvGitHubRead, payload, msg)
+}
+
+// permissionSets is forge.Error.AcceptedPermissions as GitHub's settings
+// name each permission ("pull_requests=read": "Pull requests: read"), one
+// list per alternative set.
+func permissionSets(accepted string) [][]string {
+	var sets [][]string
+	for _, set := range strings.Split(accepted, "; ") {
+		var names []string
+		for _, p := range strings.Split(set, ",") {
+			name, access, ok := strings.Cut(p, "=")
+			if !ok || name == "" {
+				return nil
+			}
+			name = strings.ReplaceAll(name, "_", " ")
+			names = append(names, strings.ToUpper(name[:1])+name[1:]+": "+access)
+		}
+		sets = append(sets, names)
+	}
+	return sets
 }
 
 // forgeError is GitHub's refusal err wraps, or nil for none (no answer).
@@ -565,7 +594,13 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	}
 	pr := map[string]any{"pullRequest": w.line(p.IssueLine), "body": w.text(p.Body, textCap), "draft": p.Draft,
 		"head": w.text(p.Head, 300), "base": w.text(p.Base, 300), "reviews": reviews, "unresolvedThreads": threads,
-		"checks": checks, "files": files, "external": w.note()}
+		"checks": checks, "files": files, "comments": w.comments(p.Comments), "external": w.note()}
+	if p.CommentCount > len(p.Comments) {
+		pr["moreComments"] = githubText("comments-newest-cut", struct {
+			Cut          string
+			Shown, Total int
+		}{cutMark, len(p.Comments), p.CommentCount})
+	}
 	if p.ChecksCut {
 		pr["moreChecks"] = githubText("checks-cut", cutMark)
 	}
