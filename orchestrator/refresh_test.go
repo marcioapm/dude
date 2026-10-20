@@ -101,12 +101,19 @@ func TestABrainstormRefreshesALinkedTasksPullRequests(t *testing.T) {
 const githubReadsHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue',
 	'github_pull_request', 'github_check_log', 'refresh_pull_requests') AND occurred_at > now() - interval '1 hour'`
 
+// spendGitHubReads records n of the task's GitHub reads ten minutes ago,
+// as evt_spent_1…n.
+func (w *world) spendGitHubReads(task string, n int) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO events (id, organization_id, event_type, task_id, occurred_at, actor_type, actor_id, source, payload)
+		SELECT 'evt_spent_' || n, $1, 'agent.tool.attempted', $2, now() - interval '10 minutes', 'agent', 'run_x', 'runner',
+			jsonb_build_object('tool', 'github_issue') FROM generate_series(1, $3::int) n`, w.org, task, n)
+}
+
 // With the hour's 60 reads spent, a refresh is refused before GitHub is asked.
 func TestARefreshPastTheHoursReadsIsRefused(t *testing.T) {
 	w, task := refreshWorld(t)
-	mustExec(t, w.owner, `INSERT INTO events (id, organization_id, event_type, task_id, occurred_at, actor_type, actor_id, source, payload)
-		SELECT 'evt_spent_' || n, $1, 'agent.tool.attempted', $2, now() - interval '10 minutes', 'agent', 'run_x', 'runner',
-			jsonb_build_object('tool', 'github_issue') FROM generate_series(1, 60) n`, w.org, task)
+	w.spendGitHubReads(task, 60)
 	before := w.requests()
 	w.refused(task, "refresh_pull_requests", `{}`, "at most 60 GitHub reads an hour")
 	if w.requests() != before {
@@ -114,9 +121,40 @@ func TestARefreshPastTheHoursReadsIsRefused(t *testing.T) {
 	}
 }
 
+// secondPullRequest gives the task another open pull request, #2 of the same
+// repository, which GitHub does not have.
+func (w *world) secondPullRequest(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO pull_requests SELECT (jsonb_populate_record(NULL::pull_requests,
+		to_jsonb(pr) || jsonb_build_object('id', pr.id || '_2', 'number', 2, 'node_id', NULL, 'url', pr.url || '-2'))).*
+		FROM pull_requests pr WHERE task_id = $1`, task)
+}
+
+// A refresh spends one GitHub read per open pull request: with fewer left
+// than it has open, it syncs none and says how many it needs and has; with
+// enough, its attempt counts them all, in the hourly count and in limits.
+func TestARefreshSpendsAReadPerPullRequest(t *testing.T) {
+	w, task := refreshWorld(t)
+	w.secondPullRequest(task)
+	w.spendGitHubReads(task, 59)
+	before := w.requests()
+	w.refused(task, "refresh_pull_requests", `{}`, "one GitHub read for each open pull request, 2 here, and 1 of the hour's 60 are left")
+	if w.requests() != before {
+		t.Error("a refresh short of reads reached GitHub")
+	}
+	mustExec(t, w.owner, `DELETE FROM events WHERE id = 'evt_spent_1'`)
+	w.must(task, "refresh_pull_requests", `{}`)
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1`+githubReadsHour, task); n != 60 {
+		t.Errorf("%d GitHub reads this hour, want 58 and the refresh's 2", n)
+	}
+	if reads := field(w.limitsOf(task), "githubReadsThisHour"); num(field(reads, "used")) != 60 || num(field(reads, "remaining")) != 0 {
+		t.Errorf("limits' GitHub reads: %v", reads)
+	}
+}
+
 // The refresh reads GitHub with no transaction open: while GitHub holds its
-// answer, the task's GitHub-reads lock its check took is free, and the
-// conductor's other tools answer.
+// answer, no backend is idle in a transaction, the task's GitHub-reads lock
+// is free, and the conductor's other tools answer.
 func TestARefreshHoldsNoTransactionWhileGitHubAnswers(t *testing.T) {
 	w, task := refreshWorld(t)
 	held, release := make(chan struct{}), make(chan struct{})
@@ -139,8 +177,40 @@ func TestARefreshHoldsNoTransactionWhileGitHubAnswers(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the refresh never asked GitHub")
 	}
-	// The check's transaction holds the task's GitHub-reads lock until it
-	// ends: free now, it has.
+	// No backend of this database sits in a transaction while GitHub holds
+	// the answer: one seen idle in the same transaction across samples a
+	// tenth of a second apart is one held open over the request.
+	inTx := func() map[string]bool {
+		rows, err := w.owner.Query(context.Background(), `SELECT pid || '@' || xact_start || ': ' || left(query, 200) FROM pg_stat_activity
+			WHERE datname = current_database() AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		open := map[string]bool{}
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				t.Fatal(err)
+			}
+			open[s] = true
+		}
+		return open
+	}
+	idle := inTx()
+	for range 3 {
+		time.Sleep(100 * time.Millisecond)
+		now := inTx()
+		for s := range idle {
+			if !now[s] {
+				delete(idle, s)
+			}
+		}
+	}
+	for s := range idle {
+		t.Errorf("a transaction is held while GitHub answers: %s", s)
+	}
+	// The budget: the check's GitHub-reads lock is free, so another read
+	// of the task's is not held behind the refresh.
 	tx := w.begin()
 	var free bool
 	if err := tx.QueryRow(context.Background(), `SELECT pg_try_advisory_xact_lock(hashtext('github_reads:' || $1))`, "task:"+task).Scan(&free); err != nil {

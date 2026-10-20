@@ -365,7 +365,7 @@ func prFixBoundFor(ctx context.Context, tx pgx.Tx, st *State, repos []string) er
 		return refusef(rPullRequestFixesAreAtTheir,
 			st.PRIteration, st.RoundFixLimit())
 	}
-	settings, _, err := GitHubSettingsTx(ctx, tx)
+	settings, err := GitHubSettingsTx(ctx, tx)
 	if err != nil {
 		return err
 	}

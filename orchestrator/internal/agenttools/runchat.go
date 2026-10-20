@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // run_chat (capabilities.RunsRead) reads another Run's conversation as its
@@ -25,9 +26,15 @@ const (
 )
 
 // The events a Run's Chat shows as its conversation, in apps/web's
-// conversation.ts terms: the agent's messages, and the person's, the
-// conductor's and GitHub's messages to it.
-var runChatTypes = []string{"agent.message", delivery.EvChatMessage, delivery.EvRunSteered, "question.answered"}
+// conversation.ts terms: the agent's messages (but one with no words, no
+// turn in its Chat either), and the person's, the conductor's and GitHub's
+// messages to it. The WHERE of events_run_chat_idx (migration 165), written
+// with literals, as a parameter would not prove the index's WHERE.
+const (
+	runChatShown = `run_id = $1 AND event_type IN ('agent.message', 'chat.message', 'run.steered', 'question.answered')
+		AND (event_type <> 'agent.message' OR btrim(COALESCE(payload->>'text', '')) <> '')`
+	runChatCount = `SELECT count(*) FROM events WHERE ` + runChatShown
+)
 
 type runChatIn struct {
 	Run   string `json:"run"`
@@ -78,14 +85,10 @@ type openQuestionOut struct {
 // one its session started; any other's, one of its task's.
 func runChatScope(ctx context.Context, tx pgx.Tx, c Caller, runID string) (chatRunOut, bool, error) {
 	var r chatRunOut
-	session := ""
-	if sessionAgent(c.Role) {
-		session = c.SessionID
-	}
 	err := tx.QueryRow(ctx, `SELECT r.id, COALESCE(r.role::text, ''), COALESCE(r.phase::text, ''), r.status::text, COALESCE(r.attempt, 0)
 		FROM runs r WHERE r.id = $1 AND r.kind = 'agent'
 		  AND CASE WHEN $4 THEN $2 <> '' AND r.source_kind = 'session' AND r.parent_session_id = $2
-		           ELSE $3 <> '' AND r.task_id = $3 END`, runID, session, c.TaskID, sessionAgent(c.Role)).
+		           ELSE $3 <> '' AND r.task_id = $3 END`, runID, c.SessionID, c.TaskID, sessionAgent(c.Role)).
 		Scan(&r.ID, &r.Role, &r.Phase, &r.Status, &r.Attempt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, false, nil
@@ -116,34 +119,30 @@ func runChat(ctx context.Context, tx pgx.Tx, c Caller, in runChatIn) (json.RawMe
 		}
 		return nil, refuse(rNotRunYourTaskYouRead, runID)
 	}
-	// The latest limit, oldest first; an agent's message with no words is
-	// no turn in its Chat either.
-	shown := `run_id = $1 AND event_type = ANY($2) AND (event_type <> 'agent.message' OR btrim(COALESCE(payload->>'text', '')) <> '')`
+	// The latest limit, oldest first.
 	var total int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE `+shown, runID, runChatTypes).Scan(&total); err != nil {
+	if err := tx.QueryRow(ctx, runChatCount, runID).Scan(&total); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT e.event_type, e.actor_type, COALESCE(e.actor_id, ''),
 			COALESCE((SELECT p.name FROM people p WHERE p.id = e.actor_id),
 				(SELECT p.name FROM api_keys k JOIN people p ON p.id = k.person_id WHERE k.id = e.actor_id), ''),
 			e.payload, e.occurred_at
-		FROM (SELECT * FROM events WHERE `+shown+` ORDER BY cursor DESC LIMIT $3) e ORDER BY e.cursor`, runID, runChatTypes, limit)
+		FROM (SELECT * FROM events WHERE `+runChatShown+` ORDER BY cursor DESC LIMIT $2) e ORDER BY e.cursor`, runID, limit)
 	if err != nil {
 		return nil, err
 	}
 	w := newWrapper()
-	messages := []chatMessageOut{}
-	for rows.Next() {
+	messages, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (chatMessageOut, error) {
 		var typ, actorType, actorID, name string
 		var payload map[string]any
 		var at time.Time
-		if err := rows.Scan(&typ, &actorType, &actorID, &name, &payload, &at); err != nil {
-			rows.Close()
-			return nil, err
+		if err := r.Scan(&typ, &actorType, &actorID, &name, &payload, &at); err != nil {
+			return chatMessageOut{}, err
 		}
-		messages = append(messages, w.chatMessage(typ, actorType, actorID, name, payload, at))
-	}
-	if err := rows.Err(); err != nil {
+		return w.chatMessage(typ, actorType, actorID, name, payload, at), nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	out := map[string]any{"external": runChatNote(w.id), "run": run, "messages": messages, "total": total}
@@ -161,11 +160,13 @@ func runChat(ctx context.Context, tx pgx.Tx, c Caller, in runChatIn) (json.RawMe
 	// messages first and saying so.
 	for {
 		raw, err := delivery.GitHubReadJSON(out)
-		if err != nil || len(raw) <= resultCap || len(messages) <= 1 {
-			if err == nil && len(raw) > resultCap {
-				return w.fit(out)
-			}
-			return raw, err
+		switch {
+		case err != nil:
+			return nil, err
+		case len(raw) <= resultCap:
+			return raw, nil
+		case len(messages) <= 1:
+			return w.fit(out)
 		}
 		messages = messages[1:]
 		out["messages"] = messages
@@ -189,6 +190,10 @@ func (w wrapper) chatMessage(typ, actorType, actorID, name string, p map[string]
 		return m
 	case p["by"] == delivery.RoleConductor:
 		m.From, m.Text = "conductor", w.own(text)
+		return m
+	case typ == delivery.EvChatMessage && actorType == ledger.ActorAgent:
+		// The Run's own reply on GitHub (reply_on_pull_request, by "fixer").
+		m.From, m.Text = "agent", w.own(text)
 		return m
 	case typ == "question.answered":
 		m.Kind = "answer"

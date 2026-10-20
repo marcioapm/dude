@@ -169,6 +169,36 @@ func TestClaudeCodeDisallowsBothBeforeItsSettings(t *testing.T) {
 	}
 }
 
+// A Run that may reach any host but is granted neither web tool has an
+// unrestricted network and still has its harness's web tools off: the
+// network is not what turns them off.
+func TestAnAnywhereRunWithoutTheWebHasItsHarnessWebOff(t *testing.T) {
+	g := grantsWithout(delivery.RoleBrainstorm, capabilities.WebSearch, capabilities.WebFetch)
+	spec := func(harness string) lux.Spec {
+		c, in := goldenInput("claude-sonnet-5")
+		everyRole[delivery.RoleBrainstorm](&in)
+		in.Harness, in.Anywhere, in.Egress, in.Grants = harness, true, []string{"pypi.org"}, g
+		s := buildSpec(c, in)
+		if !reflect.DeepEqual(s.Network, &lux.Network{Unrestricted: true}) {
+			t.Errorf("%s: network %+v, want unrestricted", harness, s.Network)
+		}
+		return s
+	}
+	oc := spec(delivery.HarnessOpenCode)
+	if _, set := oc.Env["OPENCODE_ENABLE_EXA"]; set {
+		t.Error("OpenCode: OPENCODE_ENABLE_EXA set")
+	}
+	if p := openCodePermission(t, oc); !reflect.DeepEqual(p, map[string]any{"*": "allow", "webfetch": "deny"}) {
+		t.Errorf("OpenCode: permission %v", p)
+	}
+	if d := claudeDisallowed(spec(delivery.HarnessClaudeCode)); !slices.Equal(d, []string{"WebSearch", "WebFetch"}) {
+		t.Errorf("Claude Code: --disallowedTools %q", d)
+	}
+	if got := codexWebSearch(t, spec(delivery.HarnessCodex)); got != "disabled" {
+		t.Errorf("Codex: web_search %v", got)
+	}
+}
+
 // A tier's -c web_search cannot turn search back on for a Run without it,
 // on any network.
 func TestATiersCodexSearchCannotOverrideAMissingGrant(t *testing.T) {

@@ -67,8 +67,10 @@ type tracked struct {
 	ChecksJSON                                                                                 []byte
 }
 
-// errRaced: another sync of the same pull request recorded first.
-var errRaced = errors.New("pull request synced concurrently")
+// ErrRaced: another sync of the same pull request recorded first. Sync
+// returns it when it lost every retry: the pull request was synced, by
+// another.
+var ErrRaced = errors.New("pull request synced concurrently")
 
 // Sync reads one PR from GitHub, records what changed, and signals the
 // workflow if a change is actionable.
@@ -80,7 +82,7 @@ var errRaced = errors.New("pull request synced concurrently")
 // and the one that lost reads again.
 func (s *Syncer) Sync(ctx context.Context, org, prID string) error {
 	for range 3 {
-		if err := s.sync(ctx, org, prID); !errors.Is(err, errRaced) {
+		if err := s.sync(ctx, org, prID); !errors.Is(err, ErrRaced) {
 			return err
 		}
 	}
@@ -315,7 +317,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return errRaced
+			return ErrRaced
 		}
 
 		// One event per thing that changed. "Nothing happened" is not an

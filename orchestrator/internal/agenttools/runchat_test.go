@@ -184,6 +184,106 @@ func TestWhatPeopleToldARunReachesTheConductorQuoted(t *testing.T) {
 	}
 }
 
+// A fixer's own reply on its pull request (reply_on_pull_request, recorded
+// by delivery.RecordReplyTx) is the agent's words, not quoted as a person's.
+func TestAFixersReplyOnItsPullRequestIsItsOwnWords(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	f.run(t, "run_fixer", "implementer", "running")
+	f.say(t, "run_fixer", f.item, "chat.message", "agent", "run_fixer",
+		`{"text":"Fixed in the latest push.","by":"fixer","github":{"repo":"target","number":1,"feedbackId":"77","url":"https://github.test/acme/target/pull/1#issuecomment-77"}}`)
+	_, out, raw := f.chatOf(t, token, `{"run":"run_fixer"}`)
+	if got := strings.Join(texts(out), "|"); got != "agent/message:Fixed in the latest push." || field(out, "messages", 0, "who") != nil {
+		t.Errorf("the fixer's reply: %s", raw)
+	}
+}
+
+// A Run whose latest messages do not fit one result gives the latest that
+// do: the oldest are left out first, total stays every message, and more
+// says how many are shown.
+func TestRunChatLeavesOutTheOldestPastTheResultCap(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	f.run(t, "run_wordy", "implementer", "running")
+	for i := 1; i <= 20; i++ {
+		f.say(t, "run_wordy", f.item, "agent.message", "agent", "run_wordy",
+			fmt.Sprintf(`{"text":"m%02d %s"}`, i, strings.Repeat("w", 7<<10+512)))
+	}
+	status, out, raw := f.chatOf(t, token, `{"run":"run_wordy","limit":20}`)
+	if status != 200 || len(raw) > 64<<10 {
+		t.Fatalf("run_chat: %d, %d bytes", status, len(raw))
+	}
+	got := texts(out)
+	if len(got) < 2 || len(got) >= 20 {
+		t.Fatalf("%d messages", len(got))
+	}
+	for i, m := range got {
+		if want := fmt.Sprintf("agent/message:m%02d ", 20-len(got)+1+i); !strings.HasPrefix(m, want) {
+			t.Errorf("message %d is %.20q, want %q: the latest, oldest first", i, m, want)
+		}
+	}
+	if field(out, "total") != float64(20) || out["more"] != fmt.Sprintf("the latest %d of 20 messages: ask with a larger limit for more, up to 100 and what fits in one result", len(got)) {
+		t.Errorf("total %v, more %v", out["total"], out["more"])
+	}
+}
+
+// limit 0 is an omitted limit (JSON gives the tool the same zero): the
+// default 30.
+func TestRunChatReadsLimitZeroAsTheDefault(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	f.run(t, "run_zero", "implementer", "running")
+	for i := 1; i <= 31; i++ {
+		f.say(t, "run_zero", f.item, "agent.message", "agent", "run_zero", fmt.Sprintf(`{"text":"m%d"}`, i))
+	}
+	status, out, raw := f.chatOf(t, token, `{"run":"run_zero","limit":0}`)
+	if got := texts(out); status != 200 || len(got) != 30 || got[0] != "agent/message:m2" {
+		t.Errorf("limit 0: %d %.300s", status, raw)
+	}
+}
+
+// An answered question is no open question; its answer stays in the Chat
+// as the person's.
+func TestAnAnsweredQuestionIsNotOpenAndItsAnswerIsAMessage(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	f.run(t, "run_asked", "implementer", "running")
+	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name) VALUES ('per_bo', $1, 'Bo')`, f.org)
+	mustExec(t, f.owner, `INSERT INTO questions (id, organization_id, run_id, prompt, items, status, answer, answered_at)
+		VALUES ('qst_done', $1, 'run_asked', 'Keep v1?', '[{"question":"Keep v1?"}]', 'answered', 'Yes', now())`, f.org)
+	f.say(t, "run_asked", f.item, "question.answered", "human", "per_bo", `{"questionId":"qst_done","answer":"Yes","note":"until June"}`)
+	_, out, raw := f.chatOf(t, token, `{"run":"run_asked"}`)
+	if _, open := out["openQuestion"]; open {
+		t.Errorf("an answered question is open: %s", raw)
+	}
+	got := texts(out)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "person/answer:⟦external ") || !strings.Contains(got[0], "Yes\n\nuntil June") ||
+		!strings.Contains(field(out, "messages", 0, "who").(string), "Bo") {
+		t.Errorf("the answer: %q", got)
+	}
+}
+
+// A task's agent reads every Run of its task: an earlier attempt and a
+// child the conductor started.
+func TestAConductorReadsAnEarlierAttemptAndItsChild(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role) VALUES
+		('run_attempt1', $1, $2, $3, 1, 'failed', 'implement', 'implementer'),
+		('run_attempt2', $1, $2, $3, 2, 'running', 'implement', 'implementer')`, f.org, f.project, f.item)
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role, phase, source_kind, parent_run_id,
+			child_profile, child_capabilities)
+		VALUES ('run_child', $1, $2, $3, 1, 'running', 'agent', 'investigator', 'investigate', 'task_conductor', 'run_cond', 'investigator', '{}')`,
+		f.org, f.project, f.item)
+	for _, r := range []string{"run_attempt1", "run_child"} {
+		f.say(t, r, f.item, "agent.message", "agent", r, `{"text":"from `+r+`"}`)
+		status, out, raw := f.chatOf(t, token, `{"run":"`+r+`"}`)
+		if status != 200 || strings.Join(texts(out), "|") != "agent/message:from "+r {
+			t.Errorf("%s: %d %s", r, status, raw)
+		}
+	}
+}
+
 // field is the value at path in a decoded JSON value: keys and indexes.
 func field(v any, path ...any) any {
 	for _, p := range path {
