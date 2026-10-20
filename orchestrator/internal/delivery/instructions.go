@@ -10,7 +10,8 @@ import (
 // is assembled from: what the Run has, and the saved prompts for its role.
 // Nothing in it changes during a Run, so a resume assembles the same file.
 type InstructionsInput struct {
-	// An independent child receives the report-only contract.
+	// A conductor-started child: a writer gets the writer-child contract,
+	// any other the report-only contract (childContract).
 	Child bool
 	// The Run has dude's tools, and the dude CLI on its shell.
 	Tools, CLI bool
@@ -64,7 +65,7 @@ var InstructionTools = map[string][]string{
 	RoleBrainstorm: {"ask_person", "search_memory", "remember", "request_machine"},
 }
 
-// ChildTools are the tools an independent report child may call.
+// ChildTools are the tools a conductor-started child may call.
 var ChildTools = []string{"list_tasks", "list_epics", "list_repositories", "search_memory", "get_memory", "run_diff", "list_machine_sizes", "emit_event"}
 
 // instructionData is what every instruction template is given.
@@ -104,8 +105,18 @@ var (
 	dudeTmpl       = mustTemplate("instructions/dude")
 	savedTmpl      = mustTemplate("instructions/saved")
 	roleNotesTmpl  = mustTemplate("instructions/notes")
-	childToolsTmpl = mustTemplate("contracts/child-tools")
+	childToolsTmpl  = mustTemplate("contracts/child-tools")
+	childWriterTmpl = mustTemplate("contracts/child-writer")
 )
+
+// childContract is a child's closing contract: a child whose phase publishes
+// commits works and commits; any other reports only.
+func childContract(role string) *template.Template {
+	if Publishes[PhaseForPromptRole(role)] {
+		return childWriterTmpl
+	}
+	return childToolsTmpl
+}
 
 // roleParts are each role file's three parts (parseRole), resolved at init.
 var roleParts = func() map[string][3]*template.Template {
@@ -171,7 +182,7 @@ func Instructions(role, aspect string, in InstructionsInput) string {
 		sections = append(sections, render(roleNotesTmpl, c))
 	}
 	if in.Child {
-		sections = append(sections, render(childToolsTmpl, d))
+		sections = append(sections, render(childContract(role), d))
 	}
 	return strings.Join(sections, "\n\n") + "\n"
 }
