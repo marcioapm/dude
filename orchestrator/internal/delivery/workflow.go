@@ -450,7 +450,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	return &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests"},
+		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},

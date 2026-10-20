@@ -2,7 +2,11 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -20,14 +24,38 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 			return nil, err
 		}
 		c := &Continue{Predecessor: p.ID}
+		// The durable cache survives artifact-collection waits and step retries.
+		// Equal predecessor checkouts share a measurement across categories.
+		cacheKey, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, st.Candidate, p.BaseRefs, st.Heads})
+		var cached *int
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT (state->'roundDelta'->>$2)::int FROM workflow_runs WHERE id = $1`, sc.WorkflowRunID, string(cacheKey)).Scan(&cached)
+		}); err != nil {
+			return nil, err
+		}
+		if cached != nil {
+			c.DeltaLines = *cached
+			return c, nil
+		}
 		if w.forges == nil {
+			c.DeltaLines = MaxResumeDeltaLines + 1
 			return c, nil
 		}
 		gh, err := w.forges.For(ctx, sc.OrganizationID)
 		if err != nil {
-			return nil, err
+			if forge.Transient(err) {
+				return nil, forgeWait(err)
+			}
+			c.DeltaLines = MaxResumeDeltaLines + 1
+			return c, nil
 		}
 		if c.DeltaLines, err = w.s.DeltaLines(ctx, sc.OrganizationID, st.TaskID, gh, p.BaseRefs, st.Heads); err != nil {
+			return nil, err
+		}
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{roundDelta}', COALESCE(state->'roundDelta', '{}'::jsonb) || jsonb_build_object($2::text, $3::int)) WHERE id = $1`, sc.WorkflowRunID, string(cacheKey), c.DeltaLines)
+			return err
+		}); err != nil {
 			return nil, err
 		}
 		return c, nil

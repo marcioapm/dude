@@ -126,6 +126,33 @@ func TestARestartOfAContinuedRoundIsFresh(t *testing.T) {
 	}
 }
 
+func TestLargeRoundClearsNarrowRanges(t *testing.T) {
+	for _, of := range []string{delivery.RangeSimplify, delivery.RangePullRequestFix} {
+		for _, lines := range []int{300, 301} {
+			t.Run(fmt.Sprintf("%s/%d", of, lines), func(t *testing.T) {
+				w := newRoundWorld(t)
+				w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+					VALUES ('ev_range', $1, 'agent.message', $2, $3, 'agent', $2, 'test', '{"text":"Earlier review"}')`, w.org, w.first, w.task)
+				id, err := (&delivery.Store{DB: w.app}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
+					TaskID: w.task, Phase: delivery.PhaseReview, Category: "correctness", Attempt: 1,
+					BaseRefs: map[string]string{"api": "bbb"}, ReviewRange: &delivery.ReviewRange{Of: of, Base: map[string]string{"api": "aaa"}},
+					Continue: &delivery.Continue{Predecessor: w.first, DeltaLines: lines}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := w.str(t, `SELECT COALESCE(review_range->>'of', '') || '|' || COALESCE(continues_how, '') FROM runs WHERE id = $1`, id)
+				want := of + "|replay"
+				if lines > 300 {
+					want = "|"
+				}
+				if got != want {
+					t.Fatalf("range|continuation = %q, want %q", got, want)
+				}
+			})
+		}
+	}
+}
+
 // A kept predecessor is let go when the task ends, and by a new attempt
 // or a decision past a stop (ReleaseKeptTx): RetireCompleted takes it up.
 func TestAKeptReviewerIsLetGoWhenItsTaskEnds(t *testing.T) {

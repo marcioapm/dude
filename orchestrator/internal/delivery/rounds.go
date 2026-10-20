@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"maps"
 	"slices"
 	"time"
@@ -116,15 +115,19 @@ func (s *Store) DeltaLines(ctx context.Context, org, taskID string, gh *forge.Gi
 		if prev == now {
 			continue
 		}
-		cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), prev, now)
-		var fe *forge.Error
-		if errors.As(err, &fe) && (fe.Status == 404 || fe.Status == 422) {
-			// A commit GitHub does not have (never published, or gone):
-			// nothing to measure the change by, so fresh eyes.
+		if gh == nil {
 			return MaxResumeDeltaLines + 1, nil
 		}
+		cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), prev, now)
 		if err != nil {
-			return 0, err
+			if ctx.Err() != nil {
+				return 0, ctx.Err()
+			}
+			if forge.Transient(err) {
+				return 0, forgeWait(err)
+			}
+			// Unmeasurable changes require fresh eyes on the whole branch.
+			return MaxResumeDeltaLines + 1, nil
 		}
 		if cmp.Truncated() {
 			return MaxResumeDeltaLines + 1, nil
@@ -177,10 +180,12 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 		return "", err
 	}
 	if c.DeltaLines > MaxResumeDeltaLines {
-		// Fresh eyes on the whole branch: the predecessor is let go.
+		// Fresh eyes on the whole branch: the predecessor is let go and any
+		// narrower range is no longer valid for this decision.
 		if err := releaseRunTx(ctx, tx, p.ID); err != nil {
 			return "", err
 		}
+		in.ReviewRange = nil
 		in.freshReason = "large_delta"
 		return createPhaseRunTx(ctx, tx, org, in)
 	}
