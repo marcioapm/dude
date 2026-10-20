@@ -96,6 +96,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		} else if tier, noTier, err = delivery.TierFor(ctx, tx, role, settings); err != nil || noTier != "" {
 			return err
 		}
+		// What the spec and the instruction file's web both read (runWeb).
+		in.Role, in.Grants, in.Harness = role, &grants, settings.HarnessName()
+		in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 		if sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
 			return err
 		}
@@ -109,8 +112,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 				return err
 			}
 			prompt = delivery.BrainstormPrompt(briefing, talker)
-			web := runWeb(s.Agent, specInput{Role: role, Harness: settings.HarnessName(), Options: tier.Options,
-				Anywhere: in.Anywhere, Egress: in.Egress, Grants: &grants})
+			web := runWeb(s.Agent, in)
 			instructions := talker.InstructionsInput()
 			instructions.Grants, instructions.Web = &grants, &web
 			in.Instructions = delivery.Instructions(role, "", instructions)
@@ -131,9 +133,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		in.Repos = append(in.Repos, specRepo{Name: repo.SpecName(), URL: repo.URL, Ref: repo.DefaultBranch, ReadOnly: true,
 			Path: delivery.SessionRepoPath(repo.Key, repo.Name), Setup: repo.SetupScript})
 	}
-	in.RunID, in.OrganizationID, in.SessionID, in.Role, in.Grants = r.ID, r.Org, r.SessionID, role, &grants
-	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
-	in.Harness = settings.HarnessName()
+	in.RunID, in.OrganizationID, in.SessionID = r.ID, r.Org, r.SessionID
 	s.logIgnoredOptions(r, in)
 	if m, ok := sizes.ForRole(role, raised, nil, orgModels); ok {
 		if m.Raised != nil {
@@ -190,21 +190,28 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		if err := tx.QueryRow(ctx, `SELECT lux_repositories FROM runs WHERE id = $1`, r.ID).Scan(&have); err != nil {
 			return err
 		}
+		var err error
+		if repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID); err != nil {
+			return err
+		}
+		// Which wording an added repository gets is all again decides.
+		if !slices.ContainsFunc(repos, func(repo delivery.SessionRepo) bool { return !slices.Contains(have, repo.SpecName()) }) {
+			return nil
+		}
 		// Asked for again by the agent (refresh_checkout) after its clone
-		// failed on this session: by spec name.
+		// failed on this session, and not linked by a member since: by spec name.
 		rows, err := tx.Query(ctx, `SELECT DISTINCT f.payload->>'repository' FROM events f
 			WHERE f.session_id = $1 AND f.event_type = 'repository.clone_failed' AND EXISTS (SELECT 1 FROM events q
 				WHERE q.session_id = $1 AND q.event_type = $2 AND q.occurred_at > f.occurred_at
 				  AND q.payload->>'project' = f.payload->>'key'
-				  AND q.payload->'repositories' @> jsonb_build_array(jsonb_build_object('name', f.payload->>'name')))`,
-			r.SessionID, delivery.EvCheckoutRequested)
+				  AND q.payload->'repositories' @> jsonb_build_array(jsonb_build_object('name', f.payload->>'name'))
+				  AND NOT EXISTS (SELECT 1 FROM events l WHERE l.session_id = $1 AND l.event_type = $3
+					AND l.occurred_at > q.occurred_at))`,
+			r.SessionID, delivery.EvCheckoutRequested, delivery.EvSessionLinked)
 		if err != nil {
 			return err
 		}
-		if again, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
-			return err
-		}
-		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
+		again, err = pgx.CollectRows(rows, pgx.RowTo[string])
 		return err
 	}); err != nil {
 		return err
@@ -256,9 +263,12 @@ func (s *Syncer) sessionWebChanged(ctx context.Context, tx pgx.Tx, r phaseRun, w
 	if _, err := tx.Exec(ctx, `UPDATE runs SET web = $2::jsonb WHERE id = $1`, r.ID, raw); err != nil {
 		return "", fmt.Errorf("record the brainstorm's web: %w", err)
 	}
+	// The agent before is the newest that reached lux: one whose submit was
+	// refused never ran on the web it recorded.
 	var before delivery.Web
 	err = tx.QueryRow(ctx, `SELECT p.web FROM runs p JOIN runs r ON r.id = $2
-		WHERE p.session_id = $1 AND p.id <> r.id AND p.role = 'brainstorm' AND p.web IS NOT NULL AND p.created_at <= r.created_at
+		WHERE p.session_id = $1 AND p.id <> r.id AND p.role = 'brainstorm' AND p.web IS NOT NULL AND p.lux_run_id IS NOT NULL
+		  AND p.created_at <= r.created_at
 		ORDER BY p.created_at DESC, p.id DESC LIMIT 1`, r.SessionID, r.ID).Scan(&before)
 	if db.IsNotFound(err) {
 		return "", nil

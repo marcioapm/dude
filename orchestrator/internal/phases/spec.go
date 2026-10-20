@@ -605,9 +605,9 @@ func harnessHosts(harness string, webSearch bool) []string {
 // hosts on its list that are not the model's, dude's tools or the harness's
 // own.
 func runWeb(c AgentConfig, in specInput) delivery.Web {
-	web := delivery.Web{Search: in.native(capabilities.NativeWebSearch),
-		Fetch: in.native(capabilities.NativeWebFetch) && in.Harness != delivery.HarnessCodex}
-	if web.Search && in.Harness == delivery.HarnessCodex {
+	search := in.native(capabilities.NativeWebSearch)
+	web := delivery.Web{Search: search, Fetch: in.native(capabilities.NativeWebFetch) && in.Harness != delivery.HarnessCodex}
+	if search && in.Harness == delivery.HarnessCodex {
 		settings, _ := codexSettings(c, in)
 		web.Search = slices.Contains(settings, "web_search="+tomlString("live")) ||
 			slices.Contains(settings, "web_search="+tomlString("cached"))
@@ -618,7 +618,7 @@ func runWeb(c AgentConfig, in specInput) delivery.Web {
 		return web
 	}
 	var skip []lux.EgressRule
-	for _, h := range harnessHosts(in.Harness, in.native(capabilities.NativeWebSearch)) {
+	for _, h := range harnessHosts(in.Harness, search) {
 		r, _ := lux.ParseEgressRule(h)
 		skip = append(skip, r)
 	}

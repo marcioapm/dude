@@ -38,6 +38,7 @@ const (
 	rItemKindEpicTaskEditComment           = "item %d: kind is epic, task, edit, comment, note or link_project"
 	rNoProjectInOrganisation               = "no project %s in this organisation; the projects you can propose to link are %s"
 	rItemProjectAlreadyLinked              = "item %d: project %s is linked to this session already"
+	rItemProjectProposedTwice              = "item %d: project %s is item %d's already"
 	rItemLinkReason                        = "item %d: a link_project gives its reason, 1 to %d characters, for the member who confirms it"
 	rItemOnlyTaskItemHasRelations          = "item %d: only a task item has relations; relate existing tasks with relate"
 	rItemNamesTaskByKeyOr                  = "item %d: %s names a task by key or by item, not both"

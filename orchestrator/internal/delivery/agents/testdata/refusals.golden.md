@@ -498,6 +498,10 @@ item %d: project %s is linked to this session already
 
 no project %s in this organisation; the projects you can propose to link are %s
 
+## refusals/tools/brainstorm/item-project-proposed-twice
+
+item %d: project %s is item %d's already
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

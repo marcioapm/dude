@@ -231,12 +231,15 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org strin
 	return nil
 }
 
+// linksMax is the most projects a session links.
+const linksMax = 50
+
 // setLinks makes the session's linked projects and repositories exactly
 // those given: projects the caller's organisation has, and only their own
 // repositories.
 func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []linkInput) error {
-	if len(projects) > 50 {
-		return fail(http.StatusBadRequest, "bad_request", "at most 50 projects")
+	if len(projects) > linksMax {
+		return fail(http.StatusBadRequest, "bad_request", "at most %d projects", linksMax)
 	}
 	var projectIDs, repoIDs []string
 	for _, l := range projects {
@@ -277,18 +280,17 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 	return err
 }
 
-// addLink links one more project to the session through setLinks, beside
-// what it links now: the project with every repository of it when add
-// names none, recorded as linkSession records a link (session.linked with
-// the session's whole set). Returns the set.
-func addLink(ctx context.Context, tx pgx.Tx, org, sessionID string, add linkInput, f delivery.Filer) ([]linkInput, error) {
+// addLink links one more project, with every repository of it, to the
+// session through setLinks, beside what it links now, recorded as
+// linkSession records a link (session.linked with the session's whole set).
+func addLink(ctx context.Context, tx pgx.Tx, org, sessionID, projectID string, f delivery.Filer) error {
 	rows, err := tx.Query(ctx, `SELECT sp.project_id, COALESCE(array_agg(sr.repository_id ORDER BY sr.repository_id)
 			FILTER (WHERE sr.repository_id IS NOT NULL), '{}')
 		FROM session_projects sp LEFT JOIN repositories r ON r.project_id = sp.project_id
 		LEFT JOIN session_repositories sr ON sr.session_id = sp.session_id AND sr.repository_id = r.id
 		WHERE sp.session_id = $1 GROUP BY sp.project_id ORDER BY sp.project_id`, sessionID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	links, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (linkInput, error) {
 		var l linkInput
@@ -296,22 +298,21 @@ func addLink(ctx context.Context, tx pgx.Tx, org, sessionID string, add linkInpu
 		return l, err
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if add.RepositoryIDs == nil {
-		rows, err := tx.Query(ctx, `SELECT id FROM repositories WHERE project_id = $1 ORDER BY id`, add.ProjectID)
-		if err != nil {
-			return nil, err
-		}
-		if add.RepositoryIDs, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
-			return nil, err
-		}
+	rows, err = tx.Query(ctx, `SELECT id FROM repositories WHERE project_id = $1 ORDER BY id`, projectID)
+	if err != nil {
+		return err
 	}
-	links = append(links, linkInput{ProjectID: add.ProjectID, RepositoryIDs: db.NonNil(add.RepositoryIDs)})
+	repoIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	links = append(links, linkInput{ProjectID: projectID, RepositoryIDs: db.NonNil(repoIDs)})
 	if err := setLinks(ctx, tx, org, sessionID, links); err != nil {
-		return nil, err
+		return err
 	}
-	return links, delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, sessionID), delivery.EvSessionLinked, f.ActorType, f.ActorID,
+	return delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, sessionID), delivery.EvSessionLinked, f.ActorType, f.ActorID,
 		map[string]any{"projects": links})
 }
 
@@ -732,12 +733,17 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) f
 			}
 		}
 	case "link_project":
+		key := strings.ToUpper(strings.TrimSpace(item.Project))
 		// Linked since it was proposed: nothing left to do, by anyone.
-		if f.projects[strings.ToUpper(strings.TrimSpace(item.Project))] {
+		if f.projects[key] {
 			return fileBlock{why: fmt.Sprintf("project %s is linked already", item.Project), by: "linked"}
 		}
-		if f.orgProjects[strings.ToUpper(strings.TrimSpace(item.Project))] == "" {
+		if f.orgProjects[key] == "" {
 			return fileBlock{why: fmt.Sprintf("no project %s in this organisation", item.Project), by: "unknown"}
+		}
+		// setLinks would refuse the whole filing; only this item is refused.
+		if len(f.projects) >= linksMax {
+			return fileBlock{why: fmt.Sprintf("the session links %d projects already, the most it can", linksMax), by: "limit"}
 		}
 	default:
 		return fileBlock{why: "unknown item", by: "unknown"}
@@ -947,7 +953,11 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				return err
 			}
 			done[n], made[n] = true, taskID
-			linkedOne = linkedOne || item.Kind == "link_project"
+			if item.Kind == "link_project" {
+				// Counted for the card's next link_project's limit.
+				facts.projects[key] = true
+				linkedOne = true
+			}
 			if item.Kind == "task" {
 				k, err := fileItemRelations(r.Context(), tx, org, proposalRunID, linked, items, n, made, p.Person)
 				if err != nil {
@@ -1071,8 +1081,7 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 		// Through the session-link API's own write, adding this project beside
 		// what the session links (setLinks replaces the whole set).
 		k := strings.ToUpper(strings.TrimSpace(item.Project))
-		_, err := addLink(ctx, tx, org, sessionID, linkInput{ProjectID: facts.orgProjects[k]}, f)
-		return k, "", "", err
+		return k, "", "", addLink(ctx, tx, org, sessionID, facts.orgProjects[k], f)
 	}
 	return "", "", "", fmt.Errorf("unknown item kind %q", item.Kind)
 }

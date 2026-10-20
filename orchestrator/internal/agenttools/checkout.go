@@ -52,16 +52,24 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 		return refreshCheckoutOut{}, err
 	}
 	// Each repository of the project: linked, held by this Run's lux Run,
-	// and its newest failed clone on the session, if any.
-	rows, err := tx.Query(ctx, `SELECT repo.id, repo.name,
+	// its newest failed clone on the session, if any, and whether a member
+	// unlinked the project since. A failed clone leaves its project linked,
+	// and every session.linked records the session's whole set, so only a
+	// set without the project is the member deciding on it: linking it again
+	// after that chooses its repositories anew. The session's events are
+	// read once for each, not once per repository.
+	rows, err := tx.Query(ctx, `WITH f AS (SELECT DISTINCT ON (e.payload->>'name') e.payload->>'name' AS name, e.occurred_at, e.payload
+			FROM events e WHERE e.session_id = $2 AND e.event_type = 'repository.clone_failed' AND e.payload->>'key' = $3
+			ORDER BY e.payload->>'name', e.occurred_at DESC),
+		l AS (SELECT max(e.occurred_at) AS at FROM events e WHERE e.session_id = $2 AND e.event_type = 'session.linked'
+			AND NOT e.payload->'projects' @> jsonb_build_array(jsonb_build_object('projectId', $1::text)))
+		SELECT repo.id, repo.name,
 			EXISTS (SELECT 1 FROM session_repositories sr WHERE sr.session_id = $2 AND sr.repository_id = repo.id),
 			lux_name($3 || '-' || repo.name) = ANY (r.lux_repositories),
-			f.occurred_at, COALESCE(f.payload->>'reason', ''), COALESCE(f.payload->>'error', '')
-		FROM repositories repo JOIN runs r ON r.id = $4
-		LEFT JOIN LATERAL (SELECT e.occurred_at, e.payload FROM events e
-			WHERE e.session_id = $2 AND e.event_type = 'repository.clone_failed'
-			  AND e.payload->>'key' = $3 AND e.payload->>'name' = repo.name
-			ORDER BY e.occurred_at DESC LIMIT 1) f ON true
+			f.occurred_at, COALESCE(f.payload->>'reason', ''), COALESCE(f.payload->>'error', ''),
+			COALESCE(l.at > f.occurred_at, false)
+		FROM repositories repo JOIN runs r ON r.id = $4 CROSS JOIN l
+		LEFT JOIN f ON f.name = repo.name
 		WHERE repo.project_id = $1 ORDER BY repo.name`, p.ID, c.SessionID, p.Key, c.RunID)
 	if err != nil {
 		return refreshCheckoutOut{}, err
@@ -71,6 +79,7 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 		Linked, Held   bool
 		FailedAt       *time.Time
 		Reason, GitErr string
+		Relinked       bool
 	}
 	repos, err := pgx.CollectRows(rows, pgx.RowToStructByPos[repoRow])
 	if err != nil {
@@ -95,7 +104,10 @@ func refreshCheckout(ctx context.Context, tx pgx.Tx, c Caller, in refreshCheckou
 		case r.Linked:
 			line.Status = "pending"
 			names.Pending = append(names.Pending, p.Key+"/"+r.Name)
-		case r.FailedAt != nil:
+		// A held, unlinked repository is one a member unlinked, and a failure
+		// followed by an unlink of its project was decided on by the member:
+		// either stays unlinked.
+		case r.FailedAt != nil && !r.Held && !r.Relinked:
 			line.Status = "requested"
 			names.Requested = append(names.Requested, p.Key+"/"+r.Name)
 			requested = append(requested, map[string]any{"id": r.ID, "name": r.Name})

@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -136,5 +137,124 @@ func TestALinkProposalIsScopedToTheOrganisation(t *testing.T) {
 	_ = s.owner.QueryRow(context.Background(), `SELECT count(*) FROM session_projects WHERE session_id = $1`, id).Scan(&linked)
 	if linked != 1 {
 		t.Errorf("%d projects linked, want BL alone", linked)
+	}
+}
+
+// A proposal naming one project to link twice is refused: filing both
+// would fail the whole card. A reason is at most 2,000 characters.
+func TestALinkProposalNamesEachProjectOnce(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	run := s.started(id)
+	status, out := s.latestTool(run, "propose", `{"items":[{"kind":"link_project","project":"WC","reason":"web"},`+
+		`{"kind":"link_project","project":"web-console","reason":"again"}]}`)
+	if status == 200 || out["error"] != "item 2: project WC is item 1's already" {
+		t.Errorf("a project proposed twice: %d %v", status, out)
+	}
+	if n := s.count(`SELECT count(*) FROM session_proposals WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("a refused proposal was kept")
+	}
+	long := strings.Repeat("r", 2001)
+	if status, out := s.proposeLink(run, "WC", long); status == 200 ||
+		out["error"] != "item 1: a link_project gives its reason, 1 to 2000 characters, for the member who confirms it" {
+		t.Errorf("a reason of 2,001 characters: %d %v", status, out)
+	}
+	if status, out := s.proposeLink(run, "WC", long[:2000]); status != 200 {
+		t.Errorf("a reason of 2,000 characters: %d %v", status, out)
+	}
+}
+
+// A project a member links between the agent's proposal and the owner's
+// confirm is blocked for everyone, as linked already, and links nothing more.
+func TestALinkConfirmedAfterAMemberLinkedItIsBlocked(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	run := s.started(id)
+	status, out := s.proposeLink(run, "WC", "the console")
+	if status != 200 {
+		t.Fatalf("propose: %d %v", status, out)
+	}
+	s.linkWeb(id)
+	card := s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)["proposals"].([]any)[0].(map[string]any)
+	if st := card["status"].([]any)[0].(map[string]any); st["canFile"] != false || st["blockedBy"] != "linked" {
+		t.Errorf("the link's status %v", st)
+	}
+	results := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": out["proposalId"], "items": []int{0}})["results"].([]any)
+	if r := results[0].(map[string]any); r["status"] != "refused" || r["why"] != "project WC is linked already" {
+		t.Errorf("the confirm: %v", r)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.linked'`, id); n != 1 {
+		t.Errorf("%d session.linked, want the member's alone", n)
+	}
+}
+
+// The briefing lists at most 50 of the organisation's unlinked projects,
+// then how many more there are.
+func TestTheBriefingListsFiftyUnlinkedProjects(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	// WC and 51 more: 52 unlinked.
+	for i := range 51 {
+		p := fmt.Sprintf("prj_more%02d_%s", i, s.org)
+		mustExec(t, s.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, $3, $1, $3)`,
+			p, s.org, fmt.Sprintf("M%02d", i))
+	}
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	p := s.prompt(s.started(id))
+	const heading = "## The organisation's other projects\nNot linked to this session; the owner links one when the conversation needs it.\n\n"
+	start := strings.Index(p, heading)
+	if start < 0 {
+		t.Fatalf("no list of unlinked projects:\n%s", p)
+	}
+	section, _, _ := strings.Cut(p[start+len(heading):], "\n\n")
+	lines := strings.Split(section, "\n")
+	if len(lines) != 51 || lines[50] != "- and 2 more" || lines[0] != "- M00 (M00)" || lines[49] != "- M49 (M49)" {
+		t.Errorf("%d lines, first %q, 50th %q, last %q", len(lines), lines[0], lines[min(49, len(lines)-1)], lines[len(lines)-1])
+	}
+}
+
+// A session linking the most projects it may (50) files a card's other
+// items; only its link_project is refused, saying why.
+func TestALinkBeyondTheSessionsLimitRefusesOnlyThatItem(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	links := []map[string]any{{"projectId": s.project, "repositoryIds": []string{}}}
+	for i := range 49 {
+		p := fmt.Sprintf("prj_more%02d_%s", i, s.org)
+		mustExec(t, s.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, $1, $1, $3)`,
+			p, s.org, fmt.Sprintf("M%02d", i))
+		links = append(links, map[string]any{"projectId": p, "repositoryIds": []string{}})
+	}
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": links})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "hello"})
+	run := s.started(id)
+	status, out := s.latestTool(run, "propose", `{"items":[`+
+		`{"kind":"task","project":"BL","title":"Meter runs","goal":"Count experiment runs per org per day"},`+
+		`{"kind":"link_project","project":"WC","reason":"the console"}]}`)
+	if status != 200 {
+		t.Fatalf("propose: %d %v", status, out)
+	}
+	card := s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)["proposals"].([]any)[0].(map[string]any)
+	if st := card["status"].([]any)[1].(map[string]any); st["canFile"] != false || st["blockedBy"] != "limit" {
+		t.Errorf("the link's status %v", st)
+	}
+	results := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": out["proposalId"], "items": []int{0, 1}})["results"].([]any)
+	if r := results[0].(map[string]any); r["status"] != "filed" {
+		t.Errorf("the task: %v", r)
+	}
+	if r := results[1].(map[string]any); r["status"] != "refused" || r["why"] != "the session links 50 projects already, the most it can" {
+		t.Errorf("the link: %v", r)
+	}
+	if n := s.count(`SELECT count(*) FROM session_projects WHERE session_id = $1 AND project_id = $2`, id, s.webProject); n != 0 {
+		t.Errorf("WC was linked beyond the limit")
+	}
+	if n := s.count(`SELECT count(*) FROM tasks WHERE project_id = $1 AND title = 'Meter runs'`, s.project); n != 1 {
+		t.Errorf("the task was not filed")
 	}
 }

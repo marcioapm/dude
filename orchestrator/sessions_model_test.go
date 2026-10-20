@@ -459,6 +459,11 @@ func TestAFreshAgentAfterAChangeTakesTheSettingAsItIsNow(t *testing.T) {
 	if codexSearchesLive(t, v.spec.Secrets) {
 		t.Error("the fresh agent with the setting off is pinned to search live")
 	}
+	// The Codex agent before it searched; this one is told it cannot.
+	lost := webChangedNote + " It had web search, no fetching; you have no web search, no fetching."
+	if !strings.Contains(v.spec.Workload.Prompt, lost) {
+		t.Errorf("the fresh agent with the setting off is not told it lost search %q:\n%s", lost, v.spec.Workload.Prompt)
+	}
 }
 
 // A tier on the same model at another effort is a change: the next

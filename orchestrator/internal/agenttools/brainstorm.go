@@ -98,14 +98,10 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 	return delivery.LinkedProject{}, refuse(rProjectNotLinkedThisSession, key)
 }
 
-// orgProject is a project of the session's organisation a link_project
-// item names, by key or name, linked or not: row security keeps any other
-// organisation's out of the read.
-func orgProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delivery.OrgProject, error) {
-	projects, err := delivery.OrgProjects(ctx, tx, c.SessionID)
-	if err != nil {
-		return delivery.OrgProject{}, err
-	}
+// orgProject is the project of the session's organisation a link_project
+// item names, by key or name, linked or not, among projects (OrgProjects:
+// row security keeps any other organisation's out of the read).
+func orgProject(projects []delivery.OrgProject, key string) (delivery.OrgProject, error) {
 	key = strings.TrimSpace(key)
 	var unlinked []string
 	for _, p := range projects {
@@ -396,6 +392,13 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 	for i, p := range projects {
 		linkedIDs[i] = p.ID
 	}
+	// The organisation's projects, read once for every link_project item.
+	var orgProjects []delivery.OrgProject
+	if slices.ContainsFunc(in.Items, func(it delivery.ProposalItem) bool { return strings.TrimSpace(it.Kind) == "link_project" }) {
+		if orgProjects, err = delivery.OrgProjects(ctx, tx, c.SessionID); err != nil {
+			return proposeOut{}, err
+		}
+	}
 	newEpics := map[string]bool{}
 	items := make([]delivery.ProposalItem, len(in.Items))
 	for i, item := range in.Items {
@@ -509,12 +512,18 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				return proposeOut{}, refuse(rItemNewEpicHasNoNote, n, item.Replaces)
 			}
 		case "link_project":
-			p, err := orgProject(ctx, tx, c, item.Project)
+			p, err := orgProject(orgProjects, item.Project)
 			if err != nil {
 				return proposeOut{}, refuse(rItem, n, err)
 			}
 			if p.Linked {
 				return proposeOut{}, refuse(rItemProjectAlreadyLinked, n, p.Key)
+			}
+			// Filing one project twice would fail the whole card at setLinks.
+			if j := slices.IndexFunc(items[:i], func(o delivery.ProposalItem) bool {
+				return o.Kind == "link_project" && o.Project == p.Key
+			}); j >= 0 {
+				return proposeOut{}, refuse(rItemProjectProposedTwice, n, p.Key, j+1)
 			}
 			item.Project, item.ProjectName = p.Key, p.Name
 			if item.Reason = strings.TrimSpace(item.Reason); item.Reason == "" || utf8.RuneCountInString(item.Reason) > delivery.ReasonMax {

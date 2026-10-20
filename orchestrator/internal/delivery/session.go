@@ -372,11 +372,12 @@ func sessionAbout(ctx context.Context, tx pgx.Tx, sessionID string) (string, err
 		return "", err
 	}
 	for _, p := range org {
-		switch {
-		case p.Linked:
-		case len(data.Unlinked) < unlinkedListed:
+		if p.Linked {
+			continue
+		}
+		if len(data.Unlinked) < unlinkedListed {
 			data.Unlinked = append(data.Unlinked, project{Key: p.Key, Name: p.Name})
-		default:
+		} else {
 			data.More++
 		}
 	}

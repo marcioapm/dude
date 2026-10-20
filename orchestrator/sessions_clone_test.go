@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -53,6 +55,29 @@ func (s *sessionWorld) linkWeb(id string) {
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
 		{"projectId": s.project, "repositoryIds": []string{}},
 		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
+}
+
+// untilWebCheckedOut waits for run's lux Run to hold the web repository.
+func (s *sessionWorld) untilWebCheckedOut(run string) {
+	s.t.Helper()
+	s.until("web checked out", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
+	})
+}
+
+// keepWebWithoutRepositories links session id to BL and WC, neither with a
+// repository: WC stays linked, its web repository does not.
+func (s *sessionWorld) keepWebWithoutRepositories(id string) {
+	s.t.Helper()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{}}}})
+}
+
+// checkoutRequests counts session id's session.checkout.requested events.
+func (s *sessionWorld) checkoutRequests(id string) int {
+	s.t.Helper()
+	return s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.checkout.requested'`, id)
 }
 
 // resumedSecretNames are the secret names each resume of the dude Run carried.
@@ -200,6 +225,54 @@ func TestAFailedCloneIsToldToTheAgentAndTheMembers(t *testing.T) {
 	}
 }
 
+// A session's agent without session.checkout is told a member's remedy
+// alone: refresh_checkout, which it does not have, is not named.
+func TestAFailedCloneNamesNoToolTheAgentLacks(t *testing.T) {
+	// Root tests run one at a time: the role's defaults are this test's alone.
+	was := capabilities.Defaults[delivery.RoleBrainstorm]
+	capabilities.Defaults[delivery.RoleBrainstorm] = slices.DeleteFunc(slices.Clone(was),
+		func(k capabilities.Key) bool { return k == capabilities.SessionCheckout })
+	t.Cleanup(func() { capabilities.Defaults[delivery.RoleBrainstorm] = was })
+
+	s, id, run := cloneFailingSession(t)
+	mustExec(t, s.owner, `UPDATE repositories SET url = 'https://github.com/acme/web.git' WHERE id = $1`, s.webRepo)
+	s.linkWebAndFail(id, run)
+	var told string
+	if err := s.owner.QueryRow(context.Background(), `SELECT text FROM directives WHERE run_id = $1 AND text LIKE 'WC/web could not be checked out%'`,
+		run).Scan(&told); err != nil {
+		t.Fatalf("no directive telling the agent: %v", err)
+	}
+	want := "WC/web could not be checked out (could not read Username for 'https://github.com': terminal prompts disabled). " +
+		"It is not in /workspace; a member can check the repository's URL and access and link it again."
+	if told != want {
+		t.Errorf("told:\n %s\nwant\n %s", told, want)
+	}
+}
+
+// A repository the agent asked for again, whose clone failed again, then
+// linked again by a member is told as the member's link, not the agent's ask.
+func TestAMembersLinkAfterAnAskIsToldAsTheMembers(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWebAndFail(id, run)
+	s.runningIdle(run)
+	if status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`); status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	s.until("the second clone failed", func() bool {
+		return s.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'repository.clone_failed'`, run) == 2
+	})
+	s.runningIdle(run)
+
+	s.lux.CloneError = nil
+	s.linkWeb(id)
+	s.untilWebCheckedOut(run)
+	resumes := s.luxRun(run).resumes
+	last := resumes[len(resumes)-1]
+	if !strings.Contains(last, "A member linked WC/web") || strings.Contains(last, "as you asked") {
+		t.Errorf("the member's link was told as %q", last)
+	}
+}
+
 // latestTool calls a tool as run with the token its newest placement holds:
 // a resume supplies a new one.
 func (s *sessionWorld) latestTool(run, name, args string) (int, map[string]any) {
@@ -278,9 +351,7 @@ func TestRefreshCheckoutAsksAgainForAFailedClone(t *testing.T) {
 	if status, out := s.latestTool(run, "refresh_checkout", `{"project":"wc"}`); status != 200 {
 		t.Fatalf("refresh_checkout: %d %v", status, out)
 	}
-	s.until("web checked out", func() bool {
-		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-web') = ANY (lux_repositories)`, run) == 1
-	})
+	s.untilWebCheckedOut(run)
 	s.runningIdle(run)
 	status, out = s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
 	if status != 200 {
@@ -317,5 +388,109 @@ func TestRefreshCheckoutLinksNothingAMemberDidNot(t *testing.T) {
 	}
 	if status, out := s.latestTool(run, "refresh_checkout", `{"project":"NOPE"}`); status == 200 || out["error"] != "project NOPE is not linked to this session" {
 		t.Errorf("an unlinked project: %d %v", status, out)
+	}
+}
+
+// A repository linked and not cloned yet is pending: nothing is asked for.
+func TestRefreshCheckoutOfALinkNotClonedYetIsPending(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWeb(id)
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	if web := out["repositories"].([]any)[0].(map[string]any); web["status"] != "pending" || web["lastFailure"] != nil {
+		t.Errorf("web: %v", web)
+	}
+	if n := s.checkoutRequests(id); n != 0 {
+		t.Errorf("%d session.checkout.requested", n)
+	}
+}
+
+// A repository whose clone once failed, linked again and checked out, then
+// unlinked by a member while the Run still holds it, is not linked again by
+// refresh_checkout: the member's unlink stands.
+func TestRefreshCheckoutKeepsAMembersUnlinkOfAHeldRepository(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWebAndFail(id, run)
+	s.lux.CloneError = nil
+	s.linkWeb(id)
+	s.untilWebCheckedOut(run)
+	s.keepWebWithoutRepositories(id)
+	s.runningIdle(run)
+
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	if web := out["repositories"].([]any)[0].(map[string]any); web["status"] != "not_linked" {
+		t.Errorf("web: %v", web)
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("the repository the member unlinked was linked again")
+	}
+	if n := s.checkoutRequests(id); n != 0 {
+		t.Errorf("%d session.checkout.requested", n)
+	}
+}
+
+// A member saving the session's links while the failed project stays
+// linked, as the Link dialog and a filed link_project do with the whole set,
+// has decided nothing about its failed repository: refresh_checkout still
+// asks for it again.
+func TestRefreshCheckoutAsksAgainAfterALinkThatKeepsTheProject(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	s.linkWebAndFail(id, run)
+	s.keepWebWithoutRepositories(id)
+	s.runningIdle(run)
+
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	repos := out["repositories"].([]any)
+	if len(repos) != 1 || repos[0].(map[string]any)["status"] != "requested" {
+		t.Errorf("repositories: %v", repos)
+	}
+	if n := s.checkoutRequests(id); n != 1 {
+		t.Errorf("%d session.checkout.requested", n)
+	}
+}
+
+// A clone failure the owner has decided on since, by linking its project
+// again, is not asked for again: unlinked, then linked again with only api,
+// WC's web stays unlinked whatever refresh_checkout is asked.
+func TestRefreshCheckoutKeepsTheOwnersLaterChoiceOfRepositories(t *testing.T) {
+	s, id, run := cloneFailingSession(t)
+	api := "repo_api_" + s.org
+	mustExec(t, s.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'api', 'git://127.0.0.1/acme/api.git', 'main')`, api, s.org, s.webProject)
+	s.linkWebAndFail(id, run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}}}})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{api}}}})
+	s.until("api checked out", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_name('WC-api') = ANY (lux_repositories)`, run) == 1
+	})
+	s.runningIdle(run)
+
+	status, out := s.latestTool(run, "refresh_checkout", `{"project":"WC"}`)
+	if status != 200 {
+		t.Fatalf("refresh_checkout: %d %v", status, out)
+	}
+	got := map[string]any{}
+	for _, r := range out["repositories"].([]any) {
+		got[r.(map[string]any)["name"].(string)] = r.(map[string]any)["status"]
+	}
+	if got["api"] != "checked_out" || got["web"] != "not_linked" {
+		t.Errorf("repositories: %v", out["repositories"])
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1 AND repository_id = $2`, id, s.webRepo); n != 0 {
+		t.Errorf("web, which the owner left out, was linked again")
+	}
+	if n := s.checkoutRequests(id); n != 0 {
+		t.Errorf("%d session.checkout.requested", n)
 	}
 }
