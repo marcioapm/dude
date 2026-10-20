@@ -2,6 +2,8 @@ package delivery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
@@ -26,10 +28,13 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 		c := &Continue{Predecessor: p.ID}
 		// The durable cache survives artifact-collection waits and step retries.
 		// Equal predecessor checkouts share a measurement across categories.
-		cacheKey, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, st.Candidate, p.BaseRefs, st.Heads})
+		// Keyed by the identity's sha256, not the JSON, to keep the state small.
+		identity, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, st.Candidate, p.BaseRefs, st.Heads})
+		sum := sha256.Sum256(identity)
+		cacheKey := hex.EncodeToString(sum[:])
 		var cached *int
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT (state->'roundDelta'->>$2)::int FROM workflow_runs WHERE id = $1`, sc.WorkflowRunID, string(cacheKey)).Scan(&cached)
+			return tx.QueryRow(ctx, `SELECT (state->'roundDelta'->>$2)::int FROM workflow_runs WHERE id = $1`, sc.WorkflowRunID, cacheKey).Scan(&cached)
 		}); err != nil {
 			return nil, err
 		}
@@ -56,7 +61,7 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 			return nil, err
 		}
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{roundDelta}', COALESCE(state->'roundDelta', '{}'::jsonb) || jsonb_build_object($2::text, $3::int)) WHERE id = $1`, sc.WorkflowRunID, string(cacheKey), c.DeltaLines)
+			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{roundDelta}', COALESCE(state->'roundDelta', '{}'::jsonb) || jsonb_build_object($2::text, $3::int)) WHERE id = $1`, sc.WorkflowRunID, cacheKey, c.DeltaLines)
 			return err
 		}); err != nil {
 			return nil, err
