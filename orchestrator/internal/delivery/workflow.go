@@ -1224,9 +1224,11 @@ func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State
 	if st.adoptedPR() || st.ActingOnPR {
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	}
-	if covered, err := w.prsCoverTheWork(ctx, sc, st); err != nil {
+	covered, err := w.prsCoverTheWork(ctx, sc, st)
+	if err != nil {
 		return workflow.Result{}, err
-	} else if covered {
+	}
+	if covered {
 		// Nothing to open: back to the wait, with reviewers of an older head asked again (openPullRequest).
 		st.ActingOnPR = true
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
