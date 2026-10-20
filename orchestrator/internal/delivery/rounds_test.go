@@ -142,6 +142,14 @@ func TestRoundReplacementWaitsForCreatingStep(t *testing.T) {
 			t.Fatalf("creating step %s returned %v, want busy", status, err)
 		}
 	}
+	w.exec(t, `UPDATE workflow_runs SET step = 'awaitFix', status = 'waiting' WHERE id = $1`, wf)
+	err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RestartRunTx(context.Background(), tx, w.org, w.task, delivery.Restart{RunID: "run_creating", ByDude: true, Replays: w.first, Actor: delivery.Writer{ActorType: "system", ActorID: "dude"}})
+		return err
+	})
+	if !delivery.IsRefusal(err) {
+		t.Fatalf("a delivery that moved on returned %v, want a refusal", err)
+	}
 	w.exec(t, `UPDATE workflow_runs SET step = 'awaitReview', state = jsonb_set(state, '{pendingRunIds}', '["run_creating"]') WHERE id = $1`, wf)
 	var fresh string
 	w.in(t, func(tx pgx.Tx) (err error) {
