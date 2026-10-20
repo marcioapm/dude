@@ -142,13 +142,14 @@ func TestAChecksReportTheJudgeBacksPublishes(t *testing.T) {
 	}
 	// The pull request accounts for every gated Run, the implementer's
 	// backed command included, not only the last Run judged.
-	body := w.gh.Pull(1).Body
-	for _, want := range []string{"Checks were verified against the Run's recorded commands.",
-		"- **Implementer** — backed\n  - `" + fakeagent.CheckCommand + "` — **pass**",
-		"- **Fixer** — backed", "- **Simplifier** — backed"} {
-		if !strings.Contains(checksSection(body), want) {
-			t.Errorf("the pull request's checks section has no %q:\n%s", want, body)
-		}
+	backed := "- `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
+	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were verified against the Run's recorded commands.\n\n"+
+		"- **Implementer** — backed\n"+
+		"  - `"+fakeagent.CheckCommand+"` — **pass** — the recorded call says so (`mcall_test`)\n"+
+		"  "+backed+"\n"+
+		"- **Fixer** — backed\n  "+backed+"\n"+
+		"- **Simplifier** — backed\n  "+backed; got != want {
+		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -161,7 +162,7 @@ func checksSection(body string) string {
 	}
 	section, _, _ := strings.Cut(after, "<!-- /dude:verification -->")
 	_, checks, _ := strings.Cut(section, "### Checks\n")
-	return checks
+	return strings.TrimRight(checks, "\n")
 }
 
 // A pass over a failing command is sent back in the same session, naming
@@ -274,15 +275,13 @@ func TestWaivingAnUnverifiedReportNeedsAReasonAndPublishes(t *testing.T) {
 	}
 	// The fixer's and simplifier's later reports are backed, yet the pull
 	// request says the implementer's checks were waived, and why.
-	checks := checksSection(w.gh.Pull(1).Body)
-	for _, want := range []string{"Checks were waived by a person:\n- Implementer: The check needs hardware CI has; it passed there.",
-		"- **Implementer** — waived", "- **Simplifier** — backed"} {
-		if !strings.Contains(checks, want) {
-			t.Errorf("the pull request's checks section has no %q:\n%s", want, checks)
-		}
-	}
-	if strings.Contains(checks, "verified") {
-		t.Errorf("the pull request calls waived checks verified:\n%s", checks)
+	backed := "  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
+	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+
+		"- Implementer: The check needs hardware CI has; it passed there.\n\n"+
+		"- **Implementer** — waived\n"+
+		"- **Fixer** — backed\n"+backed+"\n"+
+		"- **Simplifier** — backed\n"+backed; got != want {
+		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -294,15 +293,11 @@ func TestWithNoJudgementTierTheChecksAreSkippedAndPublished(t *testing.T) {
 	if got := w.judged(wi); strings.Join(got, ",") != "skipped" {
 		t.Errorf("judged %v, want the skip recorded", got)
 	}
-	checks := checksSection(w.gh.Pull(1).Body)
-	for _, want := range []string{"Checks not model-checked, set a judgement tier in the organisation's settings.",
-		"- **Implementer** — not model-checked"} {
-		if !strings.Contains(checks, want) {
-			t.Errorf("the pull request's checks section has no %q:\n%s", want, checks)
-		}
-	}
-	if strings.Contains(checks, "verified") {
-		t.Errorf("the pull request calls unjudged checks verified:\n%s", checks)
+	if got, want := checksSection(w.gh.Pull(1).Body), "Checks not model-checked, set a judgement tier in the organisation's settings.\n\n"+
+		"- **Implementer** — not model-checked\n"+
+		"- **Fixer** — not model-checked\n"+
+		"- **Simplifier** — not model-checked"; got != want {
+		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
 	}
 }
 

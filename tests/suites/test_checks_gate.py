@@ -87,7 +87,24 @@ def _checks_section(body: str) -> str:
     """The checks account inside the PR body's marked verification section."""
     marked = body.split("<!-- dude:verification -->", 1)[1].split("<!-- /dude:verification -->", 1)[0]
     assert "### Checks\n" in marked, body
-    return marked.split("### Checks\n", 1)[1]
+    return marked.split("### Checks\n", 1)[1].rstrip("\n")
+
+
+def _rows(checks: str) -> tuple[str, list[tuple[str, str, list[tuple[str, str]]]]]:
+    """The account's headline (to its blank line) and each gated Run's (role, status, [(command, result)]), in order.
+
+    A check's judge reasoning and call id are the proxy's and are left out."""
+    headline, _, rest = checks.partition("\n\n")
+    rows: list[tuple[str, str, list[tuple[str, str]]]] = []
+    for line in rest.split("\n"):
+        run = re.fullmatch(r"- \*\*(\w+)\*\* — (.+)", line)
+        check = re.match(r"  - `([^`]*)` — \*\*([^*]+)\*\*", line)
+        if run:
+            rows.append((run[1], run[2], []))
+        else:
+            assert check and rows, checks
+            rows[-1][2].append((check[1], check[2]))
+    return headline, rows
 
 @pytest.mark.e2e
 def test_backed_report_judged_yes_publishes_and_is_visible(client: ApiClient, fake_github: FakeGitHub):
@@ -103,11 +120,12 @@ def test_backed_report_judged_yes_publishes_and_is_visible(client: ApiClient, fa
     assert any(e["eventType"] == "run.checks.judged" for e in activity)
     assert any("checks" in str(e["payload"]).lower() for e in activity)
     body = fake_github.pulls[1].body
-    checks = _checks_section(body)
-    assert "Checks were verified" in checks
     # The implementer's backed command is listed, not only the last Run's verdict.
-    assert "**Implementer** — backed\n  - `make check` — **pass**" in checks
-    assert "**Simplifier** — backed" in checks
+    assert _rows(_checks_section(body)) == ("Checks were verified against the Run's recorded commands.", [
+        ("Implementer", "backed", [("make check", "pass"), ("missing checks", "pass")]),
+        ("Fixer", "backed", [("missing checks", "pass")]),
+        ("Simplifier", "backed", [("missing checks", "pass")]),
+    ])
 
 
 @pytest.mark.e2e
@@ -140,11 +158,13 @@ def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClie
     accepted = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "waive", "note": "CI hardware was unavailable; owner reviewed the risk."})
     assert accepted.status_code == 200, accepted.text
     _wait_pr(client, fake_github, task["id"])
-    checks = _checks_section(fake_github.pulls[1].body)
-    # Later backed fixer/simplifier reports do not hide the waiver or its reason.
-    assert "Checks were waived by a person" in checks
-    assert "Implementer: CI hardware was unavailable; owner reviewed the risk." in checks
-    assert "verified" not in checks
+    # Later backed fixer and simplifier reports do not hide the waiver or its reason.
+    assert _rows(_checks_section(fake_github.pulls[1].body)) == (
+        "Checks were waived by a person:\n- Implementer: CI hardware was unavailable; owner reviewed the risk.", [
+            ("Implementer", "waived", []),
+            ("Fixer", "backed", [("missing checks", "pass")]),
+            ("Simplifier", "backed", [("missing checks", "pass")]),
+        ])
     assert any(e["eventType"] == "run.checks.decided" and e["payload"].get("action") == "waive" for e in client.events(taskId=task["id"]))
 
 
@@ -160,9 +180,11 @@ def test_no_judgement_tier_publishes_with_skip_advice(page: Page, web_url: str, 
     events = _checks_events(client, run["id"])
     assert events and events[-1]["payload"].get("skipped") is True
     body = fake_github.pulls[1].body
-    checks = _checks_section(body)
-    assert "not model-checked" in checks and "set a judgement tier" in checks
-    assert "verified" not in checks
+    assert _rows(_checks_section(body)) == ("Checks not model-checked, set a judgement tier in the organisation's settings.", [
+        ("Implementer", "not model-checked", []),
+        ("Fixer", "not model-checked", []),
+        ("Simplifier", "not model-checked", []),
+    ])
 
     # The same outcome is visible in the actual task screen's Activity tab.
     sign_in(page, web_url, client.api_key, at=f"#/tasks/{task['id']}", board=False)
