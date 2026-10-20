@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
@@ -50,6 +51,10 @@ const EventType = "agent.tool.dude"
 // result's EventType event is marked attempted and not counted again.
 const AttemptEventType = "agent.tool.attempted"
 
+// githubReader is a checked call spending more than one GitHub read: its
+// attempt is recorded once per read, which the hourly count counts.
+type githubReader interface{ githubReads() int }
+
 // Server serves the tools over MCP streamable HTTP.
 type Server struct {
 	DB              *db.DB
@@ -64,7 +69,8 @@ type Server struct {
 	// reply on a pull request; nil, no forge.
 	Forges delivery.Forges
 	// SyncPullRequest is prs.Syncer.Sync: a pull request is read back after
-	// a PR action succeeded on it. nil skips it.
+	// a PR action succeeded on it, and refresh_pull_requests reads the
+	// task's now. nil skips the first and refuses the second.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
 	// SyncBase asks lux for sync_base's fetch; nil, sync_base is refused.
 	SyncBase SyncBaseFunc
@@ -73,6 +79,8 @@ type Server struct {
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
+	// Test hook: resolves a caller's capabilities; nil, capabilities.Resolve.
+	resolve func(context.Context, pgx.Tx, capabilities.Agent) (capabilities.Grants, error)
 }
 
 // Caller is the Run a token names: who is calling, and all it may reach.
@@ -82,6 +90,8 @@ type Caller struct {
 	RunID, Org, ProjectID, TaskID, Role, Status string
 	// A session's agent: its session, in place of a task and project.
 	SessionID string
+	// Its capabilities (capabilities.Resolve), resolved with the token.
+	grants capabilities.Grants
 	// What the server lends a call: set on each, not part of who calls.
 	env env
 }
@@ -96,6 +106,7 @@ type env struct {
 	forges          delivery.Forges
 	syncBase        SyncBaseFunc
 	syncBaseWait    time.Duration
+	syncPR          func(ctx context.Context, org, prID string) error
 	prepared        any
 }
 
@@ -207,8 +218,8 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 	}
 	out := []entry{}
-	for _, t := range allTools() {
-		if t.allowed(c.Role) && (!c.Child || childToolAllowed(t.name)) {
+	for _, t := range granted(c.Role, c.grants) {
+		if !c.Child || childToolAllowed(t.name) {
 			out = append(out, entry{t.name, s.descriptionFor(r.Context(), c, t)})
 		}
 	}
@@ -220,7 +231,7 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 // tool this Run does not have.
 func (s *Server) callJSON(w http.ResponseWriter, r *http.Request) {
 	c, _ := r.Context().Value(callerKey{}).(Caller)
-	t, ok := find(r.PathValue("name"), c.Role)
+	t, ok := find(r.PathValue("name"), c.Role, c.grants)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no tool " + r.PathValue("name") + " for this Run"})
 		return
@@ -275,22 +286,30 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 	if role != nil {
 		c.Role = *role
 	}
+	resolve := s.resolve
+	if resolve == nil {
+		resolve = capabilities.Resolve
+	}
 	err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child)
+		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child); err != nil {
+			return err
+		}
+		c.grants, err = resolve(ctx, tx, c.agent())
+		return err
 	})
 	return c, err
 }
 
 var serverInstructions = delivery.ToolText("common/server-instructions", nil)
 
-// serverFor builds the MCP server a Run sees: the tools its role may use,
-// each bound to it.
+// serverFor builds the MCP server a Run sees: the tools its capabilities
+// grant, each bound to it.
 func (s *Server) serverFor(c Caller) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "dude", Version: "1"}, &mcp.ServerOptions{
 		Instructions: serverInstructions,
 	})
-	for _, t := range allTools() {
-		if !t.allowed(c.Role) || c.Child && !childToolAllowed(t.name) {
+	for _, t := range granted(c.Role, c.grants) {
+		if c.Child && !childToolAllowed(t.name) {
 			continue
 		}
 		handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -321,7 +340,7 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 			res, err := next(ctx, method, req)
 			if list, ok := res.(*mcp.ListToolsResult); ok && err == nil {
 				for i, listed := range list.Tools {
-					if t, ok := find(listed.Name, c.Role); ok && t.describeFor != nil {
+					if t, ok := find(listed.Name, c.Role, c.grants); ok && t.describeFor != nil {
 						described := *listed
 						described.Description = s.descriptionFor(ctx, c, t)
 						list.Tools[i] = &described
@@ -334,15 +353,15 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 	return srv
 }
 
-// tool is one tool, whichever way it is called: who may use it, and what it
-// does with JSON arguments, in the calling Run's organization.
+// tool is one tool, whichever way it is called: whose definition it is, and
+// what it does with JSON arguments, in the calling Run's organization.
 type tool struct {
 	name, description string
-	// empty: every role but a session's agent, whose tools are its own
-	// (brainstorm.go) and name it.
-	roles  []string
-	schema any
-	run    func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error)
+	// session: a session agent's own definition (brainstorm.go), answering
+	// its name for a session agent in place of the task agents'.
+	session bool
+	schema  any
+	run     func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error)
 	// perRun: how many calls a Run may make in its lifetime; 0, no limit
 	// beyond the per-minute one.
 	perRun int
@@ -392,16 +411,36 @@ func (s *Server) descriptionFor(ctx context.Context, c Caller, t tool) string {
 	return out
 }
 
-func (t tool) allowed(role string) bool {
-	if len(t.roles) == 0 {
-		return role != delivery.RoleBrainstorm
+// sessionAgent says role's tools are a session agent's: where it has its
+// own definition of a name (brainstorm.go), that one answers it.
+func sessionAgent(role string) bool { return role == delivery.RoleBrainstorm }
+
+// allowed says an agent with grants, as role, is given t: its capabilities
+// unlock t's name, and t is the definition role's audience uses.
+func (t tool) allowed(role string, grants capabilities.Grants) bool {
+	if !grants.Tool(t.name) {
+		return false
 	}
-	for _, r := range t.roles {
-		if r == role {
-			return true
+	if t.session {
+		return sessionAgent(role)
+	}
+	return !sessionAgent(role) || !hasSessionDefinition(t.name)
+}
+
+// granted are the tools an agent with grants, as role, is given, in
+// allTools' order.
+func granted(role string, grants capabilities.Grants) []tool {
+	var out []tool
+	for _, t := range allTools() {
+		if t.allowed(role, grants) {
+			out = append(out, t)
 		}
 	}
-	return false
+	return out
+}
+
+func (c Caller) agent() capabilities.Agent {
+	return capabilities.Agent{Role: c.Role, Org: c.Org, Project: c.ProjectID, Run: c.RunID, Session: c.SessionID}
 }
 
 // renamed: tools' names before "work item" became "task". A Run already
@@ -410,14 +449,14 @@ func (t tool) allowed(role string) bool {
 // lists the tools afresh each session.)
 var renamed = map[string]string{"list_work": "list_tasks", "create_work_item": "create_task"}
 
-// find is the tool a role calls by name: a session's agent has its own
-// tools under the names others use.
-func find(name, role string) (tool, bool) {
+// find is the tool an agent with grants, as role, calls by name: a
+// session's agent has its own tools under the names others use.
+func find(name, role string, grants capabilities.Grants) (tool, bool) {
 	if now, ok := renamed[name]; ok {
 		name = now
 	}
 	for _, t := range allTools() {
-		if t.name == name && t.allowed(role) {
+		if t.name == name && t.allowed(role, grants) {
 			return t, true
 		}
 	}
@@ -427,22 +466,43 @@ func find(name, role string) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, prActionTools, baseSyncTools, githubReadTools, coordinationTools, feedbackTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, baseSyncTools, githubReadTools, refreshTools, coordinationTools, feedbackTools, brainstormTools)
 }
 
-// define makes a tool from a typed function: its input schema from In,
-// its arguments decoded strictly into In. Its description and its
-// parameters' are delivery/agents/tools/<name>.md's (a session agent's,
-// tools/session/<name>.md).
-func define[In, Out any](name string, roles []string,
+// hasSessionDefinition says a session agent has its own tool called name.
+func hasSessionDefinition(name string) bool {
+	return slices.ContainsFunc(allTools(), func(t tool) bool { return t.session && t.name == name })
+}
+
+// define makes a task agent's tool from a typed function: its input schema
+// from In, its arguments decoded strictly into In. Its description and its
+// parameters' are delivery/agents/tools/<name>.md's.
+func define[In, Out any](name string,
+	do func(ctx context.Context, tx pgx.Tx, c Caller, in In) (Out, error)) tool {
+	return defineFor(name, false, do)
+}
+
+// defineSession is define for a session agent's own tool, whose texts are
+// tools/session/<name>.md.
+func defineSession[In, Out any](name string,
+	do func(ctx context.Context, tx pgx.Tx, c Caller, in In) (Out, error)) tool {
+	return defineFor(name, true, do)
+}
+
+func defineFor[In, Out any](name string, session bool,
 	do func(ctx context.Context, tx pgx.Tx, c Caller, in In) (Out, error)) tool {
 	schema, err := jsonschema.For[In](nil)
 	if err != nil {
 		panic(fmt.Sprintf("tool %s: %v", name, err))
 	}
-	key := toolKey(name, roles)
+	// A session agent's tools share their names with the task agents', so
+	// their texts are under session/.
+	key := name
+	if session {
+		key = "session/" + name
+	}
 	describeParameters(key, schema)
-	return tool{name: name, description: delivery.ToolText(key, toolTextData), roles: roles, schema: schema,
+	return tool{name: name, description: delivery.ToolText(key, toolTextData), session: session, schema: schema,
 		run: func(ctx context.Context, tx pgx.Tx, c Caller, args json.RawMessage) (any, error) {
 			var in In
 			if len(args) > 0 && string(args) != "null" {
@@ -458,15 +518,6 @@ func define[In, Out any](name string, roles []string,
 
 // toolTextData is what a tool's description may name: create_task's GoalMin.
 var toolTextData = struct{ GoalMin int }{GoalMin}
-
-// toolKey is the name of a tool's text: a session agent's tools share their
-// names with the task agents', so theirs are under session/.
-func toolKey(name string, roles []string) string {
-	if slices.Equal(roles, brainstorms) {
-		return "session/" + name
-	}
-	return name
-}
 
 // describeParameters gives schema's properties their descriptions from the
 // tool's text, each by its path ("questions.header" for a field of the
@@ -570,7 +621,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
-		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait)}
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}
@@ -631,8 +682,19 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 				if err := withinLimits(ctx, tx, c, t); err != nil {
 					return err
 				}
-				_, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "arguments": args}))
-				return err
+				if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "arguments": args})); err != nil {
+					return err
+				}
+				// The call's further GitHub reads: marked attempted, so
+				// withinLimits counts the call once.
+				if r, ok := result.(githubReader); ok {
+					for range r.githubReads() - 1 {
+						if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": t.name, "attempted": true})); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
 			}
 			return nil
 		}
@@ -716,12 +778,8 @@ func oldName(tool string) string {
 // ledger, where every call is, once (its attempt, or its result).
 func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	tool := t.name
-	var recent, sameTool int
-	if err := tx.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
-			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
-		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
-		c.RunID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool); err != nil {
+	recent, sameTool, err := callsMade(ctx, tx, c.RunID, tool)
+	if err != nil {
 		return err
 	}
 	limit := t.perRun
@@ -732,6 +790,18 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 		return refuse(rLimitedCallsInRunThisRun, tool, limit)
 	}
 	return nil
+}
+
+// callsMade are the Run's tool calls in the last minute, and its calls of
+// tool in its lifetime: counted from the ledger, where every call is, once
+// (its attempt, or its result).
+func callsMade(ctx context.Context, tx pgx.Tx, runID, tool string) (recent, sameTool int, err error) {
+	err = tx.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
+			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
+		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
+		runID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
+	return recent, sameTool, err
 }
 
 // refusal is a tool declining a request, optionally recorded after rollback.

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // conductor makes the fixture task's conductor (no phase), and returns its
@@ -64,6 +65,15 @@ func TestTheConductorsToolsFromTheShell(t *testing.T) {
 	if out := dude("prs"); !strings.Contains(out, `"pullRequests": []`) {
 		t.Errorf("dude prs:\n%s", out)
 	}
+	f.run(t, "run_sh_fixer", "implementer", "running")
+	mustExec(t, f.owner, `INSERT INTO questions (id, organization_id, run_id, prompt, items)
+		VALUES ('qst_sh', $1, 'run_sh_fixer', 'Keep the alias?', '[{"question":"Keep the alias?"}]')`, f.org)
+	if out := dude("chat", "run_sh_fixer", "--limit", "5"); !strings.Contains(out, `"Keep the alias?"`) || !strings.Contains(out, `"messages": []`) {
+		t.Errorf("dude chat:\n%s", out)
+	}
+	if out := dude("limits"); !strings.Contains(out, `"perReviewRound"`) || !strings.Contains(out, `"organisation GitHub settings"`) {
+		t.Errorf("dude limits:\n%s", out)
+	}
 }
 
 // The conductor's tools: the read ones every role has, ask_person,
@@ -86,16 +96,16 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	}
 	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,decide_escalation,dismiss_finding,emit_event,feedback,feedback_reply,findings,get_memory,"+
 		"github_check_log,github_issue,github_pull_request,github_search,"+
-		"list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,remember,reply_on_pull_request,"+
+		"limits,list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,refresh_pull_requests,remember,reply_on_pull_request,"+
 		"request_machine,request_repository,request_review,rerun_failed_checks,resolve_thread,"+
-		"restart_run,run_diff,search_memory,start_agent,start_phase,steer,sync_base,update_task,wait_for_reply" {
+		"restart_run,run_chat,run_diff,search_memory,start_agent,start_phase,steer,sync_base,update_task,wait_for_reply" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
 	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "decide_escalation", "dismiss_finding", "update_task", "steer",
-		"restart_run", "publish", "request_review", "mark_ready", "rerun_failed_checks",
+		"restart_run", "publish", "request_review", "mark_ready", "rerun_failed_checks", "limits", "run_chat", "refresh_pull_requests",
 		"github_search", "github_issue", "github_pull_request", "github_check_log"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
@@ -333,11 +343,11 @@ func TestPullRequestsGivesStateChecksReviewsAndFeedback(t *testing.T) {
 		t.Fatalf("feedback: %+v", p.Feedback)
 	}
 	first := p.Feedback[0]
-	if first.Author != "tiago" || first.Kind != "line_comment" || first.ActedOnBy != "run_prfix" || len([]rune(first.Excerpt)) != 280 ||
-		!strings.HasPrefix(first.Excerpt, "browser tab will look hung") {
+	if first.Author != "tiago" || first.Kind != "line_comment" || first.ActedOnBy != "run_prfix" || len([]rune(delivery.Unquoted(first.Excerpt))) != 280 ||
+		!strings.HasPrefix(delivery.Unquoted(first.Excerpt), "browser tab will look hung") {
 		t.Errorf("tiago's: %+v", first)
 	}
-	if p.Feedback[1].Ignored != "not_permitted" || p.Feedback[1].ActedOnBy != "" || p.Feedback[2].Excerpt != "nice" {
+	if p.Feedback[1].Ignored != "not_permitted" || p.Feedback[1].ActedOnBy != "" || delivery.Unquoted(p.Feedback[2].Excerpt) != "nice" {
 		t.Errorf("the others: %+v", p.Feedback[1:])
 	}
 }
@@ -411,7 +421,7 @@ func TestPullRequestsGivesTheLatest50FeedbackItems(t *testing.T) {
 		t.Fatalf("sdk#88: total %d, returned %d; want 51 and 50", p.FeedbackTotal, len(p.Feedback))
 	}
 	for i, fb := range p.Feedback {
-		if want := fmt.Sprintf("comment %02d", i+1); fb.Excerpt != want {
+		if want := fmt.Sprintf("comment %02d", i+1); delivery.Unquoted(fb.Excerpt) != want {
 			t.Fatalf("feedback %d is %q, want %q: the latest 50, oldest first", i, fb.Excerpt, want)
 		}
 	}

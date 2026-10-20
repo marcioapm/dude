@@ -178,13 +178,8 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		// Once per head, whoever asked: CI that fails again on the same
 		// commit is a fix's to answer, not another run's. A claim GitHub
 		// refused outright is released (DoPRAction) and counts no more.
-		var again bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events e WHERE e.task_id = $1 AND e.event_type = $2
-			AND e.payload->>'action' = $3 AND e.payload->>'repo' = $4 AND (e.payload->>'number')::int = $5 AND e.payload->>'head' = $6
-			AND e.payload->>'released' IS NULL
-			AND NOT EXISTS (SELECT 1 FROM events r WHERE r.task_id = e.task_id AND r.event_type = e.event_type
-				AND r.payload->>'released' = e.id))`,
-			ref.TaskID, EvPullRequestAction, ActionRerunChecks, repo, number, c.head).Scan(&again); err != nil {
+		again, err := RerunClaimedTx(ctx, tx, ref.TaskID, repo, number, c.head)
+		if err != nil {
 			return c, err
 		}
 		if again {

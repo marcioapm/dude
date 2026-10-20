@@ -14,6 +14,7 @@ rNameProject                           refusals/tools/brainstorm/name-project
 rProjectNotLinkedThisSession           refusals/tools/brainstorm/project-not-linked-this-session
 rNoTaskIn                              refusals/tools/brainstorm/no-task-in
 rNameTaskReadFindingsInFull            refusals/tools/brainstorm/name-task-read-findings-in-full
+rNameTaskReadFeedbackInFull            refusals/tools/brainstorm/name-task-read-feedback-in-full
 rNoMemory                              refusals/tools/brainstorm/no-memory
 rNotTaskOrEpicLinkedProjects           refusals/tools/brainstorm/not-task-or-epic-linked-projects
 rPropose130Items                       refusals/tools/brainstorm/propose-1-30-items
@@ -46,6 +47,7 @@ rWhyAtMost2000Characters               refusals/tools/brainstorm/why-at-most-200
 rYouAlreadyHaveQuestionWaitingFor      refusals/tools/brainstorm/you-already-have-question-waiting-for
 rNamesOneMemberWhoCanChat              refusals/tools/brainstorm/names-one-member-who-can-chat
 rAtMostFindingsByIdAt                  refusals/tools/conductor/at-most-findings-by-id-at
+rAtMostFeedbackItemsByIdAt             refusals/tools/conductor/at-most-feedback-items-by-id-at
 rYouAreNoLongerThisTask                refusals/tools/conductor/you-are-no-longer-this-task
 rRelationKindBlockedByBlocksOr         refusals/tools/conductor/relation-kind-blocked-by-blocks-or
 rNoTaskInThisOrganisation              refusals/tools/conductor/no-task-in-this-organisation
@@ -113,3 +115,12 @@ rNoRepositoryInThisProjectPerson       refusals/tools/tools/no-repository-in-thi
 rAlreadyCheckedOutForThisWork          refusals/tools/tools/already-checked-out-for-this-work
 rYouHaveRequestsWaitingForPerson       refusals/tools/tools/you-have-requests-waiting-for-person
 rYouAlreadyAskedForPersonHas           refusals/tools/tools/you-already-asked-for-person-has
+rLimitsAreATasks                       refusals/tools/limits/limits-are-a-tasks
+rNameRunWhoseChatRead                  refusals/tools/runchat/name-run-whose-chat-read
+rLimit1Messages                        refusals/tools/runchat/limit-1-messages
+rNotRunYourTaskYouRead                 refusals/tools/runchat/not-run-your-task-you-read
+rNotRunThisSessionStarted              refusals/tools/runchat/not-run-this-session-started
+rNoOpenPullRequestRefresh              refusals/tools/refresh/no-open-pull-request-refresh
+rNoOpenPullRequestOnGithub             refusals/tools/refresh/no-open-pull-request-on-github
+rNameTaskWhosePullRequestsRefresh      refusals/tools/refresh/name-task-whose-pull-requests-refresh
+rRefreshingTakesGithubReads            refusals/tools/refresh/refreshing-takes-github-reads

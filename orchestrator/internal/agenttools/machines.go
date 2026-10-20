@@ -19,9 +19,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// Every role with a machine of its own may move; its permission key is
-// runs.role (a fixer is an implementer), which PromptRoles covers.
-var machineRoles = delivery.PromptRoles
+// Every role with a machine of its own may move (capabilities.Machines);
+// its permission key is runs.role (a fixer is an implementer).
 
 const machineMovesPerRun = 3
 
@@ -89,6 +88,18 @@ func listMachineSizes(ctx context.Context, tx pgx.Tx, c Caller, _ struct{}) ([]d
 	return choices.Targets, nil
 }
 
+// machineMoves are the Run's machine moves: waiting on lux, spent of
+// machineMovesPerRun, and the size a waiting one goes to. A move counts
+// unless lux did not apply it: refused for good (refused), or kept on
+// another size without a refusal (refused_message alone).
+func machineMoves(ctx context.Context, tx pgx.Tx, runID string) (pending, used int, pendingTo string, err error) {
+	err = tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE m.settled_at IS NULL),
+			count(*) FILTER (WHERE m.kind = 'raise' AND (m.settled_at IS NULL OR (m.refused IS NULL AND m.refused_message IS NULL))),
+			COALESCE(max(s.name) FILTER (WHERE m.settled_at IS NULL), '')
+		FROM machine_moves m LEFT JOIN machine_sizes s ON s.id = m.to_size_id WHERE m.run_id = $1`, runID).Scan(&pending, &used, &pendingTo)
+	return pending, used, pendingTo, err
+}
+
 func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineIn) (requestMachineOut, error) {
 	var out requestMachineOut
 	reason := strings.TrimSpace(in.Reason)
@@ -103,14 +114,8 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 	// The layer and the move are keyed by settings role: a fix Run's
 	// runs.role is implementer, its settings role fixer.
 	role := cmp.Or(delivery.PromptRoleFor(phase, c.Role), c.Role)
-	var pending, used int
-	var pendingTo string
-	// A move counts unless lux did not apply it: refused for good (refused),
-	// or kept on another size without a refusal (refused_message alone).
-	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE m.settled_at IS NULL),
-			count(*) FILTER (WHERE m.kind = 'raise' AND (m.settled_at IS NULL OR (m.refused IS NULL AND m.refused_message IS NULL))),
-			COALESCE(max(s.name) FILTER (WHERE m.settled_at IS NULL), '')
-		FROM machine_moves m LEFT JOIN machine_sizes s ON s.id = m.to_size_id WHERE m.run_id = $1`, c.RunID).Scan(&pending, &used, &pendingTo); err != nil {
+	pending, used, pendingTo, err := machineMoves(ctx, tx, c.RunID)
+	if err != nil {
 		return out, err
 	}
 	if pending > 0 {

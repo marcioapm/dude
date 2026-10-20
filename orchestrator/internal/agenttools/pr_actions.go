@@ -11,10 +11,8 @@ import (
 
 // The GitHub actions dude takes on a task's own pull requests for its
 // agents (delivery.PRAction): checked in the call's transaction, done with
-// none open, recorded after.
-
-// prActors may call them; delivery decides which action each may take.
-var prActors = []string{delivery.RoleConductor, "implementer"}
+// none open, recorded after. Who may call each is its capability's
+// (capabilities.PRAct, Conduct); delivery decides which action each may take.
 
 // Calls a Run may make to each in its lifetime, counting those GitHub refused.
 const (
@@ -76,8 +74,8 @@ func recordPRAction(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.PRActio
 }
 
 var prActionTools = []tool{
-	around(define("request_review", conductors, requestReview).before(forgeFor).limit(reviewRequestsPerRun).countingAttempts(), doPRAction, recordPRAction),
-	around(define("resolve_thread", prActors, resolveThread).before(forgeFor).limit(threadsPerRun).countingAttempts(), doPRAction, recordPRAction),
-	around(define("mark_ready", conductors, markReady).before(forgeFor).limit(readiesPerRun).countingAttempts(), doPRAction, recordPRAction),
-	around(define("rerun_failed_checks", conductors, rerunFailedChecks).before(forgeFor).limit(rerunsPerRun).countingAttempts(), doPRAction, recordPRAction),
+	around(define("request_review", requestReview).before(forgeFor).limit(reviewRequestsPerRun).countingAttempts(), doPRAction, recordPRAction),
+	around(define("resolve_thread", resolveThread).before(forgeFor).limit(threadsPerRun).countingAttempts(), doPRAction, recordPRAction),
+	around(define("mark_ready", markReady).before(forgeFor).limit(readiesPerRun).countingAttempts(), doPRAction, recordPRAction),
+	around(define("rerun_failed_checks", rerunFailedChecks).before(forgeFor).limit(rerunsPerRun).countingAttempts(), doPRAction, recordPRAction),
 }

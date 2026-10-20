@@ -220,8 +220,9 @@ func severityNote(blocking []string) string {
 }
 
 // fixContract is how every fix is made, whatever the fixer's instructions
-// say: a defect shown before it is changed, and shown gone after.
-var fixContract = render(mustTemplate("contracts/fix"), nil)
+// say: a defect shown before it is changed, and shown gone after. As the
+// fixer's default capabilities read it.
+var fixContract = render(mustTemplate("contracts/fix"), InstructionsInput{}.data("fixer"))
 
 // implementContract asks the implementer to check its own work: the
 // independent tester after it verifies, but does not do this for it.
@@ -240,8 +241,8 @@ var commitNote = render(mustTemplate("contracts/commit"), nil)
 var baseIntegrationNote = render(mustTemplate("contracts/base-integration"), nil)
 
 // conductorBaseNote is baseIntegrationNote for the conductor, which runs
-// no tests and publishes with its tool.
-var conductorBaseNote = render(mustTemplate("contracts/conductor-base"), nil)
+// no tests and publishes with its tool: as its default capabilities read it.
+var conductorBaseNote = render(mustTemplate("contracts/conductor-base"), InstructionsInput{}.data(RoleConductor))
 
 // testerContract is what a person merging the change relies on from the
 // tester, whatever its instructions say: every criterion accounted for in

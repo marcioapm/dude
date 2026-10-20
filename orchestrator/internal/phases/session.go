@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -60,6 +61,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 	var submitted []string
 	role := delivery.RoleBrainstorm
 	var settings delivery.RoleSettings
+	var grants capabilities.Grants
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// A session spans projects: its organisation's list alone, or any
 		// host when the brainstorm may reach any (brainstormAnywhere).
@@ -78,6 +80,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 			return fmt.Errorf("load the session's model: %w", err)
 		}
 		settings = chosen.Over(delivery.ResolveRole(role, orgModels))
+		if grants, err = capabilities.Resolve(ctx, tx, capabilities.Agent{Role: role, Org: r.Org, Run: r.ID, Session: r.SessionID}); err != nil {
+			return err
+		}
 		if stored != nil {
 			var ranOn string
 			if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), COALESCE(effort, ''), COALESCE(harness, ''), machine, lux_repositories FROM runs WHERE id = $1`, r.ID).
@@ -101,7 +106,9 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 				return err
 			}
 			prompt = delivery.BrainstormPrompt(briefing, talker)
-			in.Instructions = delivery.Instructions(role, "", talker.InstructionsInput())
+			instructions := talker.InstructionsInput()
+			instructions.Grants = &grants
+			in.Instructions = delivery.Instructions(role, "", instructions)
 		}
 		repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID)
 		return err
@@ -116,7 +123,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 		in.Repos = append(in.Repos, specRepo{Name: repo.SpecName(), URL: repo.URL, Ref: repo.DefaultBranch, ReadOnly: true,
 			Path: delivery.SessionRepoPath(repo.Key, repo.Name), Setup: repo.SetupScript})
 	}
-	in.RunID, in.OrganizationID, in.SessionID, in.Role = r.ID, r.Org, r.SessionID, role
+	in.RunID, in.OrganizationID, in.SessionID, in.Role, in.Grants = r.ID, r.Org, r.SessionID, role, &grants
 	in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 	in.Harness = settings.HarnessName()
 	s.logIgnoredOptions(r, in)

@@ -13,15 +13,14 @@ import (
 // People's feedback on the task (delivery/feedback.go): what was submitted
 // on the current attempt, read by id, answered, or resolved with the
 // commit that fixed it. A draft is no agent's: none of these sees one.
-
-// Who handles feedback: the implementer (and so the fixer), and the
-// conductor, which reads and replies but never resolves.
-var feedbackRoles = []string{"implementer", "conductor"}
+// The implementer (and so the fixer) handles and resolves it; the
+// conductor reads and replies but never resolves (capabilities.FeedbackHandle,
+// FeedbackResolve).
 
 var feedbackTools = []tool{
-	define("feedback", feedbackRoles, listFeedback),
-	define("feedback_reply", feedbackRoles, replyFeedback),
-	define("feedback_resolve", []string{"implementer"}, resolveFeedback),
+	define("feedback", listFeedback),
+	define("feedback_reply", replyFeedback),
+	define("feedback_resolve", resolveFeedback),
 }
 
 type feedbackIn struct {

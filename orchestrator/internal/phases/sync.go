@@ -36,6 +36,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/advance"
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -1389,6 +1390,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// (forgeTokens).
 	var firstRepo []string
 	var reviewRange *delivery.ReviewRange
+	var grants capabilities.Grants
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -1403,6 +1405,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
+		// The Run's capabilities, as the tool server resolves them from its
+		// token: which tools its instructions name, and its harness's own.
+		if grants, err = capabilities.Resolve(ctx, tx, capabilities.Agent{Role: r.Role, Org: r.Org, Project: r.ProjectID, Run: r.ID}); err != nil {
+			return err
+		}
 		settings = delivery.ResolveRole(settingsRole, projectModels, orgModels)
 		// A restart on another tier runs on it, whatever the role's says.
 		if tierOverride != "" {
@@ -1530,7 +1537,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			Setup: repo.SetupScript, Synced: syncedBranches(r, repo, taskBranch)})
 		promptRepos = append(promptRepos, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 	}
-	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role = r.ID, r.Org, r.TaskID, r.Phase, role
+	in.RunID, in.OrganizationID, in.TaskID, in.Phase, in.Role, in.Grants = r.ID, r.Org, r.TaskID, r.Phase, role, &grants
 	if reviewRange != nil {
 		in.ReviewOf = reviewRange.Of
 	}
@@ -1584,7 +1591,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if r.conductor() {
 			instructionsIn = conductorIn
 		}
-		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructionsIn.InstructionsInput())
+		instructions := instructionsIn.InstructionsInput()
+		instructions.Grants = &grants
+		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructions)
 	}
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
