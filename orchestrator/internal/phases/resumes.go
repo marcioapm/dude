@@ -274,7 +274,7 @@ func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string
 // placements read once the batch commits.
 func (t *translator) resumeRunning(ctx context.Context, tx pgx.Tx, s *Syncer, epoch int) {
 	if e, _, _ := t.stamp(ctx, tx, s, "running_at", epoch); e != nil {
-		t.afterBatch(*e, true)
+		t.afterBatch(s, *e, true)
 	}
 }
 
@@ -301,7 +301,7 @@ func (t *translator) resumeOutput(ctx context.Context, tx pgx.Tx, s *Syncer, epo
 	}
 	e, missing, settled := t.stamp(ctx, tx, s, "first_output_at", epoch)
 	if e != nil {
-		t.afterBatch(*e, missing)
+		t.afterBatch(s, *e, missing)
 	}
 	if settled {
 		t.outputEpoch = epoch
@@ -325,45 +325,103 @@ func (t *translator) unsettle(what string, epoch int) {
 }
 
 // afterBatch notes a resume to follow up once the batch commits: its
-// placements read (read), then its timing written if it is complete.
-func (t *translator) afterBatch(epoch int, read bool) {
+// placements read (read), then its timing written if it is complete. A
+// read is owed from here, inside the batch's transaction, so recovery
+// never sees the committed row without the mark; once per epoch a batch.
+func (t *translator) afterBatch(s *Syncer, epoch int, read bool) {
 	if t.resumes == nil {
 		t.resumes = map[int]bool{}
 	}
+	if read && !t.resumes[epoch] {
+		s.owe(t.run.ID, epoch)
+	}
 	t.resumes[epoch] = t.resumes[epoch] || read
+}
+
+// owedResume is a resume a live follow-up has yet to read the placements of.
+type owedResume struct {
+	runID string
+	epoch int
+}
+
+// owe marks the Run's resume into epoch as having a follow-up to come that
+// reads its placements; paid undoes one owe.
+func (s *Syncer) owe(runID string, epoch int) {
+	s.owingMu.Lock()
+	defer s.owingMu.Unlock()
+	if s.owing == nil {
+		s.owing = map[owedResume]int{}
+	}
+	s.owing[owedResume{runID, epoch}]++
+}
+
+func (s *Syncer) paid(runID string, epoch int) {
+	s.owingMu.Lock()
+	defer s.owingMu.Unlock()
+	k := owedResume{runID, epoch}
+	if s.owing[k] <= 1 {
+		delete(s.owing, k)
+		return
+	}
+	s.owing[k]--
+}
+
+// owed is the epochs of the Run's resumes with a placement read to come.
+func (s *Syncer) owed(runID string) []int {
+	s.owingMu.Lock()
+	defer s.owingMu.Unlock()
+	epochs := []int{}
+	for k := range s.owing {
+		if k.runID == runID {
+			epochs = append(epochs, k.epoch)
+		}
+	}
+	return epochs
 }
 
 // resumeFollowUp does what a committed batch noted for each resume: read
 // lux's placements, where wanted, then write its timing if it is complete.
 // In the background, so a slow lux never holds up the Run's output; both
-// steps are idempotent, so two follow-ups of one resume do no harm.
+// steps are idempotent, so two follow-ups of one resume do no harm. A
+// resume it reads is its own to time: recovery skips it until the read
+// and the timing are done, whether they succeeded or not.
 func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	timeout := s.followUpTimeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for epoch, read := range resumes {
-		if read {
-			if err := s.readPlacements(ctx, r, epoch); err != nil {
-				s.logger().Warn("reading a resume's placements failed", "run", r.ID, "epoch", epoch, "error", err)
-			}
-		}
-		if err := s.timeResumes(ctx, r, epoch); err != nil {
-			s.logger().Warn("recording a resume's timing failed", "run", r.ID, "epoch", epoch, "error", err)
-		}
+		s.followUp(ctx, r, epoch, read)
 	}
 	if s.followedUp != nil {
 		s.followedUp()
 	}
 }
 
+func (s *Syncer) followUp(ctx context.Context, r phaseRun, epoch int, read bool) {
+	if read {
+		defer s.paid(r.ID, epoch)
+		if err := s.readPlacements(ctx, r, epoch); err != nil {
+			s.logger().Warn("reading a resume's placements failed", "run", r.ID, "epoch", epoch, "error", err)
+		}
+	}
+	if err := s.timeResumes(ctx, r, epoch); err != nil {
+		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "epoch", epoch, "error", err)
+	}
+}
+
 // timeResumesLater writes, in the background, run.resume.timed for every
 // resume of r whose first output is in and that is not timed yet: one a
 // batch committed whose follow-up never ran (the orchestrator stopped in
-// between).
+// between). A resume a live follow-up still has to read the placements of
+// is left to it, for its timing to carry them.
 func (s *Syncer) timeResumesLater(r phaseRun) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := s.timeResumes(ctx, r, 0); err != nil {
+		if err := s.timeUnowned(ctx, r, 0); err != nil {
 			s.logger().Warn("recording a resume's timing failed", "run", r.ID, "error", err)
 		}
 	}()
@@ -379,8 +437,10 @@ const (
 // first output is in and that was never timed, whatever its Run's status:
 // a Run that ended while its follow-up was pending, and whose process then
 // stopped, has nothing else left to time it. Once, at startup; best
-// effort, a failure is logged. Each goes through timeResumes, which
-// publishes each resume once. Returns how many it went through.
+// effort, a failure is logged. Each goes through timeUnowned, which
+// publishes each resume once and leaves one a live follow-up of this
+// process still reads the placements of to it. Returns how many it went
+// through.
 func (s *Syncer) TimeUntimedResumes(ctx context.Context) int {
 	type untimed struct {
 		run   phaseRun
@@ -406,7 +466,7 @@ func (s *Syncer) TimeUntimedResumes(ctx context.Context) int {
 		return 0
 	}
 	for _, u := range due {
-		if err := s.timeResumes(ctx, u.run, u.epoch); err != nil {
+		if err := s.timeUnowned(ctx, u.run, u.epoch); err != nil {
 			s.logger().Warn("recording a resume's timing failed", "run", u.run.ID, "epoch", u.epoch, "error", err)
 		}
 	}

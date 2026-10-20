@@ -2,10 +2,16 @@ package phases
 
 import (
 	"context"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -102,6 +108,246 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+	t.Run("recovery leaves a resume its follow-up is reading to it", testRecoveryLeavesAResumeItsFollowUpIsReadingToIt)
+	t.Run("recovery right after the batch commits leaves the resume to its follow-up", testRecoveryRightAfterTheCommitLeavesTheResume)
+}
+
+// recoveryTimingGate pauses the first timing UPDATE before Postgres takes
+// its statement snapshot; stream batches and placement reads remain
+// independent. ended is closed once that UPDATE's transaction commits or
+// rolls back.
+type recoveryTimingGate struct {
+	claimed atomic.Bool
+	conn    atomic.Pointer[pgx.Conn]
+	entered chan struct{}
+	release chan struct{}
+	ended   chan struct{}
+}
+
+type recoveryTimingKey struct{}
+
+func (g *recoveryTimingGate) TraceQueryStart(ctx context.Context, c *pgx.Conn, q pgx.TraceQueryStartData) context.Context {
+	if strings.HasPrefix(q.SQL, "UPDATE run_resumes SET timed_at") && g.claimed.CompareAndSwap(false, true) {
+		g.conn.Store(c)
+		close(g.entered)
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+		}
+	}
+	if g.conn.Load() == c && (q.SQL == "commit" || q.SQL == "rollback") {
+		return context.WithValue(ctx, recoveryTimingKey{}, true)
+	}
+	return ctx
+}
+
+func (g *recoveryTimingGate) TraceQueryEnd(ctx context.Context, c *pgx.Conn, _ pgx.TraceQueryEndData) {
+	if ctx.Value(recoveryTimingKey{}) != nil && g.conn.CompareAndSwap(c, nil) {
+		close(g.ended)
+	}
+}
+
+// batchCommitGate holds, once armed, the follower's next batch just after
+// its commit returns: the batch is committed, and the follower has yet to
+// start that batch's follow-up.
+type batchCommitGate struct {
+	armed   atomic.Bool
+	conn    atomic.Pointer[pgx.Conn]
+	claimed atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+type batchCommitKey struct{}
+
+func (g *batchCommitGate) TraceQueryStart(ctx context.Context, c *pgx.Conn, q pgx.TraceQueryStartData) context.Context {
+	// applyBatch's first statement after the tenant is set.
+	if g.armed.Load() && q.SQL == `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE` {
+		g.conn.CompareAndSwap(nil, c)
+	}
+	if q.SQL == "commit" && g.conn.Load() == c {
+		return context.WithValue(ctx, batchCommitKey{}, true)
+	}
+	return ctx
+}
+
+func (g *batchCommitGate) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, q pgx.TraceQueryEndData) {
+	if ctx.Value(batchCommitKey{}) != nil && q.Err == nil && g.claimed.CompareAndSwap(false, true) {
+		close(g.entered)
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+		}
+	}
+}
+
+// traced has w's syncer use a pool of its own whose connections report
+// their queries to tracer.
+func (w *resumeWorld) traced(tracer pgx.QueryTracer) {
+	w.t.Helper()
+	cfg := w.s.DB.Pool.Config()
+	cfg.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(w.ctx, cfg)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(pool.Close)
+	w.s.DB = &db.DB{Pool: pool}
+}
+
+// assertTimedComplete fails unless the Run has exactly one run.resume.timed,
+// for epoch 2, with every phase and lux's placement durations.
+func (w *resumeWorld) assertTimedComplete() {
+	w.t.Helper()
+	got := w.timed()
+	if len(got) != 1 {
+		w.t.Fatalf("%d run.resume.timed, want 1: %v", len(got), got)
+	}
+	phases := got[0]["phases"].(map[string]any)
+	if got[0]["epoch"] != 2.0 || len(phases) != 8 || got[0]["hostName"] != "host-a" {
+		w.t.Errorf("timed %v, want epoch 2 on host-a with every phase", got[0])
+	}
+	for name, want := range map[string]float64{"image": 100, "restore": 200, "start": 200} {
+		if phases[name] != want {
+			w.t.Errorf("%s = %v, want %v", name, phases[name], want)
+		}
+	}
+}
+
+// Recovery's UPDATE runs once the first output is committed and while both
+// follow-ups wait on lux: it leaves the resume untimed, and the follow-up
+// that reads the placements first times it, complete.
+func testRecoveryLeavesAResumeItsFollowUpIsReadingToIt(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	w.sessionOn(1)
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-a"), nil)
+
+	gate := &recoveryTimingGate{entered: make(chan struct{}), release: make(chan struct{}), ended: make(chan struct{})}
+	w.traced(gate)
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(gate.release) }) })
+	finished := make(chan struct{}, 4)
+	w.s.followedUp = func() { finished <- struct{}{} }
+	var gated *gatedLux
+	st := w.followingAs(func(st *streamLux) lux.Client {
+		gated = &gatedLux{streamLux: st, entered: make(chan int, 4)}
+		return gated
+	})
+	// The follower's own recovery, at its start, is the first timing UPDATE.
+	waitFinished(t, gate.entered)
+	st.frames <- session(2)
+	st.frames <- cursorFrame(running(2), "c1")
+	first := waitEntered(t, gated)
+	st.frames <- busy(2)
+	st.frames <- cursorFrame(spoke(2), "c2")
+	second := waitEntered(t, gated)
+	w.committed("c2", time.Second)
+	if got := w.timed(); len(got) != 0 {
+		t.Fatalf("timed while recovery and both Gets were gated: %v", got)
+	}
+
+	release.Do(func() { close(gate.release) })
+	waitFinished(t, gate.ended)
+	if got := w.timed(); len(got) != 0 {
+		t.Fatalf("recovery timed a resume a follow-up was still reading the placements of: %v", got)
+	}
+	if row := w.row(2); row["timed_at"] != nil || row["first_output_at"] == nil {
+		t.Fatalf("after recovery: timed_at %v, first_output_at %v; want untimed with its first output", row["timed_at"], row["first_output_at"])
+	}
+	for _, n := range []int{first, second} {
+		gated.release(n)
+		waitFinished(t, finished)
+	}
+	w.assertTimedComplete()
+}
+
+// Recovery that runs between a batch's commit and the start of its
+// follow-up finds the resume already owed, and leaves it.
+func testRecoveryRightAfterTheCommitLeavesTheResume(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	w.sessionOn(1)
+	w.resume(stoppedOnHost1(base))
+	// The first read finds the image not reported yet, so the first output
+	// reads again.
+	partial := runningAgain(base, "host-a")
+	partial.Placements[1].ImageReadyAt = nil
+	w.lux.set(partial, nil)
+
+	gate := &batchCommitGate{entered: make(chan struct{}), release: make(chan struct{})}
+	w.traced(gate)
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(gate.release) }) })
+	finished := make(chan struct{}, 4)
+	w.s.followedUp = func() { finished <- struct{}{} }
+	var gated *gatedLux
+	st := w.followingAs(func(st *streamLux) lux.Client {
+		gated = &gatedLux{streamLux: st, entered: make(chan int, 4)}
+		return gated
+	})
+	st.frames <- session(2)
+	st.frames <- running(2)
+	st.frames <- cursorFrame(busy(2), "c1")
+	w.committed("c1", time.Second)
+	gated.release(waitEntered(t, gated))
+	waitFinished(t, finished)
+
+	gate.armed.Store(true)
+	st.frames <- cursorFrame(spoke(2), "c2")
+	waitFinished(t, gate.entered)
+	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+		t.Fatal(err)
+	}
+	w.s.TimeUntimedResumes(w.ctx)
+	if got := w.timed(); len(got) != 0 {
+		t.Fatalf("recovery between the batch's commit and its follow-up timed the resume: %v", got)
+	}
+
+	w.lux.set(runningAgain(base, "host-a"), nil)
+	release.Do(func() { close(gate.release) })
+	gated.release(waitEntered(t, gated))
+	waitFinished(t, finished)
+	w.assertTimedComplete()
+}
+
+// A follow-up whose placement read and timing both run out of time owes
+// nothing after: recovery times the resume as it stands.
+func TestAFollowUpThatTimesOutLeavesTheResumeToRecovery(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	w.sessionOn(1)
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-a"), nil)
+	w.s.followUpTimeout = 300 * time.Millisecond
+	finished := make(chan struct{}, 4)
+	w.s.followedUp = func() { finished <- struct{}{} }
+	var gated *gatedLux
+	st := w.followingAs(func(st *streamLux) lux.Client {
+		gated = &gatedLux{streamLux: st, entered: make(chan int, 4)}
+		return gated
+	})
+	// Each Get is never let through: each follow-up ends at its deadline.
+	st.frames <- cursorFrame(session(2), "c1")
+	waitEntered(t, gated)
+	waitFinished(t, finished)
+	st.frames <- cursorFrame(busy(2), "c2")
+	w.committed("c2", time.Second)
+	st.frames <- cursorFrame(spoke(2), "c3")
+	waitEntered(t, gated)
+	waitFinished(t, finished)
+	if got := w.timed(); len(got) != 0 {
+		t.Fatalf("a follow-up past its deadline timed the resume: %v", got)
+	}
+
+	if n := w.s.TimeUntimedResumes(w.ctx); n != 1 {
+		t.Errorf("the startup pass went through %d resumes, want 1", n)
+	}
+	got := w.timed()
+	if len(got) != 1 || got[0]["epoch"] != 2.0 || got[0]["hostName"] != nil {
+		t.Fatalf("after recovery: %v, want one run.resume.timed for epoch 2 without placements", got)
 	}
 }
 
