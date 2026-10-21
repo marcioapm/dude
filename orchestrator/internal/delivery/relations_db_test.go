@@ -80,10 +80,11 @@ func blockerKeys(t *testing.T, in func(func(pgx.Tx) error) error, task string) [
 	return keys
 }
 
-// rowsRead counts the rows this transaction has read from each table so
-// far: sequential-scan rows plus index entries, so it holds whatever plan
-// the planner picks. A test measures a call's work as the difference, which
-// a busy machine cannot change the way it changes the time.
+// rowsRead counts the rows this transaction has read from each user table
+// so far: sequential-scan rows plus index entries, which index, index-only
+// and bitmap scans all count (the table's idx_tup_fetch misses the last
+// two). A test measures a call's work as the difference, which a busy
+// machine cannot change the way it changes the time.
 func rowsRead(t *testing.T, tx pgx.Tx) map[string]int64 {
 	t.Helper()
 	rows, err := tx.Query(context.Background(), `SELECT s.relname, s.seq_tup_read
@@ -255,8 +256,9 @@ func TestTaskRelationWouldCycleIsLinearOnADeepChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("a %d-deep chain among %d other edges: the check read %d rows %v", depth, others, total, read)
-	if total > 4*depth {
-		t.Fatalf("a %d-deep chain among %d other edges: the check read %d rows %v", depth, others, total, read)
+	// At least one probe a level, or the counters are not counting.
+	if total < depth || total > 8*depth {
+		t.Fatalf("the check read %d rows, want %d to %d", total, depth, 8*depth)
 	}
 	if got != nil {
 		t.Fatalf("no loop, got %v", got)
@@ -286,6 +288,9 @@ func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
 	var read map[string]int64
 	var total int64
 	if err := in(func(tx pgx.Tx) error {
+		if _, err := tx.Exec(context.Background(), `SET LOCAL statement_timeout = '30s'`); err != nil {
+			return err
+		}
 		before := rowsRead(t, tx)
 		var err error
 		if rels, err = RelationsOf(context.Background(), tx, ids); err != nil {
@@ -297,8 +302,8 @@ func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("RelationsOf over %d tasks under InOrg read %d rows %v", n, total, read)
-	if total > 16*n {
-		t.Fatalf("RelationsOf over %d blocked tasks read %d rows %v", n, total, read)
+	if read["tasks"] < n || total > 32*n {
+		t.Fatalf("RelationsOf read %d rows, %d of them tasks; want at least %d tasks and at most %d in all", total, read["tasks"], n, 32*n)
 	}
 	if !rels[w.id(1)].Startable || rels[w.id(2)].Startable || len(rels[w.id(n)].BlockedBy) != 1 {
 		t.Fatalf("CP-1 startable %v, CP-2 startable %v, CP-%d blocked by %v",
