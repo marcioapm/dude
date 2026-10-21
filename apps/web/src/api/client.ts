@@ -1520,8 +1520,8 @@ export class ApiClient {
     return this.#request("GET", `/v1/tasks/${taskId}/recover`);
   }
 
-  /** Pick a stopped task back up — the task's owner does — with a note for the agents. */
-  recover(taskId: string, action: RecoverAction, note: string, start: { override?: true } = {}): Promise<{ action: RecoverAction }> {
+  /** Pick a stopped task back up — the task's owner does — with a note for the agents; Start over may say who decides the new attempt. */
+  recover(taskId: string, action: RecoverAction, note: string, start: { override?: true; decider?: Decider } = {}): Promise<{ action: RecoverAction }> {
     return this.#request("POST", `/v1/tasks/${taskId}/recover`, { action, note, ...start });
   }
 

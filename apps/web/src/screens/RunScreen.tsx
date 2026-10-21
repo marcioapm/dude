@@ -137,6 +137,8 @@ export interface ChatVariant {
   to?: ReactNode;
   /** The briefing of the failed conductor this one retries (Try again), from that Run's ledger. */
   briefedBefore?: string | undefined;
+  /** The task is stopped: the composer waits, saying why, until it is picked back up. */
+  stopped?: string | undefined;
 }
 
 /** A Run's cost as the task's metrics split it: tokens and machine time. */
@@ -668,8 +670,8 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   mode="chat"
                   waitingFor={waitingForYou}
                   waitingKey={asked?.questionId}
-                  disabled={asking !== null && waitingOn !== undefined}
-                  disabledReason={waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined}
+                  disabled={chat.stopped !== undefined || (asking !== null && waitingOn !== undefined)}
+                  disabledReason={chat.stopped ?? (waitingOn ? `Waiting for ${waitingOn} to answer.` : undefined)}
                   onSubmit={send}
                   sentAs={youName ? firstName(youName) : undefined}
                   to={chat.to ?? (chat.above && !chat.readOnly ? <>To <b>Conductor</b></> : <>To <b>Conductor</b> · read-only</>)}

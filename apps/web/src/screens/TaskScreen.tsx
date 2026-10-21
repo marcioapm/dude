@@ -670,7 +670,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )) : null}
           {stop ? (
             <StoppedNotice task={item} stop={stop} options={recovery} owner={owner?.name ?? null} you={yours}
-              onOpenRun={onOpenRun} onChoose={setPickingUp} />
+              pullRequest={openPullRequestOf(item, pullRequests)} onOpenRun={onOpenRun} onChoose={setPickingUp} />
           ) : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
           {commentingNotices}
@@ -690,7 +690,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           }} />
       ) : null}
       {pickingUp && stop && recovery ? (
-        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp}
+        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp} pullRequest={openPullRequestOf(item, pullRequests)}
           onEdit={() => {
             setPickingUp(null);
             setEditing(true);
@@ -723,7 +723,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
         <TabPanel value="chat" fill>
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
-            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
+            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status, attempt: r.attempt }))} ledgers={endedLedgers}
             findings={findings} pullRequests={pullRequests}
             events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} onBack={onBack}
             driverControl={driverControl} canSwitchDriver={yours && !earlier} />

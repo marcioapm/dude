@@ -417,7 +417,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve(this.#recovery ?? { taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null });
   }
 
-  override async recover(_taskId: string, action: RecoverAction, _note = "", _start: { override?: true } = {}): Promise<{ action: RecoverAction }> {
+  override async recover(_taskId: string, action: RecoverAction, _note = "", _start: { override?: true; decider?: "policy" | "conductor" } = {}): Promise<{ action: RecoverAction }> {
     await wait(150);
     this.#recovery = null;
     this.#task = { ...this.#task, status: "running" };
