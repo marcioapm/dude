@@ -135,16 +135,14 @@ func (w *world) prShowsOnlyChecked(t testing.TB, task, repo, branch string, test
 			last = head
 			at := head
 			missing, ok := asked[head]
-			parents := gh.Parents(head)
-			if !ok && len(parents) == 2 {
-				at = parents[1]
-				missing, ok = asked[at]
-			}
-			// An update-branch that moved the branch made exactly this merge;
-			// one GitHub refused made none, and excuses nothing.
 			update := -1
-			if !ok && len(parents) == 2 {
-				update = slices.Index(updates, [2]string{parents[0], parents[1]})
+			if parents := gh.Parents(head); !ok && len(parents) == 2 {
+				at = parents[1]
+				// An update-branch that moved the branch made exactly this
+				// merge; one GitHub refused made none, and excuses nothing.
+				if missing, ok = asked[at]; !ok {
+					update = slices.Index(updates, [2]string{parents[0], parents[1]})
+				}
 			}
 			switch {
 			case ok && missing != "":
@@ -212,6 +210,11 @@ func TestPRShowsOnlyCheckedFailsWhatWasNotChecked(t *testing.T) {
 	}
 	// ahead is a commit on top of branch, on a ref of its own.
 	ahead := func(branch, name string) string { return w.gh.Branch(branch+"-ahead", branch, name+": ahead") }
+	// updateBranch moves main and asks GitHub to merge it into the pull request.
+	updateBranch := func(branch string, number int) {
+		w.gh.AdvanceBase("main", branch+": base")
+		api("PUT", fmt.Sprintf("/pulls/%d/update-branch", number), map[string]any{"expected_head_sha": w.gh.SHA(branch)})
+	}
 	for _, tc := range []struct {
 		name string
 		// pr opens a pull request from the branch (update-branch needs one).
@@ -268,15 +271,9 @@ func TestPRShowsOnlyCheckedFailsWhatWasNotChecked(t *testing.T) {
 			api("POST", "/merges", map[string]any{"base": branch, "head": sha})
 		}, want: "before its review completed"},
 		// Arm "by update-branch".
-		{name: "update-branch", pr: true, move: func(branch string, number int) {
-			w.gh.AdvanceBase("main", branch+": base")
-			api("PUT", fmt.Sprintf("/pulls/%d/update-branch", number), map[string]any{"expected_head_sha": w.gh.SHA(branch)})
-		}, want: "by update-branch"},
+		{name: "update-branch", pr: true, move: updateBranch, want: "by update-branch"},
 		// Arm "update-branch allowed".
-		{name: "update-branch allowed", pr: true, opts: []prShowsOption{allowUpdateBranch}, move: func(branch string, number int) {
-			w.gh.AdvanceBase("main", branch+": base")
-			api("PUT", fmt.Sprintf("/pulls/%d/update-branch", number), map[string]any{"expected_head_sha": w.gh.SHA(branch)})
-		}},
+		{name: "update-branch allowed", pr: true, opts: []prShowsOption{allowUpdateBranch}, move: updateBranch},
 		// An update-branch GitHub refused moved nothing: it excuses no
 		// other move, even with allowUpdateBranch.
 		{name: "a refused update-branch", pr: true, opts: []prShowsOption{allowUpdateBranch}, move: func(branch string, number int) {
