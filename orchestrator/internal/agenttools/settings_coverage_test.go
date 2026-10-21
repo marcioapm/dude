@@ -1,6 +1,7 @@
 package agenttools_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -256,6 +257,21 @@ func TestSettingsCataloguesArePagedBoundedAndTenantScoped(t *testing.T) {
 				t.Errorf("%s leaks %s", section, secret)
 			}
 		}
+	}
+	var before string
+	snapshot := `SELECT md5(concat_ws('|', (SELECT row_to_json(o)::text FROM organizations o WHERE id=$1),
+		(SELECT string_agg(row_to_json(t)::text, ',' ORDER BY id) FROM model_tiers t WHERE organization_id=$1),
+		(SELECT string_agg(row_to_json(p)::text, ',' ORDER BY id) FROM projects p WHERE organization_id=$1),
+		(SELECT string_agg(row_to_json(s)::text, ',' ORDER BY project_id, name) FROM project_servers s WHERE organization_id=$1)))`
+	if err := f.owner.QueryRow(context.Background(), snapshot, f.org).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	for _, section := range []string{"", "models", "judgements", "servers", "memory"} {
+		f.settingsOf(t, token, `{"section":"`+section+`"}`)
+	}
+	var after string
+	if err := f.owner.QueryRow(context.Background(), snapshot, f.org).Scan(&after); err != nil || after != before {
+		t.Fatalf("settings reads changed configuration: %v", err)
 	}
 	if got := field(f.settingsOf(t, token, `{}`), "models", "tiers"); got != nil {
 		t.Fatal("default returned catalogue")

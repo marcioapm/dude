@@ -72,4 +72,13 @@ func TestSettingsStatementsDoNotGrowWithLinkedProjects(t *testing.T) {
 		t.Errorf("statements: %d with one linked project, %d with three", one, three)
 	}
 	t.Logf("a brainstorm's settings read with three linked projects: %d statements", three)
+	if _, err := owner.Exec(ctx, `INSERT INTO model_tiers(id,organization_id,name,model,position) SELECT 'mtr_count_'||i,$1,'Count '||i,'m',i FROM generate_series(1,50) i`, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `INSERT INTO project_servers(project_id,organization_id,name,port,command) SELECT p, $1, 'srv'||i, 3000+i, 'run' FROM unnest(ARRAY['p1_'||$1,'p2_'||$1,'p3_'||$1]) p, generate_series(1,20) i`, org); err != nil {
+		t.Fatal(err)
+	}
+	if many := count("s3_" + org); many != three {
+		t.Errorf("statements: %d with catalogue and recipe data, %d before", many, three)
+	}
 }
