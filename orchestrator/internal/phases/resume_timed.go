@@ -25,10 +25,27 @@ type resumeTiming struct {
 
 // timeResumes writes run.resume.timed for each of the Run's resumes whose
 // first output is in, or whose first frames were missed (frames_missed),
-// and that has none yet — the one into epoch, or with epoch 0 every one (a
-// follower starting again, after a batch whose follow-up never ran). Once
-// each: timed_at is set in the same transaction.
+// and that has none yet — the one into epoch. Once each: timed_at is set
+// in the same transaction. It is the owner's call, made by a resume's
+// follow-up after its placement read; recovery goes through timeUnowned
+// instead.
 func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int) error {
+	return s.timeResumesSkippingOwed(ctx, r, epoch, false)
+}
+
+// timeUnowned is timeResumes for recovery, and with epoch 0 takes every
+// one of the Run's resumes. It leaves each resume a live follow-up in this
+// process has yet to read the placements of (owed) to that follow-up, for
+// its timing to carry them. owed is read after the UPDATE, not before: a
+// batch marks a resume before committing it, so every row the UPDATE saw
+// timeable is marked by the time owed is read, unless its follow-up has
+// already timed it. Such a row is put back untimed before this
+// transaction commits.
+func (s *Syncer) timeUnowned(ctx context.Context, r phaseRun, epoch int) error {
+	return s.timeResumesSkippingOwed(ctx, r, epoch, true)
+}
+
+func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch int, skipOwed bool) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `UPDATE run_resumes SET timed_at = now()
 			WHERE run_id = $1 AND ($2 = 0 OR epoch = $2) AND timed_at IS NULL
@@ -42,6 +59,11 @@ func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int) error {
 		if err != nil {
 			return err
 		}
+		if skipOwed {
+			if timed, err = s.leaveOwed(ctx, tx, r.ID, timed); err != nil {
+				return err
+			}
+		}
 		for _, rt := range timed {
 			if err := s.event(ctx, tx, r, evResumeTimed, ledger.ActorSystem, rt.payload()); err != nil {
 				return err
@@ -49,6 +71,28 @@ func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int) error {
 		}
 		return nil
 	})
+}
+
+// leaveOwed puts back untimed, in tx, each of timed that a live follow-up
+// now owes a placement read, and returns the rest. A row this transaction
+// timed is locked by it, so that follow-up's own timing waits for this
+// commit and finds the row untimed.
+func (s *Syncer) leaveOwed(ctx context.Context, tx pgx.Tx, runID string, timed []resumeTiming) ([]resumeTiming, error) {
+	owed := s.owed(runID)
+	var keep []resumeTiming
+	var back []int
+	for _, rt := range timed {
+		if owed[rt.Epoch] {
+			back = append(back, rt.Epoch)
+		} else {
+			keep = append(keep, rt)
+		}
+	}
+	if len(back) == 0 {
+		return keep, nil
+	}
+	_, err := tx.Exec(ctx, `UPDATE run_resumes SET timed_at = NULL WHERE run_id = $1 AND epoch = ANY($2::int[])`, runID, back)
+	return keep, err
 }
 
 // payload is run.resume.timed's: the resume's numbers in milliseconds.
