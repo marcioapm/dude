@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,10 +68,25 @@ func TestAPullRequestToContinueIsImplementedOnBeforeItsReview(t *testing.T) {
 	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
 	start := w.gh.SHA("feature/half")
 	w.gh.Comment(n, "jerv", "Still needs the farewell.")
-	wi := w.startDelivery(w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue))
+	// A standing approval: whatever head the branch shows can be merged.
+	w.gh.Review(n, "ana", "APPROVED")
+	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue)
+	moved := len(w.gh.BranchLog("feature/half"))
+	check := w.prShowsOnlyChecked(t, wi, "target", "feature/half", false)
+	w.startDelivery(wi)
 	w.until("waiting on the pull request", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
 	})
+	// The implementer's work and its loop's reached the person's pull
+	// request by one promotion, and jerv's comment's fix by another, each
+	// at a head reviewed there.
+	check()
+	moves := w.gh.BranchLog("feature/half")[moved:]
+	if len(moves) != 2 || moves[1] != w.gh.SHA("feature/half") || w.fixes(wi) != 1 ||
+		w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvPullRequestFixMoved) != 2 {
+		t.Errorf("feature/half moved to %v, want the loop's promotion and the comment's fix's\n%s", moves, w.describeRuns())
+	}
+	w.writersOnCandidate(wi, nil, "implement", "fix", "simplify")
 	got := w.phasesRun(wi)
 	if len(got) < 2 || got[0] != "implement" || got[1] != "review" {
 		t.Fatalf("phases %v, want implement then review", got)
@@ -390,7 +406,10 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	start := w.gh.SHA("feature/greet")
 	w.gh.ReviewSaying(n, "jerv", "APPROVED", "")
 
-	wi := w.adopting("pr", n, "feature/greet", "main")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
+	moved := len(w.gh.BranchLog("feature/greet"))
+	check := w.prShowsOnlyChecked(t, wi, "target", "feature/greet", false)
+	w.startDelivery(wi)
 	// jerv's approval stands on GitHub and its checks pass: once the pull
 	// request is read back, it is ready to merge.
 	w.until("waiting on the pull request", func() bool {
@@ -402,6 +421,13 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "fix", "review", "simplify", "review"}) {
 		t.Fatalf("phases %v, want review, fix, re-review, simplify, its diff's review (no implement)", got)
 	}
+	// The review loop's fix and simplification reached the person's pull
+	// request once, by promotion, at a head reviewed there.
+	check()
+	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != w.gh.SHA("feature/greet") {
+		t.Errorf("feature/greet moved to %v, want one promotion", moves)
+	}
+	w.writersOnCandidate(wi, nil, "fix", "simplify")
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests, want the one taken over", len(w.gh.Pulls()))
 	}
@@ -466,6 +492,42 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests after the fix", len(w.gh.Pulls()))
 	}
+}
+
+// A person pushes to the pull request dude adopted while its first review
+// loop's fix is checked on the candidate: the promotion does not overwrite
+// their commit. The delivery stops for a person (pull_request_moved), and
+// the pull request stays at the person's commit, which nothing of dude's
+// reached.
+func TestAPersonsPushDuringAnAdoptedPullRequestsFirstLoopRefusesItsPromotion(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+	w.gh.Review(n, "ana", "APPROVED")
+	var once sync.Once
+	var person string
+	armed := w.gated(func(step, next string) {
+		if step == "awaitFix" && next == "review" {
+			once.Do(func() {
+				person = w.commitFileIn(w.gh.Repo, "feature/greet", "PERSON.md", "mine\n", "A person's push")
+			})
+		}
+	})
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
+	moved := len(w.gh.BranchLog("feature/greet"))
+	armed.Store(true)
+	w.startDelivery(wi)
+	w.until("refused", func() bool { return w.escalationReason(wi) != "" })
+	if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	if got := w.gh.SHA("feature/greet"); person == "" || got != person {
+		t.Fatalf("feature/greet at %s, want the person's %s", got, person)
+	}
+	// No API write of dude's moved it: the person's push is its only move.
+	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 0 {
+		t.Errorf("dude moved feature/greet to %v", moves)
+	}
+	w.writersOnCandidate(wi, nil, "fix")
 }
 
 // A task whose PR fixer was aborted released its adopted branch; once a

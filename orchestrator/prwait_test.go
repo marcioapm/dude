@@ -164,6 +164,9 @@ func (w *world) runsSoFar(task string) []string {
 // candidate branch.
 func (w *world) writersOnCandidate(task string, before []string, phases ...string) {
 	w.t.Helper()
+	if before == nil {
+		before = []string{}
+	}
 	for _, phase := range phases {
 		all := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)`, task, phase, before)
 		off := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)

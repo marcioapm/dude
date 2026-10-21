@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -418,6 +419,59 @@ func TestALargeChangeGetsAFreshReviewerOfTheWholeBranch(t *testing.T) {
 	w.until("the first round's lux Run let go", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason = 'cancel' AND NOT keep`, first.ID) == 1
 	})
+}
+
+// An adopted pull request's first review is of the whole branch; a person
+// pushes to it before the loop's fix, and the next round's resumed
+// reviewer is told to review from the head the first round reviewed to the
+// candidate's: the person's commit and the fix, not the fix alone and not
+// the whole branch again.
+func TestAnAdoptedPullRequestsNextRoundReviewsSinceTheLastReviewedHeadWithAPersonsPush(t *testing.T) {
+	w := resuming(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+	start := w.gh.SHA("feature/greet")
+	var once sync.Once
+	var person string
+	armed := w.gated(func(step, next string) {
+		if step == "awaitReview" && next == "fix" {
+			once.Do(func() {
+				person = w.commitFileIn(w.gh.Repo, "feature/greet", "PERSON.md", "mine\n", "A person's push")
+			})
+		}
+	})
+	armed.Store(true)
+	wi := w.startDelivery(w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview))
+	w.until("waiting on the pull request", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, wi) == 1
+	})
+	reviews := w.reviewRows(wi)
+	if len(reviews) < 2 || person == "" {
+		t.Fatalf("%d review Runs, person's push %q\n%s", len(reviews), person, w.describeRuns())
+	}
+	first, second := reviews[0], reviews[1]
+	if first.Base["target"] != start {
+		t.Fatalf("the first review was of %s, want the adopted head %s", first.Base["target"], start)
+	}
+	if second.Continues != first.ID || second.How != delivery.ContinuesResume {
+		t.Fatalf("the second round %s continues %q (%s), want %s resumed", second.ID, second.Continues, second.How, first.ID)
+	}
+	var round string
+	for _, in := range w.lux.Inputs(first.LuxRun) {
+		if strings.Contains(in, "## A new round") {
+			round = in
+			break
+		}
+	}
+	if want := "git log " + start + "..HEAD"; !strings.Contains(round, want) {
+		t.Fatalf("the round message does not name the commits since the last reviewed head (%s):\n%s", want, round)
+	}
+	// What that range holds: the person's commit, then the fix on top.
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", person, second.Base["target"]).CombinedOutput(); err != nil {
+		t.Fatalf("the second round's head %s does not hold the person's commit %s: %v %s", second.Base["target"], person, err, out)
+	}
+	if second.Base["target"] == person {
+		t.Fatal("the second round reviewed the person's commit without the fix")
+	}
 }
 
 // A re-review takes the first round's reviewer back up: a new Run that
