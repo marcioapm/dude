@@ -1695,6 +1695,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			return workflow.Result{}, err
 		}
 	}
+	var runBranch string
 	if existing == "" && gh != nil {
 		// What GitHub has, not what dude last pushed: a person may have
 		// pushed since, and a fix from dude's head would fail to
@@ -1709,7 +1710,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		}
 	} else if existing != "" {
 		// A replay: the fix started from the heads it was created with.
-		if st.Heads, err = w.s.runBaseRefs(ctx, sc.OrganizationID, existing); err != nil {
+		if st.Heads, runBranch, err = w.s.runBaseRefs(ctx, sc.OrganizationID, existing); err != nil {
 			return workflow.Result{}, err
 		}
 	}
@@ -1721,9 +1722,12 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	// PR feedback fixes, and an open pull request's integration, are checked
 	// on a candidate before promotion. One before a pull request opened has
 	// none to keep its merge from, unless another repository's is open: the
-	// fixer may change that one too.
+	// fixer may change that one too. A replay's Run already publishes where
+	// it was created to, whatever the pull requests' states are now.
 	candidate := st.Integration == nil || !st.Integration.BeforePR
-	if !candidate && len(st.PullRequestIDs) > 0 {
+	if existing != "" {
+		candidate = runBranch == st.candidateBranch()
+	} else if !candidate && len(st.PullRequestIDs) > 0 {
 		open, err := w.openPRRepos(ctx, sc, st)
 		if err != nil {
 			return workflow.Result{}, err
