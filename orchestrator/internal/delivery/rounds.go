@@ -222,14 +222,31 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	if err := releaseRunTx(ctx, tx, p.ID); err != nil {
 		return "", err
 	}
+	if !sameSpec {
+		in.freshReason = "spec_changed"
+	}
 	in.Replays = p.ID
 	return createPhaseRunTx(ctx, tx, org, in)
 }
 
+// SecretRecipients is the project-secret recipient a Run is, by the
+// settings role it runs as; "" for a Run that is given no project secret.
+var SecretRecipients = map[string]string{
+	"implementer": "implementer",
+	"fixer":       "fixer",
+	"simplifier":  "simplifier",
+	"reviewer":    "reviewer",
+	"qa_browser":  "tester",
+}
+
 // sameSpecTx says whether the predecessor runs on what a fresh Run of the
-// role would now: lux keeps a Run's model, tier, effort and harness from
-// its submit. Its project secrets are checked at its resume (phases'
-// roundSecrets), where the recipient a phase is given them as is known.
+// role would now: lux keeps a Run's model, tier, effort, harness and the
+// names of its project secrets from its submit, and its instruction file.
+// A fixer going on from the implementer runs on the implementer's: the
+// same only while the fixer's settings resolve to it, its recipient is
+// given the same secret names, and it has no saved prompt or notes of its
+// own. Grants are not compared: capabilities.Resolve is the role's
+// defaults alone, and a fixer's are the implementer's (toolRoleOf).
 func sameSpecTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (bool, error) {
 	role := PromptRoleFor(in.Phase, RoleForPhase[in.Phase])
 	settings := ResolveRole(role, p.ProjectModels, p.OrgModels)
@@ -245,7 +262,26 @@ func sameSpecTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (
 		// The scripted agent's label: it stands in for OpenCode.
 		harness = HarnessOpenCode
 	}
-	return tier.Model == p.Model && tier.Name == p.Tier && tier.Effort == p.Effort && harness == settings.HarnessName(), nil
+	if tier.Model != p.Model || tier.Name != p.Tier || tier.Effort != p.Effort || harness != settings.HarnessName() {
+		return false, nil
+	}
+	var same bool
+	if err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT s.name FROM project_secrets s WHERE s.project_id = r.project_id AND $2 = ANY(s.recipients) ORDER BY s.name)
+			= ARRAY(SELECT n FROM unnest(r.project_secret_names) n ORDER BY n)
+		FROM runs r WHERE r.id = $1`, p.ID, SecretRecipients[role]).Scan(&same); err != nil || !same {
+		return false, err
+	}
+	was := PromptRoleFor(p.Phase, RoleForPhase[p.Phase])
+	if was == role {
+		return true, nil
+	}
+	if ResolveRole(was, p.ProjectModels, p.OrgModels).Context != settings.Context {
+		return false, nil
+	}
+	var saved bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM prompt_versions v JOIN runs r ON r.id = $1
+		WHERE v.role = $2 AND (v.project_id IS NULL OR v.project_id = r.project_id) AND btrim(v.body) <> '')`, p.ID, role).Scan(&saved)
+	return !saved, err
 }
 
 // releaseRunTx lets a kept Run go: RetireCompleted, or the syncer's end,

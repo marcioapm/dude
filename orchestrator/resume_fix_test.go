@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // fixRow is one implement or fix Run as the test reads it.
@@ -103,6 +105,41 @@ func TestFixRoundsResumeTheImplementerThenTheFixerAndPushAgain(t *testing.T) {
 	if n := w.count(`SELECT max(fix_attempts) FROM review_findings WHERE task_id = $1`, wi); n < 2 {
 		t.Fatalf("fix attempts %d, want one per round", n)
 	}
+}
+
+// A fixer whose spec would differ from the implementer's — here a project
+// secret given to fixers only, which lux would not add to the
+// implementer's Run — is never the implementer resumed: a fresh fixer
+// given its conversation, its run.created saying why.
+func TestAFixerOnAnotherSpecDoesNotResumeTheImplementer(t *testing.T) {
+	w := resuming(t)
+	w.grant("FIX_TOKEN", "fix-test-not-a-real-token", "fixer")
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.start(wi, resumingPolicy())
+	w.until("a fix completed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'`, wi) >= 1
+	})
+	writers := w.writerRows(wi)
+	impl, fix := writers[0], writers[1]
+	if fix.How == delivery.ContinuesResume || len(w.luxRunsOf("fix")) != 1 {
+		t.Fatalf("the fixer %+v resumed the implementer %s; want a fresh fixer submitted", fix, impl.ID)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'fresh' = 'spec_changed'`, fix.ID); n != 1 {
+		t.Error("the fresh fixer's run.created does not say its spec changed")
+	}
+	if _, ok := projectSecretsOf(specOf(t, w.luxRunsOf("fix")[0].Spec))["FIX_TOKEN"]; !ok {
+		t.Error("the fresh fixer was not given its secret")
+	}
+}
+
+func specOf(t *testing.T, raw []byte) lux.Spec {
+	t.Helper()
+	var spec lux.Spec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatal(err)
+	}
+	return spec
 }
 
 // A kept writer's per-Run branch outlives its publish only while the
