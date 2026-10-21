@@ -315,7 +315,11 @@ const Finding = "---\n" +
 	"line: 1\n" +
 	"title: FACTORY.md does not record the fix\n" +
 	"description: The change is missing a record that the review was addressed.\n" +
+	"acceptance: " + FindingAcceptance + "\n" +
 	"suggested_fix: Add a file naming what was fixed.\n"
+
+// FindingAcceptance is Finding's criterion: what must hold once it is fixed.
+const FindingAcceptance = "The branch holds a file naming what the review asked for."
 
 // Verdict is the reviewer's judgement of its earlier finding once the fix
 // is in the tree, in the format the re-review prompt asks for.

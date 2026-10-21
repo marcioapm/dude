@@ -61,6 +61,8 @@ export interface FindingRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   readonly line?: number | null | undefined;
   /** Markdown. Expands under the row. */
   readonly description?: string | undefined;
+  /** Markdown. What must hold once it is fixed; first in the body, as "Done when". */
+  readonly acceptance?: string | undefined;
   /** Markdown. Expands under the row, labelled. */
   readonly suggestedFix?: string | undefined;
   /** Why it was resolved / accepted / superseded. */
@@ -88,8 +90,9 @@ export interface FindingRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
  * One review finding. Severity is a glyph and a word in its tone — never
  * a colour alone, never an uppercase enum. Then the category, the location
  * in mono, the title, and the status as a neutral badge at the end so a
- * resolved blocking finding still reads as blocking and as resolved. The
- * description and suggested fix sit under the row behind one click.
+ * resolved blocking finding still reads as blocking and as resolved. What
+ * must hold once it is fixed ("Done when"), the description and suggested
+ * fix sit under the row behind one click.
  * Anything not open is dimmed, not struck through: the text stays legible.
  */
 export function FindingRow({
@@ -100,6 +103,7 @@ export function FindingRow({
   file,
   line,
   description,
+  acceptance,
   suggestedFix,
   resolutionNote,
   statusLabel,
@@ -116,7 +120,7 @@ export function FindingRow({
   const spec = FINDING_STATUS_SPECS[status];
   const st = statusLabel ? { ...spec, label: statusLabel } : spec;
   const bodyId = useId();
-  const hasBody = Boolean(description || suggestedFix || resolutionNote);
+  const hasBody = Boolean(acceptance || description || suggestedFix || resolutionNote);
   const disc = useDisclosure({ expanded, defaultExpanded, onExpandedChange });
   const open = hasBody && disc.open;
   const location = file ? (line !== null && line !== undefined ? `${file}:${line}` : file) : null;
@@ -180,6 +184,12 @@ export function FindingRow({
       </div>
       {open ? (
         <div id={bodyId} className={styles["body"]}>
+          {acceptance ? (
+            <div className={styles["section"]}>
+              <div className={cx("ds-label", styles["sectionLabel"])}>Done when</div>
+              <Markdown unmeasured source={acceptance} className={styles["prose"]} />
+            </div>
+          ) : null}
           {description ? <Markdown unmeasured source={description} className={styles["prose"]} /> : null}
           {suggestedFix ? (
             <div className={styles["section"]}>

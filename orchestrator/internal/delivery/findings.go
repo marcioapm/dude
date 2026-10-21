@@ -87,7 +87,15 @@ func parseFinding(doc string) (Finding, bool) {
 		Repo:         fields["repo"],
 		File:         fields["file"],
 		Line:         line,
+		Acceptance:   valueOr(fields["acceptance"], fields["acceptance_criterion"]),
+		CausedByFix:  isYes(fields["caused_by_fix"]),
 	}, true
+}
+
+// isYes reads a yes/no field: `yes` or `true`, in any case; anything else,
+// or nothing, is no.
+func isYes(value string) bool {
+	return strings.EqualFold(value, "yes") || strings.EqualFold(value, "true")
 }
 
 // readFields reads one document's flat `key: value` lines, lower-cased
@@ -203,4 +211,9 @@ type Finding struct {
 	Repo         string `json:"repo"`
 	File         string `json:"file"`
 	Line         int    `json:"line"`
+	// What must hold once it is fixed, in the reviewer's words; "" when it
+	// gave none. Positional scans (phases, rounds) read it after Line.
+	Acceptance string `json:"acceptance"`
+	// The reviewer said the problem is in code the last fix wrote.
+	CausedByFix bool `json:"causedByFix"`
 }

@@ -345,6 +345,10 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
                 <FindingRow key={st} severity="high" status={st} category="security" title={`Token stored in localStorage (${st})`} file="apps/web/src/auth/session.ts" line={42} description="The refresh token is written to `localStorage`, readable by any script on the origin." suggestedFix="Keep it in an `HttpOnly` cookie scoped to `/auth`." fixedIn={st === "resolved" ? <a href="#c-finding">Fix 2</a> : undefined} fixAttempts={st === "resolved" ? 2 : 0} resolutionNote={st === "accepted" ? "Accepted for the prototype; tracked in CP-88." : st === "superseded" ? "Replaced by a broader finding on the auth module." : undefined} />
               ))}
             </ul>
+            <Label>With an acceptance criterion, expanded</Label>
+            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+              <FindingRow severity="blocking" status="open" category="correctness" title="Totals rounded per line" file="api/export.go" line={40} defaultExpanded acceptance="An export's total equals the invoice page's total to the cent." description="Each line is rounded, then summed." suggestedFix="Sum in cents, round once." />
+            </ul>
             <Label>Grouped: open first</Label>
             <FindingGroupDemo />
             <Label>Grayscale</Label>

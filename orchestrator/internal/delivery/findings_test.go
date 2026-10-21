@@ -230,3 +230,45 @@ func TestAnEvidencePrefixedDescriptionParsesWhole(t *testing.T) {
 		t.Errorf("finding = %+v, want description %q", got[0], want)
 	}
 }
+
+func TestAcceptanceIsRead(t *testing.T) {
+	cases := []struct{ name, doc, want string }{
+		{"plain", "title: T\nseverity: high\nacceptance: An empty month exports a header row only.\n", "An empty month exports a header row only."},
+		{"alias", "title: T\nseverity: high\nacceptance_criterion: Totals match to the cent.\n", "Totals match to the cent."},
+		{"wrapped", "title: T\nseverity: high\nacceptance: Two concurrent creates\n  get distinct attempt numbers.\nsuggested_fix: x\n",
+			"Two concurrent creates get distinct attempt numbers."},
+		{"block", "title: T\nseverity: high\nacceptance: |\n  First part.\n  Second part.\n", "First part. Second part."},
+		{"absent", "title: T\nseverity: high\n", ""},
+	}
+	for _, c := range cases {
+		got := ParseFindings(c.doc)
+		if len(got) != 1 {
+			t.Fatalf("%s: findings = %+v, want one", c.name, got)
+		}
+		if got[0].Acceptance != c.want {
+			t.Errorf("%s: acceptance = %q, want %q", c.name, got[0].Acceptance, c.want)
+		}
+	}
+}
+
+func TestCausedByFixIsYesOrTrueOnly(t *testing.T) {
+	for value, want := range map[string]bool{"yes": true, "Yes": true, `"true"`: true, "no": false, "maybe": false, "": false} {
+		doc := "title: T\nseverity: high\n"
+		if value != "" {
+			doc += "caused_by_fix: " + value + "\n"
+		}
+		got := ParseFindings(doc)
+		if len(got) != 1 || got[0].CausedByFix != want {
+			t.Errorf("caused_by_fix: %s → %+v, want %v", value, got, want)
+		}
+	}
+}
+
+// A model writing the prompt's "Done when:" label inside a document has a
+// space in the key: the line continues the open field, it is no criterion.
+func TestADoneWhenLineStaysInTheDescription(t *testing.T) {
+	got := ParseFindings("title: T\nseverity: high\ndescription: Traced: it rounds per line.\nDone when: x\n")
+	if len(got) != 1 || got[0].Description != "Traced: it rounds per line. Done when: x" || got[0].Acceptance != "" {
+		t.Errorf("finding = %+v", got)
+	}
+}

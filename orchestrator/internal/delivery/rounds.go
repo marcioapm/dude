@@ -311,7 +311,13 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, from map[string
 	if in.ReviewRange != nil {
 		reason = rangeReason[in.ReviewRange.Of]
 	}
-	message := RoundMessage(in.Phase, from, in.BaseRefs, reason, findings)
+	var lastFix []FixRange
+	if in.Phase == PhaseReview {
+		if lastFix, err = LastFixTx(ctx, tx, in.ParentRunID); err != nil {
+			return "", err
+		}
+	}
+	message := RoundMessage(in.Phase, from, in.BaseRefs, reason, findings, lastFix)
 	if note := strings.TrimSpace(in.ConductorNote); note != "" {
 		message += "\n\n" + render(fromConductorTmpl, note)
 	}
@@ -319,8 +325,9 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, from map[string
 }
 
 // RoundMessage renders contracts/resume/round: from and to are each
-// repository's commit at the last round and now.
-func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding) string {
+// repository's commit at the last round and now; lastFix, the commits of
+// the fix this round follows (LastFixTx).
+func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, lastFix []FixRange) string {
 	type rng struct {
 		Repo, From string
 		Named      bool
@@ -337,11 +344,45 @@ func RoundMessage(phase string, from, to map[string]string, reason string, findi
 		list = earlierFindings(findings)
 	}
 	return render(roundTmpl, struct {
-		Test             bool
-		Ranges           []rng
-		Reason, Findings string
-		Format, Summary  string
-	}{phase == PhaseTest, ranges, reason, list, findingFormat, reviewSummary})
+		Test                      bool
+		Ranges                    []rng
+		Reason, Findings, LastFix string
+		Format, Summary           string
+	}{phase == PhaseTest, ranges, reason, list, lastFixNote(lastFix), findingFormat, reviewSummary})
+}
+
+// FixRange is what a fix Run published in one repository: its commits are
+// Base..Head.
+type FixRange struct{ Repo, Base, Head string }
+
+// LastFixTx is what the fix Run parent published, per repository, in name
+// order; none when parent is no fix (a first review, a simplifier's range)
+// or published nothing. A reviewer reads these commits to say whether a new
+// finding is in code the fix wrote: dude does not infer it from the paths
+// the fix touched (earlierFindings).
+func LastFixTx(ctx context.Context, tx pgx.Tx, parent string) ([]FixRange, error) {
+	if parent == "" {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT h.key, COALESCE(NULLIF(h.value->>'base', ''), r.base_refs->>h.key, ''), h.value->>'sha'
+		FROM runs r, jsonb_each(r.heads) h
+		WHERE r.id = $1 AND r.phase = 'fix' AND jsonb_typeof(h.value) = 'object' AND COALESCE(h.value->>'sha', '') <> ''
+		ORDER BY h.key`, parent)
+	if err != nil {
+		return nil, err
+	}
+	ranges, err := pgx.CollectRows(rows, pgx.RowToStructByPos[FixRange])
+	return slices.DeleteFunc(ranges, func(r FixRange) bool { return r.Base == "" }), err
+}
+
+// lastFixNote renders contracts/last-fix, each range under its repository's
+// name: the ranges list only repositories the fix published, so their count
+// cannot tell a one-checkout Run from a several-checkout one. "" for no range.
+func lastFixNote(ranges []FixRange) string {
+	if len(ranges) == 0 {
+		return ""
+	}
+	return render(lastFixTmpl, ranges)
 }
 
 func findingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding, error) {
@@ -349,7 +390,7 @@ func findingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding,
 		return nil, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-			COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
+			COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
 		FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
 		ORDER BY chosen.n`, ids)
 	if err != nil {

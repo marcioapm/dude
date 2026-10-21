@@ -415,7 +415,8 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads", "Totals match"},
 		Repositories: twoRepos(), BlockingSeverities: []string{"blocking", "high"}, Tools: true, CLI: true}
 	for kind, got := range underEveryMode("qa_browser", "", in.InstructionsInput()) {
-		for _, want := range []string{testerContract, testerTools, findingFormat, severityNote(in.BlockingSeverities)} {
+		for _, want := range []string{testerContract, testerTools,
+			render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("qa_browser")), severityNote("qa_browser", in.BlockingSeverities)} {
 			if strings.Count(got, want) != 1 {
 				t.Errorf("%s: the tester's instructions should say %q once:\n%s", kind, want, got)
 			}
@@ -460,7 +461,7 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 			}
 		}
 		for kind, got := range underEveryMode("reviewer", category, in.InstructionsInput()) {
-			for _, want := range []string{reviewFocus[category], reviewContract, findingFormat, reviewSummary, severityNote(in.BlockingSeverities)} {
+			for _, want := range []string{reviewFocus[category], reviewContract, findingFormat, reviewSummary, severityNote("reviewer", in.BlockingSeverities)} {
 				if strings.Count(got, want) != 1 {
 					t.Errorf("%s/%s: the reviewer's instructions should say %q once:\n%s", category, kind, want, got)
 				}

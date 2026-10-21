@@ -123,12 +123,13 @@ file: path/to/file.ts
 line: 123
 title: One line naming the problem
 description: What is wrong and why it matters.
+acceptance: What must be observably true once this is fixed — an outcome or invariant someone can check, never how to fix it.
 suggested_fix: What to do instead.
 ```
 
 Report nothing if you find nothing. A finding you are not confident in is a `note`, not a `blocking` — a reviewer that cries wolf costs the next fix attempt for nothing.
 
-Severity decides what happens next: `blocking`, `high` send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. So a finding that means an acceptance criterion is not met must be one of `blocking`, `high`, however small the fix.
+Severity decides what happens next: `blocking`, `high` send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. So a finding that means an acceptance criterion is not met must be one of `blocking`, `high`, however small the fix. A finding at a severity that sends the change back states its `acceptance`.
 
 # This organisation
 
