@@ -149,7 +149,7 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
     void act("review", () => client.requestReview(pr.id, picked.map((p) => p.login))).then((ok) => ok && stopAsking());
   };
   facts.reviews = asking ? null : refusedTip(
-    <Button size="sm" variant="quiet" disabled={off} onClick={() => setAsking(true)} data-testid="pr-request-review">Request review</Button>,
+    <Button size="sm" variant="quiet" disabled={off || busy !== null} onClick={() => setAsking(true)} data-testid="pr-request-review">Request review</Button>,
   );
 
   // Asking opens under the reviewers' lines: a picker, and Ask for those picked.
