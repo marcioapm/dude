@@ -55,9 +55,18 @@ const (
 const EvRunContinues = "run.continues"
 
 // RoundContinues says whether a phase's next round goes on from its last:
-// a reviewer's or tester's, outside an integration.
+// a reviewer's, tester's or fixer's, outside an integration.
 func RoundContinues(p Policy, phase string, integration bool) bool {
-	return p.ResumeRounds && !integration && (phase == PhaseReview || phase == PhaseTest)
+	return p.ResumeRounds && !integration && len(goesOnFrom[phase]) > 0
+}
+
+// goesOnFrom is, per phase whose rounds go on, the phases its predecessor
+// may be of: a fix goes on from the attempt's last writer, its previous
+// fixer or else its implementer.
+var goesOnFrom = map[string][]string{
+	PhaseReview: {PhaseReview},
+	PhaseTest:   {PhaseTest},
+	PhaseFix:    {PhaseFix, PhaseImplement},
 }
 
 // notIntegration (SQL, over runs): not an integration review, which is
@@ -65,23 +74,31 @@ func RoundContinues(p Policy, phase string, integration bool) bool {
 const notIntegration = `NOT (pr_feedback @> '[{"source":"integration"}]')`
 
 // Predecessor is the Run a next round would go on from, and where its
-// checkouts were.
+// checkouts were when its round ended.
 type Predecessor struct {
 	ID       string
 	BaseRefs map[string]string
 }
 
-// PreviousRound is the latest completed Run of phase and category in the
-// task's attempt (0: its highest), nil for none.
+// roundEnd (SQL, over runs r): where a Run's checkouts were when its round
+// ended: where they started, each repository it published moved to its
+// head.
+const roundEnd = `(r.base_refs || COALESCE((SELECT jsonb_object_agg(h.key, h.value->>'sha')
+	FROM jsonb_each(CASE WHEN jsonb_typeof(r.heads) = 'object' THEN r.heads ELSE '{}' END) h
+	WHERE COALESCE(h.value->>'sha', '') <> ''), '{}'::jsonb))`
+
+// PreviousRound is the latest completed Run phase's next round goes on
+// from (goesOnFrom), of category in the task's attempt (0: its highest),
+// nil for none.
 func (s *Store) PreviousRound(ctx context.Context, org, taskID string, attempt int, phase, category string) (*Predecessor, error) {
 	var p *Predecessor
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var found Predecessor
-		err := tx.QueryRow(ctx, `SELECT id, base_refs FROM runs
-			WHERE task_id = $1 AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1), 1)
-			  AND phase = $3::run_phase AND category IS NOT DISTINCT FROM $4 AND status = 'completed'
-			  AND replaced_by IS NULL AND source_kind IS NULL AND `+notIntegration+`
-			ORDER BY ended_at DESC, id DESC LIMIT 1`, taskID, attempt, phase, db.Nullable(category)).Scan(&found.ID, &found.BaseRefs)
+		err := tx.QueryRow(ctx, `SELECT r.id, `+roundEnd+` FROM runs r
+			WHERE r.task_id = $1 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1), 1)
+			  AND r.phase = ANY($3::run_phase[]) AND r.category IS NOT DISTINCT FROM $4 AND r.status = 'completed'
+			  AND r.replaced_by IS NULL AND r.source_kind IS NULL AND `+notIntegration+`
+			ORDER BY r.ended_at DESC, r.id DESC LIMIT 1`, taskID, attempt, goesOnFrom[phase], db.Nullable(category)).Scan(&found.ID, &found.BaseRefs)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -162,7 +179,7 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	c := in.Continue
 	in.Continue = nil
 	var p predecessorRow
-	err := tx.QueryRow(ctx, `SELECT r.id, r.base_refs, r.phase::text, COALESCE(r.category, ''),
+	err := tx.QueryRow(ctx, `SELECT r.id, `+roundEnd+`, r.phase::text, COALESCE(r.category, ''),
 			r.keep AND COALESCE(r.kept_until > now(), false) AND r.lux_run_id IS NOT NULL
 			  AND r.lux_stop_reason IS DISTINCT FROM 'cancel' AND r.artifacts_due_at IS NULL,
 			r.keep AND COALESCE(r.kept_until > now(), false) AND r.lux_run_id IS NOT NULL
@@ -174,7 +191,7 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 		FOR UPDATE OF r`, c.Predecessor, in.TaskID, collectWait.Seconds()).
 		Scan(&p.ID, &p.BaseRefs, &p.Phase, &p.Category, &p.Kept, &p.Collecting, &p.Model, &p.Tier, &p.Effort, &p.Harness,
 			&p.ProjectModels, &p.OrgModels)
-	if db.IsNotFound(err) || err == nil && (p.Phase != in.Phase || p.Category != in.Category) {
+	if db.IsNotFound(err) || err == nil && (!slices.Contains(goesOnFrom[in.Phase], p.Phase) || p.Category != in.Category) {
 		return createPhaseRunTx(ctx, tx, org, in)
 	}
 	if err != nil {

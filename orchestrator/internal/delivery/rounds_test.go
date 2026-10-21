@@ -238,3 +238,50 @@ func TestAKeptReviewerIsLetGoWhenItsTaskEnds(t *testing.T) {
 		})
 	}
 }
+
+// A fix goes on from the attempt's last writer: its implementer, until a
+// fixer has run, then that fixer; never a simplifier. Its round started
+// where the writer left its checkouts: its published head.
+func TestAFixGoesOnFromTheLastFixerElseTheImplementer(t *testing.T) {
+	w := newRoundWorld(t)
+	store := &delivery.Store{DB: w.app}
+	ctx := context.Background()
+	prev := func() string {
+		t.Helper()
+		p, err := store.PreviousRound(ctx, w.org, w.task, 1, delivery.PhaseFix, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p == nil {
+			return "none"
+		}
+		return p.ID + "@" + p.BaseRefs["api"]
+	}
+	insert := func(id, phase, role, ended string) {
+		t.Helper()
+		w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, base_refs, heads, ended_at)
+			VALUES ($1, $2, $3, $4, 1, 'completed', $5::run_phase, $6::agent_role, 'agent', '{"api":"base"}',
+				jsonb_build_object('api', jsonb_build_object('sha', 'head_'||$1)), now() - $7::interval)`,
+			id, w.org, w.project, w.task, phase, role, ended)
+	}
+	if got := prev(); got != "none" {
+		t.Fatalf("before any writer: %s", got)
+	}
+	insert("run_im", "implement", "implementer", "3 hours")
+	if got := prev(); got != "run_im@head_run_im" {
+		t.Fatalf("after the implementer: %s, want it at its head", got)
+	}
+	insert("run_sp", "simplify", "implementer", "2 hours")
+	if got := prev(); got != "run_im@head_run_im" {
+		t.Fatalf("after a simplifier: %s, want the implementer", got)
+	}
+	insert("run_fx", "fix", "implementer", "1 hour")
+	if got := prev(); got != "run_fx@head_run_fx" {
+		t.Fatalf("after a fixer: %s, want the fixer", got)
+	}
+	// A reviewer's round still goes on from its reviewer only.
+	p, err := store.PreviousRound(ctx, w.org, w.task, 1, delivery.PhaseReview, "correctness")
+	if err != nil || p == nil || p.ID != w.first || p.BaseRefs["api"] != "aaa" {
+		t.Fatalf("a review's predecessor: %+v %v", p, err)
+	}
+}
