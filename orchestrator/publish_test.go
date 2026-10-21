@@ -10,6 +10,7 @@ import (
 	"context"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -212,6 +213,84 @@ func TestAMovingPublishHoldsOffWritersAndTheConductorsEnd(t *testing.T) {
 }
 
 func (e *editing) store() *delivery.Store { return &delivery.Store{DB: e.app} }
+
+// A publish moving the task branch when the conductor opens the pull
+// request, with whenBehind tell: the opening waits for the publish to
+// settle, and then the published head goes through the gate as any
+// conductor's commit does, reviewed before the pull request opens on it.
+func TestAPullRequestDoesNotOpenWhileAPublishMoves(t *testing.T) {
+	e := newEditing(t)
+	e.tell()
+	e.wokenWith(e.task, "after implement")
+	e.must(e.task, "start_phase", `{"phase":"simplify"}`)
+	e.finishSimplifierReview(e.task)
+	e.until("before the pull request", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
+	e.must(e.task, "decide", `{"action":"ask_person"}`)
+	if status, out := e.chat(e.task, "Open"); status != 200 || out["questionId"] == nil {
+		t.Fatalf("answer: %d %v", status, out)
+	}
+	e.current()
+	sha := e.commit(map[string]string{"README.md": "# target\n\nnit\n"})
+	g := newGate()
+	e.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if isMove(r) {
+				g.wait()
+			}
+			return 0
+		}
+	})
+	e.settleInBackground()
+	t.Cleanup(g.release)
+	id := e.publish()
+	select {
+	case <-g.held:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the move was never asked for")
+	}
+	if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE id = $1 AND status = 'moving'`, id); n != 1 {
+		t.Fatal("not reserved before the move")
+	}
+	// The delivery's heads are still the reviewed ones: the gate lets it go.
+	e.must(e.task, "decide", `{"action":"open_pull_request"}`)
+	e.until("the opening held off, or a pull request", func() bool {
+		return len(e.gh.Pulls()) > 0 || e.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'openPullRequest'
+			AND last_error = $2`, e.task, delivery.ErrPublishMoving.Why) == 1
+	})
+	if n := len(e.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened while the publish moved", n)
+	}
+	g.release()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	e.until("back before the pull request", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
+	if n := len(e.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened at the unreviewed head", n)
+	}
+	e.refused(e.task, "decide", `{"action":"open_pull_request"}`, "the last commit is the conductor's; run a review first")
+	e.must(e.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	e.until("after the review", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
+	e.dismissOpenFinding()
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.finishSimplifierReview(e.task)
+	e.until("before the pull request again", func() bool { return e.decisionAt(e.task) == delivery.PointBeforePR })
+	e.must(e.task, "decide", `{"action":"ask_person"}`)
+	if status, out := e.chat(e.task, "Open"); status != 200 || out["questionId"] == nil {
+		t.Fatalf("answer: %d %v", status, out)
+	}
+	e.must(e.task, "decide", `{"action":"open_pull_request"}`)
+	e.until("the pull request", func() bool { return len(e.gh.Pulls()) == 1 })
+	// At the task branch's head, which the published commit is on (the
+	// simplifier may have committed after it).
+	head := e.gh.SHA(e.branch)
+	if n := e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, head); n != 1 {
+		t.Errorf("the pull request is not at the task branch's head %s", head)
+	}
+	if !slices.Contains(e.gh.BranchLog(e.branch), sha) {
+		t.Errorf("the published commit %s is not on the task branch", sha)
+	}
+}
 
 // Two repositories, and the second's task branch refuses its fast-forward:
 // what moved is recorded — the commit event, the delivery's heads, the

@@ -16,9 +16,16 @@ import (
 )
 
 // syncBeforePR runs while the workflow holds its step lease. A moving
-// conductor publish is refused before any network move; its reservation
-// cannot start while stepHolds is true.
+// conductor publish is refused before any network move and before any
+// pull request opens, whatever WhenBehind says: its reservation cannot
+// start while stepHolds is true, so one already moving settles first and
+// its heads go through the gates before the pull request.
 func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		return RefuseWhileMovingTx(ctx, tx, st.TaskID)
+	}); err != nil {
+		return workflow.Result{}, false, err
+	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
 	if err != nil || gh == nil {
 		return workflow.Result{}, false, err
@@ -28,9 +35,6 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 	}
 	var repos []Repository
 	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		if err := RefuseWhileMovingTx(ctx, tx, st.TaskID); err != nil {
-			return err
-		}
 		var writer bool
 		if err := tx.QueryRow(ctx, `SELECT `+liveWriter, st.TaskID).Scan(&writer); err != nil {
 			return err
