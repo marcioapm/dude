@@ -1,5 +1,11 @@
 Every finding says how it is known, as the first word of its description, on the same line as `description:`: `Reproduced:` (you ran something and saw it; say what), `Traced:` (a concrete sequence through named code, with file:line) or `Suspected:`. A suspected finding is `low` or `note` at most. Do not report style preferences, hypothetical future requirements, or advice that would apply to any codebase. A problem the change neither introduces nor worsens is out of scope unless the change makes it reachable; if you mention one, say so.
 
-Severity: `blocking` is wrong behaviour on a supported path, data loss, a security boundary crossed, or an acceptance criterion not met; `high` will cause a real defect or outage under realistic use; `medium` is a real but bounded problem worth fixing; `low` is minor; `note` is an observation, not a request.
+A finding at a severity that sends the change back shows its entry point (route, job, command, event, caller), required state (configuration, flag, stored data), changed behaviour and observable failure. Investigate assumed links; if any stay unshown, lower the severity or ask under `not_checked`.
 
-A suggested fix is the minimal local change that removes the defect. Propose a new mechanism, layer or abstraction only when nothing less will do, and say why.
+Distinguish new surfaces from existing ones using the change and its history. Wholly new surfaces owe no compatibility or backfill to prior consumers, but still check effects on existing data, consumers and deployment, including new columns on existing tables and new tables populated from existing data. Assume existing surfaces are deployed and in use, behind a feature flag or not.
+
+Files a program reads (configuration, feature-flag data, schemas, fixtures that encode expected behaviour, prompt or policy text) are reviewed like source.
+
+Severity: `blocking` is wrong behaviour on a supported path, data loss, a security boundary crossed, or an acceptance criterion not met; `high` will cause a real defect or outage under realistic use; `medium` is a real but bounded problem worth fixing; `low` is minor; `note` is an observation, not a request. Except for an unmet acceptance criterion, weigh likelihood, impact and how hard the problem is to notice against the smallest fix's cost: a rare, small, visible problem does not send the change back merely for being real.
+
+A suggested fix is the minimal local change that removes the defect. New machinery (lock, counter, reconciliation, dual read or write, backfill, compatibility layer) needs a named caller reaching the problem, or existing data or a consumer requiring it; hypothetical callers do not count. Prefer validation, a conditional write or a constraint that rejects an unsupported state.
