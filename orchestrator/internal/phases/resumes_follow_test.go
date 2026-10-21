@@ -20,6 +20,8 @@ type streamLux struct {
 	frames chan lux.Frame
 	// Output was called: the stream is open.
 	opened chan struct{}
+	// Closed once the follower followingAs started has returned.
+	done chan struct{}
 }
 
 func newStreamLux(p *placementLux) *streamLux {
@@ -60,6 +62,7 @@ func (w *resumeWorld) followingAs(wrap func(*streamLux) lux.Client) *streamLux {
 	r.Status, r.LuxState = statusRunning, "resuming"
 	ctx, cancel := context.WithCancel(w.ctx)
 	done := make(chan struct{})
+	st.done = done
 	go func() {
 		defer close(done)
 		_ = w.s.followOutput(ctx, r)

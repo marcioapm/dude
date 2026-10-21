@@ -106,6 +106,9 @@ type Syncer struct {
 	// For tests: called as each resume follow-up finishes, its placements
 	// recorded and its timing published.
 	followedUp func()
+	// For tests: the budget of a resume follow-up's placement reads; zero
+	// is 30 s. Its timing has a budget of its own (followUpTimingTimeout).
+	followUpTimeout time.Duration
 	// For tests: called as a publish looks up its Run's git.merge_attempted
 	// (mergeAttempted).
 	MergeAttemptLookup func()
@@ -129,6 +132,10 @@ type Syncer struct {
 	following map[string]*follower
 	// What each Run's live diff last was (livediff.go).
 	diffs map[string]*diffState
+	// Resumes a live follow-up has yet to read the placements of, by Run
+	// and epoch, counted: recovery leaves them to it (owe, resumes.go).
+	owingMu sync.Mutex
+	owing   map[owedResume]int
 }
 
 // follower is one goroutine reading a Run's output. A pointer, so a
@@ -1935,7 +1942,12 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 		}
 		if err := s.applyBatch(ctx, t, batch); err != nil {
 			// What was read but not recorded is read again from the saved
-			// cursor by the next follower.
+			// cursor by the next follower; nothing of it is owed.
+			for epoch, read := range t.resumes {
+				if read {
+					s.paid(r.ID, epoch)
+				}
+			}
 			t.resumes = nil
 			return err
 		}
@@ -2806,6 +2818,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		missed = s.resumeAccepted(ctx, tx, r, foreseen, lr)
+		if missed {
+			// Owed before this commits it timeable: recovery leaves it to
+			// the follow-up below.
+			s.owe(r.ID, resumedEpoch(foreseen, lr))
+		}
 		// The agent is starting a new turn; the old "done" no longer holds.
 		// lux_state is what lux says now ("resuming"), so directives wait for
 		// the stream to report it running. A resumed lux Run's cost is no
@@ -2859,6 +2876,9 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		return s.event(ctx, tx, r, evUnparked, ledger.ActorSystem,
 			map[string]any{"reason": reason, "epoch": resumedEpoch(foreseen, lr)})
 	}); err != nil {
+		if missed {
+			s.paid(r.ID, resumedEpoch(foreseen, lr))
+		}
 		return true, err
 	}
 	if missed {

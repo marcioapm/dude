@@ -398,7 +398,7 @@ func (w *resumeWorld) follow(frames ...lux.Frame) {
 		w.t.Fatal(err)
 	}
 	// As followOutput does: a failure is the syncer's to log.
-	_ = w.s.timeResumes(w.ctx, w.run, 0)
+	_ = w.s.timeUnowned(w.ctx, w.run, 0)
 	for _, f := range frames {
 		if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
 			if err := t.apply(w.ctx, tx, w.s, f); err != nil {
