@@ -243,6 +243,44 @@ func TestSettingsRolesAreResolvedAsTheSettingsPageResolvesThem(t *testing.T) {
 	}
 }
 
+// A brainstorm's row is what its Runs are built with: the organisation's
+// Brainstorm setting with the session's own choice on top, never a linked
+// project's roles.brainstorm, image or prompt.
+func TestABrainstormsRowIsItsSessionsOverTheOrganisations(t *testing.T) {
+	f, _ := roleSettingsWorld(t)
+	token := f.session(t, "ssn_tier", "", "")
+	mustExec(t, f.owner, `UPDATE sessions SET tier = 'mtr_big' WHERE id = 'ssn_tier'`)
+	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_tier', $1, $2)`, f.project, f.org)
+	mustExec(t, f.owner, `UPDATE projects SET agent_models = agent_models || $2::jsonb WHERE id = $1`, f.project,
+		`{"brainstorm":{"tier":"mtr_small","harness":"codex","machineSize":"msz_l","image":"img_web","timeLimitMinutes":30}}`)
+	mustExec(t, f.owner, `INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, created_by, created_at)
+		VALUES ('pv_b', $1, $2, 'brainstorm', 'replace', 'x', 'psn_ana', '2026-02-03T04:05:06Z')`, f.org, f.project)
+
+	out := f.settingsOf(t, token, `{}`)
+	if field(out, "settings", 0, "project", "key") != "TEXT" {
+		t.Fatalf("the brainstorm's scope: %v", field(out, "settings", 0, "project"))
+	}
+	b := roleIn(out, "brainstorm")
+	if field(b, "tier", "value", "id") != "mtr_big" || field(b, "tier", "source") != "session" ||
+		field(b, "harness", "value") != "opencode" || field(b, "harness", "source") != "dude" ||
+		field(b, "timeLimitMinutes", "source") != "dude" || field(b, "machineSize", "source") != "dude" ||
+		field(b, "image", "source") != "dude" || b["projectNotes"] != nil {
+		t.Errorf("brainstorm: %v", b)
+	}
+	if m := field(out, "settings", 0, "machines", "brainstorm", "source"); m != "dude" {
+		t.Errorf("brainstorm's machine: %v", field(out, "settings", 0, "machines", "brainstorm"))
+	}
+	for _, p := range field(out, "settings", 0, "prompts").([]any) {
+		if m := p.(map[string]any); m["role"] == "brainstorm" && (m["project"] != nil || m["projectSaved"] != nil) {
+			t.Errorf("brainstorm's prompt: %v", m)
+		}
+	}
+	// The other roles still read the project.
+	if field(roleIn(out, "reviewer"), "tier", "source") != "project" {
+		t.Errorf("reviewer: %v", roleIn(out, "reviewer"))
+	}
+}
+
 // Prompts say built-in or saved, added to or replaced, and when and by
 // whom; network, capabilities and machines are each role's. Nothing the
 // web app shows only to admins, and no prompt or notes text, appears.

@@ -37,6 +37,7 @@ const (
 	sourceDude    = "dude"
 	sourceOrg     = "organization"
 	sourceProject = "project"
+	sourceSession = "session"
 )
 
 // valueOut is one setting: its value and the layer it is set in.
@@ -50,6 +51,19 @@ type valueOut struct {
 type settingsLayers struct {
 	org     orgRow
 	project *projectRow
+	// A brainstorm caller's session's tier and harness, over the
+	// organisation's Brainstorm setting, and the size its agent raised.
+	session *delivery.SessionModel
+	raised  delivery.Raises
+}
+
+// of is the layers role's Runs are built over: a brainstorm's are its
+// organisation's and its session's, never a project's (brainstormSpec).
+func (l settingsLayers) of(role string) settingsLayers {
+	if role == delivery.RoleBrainstorm {
+		return settingsLayers{org: l.org, session: l.session, raised: l.raised}
+	}
+	return settingsLayers{org: l.org, project: l.project}
 }
 
 type orgRow struct {
@@ -126,11 +140,23 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	}
 	out.External, out.Sources = settingsText("external", delivery.ExternalText(w.id, "…")), settingsText("sources", nil)
 	out.Organization, out.Role = w.text(org.Name, 200), c.Role
-	scopes := []settingsLayers{{org: org}}
+	var session *delivery.SessionModel
+	var raised delivery.Raises
+	if c.SessionID != "" && (want("roles") || want("machines")) {
+		m, err := delivery.LoadSessionModel(ctx, tx, c.SessionID)
+		if err != nil {
+			return out, err
+		}
+		session = &m
+		if raised, err = delivery.LoadSessionRaise(ctx, tx, c.SessionID, delivery.RoleBrainstorm); err != nil {
+			return out, err
+		}
+	}
+	scopes := []settingsLayers{{org: org, session: session, raised: raised}}
 	if len(projects) > 0 {
 		scopes = scopes[:0]
 		for i := range projects {
-			scopes = append(scopes, settingsLayers{org: org, project: &projects[i]})
+			scopes = append(scopes, settingsLayers{org: org, project: &projects[i], session: session, raised: raised})
 		}
 	}
 	grants := map[string]capabilities.Grants{}
@@ -189,7 +215,7 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		if want("machines") {
 			s.Machines = map[string]machineRole{}
 			for _, role := range settingsRoles {
-				s.Machines[role] = machineOf(w, l, refs.sizes, role)
+				s.Machines[role] = machineOf(w, l.of(role), refs.sizes, role)
 			}
 		}
 		out.Scopes = append(out.Scopes, s)

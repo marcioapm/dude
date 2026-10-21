@@ -84,12 +84,25 @@ func (l settingsLayers) projectModels() json.RawMessage {
 	return nil
 }
 
-func rolesOut(w wrapper, l settingsLayers, refs roleRefs) []roleOut {
+func rolesOut(w wrapper, scope settingsLayers, refs roleRefs) []roleOut {
 	out := make([]roleOut, 0, len(settingsRoles))
 	for _, role := range settingsRoles {
+		l := scope.of(role)
 		rs, from := delivery.ResolveRoleFrom(role, l.roleLayers()...)
 		r := roleOut{Role: role, Label: delivery.RoleName(role)}
 		r.Tier = layerSource(l, from.Tier)
+		r.Harness = layerSource(l, from.Harness)
+		if l.session != nil {
+			// The session's choice in place of the organisation's, as
+			// brainstormSpec builds its Run.
+			rs = l.session.Over(rs)
+			if l.session.Tier != nil {
+				r.Tier.Source = sourceSession
+			}
+			if l.session.Harness != nil {
+				r.Harness.Source = sourceSession
+			}
+		}
 		if rs.Tier != "" {
 			t, _, _ := delivery.TierIn(refs.tiers, role, rs)
 			tier := refOut{ID: rs.Tier, Missing: t.ID == ""}
@@ -99,7 +112,6 @@ func rolesOut(w wrapper, l settingsLayers, refs roleRefs) []roleOut {
 			}
 			r.Tier.Value = tier
 		}
-		r.Harness = layerSource(l, from.Harness)
 		r.Harness.Value = rs.HarnessName()
 		r.TimeLimitMinutes = layerSource(l, from.TimeLimit)
 		r.TimeLimitMinutes.Value = rs.TimeLimit()
@@ -140,11 +152,14 @@ type machineRole struct {
 }
 
 // machineOf is the size role's Runs start on in the scope (Sizes.ForRole,
-// with no size an agent raised). A fixer's taken from the implementer is
-// set where the implementer's is, over the same layers.
+// over a session's raised size for its brainstorm). A fixer's taken from
+// the implementer is set where the implementer's is, over the same layers.
 func machineOf(w wrapper, l settingsLayers, sizes delivery.Sizes, role string) machineRole {
-	m, ok := sizes.ForRole(role, nil, l.projectModels(), l.org.AgentModels)
+	m, ok := sizes.ForRole(role, l.raised, l.projectModels(), l.org.AgentModels)
 	out := machineRole{roleValueOut{Source: fromSource(m.From)}}
+	if m.Raised != nil {
+		out.Source = sourceSession
+	}
 	if m.From == "implementer" {
 		impl, _ := sizes.ForRole("implementer", nil, l.projectModels(), l.org.AgentModels)
 		out.Source, out.FollowsImplementer = fromSource(impl.From), true
@@ -247,12 +262,13 @@ func latestPrompts(ctx context.Context, tx pgx.Tx, projects []projectRow) (map[p
 	return out, err
 }
 
-func promptsOut(w wrapper, l settingsLayers, rows map[promptKey]promptRow) []promptOut {
+func promptsOut(w wrapper, scope settingsLayers, rows map[promptKey]promptRow) []promptOut {
 	saved := func(r promptRow) *savedOut {
 		return &savedOut{SavedAt: r.SavedAt.UTC().Format(time.RFC3339), SavedBy: w.text(r.SavedBy, 100)}
 	}
 	out := make([]promptOut, 0, len(settingsRoles))
 	for _, role := range settingsRoles {
+		l := scope.of(role)
 		p := promptOut{Role: role, Label: delivery.RoleName(role), Organization: sourceDude}
 		if r, ok := rows[promptKey{role, ""}]; ok {
 			p.Organization, p.OrgSaved = "saved", saved(r)
