@@ -223,9 +223,7 @@ func TestPullRequestActionsAllowTheOwnerAndAnAdmin(t *testing.T) {
 		if code, errCode, msg := w.act(person, "reviewers", `{"logins":["cy"]}`); code != http.StatusOK {
 			t.Fatalf("%s: %d %s %s", person, code, errCode, msg)
 		}
-		var asked int
-		w.gh.Set(func(s *fakegithub.Server) { asked = len(s.ReviewRequests) })
-		if asked != i+1 {
+		if asked := w.githubActed("reviewers"); asked != i+1 {
 			t.Fatalf("after %s, GitHub asked for reviews %d times", person, asked)
 		}
 	}
@@ -250,9 +248,7 @@ func TestPullRequestActionsOnAnUnownedTaskAreTheAdmins(t *testing.T) {
 	if code, errCode, msg := w.act("per_admin", "reviewers", `{"logins":["cy"]}`); code != http.StatusOK {
 		t.Fatalf("an admin on an unowned task: %d %s %s", code, errCode, msg)
 	}
-	var asked int
-	w.gh.Set(func(s *fakegithub.Server) { asked = len(s.ReviewRequests) })
-	if asked != 1 {
+	if asked := w.githubActed("reviewers"); asked != 1 {
 		t.Errorf("GitHub asked for reviews %d times, want 1", asked)
 	}
 }
