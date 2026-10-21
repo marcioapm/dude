@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -50,31 +52,35 @@ func (w *world) checkedAt(wi, repo, sha string, test bool) string {
 	return strings.Join(missing, " and ")
 }
 
-// allowUpdateBranch lets prShowsOnlyChecked pass a base merge GitHub made
-// on the branch by update-branch.
 type prShowsOption int
 
+// allowUpdateBranch lets prShowsOnlyChecked pass a base merge GitHub made
+// on the branch by an update-branch request that moved it.
 const allowUpdateBranch prShowsOption = 1
 
 // prShowsOnlyChecked watches every forge write that moves branch in repo
 // from now on (a ref update, a ref create, POST /merges into it) and
-// records, as each is asked, what was not yet done at its SHA (checkedAt).
-// check fails the test unless every head the branch moved to since was a
-// SHA reviewed (and with test, tested) when asked, or GitHub's merge of
-// such a SHA onto the branch (its second parent). A move by update-branch
-// fails it too unless allowUpdateBranch is given. It chains to any
-// Intercept already set, and a later one set by the test replaces it.
-func (w *world) prShowsOnlyChecked(t *testing.T, task, repo, branch string, test bool, opts ...prShowsOption) (check func()) {
+// records, as each is asked, what was not yet done at its SHA (checkedAt);
+// the first unfinished answer for a SHA stands, so a later request for it
+// cannot hide an earlier move. check fails the test unless every head the
+// branch moved to since was a SHA reviewed (and with test, tested) when
+// asked, or GitHub's merge of such a SHA onto the branch (its second
+// parent), and the branch is still at the last of them: a git push, which
+// the fake's BranchLog does not record, fails it too. A move by
+// update-branch (a merge of the base the request saw onto the head it saw)
+// fails it unless allowUpdateBranch is given. It chains to any Intercept
+// already set, and a later one set by the test replaces it.
+func (w *world) prShowsOnlyChecked(t testing.TB, task, repo, branch string, test bool, opts ...prShowsOption) (check func()) {
 	t.Helper()
 	gh := map[string]*fakegithub.Server{"target": w.gh, "web": w.web}[repo]
 	if gh == nil {
 		t.Fatalf("no fake GitHub for %s", repo)
 	}
 	prefix := "/repos/" + gh.Slug
-	before := len(gh.BranchLog(branch))
+	before, start := len(gh.BranchLog(branch)), gh.SHA(branch)
 	var mu sync.Mutex
 	asked := map[string]string{} // SHA → what was missing at it
-	updates := 0
+	var updates [][2]string      // update-branch requests: the head and base each saw
 	var previous func(*http.Request) int
 	gh.Set(func(s *fakegithub.Server) {
 		previous = s.Intercept
@@ -99,8 +105,9 @@ func (w *world) prShowsOnlyChecked(t *testing.T, task, repo, branch string, test
 				var n int
 				if _, err := fmt.Sscanf(strings.TrimPrefix(r.URL.Path, prefix+"/pulls/"), "%d/update-branch", &n); err == nil {
 					if p := gh.Pull(n); p != nil && p.Head == branch {
+						seen := [2]string{gh.SHA(branch), gh.SHA(p.Base)}
 						mu.Lock()
-						updates++
+						updates = append(updates, seen)
 						mu.Unlock()
 					}
 				}
@@ -108,7 +115,9 @@ func (w *world) prShowsOnlyChecked(t *testing.T, task, repo, branch string, test
 			if sha != "" {
 				missing := w.checkedAt(task, repo, sha, test)
 				mu.Lock()
-				asked[sha] = missing
+				if prev, ok := asked[sha]; !ok || prev == "" {
+					asked[sha] = missing
+				}
 				mu.Unlock()
 			}
 			if previous != nil {
@@ -121,25 +130,36 @@ func (w *world) prShowsOnlyChecked(t *testing.T, task, repo, branch string, test
 		t.Helper()
 		mu.Lock()
 		defer mu.Unlock()
-		unasked := updates // moves only update-branch requests can account for
+		last := start
 		for _, head := range gh.BranchLog(branch)[before:] {
+			last = head
 			at := head
 			missing, ok := asked[head]
-			if parents := gh.Parents(head); !ok && len(parents) == 2 {
+			parents := gh.Parents(head)
+			if !ok && len(parents) == 2 {
 				at = parents[1]
 				missing, ok = asked[at]
+			}
+			// An update-branch that moved the branch made exactly this merge;
+			// one GitHub refused made none, and excuses nothing.
+			update := -1
+			if !ok && len(parents) == 2 {
+				update = slices.Index(updates, [2]string{parents[0], parents[1]})
 			}
 			switch {
 			case ok && missing != "":
 				t.Fatalf("%s's %s moved to %s before its %s completed at %s", repo, branch, head, missing, at)
 			case ok:
-			case unasked > 0 && slices.Contains(opts, allowUpdateBranch):
-				unasked--
-			case unasked > 0:
+			case update >= 0 && slices.Contains(opts, allowUpdateBranch):
+				updates = slices.Delete(updates, update, update+1)
+			case update >= 0:
 				t.Fatalf("%s's %s moved to %s by update-branch, a base merge nobody reviewed", repo, branch, head)
 			default:
 				t.Fatalf("%s's %s moved to %s by no write dude asked for", repo, branch, head)
 			}
+		}
+		if cur := gh.SHA(branch); cur != last {
+			t.Fatalf("%s's %s is at %s, which no API write moved it to (a git push)", repo, branch, cur)
 		}
 	}
 }
@@ -149,6 +169,149 @@ func readBody(r *http.Request, v any) {
 	body, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	_ = json.Unmarshal(body, v)
+}
+
+// fatalRecorder stands in for the test given to prShowsOnlyChecked: it
+// records the first Fatalf and ends the goroutine, as t.Fatalf does.
+type fatalRecorder struct {
+	testing.TB
+	msg string
+}
+
+func (f *fatalRecorder) Helper() {}
+func (f *fatalRecorder) Fatalf(format string, a ...any) {
+	if f.msg == "" {
+		f.msg = fmt.Sprintf(format, a...)
+	}
+	runtime.Goexit()
+}
+
+// prShowsOnlyChecked against the fake GitHub alone: each case moves a
+// branch of its own through the API (or around it) and reads what check
+// says. No agent and no workflow run.
+func TestPRShowsOnlyCheckedFailsWhatWasNotChecked(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	n := 0
+	reviewed := func(sha string) {
+		n++
+		mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, base_refs)
+			VALUES ($1, $2, $3, $4, 1, 'completed', 'review', 'reviewer', jsonb_build_object('target', $5::text))`,
+			fmt.Sprintf("run_%s_%d", wi, n), w.org, w.project, wi, sha)
+	}
+	api := func(method, path string, body any) int {
+		b, _ := json.Marshal(body)
+		req, _ := http.NewRequest(method, w.ghURL+"/repos/acme/target"+path, bytes.NewReader(b))
+		req.Header.Set("Authorization", "token ghp_test")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	// ahead is a commit on top of branch, on a ref of its own.
+	ahead := func(branch, name string) string { return w.gh.Branch(branch+"-ahead", branch, name+": ahead") }
+	for _, tc := range []struct {
+		name string
+		// pr opens a pull request from the branch (update-branch needs one).
+		pr   bool
+		opts []prShowsOption
+		move func(branch string, number int)
+		want string // a substring of check's failure; "" passes
+	}{
+		// Arm "before its … completed", by the SHA itself.
+		{name: "an unreviewed fast-forward", move: func(branch string, _ int) {
+			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": ahead(branch, "unreviewed")})
+		}, want: "before its review completed"},
+		// The same arm: asked is read at the request, not at check.
+		{name: "a review recorded only after the move", move: func(branch string, _ int) {
+			sha := ahead(branch, "late")
+			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": sha})
+			reviewed(sha)
+		}, want: "before its review completed"},
+		// The same arm: a later request for the SHA, once reviewed, does
+		// not hide the earlier unreviewed move.
+		{name: "an unreviewed move asked again once reviewed", move: func(branch string, _ int) {
+			sha := ahead(branch, "again")
+			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": sha})
+			reviewed(sha)
+			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": sha})
+		}, want: "before its review completed"},
+		// Arm "ok", by the SHA itself.
+		{name: "a reviewed fast-forward", move: func(branch string, _ int) {
+			sha := ahead(branch, "reviewed")
+			reviewed(sha)
+			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": sha})
+		}},
+		// The final check: the branch is not where the API last moved it.
+		{name: "a git push", move: func(branch string, _ int) {
+			w.gh.CommitOnTop(branch, "pushed")
+		}, want: "which no API write moved it to"},
+		// Arm "by no write dude asked for": a move the API logged but the
+		// helper never saw (a later Intercept replaced it).
+		{name: "a write the helper did not see", move: func(branch string, _ int) {
+			sha := ahead(branch, "unseen")
+			reviewed(sha)
+			w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": sha})
+		}, want: "by no write dude asked for"},
+		// Arm "ok" by the merge's second parent.
+		{name: "POST /merges of a reviewed head", move: func(branch string, _ int) {
+			sha := w.gh.Branch(branch+"-side", "main", branch+": reviewed side")
+			reviewed(sha)
+			api("POST", "/merges", map[string]any{"base": branch, "head": sha})
+		}},
+		// Arm "before its … completed" by the merge's second parent.
+		{name: "POST /merges of an unreviewed head", move: func(branch string, _ int) {
+			sha := w.gh.Branch(branch+"-side", "main", branch+": unreviewed side")
+			api("POST", "/merges", map[string]any{"base": branch, "head": sha})
+		}, want: "before its review completed"},
+		// Arm "by update-branch".
+		{name: "update-branch", pr: true, move: func(branch string, number int) {
+			w.gh.AdvanceBase("main", branch+": base")
+			api("PUT", fmt.Sprintf("/pulls/%d/update-branch", number), map[string]any{"expected_head_sha": w.gh.SHA(branch)})
+		}, want: "by update-branch"},
+		// Arm "update-branch allowed".
+		{name: "update-branch allowed", pr: true, opts: []prShowsOption{allowUpdateBranch}, move: func(branch string, number int) {
+			w.gh.AdvanceBase("main", branch+": base")
+			api("PUT", fmt.Sprintf("/pulls/%d/update-branch", number), map[string]any{"expected_head_sha": w.gh.SHA(branch)})
+		}},
+		// An update-branch GitHub refused moved nothing: it excuses no
+		// other move, even with allowUpdateBranch.
+		{name: "a refused update-branch", pr: true, opts: []prShowsOption{allowUpdateBranch}, move: func(branch string, number int) {
+			w.gh.AdvanceBase("main", branch+": base")
+			if status := api("PUT", fmt.Sprintf("/pulls/%d/update-branch", number), map[string]any{"expected_head_sha": "0000000"}); status != 422 {
+				t.Errorf("a stale update-branch answered %d, want 422", status)
+			}
+			sha := ahead(branch, "after the refusal")
+			w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": sha})
+		}, want: "by no write dude asked for"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			branch := fmt.Sprintf("dude/%s/case-%d", wi, time.Now().UnixNano())
+			number := 0
+			if tc.pr {
+				number = w.gh.OpenAsPerson("alice", branch, "main", tc.name)
+			} else {
+				w.gh.Branch(branch, "main", tc.name)
+			}
+			w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+			rec := &fatalRecorder{TB: t}
+			check := w.prShowsOnlyChecked(rec, wi, "target", branch, false, tc.opts...)
+			tc.move(branch, number)
+			done := make(chan struct{})
+			go func() { defer close(done); check() }()
+			<-done
+			switch {
+			case tc.want == "" && rec.msg != "":
+				t.Fatalf("check failed: %s", rec.msg)
+			case tc.want != "" && !strings.Contains(rec.msg, tc.want):
+				t.Fatalf("check said %q, want it to fail with %q", rec.msg, tc.want)
+			}
+		})
+	}
 }
 
 func TestAnIntegrationReachesThePullRequestOnlyOnceReviewedAndTested(t *testing.T) {
