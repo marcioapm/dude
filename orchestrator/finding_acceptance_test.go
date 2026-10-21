@@ -141,6 +141,59 @@ func TestAReportedAgainReviewKeepsOnlyItsLatestVerdicts(t *testing.T) {
 	}
 }
 
+// A reviewer's finding without an acceptance criterion: it is stored with
+// none (NULL), the fixer is given no criterion for it, and the delivery
+// completes as it does with one.
+func TestAFindingWithoutACriterionIsFixedAsBefore(t *testing.T) {
+	w := newWorld(t)
+	// The scripted agent throughout, its reviewer's finding stated without
+	// the acceptance line. A new fake model would need a migration (the
+	// model_tiers_model_check list); the reply is all that differs.
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		b.Reply = strings.Replace(b.Reply, "acceptance: "+fakeagent.FindingAcceptance+"\n", "", 1)
+		return b
+	}
+	w.onModel("fixer", "llm-fix")
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request, or a stop", func() bool {
+		return len(w.gh.Pulls()) == 1 || w.taskStatus(wi) == "awaiting_input"
+	})
+	if s := w.escalationReason(wi); s != "" {
+		t.Fatalf("the delivery stopped for a person: %s", s)
+	}
+	var stored []string
+	rows, err := w.owner.Query(context.Background(), `SELECT COALESCE(quote_literal(acceptance), 'NULL') FROM review_findings
+		WHERE task_id = $1`, wi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			t.Fatal(err)
+		}
+		stored = append(stored, a)
+	}
+	if len(stored) != 1 || stored[0] != "NULL" {
+		t.Errorf("findings' acceptance = %v, want one NULL", stored)
+	}
+	fixes := w.luxRunsOf("fix")
+	if len(fixes) != 1 {
+		t.Fatalf("%d fixers, want one", len(fixes))
+	}
+	prompt := fixes[0].Prompt()
+	if !strings.Contains(prompt, "FACTORY.md does not record the fix") {
+		t.Fatalf("the fixer was not given the finding:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Done when:") || strings.Contains(prompt, fakeagent.FindingAcceptance) {
+		t.Errorf("the fixer was given a criterion for a finding without one:\n%s", prompt)
+	}
+}
+
 // A finding's criterion reaches whoever acts on it next: the fixer, and
 // the re-reviewer judging it, resumed (its round message) or fresh (its
 // first message). The re-review, whose parent is the fix, is told that
