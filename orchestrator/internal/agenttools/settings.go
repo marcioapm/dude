@@ -73,6 +73,9 @@ type settingsLayers struct {
 	// organisation's Brainstorm setting, and the size its agent raised.
 	session *delivery.SessionModel
 	raised  delivery.Raises
+	// The session's raised size under investigator, for the investigators
+	// its brainstorm starts (sessionChildSpec).
+	childRaised delivery.Raises
 }
 
 // of is the layers role's Runs are built over: a brainstorm's are its
@@ -83,6 +86,19 @@ func (l settingsLayers) of(role string) settingsLayers {
 	}
 	return settingsLayers{org: l.org, project: l.project}
 }
+
+// ofRun is of, except that a session caller's investigator is the one its
+// brainstorm starts: the organisation's agent models and the session's
+// raised size, never a project's or the session's tier (sessionChildSpec).
+// A Run's tier_override is per Run and not shown.
+func (l settingsLayers) ofRun(role string) settingsLayers {
+	if role == settingsInvestigator && l.session != nil {
+		return settingsLayers{org: l.org, raised: l.childRaised}
+	}
+	return l.of(role)
+}
+
+const settingsInvestigator = "investigator"
 
 type orgRow struct {
 	Name               string
@@ -130,7 +146,7 @@ type settingsOut struct {
 }
 
 // settingsRoles are the roles the settings pages list, in their order.
-var settingsRoles = []string{delivery.RoleConductor, delivery.RoleBrainstorm, "investigator", "implementer", "reviewer", "fixer",
+var settingsRoles = []string{delivery.RoleConductor, delivery.RoleBrainstorm, settingsInvestigator, "implementer", "reviewer", "fixer",
 	"simplifier", "qa_browser"}
 
 func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (settingsOut, error) {
@@ -169,7 +185,7 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	out.External, out.Sources = settingsText("external", delivery.ExternalText(w.id, "…")), settingsText("sources", nil)
 	out.Organization, out.Role = w.text(org.Name, 200), c.Role
 	var session *delivery.SessionModel
-	var raised delivery.Raises
+	var raised, childRaised delivery.Raises
 	if c.SessionID != "" && (want("roles") || want("machines")) {
 		m, err := delivery.LoadSessionModel(ctx, tx, c.SessionID)
 		if err != nil {
@@ -179,12 +195,15 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		if raised, err = delivery.LoadSessionRaise(ctx, tx, c.SessionID, delivery.RoleBrainstorm); err != nil {
 			return out, err
 		}
+		if childRaised, err = delivery.LoadSessionRaise(ctx, tx, c.SessionID, settingsInvestigator); err != nil {
+			return out, err
+		}
 	}
-	scopes := []settingsLayers{{org: org, session: session, raised: raised}}
+	scopes := []settingsLayers{{org: org, session: session, raised: raised, childRaised: childRaised}}
 	if len(projects) > 0 {
 		scopes = scopes[:0]
 		for i := range projects {
-			scopes = append(scopes, settingsLayers{org: org, project: &projects[i], session: session, raised: raised})
+			scopes = append(scopes, settingsLayers{org: org, project: &projects[i], session: session, raised: raised, childRaised: childRaised})
 		}
 	}
 	grants := map[string]capabilities.Grants{}
@@ -244,7 +263,7 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			// With roles shown, each role's size is its machineSize there.
 			s.Machines = map[string]machineRole{}
 			for _, role := range settingsRoles {
-				s.Machines[role] = machineOf(w, l.of(role), refs.sizes, role)
+				s.Machines[role] = machineOf(w, l.ofRun(role), refs.sizes, role)
 			}
 		}
 		out.Scopes = append(out.Scopes, s)

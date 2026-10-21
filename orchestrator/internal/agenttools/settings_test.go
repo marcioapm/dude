@@ -325,6 +325,40 @@ func TestABrainstormsRowIsItsSessionsOverTheOrganisations(t *testing.T) {
 	}
 }
 
+// A brainstorm's investigator row is the investigator it starts
+// (sessionChildSpec): the organisation's agent models and the session's
+// raised size, never a linked project's. A conductor's is its project's.
+func TestASessionsInvestigatorRowIsTheOneItsBrainstormStarts(t *testing.T) {
+	f, conductor := roleSettingsWorld(t)
+	token := f.session(t, "ssn_inv", "", "")
+	mustExec(t, f.owner, `UPDATE sessions SET tier = 'mtr_big' WHERE id = 'ssn_inv'`)
+	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_inv', $1, $2)`, f.project, f.org)
+	mustExec(t, f.owner, `UPDATE projects SET agent_models = agent_models || $2::jsonb WHERE id = $1`, f.project,
+		`{"investigator":{"tier":"mtr_small","harness":"codex","machineSize":"msz_l","image":"img_web","timeLimitMinutes":30}}`)
+
+	inv := roleIn(f.settingsOf(t, token, `{}`), "investigator")
+	for _, key := range []string{"tier", "harness", "timeLimitMinutes", "machineSize", "image"} {
+		if s := field(inv, key, "source"); s != "dude" {
+			t.Errorf("a brainstorm's investigator %s: %v", key, field(inv, key))
+		}
+	}
+	if field(inv, "tier", "value", "id") == "mtr_small" || inv["projectNotes"] != nil {
+		t.Errorf("a brainstorm's investigator: %v", inv)
+	}
+	mustExec(t, f.owner, `UPDATE sessions SET agent_machine = '{"sizeId":"msz_l","moveId":"mmv_1","askedBy":"run_i","reason":"r",
+		"at":"2026-03-04T05:06:07Z"}' WHERE id = 'ssn_inv'`)
+	if m := field(f.settingsOf(t, token, `{"section":"machines"}`), "settings", 0, "machines", "investigator"); field(m, "value", "id") != "msz_l" ||
+		field(m, "source") != "session" {
+		t.Errorf("a raised session's investigator machine: %v", m)
+	}
+
+	inv = roleIn(f.settingsOf(t, conductor, `{}`), "investigator")
+	if field(inv, "tier", "value", "id") != "mtr_small" || field(inv, "tier", "source") != "project" ||
+		field(inv, "machineSize", "source") != "project" {
+		t.Errorf("a conductor's investigator: %v", inv)
+	}
+}
+
 // A brainstorm with no linked project reads the organisation alone: no
 // role field, prompt or network list is the project's, and each role
 // agrees with /v1/settings/organization.

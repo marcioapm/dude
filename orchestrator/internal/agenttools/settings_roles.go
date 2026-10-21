@@ -87,7 +87,7 @@ func (l settingsLayers) projectModels() json.RawMessage {
 func rolesOut(w wrapper, scope settingsLayers, refs roleRefs) []roleOut {
 	out := make([]roleOut, 0, len(settingsRoles))
 	for _, role := range settingsRoles {
-		l := scope.of(role)
+		l := scope.ofRun(role)
 		rs, from := delivery.ResolveRoleFrom(role, l.roleLayers()...)
 		r := roleOut{Role: role, Label: delivery.RoleName(role)}
 		r.Tier = layerSource(l, from.Tier)
