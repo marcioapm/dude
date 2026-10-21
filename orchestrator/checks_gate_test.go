@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -82,7 +84,20 @@ func (w *world) checksDelivery(model string, j *scriptedJudge) string {
 	}
 	w.onModel("implementer", model)
 	wi := w.task()
-	w.deliver(wi)
+	if !w.checksTested {
+		w.deliver(wi)
+		return wi
+	}
+	// With the scripted tester, on a task of one criterion.
+	mustExec(w.t, w.owner, `UPDATE tasks SET acceptance_criteria = '["it greets"]' WHERE id = $1`, wi)
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		return delivery.NameOnlyRepository(context.Background(), tx, wi)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	p := scriptedPolicy()
+	p.Test = true
+	w.start(wi, p)
 	return wi
 }
 
@@ -391,6 +406,10 @@ func (w *world) simplifierJudged(wi string) []string {
 func TestAnUnchangedSimplifierNeedsNoChecksAndKeepsTheImplementersWaiver(t *testing.T) {
 	w := newWorld(t)
 	w.scriptedSimplifier(nil)
+	// A real model's tester, so its spec carries the prompt a real one gets;
+	// the fake lux still plays it as the scripted tester.
+	w.checksTested = true
+	w.onModel("qa_browser", "claude-test")
 	j := &scriptedJudge{}
 	wi := w.unbackedUntilEscalatedWith(0, j)
 	owner, _, _ := w.people(wi)
@@ -398,6 +417,9 @@ func TestAnUnchangedSimplifierNeedsNoChecksAndKeepsTheImplementersWaiver(t *test
 		t.Fatalf("the owner's waiver: %d %v", code, body)
 	}
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.phaseRuns(wi, "test"); n != 1 {
+		t.Fatalf("%d tester Runs, want 1", n)
+	}
 	if got := w.simplifierJudged(wi); strings.Join(got, ",") != "unchanged" {
 		t.Errorf("the simplifier was judged %v, want one unchanged turn", got)
 	}
@@ -415,6 +437,21 @@ func TestAnUnchangedSimplifierNeedsNoChecksAndKeepsTheImplementersWaiver(t *test
 		"- **Fixer** — backed\n"+backed+"\n"+
 		"- **Simplifier** — no changes; checks not needed"; got != want {
 		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
+	}
+	// The tester is given the writers' outcomes: the implementer's waiver
+	// and its reason, with the commit it published, so it does not rerun
+	// the failing checks to find them again.
+	var implementerHead string
+	_ = w.owner.QueryRow(context.Background(), `SELECT heads->'target'->>'sha' FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).
+		Scan(&implementerHead)
+	prompt := ""
+	for _, r := range w.luxRuns() {
+		if spec := submitted(w.t, r); spec.Labels["dude.task"] == wi && spec.Labels["dude.phase"] == "test" {
+			prompt = spec.Workload.Prompt
+		}
+	}
+	if line := "- Implementer (target@" + implementerHead[:7] + "): waived: Pre-existing failures on main."; !strings.Contains(prompt, line) {
+		t.Errorf("the tester's prompt does not carry %q:\n%s", line, prompt)
 	}
 }
 

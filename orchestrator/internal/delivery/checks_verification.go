@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +15,8 @@ import (
 // gatedJudgement is one gated Run's latest checks judgement. Unchanged: the
 // Run's turn changed nothing it could push, so no report was judged.
 type gatedJudgement struct {
+	RunID     string             `json:"-"`
+	Heads     map[string]RunHead `json:"-"`
 	Role      string
 	Verified  bool
 	Skipped   bool
@@ -41,8 +45,8 @@ func (j gatedJudgement) status() string {
 // gatedRuns is each gated Run of the current attempt with its latest
 // judgement, oldest Run first.
 func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, error) {
-	rows, err := tx.Query(ctx, `SELECT phase, payload FROM (
-		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, e.payload
+	rows, err := tx.Query(ctx, `SELECT id, phase, heads, payload FROM (
+		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, r.heads, e.payload
 		FROM events e JOIN runs r ON r.id=e.run_id
 		WHERE r.task_id=$1 AND r.phase IN ('implement','fix','simplify') AND e.event_type=$3
 		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)) ORDER BY r.id, e.cursor DESC) latest
@@ -51,13 +55,17 @@ func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, err
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (gatedJudgement, error) {
-		var phase string
-		var payload []byte
+		var id, phase string
+		var heads, payload []byte
 		var j gatedJudgement
-		if err := row.Scan(&phase, &payload); err != nil {
+		if err := row.Scan(&id, &phase, &heads, &payload); err != nil {
 			return j, err
 		}
-		err := json.Unmarshal(payload, &j)
+		if err := json.Unmarshal(payload, &j); err != nil {
+			return j, err
+		}
+		j.RunID = id
+		err := json.Unmarshal(heads, &j.Heads)
 		j.Role = RoleName(PromptRoleForPhase[phase])
 		return j, err
 	})
@@ -222,4 +230,59 @@ func codeSpan(s string) string {
 		s = " " + s + " "
 	}
 	return fence + s + fence
+}
+
+var writerChecksTmpl = mustTemplate("contracts/writer-checks")
+
+// writerChecksMax bounds the tester's account of the writers' checks; the
+// newest Runs that fit are kept, as the pull request's account keeps them.
+const writerChecksMax = 12_000
+
+// writerCheck is one gated Run as the tester reads it: its role, the
+// commits it published (repository@short sha), its outcome and its checks,
+// each field one clipped line.
+type writerCheck struct {
+	Role, Heads, Status, Message string
+	Checks                       []struct{ Command, Result, Reason string }
+}
+
+// WriterChecksTx is what a tester of the task's attempt is told about the
+// checks its writers reported (contracts/writer-checks), from the same
+// judgements the pull request's account reads (gatedRuns): "" with none.
+func WriterChecksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (string, error) {
+	runs, err := gatedRuns(ctx, tx, &State{TaskID: taskID, Attempt: attempt})
+	if err != nil || len(runs) == 0 {
+		return "", err
+	}
+	return writerChecksText(runs, writerChecksMax), nil
+}
+
+// writerChecksText renders runs (oldest first) in at most room characters,
+// the newest Runs that fit; with none fitting, the newest alone without its
+// checks.
+func writerChecksText(runs []gatedJudgement, room int) string {
+	items := make([]writerCheck, len(runs))
+	for i, j := range runs {
+		var heads []string
+		for _, repo := range slices.Sorted(maps.Keys(j.Heads)) {
+			heads = append(heads, repo+"@"+short(j.Heads[repo].SHA))
+		}
+		c := writerCheck{Role: j.Role, Heads: strings.Join(heads, ", "), Status: j.status()}
+		if j.Waived {
+			c.Message = checksField(j.Message)
+		}
+		for _, v := range j.Checks {
+			c.Checks = append(c.Checks, struct{ Command, Result, Reason string }{checksField(v.Command),
+				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason)})
+		}
+		items[i] = c
+	}
+	for from := range items {
+		if text := render(writerChecksTmpl, items[from:]); utf8.RuneCountInString(text) <= room {
+			return text
+		}
+	}
+	last := items[len(items)-1]
+	last.Checks = nil
+	return render(writerChecksTmpl, []writerCheck{last})
 }

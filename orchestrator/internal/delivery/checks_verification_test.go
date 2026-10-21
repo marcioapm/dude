@@ -260,3 +260,80 @@ func TestAnUnchangedRunIsItsOwnStatusInTheChecksAccount(t *testing.T) {
 		}
 	}
 }
+
+// A tester is told its own attempt's writers' checks only, each with the
+// commits that Run published, and a resumed tester's round message carries
+// the same account: a waiver of an earlier attempt is not this attempt's.
+func TestATesterIsToldItsAttemptsWriterChecks(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, q := range []string{
+		`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_wc',$1,'WC','wc','WC')`,
+		`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_wc',$1,'prj_wc',1,'WC','WC','running')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,created_at)
+			VALUES('run_wc0',$1,'prj_wc','wi_wc',1,'implement','completed',now()-interval '2 hours')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,heads,created_at)
+			VALUES('run_wc1',$1,'prj_wc','wi_wc',2,'implement','completed','{"api":{"sha":"` + a + `","changedPaths":[]}}',now()-interval '1 hour')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,heads,created_at)
+			VALUES('run_wc2',$1,'prj_wc','wi_wc',2,'simplify','completed','{}',now()-interval '30 minutes')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,base_refs)
+			VALUES('run_wct',$1,'prj_wc','wi_wc',2,'test','completed','{"api":"` + b + `"}')`,
+		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+			('ev_wc0',$1,'run.checks.judged','run_wc0','wi_wc','human','usr','test','{"turn":1,"verified":true,"waived":true,"message":"Old attempt.","checks":[]}'),
+			('ev_wc1',$1,'run.checks.judged','run_wc1','wi_wc','human','usr','test','{"turn":1,"verified":true,"waived":true,"message":"Fails on main too.","checks":[]}'),
+			('ev_wc2',$1,'run.checks.judged','run_wc2','wi_wc','system','dude','test','{"turn":1,"verified":true,"unchanged":true,"message":"No changes.","checks":[]}')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var text, round string
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		if text, err = WriterChecksTx(ctx, tx, "wi_wc", 2); err != nil {
+			return err
+		}
+		round, err = roundMessageTx(ctx, tx, PhaseRun{Phase: PhaseTest, TaskID: "wi_wc", Attempt: 2, BaseRefs: map[string]string{"api": b}},
+			predecessorRow{Predecessor: Predecessor{ID: "run_wct", BaseRefs: map[string]string{"api": a}}, Phase: PhaseTest})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"- Implementer (api@aaaaaaa): waived: Fails on main too.", "- Simplifier: no changes; checks not needed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the account lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Old attempt.") {
+		t.Errorf("an earlier attempt's waiver is in this attempt's account:\n%s", text)
+	}
+	if !strings.HasSuffix(round, text) {
+		t.Errorf("the resumed tester's round message does not end with the account:\n%s", round)
+	}
+}
+
+// The account keeps the newest Runs that fit its bound, and with none, the
+// newest alone without its checks.
+func TestTheWriterChecksAccountIsBounded(t *testing.T) {
+	type check = struct{ Command, Result, Decision, Reason, CallID string }
+	var runs []gatedJudgement
+	for i := range 60 {
+		j := gatedJudgement{Role: fmt.Sprintf("Fixer %d", i), Verified: true}
+		for k := range 30 {
+			j.Checks = append(j.Checks, check{Command: fmt.Sprintf("check %d %s", k, strings.Repeat("x", 280)), Result: "pass", Reason: strings.Repeat("r", 280)})
+		}
+		runs = append(runs, j)
+	}
+	text := writerChecksText(runs, writerChecksMax)
+	if n := utf8.RuneCountInString(text); n > writerChecksMax {
+		t.Errorf("the account is %d characters, over %d", n, writerChecksMax)
+	}
+	if !strings.Contains(text, "- Fixer 59: backed") || strings.Contains(text, "- Fixer 0:") {
+		t.Errorf("the account does not keep the newest Runs:\n%s", text[:min(len(text), 500)])
+	}
+	small := writerChecksText(runs, 10)
+	if !strings.Contains(small, "- Fixer 59: backed") || strings.Contains(small, "check 0") {
+		t.Errorf("with no room, the account is not the newest Run alone:\n%s", small)
+	}
+}

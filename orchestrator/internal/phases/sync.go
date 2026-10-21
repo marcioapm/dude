@@ -1393,6 +1393,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var lastFix []delivery.FixRange
+	var writerChecks string
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
@@ -1538,6 +1539,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		delivery.MarkPictures(peopleFeedback, taskImages)
 		// A review after a fix is told that fix's commits, to answer
 		// caused_by_fix by.
+		// A tester is told what its attempt's writers checked, so it does
+		// not rediscover failures already known or waived.
+		if r.Phase == delivery.PhaseTest && stored == nil {
+			if writerChecks, err = delivery.WriterChecksTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+				return err
+			}
+		}
 		if r.Phase == delivery.PhaseReview && stored == nil {
 			var parent string
 			if err := tx.QueryRow(ctx, `SELECT COALESCE(parent_run_id, '') FROM runs WHERE id = $1`, r.ID).Scan(&parent); err != nil {
@@ -1610,6 +1618,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
+		WriterChecks: writerChecks,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of

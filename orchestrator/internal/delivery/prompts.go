@@ -91,6 +91,9 @@ type PromptInput struct {
 	Replay string
 	// Review phase following a fix: what that fix published (LastFixTx).
 	LastFix []FixRange
+	// Test phase: the checks the attempt's writers reported
+	// (WriterChecksTx), "" for none.
+	WriterChecks string
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -363,6 +366,9 @@ func Prompt(phase string, in PromptInput) string {
 		add(in.task())
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
+		}
+		if in.WriterChecks != "" {
+			add(in.WriterChecks)
 		}
 
 	default:
