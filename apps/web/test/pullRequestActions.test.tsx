@@ -6,8 +6,10 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PullRequest } from "@dude/domain";
-import type { ApiClient } from "../src/api/client.ts";
+import type { ApiClient, TaskDetail } from "../src/api/client.ts";
+import type { People } from "../src/people.tsx";
 import { PullRequestActions } from "../src/screens/PullRequestActions.tsx";
+import { notYours } from "../src/screens/TaskLifecycle.tsx";
 
 const denied = { name: "GitHub check runs", status: "unavailable", conclusion: "", diagnostic: "check_runs_forbidden" };
 const pr = (over: Partial<PullRequest>): PullRequest => ({
@@ -196,6 +198,46 @@ describe("asking for a review", () => {
     expect(container.querySelectorAll('[data-testid="pr-review-ask"]').length).toBe(0);
     await unmount();
   });
+});
+
+describe("who may act on it", () => {
+  // Behind on its base, a failed check to re-run, and read as ready (Merge not blocked): all four are offered.
+  const actionable = pr({ behindBy: 2, display: "ready",
+    checks: [{ name: "lint", status: "completed", conclusion: "failure" }] });
+  const four = ["pr-merge", "pr-update-branch", "pr-rerun", "pr-request-review"];
+  const task = { owner: { id: "per_ana", name: "Ana Ribeiro" } } as Pick<TaskDetail, "owner">;
+  const shownTo = async (people: { you: string | null; me: { role: string } | null }) => {
+    const { mount } = await import("./dom.ts");
+    return mount(
+      <PullRequestActions client={{} as ApiClient} pr={actionable} defaultMethod="squash" onChanged={() => {}}
+        notAllowed={notYours(task, people as Pick<People, "you" | "me">)}>
+        {({ facts, merge }) => <div>{facts.checks}{facts.base}{facts.reviews}{merge}</div>}
+      </PullRequestActions>,
+    );
+  };
+  const buttons = (c: HTMLElement) => four.map((id) => c.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`));
+
+  test("a member who is neither the owner nor an admin sees the four off, saying who can", async () => {
+    const { act, until } = await import("./dom.ts");
+    const { container, unmount } = await shownTo({ you: "per_bo", me: { role: "member" } });
+    for (const [i, b] of buttons(container).entries()) {
+      expect(b ? b.disabled : `${four[i]} missing`).toBe(true);
+      await act(async () => (b!.parentElement as HTMLElement).focus());
+      const tip = await until(() => document.querySelector("[role=tooltip]"), `${four[i]}'s tooltip`);
+      expect(tip.textContent).toBe("Only Ana, the owner, or an admin can do this");
+      await act(async () => (b!.parentElement as HTMLElement).blur());
+      await until(() => (document.querySelector("[role=tooltip]") ? null : true), `${four[i]}'s tooltip gone`);
+    }
+    await unmount();
+  });
+
+  for (const [who, people] of [["the owner", { you: "per_ana", me: { role: "member" } }], ["an admin", { you: "per_cy", me: { role: "admin" } }]] as const) {
+    test(`${who} sees the four on`, async () => {
+      const { container, unmount } = await shownTo(people);
+      expect(buttons(container).map((b) => b ? b.disabled : "missing")).toEqual([false, false, false, false]);
+      await unmount();
+    });
+  }
 });
 
 describe("the reviewers a setting names", () => {

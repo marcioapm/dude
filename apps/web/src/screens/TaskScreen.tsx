@@ -91,7 +91,7 @@ import { GitHubBody } from "../GitHubBody.tsx";
 import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
-import { TaskMenu, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
+import { TaskMenu, notYours, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
@@ -806,7 +806,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
-                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name}
+                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name} notAllowed={notYours(item, people)}
                     feedbackHolds={feedback.loaded ? feedback.blocking : undefined} onShowFeedback={() => pickTab("feedback")}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}

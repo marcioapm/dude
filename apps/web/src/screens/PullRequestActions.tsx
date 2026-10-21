@@ -42,7 +42,7 @@ function askLabel(picked: ReadonlyArray<ReviewerCandidate>): string {
   return `Ask ${one.kind === "team" ? name : firstName(name)}`;
 }
 
-export function PullRequestActions({ client, pr, defaultMethod, onChanged, resolving = false, waitingFor, feedbackHolds = 0, onShowFeedback, children }: {
+export function PullRequestActions({ client, pr, defaultMethod, onChanged, resolving = false, waitingFor, notAllowed, feedbackHolds = 0, onShowFeedback, children }: {
   client: ApiClient;
   pr: PullRequest;
   /** The organization's merge method: what Merge does first. */
@@ -55,6 +55,12 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
    * resolve a conflict may decide the owner's escalation, so it is theirs.
    */
   waitingFor?: string | undefined;
+  /**
+   * Who may merge, update the branch, re-run checks and ask for reviews,
+   * when the reader may not (`notYours`): the task's owner or an admin, as
+   * the orchestrator enforces. Those buttons are off with it as their tooltip.
+   */
+  notAllowed?: string | undefined;
   /**
    * People's feedback holding the merge, as the API counts it: dude's merge
    * refuses while any is (feedback_open), so Merge is off and says why.
@@ -91,13 +97,15 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
   const held = feedbackHolds > 0 ? `Can't merge: ${plural(feedbackHolds, "feedback item")} ${one ? "is" : "are"} not yet handled. Resolve or answer ${one ? "it" : "them"} first.` : null;
   const blocked = mergeBlockedBy(pr) ?? held;
   const how = method ?? defaultMethod;
+  const off = notAllowed !== undefined;
+  const refusedTip = (button: ReactNode) => off ? <Tooltip content={notAllowed}><span tabIndex={0}>{button}</span></Tooltip> : button;
   const facts: PullRequestActionSlots["facts"] = {};
   if (pr.checks.some(prCheckFailed)) {
-    facts.checks = (
-      <Button size="sm" variant="quiet" disabled={busy !== null} onClick={() => void act("rerun", () => client.rerunFailedChecks(pr.id))}
+    facts.checks = refusedTip(
+      <Button size="sm" variant="quiet" disabled={off || busy !== null} onClick={() => void act("rerun", () => client.rerunFailedChecks(pr.id))}
         data-testid="pr-rerun">
         {busy === "rerun" ? "Asking…" : "Re-run failed"}
-      </Button>
+      </Button>,
     );
   }
   // GitHub cannot update a branch that conflicts: an agent merges the base
@@ -106,11 +114,11 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
   // action.
   let conflict: PullRequestActionSlots["conflict"];
   if (pr.behindBy > 0 && pr.mergeable !== "conflicting") {
-    facts.base = (
-      <Button size="sm" disabled={busy !== null} onClick={() => void act("update", () => client.updatePullRequestBranch(pr.id))}
+    facts.base = refusedTip(
+      <Button size="sm" disabled={off || busy !== null} onClick={() => void act("update", () => client.updatePullRequestBranch(pr.id))}
         data-testid="pr-update-branch">
         {busy === "update" ? "Updating…" : "Update branch"}
-      </Button>
+      </Button>,
     );
   } else if (pr.mergeable === "conflicting" && resolving) {
     conflict = { resolving: true };
@@ -139,8 +147,8 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
     if (picked.length === 0 || busy !== null) return;
     void act("review", () => client.requestReview(pr.id, picked.map((p) => p.login))).then((ok) => ok && stopAsking());
   };
-  facts.reviews = asking ? null : (
-    <Button size="sm" variant="quiet" onClick={() => setAsking(true)} data-testid="pr-request-review">Request review</Button>
+  facts.reviews = asking ? null : refusedTip(
+    <Button size="sm" variant="quiet" disabled={off} onClick={() => setAsking(true)} data-testid="pr-request-review">Request review</Button>,
   );
 
   // Asking opens under the reviewers' lines: a picker, and Ask for those picked.
@@ -158,10 +166,10 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
 
   const merge = (
     <span className="prMerge">
-      <Tooltip content={blocked ?? `Merges it on GitHub: ${METHOD_LABEL[how].toLowerCase()}`}>
+      <Tooltip content={notAllowed ?? blocked ?? `Merges it on GitHub: ${METHOD_LABEL[how].toLowerCase()}`}>
         {/* A disabled button takes no pointer events: the span carries the tooltip. */}
-        <span tabIndex={blocked ? 0 : -1}>
-          <Button variant="primary" disabled={blocked !== null || busy !== null}
+        <span tabIndex={off || blocked ? 0 : -1}>
+          <Button variant="primary" disabled={off || blocked !== null || busy !== null}
             onClick={() => void act("merge", () => client.mergePullRequest(pr.id, how))} data-testid="pr-merge">
             {busy === "merge" ? "Merging…" : METHOD_LABEL[how]}
           </Button>
