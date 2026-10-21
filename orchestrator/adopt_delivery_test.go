@@ -528,6 +528,29 @@ func TestAPersonsPushDuringAnAdoptedPullRequestsFirstLoopRefusesItsPromotion(t *
 		t.Errorf("dude moved feature/greet to %v", moves)
 	}
 	w.writersOnCandidate(wi, nil, "fix")
+
+	// Trying again is the loop's fix, on a candidate from the person's
+	// commit, and the pull request moves once more, by promotion, over it.
+	if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
+		t.Fatal(code, body)
+	}
+	w.until("the retried fix promoted", func() bool {
+		return w.waitingOnPR(wi) && len(w.gh.BranchLog("feature/greet")) > moved
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND base_refs->>'target' = $2
+		AND branch LIKE '%-candidate'`, wi, person); n != 1 {
+		t.Errorf("%d fixes on a candidate from the person's commit, want 1\n%s", n, w.describeRuns())
+	}
+	if w.fixes(wi) != 0 {
+		t.Error("the retry was a pull request fix, not the loop's")
+	}
+	head := w.gh.SHA("feature/greet")
+	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != head {
+		t.Errorf("feature/greet moved to %v, want one promotion", moves)
+	}
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", person, head).CombinedOutput(); err != nil {
+		t.Errorf("the promoted head %s does not hold the person's commit: %v %s", head, err, out)
+	}
 }
 
 // A task whose PR fixer was aborted released its adopted branch; once a
