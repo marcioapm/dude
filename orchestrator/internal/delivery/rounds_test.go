@@ -360,6 +360,18 @@ func TestAFixGoesOnFromTheLastFixerElseTheImplementer(t *testing.T) {
 	if got := prev(); got != "run_fx@head_run_fx" {
 		t.Fatalf("after a fixer: %s, want the fixer", got)
 	}
+	// Later fixers that are never a predecessor: a child Run's, one replaced
+	// in its slot, an integration's.
+	insert("run_fx_child", "fix", "implementer", "50 minutes")
+	w.exec(t, `UPDATE runs SET source_kind = 'task_conductor', parent_run_id = 'run_im', child_profile = 'p',
+		child_capabilities = '{}' WHERE id = 'run_fx_child'`)
+	insert("run_fx_replaced", "fix", "implementer", "40 minutes")
+	w.exec(t, `UPDATE runs SET replaced_by = 'run_fx' WHERE id = 'run_fx_replaced'`)
+	insert("run_fx_int", "fix", "implementer", "30 minutes")
+	w.exec(t, `UPDATE runs SET pr_feedback = '[{"source":"integration","body":"merge main"}]' WHERE id = 'run_fx_int'`)
+	if got := prev(); got != "run_fx@head_run_fx" {
+		t.Fatalf("after a child, a replaced and an integration fixer: %s, want the branch's fixer", got)
+	}
 	// A reviewer's round still goes on from its reviewer only.
 	p, err := store.PreviousRound(ctx, w.org, w.task, 1, delivery.PhaseReview, "correctness")
 	if err != nil || p == nil || p.ID != w.first || p.BaseRefs["api"] != "aaa" {

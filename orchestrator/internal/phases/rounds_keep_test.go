@@ -1,6 +1,36 @@
 package phases
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+// A continuing fixer whose phase was given a project secret after its row
+// was made (the implementer's lux Run has none of it) is refused its first
+// resume, naming the secret; a later resume (finishes > 0) is a person's,
+// and goes on.
+func TestAContinuingFixerGivenANewSecretCannotResume(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, status, ended_at)
+		VALUES ('run_im_'||$1, $1, 'prj_'||$1, 'wi_'||$1, 1, 'implement', 'implementer', 'completed', now())`, w.run.Org)
+	w.exec(`UPDATE runs SET phase = 'fix', role = 'implementer', continues_run_id = 'run_im_'||organization_id, continues_how = 'resume',
+		project_secret_names = '{}', finishes = 0 WHERE id = $1`, w.run.ID)
+	w.run.Phase, w.run.Role = "fix", "implementer"
+	if err := w.s.roundSecrets(w.ctx, w.run); err != nil {
+		t.Fatalf("no secret added: %v", err)
+	}
+	w.exec(`INSERT INTO project_secrets (project_id, organization_id, name, value, hint, recipients)
+		VALUES ($1, $2, 'FIX_TOKEN', 'fix-token-value', 'test', '{fixer}')`, w.run.ProjectID, w.run.Org)
+	var cannot errCannotResume
+	if err := w.s.roundSecrets(w.ctx, w.run); !errors.As(err, &cannot) || !strings.Contains(err.Error(), "its phase is now given FIX_TOKEN") {
+		t.Fatalf("a secret added for fixers: %v, want errCannotResume naming FIX_TOKEN", err)
+	}
+	w.exec(`UPDATE runs SET finishes = 1 WHERE id = $1`, w.run.ID)
+	if err := w.s.roundSecrets(w.ctx, w.run); err != nil {
+		t.Fatalf("a later resume: %v, want nil", err)
+	}
+}
 
 // A completed reviewer or tester is kept for its next round on a project
 // that goes on from the previous one; an integration's reviewer never is,

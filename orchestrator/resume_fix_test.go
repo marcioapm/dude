@@ -67,8 +67,8 @@ func TestFixRoundsResumeTheImplementerThenTheFixerAndPushAgain(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'`, wi) >= 2
 	})
 	writers := w.writerRows(wi)
-	if len(writers) < 3 {
-		t.Fatalf("writers: %+v", writers)
+	if len(writers) != 3 {
+		t.Fatalf("writers: %+v; want the implementer and two fixers", writers)
 	}
 	impl, fix1, fix2 := writers[0], writers[1], writers[2]
 	if fix1.Continues != impl.ID || fix1.How != delivery.ContinuesResume || fix2.Continues != fix1.ID || fix2.How != delivery.ContinuesResume {
@@ -82,10 +82,10 @@ func TestFixRoundsResumeTheImplementerThenTheFixerAndPushAgain(t *testing.T) {
 	}
 	// Each round's push was accepted and published: the task branch holds
 	// the second round's commit.
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND push_result::text LIKE '%"status": "pushed"%'`,
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND push_result @> '{"results":[{"status":"pushed"}]}'`,
 		[]string{fix1.ID, fix2.ID}); n != 2 {
 		t.Fatalf("%d of the two fix rounds pushed: %v", n,
-			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND push_result::text LIKE '%rejected%'`, fix2.ID))
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND push_result @> '{"results":[{"status":"rejected"}]}'`, fix2.ID))
 	}
 	var rounds []string
 	for _, in := range w.lux.Inputs(w.luxRunsOf("implement")[0].ID) {
@@ -110,7 +110,7 @@ func TestFixRoundsResumeTheImplementerThenTheFixerAndPushAgain(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1`, wi); n != 1 {
 		t.Fatalf("%d findings, want one", n)
 	}
-	if n := w.count(`SELECT max(fix_attempts) FROM review_findings WHERE task_id = $1`, wi); n < 2 {
+	if n := w.count(`SELECT max(fix_attempts) FROM review_findings WHERE task_id = $1`, wi); n != 2 {
 		t.Fatalf("fix attempts %d, want one per round", n)
 	}
 }
@@ -121,6 +121,8 @@ func TestFixRoundsResumeTheImplementerThenTheFixerAndPushAgain(t *testing.T) {
 // given its conversation, its run.created saying why.
 func TestAFixerOnAnotherSpecDoesNotResumeTheImplementer(t *testing.T) {
 	w := resuming(t)
+	// Not a scripted model: lux is given dude's prompt itself.
+	w.onModel("implementer", "llm-implement")
 	w.grant("FIX_TOKEN", "fix-test-not-a-real-token", "fixer")
 	wi := w.task()
 	w.names(wi, w.repoID)
@@ -129,14 +131,21 @@ func TestAFixerOnAnotherSpecDoesNotResumeTheImplementer(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'`, wi) >= 1
 	})
 	writers := w.writerRows(wi)
+	if len(writers) != 2 {
+		t.Fatalf("writers: %+v; want the implementer and one fixer", writers)
+	}
 	impl, fix := writers[0], writers[1]
-	if fix.How == delivery.ContinuesResume || len(w.luxRunsOf("fix")) != 1 {
-		t.Fatalf("the fixer %+v resumed the implementer %s; want a fresh fixer submitted", fix, impl.ID)
+	if fix.Continues != impl.ID || fix.How != delivery.ContinuesReplay {
+		t.Fatalf("the fixer %+v; want a replay of the implementer %s", fix, impl.ID)
+	}
+	luxFix := w.luxRunsOf("fix")
+	if len(luxFix) != 1 || !strings.Contains(luxFix[0].Prompt(), "## The conversation so far") {
+		t.Fatalf("%d fixers submitted; want one given the implementer's conversation", len(luxFix))
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'fresh' = 'spec_changed'`, fix.ID); n != 1 {
 		t.Error("the fresh fixer's run.created does not say its spec changed")
 	}
-	if _, ok := projectSecretsOf(specOf(t, w.luxRunsOf("fix")[0].Spec))["FIX_TOKEN"]; !ok {
+	if _, ok := projectSecretsOf(specOf(t, luxFix[0].Spec))["FIX_TOKEN"]; !ok {
 		t.Error("the fresh fixer was not given its secret")
 	}
 }
@@ -448,12 +457,15 @@ func TestAFixerWhoseCheckoutDidNotSyncIsReplacedByAFreshOne(t *testing.T) {
 	w.start(wi, resumingPolicy())
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	writers := w.writerRows(wi)
-	if len(writers) < 3 {
+	if len(writers) != 3 {
 		t.Fatalf("writers: %+v; want the implementer, its continuation and the fresh fixer", writers)
 	}
 	impl, cont, fresh := writers[0], writers[1], writers[2]
 	if cont.Continues != impl.ID || cont.How != delivery.ContinuesResume || fresh.Continues != impl.ID || fresh.How != delivery.ContinuesReplay {
 		t.Fatalf("writers %+v; want the continuation replaced by a replay of the implementer", writers)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.round.unsynced' AND payload->>'status' = 'kept'`, cont.ID); n != 1 {
+		t.Fatal("no run.round.unsynced (kept) on the continuation: replaced for another reason")
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND replaced_by = $2`, cont.ID, fresh.ID); n != 1 {
 		t.Fatal("the continuation was not replaced in its slot")
