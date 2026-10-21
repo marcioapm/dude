@@ -32,6 +32,7 @@ type modelsOut struct {
 }
 
 type modelCursor struct {
+	Section  string `json:"section"`
 	Org      string `json:"org"`
 	Position int    `json:"position"`
 	ID       string `json:"id"`
@@ -80,7 +81,7 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 	var after modelCursor
 	if in.Cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(in.Cursor)
-		if err != nil || json.Unmarshal(raw, &after) != nil || after.Org != org || after.ID == "" {
+		if err != nil || json.Unmarshal(raw, &after) != nil || after.Section != "models" || after.Org != org || after.ID == "" {
 			return nil, refuseText(settingsText("catalogue-cursor", nil))
 		}
 	}
@@ -97,7 +98,7 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 		}
 		if len(out.Tiers) == limit {
 			last := out.Tiers[len(out.Tiers)-1]
-			raw, _ := json.Marshal(modelCursor{Org: org, Position: last.Position, ID: last.ID})
+			raw, _ := json.Marshal(modelCursor{Section: "models", Org: org, Position: last.Position, ID: last.ID})
 			out.Next = base64.RawURLEncoding.EncodeToString(raw)
 			break
 		}
@@ -110,7 +111,7 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 		if len(encoded) > pageBytes && len(out.Tiers) > 1 {
 			out.Tiers = out.Tiers[:len(out.Tiers)-1]
 			last := out.Tiers[len(out.Tiers)-1]
-			raw, _ := json.Marshal(modelCursor{Org: org, Position: last.Position, ID: last.ID})
+			raw, _ := json.Marshal(modelCursor{Section: "models", Org: org, Position: last.Position, ID: last.ID})
 			out.Next = base64.RawURLEncoding.EncodeToString(raw)
 			break
 		}

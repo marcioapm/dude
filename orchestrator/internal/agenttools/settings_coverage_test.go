@@ -2,6 +2,7 @@ package agenttools_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -240,7 +241,20 @@ func TestSettingsCataloguesArePagedBoundedAndTenantScoped(t *testing.T) {
 			break
 		}
 	}
-	for _, args := range []string{`{"section":"models","limit":51}`, `{"section":"models","limit":-1}`, `{"section":"models","cursor":"broken"}`} {
+	mustExec(t, f.owner, `INSERT INTO images (id, organization_id, name) VALUES ('img_second', $1, 'second')`, f.org)
+	images, _ := field(f.settingsOf(t, token, `{"section":"images","limit":1}`), "images", "next").(string)
+	first, _ := field(f.settingsOf(t, token, `{"section":"models","limit":1}`), "models", "next").(string)
+	var c map[string]any
+	if raw, err := base64.RawURLEncoding.DecodeString(first); err != nil || json.Unmarshal(raw, &c) != nil {
+		t.Fatalf("cursor %q: %v", first, err)
+	}
+	c["org"] = other
+	forged, _ := json.Marshal(c)
+	if images == "" {
+		t.Fatal("no images cursor")
+	}
+	for _, args := range []string{`{"section":"models","limit":51}`, `{"section":"models","limit":-1}`, `{"section":"models","cursor":"broken"}`,
+		`{"section":"models","cursor":"` + images + `"}`, `{"section":"models","cursor":"` + base64.RawURLEncoding.EncodeToString(forged) + `"}`} {
 		if status, _ := f.post(t, token, "settings", args); status != 422 {
 			t.Errorf("invalid catalogue args %s: %d", args, status)
 		}
