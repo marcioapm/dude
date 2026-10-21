@@ -12,6 +12,7 @@ type serversOut struct {
 	Count    int                 `json:"count"`
 	Section  string              `json:"section"`
 	Recipes  []recipeOut         `json:"recipes,omitempty"`
+	Note     string              `json:"note,omitempty"`
 	Previews map[string]valueOut `json:"previews,omitempty"`
 }
 
@@ -97,5 +98,48 @@ func projectServersOut(ctx context.Context, tx pgx.Tx, w wrapper, projects []pro
 		}
 		out[id] = s
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if detailed {
+		return out, serversFit(projects, out)
+	}
+	return out, nil
+}
+
+// serversFit keeps, over the scopes in their order, the recipes that encode
+// to pageBytes together (at least one), and notes in each scope it cut how
+// many of its count it shows.
+func serversFit(projects []projectRow, out map[string]*serversOut) error {
+	used, kept := 0, 0
+	for _, p := range projects {
+		s := out[p.ID]
+		if s == nil {
+			continue
+		}
+		recipes := s.Recipes
+		s.Recipes = nil
+		base, err := json.Marshal(s)
+		if err != nil {
+			return err
+		}
+		used += len(base)
+		for _, r := range recipes {
+			encoded, err := json.Marshal(r)
+			if err != nil {
+				return err
+			}
+			if used+len(encoded)+1 > pageBytes && kept > 0 {
+				break
+			}
+			used += len(encoded) + 1
+			kept++
+			s.Recipes = append(s.Recipes, r)
+		}
+		if len(s.Recipes) < s.Count {
+			s.Note = settingsText("servers-shown", map[string]int{"Shown": len(s.Recipes), "Count": s.Count})
+			used += len(s.Note) + 10
+		}
+	}
+	return nil
 }

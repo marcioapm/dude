@@ -476,7 +476,7 @@ func settingsText(name string, data any) string { return settingsTexts[name].Ren
 
 var settingsTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
-	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit", "catalogue-limit", "catalogue-cursor", "memory-unavailable"} {
+	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit", "catalogue-limit", "catalogue-cursor", "servers-shown", "memory-unavailable"} {
 		out[name] = delivery.MustText("results/settings/" + name)
 	}
 	return out

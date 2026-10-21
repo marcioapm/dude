@@ -48,16 +48,19 @@ func catalogueLimit(limit int) (int, error) {
 	return limit, nil
 }
 
+// pageBytes is the most a page of a listed section encodes to: a tool
+// result is held to 64 KiB, and JSON escaping can grow bounded text sixfold.
+const pageBytes = 40 << 10
+
 // pageFit drops a page's trailing items, keeping at least one, until it
-// encodes to 40 KiB at most: a tool result is held to 64 KiB, and JSON
-// escaping can grow bounded text sixfold. It returns how many it kept.
+// encodes to pageBytes at most. It returns how many it kept.
 func pageFit(page any, n int, trim func(int)) (int, error) {
 	for ; n > 1; n-- {
 		encoded, err := json.Marshal(page)
 		if err != nil {
 			return 0, err
 		}
-		if len(encoded) <= 40<<10 {
+		if len(encoded) <= pageBytes {
 			return n, nil
 		}
 		trim(n - 1)
@@ -104,7 +107,7 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 		if err != nil {
 			return nil, err
 		}
-		if len(encoded) > 40<<10 && len(out.Tiers) > 1 {
+		if len(encoded) > pageBytes && len(out.Tiers) > 1 {
 			out.Tiers = out.Tiers[:len(out.Tiers)-1]
 			last := out.Tiers[len(out.Tiers)-1]
 			raw, _ := json.Marshal(modelCursor{Org: org, Position: last.Position, ID: last.ID})
