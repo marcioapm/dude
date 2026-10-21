@@ -258,8 +258,14 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   clean base merge before another repository's pull request opens. A
   person's push meanwhile refuses the promotion (`pull_request_moved`); the
   pull request stays at their commit. An adopted pull request is reviewed
-  whole once; each later round reviews what changed since the last reviewed
-  head, a person's pushes included. A conductor's publish and its writer
+  whole once; with resumed reviewers (`resumeRounds`) each later round
+  normally reviews what changed since the head the reviewer last reviewed,
+  a person's pushes included. It falls back to a full, fresh review when
+  rounds do not resume, the reviewer's conversation cannot be resumed or
+  replayed, GitHub cannot measure the change, or the change is over
+  `MaxResumeDeltaLines` (300 lines). A refused loop candidate's retry is
+  the writer the round opened with, and the findings it resolved only on
+  the discarded heads are open again for it. A conductor's publish and its writer
   children are refused while a pull request is open; `start_phase fix` is
   the way to change it. Deliberately outside it are base merges GitHub
   makes: dude's `update-branch` when a pull request is behind, a person's
