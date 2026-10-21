@@ -32,6 +32,8 @@ mDeliveryTaskNotWaitingForDecision    refusals/domain/escalations/delivery-task-
 mNotWayGoOnAfterOne                   refusals/domain/escalations/not-way-go-on-after-one
 mNeedsNoteSayWhyTaskMay               refusals/domain/escalations/needs-note-say-why-task-may
 mWhatStoppedNoLongerKeptResume        refusals/domain/escalations/what-stopped-no-longer-kept-resume
+mScopeOnlyForChecksWaiver             refusals/domain/escalations/scope-only-for-checks-waiver
+mNothingToCarryInAttempt              refusals/domain/escalations/nothing-to-carry-in-attempt
 mDraftidsAndSubmissionkeyAreRequired  refusals/domain/feedback/draftids-and-submissionkey-are-required
 mDraftsAreNotYourDraftsOn             refusals/domain/feedback/drafts-are-not-your-drafts-on
 mSubmissionKeyWasUsedForAnother       refusals/domain/feedback/submission-key-was-used-for-another
