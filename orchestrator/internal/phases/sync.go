@@ -1522,7 +1522,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		delivery.MarkPictures(peopleFeedback, taskImages)
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
+				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
 				FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
 				ORDER BY chosen.n`,
 				r.FindingIDs)
