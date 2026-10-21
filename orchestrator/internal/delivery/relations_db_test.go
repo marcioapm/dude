@@ -80,6 +80,39 @@ func blockerKeys(t *testing.T, in func(func(pgx.Tx) error) error, task string) [
 	return keys
 }
 
+// rowsRead counts the rows this transaction has read from each table so
+// far: sequential-scan rows plus index entries, so it holds whatever plan
+// the planner picks. A test measures a call's work as the difference, which
+// a busy machine cannot change the way it changes the time.
+func rowsRead(t *testing.T, tx pgx.Tx) map[string]int64 {
+	t.Helper()
+	rows, err := tx.Query(context.Background(), `SELECT s.relname, s.seq_tup_read
+			+ COALESCE((SELECT sum(pg_stat_get_xact_tuples_returned(i.indexrelid)) FROM pg_index i WHERE i.indrelid = s.relid), 0)
+		FROM pg_stat_xact_user_tables s`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := map[string]int64{}
+	var table string
+	var n int64
+	if _, err := pgx.ForEachRow(rows, []any{&table, &n}, func() error { read[table] = n; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return read
+}
+
+// readSince is what the transaction read after before, by table, and in total.
+func readSince(t *testing.T, tx pgx.Tx, before map[string]int64) (map[string]int64, int64) {
+	t.Helper()
+	read, total := map[string]int64{}, int64(0)
+	for table, n := range rowsRead(t, tx) {
+		if d := n - before[table]; d > 0 {
+			read[table], total = d, total+d
+		}
+	}
+	return read, total
+}
+
 // task_blocked_by is the one rule: a blocker is released only when it is
 // done and has a merged pull request. In review, failed, and done with
 // nothing merged all still block; a merged one does not.
@@ -187,8 +220,9 @@ func TestTaskRelationWouldCycleIsLinearOnADiamondLadder(t *testing.T) {
 }
 
 // A deep chain among many unrelated edges: each step of the check reads
-// only the edges out of the tasks it reached, so a 400-deep walk stays
-// well under a second however many other edges the organisation has.
+// only the edges out of the tasks it reached, so a 400-deep walk reads a
+// few rows a step however many other edges the organisation has. One scan
+// of the edges would read more than the whole walk.
 func TestTaskRelationWouldCycleIsLinearOnADeepChain(t *testing.T) {
 	const depth, others = 400, 30000
 	w, in := newRelWorld(t, 0)
@@ -204,18 +238,25 @@ func TestTaskRelationWouldCycleIsLinearOnADeepChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
-	start := time.Now()
+	var read map[string]int64
+	var total int64
 	if err := in(func(tx pgx.Tx) error {
 		if _, err := tx.Exec(context.Background(), `SET LOCAL statement_timeout = '30s'`); err != nil {
 			return err
 		}
+		before := rowsRead(t, tx)
 		// An edge from a task off the chain into its top: the walk goes all the way down and finds no loop.
-		return tx.QueryRow(context.Background(), `SELECT task_relation_would_cycle($1, $2)`, w.id(depth+others+1), w.id(1)).Scan(&got)
+		if err := tx.QueryRow(context.Background(), `SELECT task_relation_would_cycle($1, $2)`, w.id(depth+others+1), w.id(1)).Scan(&got); err != nil {
+			return err
+		}
+		read, total = readSince(t, tx, before)
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if took := time.Since(start); took > time.Second {
-		t.Fatalf("a %d-deep chain among %d other edges: the check took %v", depth, others, took)
+	t.Logf("a %d-deep chain among %d other edges: the check read %d rows %v", depth, others, total, read)
+	if total > 4*depth {
+		t.Fatalf("a %d-deep chain among %d other edges: the check read %d rows %v", depth, others, total, read)
 	}
 	if got != nil {
 		t.Fatalf("no loop, got %v", got)
@@ -225,7 +266,7 @@ func TestTaskRelationWouldCycleIsLinearOnADeepChain(t *testing.T) {
 // list_tasks reads every task's blockers through RelationsOf, under the
 // RLS role: each task_blocked_by call must probe its blockers by key, not
 // scan the organisation's tasks, or the listing grows with the square of
-// the project.
+// the project. Linear is a few rows a task; one scan per task is n².
 func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
 	const n = 4000
 	w, in := newRelWorld(t, 0)
@@ -242,24 +283,22 @@ func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
 		ids[i] = w.id(i + 1)
 	}
 	var rels map[string]*TaskRelationsOut
-	start := time.Now()
+	var read map[string]int64
+	var total int64
 	if err := in(func(tx pgx.Tx) error {
-		// A custom plan, not dbtest's generic one: the scan this guards costs
-		// ~4.5 s under either, but the generic plan doubles the linear 0.12 s,
-		// which a shared CI runner then pushes past the limit.
-		if _, err := tx.Exec(context.Background(), `SELECT set_config('plan_cache_mode', 'force_custom_plan', true)`); err != nil {
+		before := rowsRead(t, tx)
+		var err error
+		if rels, err = RelationsOf(context.Background(), tx, ids); err != nil {
 			return err
 		}
-		var err error
-		rels, err = RelationsOf(context.Background(), tx, ids)
-		return err
+		read, total = readSince(t, tx, before)
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	took := time.Since(start)
-	t.Logf("RelationsOf over %d tasks under InOrg: %v", n, took)
-	if took > time.Second {
-		t.Fatalf("RelationsOf over %d blocked tasks took %v", n, took)
+	t.Logf("RelationsOf over %d tasks under InOrg read %d rows %v", n, total, read)
+	if total > 16*n {
+		t.Fatalf("RelationsOf over %d blocked tasks read %d rows %v", n, total, read)
 	}
 	if !rels[w.id(1)].Startable || rels[w.id(2)].Startable || len(rels[w.id(n)].BlockedBy) != 1 {
 		t.Fatalf("CP-1 startable %v, CP-2 startable %v, CP-%d blocked by %v",
