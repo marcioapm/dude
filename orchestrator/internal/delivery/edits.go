@@ -129,10 +129,12 @@ func WriterChildRefusedTx(ctx context.Context, tx pgx.Tx, taskID string) (string
 
 // pullRequestOpenTx is why nothing but promotion may write the delivery's
 // task branch now, "" when it may: a pull request is open on it, and only
-// a candidate reviewed (and tested) reaches it.
+// a candidate reviewed (and tested) reaches it. Open (or draft) is as the
+// pull request syncer last recorded it.
 func pullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (string, error) {
-	open, err := OpenPullRequestOnTx(ctx, tx, taskID, d.Branch(taskID))
-	if err != nil || len(open) == 0 {
+	var open bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft'))`, taskID, d.Branch(taskID)).Scan(&open); err != nil || !open {
 		return "", err
 	}
 	return rPullRequestOpenOnBranch, nil

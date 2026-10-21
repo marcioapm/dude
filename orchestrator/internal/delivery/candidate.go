@@ -24,18 +24,6 @@ import (
 // Payload: {repo, number, from, to, candidate}.
 const EvPullRequestFixMoved = "pull_request.fix_moved"
 
-// OpenPullRequestOnTx names the repositories where the task has a pull
-// request open (or draft) from branch, as the pull request syncer last
-// recorded it; none when nothing is open there.
-func OpenPullRequestOnTx(ctx context.Context, tx pgx.Tx, taskID, branch string) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT DISTINCT r.name FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft') ORDER BY r.name`, taskID, branch)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
-}
-
 // EvPullRequestFixMergeAttempted: promotion is about to ask GitHub to
 // merge the candidate's head into a pull request's branch (POST /merges),
 // recorded before it is sent: what lets a retry adopt that merge as its
