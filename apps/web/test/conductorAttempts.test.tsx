@@ -1,9 +1,11 @@
 /**
- * A task's conductor beside its attempts: the conductor and its Chat are
- * the task's, not an attempt's. Its Run makes, ends and begins no attempt;
- * its session is listed on every attempt and is never read-only; its URL
- * names no attempt, and neither does Chat's. Mounted in happy-dom on the
- * fixture client's started-over task (`dude.fixtures.run=restarted`).
+ * A task's conductors beside its attempts: each conductor is the attempt
+ * recorded on its Run. A Stop and start begins attempt N+1 with only its
+ * conductor; that attempt is current, listed in the picker, and its
+ * conductor's session opens on it. An earlier attempt's conductor is
+ * read-only with the rest of that attempt. Chat's URL names no attempt.
+ * Mounted in happy-dom on the fixture client's started-over task
+ * (`dude.fixtures.run=restarted`).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -84,11 +86,11 @@ async function pick(page: HTMLElement, n: number) {
 }
 
 describe("a conductor's Run and the attempts", () => {
-  test("does not make an attempt", () => {
-    expect(attemptsOf([...RESTARTED_RUNS, conductor(3)])).toEqual([2, 1]);
+  test("a conductor alone on attempt 3 makes attempt 3, the current one", () => {
+    expect(attemptsOf([...RESTARTED_RUNS, conductor(3)])).toEqual([3, 2, 1]);
   });
 
-  test("does not decide how an attempt ended", () => {
+  test("a phase Run, not the conductor that steered it, is where an attempt stopped", () => {
     // Attempt 1's fixer was aborted 97 minutes ago; its conductor failed after that.
     const runs = [...RESTARTED_RUNS, conductor(1, { status: "failed", error: "host lost", createdAt: at(100), endedAt: at(96) })];
     const task = { status: "running", runs } as unknown as Task;
@@ -97,15 +99,14 @@ describe("a conductor's Run and the attempts", () => {
     expect(setAsideOf(1, runs, [], people).how).toBe("stopped at Fix, aborted");
   });
 
-  test("does not say when an attempt began", () => {
-    // Recorded on attempt 2 two hours ago, before attempt 2's first agent (90 minutes ago).
-    const starts = attemptStarts([...RESTARTED_RUNS, conductor(2, { createdAt: at(120) })]);
-    expect(starts.get(2)).toBe(RESTARTED_RUNS.find((r) => r.id === "run_attempt2")!.createdAt);
+  test("an attempt begins with its conductor when that is its first Run", () => {
+    const starts = attemptStarts([...RESTARTED_RUNS, conductor(3, { createdAt: at(5) })]);
+    expect(starts.get(3)).toBe(at(5));
   });
 
-  test("what happened on it is no attempt's", () => {
+  test("what happened on a conductor is its attempt's", () => {
     const of = eventAttempts([...RESTARTED_RUNS, conductor(1)], [], 2);
-    expect(of({ eventType: "chat.message", runId: COND, occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBeNull();
+    expect(of({ eventType: "chat.message", runId: COND, occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBe(1);
     expect(of({ eventType: "run.steered", runId: "run_a1_fix", occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBe(1);
   });
 });
@@ -171,13 +172,66 @@ describe("the task page with a conductor", () => {
     expect(status.textContent).toBe("Waiting on Chat");
   });
 
-  test("a conductor on a later attempt column makes no attempt in the picker", async () => {
-    const page = await taskPage(restartedWith(conductor(3)));
+  /**
+   * Stop and start attempt 2 under the conductor: attempt 1 ended (its
+   * phase Runs and its conductor aborted), and attempt 2 has only the new
+   * conductor dude started for it, no phase Run yet.
+   */
+  function stoppedAndStarted() {
+    localStorage.setItem("dude.fixtures.run", "restarted");
+    const client = new FixtureClient("a");
+    const old = conductor(1, { id: OLD, status: "aborted", createdAt: at(230), endedAt: at(96) });
+    const fresh = conductor(2, { createdAt: at(5), startedAt: at(5) });
+    const runs = [fresh, old, ...RESTARTED_RUNS.filter((r) => r.attempt === 1)];
+    const getTask = client.getTask.bind(client);
+    client.getTask = async (id) => ({ ...(await getTask(id)), status: "running", decider: "conductor", runs } as Task);
+    const getRun = client.getRun.bind(client);
+    client.getRun = async (id) => {
+      const extra = runs.find((r) => r.id === id && r.role === "conductor");
+      return extra ? { ...(await getRun("run_a1_fix")), ...extra } as Awaited<ReturnType<typeof getRun>> : getRun(id);
+    };
+    return client;
+  }
+  const OLD = "run_cond_old";
+
+  test("after Stop and start, a conductor alone on attempt 2 makes it current: header, picker and Stop name it", async () => {
+    const page = await taskPage(stoppedAndStarted());
     await until(() => (shown(page) === "2" ? true : null), "attempt 2, the current one");
+    expect(page.querySelector("[data-testid=earlier-bar]")).toBeNull();
     const trigger = await until(() => picker(page), "the attempt picker");
+    expect(trigger.textContent).toContain("Attempt 2");
     await act(async () => void trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
     await until(() => document.querySelector('[role=option][data-value="1"]'), "the options");
     expect([...document.querySelectorAll("[role=option]")].map((o) => o.getAttribute("data-value"))).toEqual(["2", "1"]);
+    await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => page.querySelector<HTMLElement>('[data-testid="task-stop"]')!.click());
+    await until(() => document.querySelector('[data-testid="stop-dialog"]'), "the Stop dialog");
+    expect([...document.querySelectorAll<HTMLElement>('[data-testid="stop-dialog"] [role="radio"]')].map((r) => r.textContent ?? "")
+      .some((t) => t.startsWith("Stop and start attempt 3"))).toBe(true);
+  });
+
+  test("after Stop and start, attempt 1 is selectable and read-only", async () => {
+    const page = await taskPage(stoppedAndStarted(), { tab: "findings" });
+    await pick(page, 1);
+    const bar = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-bar]"), "the earlier-attempt bar");
+    expect(bar.textContent).toContain("nothing in it can be merged, resumed or steered.");
+    expect(page.querySelector("[data-testid=header-status]")?.getAttribute("data-status")).toBe("aborted");
+  });
+
+  test("the old conductor's session opens on attempt 1, read-only, not on the newest attempt", async () => {
+    const page = await taskPage(stoppedAndStarted(), { runId: OLD });
+    await until(() => (shown(page) === "1" ? true : null), "attempt 1, the old conductor's");
+    await until(() => page.querySelector("[data-testid=earlier-bar]"), "the earlier-attempt bar");
+    expect(count(page, "[data-testid=abort]")).toBe(0);
+    expect(count(page, "textarea")).toBe(0);
+  });
+
+  test("the new conductor's session opens on attempt 2 with its composer", async () => {
+    const page = await taskPage(stoppedAndStarted(), { runId: COND });
+    await until(() => page.querySelector("[data-testid=abort]"), "Abort on the live conductor");
+    expect(shown(page)).toBe("2");
+    expect(count(page, "[data-testid=earlier-bar]")).toBe(0);
+    expect(count(page, "textarea")).toBe(1);
   });
 
   test("a conductor that failed after attempt 1's fixer is not where attempt 1 stopped", async () => {
@@ -188,15 +242,7 @@ describe("the task page with a conductor", () => {
     expect(bar.textContent).toContain("It had stopped at Fix, aborted by Ana.");
   });
 
-  test("a conductor recorded on attempt 2 before its first agent does not move when attempt 2 began", async () => {
-    // The decision 112 minutes ago, while attempt 1 was at work, stays attempt 1's.
-    const page = await taskPage(restartedWith(conductor(2, { status: "completed", createdAt: at(115), endedAt: at(113) })), { tab: "activity" });
-    const line = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")]
-      .find((l) => l.textContent?.includes("decided how delivery goes on")), "the decision's line");
-    expect(line.getAttribute("data-attempt")).toBe("1");
-  });
-
-  test("an Activity line about the conductor carries no attempt and no way to one", async () => {
+  test("an Activity line about attempt 1's conductor carries attempt 1", async () => {
     const client = restartedWith(conductor(1, { status: "aborted", createdAt: at(100), endedAt: at(40) }));
     const events = client.events.bind(client);
     client.events = async (params) => {
@@ -209,11 +255,7 @@ describe("the task page with a conductor", () => {
     const page = await taskPage(client, { tab: "activity" });
     const line = await until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")]
       .find((l) => l.textContent?.includes("aborted the conductor")), "the conductor's line");
-    expect(line.hasAttribute("data-attempt")).toBe(false);
-    expect(line.textContent).not.toContain("· attempt");
-    // The fix's line beside it is still attempt 1's.
-    const fix = [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes("aborted the fixer"))!;
-    expect(fix.getAttribute("data-attempt")).toBe("1");
+    expect(line.getAttribute("data-attempt")).toBe("1");
   });
 
   test("Chat's URL never names an attempt, even with attempt 1 picked", async () => {
@@ -253,26 +295,25 @@ describe("a conductor's session, from its URL", () => {
     }, "the sessions listed");
   };
 
-  test("opens on the current attempt, whatever attempt its Run names", async () => {
-    const page = await app(restartedWith(conductor(1)), `#/session/${COND}`);
+  test("opens on the attempt its Run names", async () => {
+    const page = await app(restartedWith(conductor(2)), `#/session/${COND}`);
     await until(() => page.querySelector("[data-testid=attempt-picker]"), "the task page with its picker");
     await until(() => page.querySelector("[data-testid=abort]"), "the conductor's session, live");
     expect(shown(page)).toBe("2");
     expect(count(page, "[data-testid=earlier-bar]")).toBe(0);
   });
 
-  test("on attempt 1, Sessions lists the conductor first and counts it", async () => {
+  test("on attempt 1, Sessions lists attempt 1's Runs alone, not attempt 2's conductor", async () => {
     const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}/sessions?attempt=1`);
     await until(() => (shown(page) === "1" ? true : null), "attempt 1 from the URL");
     const list = await sessionsListed(page);
-    expect(list[0]!.textContent).toContain("Conductor");
-    // Attempt 1's four Runs, and the conductor.
-    expect(list).toHaveLength(5);
-    expect(tabCount(page, "Sessions")).toBe("5");
+    expect(list.some((r) => r.textContent?.includes("Conductor"))).toBe(false);
+    expect(list).toHaveLength(4);
+    expect(tabCount(page, "Sessions")).toBe("4");
     const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith("Sessions"))!;
     await act(async () => tab.focus());
     const tip = await until(() => document.querySelector<HTMLElement>("[role=tooltip]"), "the Sessions tooltip");
-    expect(tip.textContent).toBe("Attempt 1's sessions, and the task's conductor");
+    expect(tip.textContent).toBe("Attempt 1's sessions");
   });
 
   test("Sessions lists the conductor first even when it is older than every Run of the attempt", async () => {
@@ -317,90 +358,20 @@ describe("a conductor's session, from its URL", () => {
 });
 
 describe("a conductor's session on an earlier attempt", () => {
-  async function app(client: FixtureClient, hash: string) {
-    window.history.replaceState(null, "", hash);
-    const { container, unmount } = await mount(
-      <TooltipProvider>
-        <ToastProvider>
-          <PeopleProvider client={client}>
-            <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
-          </PeopleProvider>
-        </ToastProvider>
-      </TooltipProvider>,
-    );
-    mounted.push(unmount);
-    return container;
-  }
-  const rows = (_page: HTMLElement) => [...document.querySelectorAll<HTMLElement>("[data-testid=sessions] [data-testid=session]")];
-  const openRow = async (page: HTMLElement) => {
-    await sessionOptions(page);
-    return until(() => rows(page).find((l) => l.matches("[aria-current=true]")), "the open session's row");
-  };
-  const writable = (page: HTMLElement) => {
-    expect(count(page, "[data-testid=abort]")).toBe(1);
-    expect(count(page, "[data-testid=run-ended]")).toBe(0);
-    expect(count(page, "textarea")).toBe(1);
-  };
-  // The tree lists the conductor's session with its task, as the server's does
-  // for the attempts it keeps: the page then stays mounted when it is opened.
-  const inTheTree = (client: FixtureClient) => {
-    const navigation = client.navigation.bind(client);
-    client.navigation = async () => {
-      const nav = await navigation();
-      return { projects: nav.projects.map((p) => ({ ...p, epics: p.epics!.map((e) => ({ ...e, tasks: e.tasks.map((t) => t.id !== TASK_ID ? t
-        : { ...t, runs: t.runs!.map((r, i) => i > 0 ? r : { ...r, sessions: [{ id: COND, role: "conductor", status: "running", title: "Conductor" }, ...r.sessions] }) }) })) })) };
-    };
-    return client;
-  };
+  test("attempt 1's conductor, named with attempt 1, is read-only with the rest of attempt 1", async () => {
+    const page = await taskPage(restartedWith(conductor(1, { status: "aborted", endedAt: at(96) })), { runId: COND, attempt: 1 });
+    await until(() => (shown(page) === "1" ? true : null), "attempt 1");
+    await until(() => page.querySelector("[data-testid=earlier-bar]"), "the earlier-attempt bar");
+    expect(count(page, "[data-testid=abort]")).toBe(0);
+    expect(count(page, "textarea")).toBe(0);
+  });
 
-  test("stays on the attempt the place names, and keeps its composer and Abort", async () => {
+  test("attempt 2's live conductor named with attempt 1 opens on attempt 2, writable", async () => {
     const page = await taskPage(restartedWith(conductor(2)), { runId: COND, attempt: 1 });
     await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
-    expect(shown(page)).toBe("1");
-    expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
-    expect(count(page, "[data-testid=run-ended]")).toBe(0);
+    expect(shown(page)).toBe("2");
+    expect(count(page, "[data-testid=earlier-bar]")).toBe(0);
     expect(count(page, "textarea")).toBe(1);
   });
-
-  test("Sessions on attempt 1 first opens one of attempt 1's, not the task's ended conductor", async () => {
-    const page = await app(restartedWith(conductor(2, { status: "completed", endedAt: at(20) })), `#/task/${TASK_ID}/sessions`);
-    expect((await openRow(page)).textContent).toContain("Fix");
-    await pick(page, 1);
-    const open = await openRow(page);
-    expect(rows(page)[0]!.textContent).toContain("Conductor");
-    expect(open.textContent).not.toContain("Conductor");
-    // Attempt 1's newest: its aborted Fix.
-    expect(open.textContent).toContain("Fix");
-  });
-
-  test("the live conductor opened from attempt 1's list keeps its composer and Abort", async () => {
-    const page = await app(inTheTree(restartedWith(conductor(2))), `#/task/${TASK_ID}/sessions?attempt=1`);
-    await until(() => (shown(page) === "1" ? true : null), "attempt 1 from the URL");
-    expect((await openRow(page)).textContent).not.toContain("Conductor");
-    const bar = () => page.querySelector<HTMLElement>("[data-testid=earlier-bar]")?.textContent ?? "";
-    expect(bar()).toContain("nothing in it can be merged, resumed or steered.");
-    await act(async () => rows(page).find((l) => l.textContent?.includes("Conductor"))!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
-    await until(() => (window.location.hash === `#/session/${COND}` ? true : null), "the conductor's URL");
-    await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
-    expect(shown(page)).toBe("1");
-    expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
-    // The conductor under the bar is the task's, and can be steered: the bar does not say otherwise.
-    expect(bar()).toContain("nothing in it can be merged or resumed.");
-    expect(bar()).not.toContain("steered");
-    writable(page);
-  });
-
-  test("the live conductor open on the current attempt stays writable once attempt 1 is picked", async () => {
-    const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}/sessions`);
-    expect((await openRow(page)).textContent).toContain("Conductor");
-    await pick(page, 1);
-    expect(window.location.hash).toBe(`#/task/${TASK_ID}/sessions?attempt=1`);
-    expect((await openRow(page)).textContent).toContain("Conductor");
-    await until(() => page.querySelector("[data-testid=abort]"), "Abort on the conductor");
-    expect(count(page, "[data-testid=earlier-bar]")).toBe(1);
-    writable(page);
-    // Off Sessions, the conductor is no longer under the bar: it speaks for the attempt alone.
-    await openTab(page, "Overview");
-    await until(() => (page.querySelector("[data-testid=earlier-bar]")?.textContent?.includes("resumed or steered.") ? true : null), "the bar's full sentence");
-  });
 });
+

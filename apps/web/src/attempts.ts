@@ -3,8 +3,9 @@
  * whole pipeline again), and the task page shows one at a time. What
  * belongs to which attempt is read from the Runs: a Run carries its
  * attempt, and a finding, a file or a pull request belongs to the attempt
- * of the Run that made it. A task's conductor is the task's, not an
- * attempt's: it makes no attempt, ends none and begins none.
+ * of the Run that made it. A conductor belongs to the attempt recorded on
+ * its Run: Stop and start begins attempt N+1 with a conductor before any
+ * phase Run.
  */
 
 import { firstName } from "@dude/design-system";
@@ -16,8 +17,8 @@ import { instant } from "./instant.ts";
 import { howRunStopped } from "./screens/Recovery.tsx";
 import type { People } from "./people.tsx";
 
-/** A Run that is an attempt's own work: neither a branch preview nor the task's conductor. */
-const isAttemptWork = (r: Run) => r.kind !== "preview" && !isConductor(r);
+/** A Run that is an attempt's own work, its conductor included: anything but a branch preview. */
+const isAttemptWork = (r: Run) => r.kind !== "preview";
 
 /** Every attempt the task has had, newest first: distinct `attempt` over its agent Runs. */
 export function attemptsOf(runs: readonly Run[]): number[] {
@@ -99,8 +100,7 @@ export function attemptStarts(runs: readonly Run[]): Map<number, string> {
 
 /**
  * The attempt an event happened in: the one a start over began, its Run's,
- * its pull request's, else the attempt under way when it happened; null for
- * one on the task's conductor, which is no attempt's. Built once per pass
+ * its pull request's, else the attempt under way when it happened. Built once per pass
  * over the ledger; asked only of the events that make a line.
  */
 export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[], current: number, source?: TaskSource | null): (e: PersistedEvent) => number | null {
@@ -110,7 +110,6 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
   return (e) => {
     if (e.eventType === "task.recovered" && e.payload.action === "restart" && typeof e.payload.attempt === "number") return e.payload.attempt;
     const run = e.runId ? byId.get(e.runId) : undefined;
-    if (run && isConductor(run)) return null;
     if (run) return attemptOfRun(run, current);
     if (e.eventType.startsWith("pull_request.")) {
       const pr = prOfEvent(e, prs);
@@ -121,10 +120,11 @@ export function eventAttempts(runs: readonly Run[], prs: readonly PullRequest[],
   };
 }
 
-/** An earlier attempt's last aborted or failed Run: where it stopped. */
+/** An earlier attempt's last aborted or failed Run: where it stopped. A phase Run wins over the conductor that steered it. */
 function stoppedRunOf(runs: readonly Run[], attempt: number): Run | undefined {
-  return runs.filter((r) => r.attempt === attempt && isAttemptWork(r) && !r.replacedBy && (r.status === "aborted" || r.status === "failed"))
-    .sort((a, b) => (a.endedAt ?? a.createdAt).localeCompare(b.endedAt ?? b.createdAt)).at(-1);
+  const stopped = runs.filter((r) => r.attempt === attempt && isAttemptWork(r) && !r.replacedBy && (r.status === "aborted" || r.status === "failed"))
+    .sort((a, b) => (a.endedAt ?? a.createdAt).localeCompare(b.endedAt ?? b.createdAt));
+  return stopped.filter((r) => !isConductor(r)).at(-1) ?? stopped.at(-1);
 }
 
 /** How an earlier attempt ended, for its status mark: the status of the Run it stopped at. */
@@ -150,7 +150,7 @@ export const attemptStatus = (task: TaskDetail, attempt: number, current: number
 export function attemptMark(task: TaskDetail, attempt: number, current: number): { status: Status; label?: string } {
   const status = attemptStatus(task, attempt, current);
   if (attempt !== current || status !== "running" || task.decider !== "conductor" || !task.awaitingDecision) return { status };
-  const working = task.runs.some((r) => (isAttemptWork(r) || isConductor(r))
+  const working = task.runs.some((r) => isAttemptWork(r)
     && (r.status !== "paused" || r.dudePause === "machine") && !TERMINAL_RUN_STATUSES.includes(r.status));
   return working ? { status } : { status: "paused", label: WAITING_ON_CHAT };
 }

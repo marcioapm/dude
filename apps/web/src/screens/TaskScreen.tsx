@@ -362,14 +362,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   };
 
   // Every attempt, newest first; the current is the highest. The one shown:
-  // the open session's, else the one picked, else the current.
+  // the open session's (a conductor's too), else the one picked, else the current.
   const attempts = useMemo(() => attemptsOf(item?.runs ?? []), [item]);
   const byId = useMemo(() => runsById(item?.runs ?? []), [item]);
   const current = attempts[0] ?? 1;
   const many = attempts.length > 1;
-  // The task's conductor is no attempt's: its session opens on the attempt the place says.
   const openedRow = openedRun ? byId.get(openedRun) : undefined;
-  const shown = openedRow && !isConductor(openedRow) ? attemptOfRun(openedRow, current)
+  const shown = openedRow ? attemptOfRun(openedRow, current)
     : chosenAttempt !== null && attempts.includes(chosenAttempt) ? chosenAttempt : current;
   const earlier = shown !== current;
 
@@ -417,7 +416,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         return { n, findings: theirs.findings.length, files: fileCount(theirs.artifacts) };
       }),
       // Newest first, the task's conductor above them all, on every attempt.
-      sessions: (item?.runs ?? []).filter((r) => isConductor(r) || attemptOfRun(r, current) === shown)
+      sessions: (item?.runs ?? []).filter((r) => attemptOfRun(r, current) === shown)
         .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
   }, [findings, artifacts, verifications, allPrs, item, byId, attempts, current, shown]);
@@ -456,14 +455,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const retried = shownRun ? retriedRun(byId.get(shownRun), item?.runs ?? []) : false;
   // Only ever the current attempt's: what stopped the task is a Run of it.
   const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
-  // The task's conductor is never set aside with an attempt: it stays as on any attempt.
-  const shownRow = shownRun !== null ? byId.get(shownRun) : undefined;
-  const shownConductor = shownRow !== undefined && isConductor(shownRow);
+  // A Run of an earlier attempt, its conductor included, is set aside with it.
   const openStopped = useMemo<StoppedRun | undefined>(
-    () => (earlier && !shownConductor ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
+    () => (earlier ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
       : retried ? { setAside: "retry" }
       : pickUpHere ? { onPickUp: setPickingUp, keptUntil } : undefined),
-    [earlier, shownConductor, current, toCurrent, retried, pickUpHere, keptUntil]);
+    [earlier, current, toCurrent, retried, pickUpHere, keptUntil]);
   // Session Abort points at the task's Stop while there is one to use; one value while it says the same.
   const stopKey = item && !earlier && inProgress(item) && !(people.me && notYours(item, people)) ? (item.key ?? "this task") : null;
   const stopFromSession = useMemo(() => (stopKey ? { key: stopKey, open: () => setStopping(true) } : undefined), [stopKey]);
@@ -565,12 +562,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // the current attempt's: an earlier one has none to show.
   const showServers = !earlier && Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
   // The one open is the one asked for, else the one picked on first sight
-  // (what was running, else the newest). On an earlier attempt, first sight
-  // is of that attempt's own sessions, not the task's conductor above them.
-  const firstSight = earlier ? sessions.filter((r) => !isConductor(r)) : sessions;
+  // (what was running, else the newest).
   const openRun = (openedRun && sessions.some((r) => r.id === openedRun) ? openedRun : undefined)
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
-    ?? (firstSight.find((r) => r.status === "running") ?? firstSight[0] ?? sessions[0])?.id;
+    ?? (sessions.find((r) => r.status === "running") ?? sessions[0])?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
   latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
@@ -655,7 +650,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
       {item.escalation || stop || aside || problem || blocked || openOrDraft || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
-          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
+          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
           {!earlier ? lifecycle.notice : null}
           {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
@@ -711,7 +706,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Tab value="findings" count={mine.findings.length > 0 ? mine.findings.length : undefined}
             tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
           <Tab value="sessions" count={sessions.length > 0 ? sessions.length : undefined}
-            tooltip={many ? <>Attempt {shown}'s sessions{conductors.length > 0 ? ", and the task's conductor" : ""}</> : undefined}>Sessions</Tab>
+            tooltip={many ? <>Attempt {shown}'s sessions</> : undefined}>Sessions</Tab>
           <Tab value="feedback" count={!earlier && feedback.blocking > 0 ? feedback.blocking : undefined}
             tooltip={!earlier && feedback.blocking > 0 ? `${plural(feedback.blocking, "item")} not yet handled: they hold the merge`
               : many ? `Attempt ${shown}'s feedback` : undefined}>Feedback</Tab>
@@ -1001,7 +996,7 @@ function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, peop
  * when, their note, how it had ended, and the way to the current one.
  * Neutral: nothing is wrong and nobody is needed.
  */
-function EarlierBar({ attempt, current, aside, conductorOpen, onCurrent }: { attempt: number; current: number; aside: SetAside; conductorOpen: boolean; onCurrent: () => void }) {
+function EarlierBar({ attempt, current, aside, onCurrent }: { attempt: number; current: number; aside: SetAside; onCurrent: () => void }) {
   return (
     <Callout tone="neutral" data-testid="earlier-bar">
       <div className="escalation">
@@ -1012,8 +1007,7 @@ function EarlierBar({ attempt, current, aside, conductorOpen, onCurrent }: { att
           {aside.note ? <>: “{aside.note}”</> : "."}
         </p>
         <p className="earlierSecond">
-          {/* The task's conductor, open under the bar, is not the attempt's and can still be steered. */}
-          {aside.how ? `It had ${aside.how}. ` : null}What it left is here to read; nothing in it can be {conductorOpen ? "merged or resumed" : "merged, resumed or steered"}.{" "}
+          {aside.how ? `It had ${aside.how}. ` : null}What it left is here to read; nothing in it can be merged, resumed or steered.{" "}
           <Button size="sm" variant="secondary" trailingIcon="arrow-right" onClick={onCurrent} data-testid="go-current">
             Go to attempt {current} (current)
           </Button>
@@ -1368,7 +1362,6 @@ interface ActivityLine {
   personName: string;
   id: string;
   at: string;
-  /** Null for a line about the task's conductor, which is no attempt's. */
   attempt: number | null;
   who: ReactNode;
   text: ReactNode;

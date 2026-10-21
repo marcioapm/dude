@@ -401,17 +401,19 @@ describe("a conducted task's Chat", () => {
   });
 });
 
-// A conducted task started over: the conductor is the task's, its Runs
-// are each an attempt's. Attempt 1 had a conducted implementer and a
+// A conducted task started over: each attempt has its own conductor, and
+// each Run is its attempt's. Attempt 1 had a conducted implementer and a
 // Deliver reviewer; attempt 2 has a conducted implementer and fixer and a
 // Deliver simplifier.
 describe("a conducted task with two attempts", () => {
+  const CONDUCTOR2 = "run_cond_dec2";
   const two = [
-    run({ id: CONDUCTOR, attempt: 1, phase: null, role: "conductor", status: "running", createdAt: at(0) }),
+    run({ id: CONDUCTOR, attempt: 1, phase: null, role: "conductor", status: "aborted", createdAt: at(0), endedAt: at(24) }),
     run({ id: "run_a1_impl", attempt: 1, status: "aborted", conductorRunId: CONDUCTOR, createdAt: at(10), endedAt: at(20) }),
     run({ id: "run_a1_rev", attempt: 1, phase: "review", role: "reviewer", category: "correctness", createdAt: at(15) }),
-    run({ id: "run_a2_impl", attempt: 2, conductorRunId: CONDUCTOR, createdAt: at(30) }),
-    run({ id: "run_a2_fix", attempt: 2, phase: "fix", status: "running", conductorRunId: CONDUCTOR, createdAt: at(40) }),
+    run({ id: CONDUCTOR2, attempt: 2, phase: null, role: "conductor", status: "running", createdAt: at(26) }),
+    run({ id: "run_a2_impl", attempt: 2, conductorRunId: CONDUCTOR2, createdAt: at(30) }),
+    run({ id: "run_a2_fix", attempt: 2, phase: "fix", status: "running", conductorRunId: CONDUCTOR2, createdAt: at(40) }),
     run({ id: "run_a2_simp", attempt: 2, phase: "simplify", role: "simplifier", createdAt: at(35) }),
   ];
   const restart = () => {
@@ -441,13 +443,13 @@ describe("a conducted task with two attempts", () => {
     li.getAttribute("role") === "presentation" ? "— Delivered automatically"
       : `${li.getAttribute("data-under") ?? "top"}:${li.getAttribute("data-run")}`);
 
-  test("Sessions on the current attempt: the conductor, its Runs of this attempt under it, the attempt's others under Delivered automatically", async () => {
+  test("Sessions on the current attempt: its conductor, its Runs of this attempt under it, the attempt's others under Delivered automatically", async () => {
     const { p } = await showing(undefined, "sessions");
     const rows = await until(() => (tree(p).length > 0 ? tree(p) : null), "the sessions");
-    expect(rows).toEqual([`top:${CONDUCTOR}`, "conductor:run_a2_fix", "conductor:run_a2_impl", "— Delivered automatically", "delivered:run_a2_simp"]);
+    expect(rows).toEqual([`top:${CONDUCTOR2}`, "conductor:run_a2_fix", "conductor:run_a2_impl", "— Delivered automatically", "delivered:run_a2_simp"]);
   });
 
-  test("Sessions on the earlier attempt: the conductor first, and under it only the Runs it started in that attempt", async () => {
+  test("Sessions on the earlier attempt: that attempt's conductor first, and under it only the Runs it started", async () => {
     const { p } = await showing(1, "sessions");
     const rows = await until(() => (tree(p).length > 0 ? tree(p) : null), "the sessions");
     expect(rows).toEqual([`top:${CONDUCTOR}`, "conductor:run_a1_impl", "— Delivered automatically", "delivered:run_a1_rev"]);
@@ -459,7 +461,7 @@ describe("a conducted task with two attempts", () => {
     await settle();
   };
 
-  test("Chat is the task's: a line for every Run the conductor started, whichever attempt is shown, each opening its session", async () => {
+  test("Chat is the task's: a line for every Run a conductor started, attempt 1's in its muted group, whichever attempt is shown", async () => {
     for (const attempt of [undefined, 1]) {
       const opened: string[] = [];
       // Chat's URL names no attempt: attempt 1 is picked on Findings, and kept on Chat.
@@ -471,9 +473,12 @@ describe("a conducted task with two attempts", () => {
         return l.length === 3 ? l : null;
       }, `three Run lines, attempt ${attempt ?? "current"} shown`);
       expect(lines.map((l) => l.getAttribute("data-run"))).toEqual(["run_a1_impl", "run_a2_impl", "run_a2_fix"]);
-      await click(lines[0]!.querySelector("button")!);
+      const group = p.querySelector<HTMLElement>("[data-testid=earlier-turns]")!;
+      expect(group.getAttribute("aria-label")).toBe("Attempt 1's conversation");
+      expect([...group.querySelectorAll("[data-testid=chat-run]")].map((l) => l.getAttribute("data-run"))).toEqual(["run_a1_impl"]);
+      // The earlier group is inert: only the current attempt's lines open their sessions.
       await click(lines[2]!.querySelector("button")!);
-      expect(opened).toEqual(["run_a1_impl", "run_a2_fix"]);
+      expect(opened).toEqual(["run_a2_fix"]);
       for (const unmount of mounted) await unmount();
       mounted = [];
     }

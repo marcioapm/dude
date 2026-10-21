@@ -22,6 +22,7 @@ import { clearDraftIfSent, draftKey, useDraft } from "../hooks/useDraft.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
+import { eventAttempts } from "../attempts.ts";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { DriverControl } from "./DriverSwitch.tsx";
@@ -159,24 +160,6 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   // After a Start over, the earlier attempts' conversations sit muted above a divider naming who started the next.
   const current = conductorId ? task.runs.find((r) => r.id === conductorId)?.attempt ?? null : null;
   const starts = useMemo(() => startOversByAttempt(events, people.names), [events, people.names]);
-  const before = useMemo(() => {
-    if (earlier.length === 0) return null;
-    const node = (r: { id: string; status: RunStatus }) =>
-      <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />;
-    if (current === null) return earlier.map(node);
-    const attempts = [...new Set(earlier.map((r) => r.attempt ?? current))].sort((a, b) => a - b);
-    return attempts.map((n) => {
-      const mine = earlier.filter((r) => (r.attempt ?? current) === n);
-      if (n >= current) return <Fragment key={n}>{mine.map(node)}</Fragment>;
-      const start = starts.get(n + 1);
-      return (
-        <Fragment key={n}>
-          <EarlierTurns attempt={n}>{mine.map(node)}</EarlierTurns>
-          {start ? <AttemptDivider attempt={n + 1} by={start.by} note={start.note} at={start.at} /> : null}
-        </Fragment>
-      );
-    });
-  }, [ledgers, earlierKey, current, starts]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids, attempts and whether each was retried
   // The failed conductor this one retries: its briefing, which Try again repeats, is in its own ledger.
   const retries = events.find((e) => e.eventType === EventTypes.RunCreated && e.runId === conductorId)?.payload.retries;
   const retriedRun = typeof retries === "string" ? retries : null;
@@ -229,6 +212,36 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
       node: <ChatNotice data-testid="chat-stopped" kind="stopped" by={dude} text={`${firstName(by)} stopped the task${note}`} at={stop.occurredAt} /> }];
   }, [lines, stoppedHere, events, people.names, dude]);
 
+  // Each side-line's attempt, from its Run or its ledger event: an earlier attempt's sit in its muted group.
+  const lineAttempts = useMemo(() => {
+    if (current === null) return new Map<string, number>();
+    const project = eventAttempts(task.runs, pullRequests, current, task.source);
+    const byId = new Map(events.map((e) => [e.eventId, e]));
+    return new Map(conducted.map((l): [string, number] => {
+      const e = byId.get(l.id);
+      return [l.id, l.kind === "run" ? l.run.attempt : (e ? project(e) : null) ?? current];
+    }));
+  }, [conducted, events, task.runs, task.source, pullRequests, current]);
+  const isEarlierLine = (id: string) => current !== null && (lineAttempts.get(id) ?? current) < current;
+  const currentLines = useMemo(() => stopLines.filter((l) => !isEarlierLine(l.id)), [stopLines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- isEarlierLine reads lineAttempts and current
+  const before = useMemo(() => {
+    const node = (r: { id: string; status: RunStatus }) =>
+      <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />;
+    if (current === null) return earlier.length === 0 ? null : earlier.map(node);
+    const attempts = [...new Set([...earlier.map((r) => r.attempt ?? current), ...lineAttempts.values()])].sort((a, b) => a - b);
+    const groups = attempts.map((n) => {
+      const mine = earlier.filter((r) => (r.attempt ?? current) === n);
+      if (n >= current) return mine.length === 0 ? null : <Fragment key={n}>{mine.map(node)}</Fragment>;
+      const theirs = stopLines.filter((l) => lineAttempts.get(l.id) === n);
+      const start = starts.get(n + 1);
+      return <Fragment key={n}>
+        <EarlierTurns attempt={n}>{mine.map(node)}{theirs.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}</EarlierTurns>
+        {start ? <AttemptDivider attempt={n + 1} by={start.by} note={start.note} at={start.at} /> : null}
+      </Fragment>;
+    }).filter((g) => g !== null);
+    return groups.length === 0 ? null : groups;
+  }, [ledgers, earlierKey, current, starts, lineAttempts, stopLines]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids, attempts and whether each was retried
+
   const inProgress = !["done", "aborted", "failed"].includes(task.status) && task.runs.some((r) => r.phase || isConductor(r));
   const waiting = task.awaitingDecision ? DECISION_POINT_LABEL[task.awaitingDecision.point] : undefined;
   const gateHeld = task.decider !== "conductor" && task.awaitingDecision?.point === "before_pull_request";
@@ -256,9 +269,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
     return task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</> : <>To <b>Conductor</b> · sending gives it the decisions</>;
   }, [inProgress, first.readOnly, task.decider, task.handedBack]);
   const stoppedWords = stoppedHere ? STOPPED_COMPOSER : undefined;
-  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines: stopLines, above, readOnly: gateHeld,
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines: currentLines, above, readOnly: gateHeld,
     to, briefedBefore: briefedAgain, stopped: stoppedWords }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, stopLines, above, gateHeld, to, briefedAgain, stoppedWords]);
+    [head, send, answer, retry, briefedWith, before, conductorCost, currentLines, above, gateHeld, to, briefedAgain, stoppedWords]);
 
   if (conductorId) {
     return (

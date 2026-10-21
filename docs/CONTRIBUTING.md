@@ -100,10 +100,11 @@ belongs to the attempt of the Run that made it. A pull request whose Run is
 unknown goes to the attempt its branch names (`dude/<task>/attempt-N`), else
 the current one; a finding or file whose Run is unknown, to the current
 attempt (`apps/web/src/attempts.ts`). Chat, Activity and Servers
-are the whole task's. The task's conductor is no attempt's: its Run makes,
-ends and begins no attempt, and its session is listed, live, on every
-attempt's Sessions. The URL names the attempt (`?attempt=1`) only when it
-is not the current one.
+are the whole task's. Each conductor belongs to its recorded Run attempt,
+including an attempt with no phase Run yet. Its session is listed on that
+attempt, and an older attempt's conductor is read-only. Historical Runs
+retain their recorded attempt; they are not reassigned to the newest one.
+The URL names the attempt (`?attempt=1`) only when it is not the current one.
 
 **Stopping a task, and picking it back up.** A person (the owner or an
 admin) stops a task with **Stop** (`POST /internal/tasks/{id}/stop`,
