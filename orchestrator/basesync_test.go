@@ -228,8 +228,15 @@ func TestBeforePRConflictingBaseIsResolvedReviewedAndTested(t *testing.T) {
 // (web) beside one whose pull request is open and approved (target): the
 // integration fixer also changes target, and target's pull request moves
 // only once that change is reviewed and tested, by its promotion. web's
-// pull request opens at the checked head too.
+// pull request opens at the checked head too. With target's pull request
+// closed first, nothing is left to keep the merge from: no candidate, and
+// web's pull request still opens at a reviewed and tested head.
 func TestBeforePRIntegrationBesideAnOpenPullRequestIsCheckedOnACandidate(t *testing.T) {
+	t.Run("open", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, false) })
+	t.Run("closed", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, true) })
+}
+
+func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 	w := conducting(t)
 	w.onModel("qa_browser", "fake/scripted")
 	// The conductor's tools and sync_base for the integration fixer.
@@ -284,8 +291,17 @@ func TestBeforePRIntegrationBesideAnOpenPullRequestIsCheckedOnACandidate(t *test
 	w.gh.Review(1, "ana", "APPROVED")
 	// web's base moves under it, conflicting: GitHub cannot merge it in.
 	w.commitFileIn(w.web.Repo, "main", "FIX.md", "base intent\n", "Another task's change")
-	checkTarget := w.prShowsOnlyChecked(t, task, "target", branch, true)
-	checkWeb := w.prShowsOnlyChecked(t, task, "web", branch, true)
+	// With target closed, no pull request is open while the fixer works:
+	// it publishes to web's task branch, and web's pull request opens at
+	// what was checked there (checkedAt below).
+	checkTarget, checkWeb := func() {}, func() {}
+	if closed {
+		w.gh.Close(1)
+		w.sync()
+	} else {
+		checkTarget = w.prShowsOnlyChecked(t, task, "target", branch, true)
+		checkWeb = w.prShowsOnlyChecked(t, task, "web", branch, true)
+	}
 	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed and tested; web is new."}`)
 	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
 		t.Fatalf("answer: %d %v", status, out)
@@ -294,23 +310,32 @@ func TestBeforePRIntegrationBesideAnOpenPullRequestIsCheckedOnACandidate(t *test
 
 	w.until("web's pull request open, and waiting on both", func() bool {
 		w.sync()
+		opened := len(w.web.Pulls()) == 1 && w.count(integrationCompleted, task) == 1
 		if r := w.escalationReason(task); r != "" {
+			// target closed and web open: a person decides what is left.
+			if closed && r == "pull_request_closed" && opened {
+				return true
+			}
 			t.Fatalf("escalated %s\n%s", r, w.describeRuns())
 		}
 		if w.decisionAt(task) == delivery.PointReviewed {
 			w.must(task, "decide", `{"action":"next"}`)
 		}
-		return len(w.web.Pulls()) == 1 && w.count(integrationCompleted, task) == 1 && w.waitingOnPR(task)
+		return opened && w.waitingOnPR(task)
 	})
 	checkTarget()
 	checkWeb()
-	if n := w.count(integrationRuns+` AND branch LIKE '%-candidate'`, task); n != 1 {
-		t.Errorf("integration Runs on the candidate %d, want 1\n%s", n, w.describeRuns())
+	want := 1
+	if closed {
+		want = 0
+	}
+	if n := w.count(integrationRuns+` AND branch LIKE '%-candidate'`, task); n != want {
+		t.Errorf("integration Runs on the candidate %d, want %d\n%s", n, want, w.describeRuns())
 	}
 	// Every Run that publishes from the integration on goes to the candidate.
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('implement', 'fix', 'simplify')
 		AND created_at >= (SELECT min(created_at) FROM runs WHERE task_id = $1 AND pr_feedback::text LIKE '%Base integration%')
-		AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task); n != 0 {
+		AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task); !closed && n != 0 {
 		t.Errorf("%d publishing Runs of the integration's loop off the candidate", n)
 	}
 	head := w.web.SHA(w.web.Pull(1).Head)
