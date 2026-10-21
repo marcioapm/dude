@@ -806,7 +806,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
                 ) : (
                   <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
-                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name} notAllowed={notYours(item, people)}
+                    // Until people load, not refused: the owner or an admin sees no flash of disabled buttons; the orchestrator still refuses.
+                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name} notAllowed={people.me ? notYours(item, people) : undefined}
                     feedbackHolds={feedback.loaded ? feedback.blocking : undefined} onShowFeedback={() => pickTab("feedback")}>
                     {(actions) => (
                       <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
