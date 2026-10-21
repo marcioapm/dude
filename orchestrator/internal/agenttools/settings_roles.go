@@ -41,6 +41,7 @@ type roleValueOut struct {
 	Value              any    `json:"value"`
 	Source             string `json:"source"`
 	FollowsImplementer bool   `json:"followsImplementer,omitempty"`
+	Note               string `json:"note,omitempty"`
 }
 
 type roleOut struct {
@@ -115,6 +116,9 @@ func rolesOut(w wrapper, scope settingsLayers, refs roleRefs) []roleOut {
 		r.Harness.Value = rs.HarnessName()
 		r.TimeLimitMinutes = layerSource(l, from.TimeLimit)
 		r.TimeLimitMinutes.Value = rs.TimeLimit()
+		if role == settingsInvestigator && scope.session != nil {
+			r.TimeLimitMinutes = roleValueOut{Source: sourceDude, Note: settingsText("session-child-limit", nil)}
+		}
 		r.MachineSize = machineOf(w, l, refs.sizes, role)
 		known := func(id string) bool { _, ok := refs.images[id]; return ok }
 		id, imgFrom := images.RoleImageFrom(role, l.projectModels(), l.org.AgentModels, known)
@@ -254,6 +258,11 @@ func promptsOut(w wrapper, scope settingsLayers, rows map[promptKey]promptRow) [
 	for _, role := range settingsRoles {
 		l := scope.of(role)
 		p := promptOut{Role: role, Label: delivery.RoleName(role), Organization: sourceDude}
+		if role == settingsInvestigator && scope.session != nil {
+			p.Organization = settingsText("session-child-prompt", nil)
+			out = append(out, p)
+			continue
+		}
 		if r, ok := rows[promptKey{role, ""}]; ok {
 			p.Organization, p.OrgSaved = "saved", saved(r)
 		}

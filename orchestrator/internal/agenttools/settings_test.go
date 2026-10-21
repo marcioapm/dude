@@ -336,7 +336,18 @@ func TestASessionsInvestigatorRowIsTheOneItsBrainstormStarts(t *testing.T) {
 	mustExec(t, f.owner, `UPDATE projects SET agent_models = agent_models || $2::jsonb WHERE id = $1`, f.project,
 		`{"investigator":{"tier":"mtr_small","harness":"codex","machineSize":"msz_l","image":"img_web","timeLimitMinutes":30}}`)
 
+	out := f.settingsOf(t, token, `{"section":"prompts"}`)
+	for _, p := range field(out, "settings", 0, "prompts").([]any) {
+		if m := p.(map[string]any); m["role"] == "investigator" {
+			if m["organization"] != "per-run child prompt, not saved org/project prompts" || m["organizationSaved"] != nil || m["project"] != nil || m["projectSaved"] != nil {
+				t.Errorf("session investigator prompt: %v", m)
+			}
+		}
+	}
 	inv := roleIn(f.settingsOf(t, token, `{}`), "investigator")
+	if field(inv, "timeLimitMinutes", "value") != nil || field(inv, "timeLimitMinutes", "note") != "not enforced for session investigators" {
+		t.Errorf("session investigator no-progress limit: %v", inv["timeLimitMinutes"])
+	}
 	for _, key := range []string{"tier", "harness", "timeLimitMinutes", "machineSize", "image"} {
 		if s := field(inv, key, "source"); s != "dude" {
 			t.Errorf("a brainstorm's investigator %s: %v", key, field(inv, key))

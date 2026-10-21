@@ -186,7 +186,7 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	out.Organization, out.Role = w.text(org.Name, 200), c.Role
 	var session *delivery.SessionModel
 	var raised, childRaised delivery.Raises
-	if c.SessionID != "" && (want("roles") || want("machines")) {
+	if c.SessionID != "" && (want("roles") || want("machines") || want("prompts")) {
 		m, err := delivery.LoadSessionModel(ctx, tx, c.SessionID)
 		if err != nil {
 			return out, err
@@ -432,7 +432,7 @@ func settingsText(name string, data any) string { return settingsTexts[name].Ren
 
 var settingsTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
-	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment"} {
+	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit"} {
 		out[name] = delivery.MustText("results/settings/" + name)
 	}
 	return out
