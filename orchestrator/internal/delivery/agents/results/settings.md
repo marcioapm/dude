@@ -2,6 +2,8 @@
 
 {{- define "results/settings/sources"}}source says where each value is set: dude (its built-in default, used while nobody sets one), organization (the organisation's Settings), project (the project's Settings, over the organisation's) or session (the session's own choice, over the organisation's). A person changes a value in Settings; you cannot.{{end}}
 
+{{- define "results/settings/deployment"}}the deployment may override dude's default{{end}}
+
 {{- define "results/settings/linked"}}This session links {{.}} projects: the settings above are the organisation's alone. Call settings again with project set to one of linkedProjects for what that project sets over them.{{end}}
 
 {{- define "results/settings/frozen"}}

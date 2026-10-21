@@ -93,7 +93,7 @@ func taskView(ctx context.Context, tx pgx.Tx, w wrapper, taskID string) (*taskVi
 			// before the key existed, decoded as zero).
 			v = now
 		}
-		out.Policy[k] = valueOut{Value: policyText(w, k, v), Source: sourceOf(l.NowSetIn[k])}
+		out.Policy[k] = policyValue(w, k, v, l.NowSetIn[k])
 		if l.Delivery == delivery.DeliveryLive && !reflect.DeepEqual(v, now) {
 			if out.Differs == nil {
 				out.Differs = map[string]frozenOut{}

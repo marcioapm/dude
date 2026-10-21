@@ -87,7 +87,7 @@ func (f *fixture) orchestratorGitHubSettings(t *testing.T) map[string]any {
 func TestSettingsLayersEachValueAsTheSettingsPageDoes(t *testing.T) {
 	f := setup(t)
 	token := f.conductor(t)
-	mustExec(t, f.owner, `UPDATE organizations SET delivery_policy = '{"maxReviewIterations":7,"maxPrFixIterations":4}' WHERE id = $1`, f.org)
+	mustExec(t, f.owner, `UPDATE organizations SET delivery_policy = '{"maxReviewIterations":7,"maxPrFixIterations":4,"conductorWarmMinutes":7}' WHERE id = $1`, f.org)
 	mustExec(t, f.owner, `UPDATE projects SET delivery_policy = '{"maxPrFixIterations":6}' WHERE id = $1`, f.project)
 	mustExec(t, f.owner, `INSERT INTO forge_credentials (id, organization_id, auth, secret, api_base_url, settings)
 		VALUES ('fc_s', $1, 'pat', 'x', 'http://127.0.0.1:1', '{"fixRoundsPerPr":8}')`, f.org)
@@ -107,6 +107,13 @@ func TestSettingsLayersEachValueAsTheSettingsPageDoes(t *testing.T) {
 	}
 	if out["github"] != nil {
 		t.Errorf("section delivery answers github: %v", out["github"])
+	}
+	// dude's park and idle defaults may be the deployment's; a set one is not.
+	for key, noted := range map[string]bool{"parkAfterMinutes": true, "idleNudgeMinutes": true, "conductorWarmMinutes": false,
+		"maxAttemptsPerFinding": false} {
+		if note, _ := field(scope, "delivery", key, "note").(string); (note != "") != noted {
+			t.Errorf("%s: note %q", key, note)
+		}
 	}
 
 	page := f.settingsRoute(t, "/v1/projects/"+f.project+"/settings")

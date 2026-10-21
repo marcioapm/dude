@@ -48,7 +48,21 @@ const (
 type valueOut struct {
 	Value  any    `json:"value"`
 	Source string `json:"source"`
+	Note   string `json:"note,omitempty"`
 }
+
+// policyValue is a policy key's valueOut. The syncer's park, idle and warm
+// defaults may be the operator's (DUDE_PARK_AFTER, DUDE_IDLE_AFTER,
+// DUDE_CONDUCTOR_WARM), which the tool server is not given.
+func policyValue(w wrapper, key string, v any, setIn string) valueOut {
+	out := valueOut{Value: policyText(w, key, v), Source: sourceOf(setIn)}
+	if out.Source == sourceDude && slices.Contains(deploymentKeys, key) {
+		out.Note = settingsText("deployment", nil)
+	}
+	return out
+}
+
+var deploymentKeys = []string{"parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes"}
 
 // settingsLayers are the rows a scope resolves over: the organisation's,
 // and a project's when the scope is one.
@@ -335,7 +349,7 @@ func deliveryOut(w wrapper, l settingsLayers) (map[string]valueOut, error) {
 	}
 	out := map[string]valueOut{}
 	for k, v := range policyValues(p) {
-		out[k] = valueOut{Value: policyText(w, k, v), Source: sourceOf(from[k])}
+		out[k] = policyValue(w, k, v, from[k])
 	}
 	return out, nil
 }
@@ -398,7 +412,7 @@ func settingsText(name string, data any) string { return settingsTexts[name].Ren
 
 var settingsTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
-	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked"} {
+	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment"} {
 		out[name] = delivery.MustText("results/settings/" + name)
 	}
 	return out
