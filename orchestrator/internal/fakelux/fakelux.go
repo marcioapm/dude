@@ -855,10 +855,6 @@ func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 	return s
 }
 
-// replay decides a resumed Run's behaviour again (scripted), from its spec
-// with each repository at the commit its checkout is at now. Only a
-// reviewer's or tester's: their step depends on the tree they check.
-// Callers hold s.mu.
 // writerRound is a scripted implementer's or fixer's next round, told it
 // by a round message: a fixer's step, its commit naming the round so each
 // is a change. Callers hold s.mu.
@@ -876,6 +872,10 @@ func (s *Server) writerRound(run *Run) {
 	run.woken = true
 }
 
+// replay decides a resumed Run's behaviour again (scripted), from its spec
+// with each repository at the commit its checkout is at now. Only a
+// reviewer's or tester's: their step depends on the tree they check.
+// Callers hold s.mu.
 func (s *Server) replay(run *Run, spec map[string]any) {
 	labels, _ := spec["labels"].(map[string]any)
 	if phase, _ := labels["dude.phase"].(string); phase != "review" && phase != "test" {
