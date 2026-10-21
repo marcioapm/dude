@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -243,6 +244,63 @@ func TestAPullRequestFixResumesTheLastFixerFastForwardedPastTheSimplifier(t *tes
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND base_shas->>'target' = $2
 		AND push_result @> '{"results":[{"status":"pushed"}]}'`, prFix.ID, simplified); n != 1 {
 		t.Fatal("the resumed fixer did not start from the simplifier's head and push")
+	}
+}
+
+// A continuing writer's round message waits for its resume's sync for at
+// most CheckoutSyncWait from when lux reported it running again, however
+// long the resume took: a slow placement whose sync then lands goes on;
+// a sync never reported is replaced once the wait is over.
+func TestAContinuingWritersSyncIsWaitedForFromItsResume(t *testing.T) {
+	for _, landed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "slow resume, sync lands", false: "sync never reported"}[landed], func(t *testing.T) {
+			w := resuming(t)
+			w.syncer.CheckoutSyncWait = time.Second
+			wi := w.task()
+			w.names(wi, w.repoID)
+			w.lux.BeforeStart(func(id string) {
+				if w.fixStarts(id) {
+					// Placed well after the handover queued the round message.
+					time.Sleep(2 * time.Second)
+				}
+			})
+			released := make(chan struct{})
+			release := sync.OnceFunc(func() { close(released) })
+			t.Cleanup(func() { w.lux.BeforeEvent(nil); release() })
+			var held atomic.Bool
+			w.lux.BeforeEvent(func(runID string, _ int64, typ string) {
+				if typ != "git.sync" || !w.fixStarts(runID) || !held.CompareAndSwap(false, true) {
+					return
+				}
+				if landed {
+					// Read a little after the running it trails.
+					time.Sleep(200 * time.Millisecond)
+					return
+				}
+				<-released
+			})
+			w.start(wi, resumingPolicy())
+			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			writers := w.writerRows(wi)
+			if len(writers) < 2 || writers[1].How != delivery.ContinuesResume {
+				t.Fatalf("writers: %+v; want the implementer resumed for the first fix", writers)
+			}
+			cont := writers[1]
+			replaced := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND replaced_by IS NOT NULL`, cont.ID)
+			restarted := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.restarted' AND payload->>'by' = 'dude'`, cont.ID)
+			if landed {
+				if replaced != 0 || restarted != 0 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, cont.ID) != 1 {
+					t.Fatalf("the continuation whose sync landed was replaced (%d) or restarted (%d), or did not complete", replaced, restarted)
+				}
+				return
+			}
+			if replaced != 1 || restarted != 1 {
+				t.Fatalf("the continuation whose sync was never reported: replaced %d, restarted %d; want both", replaced, restarted)
+			}
+			if luxFix := w.luxRunsOf("fix"); len(luxFix) != 1 {
+				t.Fatalf("%d fixers submitted; want the fresh one in its slot", len(luxFix))
+			}
+		})
 	}
 }
 

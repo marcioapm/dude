@@ -73,22 +73,33 @@ const evRoundUnsynced = "run.round.unsynced"
 
 // roundSyncLanded is, for a continuing writer not yet taken back up, why
 // its checkout is not at the round's head ("" when it is, or it is not
-// one), and whether its round message waits for the sync's report.
+// one), and whether its round message waits for the sync's report. The
+// wait is bounded by syncWait from when the stream reported the resumed
+// epoch running (run_resumes.running_at: the row is the continuation's
+// own, so any is since the handover); before that it holds. A running
+// continuation whose resume went untimed (that row is best effort) is
+// bounded from its round message instead.
 func (s *Syncer) roundSyncLanded(ctx context.Context, r phaseRun) (hold bool, why string, err error) {
 	if !delivery.Publishes[r.Phase] || r.talker() {
 		return false, "", nil
 	}
-	var continued, expired bool
+	var expired *bool
 	var unsynced *string
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT r.continues_how IS NOT DISTINCT FROM 'resume' AND r.finishes = 0,
+		return tx.QueryRow(ctx, `SELECT
 				(SELECT e.payload->>'repo' || ' ' || (e.payload->>'status') FROM events e
 				 WHERE e.run_id = r.id AND e.event_type = $2 ORDER BY e.cursor LIMIT 1),
-				COALESCE((SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL)
-					<= now() - make_interval(secs => $3), false)
-			FROM runs r WHERE r.id = $1`, r.ID, evRoundUnsynced, s.syncWait().Seconds()).Scan(&continued, &unsynced, &expired)
+				COALESCE((SELECT max(rr.running_at) FROM run_resumes rr WHERE rr.run_id = r.id),
+					CASE WHEN r.lux_state = 'running' THEN (SELECT min(d.created_at) FROM directives d
+						WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL) END)
+					<= now() - make_interval(secs => $3)
+			FROM runs r WHERE r.id = $1 AND r.continues_how = 'resume' AND r.finishes = 0`,
+			r.ID, evRoundUnsynced, s.syncWait().Seconds()).Scan(&unsynced, &expired)
 	})
-	if err != nil || !continued {
+	if db.IsNotFound(err) {
+		return false, "", nil
+	}
+	if err != nil {
 		return false, "", err
 	}
 	if unsynced != nil {
@@ -98,7 +109,7 @@ func (s *Syncer) roundSyncLanded(ctx context.Context, r phaseRun) (hold bool, wh
 	if err != nil || len(refs) == 0 {
 		return false, "", err
 	}
-	if expired {
+	if expired != nil && *expired {
 		return false, "its checkout's sync to the round's head was never reported", nil
 	}
 	return true, "", nil
