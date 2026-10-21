@@ -102,6 +102,51 @@ func TestClosingAStoppedTaskLetsWhatWasKeptGo(t *testing.T) {
 	w.until("the kept lux Run to be cancelled", func() bool { return w.luxRunFor(conductor).Cancelled })
 }
 
+// A reason to wake the conductor that came after a Stop is settled when
+// the task closes, and the halt cleared: nothing is held for a pick-up a
+// closed task will not get, and no conductor is woken.
+func TestClosingAStoppedTaskSettlesItsHeldWakes(t *testing.T) {
+	w := conducting(t)
+	task, ana, _ := w.stoppedAtDecision()
+	w.heldWake(task)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	w.assertWakesEnded(task)
+}
+
+// Start over ends the stopped attempt's wakes the same way: attempt 2,
+// handed to Deliver, gets no conductor for attempt 1's reasons.
+func TestStartingOverSettlesTheStoppedAttemptsWakes(t *testing.T) {
+	w := conducting(t)
+	task, ana, _ := w.stoppedAtDecision()
+	w.heldWake(task)
+	w.pickUp(ana, task, map[string]any{"action": "restart", "decider": "policy"})
+	w.assertWakesEnded(task)
+}
+
+func (w *world) heldWake(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES ('cwk_held_'||$2, $1, $2, 'decision', 'decision:held', 'A decision waits.', now() - interval '1 hour')`, w.org, task)
+}
+
+func (w *world) assertWakesEnded(task string) {
+	w.t.Helper()
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
+		w.t.Errorf("%d reasons still pending", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'halt'`, task); n != 0 {
+		w.t.Errorf("a delivery still holds its halt")
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		w.t.Errorf("conductors: %v", got)
+	}
+}
+
 // A pull request dude opened: closed on GitHub with a comment saying why
 // when asked; the task in review closes either way (Q8).
 func TestClosingInReviewClosesDudesPullRequestWhenAsked(t *testing.T) {

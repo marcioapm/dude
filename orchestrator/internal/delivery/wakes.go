@@ -358,6 +358,19 @@ const (
 	latestDelivery = ` AND w.workflow_type = '` + WorkflowType + `' ORDER BY w.created_at DESC, w.id DESC LIMIT 1`
 )
 
+// EndWakesTx is a delivery's end for its wakes, as the task closes or
+// starts over: its pending reasons are settled, told to no conductor, and
+// its deliveries' Halt cleared, so nothing is held for a pick-up that will
+// not come.
+func EndWakesTx(ctx context.Context, tx pgx.Tx, taskID string) error {
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = state - 'halt'
+		WHERE task_id = $1 AND workflow_type = $2 AND state ? 'halt'`, taskID, WorkflowType); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now() WHERE task_id = $1 AND delivered_at IS NULL`, taskID)
+	return err
+}
+
 // HaltedTx says whether the task's newest delivery was stopped by a person
 // and not yet picked back up: nothing starts a conductor for it until then.
 func HaltedTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {

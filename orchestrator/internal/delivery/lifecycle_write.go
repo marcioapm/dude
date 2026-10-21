@@ -231,6 +231,9 @@ func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, stoppe
 	if err := ReleaseKeptTx(ctx, tx, t.ID); err != nil {
 		return out, err
 	}
+	if err := EndWakesTx(ctx, tx, t.ID); err != nil {
+		return out, err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE tasks SET status = 'aborted', resolution = $2::task_resolution, closed_by = NULLIF($3, ''),
 		updated_at = now() WHERE id = $1`, t.ID, in.Resolution, in.Actor.Person); err != nil {
 		return out, err

@@ -522,6 +522,10 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectI
 		WHERE task_id = $1 AND status <> 'completed'`, taskID); err != nil {
 		return "", err
 	}
+	// The last attempt's reasons are its own: the next is briefed afresh.
+	if err := delivery.EndWakesTx(ctx, tx, taskID); err != nil {
+		return "", err
+	}
 	st, err := delivery.NewState(ctx, tx, taskID, projectID, policy, attempt)
 	if err != nil {
 		return "", err
