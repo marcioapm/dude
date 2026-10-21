@@ -103,7 +103,7 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 		ev["diverged"] = true
 	}
 	switch {
-	case ahead == 0 && behind == 0 && op == "":
+	case ahead == 0 && behind == 0 && op == "" && !dirty:
 		ev["status"] = "up-to-date"
 	case sr.Mode == lux.SyncFetch:
 		ev["status"] = "fetched"
@@ -187,6 +187,35 @@ func pushWorkspace(work, bare, branch, base string) (string, error) {
 		return "", fmt.Errorf("git push: %v: %s", err, out)
 	}
 	return sha, nil
+}
+
+// committedIn leaves the checkout work where an agent that committed sha
+// there would be: HEAD (its branch, or detached, as checked out) at sha,
+// the files sha changed as committed, any other local change kept. The
+// scripted commit is made in the repository bare, so its objects are
+// fetched in first.
+func committedIn(work, bare, sha string) error {
+	git := func(args ...string) error {
+		if out, err := exec.Command("git", append([]string{"-C", work}, args...)...).CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s in the checkout: %v: %s", args[0], err, out)
+		}
+		return nil
+	}
+	if err := git("fetch", "-q", bare, sha); err != nil {
+		return err
+	}
+	out, err := exec.Command("git", "-C", work, "diff", "--name-only", "-z", "HEAD", sha).Output()
+	if err != nil {
+		return fmt.Errorf("git diff in the checkout: %v", err)
+	}
+	if err := git("reset", "-q", "--soft", sha); err != nil {
+		return err
+	}
+	if paths := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00"); paths[0] != "" {
+		// restore, unlike checkout, removes a path HEAD has and sha lacks.
+		return git(append([]string{"restore", "-q", "--source=" + sha, "--staged", "--worktree", "--"}, paths...)...)
+	}
+	return nil
 }
 
 // localCall is a scripted conductor's own work in its checkout

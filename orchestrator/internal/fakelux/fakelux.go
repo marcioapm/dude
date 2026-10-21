@@ -178,6 +178,9 @@ type Run struct {
 	looked map[string]bool
 	// Some repository got a commit from a push.
 	Pushed bool
+	// Per repository, the commit this Run last pushed: lux's lease for its
+	// next push (runs.pushed).
+	pushedTo map[string]string
 	// dude tools the agent called: "tool status".
 	ToolCalls []string
 	// The id the agent's last dude tool call answered with: CallTools'
@@ -276,6 +279,9 @@ type Run struct {
 	harness *harnessSay
 	// Turns the agent finished (went idle after), for TurnsEnded.
 	turnsEnded int
+	// A writer's next round was just told it (writerRound): its tool calls
+	// are this turn's, once, as a first turn's are.
+	roundCalls bool
 	// Its next failTurns turns fail at once with failWith (FailTurns).
 	failTurns int
 	failWith  string
@@ -590,6 +596,9 @@ func (s *Server) deliverQueued(run *Run) {
 	}
 	for i := range run.queued {
 		s.accept(run, &run.queued[i])
+		if s.scriptedAgent && strings.HasPrefix(run.queued[i].text, "## A new round") {
+			s.writerRound(run, run.queued[i].text)
+		}
 	}
 	s.consume(run)
 	// Input after a resume is what a paused agent was waiting for: it
@@ -847,6 +856,31 @@ func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 		s.scriptedAgent = true
 	}
 	return s
+}
+
+// writerRound is a scripted implementer's or fixer's next round, told it
+// by a round message: a fixer's step, its commit naming the round so each
+// is a change, carrying out the "tool: NAME {json}" lines the message's
+// feedback names, as a fresh scripted fixer does from its prompt
+// (CallsLabel). Callers hold s.mu.
+func (s *Server) writerRound(run *Run, message string) {
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	labels, _ := spec["labels"].(map[string]any)
+	phase, _ := labels["dude.phase"].(string)
+	model, _ := labels["dude.model"].(string)
+	if phase != "implement" && phase != "fix" {
+		return
+	}
+	round := map[string]any{"dude.phase": "fix", "dude.model": model,
+		"dude.run": fmt.Sprintf("%s-round-%d", run.ID, run.turnsEnded)}
+	if calls := fakeagent.ConductorCalls(message); len(calls) > 0 {
+		raw, _ := json.Marshal(calls)
+		round[fakeagent.CallsLabel] = string(raw)
+	}
+	run.behavior = s.Decide(map[string]any{"labels": round})
+	run.roundCalls = len(run.behavior.CallTools) > 0
+	run.woken = true
 }
 
 // replay decides a resumed Run's behaviour again (scripted), from its spec
@@ -1831,6 +1865,11 @@ func (s *Server) turn(run *Run) {
 		}
 		s.edit(run, b.Edits)
 		s.save(run, b.PublishNow, b.Descriptions)
+	} else if run.roundCalls {
+		run.roundCalls = false
+		for _, c := range b.CallTools {
+			s.callTool(run, c[0], c[1])
+		}
 	}
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
@@ -2732,6 +2771,10 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 		}
 		path := s.repoPath(repo.URL)
 		base := head(path, repo.Ref)
+		if run.pushedTo[repo.Name] != "" && run.at[repo.Name] != "" {
+			// A later round's: its checkout moved on from the spec's ref.
+			base = run.at[repo.Name]
+		}
 		var sha string
 		var err error
 		work, op := "", ""
@@ -2750,6 +2793,13 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			results = append(results, result)
 			continue
 		}
+		if tip := head(path, "refs/heads/"+branch); leaseFails(run, repo.Name, tip, base, work, files) {
+			// As lux's explicit lease: the branch must be where this Run last
+			// pushed it, or absent the first time.
+			result["status"], result["error"] = "rejected", "the branch moved since this Run last pushed it: not overwritten"
+			results = append(results, result)
+			continue
+		}
 		if len(files) == 0 && work != "" {
 			// What the agent committed in its checkout itself, as lux
 			// pushes a checkout's HEAD.
@@ -2758,11 +2808,8 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			sha, err = commit(path, base, branch, files, run.behavior.Message)
 			if err == nil && work != "" && sha != base {
 				// lux pushes what is in the checkout: the scripted commit
-				// made in the repository is the checkout's too, its objects
-				// fetched in (HEAD is left where the agent's edits are).
-				if out, ferr := exec.Command("git", "-C", work, "fetch", "-q", path, sha).CombinedOutput(); ferr != nil {
-					err = fmt.Errorf("fetching the commit into the checkout: %v: %s", ferr, out)
-				}
+				// made in the repository is the checkout's too.
+				err = committedIn(work, path, sha)
 			}
 		}
 		switch {
@@ -2774,9 +2821,37 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			result["status"], result["commit"] = "pushed", sha
 			run.Pushed = true
 		}
+		if tip := head(path, "refs/heads/"+branch); err == nil && tip != "" && tip == sha {
+			if run.pushedTo == nil {
+				run.pushedTo = map[string]string{}
+			}
+			run.pushedTo[repo.Name] = sha
+			if run.at == nil {
+				run.at = map[string]string{}
+			}
+			// The checkout is at what it pushed.
+			run.at[repo.Name] = sha
+		}
 		results = append(results, result)
 	}
 	s.luxEvent(run, "git.push", map[string]any{"requestId": requestID, "results": results})
+}
+
+// leaseFails is whether a push that would move branch from tip finds it
+// not where this Run last pushed it ("" before its first push: absent).
+// One that would leave it unchanged (nothing committed over base) is not
+// a push and never fails.
+func leaseFails(run *Run, repo, tip, base, work string, files map[string]string) bool {
+	if len(files) == 0 {
+		if work == "" {
+			return false
+		}
+		out, err := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
+		if err != nil || strings.TrimSpace(string(out)) == base {
+			return false
+		}
+	}
+	return tip != run.pushedTo[repo]
 }
 
 type specRepo struct {
