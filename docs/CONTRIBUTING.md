@@ -108,12 +108,16 @@ The URL names the attempt (`?attempt=1`) only when it is not the current one.
 
 **Stopping a task, and picking it back up.** A person (the owner or an
 admin) stops a task with **Stop** (`POST /internal/tasks/{id}/stop`,
-`api/stop.go`), whoever decides it: every live Run of the attempt stops in
-one transaction — phase Runs and the conductor aborted and kept in lux for a
-resume (`runs.keep`; `phases.Syncer.end` keeps an aborted conductor too), the
-conductor's children aborted as `AbortChildTx` does — the delivery is
-aborted with `State.Halt` naming the conductor and the step it waited at,
-and the task is `aborted` (`task.stopped`). The PR is untouched.
+`api/stop.go`), whoever decides it: every live Run of the task stops in
+one transaction (`delivery.StopAllTx`) — every live phase Run whatever its
+attempt (`StopPhaseRunsTx` selects by task, not attempt, so a live Run left
+on an older attempt is stopped too) and the live conductor, aborted and kept
+in lux for a resume (`runs.keep`; `phases.Syncer.end` keeps an aborted
+conductor too), the conductors' children aborted as `AbortChildTx` does — the
+delivery is aborted with `State.Halt` naming the conductor and the step it
+waited at, and the task is `aborted` (`task.stopped`). While `Halt` stands,
+no wake reaches the conductor (`delivery.Wakeable`): Resume takes the kept
+one back up and it hears what queued meanwhile. The PR is untouched.
 `andRestart` starts the next attempt in the same request. Aborting one Run
 (`/internal/runs/{id}/abort`) is still there: a phase Run stops its step's
 Runs and the task as Stop does (`delivery.StopPhaseRunsTx`, shared); the
@@ -130,7 +134,8 @@ works on its head branch.
 
 **Close and Archive stop what is live.** `delivery.CloseTx` and
 `ArchiveTaskTx` refuse nothing for agents working or a PR open: in the same
-transaction they stop every live Run (`StopAllTx`, nothing kept), let go at
+transaction they stop every live Run of the task, any attempt's
+(`StopAllTx`, nothing kept), let go at
 once what a Stop kept, end the delivery, then close (`task.closed` names
 what it `stopped`). `closePullRequest` closes the task's open PRs on GitHub
 after the commit, each with "Closed with <KEY> as <resolution>: <note>",

@@ -12,9 +12,9 @@ import (
 )
 
 // Stop: a person stops the whole task where it stands — every live Run of
-// its current attempt, the conductor and its children included — so it can
-// be picked back up (recover.go), or stops it and starts it over at once.
-// The task's owner or an admin, as Close.
+// the task whatever its attempt, the conductor and its children included —
+// so it can be picked back up (recover.go), or stops it and starts it over
+// at once. The task's owner or an admin, as Close.
 
 func (s *Server) stopRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/tasks/{id}/stop", s.auth(s.stopTask))

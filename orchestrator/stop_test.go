@@ -170,6 +170,31 @@ func TestStopIsTheOwnersOrAnAdminsAndOnlyInProgress(t *testing.T) {
 	}
 }
 
+// Stop is the whole task's, not its current attempt's: a phase Run left
+// live on an older attempt (an anomaly: Start over ends them) is stopped
+// and named with the current attempt's.
+func TestStopStopsALiveRunLeftOnAnOlderAttempt(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	mustExec(t, w.owner, `UPDATE runs SET attempt = 2 WHERE id = $1`, conductor)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{attempt}', '2') WHERE task_id = $1`, task)
+	stray := "run_stray_" + task
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role, phase)
+		SELECT $1, organization_id, project_id, task_id, 1, 'pending', 'agent', 'reviewer', 'review' FROM runs WHERE id = $2`, stray, conductor)
+	out := w.stop(ana, task, map[string]any{})
+	if out["status"] != "aborted" {
+		t.Fatalf("stop: %v", out)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, stray); n != 1 {
+		t.Errorf("attempt 1's live reviewer was not stopped: %s", w.str(`SELECT status::text FROM runs WHERE id = $1`, stray))
+	}
+	if stopped := w.str(`SELECT payload->>'runIds' FROM events WHERE task_id = $1 AND event_type = 'task.stopped'`, task); !strings.Contains(stopped, stray) {
+		t.Errorf("task.stopped does not name attempt 1's reviewer: %s", stopped)
+	}
+}
+
 // taskChild inserts a live child the conductor started, as start_child
 // leaves one before lux has it.
 func (w *world) taskChild(task, conductor string) string {

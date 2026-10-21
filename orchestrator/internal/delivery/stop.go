@@ -38,7 +38,9 @@ func LockLiveWorkTx(ctx context.Context, tx pgx.Tx, taskID string) (string, erro
 }
 
 // StopPhaseRunsTx aborts the task's live phase Runs, and runID with them
-// when given: what they never read fails, and a pull request fix being
+// when given. It selects by task, not attempt: a phase Run still live on an
+// older attempt is stopped with the current one's. What they never read
+// fails, and a pull request fix being
 // checked on its candidate stops short of the pull request (its candidate
 // stays in the state, so a recovery may still promote it). With keep, each
 // lux has is kept to resume. Returns the Runs aborted.
@@ -127,9 +129,10 @@ func (s Stopped) All() []string {
 	return append(out, s.Children...)
 }
 
-// StopAllTx stops every live Run of the task — its phase Runs, its
-// conductor and the conductor's children — for a person's Stop (keep: the
-// phase Runs and the conductor kept to resume) or Close (nothing kept).
+// StopAllTx stops every live Run of the task, whatever its attempt — its
+// phase Runs, its conductor and the conductors' children — for a person's
+// Stop (keep: the phase Runs and the conductor kept to resume) or Close and
+// Archive (nothing kept).
 // Locks as the writers it races take them: the Chat and the conductor's
 // row, the phase Runs, then the delivery and the task (LockEscalationTx),
 // then each child (lockChild).

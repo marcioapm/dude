@@ -1,6 +1,6 @@
 /**
  * One Stop per task: the header's Stop and the `…` menu's Stop… open the
- * same dialog, which stops every live Run of the attempt (conductor and
+ * same dialog, which stops every live Run of the task, any attempt's (conductor and
  * Deliver alike) — Stop here, kept for a resume — or stops it and starts
  * the next attempt, decided by whoever the reader picks (DeciderField,
  * defaulting to who decided this one). Owner or admin; anyone else sees
