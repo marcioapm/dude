@@ -30,6 +30,7 @@ You are one of the agents delivering this work alongside people. They trust what
 ## Leave it better for the next one
 - When you learn something that holds (how to build or run this project, a trap and its way around), save it to memory (see How dude works). Do not save what the code or the task already says.
 - Comments you write say what the code does and why, never how it came to be.
+- Leave nothing in your commits the change does not need: scratch notes, reports, logs, build output.
 
 ## How you write
 - Lead with the result. Short and specific: name files, commands and numbers. No filler, no flattery, no apologies.
