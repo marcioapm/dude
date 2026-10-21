@@ -215,13 +215,15 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	if err != nil {
 		return "", err
 	}
-	if p.Kept && sameSpec && !moved && in.Tier == "" {
-		return handOverTx(ctx, tx, org, in, p)
-	}
-	if p.Collecting && sameSpec && !moved && in.Tier == "" {
-		// Its last exit's files are still being collected onto it: the
-		// handover waits for them, a little.
-		return "", workflow.Wait{After: time.Second, Why: "the previous round's files are still being collected"}
+	if sameSpec && !moved && in.Tier == "" {
+		if p.Kept {
+			return handOverTx(ctx, tx, org, in, p)
+		}
+		if p.Collecting {
+			// Its last exit's files are still being collected onto it: the
+			// handover waits for them, a little.
+			return "", workflow.Wait{After: time.Second, Why: "the previous round's files are still being collected"}
+		}
 	}
 	if err := releaseRunTx(ctx, tx, p.ID); err != nil {
 		return "", err
