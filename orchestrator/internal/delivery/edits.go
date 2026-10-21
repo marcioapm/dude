@@ -99,12 +99,17 @@ func refuseWriterAdmissionTx(ctx context.Context, tx pgx.Tx, taskID, excludeRunI
 	if publishing {
 		return refuseText(rChildTaskPublishing)
 	}
-	if d != nil && d.State.Candidate != nil {
-		return refusef("%s", refusedCandidate)
-	}
 	if d == nil {
 		return nil
 	}
+	if d.State.Candidate != nil {
+		return refusef("%s", refusedCandidate)
+	}
+	return refusePullRequestOpenTx(ctx, tx, taskID, d)
+}
+
+// refusePullRequestOpenTx is pullRequestOpenTx as a Refusal.
+func refusePullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) error {
 	why, err := pullRequestOpenTx(ctx, tx, taskID, d)
 	if err == nil && why != "" {
 		err = refuseText(why)
@@ -192,10 +197,7 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	if d.State.Candidate != nil {
 		return "", refusef("%s", refusedCandidate)
 	}
-	if why, err := pullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil || why != "" {
-		if err == nil {
-			err = refuseText(why)
-		}
+	if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
 		return "", err
 	}
 	id := ids.New("pub")
@@ -323,11 +325,12 @@ func claimed(n int) string { return fmt.Sprintf("claim_token = $%d", n) }
 
 // publishEligibleTx is why the publish may not go on now, "" when it may:
 // what ConductPublish checked, again — its conductor live and not ending,
-// its checkout writable, it still deciding, no other writer, and the
-// delivery and attempt it was asked on still the task's, not ended. With
-// lock, the task's Chat lock, then the conductor's Run, then the
-// delivery's row are held for the rest of tx: what ending or replacing the
-// conductor, changing the decider and starting a writer take.
+// its checkout writable, it still deciding, no other writer, no candidate
+// and no pull request open on the task branch, and the delivery and
+// attempt it was asked on still the task's, not ended. With lock, the
+// task's Chat lock, then the conductor's Run, then the delivery's row are
+// held for the rest of tx: what ending or replacing the conductor,
+// changing the decider and starting a writer take.
 func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (*Delivery, string, error) {
 	runLock, load := "", ReadDelivery
 	if lock {
