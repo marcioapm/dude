@@ -115,7 +115,7 @@ func rolesOut(w wrapper, scope settingsLayers, refs roleRefs) []roleOut {
 		r.Harness.Value = rs.HarnessName()
 		r.TimeLimitMinutes = layerSource(l, from.TimeLimit)
 		r.TimeLimitMinutes.Value = rs.TimeLimit()
-		r.MachineSize = machineOf(w, l, refs.sizes, role).roleValueOut
+		r.MachineSize = machineOf(w, l, refs.sizes, role)
 		known := func(id string) bool { _, ok := refs.images[id]; return ok }
 		id, imgFrom := images.RoleImageFrom(role, l.projectModels(), l.org.AgentModels, known)
 		r.Image = roleValueOut{Source: fromSource(imgFrom)}
@@ -147,16 +147,12 @@ func fromSource(from string) string {
 	return sourceDude
 }
 
-type machineRole struct {
-	roleValueOut
-}
-
 // machineOf is the size role's Runs start on in the scope (Sizes.ForRole,
 // over a session's raised size for its brainstorm). A fixer's taken from
 // the implementer is set where the implementer's is, over the same layers.
-func machineOf(w wrapper, l settingsLayers, sizes delivery.Sizes, role string) machineRole {
+func machineOf(w wrapper, l settingsLayers, sizes delivery.Sizes, role string) roleValueOut {
 	m, ok := sizes.ForRole(role, l.raised, l.projectModels(), l.org.AgentModels)
-	out := machineRole{roleValueOut{Source: fromSource(m.From)}}
+	out := roleValueOut{Source: fromSource(m.From)}
 	if m.Raised != nil {
 		out.Source = sourceSession
 	}

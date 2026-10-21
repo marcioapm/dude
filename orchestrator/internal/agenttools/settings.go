@@ -117,13 +117,13 @@ type projectRow struct {
 }
 
 type scopeOut struct {
-	Project  *projectRefOut         `json:"project,omitempty"`
-	Delivery map[string]valueOut    `json:"delivery,omitempty"`
-	Roles    []roleOut              `json:"roles,omitempty"`
-	Secrets  []secretOut            `json:"secrets,omitempty"`
-	Prompts  []promptOut            `json:"prompts,omitempty"`
-	Network  *networkOut            `json:"network,omitempty"`
-	Machines map[string]machineRole `json:"machines,omitempty"`
+	Project  *projectRefOut          `json:"project,omitempty"`
+	Delivery map[string]valueOut     `json:"delivery,omitempty"`
+	Roles    []roleOut               `json:"roles,omitempty"`
+	Secrets  []secretOut             `json:"secrets,omitempty"`
+	Prompts  []promptOut             `json:"prompts,omitempty"`
+	Network  *networkOut             `json:"network,omitempty"`
+	Machines map[string]roleValueOut `json:"machines,omitempty"`
 }
 
 type projectRefOut struct {
@@ -261,7 +261,7 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		}
 		if section == "machines" {
 			// With roles shown, each role's size is its machineSize there.
-			s.Machines = map[string]machineRole{}
+			s.Machines = map[string]roleValueOut{}
 			for _, role := range settingsRoles {
 				s.Machines[role] = machineOf(w, l.ofRun(role), refs.sizes, role)
 			}
