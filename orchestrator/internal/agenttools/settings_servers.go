@@ -31,6 +31,22 @@ func projectServersOut(ctx context.Context, tx pgx.Tx, w wrapper, projects []pro
 	for i, p := range projects {
 		ids[i] = p.ID
 	}
+	out := map[string]*serversOut{}
+	if !detailed {
+		// Counts only: a recipe's JSON carries its env values.
+		rows, err := tx.Query(ctx, `SELECT p.id, count(s.name) FROM projects p LEFT JOIN project_servers s ON s.project_id = p.id
+			WHERE p.id = ANY($1) GROUP BY p.id`, ids)
+		if err != nil {
+			return nil, err
+		}
+		var id string
+		var n int
+		_, err = pgx.ForEachRow(rows, []any{&id, &n}, func() error {
+			out[id] = &serversOut{Source: sourceProject, Count: n, Section: "servers"}
+			return nil
+		})
+		return out, err
+	}
 	// server_recipe and preview_settings supply the page's persisted fields and defaults.
 	rows, err := tx.Query(ctx, `SELECT p.id, preview_settings(p), p.preview_settings,
    COALESCE((SELECT json_agg(server_recipe(s) ORDER BY s.name) FROM project_servers s WHERE s.project_id=p.id),'[]')
@@ -38,7 +54,6 @@ func projectServersOut(ctx context.Context, tx pgx.Tx, w wrapper, projects []pro
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]*serversOut{}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
@@ -59,52 +74,46 @@ func projectServersOut(ctx context.Context, tx pgx.Tx, w wrapper, projects []pro
 		if err := json.Unmarshal(raw, &recipes); err != nil {
 			return nil, err
 		}
-		s := &serversOut{Source: sourceProject, Count: len(recipes), Section: "servers"}
-		if detailed {
-			s.Previews = map[string]valueOut{}
-			for k, v := range previews {
-				src := sourceDude
-				if _, ok := stored[k]; ok {
-					src = sourceProject
-				}
-				if k == "imageId" && v != nil {
-					src = sourceProject
-				}
-				switch x := v.(type) {
-				case string:
-					v = w.text(x, 500)
-				case []any:
-					values := make([]string, 0, len(x))
-					for _, host := range x {
-						if h, ok := host.(string); ok {
-							values = append(values, w.text(h, 255))
-						}
+		s := &serversOut{Source: sourceProject, Count: len(recipes), Section: "servers", Previews: map[string]valueOut{}}
+		for k, v := range previews {
+			src := sourceDude
+			if _, ok := stored[k]; ok {
+				src = sourceProject
+			}
+			if k == "imageId" && v != nil {
+				src = sourceProject
+			}
+			switch x := v.(type) {
+			case string:
+				v = w.text(x, 500)
+			case []any:
+				values := make([]string, 0, len(x))
+				for _, host := range x {
+					if h, ok := host.(string); ok {
+						values = append(values, w.text(h, 255))
 					}
-					v = values
 				}
-				s.Previews[k] = valueOut{Value: v, Source: src}
+				v = values
 			}
-			for _, r := range recipes {
-				item := recipeOut{Name: w.text(r.Name, 120), Command: w.text(r.Command, 1000), Workdir: w.text(r.Workdir, 500), Port: r.Port, Autostart: r.Autostart, EnvNames: []string{}}
-				if r.Setup != nil {
-					setup := w.text(*r.Setup, 1000)
-					item.Setup = &setup
-				}
-				for _, e := range r.Env {
-					item.EnvNames = append(item.EnvNames, w.text(e.Name, 200))
-				}
-				s.Recipes = append(s.Recipes, item)
+			s.Previews[k] = valueOut{Value: v, Source: src}
+		}
+		for _, r := range recipes {
+			item := recipeOut{Name: w.text(r.Name, 120), Command: w.text(r.Command, 1000), Workdir: w.text(r.Workdir, 500), Port: r.Port, Autostart: r.Autostart, EnvNames: []string{}}
+			if r.Setup != nil {
+				setup := w.text(*r.Setup, 1000)
+				item.Setup = &setup
 			}
+			for _, e := range r.Env {
+				item.EnvNames = append(item.EnvNames, w.text(e.Name, 200))
+			}
+			s.Recipes = append(s.Recipes, item)
 		}
 		out[id] = s
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if detailed {
-		return out, serversFit(projects, out)
-	}
-	return out, nil
+	return out, serversFit(projects, out)
 }
 
 // serversFit keeps, over the scopes in their order, the recipes that encode

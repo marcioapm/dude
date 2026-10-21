@@ -95,6 +95,12 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	if !strings.HasPrefix(command, "⟦external ") || len(unwrapped(command)) != 1000 || !strings.Contains(command, "2000") {
 		t.Errorf("truncated command: %s", command)
 	}
+	// The default read counts recipes without decoding one: an env column
+	// no recipe decoder accepts is never read there.
+	mustExec(t, f.owner, `UPDATE project_servers SET env = '"not a list"' WHERE project_id = $1`, f.project)
+	if got := field(f.settingsOf(t, token, `{}`), "settings", 0, "servers"); field(got, "count") != 1.0 || field(got, "previews") != nil {
+		t.Errorf("default servers: %v", got)
+	}
 }
 
 // Three linked projects of ten recipes each, every command and setup 1000
