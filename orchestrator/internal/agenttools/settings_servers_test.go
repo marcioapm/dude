@@ -16,9 +16,9 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	route := f.settingsRoute(t, "/v1/projects/"+f.project+"/servers")
 	rules := map[string]coverageRule{}
 	for _, k := range []string{"name", "command", "setup", "workdir", "port", "autostartInPreviews"} {
-		rules["servers.*."+k] = coverageRule{Tool: k}
+		rules["servers.*."+k] = mapped
 	}
-	rules["servers.*.env.*.name"] = coverageRule{Tool: "envNames"}
+	rules["servers.*.env.*.name"] = mapped
 	rules["servers.*.env.*.value"] = coverageRule{Excluded: "environment values may contain credentials"}
 	rules["servers.*.updatedAt"] = coverageRule{Excluded: "audit metadata"}
 	rules["servers.*.updatedBy"] = coverageRule{Excluded: "audit metadata"}
@@ -28,7 +28,7 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 		if k == "egress" {
 			path += ".*"
 		}
-		rules[path] = coverageRule{Tool: k}
+		rules[path] = mapped
 	}
 	if err := classifyResponse(route, rules); err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	}
 	schemaRules := map[string]coverageRule{}
 	for _, k := range previewKeys {
-		schemaRules[k] = coverageRule{Tool: k}
+		schemaRules[k] = mapped
 	}
 	if err := classifyResponse(f.settingsRoute(t, "/schemas/preview"), schemaRules); err != nil {
 		t.Fatal(err)

@@ -47,11 +47,12 @@ func imageRules() map[string]coverageRule {
 	r := map[string]coverageRule{}
 	for _, p := range []string{"id", "name", "description", "archivedAt", "isDefault", "published", "published.versionId",
 		"published.number", "published.builtAt", "published.userRef", "published.canRunContainers", "pending",
-		"pending.versionId", "pending.number", "pending.state", "draft", "draft.versionId", "parents", "parents.*.id",
+		"pending.versionId", "pending.number", "pending.state", "draft", "parents", "parents.*.id",
 		"parents.*.name"} {
-		r["images.*."+p] = coverageRule{Tool: p}
+		r["images.*."+p] = mapped
 	}
 	for p, why := range map[string]string{
+		"draft.versionId":     "the section says only that a draft exists",
 		"pending.error":       "build error text: build output, not configuration",
 		"draft.updatedAt":     "draft edit audit; the section says only that a draft exists",
 		"draft.updatedBy":     "draft edit audit (null author in fixture)",
@@ -69,7 +70,7 @@ func imageRules() map[string]coverageRule {
 	} {
 		r["images.*."+p] = coverageRule{Excluded: why}
 	}
-	r["defaultImageId"] = coverageRule{Tool: "organizationDefault"}
+	r["defaultImageId"] = mapped
 	r["queue"] = coverageRule{Excluded: "builder queue (empty: the fixture's build failed), not configuration"}
 	r["canEdit"] = coverageRule{Excluded: "UI-only member edit permission"}
 	for _, k := range []string{"available", "layer", "cpus", "memoryMiB", "lastSeenAt", "offline"} {
@@ -153,8 +154,8 @@ func TestSettingsImagesMatchTheMemberLibrary(t *testing.T) {
 	}
 
 	schemaRules := map[string]coverageRule{
-		"new.name": {Tool: "name"}, "new.description": {Tool: "description"}, "patch.description": {Tool: "description"},
-		"patch.archived": {Tool: "archivedAt"}, "new.canRunContainers": {Tool: "published.canRunContainers"},
+		"new.name": mapped, "new.description": mapped, "patch.description": mapped,
+		"patch.archived": mapped, "new.canRunContainers": mapped,
 		"new.containerfile": {Excluded: "Containerfile body"}, "new.buildArgs": {Excluded: "build input, shown in history only"},
 		"new.note": {Excluded: "version note: history"},
 	}

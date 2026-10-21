@@ -21,6 +21,7 @@ func sameInstant(a, b any) bool {
 
 func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 	f, conductor := roleSettingsWorld(t)
+	mustExec(t, f.owner, `UPDATE organizations SET brainstorm_anywhere = true WHERE id = $1`, f.org)
 	token := conductor
 	for _, project := range []bool{false, true} {
 		path := "/v1/settings/organization"
@@ -38,7 +39,7 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 		out := f.settingsOf(t, token, args)
 		rules := map[string]coverageRule{
 			"organization.id":     {Excluded: "scope identifier; caller token fixes organisation"},
-			"organization.name":   {Tool: "organization"},
+			"organization.name":   mapped,
 			"canEdit":             {Excluded: "UI-only member edit permission"},
 			"network.operator":    {Excluded: "deployment network defaults not wired to tools"},
 			"network.always.*":    {Excluded: "deployment network defaults not wired to tools"},
@@ -46,33 +47,33 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 		}
 		if project {
 			rules["project.id"] = coverageRule{Excluded: "scope identifier; project key identifies output"}
-			rules["project.name"] = coverageRule{Tool: "project.name"}
+			rules["project.name"] = mapped
 		}
 		for _, key := range coveredDeliveryFields {
-			rules["delivery."+key+".value"] = coverageRule{Tool: "delivery." + key}
+			rules["delivery."+key+".value"] = mapped
 			if key == "requiredReviewers" || key == "blockingSeverities" {
 				delete(rules, "delivery."+key+".value")
-				rules["delivery."+key+".value.*"] = coverageRule{Tool: "delivery." + key}
+				rules["delivery."+key+".value.*"] = mapped
 			}
-			rules["delivery."+key+".source"] = coverageRule{Tool: "delivery." + key}
+			rules["delivery."+key+".source"] = mapped
 		}
 		for _, role := range []string{"conductor", "brainstorm", "investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"} {
 			prefix := "roles." + role + "."
 			for _, key := range coveredRoleFields {
-				rules[prefix+key+".value"] = coverageRule{Tool: "roles." + role + "." + key}
-				rules[prefix+key+".source"] = coverageRule{Tool: "roles." + role + "." + key}
+				rules[prefix+key+".value"] = mapped
+				rules[prefix+key+".source"] = mapped
 				if project && key != "timeLimitMinutes" {
 					rules[prefix+key+".organization"] = coverageRule{Excluded: "UI reset reference; organisation scope separately exposes this value"}
 				}
 				if role == "fixer" && key != "timeLimitMinutes" {
-					rules[prefix+key+".followsImplementer"] = coverageRule{Tool: "roles.fixer." + key}
+					rules[prefix+key+".followsImplementer"] = mapped
 				}
 			}
 			rules[prefix+"enabled"] = coverageRule{Excluded: "always-on role has no toggle"}
 			if role == "simplifier" || role == "qa_browser" {
 				delete(rules, prefix+"enabled")
-				rules[prefix+"enabled.value"] = coverageRule{Tool: "delivery toggle"}
-				rules[prefix+"enabled.source"] = coverageRule{Tool: "delivery toggle"}
+				rules[prefix+"enabled.value"] = mapped
+				rules[prefix+"enabled.source"] = mapped
 			}
 			for _, layer := range []string{"organization", "project"} {
 				if layer == "project" && !project {
@@ -80,29 +81,29 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 				}
 				p := prefix + "prompt." + layer + "."
 				rules[p+"body"] = coverageRule{Excluded: "prompt body not approved for exposure"}
-				rules[p+"versionId"] = coverageRule{Tool: "prompt saved state"}
-				rules[p+"updatedAt"] = coverageRule{Tool: "prompt saved timestamp"}
+				rules[p+"versionId"] = mapped
+				rules[p+"updatedAt"] = mapped
 				rules[p+"updatedBy"] = coverageRule{Excluded: "null prompt author"}
 				// Both null and non-null author shapes occur across seeded roles.
 				if role == "implementer" && layer == "organization" || project && layer == "project" && (role == "implementer" || role == "reviewer") {
 					delete(rules, p+"updatedBy")
 					rules[p+"updatedBy.id"] = coverageRule{Excluded: "audit author identifier"}
-					rules[p+"updatedBy.name"] = coverageRule{Tool: "prompt saved author"}
+					rules[p+"updatedBy.name"] = mapped
 				}
 				rules[p+"versions"] = coverageRule{Excluded: "prompt history count, not configuration"}
 				if layer == "project" {
-					rules[p+"mode"] = coverageRule{Tool: "prompt project mode"}
+					rules[p+"mode"] = mapped
 				}
 			}
 		}
-		rules["network.egress.value.*"] = coverageRule{Tool: "network egress"}
-		rules["network.egress.source"] = coverageRule{Tool: "network egress source"}
+		rules["network.egress.value.*"] = mapped
+		rules["network.egress.source"] = mapped
 		if project {
-			rules["network.mode.value"] = coverageRule{Tool: "network mode"}
-			rules["network.mode.source"] = coverageRule{Tool: "network mode source"}
-			rules["network.organizationEgress.*"] = coverageRule{Tool: "network organisation egress"}
+			rules["network.mode.value"] = mapped
+			rules["network.mode.source"] = mapped
+			rules["network.organizationEgress.*"] = mapped
 		} else {
-			rules["network.brainstorm.anywhere"] = coverageRule{Tool: "network brainstorm anywhere"}
+			rules["network.brainstorm.anywhere"] = mapped
 		}
 		if err := classifyResponse(page, rules); err != nil {
 			t.Fatal(path, err)
@@ -122,6 +123,18 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 		}
 		if unwrapped(out["organization"].(string)) != field(page, "organization", "name") {
 			t.Error("organisation name differs")
+		}
+		if project && unwrapped(field(out, "settings", 0, "project", "name").(string)) != field(page, "project", "name") {
+			t.Error("project name differs")
+		}
+		for _, key := range coveredRoleFields {
+			if key == "timeLimitMinutes" {
+				continue
+			}
+			shown := field(page, "roles", "fixer", key, "followsImplementer") == true
+			if got := field(roleIn(out, "fixer"), key, "followsImplementer") == true; got != shown {
+				t.Errorf("fixer %s followsImplementer: tool %v, page %v", key, got, shown)
+			}
 		}
 		for key, shown := range page["delivery"].(map[string]any) {
 			actual := field(out, "settings", 0, "delivery", key, "value")
@@ -165,7 +178,8 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 				if role == "qa_browser" {
 					k = "test"
 				}
-				if field(shown, "enabled", "value") != field(out, "settings", 0, "delivery", k, "value") {
+				if field(shown, "enabled", "value") != field(out, "settings", 0, "delivery", k, "value") ||
+					(field(shown, "enabled", "source") == "project") != (field(out, "settings", 0, "delivery", k, "source") == "project") {
 					t.Error("enabled differs")
 				}
 			}
@@ -180,15 +194,34 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 		if len(got) != len(want) {
 			t.Error("egress length differs")
 		}
+		if (field(page, "network", "egress", "source") == "project") != (field(net, key, "source") == "project") {
+			t.Errorf("egress source: tool %v, page %v", field(net, key, "source"), field(page, "network", "egress", "source"))
+		}
 		for i, v := range got {
 			if unwrapped(v.(string)) != want[i] {
 				t.Error("egress differs")
 			}
 		}
+		if project {
+			if field(net, "mode", "value") != field(page, "network", "mode", "value") ||
+				(field(net, "mode", "source") == "project") != (field(page, "network", "mode", "source") == "project") {
+				t.Errorf("mode: tool %v, page %v", field(net, "mode"), field(page, "network", "mode"))
+			}
+			var orgEgress []any
+			for _, v := range field(net, "organizationEgress", "value").([]any) {
+				orgEgress = append(orgEgress, unwrapped(v.(string)))
+			}
+			if !reflect.DeepEqual(orgEgress, field(page, "network", "organizationEgress")) {
+				t.Errorf("organisation egress: tool %v, page %v", orgEgress, field(page, "network", "organizationEgress"))
+			}
+		} else if anywhere := field(page, "network", "brainstorm", "anywhere"); anywhere != true ||
+			field(net, "brainstormAnywhere", "value") != anywhere || field(net, "brainstormAnywhere", "source") != "organization" {
+			t.Errorf("brainstorm anywhere: tool %v, page %v", field(net, "brainstormAnywhere"), anywhere)
+		}
 	}
 	roleRules := map[string]coverageRule{}
 	for _, k := range coveredRoleFields {
-		roleRules[k] = coverageRule{Tool: k}
+		roleRules[k] = mapped
 	}
 	for k, reason := range map[string]string{"model": "removed legacy input; rejected by schema", "context": "notes body not approved for exposure", "maxTokens": "not exposed by member settings response", "temperature": "not exposed by member settings response", "costLimitUsd": "not exposed by member settings response"} {
 		roleRules[k] = coverageRule{Excluded: reason}
@@ -198,7 +231,7 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 	}
 	deliveryRules := map[string]coverageRule{}
 	for _, k := range coveredDeliveryFields {
-		deliveryRules[k] = coverageRule{Tool: k}
+		deliveryRules[k] = mapped
 	}
 	if err := classifyResponse(f.settingsRoute(t, "/schemas/delivery"), deliveryRules); err != nil {
 		t.Fatal(err)
@@ -224,10 +257,9 @@ func TestSettingsMachineSizesAndGitHubMatchTheirPages(t *testing.T) {
 
 	sizes := f.settingsRoute(t, "/v1/machines/sizes")
 	rules := map[string]coverageRule{"canEdit": {Excluded: "UI-only member edit permission"}}
-	for _, k := range []string{"id", "name", "cpus", "memoryMiB", "diskGiB"} {
-		rules["sizes.*."+k] = coverageRule{Tool: k}
+	for _, k := range []string{"id", "name", "cpus", "memoryMiB", "diskGiB", "isDefault"} {
+		rules["sizes.*."+k] = mapped
 	}
-	rules["sizes.*.isDefault"] = coverageRule{Tool: "default"}
 	for k, why := range map[string]string{
 		"poolId": "lux pool placement: operator infrastructure (null in fixture)", "poolName": "lux pool name: operator infrastructure (null in fixture)",
 		"updatedAt": "audit metadata", "updatedBy": "audit metadata (null author in fixture)",
@@ -262,9 +294,9 @@ func TestSettingsMachineSizesAndGitHubMatchTheirPages(t *testing.T) {
 	}
 
 	gh := f.settingsRoute(t, "/v1/forge/settings")
-	ghRules := map[string]coverageRule{"reviewLogins.*": {Tool: "github.reviewLogins"}}
+	ghRules := map[string]coverageRule{"reviewLogins.*": mapped}
 	for _, k := range []string{"whoCanWake", "openAs", "requestReviewFrom", "mergeMethod", "whenBehind", "fixRoundsPerPr", "ciStuckMinutes", "checksFixRounds"} {
-		ghRules[k] = coverageRule{Tool: "github." + k}
+		ghRules[k] = mapped
 	}
 	if err := classifyResponse(gh, ghRules); err != nil {
 		t.Fatal(err)

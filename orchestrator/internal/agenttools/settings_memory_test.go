@@ -57,8 +57,8 @@ func TestSettingsMemoryReportsConfigurationNotInventedHealth(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	route := f.settingsRouteWith(t, "/v1/memory/index", e, failingIndexer{since: now.Add(-time.Hour), retry: now.Add(time.Minute)})
 	rules := map[string]coverageRule{
-		"model":        {Tool: "model"},
-		"dimensions":   {Tool: "dimensions"},
+		"model":        mapped,
+		"dimensions":   mapped,
 		"endpoint":     {Excluded: "where text is sent: the operator's deployment, not a setting"},
 		"health.error": {Excluded: "the indexer's last error body: live health is not wired to tools"},
 		"health.since": {Excluded: "live indexer health is not wired to tools"},

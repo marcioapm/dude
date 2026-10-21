@@ -15,12 +15,14 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// coverageRule classifies one response leaf: Tool names the settings output
-// it is value-compared with, or Excluded says why settings does not show it.
+// coverageRule classifies one response leaf: Mapped when settings shows it
+// (each test compares the values itself), or Excluded with why it does not.
 type coverageRule struct {
-	Tool     string
+	Mapped   bool
 	Excluded string
 }
+
+var mapped = coverageRule{Mapped: true}
 
 // settingsRouteFamilies is every member-readable GET route family of the
 // settings pages: covered ones are fetched by settingsRoute and classified
@@ -133,9 +135,8 @@ func TestSettingsRouteInventoryCatchesAnUnlistedOrUnclassifiedFamily(t *testing.
 }
 
 var modelCoverage = map[string]coverageRule{
-	"tiers.*.id": {Tool: "id"}, "tiers.*.name": {Tool: "name"},
-	"tiers.*.description": {Tool: "description"}, "tiers.*.model": {Tool: "model"},
-	"tiers.*.effort": {Tool: "effort"}, "tiers.*.position": {Tool: "position"},
+	"tiers.*.id": mapped, "tiers.*.name": mapped, "tiers.*.description": mapped, "tiers.*.model": mapped,
+	"tiers.*.effort": mapped, "tiers.*.position": mapped,
 	"tiers.*.headers.X-Api-Key":         {Excluded: "credential-sensitive provider header"},
 	"tiers.*.headers":                   {Excluded: "credential-sensitive provider headers (null)"},
 	"tiers.*.options.apiKey":            {Excluded: "credential-sensitive provider options"},
@@ -188,7 +189,7 @@ func classifyResponse(v any, rules map[string]coverageRule) error {
 	var problems []string
 	for p := range leaves {
 		r, ok := rules[p]
-		if !ok || (r.Tool == "") == (r.Excluded == "") {
+		if !ok || r.Mapped == (r.Excluded != "") {
 			problems = append(problems, "unclassified "+p)
 		}
 	}
@@ -212,7 +213,7 @@ func classifyResponse(v any, rules map[string]coverageRule) error {
 }
 
 func TestSettingsCoverageClassifierRejectsDrift(t *testing.T) {
-	rules := map[string]coverageRule{"items.*.value": {Tool: "value"}}
+	rules := map[string]coverageRule{"items.*.value": mapped}
 	original := map[string]any{"items": []any{map[string]any{"value": 1}}}
 	if err := classifyResponse(original, rules); err != nil {
 		t.Fatal(err)
@@ -277,12 +278,12 @@ func TestSettingsModelsAndJudgementsMatchMemberRoutes(t *testing.T) {
 		shown := v.(map[string]any)
 		got := byID[shown["id"].(string)]
 		for path, rule := range rules {
-			if rule.Tool == "" {
+			if !rule.Mapped {
 				continue
 			}
 			key := strings.TrimPrefix(path, "tiers.*.")
 			want := shown[key]
-			actual := got[rule.Tool]
+			actual := got[key]
 			if s, ok := actual.(string); ok {
 				if s != "" && !strings.HasPrefix(s, "⟦external ") && (key == "name" || key == "model" || key == "description") {
 					t.Errorf("unwrapped %s: %q", key, s)
@@ -302,7 +303,7 @@ func TestSettingsModelsAndJudgementsMatchMemberRoutes(t *testing.T) {
 	}
 	schemaRules := map[string]coverageRule{}
 	for _, k := range []string{"name", "description", "model", "effort"} {
-		schemaRules[k] = coverageRule{Tool: k}
+		schemaRules[k] = mapped
 	}
 	for _, k := range []string{"headers", "options"} {
 		schemaRules[k] = coverageRule{Excluded: "credential-sensitive provider configuration"}
@@ -318,7 +319,7 @@ func TestSettingsModelsAndJudgementsMatchMemberRoutes(t *testing.T) {
 	for _, tier := range []any{"mtr_big", "mtr_small", nil} {
 		mustExec(t, f.owner, `UPDATE organizations SET judgement_tier_id=$2 WHERE id=$1`, f.org, tier)
 		page := f.settingsRoute(t, "/v1/judgements/settings")
-		rules := map[string]coverageRule{"tierId": {Tool: "tierId"}, "canEdit": {Excluded: "UI-only member edit permission"}}
+		rules := map[string]coverageRule{"tierId": mapped, "canEdit": {Excluded: "UI-only member edit permission"}}
 		if err := classifyResponse(page, rules); err != nil {
 			t.Fatal(err)
 		}
