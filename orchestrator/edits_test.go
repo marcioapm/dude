@@ -522,7 +522,7 @@ func TestAResumeOnALuxWithoutSyncModesLeavesTheConductorReadOnly(t *testing.T) {
 func TestThePublishedCommitMovesTheTaskBranch(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
-	before := e.openPullRequestRow("merged")
+	before := e.pullRequestRow("merged")
 	e.current()
 	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
 	id := e.publish()
@@ -550,10 +550,10 @@ func TestThePublishedCommitMovesTheTaskBranch(t *testing.T) {
 
 const pullRequestOpenRefusal = "a pull request is open on this branch, so changes reach it only after review on a candidate: use start_phase fix"
 
-// openPullRequestRow records a pull request in state (open, draft, closed
+// pullRequestRow records a pull request in state (open, draft, closed
 // or merged) on the task branch at its head, as the pull request syncer
-// would.
-func (e *editing) openPullRequestRow(state string) string {
+// would, and returns that head.
+func (e *editing) pullRequestRow(state string) string {
 	e.t.Helper()
 	head := e.gh.SHA(e.branch)
 	mustExec(e.t, e.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
@@ -584,7 +584,7 @@ func TestAPublishIsRefusedWhileAPullRequestIsOpen(t *testing.T) {
 		t.Run("asked with the pull request "+state, func(t *testing.T) {
 			e := newEditing(t)
 			e.wokenWith(e.task, "after implement")
-			head := e.openPullRequestRow(state)
+			head := e.pullRequestRow(state)
 			log := len(e.gh.BranchLog(e.branch))
 			e.current()
 			e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
@@ -599,7 +599,7 @@ func TestAPublishIsRefusedWhileAPullRequestIsOpen(t *testing.T) {
 		e, g, id := pausedAtCompare(t)
 		head := e.gh.SHA(e.branch)
 		log := len(e.gh.BranchLog(e.branch))
-		e.openPullRequestRow("open")
+		e.pullRequestRow("open")
 		g.release()
 		e.refusedUnmoved(id, head, pullRequestOpenRefusal)
 		unmoved(t, e, log, head)
