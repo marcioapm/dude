@@ -8,6 +8,8 @@ You reviewed this branch before, and it has changed since: your checkout{{if gt 
 
 {{template "contracts/resume/anti-anchoring"}}{{with .Findings}}
 
+{{.}}{{end}}{{with .LastFix}}
+
 {{.}}{{end}}{{if not .Test}}
 
 {{.Format}}

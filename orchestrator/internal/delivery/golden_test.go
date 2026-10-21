@@ -112,7 +112,8 @@ var goldenEnvs = []struct {
 func goldenFindings() []Finding {
 	return []Finding{
 		{Severity: "blocking", Category: "correctness", Title: "Totals off by one cent", File: "api/export.go", Line: 40,
-			Description: "Rounds each line, then sums.", SuggestedFix: "Sum in cents, round once."},
+			Description: "Rounds each line, then sums.", SuggestedFix: "Sum in cents, round once.",
+			Acceptance: "An export's total equals the invoice page's total to the cent."},
 		{Severity: "medium", Category: "tests", Title: "No test for an empty month", File: "api/export_test.go",
 			Description: "An empty month is not exercised."},
 		{Severity: "note", Title: "Header casing"},
@@ -253,12 +254,16 @@ func TestGoldenReviewPrompts(t *testing.T) {
 // the commits since its round.
 func TestGoldenResumeRounds(t *testing.T) {
 	from, to := map[string]string{"api": "aaa111", "web": "ccc333"}, map[string]string{"api": "bbb222", "web": "ccc333"}
-	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings()))
+	lastFix := []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}
+	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings(), lastFix))
+	// Two checkouts, the fix publishing only api: BaseRefs holds api alone.
+	golden(t, "resume-review-one-published", RoundMessage(PhaseReview, map[string]string{"api": "aaa111"},
+		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], lastFix))
 	golden(t, "resume-review-simplify-two", RoundMessage(PhaseReview, map[string]string{"api": "aaa111", "web": "ccc000"}, to,
-		rangeReason[RangeSimplify], nil))
-	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1]))
+		rangeReason[RangeSimplify], nil, nil))
+	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1], nil))
 	// A round on the same head (a retry): nothing to name as changed.
-	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil))
+	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil, nil))
 	// A fixer's round: the implementer's first carries the fix contract,
 	// a fixer's next does not; what it fixes is Prompt(PhaseFix)'s.
 	fixIn := PromptInput{Findings: goldenFindings(), Tools: true, CLI: true,
@@ -268,6 +273,7 @@ func TestGoldenResumeRounds(t *testing.T) {
 	in := goldenTask()
 	in.Category = "correctness"
 	in.ReviewBase, in.ReviewOf, in.Findings = map[string]string{"api": "aaa111"}, RangeSinceLastRound, goldenFindings()
+	in.LastFix = []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}, {Repo: "web", Base: "ccc000", Head: "ccc333"}}
 	in.Replay = replayHeading("You: One problem: the totals are rounded per line.")
 	in.RestartNote = "The previous round's agent could not be taken back up (lux says the run is terminated); you are given its conversation instead."
 	golden(t, "prompt-review-range-since-last-round", Prompt(PhaseReview, in))

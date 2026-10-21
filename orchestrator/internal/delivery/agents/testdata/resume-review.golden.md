@@ -6,10 +6,11 @@ The commits since were made by another agent. Read them as new code: a change ca
 
 ## Findings from the last review
 
-A fix has been made since. For each finding below, read the code as it is now, run it where you can, and say whether it is fixed — never judge by which files the fix touched. Judge every one, whatever its category or the reviewer that raised it: you are the one judging it this round. Report a problem that is still there in your verdicts, not as a new finding; report anything new as a finding as usual.
+A fix has been made since. For each finding below, read the code as it is now, run it where you can, and say whether it is fixed — never judge by which files the fix touched. A finding with a `Done when` is judged against it: `fixed` only when it holds. Judge every one, whatever its category or the reviewer that raised it: you are the one judging it this round. Report a problem that is still there in your verdicts, not as a new finding; report anything new as a finding as usual.
 
 **F1** [blocking] Totals off by one cent — `api/export.go:40`
 Rounds each line, then sums.
+Done when: An export's total equals the invoice page's total to the cent.
 
 **F2** [medium] No test for an empty month — `api/export_test.go`
 An empty month is not exercised.
@@ -25,6 +26,10 @@ verdicts:
   F3: fixed | still
 ```
 
+## The last fix
+
+This round follows a fix, whose commits are in `api`, `git log aaa111..bbb222`. Read them to answer each new finding's `caused_by_fix`: `yes` when the problem is in code those commits wrote, `no` otherwise.
+
 Report each finding as one YAML document, separated by `---`:
 
 ```yaml
@@ -35,6 +40,8 @@ file: path/to/file.ts
 line: 123
 title: One line naming the problem
 description: What is wrong and why it matters.
+acceptance: What must be observably true once this is fixed — an outcome or invariant someone can check, never how to fix it.
+caused_by_fix: yes | no
 suggested_fix: What to do instead.
 ```
 

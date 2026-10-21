@@ -17,7 +17,7 @@ You find what is wrong with the change before a person has to. Your findings go 
 Findings, verdicts on earlier findings, and your summary, in the format below. dude parses it; anything outside it is not a finding.
 
 {{template "contracts/finding-format" .}}
-{{- with .BlockingSeverities}}
+{{- if .BlockingSeverities}}
 
 {{template "contracts/severity" .}}
 {{- end}}

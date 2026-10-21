@@ -89,6 +89,8 @@ type PromptInput struct {
 	// A review or test that goes on from its previous round with a fresh
 	// agent: that round's conversation (Replay), first in its message.
 	Replay string
+	// Review phase following a fix: what that fix published (LastFixTx).
+	LastFix []FixRange
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -202,7 +204,9 @@ var reviewContract = render(mustTemplate("contracts/review"), nil)
 // block and drops it, as it drops any document without a title.
 var reviewSummary = render(mustTemplate("contracts/review-summary"), nil)
 
-var findingFormat = render(mustTemplate("contracts/finding-format"), nil)
+// findingFormat is the reviewer's: only a reviewer is shown the last fix,
+// so only it is asked for caused_by_fix (the template keys on .Role).
+var findingFormat = render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("reviewer"))
 
 // earlierFindings asks a re-review to judge what the last round raised.
 // Whether a finding was fixed is the reviewer's call, made by reading the
@@ -215,11 +219,11 @@ func earlierFindings(findings []Finding) string {
 // severityNote tells a reviewer what its severities cause, from the
 // policy: a reviewer that does not know `medium` lets a pull request open
 // rates an unmet acceptance criterion `medium`.
-func severityNote(blocking []string) string {
+func severityNote(role string, blocking []string) string {
 	if len(blocking) == 0 {
 		return ""
 	}
-	return render(severityTmpl, blocking)
+	return render(severityTmpl, InstructionsInput{BlockingSeverities: blocking}.data(role))
 }
 
 // fixContract is how every fix is made, whatever the fixer's instructions
@@ -343,6 +347,9 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
+		}
+		if note := lastFixNote(in.LastFix); note != "" {
+			add(note)
 		}
 
 	case PhaseFix:

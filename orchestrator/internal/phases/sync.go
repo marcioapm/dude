@@ -1377,6 +1377,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var decisions []delivery.Decision
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
+	var lastFix []delivery.FixRange
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
@@ -1520,9 +1521,20 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A preview item's picture is said attached only when it goes with
 		// this prompt (PromptAttachments had room for it).
 		delivery.MarkPictures(peopleFeedback, taskImages)
+		// A review after a fix is told that fix's commits, to answer
+		// caused_by_fix by.
+		if r.Phase == delivery.PhaseReview && stored == nil {
+			var parent string
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(parent_run_id, '') FROM runs WHERE id = $1`, r.ID).Scan(&parent); err != nil {
+				return err
+			}
+			if lastFix, err = delivery.LastFixTx(ctx, tx, parent); err != nil {
+				return err
+			}
+		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0)
+				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
 				FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
 				ORDER BY chosen.n`,
 				r.FindingIDs)
@@ -1582,7 +1594,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of
@@ -3841,7 +3853,18 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 	}
 	// The reviewer's judgement of what it was shown: fixed is resolved;
 	// still stays open, for the next fix. One it said nothing about stays
-	// as it was.
+	// as it was. All of it is kept on the Run, replacing an earlier report's.
+	said := map[string]string{}
+	for id, fixed := range verdicts {
+		said[id] = "still"
+		if fixed {
+			said[id] = "fixed"
+		}
+	}
+	saidJSON, _ := json.Marshal(said)
+	if _, err := tx.Exec(ctx, `UPDATE runs SET verdicts = $2::jsonb WHERE id = $1`, runID, saidJSON); err != nil {
+		return err
+	}
 	for id, fixed := range verdicts {
 		if !fixed {
 			continue
@@ -3863,10 +3886,11 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			cat, topic = category, f.Category
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
-				severity, repo, file, line, title, description, suggested_fix)
-				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13)`,
+				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix)
+				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15)`,
 			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
-			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
+			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
+			db.Nullable(f.Acceptance), f.CausedByFix); err != nil {
 			return err
 		}
 	}

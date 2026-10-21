@@ -57,6 +57,7 @@ var (
 	earlierFindingsTmpl        = mustTemplate("contracts/earlier-findings")
 	feedbackTmpl               = mustTemplate("contracts/feedback")
 	fromConductorTmpl          = mustTemplate("contracts/from-conductor")
+	lastFixTmpl                = mustTemplate("contracts/last-fix")
 	machineTmpl                = mustTemplate("contracts/machine")
 	machineNothingTmpl         = mustTemplate("contracts/machine-nothing")
 	machineOfferTmpl           = mustTemplate("contracts/machine-offer")

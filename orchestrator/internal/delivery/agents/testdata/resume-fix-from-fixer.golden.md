@@ -10,4 +10,6 @@ You worked on this branch before, and there is more to fix: your checkout is now
 
 Rounds each line, then sums.
 
+Done when: An export's total equals the invoice page's total to the cent.
+
 Suggested: Sum in cents, round once.
