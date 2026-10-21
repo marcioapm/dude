@@ -226,7 +226,8 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		if want("network") {
 			s.Network = networkOf(w, l, grants)
 		}
-		if want("machines") {
+		if section == "machines" {
+			// With roles shown, each role's size is its machineSize there.
 			s.Machines = map[string]machineRole{}
 			for _, role := range settingsRoles {
 				s.Machines[role] = machineOf(w, l.of(role), refs.sizes, role)
@@ -245,7 +246,12 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		for _, role := range settingsRoles {
 			cs := capabilitiesOut{Role: role, Label: delivery.RoleName(role), Yours: role == c.Role, Granted: []capabilityOut{}}
 			for _, cap := range grants[role].Granted() {
-				cs.Granted = append(cs.Granted, capabilityOut{Key: string(cap.Key), Description: cap.Description})
+				// The registry's descriptions only when capabilities are asked for.
+				desc := ""
+				if section == "capabilities" {
+					desc = cap.Description
+				}
+				cs.Granted = append(cs.Granted, capabilityOut{Key: string(cap.Key), Description: desc})
 			}
 			out.Capabilities = append(out.Capabilities, cs)
 		}

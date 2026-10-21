@@ -371,7 +371,7 @@ func projectSecrets(ctx context.Context, tx pgx.Tx, projects []projectRow) (map[
 
 type capabilityOut struct {
 	Key         string `json:"key"`
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
 }
 
 type capabilitiesOut struct {

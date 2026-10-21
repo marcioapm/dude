@@ -267,8 +267,8 @@ func TestABrainstormsRowIsItsSessionsOverTheOrganisations(t *testing.T) {
 		field(b, "image", "source") != "dude" || b["projectNotes"] != nil {
 		t.Errorf("brainstorm: %v", b)
 	}
-	if m := field(out, "settings", 0, "machines", "brainstorm", "source"); m != "dude" {
-		t.Errorf("brainstorm's machine: %v", field(out, "settings", 0, "machines", "brainstorm"))
+	if m := field(f.settingsOf(t, token, `{"section":"machines"}`), "settings", 0, "machines", "brainstorm", "source"); m != "dude" {
+		t.Errorf("brainstorm's machine: %v", m)
 	}
 	for _, p := range field(out, "settings", 0, "prompts").([]any) {
 		if m := p.(map[string]any); m["role"] == "brainstorm" && (m["project"] != nil || m["projectSaved"] != nil) {
@@ -329,10 +329,20 @@ func TestSettingsShowNoSecretAndNoPromptText(t *testing.T) {
 			}
 		}
 	}
-	if !slices.Contains(yours, "settings.read") || !slices.Contains(yours, "conduct") || len(caps) != 8 {
-		t.Errorf("capabilities: yours %v of %d roles", yours, len(caps))
+	if !slices.Contains(yours, "settings.read") || !slices.Contains(yours, "conduct") || len(caps) != 8 ||
+		field(caps, 0, "granted", 0, "description") != nil {
+		t.Errorf("capabilities: yours %v of %d roles, %v", yours, len(caps), field(caps, 0, "granted", 0))
 	}
-	if field(out, "settings", 0, "machines", "implementer", "value", "id") != "msz_l" || len(out["machineSizes"].([]any)) < 2 {
+	// Each role's size is its machineSize under roles; machines lists the sizes.
+	if field(out, "settings", 0, "machines") != nil || field(roleIn(out, "implementer"), "machineSize", "value", "id") != "msz_l" ||
+		len(out["machineSizes"].([]any)) < 2 {
 		t.Errorf("machines: %v %v", field(out, "settings", 0, "machines"), out["machineSizes"])
+	}
+	// Asked for alone, capabilities carry their descriptions and machines each role's size.
+	if d, _ := field(f.settingsOf(t, token, `{"section":"capabilities"}`), "capabilities", 0, "granted", 0, "description").(string); d == "" {
+		t.Errorf("section capabilities: no description")
+	}
+	if id := field(f.settingsOf(t, token, `{"section":"machines"}`), "settings", 0, "machines", "implementer", "value", "id"); id != "msz_l" {
+		t.Errorf("section machines: implementer %v", id)
 	}
 }
