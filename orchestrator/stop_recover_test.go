@@ -313,6 +313,36 @@ func TestResumingAConductorAndItsLiveReviewerOnLuxTakesBothUp(t *testing.T) {
 	}
 }
 
+// A reason to wake the conductor that arrives after a Stop waits for the
+// pick-up: no conductor is started beside the kept one, and Resume goes on
+// with the kept one, which then hears it.
+func TestAWakeAfterAStopWaitsForThePickUp(t *testing.T) {
+	w := conducting(t)
+	task, ana, conductor := w.stoppedAtDecision()
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES('cwk_after_stop', $1, $2, 'decision', 'decision:after-stop', 'A decision waits.', now() - interval '1 hour')`, w.org, task)
+	for range 10 {
+		w.pump()
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Fatalf("a wake on a stopped task started a conductor: %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_after_stop' AND delivered_at IS NULL`); n != 1 {
+		t.Errorf("the reason was delivered while the task was stopped")
+	}
+	w.pickUp(ana, task, map[string]any{"action": "resume"})
+	w.until("the kept conductor resumed", func() bool {
+		r := w.luxRunFor(conductor)
+		return r != nil && r.Resumed == 1
+	})
+	w.until("the reason delivered to the kept conductor", func() bool {
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_after_stop' AND conductor_run_id = $1`, conductor) == 1
+	})
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("conductors after the resume: %v", got)
+	}
+}
+
 func slicesContainsSub(items []string, want string) bool {
 	for _, s := range items {
 		if strings.Contains(s, want) {

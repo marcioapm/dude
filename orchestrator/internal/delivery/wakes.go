@@ -72,6 +72,17 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	if err := liveNow(); err != nil {
 		return "", err
 	}
+	// A task a person stopped keeps its reasons until it is picked back up:
+	// a note would start a conductor beside the kept one, which Resume then
+	// takes as superseded.
+	var halted bool
+	if err := tx.QueryRow(ctx, `SELECT `+haltedDelivery+`
+		FROM workflow_runs w WHERE w.task_id = $1`+latestDelivery, taskID).Scan(&halted); err != nil && !db.IsNotFound(err) {
+		return "", err
+	}
+	if halted {
+		return "", nil
+	}
 	pending, err := pendingNow()
 	if err != nil || len(pending) == 0 {
 		return "", err
@@ -345,6 +356,14 @@ func runFailedLine(phase, runID, errText string) string {
 	return render(runFailedTmpl, struct{ Phase, RunID, Error string }{phase, runID, errText})
 }
 
+// haltedDelivery (SQL, over workflow_runs w) is whether w was stopped by a
+// person and not yet picked back up; latestDelivery narrows w to the
+// task's newest delivery.
+const (
+	haltedDelivery = `w.state ? 'halt'`
+	latestDelivery = ` AND w.workflow_type = '` + WorkflowType + `' ORDER BY w.created_at DESC, w.id DESC LIMIT 1`
+)
+
 // Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task
 // with pending reasons that can be delivered now — none arrived within the
 // window, and its live conductor can hear a note (between turns, or
@@ -352,7 +371,9 @@ func runFailedLine(phase, runID, errText string) string {
 // (it is ended first). Selected before the sweep's batch limit, so tasks
 // that must wait (a conductor mid-turn) cannot fill the batch. Held
 // reasons alone (heldWakePrefix) wait for a conductor running between turns.
+// A task whose newest delivery a person stopped (Halt) waits for its pick-up.
 const Wakeable = `c.delivered_at IS NULL
+	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
 	AND NOT EXISTS (SELECT 1 FROM conductor_wakes n WHERE n.task_id = c.task_id AND n.delivered_at IS NULL
 		AND n.created_at >= now() - make_interval(secs => $1))
 	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)
