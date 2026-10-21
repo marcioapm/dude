@@ -10,6 +10,7 @@ import { Router } from "../../apps/control-plane/src/api/router.ts";
 import { registerSettingsRoutes } from "../../apps/control-plane/src/api/routes/settings.ts";
 import { registerModelRoutes } from "../../apps/control-plane/src/api/routes/models.ts";
 import { registerJudgementRoutes } from "../../apps/control-plane/src/api/routes/judgements.ts";
+import { registerMemoryRoutes } from "../../apps/control-plane/src/api/routes/memory.ts";
 import { registerServerRoutes } from "../../apps/control-plane/src/api/routes/servers.ts";
 import { previewSettingsSchema } from "../../packages/domain/src/servers.ts";
 import { agentModelConfigSchema, deliveryPolicySchema } from "../../packages/domain/src/hierarchy.ts";
@@ -23,6 +24,7 @@ registerSettingsRoutes(router);
 registerModelRoutes(router);
 registerJudgementRoutes(router);
 registerServerRoutes(router);
+registerMemoryRoutes(router);
 if (path === "/schemas/roles" || path === "/schemas/delivery") {
   const schema = path === "/schemas/roles" ? agentModelConfigSchema : deliveryPolicySchema;
   process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(schema.shape).map(k => [k, true]))));

@@ -107,10 +107,8 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 		if err := classifyResponse(page, rules); err != nil {
 			t.Fatal(path, err)
 		}
-		comparison := out
 		if !project {
-			// The session's investigator has intentionally different runtime semantics.
-			comparison = f.settingsOf(t, conductor, `{}`)
+			// Session children intentionally have no saved prompt or enforced no-progress bound.
 			orgPage := page["roles"].(map[string]any)
 			copyRoles := map[string]any{}
 			for role, value := range orgPage {
@@ -118,10 +116,9 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 					copyRoles[role] = value
 				}
 			}
-			copyPage := map[string]any{"roles": copyRoles}
-			sameRolesAsThePage(t, out, copyPage)
+			sameRolesAsThePage(t, out, map[string]any{"roles": copyRoles})
 		} else {
-			sameRolesAsThePage(t, comparison, page)
+			sameRolesAsThePage(t, out, page)
 		}
 		if unwrapped(out["organization"].(string)) != field(page, "organization", "name") {
 			t.Error("organisation name differs")

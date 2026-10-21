@@ -73,7 +73,19 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 			out.Next = base64.RawURLEncoding.EncodeToString(raw)
 			break
 		}
-		out.Tiers = append(out.Tiers, modelOut{ID: t.ID, Name: w.text(t.Name, 96), Description: w.text(t.Description, 320), Model: w.text(t.Model, 800), Effort: t.Effort, Position: t.Position, Configured: t.Model != ""})
+		item := modelOut{ID: t.ID, Name: w.text(t.Name, 96), Description: w.text(t.Description, 320), Model: w.text(t.Model, 800), Effort: t.Effort, Position: t.Position, Configured: t.Model != ""}
+		out.Tiers = append(out.Tiers, item)
+		encoded, err := json.Marshal(out)
+		if err != nil {
+			return nil, err
+		}
+		if len(encoded) > 40<<10 && len(out.Tiers) > 1 {
+			out.Tiers = out.Tiers[:len(out.Tiers)-1]
+			last := out.Tiers[len(out.Tiers)-1]
+			raw, _ := json.Marshal(modelCursor{Org: org, Position: last.Position, ID: last.ID})
+			out.Next = base64.RawURLEncoding.EncodeToString(raw)
+			break
+		}
 	}
 	return out, nil
 }

@@ -2,6 +2,8 @@
 
 {{- define "results/settings/sources"}}source says where each value is set: dude (its built-in default, used while nobody sets one), organization (the organisation's Settings), project (the project's Settings, over the organisation's) or session (the session's own choice, over the organisation's). A person changes a value in Settings; you cannot.{{end}}
 
+{{- define "results/settings/memory-unavailable"}}Memory embedding configuration is operator-managed, not an organisation setting. Model and dimensions describe the shared provider configuration only, not availability. Live indexer health is unavailable to this tool; queue history, memory contents, endpoint and error bodies are not returned.{{end}}
+
 {{- define "results/settings/catalogue-limit"}}catalogue limit must be between 1 and 50{{end}}
 
 {{- define "results/settings/catalogue-cursor"}}invalid settings catalogue cursor for this organisation{{end}}

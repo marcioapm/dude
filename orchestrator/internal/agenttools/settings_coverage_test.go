@@ -205,7 +205,7 @@ func TestSettingsModelsAndJudgementsMatchMemberRoutes(t *testing.T) {
 func TestSettingsCataloguesArePagedBoundedAndTenantScoped(t *testing.T) {
 	f, token := roleSettingsWorld(t)
 	mustExec(t, f.owner, `INSERT INTO model_tiers(id,organization_id,name,description,model,position)
- SELECT 'mtr_page_'||lpad(i::text,4,'0'),$1,'Tier '||i,repeat('界',80),repeat('m',200),i/3 FROM generate_series(1,125) i`, f.org)
+ SELECT 'mtr_page_'||lpad(i::text,4,'0'),$1,'Tier '||i,repeat('<',80),repeat('>',200),i/3 FROM generate_series(1,125) i`, f.org)
 	other := dbtest.Org(t, f.owner)
 	mustExec(t, f.owner, `INSERT INTO model_tiers(id,organization_id,name,model) VALUES('mtr_other',$1,'OTHER-SECRET','OTHER-MODEL')`, other)
 	var cursor string
@@ -239,7 +239,12 @@ func TestSettingsCataloguesArePagedBoundedAndTenantScoped(t *testing.T) {
 			break
 		}
 	}
-	for _, section := range []string{"models", "judgements"} {
+	for _, args := range []string{`{"section":"models","limit":51}`, `{"section":"models","limit":-1}`, `{"section":"models","cursor":"broken"}`} {
+		if status, _ := f.post(t, token, "settings", args); status != 422 {
+			t.Errorf("invalid catalogue args %s: %d", args, status)
+		}
+	}
+	for _, section := range []string{"models", "judgements", "servers", "memory"} {
 		args := `{"section":"` + section + `","project":"foreign"}`
 		if status, _ := f.post(t, token, "settings", args); status != 422 {
 			t.Errorf("foreign scope %s: %d", section, status)

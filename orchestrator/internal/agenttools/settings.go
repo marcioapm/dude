@@ -32,7 +32,7 @@ type settingsIn struct {
 }
 
 // The sections settings answers, in its output's order.
-var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements", "servers"}
+var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements", "servers", "memory"}
 
 // maxLinkedScopes is the most linked projects a session's unnamed read
 // shows a scope each for.
@@ -135,19 +135,20 @@ type projectRefOut struct {
 }
 
 type settingsOut struct {
-	External     string            `json:"external"`
-	Sources      string            `json:"sources"`
-	Organization string            `json:"organization"`
-	Role         string            `json:"yourRole"`
-	Scopes       []scopeOut        `json:"settings"`
-	Linked       []projectRefOut   `json:"linkedProjects,omitempty"`
-	LinkedNote   string            `json:"linkedNote,omitempty"`
-	Task         *taskViewOut      `json:"task,omitempty"`
-	GitHub       any               `json:"github,omitempty"`
-	Capabilities []capabilitiesOut `json:"capabilities,omitempty"`
-	MachineSizes []sizeOut         `json:"machineSizes,omitempty"`
-	Models       *modelsOut        `json:"models,omitempty"`
-	Judgements   *judgementsOut    `json:"judgements,omitempty"`
+	External     string             `json:"external"`
+	Sources      string             `json:"sources"`
+	Organization string             `json:"organization"`
+	Role         string             `json:"yourRole"`
+	Scopes       []scopeOut         `json:"settings"`
+	Linked       []projectRefOut    `json:"linkedProjects,omitempty"`
+	LinkedNote   string             `json:"linkedNote,omitempty"`
+	Task         *taskViewOut       `json:"task,omitempty"`
+	GitHub       any                `json:"github,omitempty"`
+	Capabilities []capabilitiesOut  `json:"capabilities,omitempty"`
+	MachineSizes []sizeOut          `json:"machineSizes,omitempty"`
+	Memory       *memorySettingsOut `json:"memory,omitempty"`
+	Models       *modelsOut         `json:"models,omitempty"`
+	Judgements   *judgementsOut     `json:"judgements,omitempty"`
 }
 
 // settingsRoles are the roles the settings pages list, in their order.
@@ -233,6 +234,12 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	if want("models") {
 		if out.Models, err = modelCatalogue(w, refs.tiers, c.Org, in); err != nil {
 			return out, err
+		}
+	}
+	if want("memory") {
+		out.Memory, _ = c.env.prepared.(*memorySettingsOut)
+		if out.Memory == nil {
+			out.Memory = &memorySettingsOut{Source: "operator", EmbeddingState: "unavailable", DynamicStatus: "unavailable", Note: settingsText("memory-unavailable", nil)}
 		}
 	}
 	if want("judgements") {
@@ -462,7 +469,7 @@ func settingsText(name string, data any) string { return settingsTexts[name].Ren
 
 var settingsTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
-	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit", "catalogue-limit", "catalogue-cursor"} {
+	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit", "catalogue-limit", "catalogue-cursor", "memory-unavailable"} {
 		out[name] = delivery.MustText("results/settings/" + name)
 	}
 	return out
