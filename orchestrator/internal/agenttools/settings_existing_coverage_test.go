@@ -22,21 +22,16 @@ func sameInstant(a, b any) bool {
 func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 	f, conductor := roleSettingsWorld(t)
 	mustExec(t, f.owner, `UPDATE organizations SET brainstorm_anywhere = true WHERE id = $1`, f.org)
-	token := conductor
 	for _, project := range []bool{false, true} {
+		token := conductor
 		path := "/v1/settings/organization"
-		args := `{}`
 		if project {
 			path = "/v1/projects/" + f.project + "/settings"
 		} else {
-			session := f.session(t, "ssn_coverage", "", "")
-			token = session
-		}
-		if project {
-			token = conductor
+			token = f.session(t, "ssn_coverage", "", "")
 		}
 		page := f.settingsRoute(t, path)
-		out := f.settingsOf(t, token, args)
+		out := f.settingsOf(t, token, `{}`)
 		rules := map[string]coverageRule{
 			"organization.id":     {Excluded: "scope identifier; caller token fixes organisation"},
 			"organization.name":   mapped,
@@ -50,11 +45,11 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 			rules["project.name"] = mapped
 		}
 		for _, key := range coveredDeliveryFields {
-			rules["delivery."+key+".value"] = mapped
+			valuePath := "delivery." + key + ".value"
 			if key == "requiredReviewers" || key == "blockingSeverities" {
-				delete(rules, "delivery."+key+".value")
-				rules["delivery."+key+".value.*"] = mapped
+				valuePath += ".*"
 			}
+			rules[valuePath] = mapped
 			rules["delivery."+key+".source"] = mapped
 		}
 		for _, role := range []string{"conductor", "brainstorm", "investigator", "implementer", "reviewer", "fixer", "simplifier", "qa_browser"} {
@@ -69,11 +64,11 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 					rules[prefix+key+".followsImplementer"] = mapped
 				}
 			}
-			rules[prefix+"enabled"] = coverageRule{Excluded: "always-on role has no toggle"}
 			if role == "simplifier" || role == "qa_browser" {
-				delete(rules, prefix+"enabled")
 				rules[prefix+"enabled.value"] = mapped
 				rules[prefix+"enabled.source"] = mapped
+			} else {
+				rules[prefix+"enabled"] = coverageRule{Excluded: "always-on role has no toggle"}
 			}
 			for _, layer := range []string{"organization", "project"} {
 				if layer == "project" && !project {
@@ -83,12 +78,12 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 				rules[p+"body"] = coverageRule{Excluded: "prompt body not approved for exposure"}
 				rules[p+"versionId"] = mapped
 				rules[p+"updatedAt"] = mapped
-				rules[p+"updatedBy"] = coverageRule{Excluded: "null prompt author"}
 				// Both null and non-null author shapes occur across seeded roles.
 				if role == "implementer" && layer == "organization" || project && layer == "project" && (role == "implementer" || role == "reviewer") {
-					delete(rules, p+"updatedBy")
 					rules[p+"updatedBy.id"] = coverageRule{Excluded: "audit author identifier"}
 					rules[p+"updatedBy.name"] = mapped
+				} else {
+					rules[p+"updatedBy"] = coverageRule{Excluded: "null prompt author"}
 				}
 				rules[p+"versions"] = coverageRule{Excluded: "prompt history count, not configuration"}
 				if layer == "project" {
