@@ -222,7 +222,7 @@ type findingsAnswer struct {
 	Total    int `json:"total"`
 	Findings []struct {
 		ID, Severity, Category, Where, Status, Settled, RaisedBy, ResolvedBy string
-		Title, Description, SuggestedFix, ResolutionNote                     string
+		Title, Description, SuggestedFix, Acceptance, ResolutionNote         string
 	} `json:"findings"`
 	Unknown []string `json:"unknown"`
 }
@@ -248,9 +248,9 @@ func TestFindingsListsHowEachWasSettledAndGivesTextById(t *testing.T) {
 		{"fnd_other", "wi_other", "blocking", "open", "", 0},
 	} {
 		mustExec(t, f.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, status, file, line,
-				title, description, suggested_fix, resolved_by_run_id, resolution_note, fix_attempts)
+				title, description, suggested_fix, acceptance, resolved_by_run_id, resolution_note, fix_attempts)
 			VALUES ($1, $2, $3, 'run_rev', 'correctness', $4::finding_severity, $5::finding_status, 'src/retry.ts', 41,
-				'Title of '||$1, 'Why '||$1, 'Fix '||$1, NULLIF($6, ''), CASE WHEN $5 = 'resolved' THEN 'judged fixed' ELSE '' END, $7)`,
+				'Title of '||$1, 'Why '||$1, 'Fix '||$1, 'Holds for '||$1, NULLIF($6, ''), CASE WHEN $5 = 'resolved' THEN 'judged fixed' ELSE '' END, $7)`,
 			row.id, f.org, row.task, row.sev, row.status, row.by, row.attempts)
 	}
 
@@ -261,7 +261,7 @@ func TestFindingsListsHowEachWasSettledAndGivesTextById(t *testing.T) {
 	var lines []string
 	for _, x := range list.Findings {
 		lines = append(lines, fmt.Sprintf("%s %s %s %s %s", x.ID, x.Severity, x.Where, x.Status, x.Settled))
-		if x.Title != "" || x.Description != "" || x.SuggestedFix != "" {
+		if x.Title != "" || x.Description != "" || x.SuggestedFix != "" || x.Acceptance != "" {
 			t.Errorf("the list carries %s's text", x.ID)
 		}
 	}
@@ -278,7 +278,7 @@ func TestFindingsListsHowEachWasSettledAndGivesTextById(t *testing.T) {
 	var one findingsAnswer
 	f.postAs(t, token, "findings", `{"ids":["fnd_fixed","fnd_other","fnd_nope"]}`, &one)
 	if len(one.Findings) != 1 || one.Findings[0].Description != "Why fnd_fixed" || one.Findings[0].SuggestedFix != "Fix fnd_fixed" ||
-		one.Findings[0].ResolutionNote != "judged fixed" || one.Findings[0].RaisedBy != "run_rev" ||
+		one.Findings[0].Acceptance != "Holds for fnd_fixed" || one.Findings[0].ResolutionNote != "judged fixed" || one.Findings[0].RaisedBy != "run_rev" ||
 		strings.Join(one.Unknown, ",") != "fnd_other,fnd_nope" {
 		t.Errorf("by id: %+v", one)
 	}

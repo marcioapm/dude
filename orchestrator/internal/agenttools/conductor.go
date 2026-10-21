@@ -55,6 +55,7 @@ type findingOut struct {
 	Title          string `json:"title,omitempty"`
 	Description    string `json:"description,omitempty"`
 	SuggestedFix   string `json:"suggestedFix,omitempty"`
+	Acceptance     string `json:"acceptance,omitempty"`
 	ResolutionNote string `json:"resolutionNote,omitempty"`
 }
 
@@ -80,7 +81,7 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category || COALESCE(' · ' || topic, ''), COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
 			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''), COALESCE(resolution_note, ''),
 			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
-			CASE WHEN $2 THEN suggested_fix ELSE '' END
+			CASE WHEN $2 THEN suggested_fix ELSE '' END, CASE WHEN $2 THEN COALESCE(acceptance, '') ELSE '' END
 		FROM review_findings WHERE task_id = $1 AND (NOT $2 OR id = ANY ($3))
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
 		LIMIT $4`, c.TaskID, full, ids, findingsMax)
@@ -93,7 +94,7 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 		var file, note string
 		var line, attempts int
 		if err := rows.Scan(&f.ID, &f.Severity, &f.Category, &f.Repo, &file, &line, &f.Status, &attempts, &f.RaisedBy, &f.ResolvedBy,
-			&note, &f.Title, &f.Description, &f.SuggestedFix); err != nil {
+			&note, &f.Title, &f.Description, &f.SuggestedFix, &f.Acceptance); err != nil {
 			return nil, err
 		}
 		if full {
