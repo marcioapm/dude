@@ -476,7 +476,7 @@ func run(args []string, out io.Writer) error {
 	case "settings":
 		project := fs.String("project", "", "a project's id, key or name")
 		task := fs.String("task", "", "a task's key or id: what its delivery is held to")
-		section := fs.String("section", "", "delivery, roles, prompts, github, network, capabilities, machines, models or judgements")
+		section := fs.String("section", "", "delivery, roles, prompts, github, network, capabilities, machines, models, judgements or servers")
 		limit := fs.Int("limit", 0, "catalogue page size: default 20, maximum 50")
 		cursor := fs.String("cursor", "", "catalogue next cursor")
 		if err := fs.Parse(rest); err != nil {

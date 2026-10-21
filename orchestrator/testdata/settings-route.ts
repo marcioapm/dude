@@ -10,6 +10,9 @@ import { Router } from "../../apps/control-plane/src/api/router.ts";
 import { registerSettingsRoutes } from "../../apps/control-plane/src/api/routes/settings.ts";
 import { registerModelRoutes } from "../../apps/control-plane/src/api/routes/models.ts";
 import { registerJudgementRoutes } from "../../apps/control-plane/src/api/routes/judgements.ts";
+import { registerServerRoutes } from "../../apps/control-plane/src/api/routes/servers.ts";
+import { previewSettingsSchema } from "../../packages/domain/src/servers.ts";
+import { agentModelConfigSchema, deliveryPolicySchema } from "../../packages/domain/src/hierarchy.ts";
 import { modelTierInputSchema } from "../../packages/domain/src/tiers.ts";
 
 const [org, person, path] = process.argv.slice(2);
@@ -19,6 +22,18 @@ const router = new Router(async () => ({ credentialKind: "person", organizationI
 registerSettingsRoutes(router);
 registerModelRoutes(router);
 registerJudgementRoutes(router);
+registerServerRoutes(router);
+if (path === "/schemas/roles" || path === "/schemas/delivery") {
+  const schema = path === "/schemas/roles" ? agentModelConfigSchema : deliveryPolicySchema;
+  process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(schema.shape).map(k => [k, true]))));
+  await closePool();
+  process.exit(0);
+}
+if (path === "/schemas/preview") {
+  process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(previewSettingsSchema.shape).map(k => [k, true]))));
+  await closePool();
+  process.exit(0);
+}
 if (path === "/schemas/tier") {
   process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(modelTierInputSchema.shape).map(k => [k, true]))));
   await closePool();

@@ -32,7 +32,7 @@ type settingsIn struct {
 }
 
 // The sections settings answers, in its output's order.
-var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements"}
+var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements", "servers"}
 
 // maxLinkedScopes is the most linked projects a session's unnamed read
 // shows a scope each for.
@@ -125,6 +125,7 @@ type scopeOut struct {
 	Secrets  []secretOut             `json:"secrets,omitempty"`
 	Prompts  []promptOut             `json:"prompts,omitempty"`
 	Network  *networkOut             `json:"network,omitempty"`
+	Servers  *serversOut             `json:"servers,omitempty"`
 	Machines map[string]roleValueOut `json:"machines,omitempty"`
 }
 
@@ -247,6 +248,12 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			return out, err
 		}
 	}
+	var servers map[string]*serversOut
+	if want("servers") {
+		if servers, err = projectServersOut(ctx, tx, w, projects, section == "servers"); err != nil {
+			return out, err
+		}
+	}
 	var prompts map[promptKey]promptRow
 	if want("prompts") {
 		if prompts, err = latestPrompts(ctx, tx, projects); err != nil {
@@ -267,6 +274,13 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			s.Roles = rolesOut(w, l, refs)
 			if l.project != nil {
 				s.Secrets = secrets[l.project.ID]
+			}
+		}
+		if want("servers") {
+			if l.project != nil {
+				s.Servers = servers[l.project.ID]
+			} else {
+				s.Servers = &serversOut{Source: "no-project", Section: "servers"}
 			}
 		}
 		if want("prompts") {

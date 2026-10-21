@@ -1,6 +1,6 @@
 # settings
 
-dude's settings as they apply here, each value with where it is set: dude (its built-in default), organization or project. Sections: delivery (the delivery policy: reviewers, including the path globs that add one, blocking severities, review and fix rounds, simplify, test, park, idle and warm minutes, the conductor's publish size), roles (each agent role's model tier, harness, time limit, machine size, image, and whether notes are set), prompts (built-in or saved, added to or replaced, saved when and by whom; never the text), github, network (egress, and which roles may search and read the web), capabilities (each role's tools) and machines. models lists the organisation's tiers, model configured/empty state, description, effort and order, in bounded pages; headers/options are never returned. judgements shows Off or the organisation's selected tier and resolved model, never calls or tests. With a task, also what its delivery is held to: the frozen policy where it differs from today's, raises people granted, and the reviewers its changed paths pick. Read-only: a person changes a setting in Settings.
+dude's settings as they apply here, each value with where it is set: dude (its built-in default), organization or project. Sections: delivery (the delivery policy: reviewers, including the path globs that add one, blocking severities, review and fix rounds, simplify, test, park, idle and warm minutes, the conductor's publish size), roles (each agent role's model tier, harness, time limit, machine size, image, and whether notes are set), prompts (built-in or saved, added to or replaced, saved when and by whom; never the text), github, network (egress, and which roles may search and read the web), capabilities (each role's tools) and machines. models lists the organisation's tiers, model configured/empty state, description, effort and order, in bounded pages; headers/options are never returned. judgements shows Off or the organisation's selected tier and resolved model, never calls or tests. servers lists only the scope's project recipes and preview settings; commands/setup are external text, clipped at 1000 bytes with an explicit truncation notice, never executed; env names only, never values. No project scope means no recipes. Default output gives recipe counts; ask for servers for details. With a task, also what its delivery is held to: the frozen policy where it differs from today's, raises people granted, and the reviewers its changed paths pick. Read-only: a person changes a setting in Settings.
 
 ```json
 {
@@ -16,7 +16,7 @@ dude's settings as they apply here, each value with where it is set: dude (its b
     },
     "section": {
       "type": "string",
-      "description": "one of delivery, roles, prompts, github, network, capabilities, machines, models, judgements; default existing sections plus compact model count and judgement selection (ask for models for the catalogue)"
+      "description": "one of delivery, roles, prompts, github, network, capabilities, machines, models, judgements, servers; default existing sections plus compact model count and judgement selection (ask for models for the catalogue)"
     },
     "limit": {
       "type": "integer",
