@@ -7,12 +7,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -393,6 +395,155 @@ func (w *world) phasesRun(wi string) []string {
 		out = append(out, p)
 	}
 	return out
+}
+
+// A taken-over pull request whose whole review is clear reaches its first
+// writer at the simplifier: that writer opens the candidate, its diff alone
+// is reviewed and the candidate tested, and only then does the person's
+// pull request move, once.
+func TestASimplifierThatIsAnAdoptedPullRequestsFirstWriterReachesItOnlyByPromotion(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("qa_browser", "fake/scripted")
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"requiredReviewers":["correctness"],"test":true}' WHERE id = $1`, w.project)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
+			return fakelux.Behaviour{Reply: "Reviewed it; no problems."}
+		}
+		return scripted(spec)
+	}
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+	start := w.gh.SHA("feature/greet")
+	// A standing approval: whatever head the branch shows can be merged.
+	w.gh.Review(n, "ana", "APPROVED")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
+	moved := len(w.gh.BranchLog("feature/greet"))
+	check := w.prShowsOnlyChecked(t, wi, "target", "feature/greet", true)
+	w.startDelivery(wi)
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(wi) })
+
+	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "simplify", "review", "test"}) {
+		t.Fatalf("phases %v, want the whole review, the simplifier, its diff's review and the test\n%s", got, w.describeRuns())
+	}
+	check()
+	head := w.gh.SHA("feature/greet")
+	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != head || head == start {
+		t.Errorf("feature/greet moved to %v from %s, want one promotion", moves, start)
+	}
+	w.writersOnCandidate(wi, nil, "simplify")
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
+		AND review_range->'base'->>'target' = $3`, wi, delivery.RangeSimplify, start); n != 1 {
+		t.Errorf("%d reviews of the simplifier's diff from the person's head, want 1", n)
+	}
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", start, head).CombinedOutput(); err != nil {
+		t.Errorf("the person's commit %s is not under the promoted head: %v %s", start, err, out)
+	}
+}
+
+// A taken-over pull request whose loop writer opens a candidate and commits
+// nothing has nothing to promote: the person's branch does not move, its
+// description stays theirs, and the delivery goes back to waiting on it.
+// A fix the conductor starts at the wait that commits nothing goes on as
+// its loop does: the candidate is dropped, and the conductor is back at
+// the wait, its next phase its to start.
+func TestALoopWriterThatCommitsNothingLeavesTheAdoptedPullRequestAsItWas(t *testing.T) {
+	t.Run("adopted", func(t *testing.T) {
+		w := newWorld(t)
+		scripted := w.lux.Decide
+		w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+			switch labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] {
+			case "review":
+				return fakelux.Behaviour{Reply: "Reviewed it; no problems."}
+			case "simplify":
+				return fakelux.Behaviour{Reply: "Simple enough already."}
+			}
+			return scripted(spec)
+		}
+		n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+		start, body := w.gh.SHA("feature/greet"), w.gh.Pull(n).Body
+		w.gh.Review(n, "ana", "APPROVED")
+		wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
+		moved := len(w.gh.BranchLog("feature/greet"))
+		w.startDelivery(wi)
+		w.until("waiting on the pull request", func() bool { return w.waitingOnPR(wi) })
+		w.writersOnCandidate(wi, nil, "simplify")
+		if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 0 || w.gh.SHA("feature/greet") != start {
+			t.Fatalf("feature/greet moved to %v, want no move", moves)
+		}
+		if got := w.gh.Pull(n); got.Body != body || len(w.gh.Pulls()) != 1 || got.State != "open" {
+			t.Errorf("the pull request is %+v, want the person's, open, as it was", got)
+		}
+		// Its feedback still goes to a fix, which reaches it by promotion.
+		w.gh.Comment(n, "alice", "Please rename the greeting.")
+		w.until("the feedback fixed", func() bool {
+			w.sync()
+			return w.fixes(wi) == 1 && w.gh.SHA("feature/greet") != start && w.waitingOnPR(wi)
+		})
+	})
+	t.Run("at the conductor's wait", func(t *testing.T) {
+		w := conducting(t)
+		scripted := w.lux.Decide
+		var armed atomic.Bool
+		var reviews atomic.Int32
+		w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+			labels, _ := spec["labels"].(map[string]any)
+			switch labels["dude.phase"] {
+			case "review":
+				if !armed.Load() {
+					break
+				}
+				if reviews.Add(1) == 1 {
+					return fakelux.Behaviour{Reply: "One problem:\n\n```yaml\n" + fakeagent.Finding + "```\n"}
+				}
+				return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
+			case "fix", "simplify":
+				if armed.Load() {
+					return fakelux.Behaviour{Reply: "Nothing to change."}
+				}
+			}
+			return scripted(spec)
+		}
+		task := w.reviewing()
+		setPolicy(w, task, `{"maxReviewIterations":9}`)
+		if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+			t.Fatalf("chat: %d %v", status, out)
+		}
+		w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+		branch := w.gh.Pull(1).Head
+		before, moves, body := w.gh.SHA(branch), len(w.gh.BranchLog(branch)), w.gh.Pull(1).Body
+		earlier := w.runsSoFar(task)
+		armed.Store(true)
+		// The review started at the wait; its loop goes on as the policy's.
+		w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+		w.until("waiting on the pull request again", func() bool {
+			switch w.decisionAt(task) {
+			case delivery.PointReviewed, delivery.PointFixed:
+				w.must(task, "decide", `{"action":"next"}`)
+			}
+			return w.phaseRuns(task, "simplify") > 1 && w.waitingOnPR(task)
+		})
+		w.writersOnCandidate(task, earlier, "fix", "simplify")
+		if got := w.gh.BranchLog(branch)[moves:]; len(got) != 0 || w.gh.SHA(branch) != before || w.gh.Pull(1).Body != body {
+			t.Errorf("the pull request moved to %v or its description changed", got)
+		}
+		// Back at the wait as the loop leaves it (the pull request step),
+		// no longer acting on the pull request, no candidate kept.
+		if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state ? 'actingOnPr' OR state ? 'candidate')`, task); n != 0 {
+			var state string
+			_ = w.owner.QueryRow(context.Background(), `SELECT state::text FROM workflow_runs WHERE task_id = $1`, task).Scan(&state)
+			t.Errorf("waiting again still acting on the pull request: %s", state)
+		}
+		if point := w.decisionAt(task); point != "" {
+			t.Errorf("parked on the conductor's %q decision, want the wait", point)
+		}
+		// Feedback after it is handed to the conductor's pull request fix.
+		armed.Store(false)
+		w.gh.Comment(1, "ana", "Please rename the greeting.")
+		w.until("the feedback's decision", func() bool {
+			w.sync()
+			return w.decisionAt(task) == delivery.PointPRFeedback
+		})
+	})
 }
 
 // A pull request a person opened is taken over: dude reviews it (nothing
