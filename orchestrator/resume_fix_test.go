@@ -267,31 +267,71 @@ func TestAContinuingWritersSyncIsWaitedForFromItsResume(t *testing.T) {
 		t.Run(map[bool]string{true: "slow resume, sync lands", false: "sync never reported"}[landed], func(t *testing.T) {
 			w := resuming(t)
 			w.syncer.CheckoutSyncWait = time.Second
+			if landed {
+				// Far longer than the test runs: only a bound taken from the
+				// backdated round message below can expire.
+				w.syncer.CheckoutSyncWait = time.Minute
+			}
 			wi := w.task()
 			w.names(wi, w.repoID)
+			// The test goroutine polls on w.owner; the hook gets its own.
+			hookConn, err := pgx.ConnectConfig(context.Background(), w.owner.Config())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = hookConn.Close(context.Background()) })
 			w.lux.BeforeStart(func(id string) {
-				if w.fixStarts(id) {
+				if !w.fixStarts(id) {
+					return
+				}
+				if !landed {
 					// Placed well after the handover queued the round message.
 					time.Sleep(2 * time.Second)
+					return
+				}
+				// A resume placed an hour after the handover queued the round
+				// message: the sync's wait runs from the resume, not from it.
+				tag, err := hookConn.Exec(context.Background(), `UPDATE directives SET created_at = now() - interval '1 hour'
+					WHERE run_id = (SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND continues_how = 'resume')`, wi)
+				if err != nil || tag.RowsAffected() == 0 {
+					t.Errorf("backdating the continuation's round message: %v, %d rows", err, tag.RowsAffected())
 				}
 			})
 			released := make(chan struct{})
 			release := sync.OnceFunc(func() { close(released) })
 			t.Cleanup(func() { w.lux.BeforeEvent(nil); release() })
 			var held atomic.Bool
+			// Pumps completed by w.until below.
+			var pumps atomic.Int64
 			w.lux.BeforeEvent(func(runID string, _ int64, typ string) {
 				if typ != "git.sync" || !w.fixStarts(runID) || !held.CompareAndSwap(false, true) {
 					return
 				}
-				if landed {
-					// Read a little after the running it trails.
-					time.Sleep(200 * time.Millisecond)
+				if !landed {
+					<-released
 					return
 				}
-				<-released
+				// Held until the continuation is recorded running and a whole
+				// pump (its sweep delivering directives) has run since: an
+				// expired bound replaces it before the sync lands.
+				for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Error("the continuation was never recorded running")
+						return
+					}
+					var running bool
+					_ = hookConn.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM runs r
+						JOIN run_resumes rr ON rr.run_id = r.id AND rr.running_at IS NOT NULL
+						WHERE r.task_id = $1 AND r.phase = 'fix' AND r.continues_how = 'resume' AND r.lux_state = 'running')`, wi).Scan(&running)
+					if running {
+						break
+					}
+				}
+				for after := pumps.Load() + 2; pumps.Load() < after; time.Sleep(20 * time.Millisecond) {
+				}
 			})
 			w.start(wi, resumingPolicy())
-			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			w.until("a pull request", func() bool { pumps.Add(1); return len(w.gh.Pulls()) == 1 })
 			writers := w.writerRows(wi)
 			if len(writers) < 2 || writers[1].How != delivery.ContinuesResume {
 				t.Fatalf("writers: %+v; want the implementer resumed for the first fix", writers)
