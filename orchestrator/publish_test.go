@@ -214,9 +214,8 @@ func TestAMovingPublishHoldsOffWritersAndTheConductorsEnd(t *testing.T) {
 func (e *editing) store() *delivery.Store { return &delivery.Store{DB: e.app} }
 
 // Two repositories, and the second's task branch refuses its fast-forward:
-// what moved is recorded — the pull request's head, the commit event, the
-// delivery's heads, the publish's heads for the gate — and the wake says
-// it is published in part.
+// what moved is recorded — the commit event, the delivery's heads, the
+// publish's heads for the gate — and the wake says it is published in part.
 func TestAPartlyMovedPublishRecordsWhatMoved(t *testing.T) {
 	w := conducting(t)
 	e := &editing{world: w, task: w.task()}
@@ -228,10 +227,6 @@ func TestAPartlyMovedPublishRecordsWhatMoved(t *testing.T) {
 	e.branch = delivery.BranchFor(e.task, 1)
 	w.implemented(e.task)
 	e.wokenWith(e.task, "after implement")
-	before := e.gh.SHA(e.branch)
-	mustExec(t, e.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
-		head_branch, base_branch, head_sha, title, state, checks) VALUES ('pr_part', $1, $2, $3, $4, 7, 'https://x/7', $5, 'main', $6, 't', 'open', 'passing')`,
-		e.org, e.project, e.task, e.repoID, e.branch, before)
 	e.current()
 	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
 	web, err := e.lux.Checkout(e.luxRunOf(e.cond), "web")
@@ -268,9 +263,6 @@ func TestAPartlyMovedPublishRecordsWhatMoved(t *testing.T) {
 	}
 	if got := e.web.SHA(e.branch); got != webBefore {
 		t.Errorf("web's task branch at %s, want %s", got, webBefore)
-	}
-	if n := e.count(`SELECT count(*) FROM pull_requests WHERE id = 'pr_part' AND head_sha = $1`, sha); n != 1 {
-		t.Error("the pull request's head did not follow")
 	}
 	if n := e.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'git.commit_created' AND payload->>'headSha' = $2
 		AND payload->>'by' = 'conductor'`, e.task, sha); n != 1 {

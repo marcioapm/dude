@@ -516,16 +516,12 @@ func TestAResumeOnALuxWithoutSyncModesLeavesTheConductorReadOnly(t *testing.T) {
 }
 
 // Publish: the conductor's commit goes to the task branch, by
-// fast-forward; the pull request's head follows; git.commit_created is
-// the conductor's; the delivery's heads move; it is woken saying so.
-func TestThePublishedCommitMovesTheTaskBranchAndThePullRequest(t *testing.T) {
+// fast-forward; git.commit_created is the conductor's; the delivery's
+// heads move; it is woken saying so.
+func TestThePublishedCommitMovesTheTaskBranch(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
 	before := e.gh.SHA(e.branch)
-	// A pull request open on the branch, as after the gate.
-	mustExec(t, e.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
-		head_branch, base_branch, head_sha, title, state, checks) VALUES ('pr_edit', $1, $2, $3, $4, 7, 'https://x/7', $5, 'main', $6, 't', 'open', 'passing')`,
-		e.org, e.project, e.task, e.repoID, e.branch, before)
 	e.current()
 	sha := e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
 	id := e.publish()
@@ -534,9 +530,6 @@ func TestThePublishedCommitMovesTheTaskBranchAndThePullRequest(t *testing.T) {
 	}
 	if got := e.gh.SHA(e.branch); got != sha {
 		t.Fatalf("task branch at %s, want %s", got, sha)
-	}
-	if n := e.count(`SELECT count(*) FROM pull_requests WHERE id = 'pr_edit' AND head_sha = $1 AND checks = 'unknown'`, sha); n != 1 {
-		t.Error("the pull request's head did not follow")
 	}
 	var actor, by string
 	var payload map[string]any
@@ -552,6 +545,60 @@ func TestThePublishedCommitMovesTheTaskBranchAndThePullRequest(t *testing.T) {
 		t.Error("the delivery's head did not move")
 	}
 	e.wokenWith(e.task, "is on the task branch")
+}
+
+const pullRequestOpenRefusal = "a pull request is open on this branch, so changes reach it only after review on a candidate: use start_phase fix"
+
+// openPullRequestRow records a pull request open on the task branch at
+// its head, as the pull request syncer would.
+func (e *editing) openPullRequestRow() string {
+	e.t.Helper()
+	head := e.gh.SHA(e.branch)
+	mustExec(e.t, e.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
+		head_branch, base_branch, head_sha, title, state, checks) VALUES ('pr_edit', $1, $2, $3, $4, 7, 'https://x/7', $5, 'main', $6, 't', 'open', 'passing')`,
+		e.org, e.project, e.task, e.repoID, e.branch, head)
+	return head
+}
+
+// While a pull request is open on the task branch, a conductor's publish
+// is refused, pointing to start_phase fix: neither the branch nor the
+// pull request's head moves. Asked before the pull request was recorded,
+// it is refused once it is, before anything moves.
+func TestAPublishIsRefusedWhileAPullRequestIsOpen(t *testing.T) {
+	unmoved := func(t *testing.T, e *editing, log int, head string) {
+		t.Helper()
+		if got := e.gh.BranchLog(e.branch); len(got) != log {
+			t.Errorf("the task branch moved: %v", got[log:])
+		}
+		if got := e.gh.SHA(e.branch); got != head {
+			t.Errorf("the task branch is at %s, want %s", got, head)
+		}
+		if n := e.count(`SELECT count(*) FROM pull_requests WHERE id = 'pr_edit' AND head_sha = $1`, head); n != 1 {
+			t.Error("the pull request's head moved")
+		}
+	}
+	t.Run("asked with the pull request open", func(t *testing.T) {
+		e := newEditing(t)
+		e.wokenWith(e.task, "after implement")
+		head := e.openPullRequestRow()
+		log := len(e.gh.BranchLog(e.branch))
+		e.current()
+		e.commit(map[string]string{"README.md": "# target\n\nfixed\n"})
+		e.refused(e.task, "publish", `{"message":"a small fix"}`, pullRequestOpenRefusal)
+		if n := e.count(`SELECT count(*) FROM conductor_publishes WHERE task_id = $1`, e.task); n != 0 {
+			t.Errorf("%d publishes recorded", n)
+		}
+		unmoved(t, e, log, head)
+	})
+	t.Run("asked before the pull request opened", func(t *testing.T) {
+		e, g, id := pausedAtCompare(t)
+		head := e.gh.SHA(e.branch)
+		log := len(e.gh.BranchLog(e.branch))
+		e.openPullRequestRow()
+		g.release()
+		e.refusedUnmoved(id, head, pullRequestOpenRefusal)
+		unmoved(t, e, log, head)
+	})
 }
 
 // Each refusal says why, and moves nothing.

@@ -105,6 +105,17 @@ func refuseWriterAdmissionTx(ctx context.Context, tx pgx.Tx, taskID, excludeRunI
 	return nil
 }
 
+// pullRequestOpenTx is why nothing but promotion may write the delivery's
+// task branch now, "" when it may: a pull request is open on it, and only
+// a candidate reviewed (and tested) reaches it.
+func pullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (string, error) {
+	open, err := OpenPullRequestOnTx(ctx, tx, taskID, d.Branch(taskID))
+	if err != nil || len(open) == 0 {
+		return "", err
+	}
+	return rPullRequestOpenOnBranch, nil
+}
+
 // ConductPublish is publish: the task's live conductor asks for what it
 // committed in its checkout to be pushed and taken to the task branch.
 // Refused, writing nothing, unless it is the live conductor, it takes the
@@ -163,6 +174,12 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	}
 	if d.State.Candidate != nil {
 		return "", refusef("%s", refusedCandidate)
+	}
+	if why, err := pullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil || why != "" {
+		if err == nil {
+			err = refuseText(why)
+		}
+		return "", err
 	}
 	id := ids.New("pub")
 	if _, err := tx.Exec(ctx, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, message,
@@ -344,7 +361,8 @@ func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (
 		// the pull request before the fix being checked does, unchecked.
 		return d, refusedCandidate, nil
 	}
-	return d, "", nil
+	why, err := pullRequestOpenTx(ctx, tx, p.TaskID, d)
+	return d, why, err
 }
 
 // PublishEligibleTx is why the publish may not go on now, "" when it may
