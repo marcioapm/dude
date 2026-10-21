@@ -3771,7 +3771,18 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 	}
 	// The reviewer's judgement of what it was shown: fixed is resolved;
 	// still stays open, for the next fix. One it said nothing about stays
-	// as it was.
+	// as it was. All of it is kept on the Run, replacing an earlier report's.
+	said := map[string]string{}
+	for id, fixed := range verdicts {
+		said[id] = "still"
+		if fixed {
+			said[id] = "fixed"
+		}
+	}
+	saidJSON, _ := json.Marshal(said)
+	if _, err := tx.Exec(ctx, `UPDATE runs SET verdicts = $2::jsonb WHERE id = $1`, runID, saidJSON); err != nil {
+		return err
+	}
 	for id, fixed := range verdicts {
 		if !fixed {
 			continue
@@ -3793,10 +3804,11 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			cat, topic = category, f.Category
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
-				severity, repo, file, line, title, description, suggested_fix)
-				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13)`,
+				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix)
+				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15)`,
 			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
-			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix); err != nil {
+			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
+			db.Nullable(f.Acceptance), f.CausedByFix); err != nil {
 			return err
 		}
 	}
