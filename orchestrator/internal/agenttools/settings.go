@@ -27,10 +27,12 @@ type settingsIn struct {
 	Project string `json:"project,omitempty"`
 	Task    string `json:"task,omitempty"`
 	Section string `json:"section,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Cursor  string `json:"cursor,omitempty"`
 }
 
 // The sections settings answers, in its output's order.
-var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines"}
+var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements", "servers", "memory", "images"}
 
 // maxLinkedScopes is the most linked projects a session's unnamed read
 // shows a scope each for.
@@ -123,6 +125,7 @@ type scopeOut struct {
 	Secrets  []secretOut             `json:"secrets,omitempty"`
 	Prompts  []promptOut             `json:"prompts,omitempty"`
 	Network  *networkOut             `json:"network,omitempty"`
+	Servers  *serversOut             `json:"servers,omitempty"`
 	Machines map[string]roleValueOut `json:"machines,omitempty"`
 }
 
@@ -132,17 +135,21 @@ type projectRefOut struct {
 }
 
 type settingsOut struct {
-	External     string            `json:"external"`
-	Sources      string            `json:"sources"`
-	Organization string            `json:"organization"`
-	Role         string            `json:"yourRole"`
-	Scopes       []scopeOut        `json:"settings"`
-	Linked       []projectRefOut   `json:"linkedProjects,omitempty"`
-	LinkedNote   string            `json:"linkedNote,omitempty"`
-	Task         *taskViewOut      `json:"task,omitempty"`
-	GitHub       any               `json:"github,omitempty"`
-	Capabilities []capabilitiesOut `json:"capabilities,omitempty"`
-	MachineSizes []sizeOut         `json:"machineSizes,omitempty"`
+	External     string             `json:"external"`
+	Sources      string             `json:"sources"`
+	Organization string             `json:"organization"`
+	Role         string             `json:"yourRole"`
+	Scopes       []scopeOut         `json:"settings"`
+	Linked       []projectRefOut    `json:"linkedProjects,omitempty"`
+	LinkedNote   string             `json:"linkedNote,omitempty"`
+	Task         *taskViewOut       `json:"task,omitempty"`
+	GitHub       any                `json:"github,omitempty"`
+	Capabilities []capabilitiesOut  `json:"capabilities,omitempty"`
+	MachineSizes []sizeOut          `json:"machineSizes,omitempty"`
+	Memory       *memorySettingsOut `json:"memory,omitempty"`
+	Models       *modelsOut         `json:"models,omitempty"`
+	Images       *imagesOut         `json:"images,omitempty"`
+	Judgements   *judgementsOut     `json:"judgements,omitempty"`
 }
 
 // settingsRoles are the roles the settings pages list, in their order.
@@ -186,7 +193,7 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	out.Organization, out.Role = w.text(org.Name, 200), c.Role
 	var session *delivery.SessionModel
 	var raised, childRaised delivery.Raises
-	if c.SessionID != "" && (want("roles") || want("machines")) {
+	if c.SessionID != "" && (want("roles") || want("machines") || want("prompts")) {
 		m, err := delivery.LoadSessionModel(ctx, tx, c.SessionID)
 		if err != nil {
 			return out, err
@@ -220,14 +227,58 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			return out, err
 		}
 	}
-	if want("roles") {
+	if want("roles") || want("models") {
 		if refs.tiers, err = delivery.LoadTiers(ctx, tx); err != nil {
 			return out, err
 		}
+	}
+	// A catalogue page shares the result with the linked projects' list.
+	budget := pageBytes
+	if out.Linked != nil {
+		linked, err := json.Marshal(out.Linked)
+		if err != nil {
+			return out, err
+		}
+		budget -= len(linked)
+	}
+	if want("models") {
+		if out.Models, err = modelCatalogue(w, refs.tiers, c.Org, in, budget); err != nil {
+			return out, err
+		}
+	}
+	if section == "images" {
+		// Explicit only: by default each role's image is in roles.
+		if out.Images, err = imageCatalogue(ctx, tx, w, c.Org, in, budget); err != nil {
+			return out, err
+		}
+	}
+	if want("memory") {
+		if prepared, _ := c.env.prepared.(*memorySettingsOut); prepared != nil {
+			m := *prepared
+			if m.Model != "" {
+				m.Model = w.text(m.Model, 800)
+			}
+			out.Memory = &m
+		} else {
+			out.Memory = &memorySettingsOut{Source: "operator", EmbeddingState: "unavailable", DynamicStatus: "unavailable", Note: settingsText("memory-unavailable", nil)}
+		}
+	}
+	if want("judgements") {
+		if out.Judgements, err = readJudgements(ctx, tx, w); err != nil {
+			return out, err
+		}
+	}
+	if want("roles") {
 		if refs.images, err = imageNames(ctx, tx); err != nil {
 			return out, err
 		}
 		if secrets, err = projectSecrets(ctx, tx, projects); err != nil {
+			return out, err
+		}
+	}
+	var servers map[string]*serversOut
+	if want("servers") {
+		if servers, err = projectServersOut(ctx, tx, w, projects, section == "servers"); err != nil {
 			return out, err
 		}
 	}
@@ -251,6 +302,16 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			s.Roles = rolesOut(w, l, refs)
 			if l.project != nil {
 				s.Secrets = secrets[l.project.ID]
+			}
+		}
+		if want("servers") {
+			switch {
+			case l.project != nil:
+				s.Servers = servers[l.project.ID]
+			case out.Linked != nil:
+				s.Servers = &serversOut{Source: "linked-projects-not-named", Section: "servers"}
+			default:
+				s.Servers = &serversOut{Source: "no-project", Section: "servers"}
 			}
 		}
 		if want("prompts") {
@@ -432,7 +493,7 @@ func settingsText(name string, data any) string { return settingsTexts[name].Ren
 
 var settingsTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
-	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment"} {
+	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit", "catalogue-limit", "catalogue-cursor", "servers-shown", "memory-unavailable"} {
 		out[name] = delivery.MustText("results/settings/" + name)
 	}
 	return out

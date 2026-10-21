@@ -8,12 +8,52 @@ import { Config, useConfig } from "../../apps/control-plane/src/config.ts";
 import { closePool } from "../../apps/control-plane/src/db/client.ts";
 import { Router } from "../../apps/control-plane/src/api/router.ts";
 import { registerSettingsRoutes } from "../../apps/control-plane/src/api/routes/settings.ts";
+import { registerModelRoutes } from "../../apps/control-plane/src/api/routes/models.ts";
+import { registerJudgementRoutes } from "../../apps/control-plane/src/api/routes/judgements.ts";
+import { registerImageRoutes } from "../../apps/control-plane/src/api/routes/images.ts";
+import { registerMemoryRoutes } from "../../apps/control-plane/src/api/routes/memory.ts";
+import { registerServerRoutes } from "../../apps/control-plane/src/api/routes/servers.ts";
+import { registerMachineRoutes } from "../../apps/control-plane/src/api/routes/machines.ts";
+import { registerPullRequestRoutes } from "../../apps/control-plane/src/api/routes/pullRequests.ts";
+import { previewSettingsSchema } from "../../packages/domain/src/servers.ts";
+import { agentModelConfigSchema, deliveryPolicySchema } from "../../packages/domain/src/hierarchy.ts";
+import { imagePatchSchema, newImageSchema } from "../../packages/domain/src/images.ts";
+import { modelTierInputSchema } from "../../packages/domain/src/tiers.ts";
 
 const [org, person, path] = process.argv.slice(2);
 useConfig(Config.load({ env: { ...process.env, DUDE_AUTH_PROVIDER: "cloudflare_access", DUDE_AUTH_PUBLIC_URL: "https://dude.test",
   DUDE_AUTH_DEFAULT_ORGANIZATION: "test", DUDE_AUTH_CLOUDFLARE_ACCESS_TEAM: "test", DUDE_AUTH_CLOUDFLARE_ACCESS_AUD: "aud" } }));
 const router = new Router(async () => ({ credentialKind: "person", organizationId: org!, personId: person!, kind: "user", name: person!, role: "member", resolved: true }));
 registerSettingsRoutes(router);
+registerModelRoutes(router);
+registerJudgementRoutes(router);
+registerServerRoutes(router);
+registerMemoryRoutes(router);
+registerImageRoutes(router);
+registerMachineRoutes(router);
+registerPullRequestRoutes(router);
+if (path === "/schemas/images") {
+  const keys = (s: { shape: object }) => Object.fromEntries(Object.keys(s.shape).map(k => [k, true]));
+  process.stdout.write(JSON.stringify({ new: keys(newImageSchema), patch: keys(imagePatchSchema) }));
+  await closePool();
+  process.exit(0);
+}
+if (path === "/schemas/roles" || path === "/schemas/delivery") {
+  const schema = path === "/schemas/roles" ? agentModelConfigSchema : deliveryPolicySchema;
+  process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(schema.shape).map(k => [k, true]))));
+  await closePool();
+  process.exit(0);
+}
+if (path === "/schemas/preview") {
+  process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(previewSettingsSchema.shape).map(k => [k, true]))));
+  await closePool();
+  process.exit(0);
+}
+if (path === "/schemas/tier") {
+  process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(modelTierInputSchema.shape).map(k => [k, true]))));
+  await closePool();
+  process.exit(0);
+}
 const res = await router.handle(new Request(`https://dude.test${path}`));
 process.stdout.write(await res.text());
 await closePool();
