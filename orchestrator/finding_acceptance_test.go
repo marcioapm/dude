@@ -10,6 +10,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
 // A re-review's verdicts are kept on its Run, a still as much as a fixed:
@@ -79,6 +80,41 @@ func TestEachReviewRunKeepsItsVerdicts(t *testing.T) {
 	for i, v := range want {
 		if fmt.Sprint(got[i]) != fmt.Sprint(v) {
 			t.Errorf("review %d's verdicts = %v, want %v", i+1, got[i], v)
+		}
+	}
+}
+
+// A review Run reporting again (a retried report) keeps only its latest
+// verdicts: one dropped from the report is gone, and a report with none
+// leaves an empty map, never NULL.
+func TestAReportedAgainReviewKeepsOnlyItsLatestVerdicts(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	ctx := context.Background()
+	var run string
+	if err := w.owner.QueryRow(ctx, `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review'
+		ORDER BY created_at, id LIMIT 1`, wi).Scan(&run); err != nil {
+		t.Fatal(err)
+	}
+	for _, report := range []struct {
+		verdicts map[string]bool
+		want     string
+	}{
+		{map[string]bool{"a": false, "b": false}, `{"a": "still", "b": "still"}`},
+		{map[string]bool{"b": false}, `{"b": "still"}`},
+		{nil, `{}`},
+	} {
+		if err := phases.RecordFindings(ctx, w.app, w.org, run, nil, report.verdicts); err != nil {
+			t.Fatal(err)
+		}
+		var stored string
+		if err := w.owner.QueryRow(ctx, `SELECT COALESCE(verdicts::text, 'NULL') FROM runs WHERE id = $1`, run).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != report.want {
+			t.Errorf("after reporting %v the Run's verdicts are %s, want %s", report.verdicts, stored, report.want)
 		}
 	}
 }
