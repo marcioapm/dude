@@ -120,6 +120,9 @@ rAlreadyCheckedOutForThisWork          refusals/tools/tools/already-checked-out-
 rYouHaveRequestsWaitingForPerson       refusals/tools/tools/you-have-requests-waiting-for-person
 rYouAlreadyAskedForPersonHas           refusals/tools/tools/you-already-asked-for-person-has
 rLimitsAreATasks                       refusals/tools/limits/limits-are-a-tasks
+rSettingsNoProject                     refusals/tools/settings/no-project
+rSettingsNoTask                        refusals/tools/settings/no-task
+rSettingsSection                       refusals/tools/settings/section
 rNameRunWhoseChatRead                  refusals/tools/runchat/name-run-whose-chat-read
 rLimit1Messages                        refusals/tools/runchat/limit-1-messages
 rNotRunYourTaskYouRead                 refusals/tools/runchat/not-run-your-task-you-read

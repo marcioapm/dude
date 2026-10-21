@@ -34,6 +34,8 @@
 //	                                      a conductor's: the task's pull requests
 //	dude chat RUN [--limit N]             a conductor's: a Run's Chat and open question
 //	dude limits                           a conductor's: the task's limits, and what is used
+//	dude settings [--project P] [--task T] [--section S]
+//	                                      dude's settings here, and where each is set
 //	dude limit request LIMIT [--to N] [--pr PR] --reason R
 //	                                      a conductor's: ask the task's people to raise one
 //	dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]
@@ -471,6 +473,23 @@ func run(args []string, out io.Writer) error {
 			return errors.New("usage: dude limits")
 		}
 		return show(out, *asJSON, call("limits", map[string]any{}))
+	case "settings":
+		project := fs.String("project", "", "a project's id, key or name")
+		task := fs.String("task", "", "a task's key or id: what its delivery is held to")
+		section := fs.String("section", "", "delivery, roles, prompts, github, network, capabilities or machines")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		if fs.NArg() > 0 {
+			return errors.New(settingsUsage)
+		}
+		body := map[string]any{}
+		for k, v := range map[string]string{"project": *project, "task": *task, "section": *section} {
+			if v != "" {
+				body[k] = v
+			}
+		}
+		return show(out, *asJSON, call("settings", body))
 	case "limit request":
 		to := fs.Int("to", 0, "perReviewRound, perPullRequest: the limit you ask for")
 		pr := fs.String("pr", "", "rerun: the pull request (repo#number)")
@@ -976,6 +995,8 @@ func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 // prsUsage is dude prs's usage error: --feedback repeats, one ID each.
 const prsUsage = "usage: dude prs [--refresh | [--feedback ID]...]"
 
+const settingsUsage = "usage: dude settings [--project P] [--task T] [--section S]"
+
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
 
   dude task list [--text T] [--startable] [--archived | --closed]
@@ -1042,6 +1063,9 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              max 100) oldest first, and the question it waits on
   dude limits                                a conductor's: the limits the task is held to, where each
                                              is set, and how much is used
+  dude settings [--project P] [--task T] [--section S]
+                                             dude's settings as they apply here, each with where it
+                                             is set; --task adds what that task's delivery is held to
   dude limit request LIMIT [--to N] [--pr PR] --reason "…"
                                              a conductor's: ask the task's people to raise
                                              perReviewRound, perPullRequest or rerun for this task

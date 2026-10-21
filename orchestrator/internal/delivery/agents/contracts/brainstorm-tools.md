@@ -19,4 +19,4 @@
 	"github_search github_issue github_pull_request github_check_log" (print "github_search, github_issue and github_pull_request read the linked projects' repositories on GitHub (issues, pull requests, their conversations, reviews, threads, checks and diffs), and github_check_log reads a failed check's log before deciding whether to rerun or fix it, at most 60 reads an hour" (.List "" "" "refresh_pull_requests" ", refresh_pull_requests included") ".")
 	"start_agent" "`start_agent` starts a named investigator child for read-only repository research; it cannot start another child, mutate work, publish code, or receive project secrets."
 	"" .ExternalTextNote
-}}
+}}{{template "contracts/settings" .}}

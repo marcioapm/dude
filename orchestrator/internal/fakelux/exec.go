@@ -97,6 +97,13 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 				return "", fmt.Errorf("git %s: %v: %s", args[0], err, out)
 			}
 		}
+		if pushed := run.pushedTo[repo.Name]; pushed != "" {
+			// Made after the Run pushed: the agent committed what it pushed
+			// in this checkout.
+			if err := committedIn(dst, src, pushed); err != nil {
+				return "", err
+			}
+		}
 	}
 	run.workspace = dir
 	return dir, nil

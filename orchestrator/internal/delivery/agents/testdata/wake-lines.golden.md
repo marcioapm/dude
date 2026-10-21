@@ -100,7 +100,7 @@ Your implement Run run_impl asks the person a question (qst_3): read it in its c
 
 ## base-moved
 
-`main` moved: GLD-8 merged (#14). Call sync_base if your work depends on it.
+`main` moved: GLD-8 merged (#14). Call sync_base if your work depends on it; while a pull request is open on the task branch, publish is refused, so use start_phase fix to bring it in instead.
 
 ## stalled
 

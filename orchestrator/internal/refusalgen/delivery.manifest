@@ -53,6 +53,7 @@ rThisTaskHasNoDeliveryIn2               refusals/delivery/edits/this-task-has-no
 rYourCheckoutReadOnlyForThis            refusals/delivery/edits/your-checkout-read-only-for-this
 rYourCheckoutHasNoRepositoryYou         refusals/delivery/edits/your-checkout-has-no-repository-you
 rPublishYoursUnderWayYouAre             refusals/delivery/edits/publish-yours-under-way-you-are
+rPullRequestOpenOnBranch                refusals/delivery/edits/pull-request-open-on-branch
 rEscalationWasJustDecidedAskNothing     refusals/delivery/escalations/escalation-was-just-decided-ask-nothing
 rActionsAreForQuestionAboutEscalation   refusals/delivery/escalations/actions-are-for-question-about-escalation
 rTaskEscalationWaitsOnPersonAsk         refusals/delivery/escalations/task-escalation-waits-on-person-ask

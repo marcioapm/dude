@@ -510,6 +510,18 @@ name the task to read its feedback in full
 
 at most %d feedback items by id at once
 
+## refusals/tools/settings/no-project
+
+no project %q in this organisation: name one by its key, name or id
+
+## refusals/tools/settings/no-task
+
+no task %q in this organisation: name one by its key (ABC-12) or id
+
+## refusals/tools/settings/section
+
+section is one of %s, or left out for all
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
@@ -1181,4 +1193,8 @@ this profile is not available to a brainstorm session child
 ## refusals/delivery/child/session-restart-unsupported
 
 session children cannot be restarted; start a new investigator child from the live brainstorm
+
+## refusals/delivery/edits/pull-request-open-on-branch
+
+a pull request is open on this branch, so changes reach it only after review on a candidate: use start_phase fix with a note saying what to change
 

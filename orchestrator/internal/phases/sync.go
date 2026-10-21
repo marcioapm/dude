@@ -1170,6 +1170,21 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if err := s.childExecutionAllowed(ctx, r); err != nil {
 		return err
 	}
+	if r.SourceKind == string(delivery.ChildParentTaskConductor) && delivery.Publishes[r.Phase] {
+		// A writer child admitted before a pull request opened on the task
+		// branch would publish to it unreviewed: it ends before it starts.
+		var why string
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			var err error
+			why, err = delivery.WriterChildRefusedTx(ctx, tx, r.TaskID)
+			return err
+		}); err != nil {
+			return err
+		}
+		if why != "" {
+			return s.fail(ctx, r, "cannot start: "+why)
+		}
+	}
 	image, got, nested, err := s.image(ctx, r)
 	var waiting images.Waiting
 	var refused images.Refused
@@ -2388,6 +2403,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	var repos []delivery.Repository
 	var branch string
 	var bases map[string]string
+	// The Run is kept for its next round once it completes (finish's keep):
+	// its per-Run branch is kept with it.
+	var keepBranch bool
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return err
@@ -2398,7 +2416,8 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		branch, bases = tb.Branch, tb.Bases
 		var own string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(branch, '') FROM runs WHERE id = $1`, r.ID).Scan(&own); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(r.branch, ''), `+keptForNextRound+` FROM runs r WHERE r.id = $1`, r.ID).
+			Scan(&own, &keepBranch); err != nil {
 			return err
 		}
 		if own != "" {
@@ -2488,8 +2507,12 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if err != nil {
 			return nil, "", fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
 		}
-		// Best effort: a leftover per-Run branch is clutter, not a fault.
-		_ = gh.DeleteBranch(ctx, slug, res.Branch)
+		// Best effort: a leftover per-Run branch is clutter, not a fault. One
+		// kept for the writer's next round stays: its next push's lease is
+		// what it pushed there (releaseBranch deletes it later).
+		if !keepBranch {
+			_ = gh.DeleteBranch(ctx, slug, res.Branch)
+		}
 		// The head is the branch's (a merge, when the base was merged in
 		// under the Run); the change is the Run's own, base...commit.
 		heads[repo.Name] = delivery.RunHead{SHA: adv.Head, ChangedPaths: db.NonNil(acc.Paths), Base: base}
@@ -2623,6 +2646,15 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 			return err
 		}
 	}
+	var branch string
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT CASE WHEN `+keptBranch+` THEN r.push_branch ELSE '' END FROM runs r WHERE r.id = $1`, r.ID).Scan(&branch)
+	}); err != nil {
+		return err
+	}
+	if branch != "" {
+		s.releaseBranch(ctx, r.Org, r.TaskID, branch)
+	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL
 			WHERE id = $1 AND status IN ('aborted', 'failed')`, r.ID)
@@ -2642,10 +2674,15 @@ const retireBatch = 100
 // (artifacts_due_at cleared). Its own loop, apart from Sweep: a slow lux
 // holds this one, never the live Runs. Returns how many it retired.
 func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
-	type done struct{ ID, Org, LuxRunID string }
+	type done struct {
+		ID, Org, LuxRunID string
+		// A writer kept for a next round left its per-Run branch (publish).
+		TaskID, KeptBranch string
+	}
 	var todo []done
 	if err := s.DB.InSystem(ctx, "lux-retire", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.lux_run_id FROM runs r
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.lux_run_id, COALESCE(r.task_id, ''),
+				CASE WHEN `+keptBranch+` THEN r.push_branch ELSE '' END FROM runs r
 			WHERE `+retirable+` AND `+sweptRuns+` ORDER BY r.ended_at LIMIT $1`, retireBatch)
 		if err != nil {
 			return err
@@ -2676,6 +2713,9 @@ func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 				return
 			}
 			// A refusal (unknown, already terminated) is as good as done.
+			if d.KeptBranch != "" {
+				s.releaseBranch(ctx, d.Org, d.TaskID, d.KeptBranch)
+			}
 			errs[i] = s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
 				_, err := tx.Exec(ctx, `UPDATE runs r SET lux_stop_reason = 'cancel' WHERE r.id = $1 AND `+retirable, d.ID)
 				return err
@@ -2695,11 +2735,47 @@ func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 const retirable = `(r.status = 'completed' AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 	AND r.artifacts_due_at IS NULL AND NOT (r.keep AND COALESCE(r.kept_until > now(), false)))`
 
-// keptForNextRound (SQL, over runs r): a completed reviewer or tester,
-// outside an integration, of a task whose delivery policy goes on from the
-// previous round (delivery.RoundContinues; resumeRounds, the project's over
-// its organization's over the factory's).
-var keptForNextRound = `(r.phase IN ('review', 'test') AND r.source_kind IS NULL AND r.lux_run_id IS NOT NULL
+// keptBranch (SQL, over runs r): a writer whose per-Run branch publish
+// left for its next round: one finish kept (kept_until set, released or
+// not), or a continuation, which pushes to its predecessor's; and any
+// writer that failed or was aborted, since publish may have skipped the
+// delete for a finish that then failed (another repository's advance, a
+// refused resolution).
+const keptBranch = `(r.phase IN ('implement', 'fix') AND COALESCE(r.push_branch, '') <> ''
+	AND (r.kept_until IS NOT NULL OR r.continues_how IS NOT DISTINCT FROM 'resume' OR r.status IN ('failed', 'aborted')))`
+
+// releaseBranch deletes a released writer's per-Run branch from each
+// repository the task may change. Best effort, as publish's delete: one
+// GitHub refuses or no longer has is clutter at worst.
+func (s *Syncer) releaseBranch(ctx context.Context, org, taskID, branch string) {
+	if s.Forges == nil || taskID == "" {
+		return
+	}
+	gh, err := s.Forges.For(ctx, org)
+	if err != nil || gh == nil {
+		return
+	}
+	var repos []delivery.Repository
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		repos, err = delivery.TaskRepositories(ctx, tx, taskID)
+		return err
+	}); err != nil {
+		return
+	}
+	for _, repo := range repos {
+		if slug := forge.SlugFromURL(repo.URL); slug != "" && repo.Access != "read" {
+			_ = gh.DeleteBranch(ctx, slug, branch)
+		}
+	}
+}
+
+// keptForNextRound (SQL, over runs r): a completed reviewer, tester,
+// implementer or fixer, outside an integration, of a task whose delivery
+// policy goes on from the previous round (delivery.RoundContinues;
+// resumeRounds, the project's over its organization's over the factory's).
+// A writer's per-Run branch is kept with it: lux's push lease is that
+// branch's last push (publish, releaseBranch).
+var keptForNextRound = `(r.phase IN ('review', 'test', 'implement', 'fix') AND r.source_kind IS NULL AND r.lux_run_id IS NOT NULL
 	AND NOT (r.pr_feedback @> '[{"source":"integration"}]')
 	AND COALESCE((SELECT (p.delivery_policy->>'resumeRounds')::boolean FROM projects p WHERE p.id = r.project_id),
 		(SELECT (o.delivery_policy->>'resumeRounds')::boolean FROM organizations o WHERE o.id = r.organization_id), ` +
@@ -3196,6 +3272,15 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 		return false, nil
 	}
 	var upTo *time.Time
+	// A continuing writer hears its round only on the round's head; one
+	// whose checkout did not get there starts fresh in its slot.
+	if hold, why, err := s.roundSyncLanded(ctx, r); hold || err != nil {
+		return false, err
+	} else if why != "" {
+		if replaced, err := s.replaceRound(ctx, r, why); replaced || err != nil {
+			return true, err
+		}
+	}
 	if r.conductor() {
 		// A wake note waits for the conductor's checkout to be brought
 		// current, and says how that went (edits.go).

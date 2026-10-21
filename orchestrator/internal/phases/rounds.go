@@ -48,12 +48,71 @@ func (s *Syncer) roundRefs(ctx context.Context, r phaseRun) ([]lux.SyncRef, erro
 			if to == "" || !slices.Contains(held, name) || lookupBase(r.BaseSHAs, repos, repo.Name) == to {
 				continue
 			}
-			refs = append(refs, lux.SyncRef{Repo: name, Ref: to})
+			refs = append(refs, lux.SyncRef{Repo: name, Ref: to, Mode: roundSyncMode(r)})
 		}
 		return nil
 	})
 	slices.SortFunc(refs, func(a, b lux.SyncRef) int { return strings.Compare(a.Repo, b.Repo) })
 	return refs, err
+}
+
+// roundSyncMode is how a continuation's checkout moves: a fixer's is at
+// its own pushed commit, which the round's head descends from unless
+// someone else moved the branch, and must never be reset (fast-forward);
+// a reviewer's or tester's changes nothing (move).
+func roundSyncMode(r phaseRun) string {
+	if delivery.Publishes[r.Phase] {
+		return lux.SyncFastForward
+	}
+	return ""
+}
+
+// evRoundUnsynced is a continuing writer's checkout that its resume's sync
+// did not bring to the round's head. Payload: {repo, status, error?}.
+const evRoundUnsynced = "run.round.unsynced"
+
+// roundSyncLanded is, for a continuing writer not yet taken back up, why
+// its checkout is not at the round's head ("" when it is, or it is not
+// one), and whether its round message waits for the sync's report. The
+// wait is bounded by syncWait from when the stream reported the resumed
+// epoch running (run_resumes.running_at: the row is the continuation's
+// own, so any is since the handover); before that it holds. A running
+// continuation whose resume went untimed (that row is best effort) is
+// bounded from its round message instead.
+func (s *Syncer) roundSyncLanded(ctx context.Context, r phaseRun) (hold bool, why string, err error) {
+	if !delivery.Publishes[r.Phase] || r.talker() {
+		return false, "", nil
+	}
+	var expired *bool
+	var unsynced *string
+	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT
+				(SELECT e.payload->>'repo' || ' ' || (e.payload->>'status') FROM events e
+				 WHERE e.run_id = r.id AND e.event_type = $2 ORDER BY e.cursor LIMIT 1),
+				COALESCE((SELECT max(rr.running_at) FROM run_resumes rr WHERE rr.run_id = r.id),
+					CASE WHEN r.lux_state = 'running' THEN (SELECT min(d.created_at) FROM directives d
+						WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL) END)
+					<= now() - make_interval(secs => $3)
+			FROM runs r WHERE r.id = $1 AND r.continues_how = 'resume' AND r.finishes = 0`,
+			r.ID, evRoundUnsynced, s.syncWait().Seconds()).Scan(&unsynced, &expired)
+	})
+	if db.IsNotFound(err) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	if unsynced != nil {
+		return false, "its checkout could not be brought to the round's head (" + *unsynced + ")", nil
+	}
+	refs, err := s.roundRefs(ctx, r)
+	if err != nil || len(refs) == 0 {
+		return false, "", err
+	}
+	if expired != nil && *expired {
+		return false, "its checkout's sync to the round's head was never reported", nil
+	}
+	return true, "", nil
 }
 
 // roundSecrets refuses a continuation's resume when its phase is now given
@@ -122,6 +181,21 @@ func syncedBase(ctx context.Context, tx pgx.Tx, r phaseRun, data map[string]any)
 	repo, _ := data["repo"].(string)
 	to, _ := data["to"].(string)
 	status, _ := data["status"].(string)
+	if mode, _ := data["mode"].(string); mode == lux.SyncFastForward && repo != "" && status != "fast-forward" && status != "up-to-date" {
+		// Kept, ahead, diverged or failed: someone else moved the branch
+		// (a person's push, the base merged in). The checkout is not the
+		// round's, and the continuation is replaced (roundSyncLanded).
+		var continued bool
+		if err := tx.QueryRow(ctx, `SELECT continues_how IS NOT DISTINCT FROM 'resume' FROM runs WHERE id = $1`, r.ID).Scan(&continued); err != nil || !continued {
+			return err
+		}
+		payload := map[string]any{"repo": repo, "status": status}
+		if e, _ := data["error"].(string); e != "" {
+			payload["error"] = e
+		}
+		_, err := ledger.Append(ctx, tx, r.ref().Event(evRoundUnsynced, ledger.ActorSystem, payload))
+		return err
+	}
 	if repo == "" || !isSHA(to) || status == "failed" {
 		return nil
 	}

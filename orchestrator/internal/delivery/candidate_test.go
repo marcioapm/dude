@@ -11,16 +11,30 @@ import (
 
 // A replayed BeforePR integration fix keeps the candidate decision its Run
 // was created with, whatever the other repository's pull request did since:
-// the Run publishes to the branch it was created for.
+// the Run publishes to the branch it was created for. A replayed pull
+// request fix, with no integration, keeps its candidate too.
 func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
+	beforePR := &Integration{Repo: "web", Base: "main", Head: "bbb", BaseHead: "ccc", BeforePR: true}
 	for _, tc := range []struct {
-		name, prState, runBranch string
-		candidate                bool
+		name, prState string
+		integration   *Integration
+		// onCandidate creates the Run on the delivery's candidate branch,
+		// else on the task branch (runs.branch NULL).
+		onCandidate, candidate bool
 	}{
-		{"created on a candidate, the pull request merged since", "merged", "dude/wi_e/attempt-1-candidate", true},
-		{"created on the task branch, a pull request open now", "open", "", false},
+		{"created on a candidate, the pull request merged since", "merged", beforePR, true, true},
+		{"created on the task branch, a pull request open now", "open", beforePR, false, false},
+		{"a pull request fix, not an integration, created on a candidate", "open", nil, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Branch: "dude/wi_e/attempt-1", PullRequestIDs: []string{"pr_t"},
+				Heads: map[string]string{"target": "aaa", "web": "bbb"}, Integration: tc.integration,
+				// A pull request fix is charged its round: one is left.
+				Policy: Policy{MaxPRFixIterations: 1}}
+			var runBranch string
+			if tc.onCandidate {
+				runBranch = st.candidateBranch()
+			}
 			app, owner := dbtest.Open(t)
 			org := dbtest.Org(t, owner)
 			ctx := context.Background()
@@ -34,15 +48,12 @@ func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
 				{`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
 					VALUES ('pr_t', $1, 'prj_e', 'wi_e', 'repo_t', 1, 'https://github.com/acme/target/pull/1', 'dude/wi_e/attempt-1', 'main', 'aaa', 'Greet', $2::pull_request_state)`, []any{tc.prState}},
 				{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
-					VALUES ('run_fix', $1, 'prj_e', 'wi_e', 1, 'fix', 'implementer', 'agent', 'pending', '{"target":"aaa","web":"bbb"}', 'wf_e:prfix:1', NULLIF($2, ''))`, []any{tc.runBranch}},
+					VALUES ('run_fix', $1, 'prj_e', 'wi_e', 1, 'fix', 'implementer', 'agent', 'pending', '{"target":"aaa","web":"bbb"}', 'wf_e:prfix:1', NULLIF($2, ''))`, []any{runBranch}},
 			} {
 				if _, err := owner.Exec(ctx, s.sql, append([]any{org}, s.args...)...); err != nil {
 					t.Fatal(err)
 				}
 			}
-			st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Branch: "dude/wi_e/attempt-1", PullRequestIDs: []string{"pr_t"},
-				Heads:       map[string]string{"target": "aaa", "web": "bbb"},
-				Integration: &Integration{Repo: "web", Base: "main", Head: "bbb", BaseHead: "ccc", BeforePR: true}}
 			raw, err := json.Marshal(st)
 			if err != nil {
 				t.Fatal(err)
@@ -58,6 +69,9 @@ func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
 			}
 			if (got.Candidate != nil) != tc.candidate {
 				t.Fatalf("candidate %+v, want one: %v", got.Candidate, tc.candidate)
+			}
+			if got.Candidate != nil && got.Candidate.Branch != runBranch {
+				t.Fatalf("candidate on %q, want the Run's %q", got.Candidate.Branch, runBranch)
 			}
 		})
 	}

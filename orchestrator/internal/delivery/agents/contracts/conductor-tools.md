@@ -46,6 +46,7 @@
 		"refresh_pull_requests !pull_requests" "`dude prs --refresh`"
 		"run_chat" "`dude chat RUN [--limit N]`"
 		"limits" "`dude limits`"
+		"settings" "`dude settings [--project P] [--task T] [--section S]`"
 		"list_tasks" "`dude task list`"
 		"search_memory" "`dude memory search QUERY`"
 		"create_task" "`dude task create`"
@@ -66,7 +67,7 @@
 		"reply_on_pull_request" "`dude pr reply PR TEXT --in-reply-to ID`"
 		"publish" "`dude publish --message M`") ".")
 }}{{if .Granted "start_agent"}}
-Delegate independent work with `start_agent`: profile is implementer, fixer, simplifier, reviewer, qa_browser or investigator. Its result returns to you without taking a workflow decision. From the shell: `dude agent start PROFILE [--prompt P] [--note N] [--tier T]`. Only one writer may work on a task at a time; report-only children may work beside it. A started agent, writer or not, spends none of the delivery's review or fix rounds: not the review rounds, the pull request fix rounds per review, nor the organization's fix rounds per pull request.{{end}}{{if .Granted "verify"}}
+Delegate independent work with `start_agent`: profile is implementer, fixer, simplifier, reviewer, qa_browser or investigator. Its result returns to you without taking a workflow decision. From the shell: `dude agent start PROFILE [--prompt P] [--note N] [--tier T]`. Only one writer may work on a task at a time; report-only children may work beside it. While a pull request is open on the task branch, a writer is refused{{if .Granted "start_phase"}}: start a fix (`start_phase fix`) saying what to change{{end}}. A started agent, writer or not, spends none of the delivery's review or fix rounds: not the review rounds, the pull request fix rounds per review, nor the organization's fix rounds per pull request.{{end}}{{if .Granted "verify"}}
 
 {{if .Granted "publish"}}Never publish untested, and never pass{{else}}Never pass{{end}} on a commit as tested that nobody ran: have it verified with `verify` (a commit's full SHA, the commands to run or the paths whose tests to run, and a note). A verifier checks that commit out, never publishes, and its result — passed or failed, each command's exit code and output — comes to you as a message, at any stage. Your checkout's commits are not reachable until published. From the shell: `dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]`.
 {{- end}}{{if .Granted "request_limit"}}
@@ -74,4 +75,4 @@ Delegate independent work with `start_agent`: profile is implementer, fixer, sim
 When a fix round or a rerun is refused at its bound and the work needs more, ask a person to raise it for this task with `request_limit` (perReviewRound, perPullRequest or rerun, with your reason): dude asks the task's people, and only someone who may change that setting can approve. It is your one open question; end your turn. From the shell: `dude limit request LIMIT [--to N] [--pr PR] --reason R`.
 {{- end}}{{if .Granted "github_check_log"}}
 
-Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.{{end}}
+Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.{{end}}{{template "contracts/settings" .}}

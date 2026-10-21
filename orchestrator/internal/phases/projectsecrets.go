@@ -29,14 +29,8 @@ const EvSecretsGiven = "run.secrets.given"
 const projectSecretAs = "env"
 
 // secretRecipient is the recipient a phase's Runs are, by the settings role
-// they run as; "" for a Run that is given no project secret.
-var secretRecipient = map[string]string{
-	"implementer": "implementer",
-	"fixer":       "fixer",
-	"simplifier":  "simplifier",
-	"reviewer":    "reviewer",
-	"qa_browser":  "tester",
-}
+// they run as (delivery.SecretRecipients).
+var secretRecipient = delivery.SecretRecipients
 
 // SecretRecipientFor is the recipient a Run of phase and role is; "" for
 // the conductor, brainstorm and any phase no recipient names.
