@@ -10,10 +10,12 @@ import { Router } from "../../apps/control-plane/src/api/router.ts";
 import { registerSettingsRoutes } from "../../apps/control-plane/src/api/routes/settings.ts";
 import { registerModelRoutes } from "../../apps/control-plane/src/api/routes/models.ts";
 import { registerJudgementRoutes } from "../../apps/control-plane/src/api/routes/judgements.ts";
+import { registerImageRoutes } from "../../apps/control-plane/src/api/routes/images.ts";
 import { registerMemoryRoutes } from "../../apps/control-plane/src/api/routes/memory.ts";
 import { registerServerRoutes } from "../../apps/control-plane/src/api/routes/servers.ts";
 import { previewSettingsSchema } from "../../packages/domain/src/servers.ts";
 import { agentModelConfigSchema, deliveryPolicySchema } from "../../packages/domain/src/hierarchy.ts";
+import { imagePatchSchema, newImageSchema } from "../../packages/domain/src/images.ts";
 import { modelTierInputSchema } from "../../packages/domain/src/tiers.ts";
 
 const [org, person, path] = process.argv.slice(2);
@@ -25,6 +27,13 @@ registerModelRoutes(router);
 registerJudgementRoutes(router);
 registerServerRoutes(router);
 registerMemoryRoutes(router);
+registerImageRoutes(router);
+if (path === "/schemas/images") {
+  const keys = (s: { shape: object }) => Object.fromEntries(Object.keys(s.shape).map(k => [k, true]));
+  process.stdout.write(JSON.stringify({ new: keys(newImageSchema), patch: keys(imagePatchSchema) }));
+  await closePool();
+  process.exit(0);
+}
 if (path === "/schemas/roles" || path === "/schemas/delivery") {
   const schema = path === "/schemas/roles" ? agentModelConfigSchema : deliveryPolicySchema;
   process.stdout.write(JSON.stringify(Object.fromEntries(Object.keys(schema.shape).map(k => [k, true]))));
