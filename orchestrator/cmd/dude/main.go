@@ -34,7 +34,7 @@
 //	                                      a conductor's: the task's pull requests
 //	dude chat RUN [--limit N]             a conductor's: a Run's Chat and open question
 //	dude limits                           a conductor's: the task's limits, and what is used
-//	dude settings [--project P] [--task T] [--section S]
+//	dude settings [--project P] [--task T] [--section S] [--limit N] [--cursor C]
 //	                                      dude's settings here, and where each is set
 //	dude limit request LIMIT [--to N] [--pr PR] --reason R
 //	                                      a conductor's: ask the task's people to raise one
@@ -476,7 +476,9 @@ func run(args []string, out io.Writer) error {
 	case "settings":
 		project := fs.String("project", "", "a project's id, key or name")
 		task := fs.String("task", "", "a task's key or id: what its delivery is held to")
-		section := fs.String("section", "", "delivery, roles, prompts, github, network, capabilities or machines")
+		section := fs.String("section", "", "delivery, roles, prompts, github, network, capabilities, machines, models or judgements")
+		limit := fs.Int("limit", 0, "catalogue page size: default 20, maximum 50")
+		cursor := fs.String("cursor", "", "catalogue next cursor")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
@@ -484,10 +486,13 @@ func run(args []string, out io.Writer) error {
 			return errors.New(settingsUsage)
 		}
 		body := map[string]any{}
-		for k, v := range map[string]string{"project": *project, "task": *task, "section": *section} {
+		for k, v := range map[string]string{"project": *project, "task": *task, "section": *section, "cursor": *cursor} {
 			if v != "" {
 				body[k] = v
 			}
+		}
+		if *limit != 0 {
+			body["limit"] = *limit
 		}
 		return show(out, *asJSON, call("settings", body))
 	case "limit request":
@@ -995,7 +1000,7 @@ func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 // prsUsage is dude prs's usage error: --feedback repeats, one ID each.
 const prsUsage = "usage: dude prs [--refresh | [--feedback ID]...]"
 
-const settingsUsage = "usage: dude settings [--project P] [--task T] [--section S]"
+const settingsUsage = "usage: dude settings [--project P] [--task T] [--section S] [--limit N] [--cursor C]"
 
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
 
@@ -1063,7 +1068,7 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              max 100) oldest first, and the question it waits on
   dude limits                                a conductor's: the limits the task is held to, where each
                                              is set, and how much is used
-  dude settings [--project P] [--task T] [--section S]
+  dude settings [--project P] [--task T] [--section S] [--limit N] [--cursor C]
                                              dude's settings as they apply here, each with where it
                                              is set; --task adds what that task's delivery is held to
   dude limit request LIMIT [--to N] [--pr PR] --reason "…"

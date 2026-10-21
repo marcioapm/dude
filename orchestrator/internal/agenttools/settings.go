@@ -27,10 +27,12 @@ type settingsIn struct {
 	Project string `json:"project,omitempty"`
 	Task    string `json:"task,omitempty"`
 	Section string `json:"section,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Cursor  string `json:"cursor,omitempty"`
 }
 
 // The sections settings answers, in its output's order.
-var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines"}
+var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements"}
 
 // maxLinkedScopes is the most linked projects a session's unnamed read
 // shows a scope each for.
@@ -143,6 +145,8 @@ type settingsOut struct {
 	GitHub       any               `json:"github,omitempty"`
 	Capabilities []capabilitiesOut `json:"capabilities,omitempty"`
 	MachineSizes []sizeOut         `json:"machineSizes,omitempty"`
+	Models       *modelsOut        `json:"models,omitempty"`
+	Judgements   *judgementsOut    `json:"judgements,omitempty"`
 }
 
 // settingsRoles are the roles the settings pages list, in their order.
@@ -220,10 +224,22 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			return out, err
 		}
 	}
-	if want("roles") {
+	if want("roles") || want("models") {
 		if refs.tiers, err = delivery.LoadTiers(ctx, tx); err != nil {
 			return out, err
 		}
+	}
+	if want("models") {
+		if out.Models, err = modelCatalogue(w, refs.tiers, c.Org, in); err != nil {
+			return out, err
+		}
+	}
+	if want("judgements") {
+		if out.Judgements, err = readJudgements(ctx, tx, w); err != nil {
+			return out, err
+		}
+	}
+	if want("roles") {
 		if refs.images, err = imageNames(ctx, tx); err != nil {
 			return out, err
 		}
@@ -432,7 +448,7 @@ func settingsText(name string, data any) string { return settingsTexts[name].Ren
 
 var settingsTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
-	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit"} {
+	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked", "deployment", "session-child-prompt", "session-child-limit", "catalogue-limit", "catalogue-cursor"} {
 		out[name] = delivery.MustText("results/settings/" + name)
 	}
 	return out

@@ -2,6 +2,10 @@
 
 {{- define "results/settings/sources"}}source says where each value is set: dude (its built-in default, used while nobody sets one), organization (the organisation's Settings), project (the project's Settings, over the organisation's) or session (the session's own choice, over the organisation's). A person changes a value in Settings; you cannot.{{end}}
 
+{{- define "results/settings/catalogue-limit"}}catalogue limit must be between 1 and 50{{end}}
+
+{{- define "results/settings/catalogue-cursor"}}invalid settings catalogue cursor for this organisation{{end}}
+
 {{- define "results/settings/session-child-prompt"}}per-run child prompt, not saved org/project prompts{{end}}
 
 {{- define "results/settings/session-child-limit"}}not enforced for session investigators{{end}}

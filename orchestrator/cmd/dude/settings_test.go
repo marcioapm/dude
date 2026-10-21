@@ -28,18 +28,18 @@ func TestDudeSettingsPassesItsFlags(t *testing.T) {
 	t.Setenv("LUX_SERVICE_DUDE", "")
 	t.Setenv("DUDE_TOOLS_URL", srv.URL)
 	var out bytes.Buffer
-	if err := run([]string{"settings", "--project", "API", "--task", "API-3", "--section", "delivery"}, &out); err != nil {
+	if err := run([]string{"settings", "--project", "API", "--task", "API-3", "--section", "models", "--limit", "50", "--cursor", "opaque"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if err := run([]string{"settings"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 2 || asked[0]["project"] != "API" || asked[0]["task"] != "API-3" || asked[0]["section"] != "delivery" ||
-		len(asked[0]) != 3 || len(asked[1]) != 0 {
+	if len(asked) != 2 || asked[0]["project"] != "API" || asked[0]["task"] != "API-3" || asked[0]["section"] != "models" || asked[0]["limit"] != 50.0 || asked[0]["cursor"] != "opaque" ||
+		len(asked[0]) != 5 || len(asked[1]) != 0 {
 		t.Fatalf("calls: %v", asked)
 	}
 	if err := run([]string{"settings", "delivery"}, &out); err == nil ||
-		err.Error() != "usage: dude settings [--project P] [--task T] [--section S]" {
+		err.Error() != "usage: dude settings [--project P] [--task T] [--section S] [--limit N] [--cursor C]" {
 		t.Errorf("an argument: %v", err)
 	}
 	if len(asked) != 2 {
