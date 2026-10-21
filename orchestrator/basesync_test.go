@@ -21,6 +21,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -216,6 +217,136 @@ func TestBeforePRConflictingBaseIsResolvedReviewedAndTested(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='test' AND status='completed'`, wi); n < 2 {
 		t.Fatalf("verification was not repeated: %d", n)
+	}
+	// No pull request is open: the integration publishes to the task branch itself.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND branch LIKE '%-candidate'`, wi); n != 0 {
+		t.Fatalf("%d Runs on a candidate with no pull request open\n%s", n, w.describeRuns())
+	}
+}
+
+// The merge before a pull request opens, for a repository with none yet
+// (web) beside one whose pull request is open and approved (target): the
+// integration fixer also changes target, and target's pull request moves
+// only once that change is reviewed and tested, by its promotion. web's
+// pull request opens at the checked head too. With target's pull request
+// closed first, nothing is left to keep the merge from: no candidate, and
+// web's pull request still opens at a reviewed and tested head.
+func TestBeforePRIntegrationBesideAnOpenPullRequestIsCheckedOnACandidate(t *testing.T) {
+	t.Run("open", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, false) })
+	t.Run("closed", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, true) })
+}
+
+func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
+	w := conducting(t)
+	w.onModel("qa_browser", "fake/scripted")
+	// The conductor's tools and sync_base for the integration fixer.
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+		SyncPullRequest: w.prs.Sync, SyncBase: w.syncer.SyncBase}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	arm := w.firstReviewAfter()
+	inLoop := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := inLoop(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.integration"] == "true":
+			// Merges web's base in its checkout, and changes target as well.
+			b.Commit = map[string]string{"target:INTEGRATION.md": "touched by the integration\n"}
+		case labels["dude.phase"] == "fix":
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	task := w.prOpen(w.task(), prAt{test: true})
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main') ON CONFLICT DO NOTHING`, "repo_web_"+w.org, w.org, w.project)
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+		VALUES ($1, $2, $3, 'write')`, w.org, task, "repo_web_"+w.org)
+	setPolicy(w, task, `{"maxReviewIterations":9}`)
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	arm()
+
+	// A fix that changes web first: web gets no pull request without the
+	// person's Open or Draft.
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the decision before the pull request", func() bool {
+		switch w.decisionAt(task) {
+		case delivery.PointReviewed, delivery.PointFixed:
+			w.must(task, "decide", `{"action":"next"}`)
+		case delivery.PointBeforePR:
+			return true
+		}
+		return false
+	})
+
+	branch := w.gh.Pull(1).Head
+	w.gh.Review(1, "ana", "APPROVED")
+	// web's base moves under it, conflicting: GitHub cannot merge it in.
+	w.commitFileIn(w.web.Repo, "main", "FIX.md", "base intent\n", "Another task's change")
+	// With target closed, no pull request is open while the fixer works:
+	// it publishes to web's task branch, and web's pull request opens at
+	// what was checked there (checkedAt below).
+	checkTarget, checkWeb := func() {}, func() {}
+	if closed {
+		w.gh.Close(1)
+		w.sync()
+	} else {
+		checkTarget = w.prShowsOnlyChecked(t, task, "target", branch, true)
+		checkWeb = w.prShowsOnlyChecked(t, task, "web", branch, true)
+	}
+	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed and tested; web is new."}`)
+	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
+		t.Fatalf("answer: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+
+	w.until("web's pull request open, and waiting on both", func() bool {
+		w.sync()
+		opened := len(w.web.Pulls()) == 1 && w.count(integrationCompleted, task) == 1
+		if r := w.escalationReason(task); r != "" {
+			// target closed and web open: a person decides what is left.
+			if closed && r == "pull_request_closed" && opened {
+				return true
+			}
+			t.Fatalf("escalated %s\n%s", r, w.describeRuns())
+		}
+		if w.decisionAt(task) == delivery.PointReviewed {
+			w.must(task, "decide", `{"action":"next"}`)
+		}
+		return opened && w.waitingOnPR(task)
+	})
+	checkTarget()
+	checkWeb()
+	want := 1
+	if closed {
+		want = 0
+	}
+	if n := w.count(integrationRuns+` AND branch LIKE '%-candidate'`, task); n != want {
+		t.Errorf("integration Runs on the candidate %d, want %d\n%s", n, want, w.describeRuns())
+	}
+	// Every Run that publishes from the integration on goes to the candidate.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('implement', 'fix', 'simplify')
+		AND created_at >= (SELECT min(created_at) FROM runs WHERE task_id = $1 AND pr_feedback::text LIKE '%Base integration%')
+		AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task); !closed && n != 0 {
+		t.Errorf("%d publishing Runs of the integration's loop off the candidate", n)
+	}
+	head := w.web.SHA(w.web.Pull(1).Head)
+	if missing := w.checkedAt(task, "web", head, true); missing != "" {
+		t.Errorf("web's pull request opened at %s with no %s there", head, missing)
+	}
+	if out := gitOut(t, w.web.Repo, "rev-list", "--count", head+"..main"); out != "0" {
+		t.Errorf("web's pull request lacks its base: %s behind", out)
+	}
+	if got := gitOut(t, w.gh.Repo, "show", branch+":INTEGRATION.md"); got != "touched by the integration" {
+		t.Errorf("target's pull request does not show the integration's change: %q", got)
 	}
 }
 

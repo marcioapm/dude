@@ -119,13 +119,15 @@ func (s *Store) unreviewedHeads(ctx context.Context, org string, st *State, c *C
 	return out, err
 }
 
-// runBaseRefs is the commit per repository a Run was created to start from.
-func (s *Store) runBaseRefs(ctx context.Context, org, runID string) (map[string]string, error) {
+// runBaseRefs is the commit per repository a Run was created to start
+// from, and the branch it publishes to ("" for the task branch).
+func (s *Store) runBaseRefs(ctx context.Context, org, runID string) (map[string]string, string, error) {
 	var heads map[string]string
+	var branch string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT base_refs FROM runs WHERE id = $1`, runID).Scan(&heads)
+		return tx.QueryRow(ctx, `SELECT base_refs, COALESCE(branch, '') FROM runs WHERE id = $1`, runID).Scan(&heads, &branch)
 	})
-	return heads, err
+	return heads, branch, err
 }
 
 // writableSlugs is each repository the task may change, by name, as the

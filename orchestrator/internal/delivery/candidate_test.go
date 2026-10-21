@@ -1,6 +1,67 @@
 package delivery
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
+)
+
+// A replayed BeforePR integration fix keeps the candidate decision its Run
+// was created with, whatever the other repository's pull request did since:
+// the Run publishes to the branch it was created for.
+func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
+	for _, tc := range []struct {
+		name, prState, runBranch string
+		candidate                bool
+	}{
+		{"created on a candidate, the pull request merged since", "merged", "dude/wi_e/attempt-1-candidate", true},
+		{"created on the task branch, a pull request open now", "open", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, owner := dbtest.Open(t)
+			org := dbtest.Org(t, owner)
+			ctx := context.Background()
+			for _, s := range []struct {
+				sql  string
+				args []any
+			}{
+				{`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`, nil},
+				{`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`, nil},
+				{`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_t', $1, 'prj_e', 'target', 'https://github.com/acme/target')`, nil},
+				{`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
+					VALUES ('pr_t', $1, 'prj_e', 'wi_e', 'repo_t', 1, 'https://github.com/acme/target/pull/1', 'dude/wi_e/attempt-1', 'main', 'aaa', 'Greet', $2::pull_request_state)`, []any{tc.prState}},
+				{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
+					VALUES ('run_fix', $1, 'prj_e', 'wi_e', 1, 'fix', 'implementer', 'agent', 'pending', '{"target":"aaa","web":"bbb"}', 'wf_e:prfix:1', NULLIF($2, ''))`, []any{tc.runBranch}},
+			} {
+				if _, err := owner.Exec(ctx, s.sql, append([]any{org}, s.args...)...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Branch: "dude/wi_e/attempt-1", PullRequestIDs: []string{"pr_t"},
+				Heads:       map[string]string{"target": "aaa", "web": "bbb"},
+				Integration: &Integration{Repo: "web", Base: "main", Head: "bbb", BaseHead: "ccc", BeforePR: true}}
+			raw, err := json.Marshal(st)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := &steps{s: &Store{DB: app}, forges: forgeOf{}}
+			res, err := w.prFix(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, State: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := res.State.(*State)
+			if len(got.PendingRunIDs) != 1 || got.PendingRunIDs[0] != "run_fix" {
+				t.Fatalf("waits on %v, want the existing run_fix", got.PendingRunIDs)
+			}
+			if (got.Candidate != nil) != tc.candidate {
+				t.Fatalf("candidate %+v, want one: %v", got.Candidate, tc.candidate)
+			}
+		})
+	}
+}
 
 // A pull request's fix is checked on a branch of its own beside the task
 // branch, which a run's own branch name can never be.
