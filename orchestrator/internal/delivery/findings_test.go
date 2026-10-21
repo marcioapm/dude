@@ -272,3 +272,71 @@ func TestADoneWhenLineStaysInTheDescription(t *testing.T) {
 		t.Errorf("finding = %+v", got)
 	}
 }
+
+// A question document is no finding, even one that also carries a title and
+// a blocking severity: it goes to a person, never a fixer.
+func TestAQuestionIsNotAFinding(t *testing.T) {
+	reply := "```yaml\nseverity: high\ntitle: Kept\n```\n---\n" +
+		"```yaml\nquestion: Is the export meant to include voided invoices?\ntitle: Voided invoices\nseverity: blocking\n```\n"
+	if got := ParseFindings(reply); len(got) != 1 || got[0].Title != "Kept" {
+		t.Errorf("findings = %+v, want only Kept", got)
+	}
+	if got := ParseQuestions(reply); len(got) != 1 || got[0].Question != "Is the export meant to include voided invoices?" {
+		t.Errorf("questions = %+v", got)
+	}
+}
+
+func TestQuestionFieldsAreRead(t *testing.T) {
+	reply := "Two things I could not establish.\n\n```yaml\n" +
+		"question: Which time zone do invoices close in?\n" +
+		"why_it_matters: F2 is blocking only if months close in UTC.\n" +
+		"evidence_checked: Read config/billing.ts and the\n" +
+		"  migrations; neither names a zone.\n" +
+		"needed_from: product\n" +
+		"about: F2\n" +
+		"---\n" +
+		"question: |\n  Is a retry expected\n  after a timeout?\n" +
+		"about: the rounding one\n" +
+		"---\n" +
+		"question: Are refunds in scope?\nabout: \"f3 (the refund path)\"\n" +
+		"---\n" +
+		"question: \"\"\ntitle: Dropped\n" +
+		"---\n" +
+		"verdicts:\n  F1: fixed\n" +
+		"```\n"
+	got := ParseQuestions(reply)
+	want := []ReviewQuestion{
+		{Question: "Which time zone do invoices close in?", Why: "F2 is blocking only if months close in UTC.",
+			Evidence: "Read config/billing.ts and the migrations; neither names a zone.", NeededFrom: "product", About: 2},
+		{Question: "Is a retry expected after a timeout?"},
+		{Question: "Are refunds in scope?", About: 3},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("questions = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("question %d = %+v, want %+v", i+1, got[i], want[i])
+		}
+	}
+	// The empty question's document is still a finding by its title, as
+	// any titled document without a question is.
+	if f := ParseFindings(reply); len(f) != 1 || f[0].Title != "Dropped" {
+		t.Errorf("findings = %+v", f)
+	}
+	if v := ParseVerdicts(reply); len(v) != 1 || !v[0] {
+		t.Errorf("verdicts = %v", v)
+	}
+}
+
+func TestAnUnreadableAboutIsNone(t *testing.T) {
+	for _, about := range []string{"", "about: F0\n", "about: F\n", "about: 2\n", "about: XF2\n"} {
+		got := ParseQuestions("question: Q?\n" + about)
+		if len(got) != 1 || got[0].About != 0 {
+			t.Errorf("%q: questions = %+v, want one about none", about, got)
+		}
+	}
+	if got := ParseQuestions("I have no questions."); len(got) != 0 {
+		t.Errorf("questions = %+v, want none", got)
+	}
+}

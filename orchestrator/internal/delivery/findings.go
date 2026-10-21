@@ -49,16 +49,57 @@ func ParseFindings(output string) []Finding {
 		if isVerdicts(doc) {
 			continue
 		}
-		if f, ok := parseFinding(doc); ok {
+		fields := readFields(doc)
+		// A question goes to a person, never a fixer: one that also carries
+		// a title and a severity (formats mixed) is still no finding.
+		if isQuestion(fields) {
+			continue
+		}
+		if f, ok := parseFinding(fields); ok {
 			findings = append(findings, f)
 		}
 	}
 	return findings
 }
 
-func parseFinding(doc string) (Finding, bool) {
-	fields := readFields(doc)
+func isQuestion(fields map[string]string) bool { return fields["question"] != "" }
 
+// ReviewQuestion is a fact a reviewer could not establish and a person can:
+// About is the n of `about: F<n>` (an earlier finding it was shown), 0 for none.
+type ReviewQuestion struct {
+	Question, Why, Evidence, NeededFrom string
+	About                               int
+}
+
+var aboutFinding = regexp.MustCompile(`(?i)^F(\d+)\b`)
+
+// ParseQuestions reads a reviewer's question documents, in reply order; one
+// with an empty question is dropped.
+func ParseQuestions(output string) []ReviewQuestion {
+	var questions []ReviewQuestion
+	for _, doc := range strings.Split(fenceLine.ReplaceAllString(output, ""), "\n---") {
+		if isVerdicts(doc) {
+			continue
+		}
+		fields := readFields(doc)
+		if !isQuestion(fields) {
+			continue
+		}
+		about := 0
+		if m := aboutFinding.FindStringSubmatch(fields["about"]); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+				about = n
+			}
+		}
+		questions = append(questions, ReviewQuestion{
+			Question: fields["question"], Why: fields["why_it_matters"], Evidence: fields["evidence_checked"],
+			NeededFrom: fields["needed_from"], About: about,
+		})
+	}
+	return questions
+}
+
+func parseFinding(fields map[string]string) (Finding, bool) {
 	// A finding with no title says nothing actionable, whatever else it has.
 	title := fields["title"]
 	if title == "" {
