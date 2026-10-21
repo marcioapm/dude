@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -133,6 +135,114 @@ func TestAFixerOnAnotherSpecDoesNotResumeTheImplementer(t *testing.T) {
 	}
 	if _, ok := projectSecretsOf(specOf(t, w.luxRunsOf("fix")[0].Spec))["FIX_TOKEN"]; !ok {
 		t.Error("the fresh fixer was not given its secret")
+	}
+}
+
+// A writer whose round ended with the head somewhere it did not push (the
+// simplifier published on top) is not taken back up when its lux Run
+// checked the repository out on a branch, as the implementer's does: lux
+// fast-forwards only a detached checkout to a commit, so the resume could
+// never land. The fix after the simplifier's diff's review is a replay of
+// the last fixer — itself the implementer's lux Run resumed — and the
+// implementer's lux Run is not resumed again.
+func TestAWriterOnItsBranchIsReplayedWhenTheHeadMovedPastItsPush(t *testing.T) {
+	w := resuming(t)
+	w.onModel("reviewer", "llm-reviewer")
+	findingOnTheSimplification(w)
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.start(wi, resumingPolicy())
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	writers := w.writerRows(wi)
+	if len(writers) != 3 {
+		t.Fatalf("writers: %+v; want the implementer, its continuation and the fixer after the simplifier", writers)
+	}
+	impl, fix1, fix2 := writers[0], writers[1], writers[2]
+	if fix1.Continues != impl.ID || fix1.How != delivery.ContinuesResume {
+		t.Fatalf("the first fix %+v; want the implementer resumed", fix1)
+	}
+	if fix2.Continues != fix1.ID || fix2.How != delivery.ContinuesReplay {
+		t.Fatalf("the fix after the simplifier %+v; want a replay of %s", fix2, fix1.ID)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'fresh' = 'head_moved'`, fix2.ID); n != 1 {
+		t.Error("the replay's run.created does not say the head moved")
+	}
+	if luxImpl, luxFix := w.luxRunsOf("implement"), w.luxRunsOf("fix"); len(luxImpl) != 1 || luxImpl[0].Resumed != 1 || len(luxFix) != 1 {
+		t.Fatalf("%d implementers (resumed %d), %d fixers submitted; want the implementer resumed once, one fresh fixer",
+			len(luxImpl), luxImpl[0].Resumed, len(luxFix))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type IN ('run.round.unsynced', 'run.restarted')`, wi); n != 0 {
+		t.Errorf("%d unsynced or restarted events; want the replay chosen at the round's creation", n)
+	}
+}
+
+// findingOnTheSimplification has the review of the simplifier's diff (the
+// task's third review decided) raise simplifierFinding, and the next pass
+// it.
+func findingOnTheSimplification(w *world) {
+	scripted := w.lux.Decide
+	var reviews atomic.Int32
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "review" {
+			switch reviews.Add(1) {
+			case 3:
+				return fakelux.Behaviour{Reply: simplifierFinding}
+			case 4:
+				return fakelux.Behaviour{Reply: "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict}
+			}
+		}
+		return scripted(spec)
+	}
+}
+
+// A fixer submitted fresh (here its own secret) is checked out detached at
+// the commit it started from, so after the simplifier moved the branch
+// past its push its lux Run is resumed and fast-forwarded there: a pull
+// request comment's fix takes that fixer back up (prFix goes on from the
+// attempt's last writer).
+func TestAPullRequestFixResumesTheLastFixerFastForwardedPastTheSimplifier(t *testing.T) {
+	w := resuming(t)
+	w.grant("FIX_TOKEN", "fix-test-not-a-real-token", "fixer")
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.start(wi, resumingPolicy())
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	var simplified string
+	_ = w.owner.QueryRow(context.Background(), `SELECT heads->'target'->>'sha' FROM runs WHERE task_id = $1 AND phase = 'simplify'`, wi).Scan(&simplified)
+	if simplified == "" {
+		t.Fatal("the simplifier published nothing")
+	}
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("the pull request's fix completed", func() bool {
+		w.sync()
+		return w.fixes(wi) == 1 && w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb
+			AND status = 'completed'`, wi) == 1
+	})
+	writers := w.writerRows(wi)
+	if len(writers) != 3 {
+		t.Fatalf("writers: %+v; want the implementer, the fresh fixer and the pull request's fix", writers)
+	}
+	fix1, prFix := writers[1], writers[2]
+	if fix1.Continues != writers[0].ID || fix1.How != delivery.ContinuesReplay {
+		t.Fatalf("the first fix %+v; want a replay of the implementer (its own secret)", fix1)
+	}
+	if prFix.Continues != fix1.ID || prFix.How != delivery.ContinuesResume {
+		t.Fatalf("the pull request's fix %+v; want %s resumed", prFix, fix1.ID)
+	}
+	luxFix := w.luxRunsOf("fix")
+	if len(luxFix) != 1 || luxFix[0].Resumed != 1 {
+		t.Fatalf("%d fixers submitted; want one, resumed once", len(luxFix))
+	}
+	if syncs := luxFix[0].ResumeSyncs; len(syncs) != 1 || len(syncs[0]) != 1 || syncs[0][0].Ref != simplified || syncs[0][0].Mode != lux.SyncFastForward {
+		t.Fatalf("resume syncs %v; want a fast-forward to the simplifier's %s", syncs, simplified)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type IN ('run.round.unsynced', 'run.restarted')`, prFix.ID); n != 0 {
+		t.Fatal("the resumed fixer's checkout did not sync")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND base_shas->>'target' = $2
+		AND push_result @> '{"results":[{"status":"pushed"}]}'`, prFix.ID, simplified); n != 1 {
+		t.Fatal("the resumed fixer did not start from the simplifier's head and push")
 	}
 }
 

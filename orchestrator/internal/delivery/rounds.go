@@ -211,10 +211,14 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	if err != nil {
 		return "", err
 	}
-	if p.Kept && sameSpec && in.Tier == "" {
+	moved, err := headMovedTx(ctx, tx, in, p)
+	if err != nil {
+		return "", err
+	}
+	if p.Kept && sameSpec && !moved && in.Tier == "" {
 		return handOverTx(ctx, tx, org, in, p)
 	}
-	if p.Collecting && sameSpec && in.Tier == "" {
+	if p.Collecting && sameSpec && !moved && in.Tier == "" {
 		// Its last exit's files are still being collected onto it: the
 		// handover waits for them, a little.
 		return "", workflow.Wait{After: time.Second, Why: "the previous round's files are still being collected"}
@@ -222,11 +226,42 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	if err := releaseRunTx(ctx, tx, p.ID); err != nil {
 		return "", err
 	}
-	if !sameSpec {
+	switch {
+	case !sameSpec:
 		in.freshReason = "spec_changed"
+	case moved:
+		in.freshReason = "head_moved"
 	}
 	in.Replays = p.ID
 	return createPhaseRunTx(ctx, tx, org, in)
+}
+
+// headMovedTx says whether a writer predecessor's checkout cannot be
+// fast-forwarded to the round's head: lux moves a checkout to a commit
+// only when it is detached, and a lux Run first submitted with no commit
+// for a repository (the implementer of new work) checked that repository
+// out on its branch. Such a checkout is synced only when the head is still
+// where the predecessor's round ended.
+func headMovedTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (bool, error) {
+	if !Publishes[p.Phase] {
+		return false, nil
+	}
+	// The resumed chain's first row is the one its lux Run was submitted for.
+	var submitted map[string]string
+	if err := tx.QueryRow(ctx, `WITH RECURSIVE chain AS (
+			SELECT id, continues_run_id, continues_how, base_refs FROM runs WHERE id = $1
+			UNION ALL
+			SELECT r.id, r.continues_run_id, r.continues_how, r.base_refs FROM runs r JOIN chain c ON r.id = c.continues_run_id
+			WHERE c.continues_how = 'resume')
+		SELECT base_refs FROM chain WHERE continues_how IS DISTINCT FROM 'resume'`, p.ID).Scan(&submitted); err != nil {
+		return false, err
+	}
+	for repo, head := range in.BaseRefs {
+		if submitted[repo] == "" && head != "" && head != p.BaseRefs[repo] {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // SecretRecipients is the project-secret recipient a Run is, by the
