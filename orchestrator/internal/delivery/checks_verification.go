@@ -10,24 +10,28 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// gatedJudgement is one gated Run's latest checks judgement.
+// gatedJudgement is one gated Run's latest checks judgement. Unchanged: the
+// Run's turn changed nothing it could push, so no report was judged.
 type gatedJudgement struct {
-	Role     string
-	Verified bool
-	Skipped  bool
-	Waived   bool
-	Message  string
-	Checks   []struct{ Command, Result, Decision, Reason, CallID string } `json:"checks"`
+	Role      string
+	Verified  bool
+	Skipped   bool
+	Waived    bool
+	Unchanged bool
+	Message   string
+	Checks    []struct{ Command, Result, Decision, Reason, CallID string } `json:"checks"`
 }
 
 // status is a gated Run's outcome as its row in the pull request names it.
-// A waived or skipped Run is never called verified.
+// A waived, skipped or unchanged Run is never called verified.
 func (j gatedJudgement) status() string {
 	switch {
 	case j.Skipped:
 		return "not model-checked"
 	case j.Waived:
 		return "waived"
+	case j.Unchanged:
+		return "no changes; checks not needed"
 	case j.Verified:
 		return "backed"
 	}
@@ -68,22 +72,28 @@ var (
 // first) for a PR, in at most room characters as long as its headline fits:
 // the headline is the weakest of them all (a skip, else any waiver with each
 // reason, else verified), then the newest Run, compactly if its full row does
-// not fit, then older Runs newest-first while they fit. "" for no Runs.
+// not fit, then older Runs newest-first while they fit. "" for no Runs. A
+// Run that changed nothing weakens nothing and backs nothing: with only such
+// Runs the headline says no checks were needed.
 func checksAccountText(runs []gatedJudgement, room int) string {
 	if len(runs) == 0 {
 		return ""
 	}
 	var skipped, unverified bool
 	var waivers []gatedJudgement
+	judged := 0
 	for _, j := range runs {
 		switch {
 		case j.Skipped:
 			skipped = true
 		case j.Waived:
 			waivers = append(waivers, j)
+		case j.Unchanged:
+			continue
 		case !j.Verified:
 			unverified = true
 		}
+		judged++
 	}
 	newest := runs[len(runs)-1]
 	compact := render(checksCompactTmpl, map[string]any{"Role": newest.Role, "Status": newest.status(), "Count": len(newest.Checks)}) + "\n"
@@ -107,6 +117,8 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 		}
 	case unverified:
 		b.WriteString("Checks were not verified; the work was sent back or awaits a person.\n")
+	case judged == 0:
+		b.WriteString("No gated Run changed anything; no checks were needed.\n")
 	default:
 		b.WriteString("Checks were verified against the Run's recorded commands.\n")
 	}

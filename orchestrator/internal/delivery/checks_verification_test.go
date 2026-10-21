@@ -225,3 +225,38 @@ func TestThePullRequestChecksAccountIsBounded(t *testing.T) {
 		t.Errorf("the rows open with %q, want %q", lines[0], want)
 	}
 }
+
+// A Run that changed nothing is shown as such, never as backed: it neither
+// hides an earlier Run's waiver nor turns an unverified account verified,
+// and alone its headline says no checks were needed.
+func TestAnUnchangedRunIsItsOwnStatusInTheChecksAccount(t *testing.T) {
+	unchanged := gatedJudgement{Role: "Simplifier", Verified: true, Unchanged: true}
+	for _, c := range []struct {
+		name string
+		runs []gatedJudgement
+		want string
+	}{{
+		"after a waived implementer",
+		[]gatedJudgement{{Role: "Implementer", Verified: true, Waived: true, Message: "Pre-existing failures on main."}, unchanged},
+		"### Checks\nChecks were waived by a person:\n- Implementer: Pre-existing failures on main.\n\n" +
+			"- **Implementer** — waived\n- **Simplifier** — no changes; checks not needed",
+	}, {
+		"after a skipped implementer",
+		[]gatedJudgement{{Role: "Implementer", Verified: true, Skipped: true}, unchanged},
+		"### Checks\nChecks not model-checked, set a judgement tier in the organisation's settings.\n\n" +
+			"- **Implementer** — not model-checked\n- **Simplifier** — no changes; checks not needed",
+	}, {
+		"after a backed implementer",
+		[]gatedJudgement{{Role: "Implementer", Verified: true}, unchanged},
+		"### Checks\nChecks were verified against the Run's recorded commands.\n\n" +
+			"- **Implementer** — backed\n- **Simplifier** — no changes; checks not needed",
+	}, {
+		"alone",
+		[]gatedJudgement{unchanged},
+		"### Checks\nNo gated Run changed anything; no checks were needed.\n\n- **Simplifier** — no changes; checks not needed",
+	}} {
+		if got := checksAccountText(c.runs, prBodyMax); got != c.want {
+			t.Errorf("%s: the checks account is\n%s\nwant\n%s", c.name, got, c.want)
+		}
+	}
+}

@@ -2129,6 +2129,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	heads := map[string]delivery.RunHead{}
 	branch := ""
 	if pushes {
+		if delivery.ChecksGated[r.Phase] {
+			if refused, err := s.unchangedPushRefused(ctx, r); refused || err != nil {
+				return true, err
+			}
+		}
 		var err error
 		if heads, branch, err = s.publish(ctx, r); err != nil {
 			// A forge that is down or rate-limiting will answer later; a
