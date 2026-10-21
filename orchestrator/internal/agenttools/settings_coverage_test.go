@@ -125,8 +125,21 @@ func TestSettingsModelsAndJudgementsMatchMemberRoutes(t *testing.T) {
 	mustExec(t, f.owner, `UPDATE model_tiers SET description='A safe description', effort='high', position=4 WHERE id='mtr_big'`)
 	mustExec(t, f.owner, `UPDATE model_tiers SET model=NULL, position=7 WHERE id='mtr_small'`)
 	mustExec(t, f.owner, `UPDATE organizations SET judgement_tier_id='mtr_big' WHERE id=$1`, f.org)
+	// Equal positions, ids in the reverse of the names' order.
+	mustExec(t, f.owner, `INSERT INTO model_tiers(id,organization_id,name,model,position) VALUES
+		('mtr_tie_a',$1,'Zeta','z',9),('mtr_tie_b',$1,'mid','m',9),('mtr_tie_c',$1,'Alpha','a',9)`, f.org)
 	page := f.settingsRoute(t, "/v1/models/tiers")
 	out := f.settingsOf(t, token, `{"section":"models"}`)
+	var toolOrder, routeOrder []any
+	for _, v := range field(out, "models", "tiers").([]any) {
+		toolOrder = append(toolOrder, field(v, "id"))
+	}
+	for _, v := range page["tiers"].([]any) {
+		routeOrder = append(routeOrder, field(v, "id"))
+	}
+	if !reflect.DeepEqual(toolOrder, routeOrder) {
+		t.Errorf("order: tool %v, route %v", toolOrder, routeOrder)
+	}
 	// The seeded default tier also has an empty usage array. Record that shape explicitly.
 	rules := make(map[string]coverageRule, len(modelCoverage)+1)
 	for k, v := range modelCoverage {
@@ -227,7 +240,8 @@ func TestSettingsCataloguesArePagedBoundedAndTenantScoped(t *testing.T) {
 			if seen[id] || id == "mtr_other" {
 				t.Fatalf("duplicate or foreign tier %s", id)
 			}
-			if previous != nil && (m["position"].(float64) < previous["position"].(float64) || m["position"] == previous["position"] && id <= previous["id"].(string)) {
+			if previous != nil && (m["position"].(float64) < previous["position"].(float64) ||
+				m["position"] == previous["position"] && strings.ToLower(unwrapped(m["name"].(string))) < strings.ToLower(unwrapped(previous["name"].(string)))) {
 				t.Fatal("unstable order")
 			}
 			seen[id] = true

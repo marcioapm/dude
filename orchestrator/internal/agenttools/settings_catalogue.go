@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -35,6 +36,7 @@ type modelCursor struct {
 	Section  string `json:"section"`
 	Org      string `json:"org"`
 	Position int    `json:"position"`
+	Name     string `json:"name"`
 	ID       string `json:"id"`
 }
 
@@ -85,21 +87,31 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 			return nil, refuseText(settingsText("catalogue-cursor", nil))
 		}
 	}
+	// The route's order (listTiers: position, lower(name)), id breaking ties.
+	// Go compares the lowered names bytewise, the database by its collation:
+	// names that differ only in punctuation or spacing may order differently.
+	key := func(t delivery.Tier) modelCursor {
+		return modelCursor{Section: "models", Org: org, Position: t.Position, Name: strings.ToLower(t.Name), ID: t.ID}
+	}
+	compare := func(a, b modelCursor) int {
+		return cmp.Or(cmp.Compare(a.Position, b.Position), cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	}
 	ordered := make([]delivery.Tier, 0, len(tiers))
 	for _, t := range tiers {
 		ordered = append(ordered, t)
 	}
-	slices.SortFunc(ordered, func(a, b delivery.Tier) int {
-		return cmp.Or(cmp.Compare(a.Position, b.Position), cmp.Compare(a.ID, b.ID))
-	})
+	slices.SortFunc(ordered, func(a, b delivery.Tier) int { return compare(key(a), key(b)) })
+	var last delivery.Tier
+	next := func() {
+		raw, _ := json.Marshal(key(last))
+		out.Next = base64.RawURLEncoding.EncodeToString(raw)
+	}
 	for _, t := range ordered {
-		if after.ID != "" && (t.Position < after.Position || t.Position == after.Position && t.ID <= after.ID) {
+		if after.ID != "" && compare(key(t), after) <= 0 {
 			continue
 		}
 		if len(out.Tiers) == limit {
-			last := out.Tiers[len(out.Tiers)-1]
-			raw, _ := json.Marshal(modelCursor{Section: "models", Org: org, Position: last.Position, ID: last.ID})
-			out.Next = base64.RawURLEncoding.EncodeToString(raw)
+			next()
 			break
 		}
 		item := modelOut{ID: t.ID, Name: w.text(t.Name, 96), Description: w.text(t.Description, 320), Model: w.text(t.Model, 800), Effort: t.Effort, Position: t.Position, Configured: t.Model != ""}
@@ -110,11 +122,10 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 		}
 		if len(encoded) > pageBytes && len(out.Tiers) > 1 {
 			out.Tiers = out.Tiers[:len(out.Tiers)-1]
-			last := out.Tiers[len(out.Tiers)-1]
-			raw, _ := json.Marshal(modelCursor{Section: "models", Org: org, Position: last.Position, ID: last.ID})
-			out.Next = base64.RawURLEncoding.EncodeToString(raw)
+			next()
 			break
 		}
+		last = t
 	}
 	return out, nil
 }
