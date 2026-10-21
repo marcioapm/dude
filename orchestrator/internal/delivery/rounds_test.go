@@ -294,6 +294,32 @@ func TestAResumedFixerIsToldTheTaskEditedAndDecidedSinceItsRound(t *testing.T) {
 	}
 }
 
+// A resumed fixer is pointed at the dude CLI only where a fresh fixer
+// would be: its lux Run has dude's tools (a token) and lux serves them in
+// the container (Store.ToolsService); otherwise at the MCP tools.
+func TestAResumedFixersFeedbackNamesTheCLIOnlyWhereItIsServed(t *testing.T) {
+	for _, service := range []bool{true, false} {
+		t.Run(map[bool]string{true: "served", false: "mcp only"}[service], func(t *testing.T) {
+			w := writerWorld(t)
+			w.exec(t, `UPDATE runs SET mcp_token_hash = 'h' WHERE id = 'run_im'`)
+			w.draft(t, "fb_1", w.ana, "Rename it.")
+			w.exec(t, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+				VALUES ('fbb_1', $1, $2, 1, $3, 'k')`, w.org, w.task, w.ana)
+			w.exec(t, `UPDATE feedback_items SET status = 'open', submitted_at = now(), batch_id = 'fbb_1' WHERE id = 'fb_1'`)
+			id, err := (&delivery.Store{DB: w.app, ToolsService: service}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
+				TaskID: w.task, Phase: delivery.PhaseFix, Key: "f1", Attempt: 1, FeedbackItemIDs: []string{"fb_1"},
+				BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_im"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := w.str(t, `SELECT text FROM directives WHERE run_id = $1`, id)
+			if cli := strings.Contains(text, "dude feedback resolve"); cli != service || !strings.Contains(text, "Rename it.") {
+				t.Fatalf("CLI named %v, want %v:\n%s", cli, service, text)
+			}
+		})
+	}
+}
+
 // A fix goes on from the attempt's last writer: its implementer, until a
 // fixer has run, then that fixer; never a simplifier. Its round started
 // where the writer left its checkouts: its published head.

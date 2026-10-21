@@ -82,6 +82,9 @@ type Store struct {
 	// Bound on the GitHub calls of one verdict comment; zero means
 	// verdictCommentTimeout.
 	CommentTimeout time.Duration
+	// The dude CLI is served in agents' containers (phases.AgentConfig's
+	// ToolsService): a resumed fixer's round message names it only then.
+	ToolsService bool
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).
@@ -159,6 +162,8 @@ type PhaseRun struct {
 	// Run asked to go on starts fresh, for its run.created.
 	Replays     string
 	freshReason string
+	// Store.ToolsService, for a resumed fixer's round message.
+	toolsService bool
 }
 
 // ReviewRange is the range a review covers: from Base, per repository,
@@ -176,6 +181,7 @@ type ReviewRange struct {
 // is the same attempt, not a new one.
 func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (string, error) {
 	var runID string
+	in.toolsService = s.ToolsService
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		runID, err = createPhaseRunTx(ctx, tx, org, in)
 		return err

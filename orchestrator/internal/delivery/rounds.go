@@ -409,13 +409,15 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 			return "", err
 		}
 		// The predecessor's tools are the new row's: a token was made for
-		// it only when dude serves them (phases' toolsToken).
+		// it only when dude serves them (phases' toolsToken); the CLI is
+		// there only when lux serves them in the container, as a fresh
+		// fixer's prompt has it.
 		var tools bool
 		if err := tx.QueryRow(ctx, `SELECT mcp_token_hash IS NOT NULL FROM runs WHERE id = $1`, p.ID).Scan(&tools); err != nil {
 			return "", err
 		}
 		message = FixRoundMessage(p.BaseRefs, in.BaseRefs, p.Phase != PhaseFix,
-			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools})
+			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools && in.toolsService})
 		since, err := sinceLastRoundTx(ctx, tx, in.TaskID, p.ID)
 		if err != nil {
 			return "", err
