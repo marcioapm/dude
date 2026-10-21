@@ -343,7 +343,8 @@ func settingsScopes(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (or
 	return org, projects, nil
 }
 
-// sourceOf names a delivery.SetIn… layer as settings says it.
+// sourceOf names a resolver's layer as settings says it; defaults and
+// missing values are dude's.
 func sourceOf(setIn string) string {
 	switch setIn {
 	case delivery.SetInProject:

@@ -118,10 +118,10 @@ func rolesOut(w wrapper, scope settingsLayers, refs roleRefs) []roleOut {
 		r.MachineSize = machineOf(w, l, refs.sizes, role)
 		known := func(id string) bool { _, ok := refs.images[id]; return ok }
 		id, imgFrom := images.RoleImageFrom(role, l.projectModels(), l.org.AgentModels, known)
-		r.Image = roleValueOut{Source: fromSource(imgFrom)}
+		r.Image = roleValueOut{Source: sourceOf(imgFrom)}
 		if imgFrom == "implementer" {
 			_, implFrom := images.RoleImageFrom("implementer", l.projectModels(), l.org.AgentModels, known)
-			r.Image.Source, r.Image.FollowsImplementer = fromSource(implFrom), true
+			r.Image.Source, r.Image.FollowsImplementer = sourceOf(implFrom), true
 		}
 		if id != "" {
 			r.Image.Value = refOut{ID: id, Name: w.text(refs.images[id], 200)}
@@ -135,30 +135,18 @@ func rolesOut(w wrapper, scope settingsLayers, refs roleRefs) []roleOut {
 	return out
 }
 
-// fromSource names a resolver's "project", "organization" or
-// "default"/"none" as settings says it.
-func fromSource(from string) string {
-	switch from {
-	case "project":
-		return sourceProject
-	case "organization":
-		return sourceOrg
-	}
-	return sourceDude
-}
-
 // machineOf is the size role's Runs start on in the scope (Sizes.ForRole,
 // over a session's raised size for its brainstorm). A fixer's taken from
 // the implementer is set where the implementer's is, over the same layers.
 func machineOf(w wrapper, l settingsLayers, sizes delivery.Sizes, role string) roleValueOut {
 	m, ok := sizes.ForRole(role, l.raised, l.projectModels(), l.org.AgentModels)
-	out := roleValueOut{Source: fromSource(m.From)}
+	out := roleValueOut{Source: sourceOf(m.From)}
 	if m.Raised != nil {
 		out.Source = sourceSession
 	}
 	if m.From == "implementer" {
 		impl, _ := sizes.ForRole("implementer", nil, l.projectModels(), l.org.AgentModels)
-		out.Source, out.FollowsImplementer = fromSource(impl.From), true
+		out.Source, out.FollowsImplementer = sourceOf(impl.From), true
 	}
 	if ok {
 		out.Value = refOut{ID: m.SizeID, Name: w.text(m.Name, 200)}
