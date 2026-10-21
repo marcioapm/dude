@@ -134,8 +134,8 @@ func (s Stopped) All() []string {
 // Stop (keep: the phase Runs and the conductor kept to resume) or Close and
 // Archive (nothing kept).
 // Locks as the writers it races take them: the Chat and the conductor's
-// row, the phase Runs, then the delivery and the task (LockEscalationTx),
-// then each child (lockChild).
+// row (lockChild's prefix), the delivery and the task (LockEscalationTx),
+// then the phase Runs (RestartRunTx's order after the task) and each child.
 func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep bool) (Stopped, error) {
 	var out Stopped
 	if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&out.ProjectID); err != nil {
@@ -145,13 +145,13 @@ func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep 
 	if err != nil {
 		return out, err
 	}
-	if out.PhaseRuns, err = StopPhaseRunsTx(ctx, tx, org, out.ProjectID, taskID, "", reason, keep); err != nil {
-		return out, err
-	}
 	if _, out.Delivery, err = LockEscalationTx(ctx, tx, taskID); err != nil {
 		return out, err
 	}
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, taskID).Scan(&out.TaskStatus); err != nil {
+		return out, err
+	}
+	if out.PhaseRuns, err = StopPhaseRunsTx(ctx, tx, org, out.ProjectID, taskID, "", reason, keep); err != nil {
 		return out, err
 	}
 	if out.Children, err = StopChildrenTx(ctx, tx, taskID); err != nil {

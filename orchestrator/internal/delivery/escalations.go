@@ -61,11 +61,14 @@ type EscalationDecision struct {
 //
 // as do the delivery's other writers (parked → AskTx → SetTaskStatusTx; an
 // ending SetTaskStatusTx; markDone; recovery), the lifecycle writes
-// (lockLifecycleTask: Close, Reopen, Archive, Unarchive), the starts
-// (StartTx, AutoStarts.fire, a writer's createPhaseRunTx) and a
-// conductor's children (StartChildTx, RestartChildTx: after Chat and the
-// parent Run). The opposite order deadlocks with a Close or an ending
-// status change (child_lock_order_test.go). What follows differs:
+// (lockLifecycleTask: Close, Reopen, Archive, Unarchive), a person's Stop
+// (StopAllTx: the Chat and the live conductor's row first, the phase Runs
+// and children after the task), a Run's restart (RestartRunTx: its Run after
+// the task), the starts (StartTx, AutoStarts.fire, a writer's
+// createPhaseRunTx) and a conductor's children (StartChildTx,
+// RestartChildTx: after Chat and the parent Run). The opposite order
+// deadlocks with a Close or an ending status change
+// (child_lock_order_test.go). What follows differs:
 //
 //	banner (no Chat)      kept Runs (ResumeKeptTx/ReleaseKeptTx) → open escalation questions
 //	answer to a conductor the question → its Run → the owner's person (answered_by_person FK)

@@ -200,6 +200,43 @@ func TestAChildRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 	}
 }
 
+// A Run's restart (RestartRunTx: delivery → task → that Run, the syncer's
+// replaceRound with no Chat lock) and a person's Close or Archive of the
+// task at once: held between its task lock and its Run lock, the restart
+// takes the Run once the ending waits, and neither is refused for a
+// deadlock. The ending then stops the Run.
+func TestARunRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
+	for _, e := range enders[:2] {
+		t.Run(e.name, func(t *testing.T) {
+			w := newChildWorld(t)
+			w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+				VALUES ('run_impl', $1, 'prj_life', 'wi_life', 3, 'running', 'implement', 'implementer')`, w.org)
+			restartErr, endErr := w.raceEnder(e.end, func(tx pgx.Tx, between func()) error {
+				if _, _, err := LockEscalationTx(w.ctx, tx, "wi_life"); err != nil {
+					return err
+				}
+				between()
+				// RestartRunTx's own lock on the Run it replaces.
+				_, err := tx.Exec(w.ctx, `SELECT id FROM runs WHERE id = 'run_impl' FOR UPDATE`)
+				return err
+			})
+			if isDeadlock(restartErr) || isDeadlock(endErr) {
+				t.Fatalf("deadlock: restart %v, %s %v", restartErr, e.name, endErr)
+			}
+			if restartErr != nil || endErr != nil {
+				t.Fatalf("restart %v, %s %v", restartErr, e.name, endErr)
+			}
+			var status string
+			if err := w.owner.QueryRow(w.ctx, `SELECT status::text FROM runs WHERE id = 'run_impl'`).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if status != "aborted" {
+				t.Fatalf("the phase Run after the %s is %s", e.name, status)
+			}
+		})
+	}
+}
+
 func assertEnderAfterChild(t *testing.T, w *childWorld, ender string, endErr error, child string) {
 	t.Helper()
 	if endErr != nil {
