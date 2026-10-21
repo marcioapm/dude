@@ -335,17 +335,32 @@ func deliveryOut(w wrapper, l settingsLayers) (map[string]valueOut, error) {
 	}
 	out := map[string]valueOut{}
 	for k, v := range policyValues(p) {
-		out[k] = valueOut{Value: v, Source: sourceOf(from[k])}
-	}
-	if src := out["conditionalReviewers"].Source; src != sourceDude {
-		rules := make([]delivery.ReviewerRule, len(p.ConditionalReviewers))
-		for i, r := range p.ConditionalReviewers {
-			rules[i] = delivery.ReviewerRule{Category: w.text(r.Category, 100), WhenPathsMatch: w.labels(r.WhenPathsMatch)}
-		}
-		out["conditionalReviewers"] = valueOut{Value: rules, Source: src}
+		out[k] = valueOut{Value: policyText(w, k, v), Source: sourceOf(from[k])}
 	}
 	return out, nil
 }
+
+// policyText is a policy key's value as settings shows it: the reviewer
+// categories, path globs and severities quoted as people's text when they
+// are not dude's own (DefaultPolicy's).
+func policyText(w wrapper, key string, v any) any {
+	if reflect.DeepEqual(v, dudePolicy[key]) {
+		return v
+	}
+	switch v := v.(type) {
+	case []delivery.ReviewerRule:
+		rules := make([]delivery.ReviewerRule, len(v))
+		for i, r := range v {
+			rules[i] = delivery.ReviewerRule{Category: w.text(r.Category, 100), WhenPathsMatch: w.labels(r.WhenPathsMatch)}
+		}
+		return rules
+	case []string:
+		return w.labels(v)
+	}
+	return v
+}
+
+var dudePolicy = policyValues(delivery.DefaultPolicy())
 
 // policyValues are p's fields by their stored keys.
 func policyValues(p delivery.Policy) map[string]any {
