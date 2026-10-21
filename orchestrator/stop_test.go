@@ -195,6 +195,24 @@ func TestStopStopsALiveRunLeftOnAnOlderAttempt(t *testing.T) {
 	}
 }
 
+// A person's abort of the conductor alone lets its live child go as its
+// parent ended, not kept; the task goes on.
+func TestAbortingTheConductorLetsItsChildGo(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	conductor := w.talk(task)
+	child := w.taskChild(task, conductor)
+	if status, body := w.call("/internal/runs/"+conductor+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND child_stop_reason = 'parent-ended' AND control = 'abort' AND NOT keep`, child); n != 1 {
+		t.Errorf("the conductor's child after its abort: %s", w.str(`SELECT status || ' ' || COALESCE(child_stop_reason, '-') || ' ' || control || ' ' || keep FROM runs WHERE id = $1`, child))
+	}
+	if s := w.taskStatus(task); s == "aborted" {
+		t.Errorf("aborting the conductor aborted the task")
+	}
+}
+
 // taskChild inserts a live child the conductor started, as start_child
 // leaves one before lux has it.
 func (w *world) taskChild(task, conductor string) string {

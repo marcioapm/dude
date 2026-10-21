@@ -1036,7 +1036,7 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			if err := delivery.AbortConductorTx(r.Context(), tx, ref, body.Reason, false); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(r.Context(), `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false WHERE parent_run_id=$1 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, runID); err != nil {
+			if err := delivery.MarkChildParentEndedTx(r.Context(), tx, ri.TaskID, runID); err != nil {
 				return err
 			}
 			return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", principalOf(r), map[string]any{"reason": db.Nullable(body.Reason)})
