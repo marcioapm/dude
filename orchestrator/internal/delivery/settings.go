@@ -65,36 +65,55 @@ var modelFallback = map[string]string{"fixer": "implementer"}
 // A field no layer sets for the role comes from the role it follows, if
 // any, over the same layers.
 func ResolveRole(role string, layers ...json.RawMessage) RoleSettings {
+	rs, _ := ResolveRoleFrom(role, layers...)
+	return rs
+}
+
+// Found is where ResolveRoleFrom found one field: the index of its layer
+// (-1 for none), and whether under the role this one follows.
+type Found struct {
+	Layer   int
+	Follows bool
+}
+
+// RoleFrom is where each field of a resolved RoleSettings was found.
+type RoleFrom struct {
+	Tier, TimeLimit, Context, Harness Found
+}
+
+// ResolveRoleFrom is ResolveRole, saying where each field was found.
+func ResolveRoleFrom(role string, layers ...json.RawMessage) (RoleSettings, RoleFrom) {
 	var rs RoleSettings
+	none := Found{Layer: -1}
+	from := RoleFrom{none, none, none, none}
 	chain := []string{role}
 	if f, ok := modelFallback[role]; ok {
 		chain = append(chain, f)
 	}
-	parsed := make([]map[string]roleLayer, 0, len(layers))
-	for _, raw := range layers {
-		var m map[string]roleLayer
-		if json.Unmarshal(raw, &m) == nil {
-			parsed = append(parsed, m)
+	parsed := make([]map[string]roleLayer, len(layers))
+	for i, raw := range layers {
+		if json.Unmarshal(raw, &parsed[i]) != nil {
+			parsed[i] = nil
 		}
 	}
 	for _, r := range chain {
-		for _, m := range parsed {
-			l := m[r]
+		for i, m := range parsed {
+			l, here := m[r], Found{Layer: i, Follows: r != role}
 			if rs.Tier == "" && l.Tier != nil {
-				rs.Tier = *l.Tier
+				rs.Tier, from.Tier = *l.Tier, here
 			}
 			if rs.TimeLimitMinutes == 0 && l.TimeLimitMinutes != nil {
-				rs.TimeLimitMinutes = *l.TimeLimitMinutes
+				rs.TimeLimitMinutes, from.TimeLimit = *l.TimeLimitMinutes, here
 			}
 			if rs.Context == "" && l.Context != nil {
-				rs.Context = *l.Context
+				rs.Context, from.Context = *l.Context, here
 			}
 			if rs.Harness == "" && l.Harness != nil && IsHarness(*l.Harness) {
-				rs.Harness = *l.Harness
+				rs.Harness, from.Harness = *l.Harness, here
 			}
 		}
 	}
-	return rs
+	return rs, from
 }
 
 // HarnessName is the harness the role runs on: its own, else OpenCode.

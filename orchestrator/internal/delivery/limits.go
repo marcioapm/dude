@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -90,15 +91,28 @@ func (st *State) PullRequestFixesSpent(repo string, total int) bool {
 // GitHubSettingsTx are the organisation's GitHub settings as dude applies
 // them (forge.ReadSettings); without a GitHub connection, the defaults.
 func GitHubSettingsTx(ctx context.Context, tx pgx.Tx) (forge.Settings, error) {
+	s, _, err := GitHubSettingsSetTx(ctx, tx)
+	return s, err
+}
+
+// GitHubSettingsSetTx is GitHubSettingsTx and the keys the organisation
+// stored: every other key is the default.
+func GitHubSettingsSetTx(ctx context.Context, tx pgx.Tx) (forge.Settings, map[string]bool, error) {
 	var raw []byte
 	err := tx.QueryRow(ctx, `SELECT settings FROM forge_credentials WHERE forge = 'github' LIMIT 1`).Scan(&raw)
 	if db.IsNotFound(err) {
-		return forge.DefaultSettings(), nil
+		return forge.DefaultSettings(), map[string]bool{}, nil
 	}
 	if err != nil {
-		return forge.Settings{}, err
+		return forge.Settings{}, nil, err
 	}
-	return forge.ReadSettings(raw), nil
+	var stored map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &stored)
+	set := map[string]bool{}
+	for k := range stored {
+		set[k] = true
+	}
+	return forge.ReadSettings(raw), set, nil
 }
 
 // rerunClaims are the task's ($1) rerun claims (event $2, action $3), as e:
@@ -159,6 +173,13 @@ type TaskLimits struct {
 	PolicyNow *Policy
 	// The layer the policy's MaxPRFixIterations is set in now (SetIn…).
 	FixRoundsSetIn string
+	// The policy a delivery starting now would get, whatever Delivery is,
+	// and the layer each of its keys is set in now (PolicySources).
+	Now      Policy
+	NowSetIn map[string]string
+	// A live delivery's changed paths, as its reviewers are picked from
+	// (ReviewersFor); nil while none are known.
+	ChangedPaths []string
 	// Fix rounds spent in this review round, and on each pull request.
 	PRIteration int
 	PRFixes     map[string]int
@@ -217,7 +238,7 @@ func TaskLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (TaskLimits, er
 	switch {
 	case d != nil && d.Live():
 		l.Delivery, l.Policy, l.PRIteration, l.PRFixes = DeliveryLive, d.State.Policy, d.State.PRIteration, d.State.PRFixes
-		l.Grants = d.State.LimitGrants
+		l.Grants, l.ChangedPaths = d.State.LimitGrants, d.State.ChangedPaths
 		if now.MaxPRFixIterations != l.Policy.MaxPRFixIterations {
 			l.PolicyNow = &now
 		}
@@ -238,9 +259,10 @@ func TaskLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (TaskLimits, er
 	if l.PublishLines, l.PublishFiles, err = PublishLimitsTx(ctx, tx, taskID); err != nil {
 		return l, err
 	}
-	if l.FixRoundsSetIn, err = policySetIn(ctx, tx, taskID, "maxPrFixIterations"); err != nil {
+	if l.NowSetIn, err = policySetIn(ctx, tx, taskID); err != nil {
 		return l, err
 	}
+	l.Now, l.FixRoundsSetIn = now, l.NowSetIn["maxPrFixIterations"]
 	// Each open pull request with its rerun claims at its head, in one query.
 	rows, err := tx.Query(ctx, `WITH claims AS (SELECT repo, number, head, count(*) AS n FROM (`+rerunClaims+`) c GROUP BY repo, number, head)
 		SELECT r.name, pr.number, COALESCE(pr.head_sha, ''), COALESCE(c.n, 0)
@@ -275,19 +297,14 @@ const (
 	SetInDefault      = "default"
 )
 
-// policySetIn is the layer the task's policy takes key from now.
-func policySetIn(ctx context.Context, tx pgx.Tx, taskID, key string) (string, error) {
-	var org, project bool
-	err := tx.QueryRow(ctx, `SELECT COALESCE(o.delivery_policy ? $2, false), COALESCE(p.delivery_policy ? $2, false)
+// policySetIn is the layer the task's policy takes each key from now.
+func policySetIn(ctx context.Context, tx pgx.Tx, taskID string) (map[string]string, error) {
+	var org, project []byte
+	if err := tx.QueryRow(ctx, `SELECT o.delivery_policy, p.delivery_policy
 		FROM tasks t JOIN projects p ON p.id = t.project_id JOIN organizations o ON o.id = p.organization_id
-		WHERE t.id = $1`, taskID, key).Scan(&org, &project)
-	switch {
-	case err != nil:
-		return "", err
-	case project:
-		return SetInProject, nil
-	case org:
-		return SetInOrganization, nil
+		WHERE t.id = $1`, taskID).Scan(&org, &project); err != nil {
+		return nil, err
 	}
-	return SetInDefault, nil
+	_, from, err := PolicySources(org, project)
+	return from, err
 }

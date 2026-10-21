@@ -79,6 +79,14 @@ func (s Site) Containers(got *RunImage, fallback bool) bool {
 // implementer, as the backend's resolveRoleImage; "" for none. An id
 // known() rejects (an image since gone) is skipped.
 func RoleImage(role string, project, org json.RawMessage, known func(string) bool) string {
+	id, _ := RoleImageFrom(role, project, org, known)
+	return id
+}
+
+// RoleImageFrom is RoleImage and where it was found, as resolveRoleImage
+// says: "project", "organization", "implementer" (a fixer's, from the
+// implementer's), or "none".
+func RoleImageFrom(role string, project, org json.RawMessage, known func(string) bool) (string, string) {
 	chain := []string{role}
 	if role == "fixer" {
 		chain = append(chain, "implementer")
@@ -92,13 +100,19 @@ func RoleImage(role string, project, org json.RawMessage, known func(string) boo
 		}
 	}
 	for _, r := range chain {
-		for _, l := range layers {
+		for i, l := range layers {
 			if id := l[r].Image; id != "" && known(id) {
-				return id
+				switch {
+				case r != role:
+					return id, "implementer"
+				case i == 0:
+					return id, "project"
+				}
+				return id, "organization"
 			}
 		}
 	}
-	return ""
+	return "", "none"
 }
 
 // Known reads the organization's image ids, in its transaction, for
