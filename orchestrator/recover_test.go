@@ -196,21 +196,18 @@ func TestStartingOverIsANewAttemptOnItsOwnBranch(t *testing.T) {
 
 // Start over runs under the settings as they are now, not as the last
 // attempt froze them: a reviewer required since, and resuming rounds
-// turned on since, both reach the new attempt.
+// turned on since, both reach the new attempt. The scripted reviewer's
+// finding gives each attempt a second review round.
 func TestStartingOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
 	w := newWorld(t)
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		if labels["dude.phase"] == "implement" {
-			return fakelux.Behaviour{Commit: map[string]string{"A.md": "a\n"}, Message: "work"}
-		}
-		return fakelux.Behaviour{Reply: "Looks good."}
-	}
 	wi := w.task()
 	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 1 AND phase = 'review' AND category = 'performance'`, wi); n != 0 {
 		t.Fatalf("attempt 1 ran %d performance reviewers before the settings asked for one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 1 AND phase = 'review' AND continues_how = 'resume'`, wi); n != 0 {
+		t.Fatalf("attempt 1 resumed %d reviewers before the settings turned resuming on", n)
 	}
 	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy
 		|| '{"requiredReviewers":["correctness","performance"],"resumeRounds":true}' WHERE id = $1`, w.project)
@@ -226,9 +223,31 @@ func TestStartingOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND category = 'performance'`, wi); n == 0 {
 		t.Error("attempt 2 ran no performance reviewer: it kept attempt 1's reviewers")
 	}
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND idempotency_key LIKE '%:attempt-2'
-		AND (state->'policy'->>'resumeRounds')::boolean`, wi); n != 1 {
-		t.Error("attempt 2's delivery does not resume rounds: it kept attempt 1's policy")
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND continues_how = 'resume'`, wi); n == 0 {
+		t.Error("attempt 2 resumed no reviewer for its next round: it kept attempt 1's policy")
+	}
+}
+
+// A Start over the settings cannot be read for is refused whole: the task
+// stays stopped, as it was, with every way back still offered.
+func TestStartingOverUnderSettingsThatDoNotDecodeLeavesTheTaskStopped(t *testing.T) {
+	w := newWorld(t)
+	wi, _ := w.aborted()
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"maxReviewIterations": "many"}' WHERE id = $1`, w.project)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart", "note": "Start fresh."}); status != http.StatusInternalServerError {
+		t.Fatalf("restart under settings that do not decode: %d %v", status, body)
+	}
+	if got := w.taskStatus(wi); got != "aborted" {
+		t.Errorf("the refused Start over left the task %s", got)
+	}
+	if got, attempt := w.options(wi); strings.Join(got, " ") != "resume retry restart" || attempt != 1 {
+		t.Errorf("the refused Start over left %v (attempt %d)", got, attempt)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, wi); n != 1 {
+		t.Errorf("%d deliveries after the refused Start over, want the stopped one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.recovered'`, wi); n != 0 {
+		t.Errorf("the refused Start over recorded %d task.recovered", n)
 	}
 }
 
