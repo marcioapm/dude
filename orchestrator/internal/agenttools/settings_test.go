@@ -64,6 +64,7 @@ func (f *fixture) settingsRouteWith(t *testing.T, path string, e embeddings.Embe
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("settings route %s: %v: %s", path, err, out)
 	}
+	recordRoute(path, body)
 	return body
 }
 

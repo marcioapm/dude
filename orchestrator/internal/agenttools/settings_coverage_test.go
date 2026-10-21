@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,11 +15,121 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// Route families are reviewed explicitly: Router exposes no registration metadata.
-// New settings route families must be registered in this coverage inventory.
+// coverageRule classifies one response leaf: Tool names the settings output
+// it is value-compared with, or Excluded says why settings does not show it.
 type coverageRule struct {
 	Tool     string
 	Excluded string
+}
+
+// settingsRouteFamilies is every member-readable GET route family of the
+// settings pages: covered ones are fetched by settingsRoute and classified
+// leaf by leaf; the others say why settings does not project them. The
+// control plane's Router keeps no route metadata, so nothing discovers a new
+// family: one added to the settings pages must be added here by hand.
+var settingsRouteFamilies = map[string]string{
+	"/v1/settings/organization":        "",
+	"/v1/projects/:id/settings":        "",
+	"/v1/models/tiers":                 "",
+	"/v1/judgements/settings":          "",
+	"/v1/projects/:id/servers":         "",
+	"/v1/memory/index":                 "",
+	"/v1/images":                       "",
+	"/v1/machines/sizes":               "",
+	"/v1/forge/settings":               "",
+	"/v1/images/:id":                   "versions with Containerfile bodies, builds and history; the library summary is /v1/images",
+	"/v1/images/picker":                "a UI picker over the same library as /v1/images",
+	"/v1/images/builds/:buildId":       "a build's log and error: build output, not configuration",
+	"/v1/machines/pools":               "lux's live pools as the orchestrator reads them: operator infrastructure, not a setting",
+	"/v1/projects/:id/network/refused": "hosts agents were refused: run history, not configuration",
+	"/v1/prompts/:role/history":        "prompt bodies and their history: never shown",
+	"/v1/judgements":                   "judgement call history: requests and responses, not configuration",
+	"/v1/judgements/:id":               "one judgement call's request and response, not configuration",
+	"/v1/models/proxy":                 "the LLM proxy's model list: the operator's catalogue, not the organisation's tiers",
+	"/v1/forge/webhook-secret":         "admin-only secret",
+	"/v1/forge/credential":             "the GitHub connection and its credential, not a setting",
+	"/v1/projects/:id/secrets":         "values are never shown; names and recipients come from project_secrets with roles (TestSettingsShowNoSecretAndNoPromptText)",
+}
+
+// routesFetched and routesClassified record, by family, what settingsRoute
+// fetched and which of its answers classifyResponse accepted. fetchedPages
+// holds each answer so its identity stays its own for the run.
+var (
+	routesFetched    = map[string]bool{}
+	routesClassified = map[string]bool{}
+	fetchedPages     []fetchedPage
+)
+
+type fetchedPage struct {
+	page   map[string]any
+	family string
+}
+
+func routeFamily(path string) string {
+	path, _, _ = strings.Cut(path, "?")
+	parts := strings.Split(path, "/")
+	if len(parts) > 3 && parts[2] == "projects" {
+		parts[3] = ":id"
+	}
+	return strings.Join(parts, "/")
+}
+
+func recordRoute(path string, page map[string]any) {
+	if strings.HasPrefix(path, "/v1/") {
+		routesFetched[routeFamily(path)] = true
+		fetchedPages = append(fetchedPages, fetchedPage{page, routeFamily(path)})
+	}
+}
+
+// TestMain checks, after a run of every test, that each covered family was
+// fetched and classified and that every fetched family is in the table.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if f := flag.Lookup("test.run"); code == 0 && f != nil && f.Value.String() == "" && len(routesFetched) > 0 {
+		if problems := routeInventoryProblems(); len(problems) > 0 {
+			fmt.Fprintln(os.Stderr, "settings route inventory:", strings.Join(problems, "; "))
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
+
+func routeInventoryProblems() []string {
+	var problems []string
+	for family, excluded := range settingsRouteFamilies {
+		if excluded == "" && !routesClassified[family] {
+			problems = append(problems, "covered but never classified "+family)
+		}
+		if excluded != "" && routesFetched[family] {
+			problems = append(problems, "excluded but fetched "+family)
+		}
+	}
+	for family := range routesFetched {
+		if _, ok := settingsRouteFamilies[family]; !ok {
+			problems = append(problems, "fetched but not in the inventory "+family)
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+func TestSettingsRouteInventoryCatchesAnUnlistedOrUnclassifiedFamily(t *testing.T) {
+	fetched, classified := routesFetched, routesClassified
+	defer func() { routesFetched, routesClassified = fetched, classified }()
+	routesFetched, routesClassified = map[string]bool{}, map[string]bool{}
+	for family, excluded := range settingsRouteFamilies {
+		if excluded == "" {
+			routesFetched[family], routesClassified[family] = true, true
+		}
+	}
+	if p := routeInventoryProblems(); len(p) > 0 {
+		t.Fatal(p)
+	}
+	routesFetched["/v1/projects/:id/brand-new"] = true
+	delete(routesClassified, "/v1/images")
+	if p := routeInventoryProblems(); len(p) != 2 {
+		t.Fatalf("problems: %v", p)
+	}
 }
 
 var modelCoverage = map[string]coverageRule{
@@ -88,6 +200,13 @@ func classifyResponse(v any, rules map[string]coverageRule) error {
 	sort.Strings(problems)
 	if len(problems) > 0 {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
+	}
+	if m, ok := v.(map[string]any); ok {
+		for _, p := range fetchedPages {
+			if reflect.ValueOf(p.page).Pointer() == reflect.ValueOf(m).Pointer() {
+				routesClassified[p.family] = true
+			}
+		}
 	}
 	return nil
 }

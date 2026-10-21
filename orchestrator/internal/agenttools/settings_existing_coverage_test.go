@@ -210,3 +210,75 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 		t.Fatal("new optional role setting accepted")
 	}
 }
+
+// machineSizes is GET /v1/machines/sizes's sizes, and github is GET
+// /v1/forge/settings, leaf for leaf.
+func TestSettingsMachineSizesAndGitHubMatchTheirPages(t *testing.T) {
+	f, token := roleSettingsWorld(t)
+	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name, role) VALUES ('psn_member', $1, 'Member', 'member')`, f.org)
+	mustExec(t, f.owner, `UPDATE forge_credentials SET settings = '{"fixRoundsPerPr":8,"requestReviewFrom":"logins","reviewLogins":["octo"]}'
+		WHERE id = 'fc_r'`)
+	// A project's own use of a size, beside the organisation's.
+	mustExec(t, f.owner, `UPDATE projects SET agent_models = agent_models || '{"qa_browser":{"machineSize":"msz_l"}}' WHERE id = $1`, f.project)
+	out := f.settingsOf(t, token, `{}`)
+
+	sizes := f.settingsRoute(t, "/v1/machines/sizes")
+	rules := map[string]coverageRule{"canEdit": {Excluded: "UI-only member edit permission"}}
+	for _, k := range []string{"id", "name", "cpus", "memoryMiB", "diskGiB"} {
+		rules["sizes.*."+k] = coverageRule{Tool: k}
+	}
+	rules["sizes.*.isDefault"] = coverageRule{Tool: "default"}
+	for k, why := range map[string]string{
+		"poolId": "lux pool placement: operator infrastructure (null in fixture)", "poolName": "lux pool name: operator infrastructure (null in fixture)",
+		"updatedAt": "audit metadata", "updatedBy": "audit metadata (null author in fixture)",
+		"usedBy":                    "usage list; each role's size is in roles (empty for the seeded default)",
+		"usedBy.*.kind":             "usage list; each role's size is in roles",
+		"usedBy.*.role":             "usage list; each role's size is in roles",
+		"usedBy.*.project":          "usage list; each role's size is in roles",
+		"usedBy.*.project.id":       "usage list; each role's size is in roles",
+		"usedBy.*.project.name":     "usage list; each role's size is in roles",
+		"usedBy.*.project.imageUrl": "UI-only project image",
+		"usedBy.*.inherited":        "usage list; fixer inheritance is in roles",
+	} {
+		rules["sizes.*."+k] = coverageRule{Excluded: why}
+	}
+	if err := classifyResponse(sizes, rules); err != nil {
+		t.Fatal(err)
+	}
+	shown := sizes["sizes"].([]any)
+	got, _ := out["machineSizes"].([]any)
+	if len(got) != len(shown) {
+		t.Fatalf("sizes: tool %v, page %v", got, shown)
+	}
+	for i, s := range shown {
+		for _, k := range []string{"id", "cpus", "memoryMiB", "diskGiB"} {
+			if field(got, i, k) != field(s, k) {
+				t.Errorf("size %d %s: tool %v, page %v", i, k, field(got, i, k), field(s, k))
+			}
+		}
+		if unwrapped(field(got, i, "name").(string)) != field(s, "name") || (field(got, i, "default") == true) != (field(s, "isDefault") == true) {
+			t.Errorf("size %d: tool %v, page %v", i, field(got, i), s)
+		}
+	}
+
+	gh := f.settingsRoute(t, "/v1/forge/settings")
+	ghRules := map[string]coverageRule{"reviewLogins.*": {Tool: "github.reviewLogins"}}
+	for _, k := range []string{"whoCanWake", "openAs", "requestReviewFrom", "mergeMethod", "whenBehind", "fixRoundsPerPr", "ciStuckMinutes", "checksFixRounds"} {
+		ghRules[k] = coverageRule{Tool: "github." + k}
+	}
+	if err := classifyResponse(gh, ghRules); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh) != len(field(out, "github").(map[string]any)) {
+		t.Errorf("github keys: tool %v, page %v", out["github"], gh)
+	}
+	for k, want := range gh {
+		actual := field(out, "github", k, "value")
+		if k == "reviewLogins" {
+			actual = []any{unwrapped(field(actual, 0).(string))}
+		}
+		if !reflect.DeepEqual(actual, want) {
+			t.Errorf("github %s: tool %v, page %v", k, actual, want)
+		}
+	}
+}

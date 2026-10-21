@@ -13,6 +13,8 @@ import { registerJudgementRoutes } from "../../apps/control-plane/src/api/routes
 import { registerImageRoutes } from "../../apps/control-plane/src/api/routes/images.ts";
 import { registerMemoryRoutes } from "../../apps/control-plane/src/api/routes/memory.ts";
 import { registerServerRoutes } from "../../apps/control-plane/src/api/routes/servers.ts";
+import { registerMachineRoutes } from "../../apps/control-plane/src/api/routes/machines.ts";
+import { registerPullRequestRoutes } from "../../apps/control-plane/src/api/routes/pullRequests.ts";
 import { previewSettingsSchema } from "../../packages/domain/src/servers.ts";
 import { agentModelConfigSchema, deliveryPolicySchema } from "../../packages/domain/src/hierarchy.ts";
 import { imagePatchSchema, newImageSchema } from "../../packages/domain/src/images.ts";
@@ -28,6 +30,8 @@ registerJudgementRoutes(router);
 registerServerRoutes(router);
 registerMemoryRoutes(router);
 registerImageRoutes(router);
+registerMachineRoutes(router);
+registerPullRequestRoutes(router);
 if (path === "/schemas/images") {
   const keys = (s: { shape: object }) => Object.fromEntries(Object.keys(s.shape).map(k => [k, true]));
   process.stdout.write(JSON.stringify({ new: keys(newImageSchema), patch: keys(imagePatchSchema) }));
