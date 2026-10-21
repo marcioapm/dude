@@ -46,6 +46,7 @@
 		"refresh_pull_requests !pull_requests" "`dude prs --refresh`"
 		"run_chat" "`dude chat RUN [--limit N]`"
 		"limits" "`dude limits`"
+		"settings" "`dude settings [--project P] [--task T] [--section S]`"
 		"list_tasks" "`dude task list`"
 		"search_memory" "`dude memory search QUERY`"
 		"create_task" "`dude task create`"
@@ -74,4 +75,4 @@ Delegate independent work with `start_agent`: profile is implementer, fixer, sim
 When a fix round or a rerun is refused at its bound and the work needs more, ask a person to raise it for this task with `request_limit` (perReviewRound, perPullRequest or rerun, with your reason): dude asks the task's people, and only someone who may change that setting can approve. It is your one open question; end your turn. From the shell: `dude limit request LIMIT [--to N] [--pr PR] --reason R`.
 {{- end}}{{if .Granted "github_check_log"}}
 
-Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.{{end}}
+Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.{{end}}{{template "contracts/settings" .}}

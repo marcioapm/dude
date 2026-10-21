@@ -123,6 +123,37 @@ func TestTheConductorsContractNamesOnlyGrantedActions(t *testing.T) {
 	}
 }
 
+// The settings paragraph is rendered from the Run's grant of settings.read
+// and of nothing else: granted alone it renders, and every other
+// capability of the conductor's and the brainstorm's without it renders
+// nothing.
+func TestTheSettingsParagraphIsKeyedOnSettingsRead(t *testing.T) {
+	tmpl := mustTemplate("contracts/settings")
+	alone := capabilities.Of(capabilities.SettingsRead)
+	for _, role := range []string{RoleConductor, RoleBrainstorm} {
+		less := capabilities.Default(role).Without(capabilities.SettingsRead)
+		with := InstructionsInput{Tools: true, CLI: true, Grants: &alone}.data(role)
+		without := InstructionsInput{Tools: true, CLI: true, Grants: &less}.data(role)
+		if render(tmpl, with) == "" || render(tmpl, without) != "" {
+			t.Errorf("%s: with settings.read alone %d bytes, with all else %d bytes", role, len(render(tmpl, with)), len(render(tmpl, without)))
+		}
+	}
+}
+
+// The conductor's and the brainstorm's instruction files without
+// settings.read, as a golden: the wording a reduced grant reads.
+func TestGoldenInstructionsWithoutSettingsRead(t *testing.T) {
+	for _, role := range []string{RoleConductor, RoleBrainstorm} {
+		less := capabilities.Default(role).Without(capabilities.SettingsRead)
+		in := goldenTask()
+		in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+		in.Repositories, in.Anywhere = readOnlyRepos(), role == RoleBrainstorm
+		ii := in.InstructionsInput()
+		ii.Grants = &less
+		golden(t, "instructions-"+role+"-without-settings", Instructions(role, "correctness", ii))
+	}
+}
+
 // The shell form of each dude tool the instruction files show, as
 // cmd/dude parses it.
 var toolCommands = map[string][]string{
