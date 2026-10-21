@@ -147,6 +147,23 @@ func TestPullRequestActionsRefuseAMemberWhoIsNotOwnerOrAdmin(t *testing.T) {
 	}
 }
 
+// An action outside the guarded set is not found, so it cannot skip the
+// owner check on its way to GitHub or the event log.
+func TestPullRequestActionsUnknownActionIsNotFound(t *testing.T) {
+	w := newPRActionWorld(t)
+	code, errCode, msg := w.act("per_member", "frobnicate", `{}`)
+	want := `no pull request action "frobnicate"`
+	if code != http.StatusNotFound || errCode != "not_found" || msg != want {
+		t.Errorf("%d %s %q, want 404 not_found %q", code, errCode, msg, want)
+	}
+	if reqs := w.gh.Requests(); len(reqs) != 0 {
+		t.Errorf("GitHub was asked %v", reqs)
+	}
+	if n := w.actions(); n != 0 {
+		t.Errorf("%d actions recorded for an unknown action", n)
+	}
+}
+
 // githubActed is how many times GitHub did what action asks.
 func (w *prActionWorld) githubActed(action string) int {
 	w.t.Helper()

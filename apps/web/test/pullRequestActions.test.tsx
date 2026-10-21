@@ -233,8 +233,22 @@ describe("who may act on it", () => {
 
   for (const [who, people] of [["the owner", { you: "per_ana", me: { role: "member" } }], ["an admin", { you: "per_cy", me: { role: "admin" } }]] as const) {
     test(`${who} sees the four on`, async () => {
+      const { act, settle, until } = await import("./dom.ts");
       const { container, unmount } = await shownTo(people);
       expect(buttons(container).map((b) => b ? b.disabled : "missing")).toEqual([false, false, false, false]);
+      // Focused past the tooltip's open delay: no refusal, and no extra tab stop on the wrapper.
+      // Merge keeps its own tooltip, saying what it does.
+      for (const [i, b] of buttons(container).entries()) {
+        const wrapper = b!.parentElement as HTMLElement;
+        await act(async () => wrapper.focus());
+        await settle(600);
+        const tip = document.querySelector("[role=tooltip]");
+        if (four[i] === "pr-merge") expect(tip?.textContent).toBe("Merges it on GitHub: squash and merge");
+        else expect(tip ? `${four[i]}'s tooltip: "${tip.textContent}"` : null).toBeNull();
+        expect(wrapper.tabIndex).toBe(-1);
+        await act(async () => wrapper.blur());
+        await until(() => (document.querySelector("[role=tooltip]") ? null : true), `${four[i]}'s tooltip gone`);
+      }
       await unmount();
     });
   }
@@ -319,15 +333,19 @@ describe("who may act on it, on the task page", () => {
     client.listPullRequests = async () => ({ pullRequests: [{ ...PULL_REQUEST, behindBy: 2, display: "ready", checkState: "failing",
       checks: [{ name: "lint", status: "completed", conclusion: "failure" }] }] });
     const listed = await client.listPeople();
+    let reads = 0;
     client.listPeople = role === "unknown" ? () => new Promise(() => {})
-      : async () => ({ ...listed, people: listed.people.map((p) => (p.id === listed.you ? { ...p, role } : p)) });
+      : async () => {
+        reads++;
+        return { ...listed, people: listed.people.map((p) => (p.id === listed.you ? { ...p, role } : p)) };
+      };
     const { container, unmount } = await mount(
       <TooltipProvider><ToastProvider><PeopleProvider client={client}>
         <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} />
       </PeopleProvider></ToastProvider></TooltipProvider>,
     );
     await until(() => container.querySelector('[data-testid="pr-merge"]'), "Merge on the task page");
-    return { container, unmount };
+    return { container, unmount, peopleRead: () => reads };
   };
   const four = ["pr-merge", "pr-update-branch", "pr-rerun", "pr-request-review"];
   const onPage = (c: HTMLElement) => four.map((id) => c.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`));
@@ -350,8 +368,10 @@ describe("who may act on it, on the task page", () => {
   });
 
   test("an admin sees the four on", async () => {
-    const { settle } = await import("./dom.ts");
-    const { container, unmount } = await page("admin");
+    const { settle, until } = await import("./dom.ts");
+    const { container, unmount, peopleRead } = await page("admin");
+    // The four are on until people are read too: only after a read does "on" mean the admin may act.
+    await until(() => peopleRead() > 0 || null, "people read");
     await settle(100);
     expect(onPage(container).map((b) => b ? b.disabled : "missing")).toEqual([false, false, false, false]);
     await unmount();
