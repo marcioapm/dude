@@ -194,6 +194,44 @@ func TestStartingOverIsANewAttemptOnItsOwnBranch(t *testing.T) {
 	}
 }
 
+// Start over runs under the settings as they are now, not as the last
+// attempt froze them: a reviewer required since, and resuming rounds
+// turned on since, both reach the new attempt.
+func TestStartingOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Commit: map[string]string{"A.md": "a\n"}, Message: "work"}
+		}
+		return fakelux.Behaviour{Reply: "Looks good."}
+	}
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 1 AND phase = 'review' AND category = 'performance'`, wi); n != 0 {
+		t.Fatalf("attempt 1 ran %d performance reviewers before the settings asked for one", n)
+	}
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy
+		|| '{"requiredReviewers":["correctness","performance"],"resumeRounds":true}' WHERE id = $1`, w.project)
+	w.gh.Close(1)
+	w.until("the task to be aborted by the close", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "aborted"
+	})
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 2 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND category = 'performance'`, wi); n == 0 {
+		t.Error("attempt 2 ran no performance reviewer: it kept attempt 1's reviewers")
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND idempotency_key LIKE '%:attempt-2'
+		AND (state->'policy'->>'resumeRounds')::boolean`, wi); n != 1 {
+		t.Error("attempt 2's delivery does not resume rounds: it kept attempt 1's policy")
+	}
+}
+
 // Only its owner picks it up; anyone else is told who can.
 func TestOnlyATasksOwnerPicksItBackUp(t *testing.T) {
 	w := newWorld(t)
