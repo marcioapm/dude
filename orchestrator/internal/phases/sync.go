@@ -1170,6 +1170,21 @@ func (s *Syncer) submit(ctx context.Context, r phaseRun) error {
 	if err := s.childExecutionAllowed(ctx, r); err != nil {
 		return err
 	}
+	if r.SourceKind == string(delivery.ChildParentTaskConductor) && delivery.Publishes[r.Phase] {
+		// A writer child admitted before a pull request opened on the task
+		// branch would publish to it unreviewed: it ends before it starts.
+		var why string
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			var err error
+			why, err = delivery.WriterChildRefusedTx(ctx, tx, r.TaskID)
+			return err
+		}); err != nil {
+			return err
+		}
+		if why != "" {
+			return s.fail(ctx, r, "cannot start: "+why)
+		}
+	}
 	image, got, nested, err := s.image(ctx, r)
 	var waiting images.Waiting
 	var refused images.Refused

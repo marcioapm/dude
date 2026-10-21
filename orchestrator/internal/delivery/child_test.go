@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -225,5 +226,65 @@ func TestStartChildAdmission(t *testing.T) {
 	}
 	if after := snapshot(); !reflect.DeepEqual(before, after) {
 		t.Fatalf("profile admission changed workflow")
+	}
+}
+
+// While a pull request is open on the task branch, a conductor's writer
+// child is refused saying to use start_phase fix, and no Run is made; a
+// child that only reads still starts. With the pull request closed, the
+// writer starts.
+func TestAWriterChildIsRefusedWhileAPullRequestIsOpen(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_c', $1, 'P', 'p', 'P')`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_c', $1, 'prj_c', 1, 'C', 'C', 'review')`, org)
+	exec(`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_c', $1, 'prj_c', 'target', 'https://github.com/acme/target')`, org)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role) VALUES ('run_parent', $1, 'prj_c', 'wi_c', 1, 'running', 'conductor')`, org)
+	exec(`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+		VALUES ('wf_c', $1, 'wi_c', 'task.delivery', 'c', 'waiting', 'awaitPullRequest',
+		'{"taskId":"wi_c","projectId":"prj_c","attempt":1,"branch":"dude/wi_c/attempt-1","heads":{"target":"aaa"},"pullRequestIds":["pr_c"]}')`, org)
+	exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
+		VALUES ('pr_c', $1, 'prj_c', 'wi_c', 'repo_c', 1, 'https://github.com/acme/target/pull/1', 'dude/wi_c/attempt-1', 'main', 'aaa', 'C', 'open')`, org)
+	s := &Store{DB: app}
+	start := func(profile string) (string, error) {
+		phase := PhaseForPromptRole(profile)
+		return s.StartChild(ctx, StartChildInput{Parent: ChildParent{Kind: ChildParentTaskConductor,
+			Run: RunRef{Org: org, ProjectID: "prj_c", TaskID: "wi_c", RunID: "run_parent"}},
+			Profile: profile, Key: profile, Capabilities: ChildCapabilities{PublishCode: Publishes[phase]}})
+	}
+	children := func(profile string) int {
+		var n int
+		if err := owner.QueryRow(ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_c' AND child_profile = $1`, profile).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, profile := range []string{"implementer", "fixer", "simplifier"} {
+		if _, err := start(profile); !IsRefusal(err) || !strings.Contains(err.Error(), "a pull request is open on this branch") ||
+			!strings.Contains(err.Error(), "use start_phase fix") {
+			t.Errorf("%s with a pull request open: %v, want refused saying to use start_phase fix", profile, err)
+		}
+		if n := children(profile); n != 0 {
+			t.Errorf("%s: %d Runs made", profile, n)
+		}
+	}
+	for _, profile := range []string{"investigator", "reviewer"} {
+		if _, err := start(profile); err != nil {
+			t.Errorf("%s with a pull request open: %v, want started", profile, err)
+		}
+	}
+	exec(`UPDATE pull_requests SET state = 'closed' WHERE id = 'pr_c'`)
+	if _, err := start("implementer"); err != nil {
+		t.Fatalf("implementer with the pull request closed: %v", err)
+	}
+	if n := children("implementer"); n != 1 {
+		t.Fatalf("%d implementer Runs, want 1", n)
 	}
 }

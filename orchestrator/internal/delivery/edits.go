@@ -102,7 +102,24 @@ func refuseWriterAdmissionTx(ctx context.Context, tx pgx.Tx, taskID, excludeRunI
 	if d != nil && d.State.Candidate != nil {
 		return refusef("%s", refusedCandidate)
 	}
-	return nil
+	if d == nil {
+		return nil
+	}
+	why, err := pullRequestOpenTx(ctx, tx, taskID, d)
+	if err == nil && why != "" {
+		err = refuseText(why)
+	}
+	return err
+}
+
+// WriterChildRefusedTx is why a conductor's writer child admitted earlier
+// may not start now, "" when it may (pullRequestOpenTx).
+func WriterChildRefusedTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return "", err
+	}
+	return pullRequestOpenTx(ctx, tx, taskID, d)
 }
 
 // pullRequestOpenTx is why nothing but promotion may write the delivery's
