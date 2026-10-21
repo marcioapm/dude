@@ -178,6 +178,9 @@ type Run struct {
 	looked map[string]bool
 	// Some repository got a commit from a push.
 	Pushed bool
+	// Per repository, the commit this Run last pushed: lux's lease for its
+	// next push (runs.pushed).
+	pushedTo map[string]string
 	// dude tools the agent called: "tool status".
 	ToolCalls []string
 	// The id the agent's last dude tool call answered with: CallTools'
@@ -2750,6 +2753,13 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			results = append(results, result)
 			continue
 		}
+		if tip := head(path, "refs/heads/"+branch); leaseFails(run, repo.Name, tip, base, work, files) {
+			// As lux's explicit lease: the branch must be where this Run last
+			// pushed it, or absent the first time.
+			result["status"], result["error"] = "rejected", "the branch moved since this Run last pushed it: not overwritten"
+			results = append(results, result)
+			continue
+		}
 		if len(files) == 0 && work != "" {
 			// What the agent committed in its checkout itself, as lux
 			// pushes a checkout's HEAD.
@@ -2774,9 +2784,32 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			result["status"], result["commit"] = "pushed", sha
 			run.Pushed = true
 		}
+		if tip := head(path, "refs/heads/"+branch); err == nil && tip != "" && tip == sha {
+			if run.pushedTo == nil {
+				run.pushedTo = map[string]string{}
+			}
+			run.pushedTo[repo.Name] = sha
+		}
 		results = append(results, result)
 	}
 	s.luxEvent(run, "git.push", map[string]any{"requestId": requestID, "results": results})
+}
+
+// leaseFails is whether a push that would move branch from tip finds it
+// not where this Run last pushed it ("" before its first push: absent).
+// One that would leave it unchanged (nothing committed over base) is not
+// a push and never fails.
+func leaseFails(run *Run, repo, tip, base, work string, files map[string]string) bool {
+	if len(files) == 0 {
+		if work == "" {
+			return false
+		}
+		out, err := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
+		if err != nil || strings.TrimSpace(string(out)) == base {
+			return false
+		}
+	}
+	return tip != run.pushedTo[repo]
 }
 
 type specRepo struct {
