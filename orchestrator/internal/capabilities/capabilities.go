@@ -39,6 +39,7 @@ const (
 	LimitsRead      Key = "limits.read"
 	LimitsRequest   Key = "limits.request"
 	Verify          Key = "verify"
+	SettingsRead    Key = "settings.read"
 	WebSearch       Key = "web_search"
 	WebFetch        Key = "web_fetch"
 )
@@ -109,6 +110,8 @@ var All = []Capability{
 		Tools: []string{"request_limit"}},
 	{Key: Verify, Description: "Have a commit's tests or named commands run by a report-only Run that never publishes, and be told each command's result; at most 10 a Run.",
 		Tools: []string{"verify"}},
+	{Key: SettingsRead, Description: "Read dude's settings as they apply here — delivery policy, agent roles, GitHub, network, capabilities — and where each is set.",
+		Tools: []string{"settings"}},
 	{Key: WebSearch, Description: "Search the web with the coding agent's own search tool.",
 		Native: []string{NativeWebSearch}},
 	{Key: WebFetch, Description: "Read web pages with the coding agent's own fetch tool.",
@@ -119,9 +122,9 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
 	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, SessionCheckout, RunsRead,
-		PRRefresh, WebSearch, WebFetch},
+		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},

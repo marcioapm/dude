@@ -138,7 +138,7 @@ var toolCommands = map[string][]string{
 	"dismiss_finding": {"dude finding dismiss"}, "decide_escalation": {"dude escalation decide"},
 	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},
 	"refresh_pull_requests": {"dude prs --refresh", "--refresh"}, "run_chat": {"dude chat"}, "limits": {"dude limits"},
-	"request_limit": {"dude limit request"}, "verify": {"dude verify"},
+	"request_limit": {"dude limit request"}, "verify": {"dude verify"}, "settings": {"dude settings"},
 }
 
 // Prose in which a tool's name is an ordinary word, or a flag of another
@@ -160,9 +160,10 @@ var notTheTool = map[string][]string{
 		"Each message reaches you", "comes to you as a message"},
 	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
 		"`low` or `note`", "`note` is an observation", "| low | note", "is a `note`", "a design note", "and a note)"},
-	"propose": {"before you propose anything"},
-	"publish": {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code"},
-	"verify":  {"could not verify", "`--no-verify`", "a reason a person could verify"},
+	"propose":  {"before you propose anything"},
+	"publish":  {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code"},
+	"verify":   {"could not verify", "`--no-verify`", "a reason a person could verify"},
+	"settings": {"and its own settings (which reviewers run"},
 }
 
 // Mentions of a tool the role's defaults never grant, which the goldens
