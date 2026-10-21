@@ -259,6 +259,12 @@ func TestGoldenResumeRounds(t *testing.T) {
 	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1]))
 	// A round on the same head (a retry): nothing to name as changed.
 	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil))
+	// A fixer's round: the implementer's first carries the fix contract,
+	// a fixer's next does not; what it fixes is Prompt(PhaseFix)'s.
+	fixIn := PromptInput{Findings: goldenFindings(), Tools: true, CLI: true,
+		PRFeedback: []forge.ActionableFeedback{{Source: "review", Repo: "api", Path: "main.go", Author: "ana", Body: "Rename it.", ID: "c1"}}}
+	golden(t, "resume-fix-from-implementer", FixRoundMessage(from, to, true, fixIn))
+	golden(t, "resume-fix-from-fixer", FixRoundMessage(from, to, false, PromptInput{Findings: goldenFindings()[:1]}))
 	in := goldenTask()
 	in.Category = "correctness"
 	in.ReviewBase, in.ReviewOf, in.Findings = map[string]string{"api": "aaa111"}, RangeSinceLastRound, goldenFindings()
