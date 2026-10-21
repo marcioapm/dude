@@ -407,8 +407,15 @@ func TestABrainstormWithNoProjectReadsTheOrganisationAlone(t *testing.T) {
 	}
 
 	page := f.settingsRoute(t, "/v1/settings/organization")
-	sameRolesAsThePage(t, out, page)
+	roles := map[string]any{}
 	for role, shown := range page["roles"].(map[string]any) {
+		// A session investigator uses its per-run child prompt and has no enforced no-progress bound.
+		if role != "investigator" {
+			roles[role] = shown
+		}
+	}
+	sameRolesAsThePage(t, out, map[string]any{"roles": roles})
+	for role, shown := range roles {
 		var p map[string]any
 		for _, x := range field(out, "settings", 0, "prompts").([]any) {
 			if m := x.(map[string]any); m["role"] == role {
