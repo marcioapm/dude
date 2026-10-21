@@ -84,6 +84,16 @@ func TestSettingsMemoryReportsConfigurationNotInventedHealth(t *testing.T) {
 			t.Errorf("settings shows %s", canary)
 		}
 	}
+	// The model is quoted under the marker the result's external note names.
+	model, _ := field(m, "model").(string)
+	id, _, _ := strings.Cut(strings.TrimPrefix(model, "⟦external "), "⟧")
+	if external, _ := out["external"].(string); id == "" || !strings.Contains(external, "⟦external "+id+"⟧") {
+		t.Errorf("model marker %q, external note %q", id, out["external"])
+	}
+	// A section named with spaces around it is the same section.
+	if got := field(f.settingsOf(t, token, `{"section":" memory "}`), "memory"); field(got, "embeddingState") != "configured" {
+		t.Errorf("section \" memory \": %v", got)
+	}
 }
 
 // With no embedder, memory is words-only search: not configured, which is

@@ -244,8 +244,13 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		}
 	}
 	if want("memory") {
-		out.Memory, _ = c.env.prepared.(*memorySettingsOut)
-		if out.Memory == nil {
+		if prepared, _ := c.env.prepared.(*memorySettingsOut); prepared != nil {
+			m := *prepared
+			if m.Model != "" {
+				m.Model = w.text(m.Model, 800)
+			}
+			out.Memory = &m
+		} else {
 			out.Memory = &memorySettingsOut{Source: "operator", EmbeddingState: "unavailable", DynamicStatus: "unavailable", Note: settingsText("memory-unavailable", nil)}
 		}
 	}

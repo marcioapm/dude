@@ -3,6 +3,7 @@ package agenttools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type memorySettingsOut struct {
@@ -15,17 +16,18 @@ type memorySettingsOut struct {
 	Note           string `json:"note"`
 }
 
-// The shared embedder's getters are read before the settings transaction, never Embed.
+// The shared embedder's getters are read before the settings transaction,
+// never Embed. Model is the provider's as given; readSettings quotes it.
 func prepareSettings(ctx context.Context, c Caller, args json.RawMessage) any {
 	var in settingsIn
 	_ = json.Unmarshal(args, &in)
-	if in.Section != "" && in.Section != "memory" {
+	if s := strings.TrimSpace(in.Section); s != "" && s != "memory" {
 		return nil
 	}
 	out := &memorySettingsOut{Source: "operator", EmbeddingState: "not-configured", DynamicStatus: "unavailable", Note: settingsText("memory-unavailable", nil)}
 	if c.env.embedder != nil {
 		out.EmbeddingState = "configured"
-		out.Model = newWrapper().text(c.env.embedder.Model(), 800)
+		out.Model = c.env.embedder.Model()
 		out.Dimensions = c.env.embedder.Dimensions()
 	}
 	return out

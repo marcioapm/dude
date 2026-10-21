@@ -156,6 +156,6 @@ func readJudgements(ctx context.Context, tx pgx.Tx, w wrapper) (*judgementsOut, 
 		out.State = "model-unset"
 	}
 	model := w.text(t.Model, 200)
-	out.Tier = &refOut{ID: t.ID, Name: w.text(t.Name, 24), Model: &model}
+	out.Tier = &refOut{ID: t.ID, Name: w.text(t.Name, 96), Model: &model}
 	return out, nil
 }
