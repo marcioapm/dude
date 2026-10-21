@@ -844,6 +844,8 @@ export const findingSchema = z.object({
   title: z.string(),
   description: z.string(),
   suggestedFix: z.string(),
+  /** What the reviewer said must hold once it is fixed; null when it gave none. */
+  acceptance: z.string().nullish(),
   resolutionNote: z.string(),
   /** The Run whose judgement closed it, when a re-review did. */
   resolvedByRunId: z.string().nullable().default(null),

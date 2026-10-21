@@ -1346,8 +1346,9 @@ here.
 - **FindingRow** is the only way a review finding is drawn: severity as
   glyph + word in its tone (`FINDING_SEVERITY_SPECS`, keyed on the domain
   union), category, title, `file:line` in mono, and the status as a neutral
-  `Badge` — a resolved blocking finding reads as both. Description,
-  suggested fix and resolution note expand under the row. Settled rows dim;
+  `Badge` — a resolved blocking finding reads as both. Its acceptance
+  criterion ("Done when", first), description, suggested fix and
+  resolution note expand under the row. Settled rows dim;
   nothing is struck through. `FindingGroup` puts open findings first, most
   severe first (`sortFindings`), and counts what is still open; `fixedIn` is
   a slot for the app's link to the fix run.

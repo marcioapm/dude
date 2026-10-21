@@ -435,6 +435,14 @@ describe("FindingRow", () => {
     const h = html(<FindingRow severity="low" status="open" category="input-validation" title="t" />);
     expect(h).toContain('title="input-validation"');
   });
+  test("its acceptance criterion reads first in the body as \"Done when\", only when given", () => {
+    const body = (h: string) => h.slice(h.indexOf('id="'), h.length).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    const given = body(html(<FindingRow severity="high" status="open" category="c" title="t" defaultExpanded acceptance="Totals match to the cent." description="Rounds per line." />));
+    expect(given).toContain("Done when Totals match to the cent.");
+    expect(given.indexOf("Done when")).toBeLessThan(given.indexOf("Rounds per line."));
+    const none = html(<FindingRow severity="high" status="open" category="c" title="t" defaultExpanded description="Rounds per line." />);
+    expect(none.split("Done when").length - 1).toBe(0);
+  });
   test("fixedIn reads \"fixed in Fix 2\", with no arrow drawn by the row", () => {
     const h = html(<FindingRow severity="low" status="resolved" category="c" title="t" fixedIn={<a href="#r">Fix 2</a>} />);
     const text = h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");

@@ -227,3 +227,14 @@ test("the orchestrator's URL and token come from the config file, and a variable
       DUDE_ORCHESTRATOR_URL: `http://localhost:${defaults.port}`, DUDE_ORCHESTRATOR_TOKEN: "test" } }));
   }
 });
+
+test("a finding is listed with its acceptance criterion, null when the reviewer gave none", async () => {
+  const project = await (await call("person", "POST", "/v1/projects", { name: "criteria", slug: "criteria" })).json() as { id: string };
+  const task = `${project.id}_task`;
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES (${task}, ${org}, ${project.id}, 1, 'Task')`;
+  await owner`INSERT INTO review_findings (id, organization_id, task_id, category, severity, title, acceptance)
+    VALUES (${`${task}_with`}, ${org}, ${task}, 'correctness', 'high', 'With', 'Totals match to the cent.'),
+           (${`${task}_without`}, ${org}, ${task}, 'correctness', 'low', 'Without', NULL)`;
+  const { findings } = await (await call("person", "GET", `/v1/findings?taskId=${task}`)).json() as { findings: Array<{ title: string; acceptance: string | null }> };
+  expect(findings.map((f) => [f.title, f.acceptance])).toEqual([["With", "Totals match to the cent."], ["Without", null]]);
+});
