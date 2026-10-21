@@ -35,7 +35,7 @@ implements, and section numbers below (§21, §81…) refer to it.
 GitHub talk to. It owns display and management: auth, organizations,
 projects, tasks, the board and sidebar (`/v1/navigation`), findings,
 forge settings, and the live event stream. It runs no background work.
-What changes what runs — deliver, steer, pause, resume, abort — it forwards
+What changes what runs — deliver, steer, pause, resume, abort, stop — it forwards
 to the orchestrator (`src/orchestrator/client.ts`) with a service token, the
 user's organization and who asked, and passes the answer straight back.
 GitHub webhooks land here, are verified against a per-organization secret
@@ -104,6 +104,36 @@ are the whole task's. The task's conductor is no attempt's: its Run makes,
 ends and begins no attempt, and its session is listed, live, on every
 attempt's Sessions. The URL names the attempt (`?attempt=1`) only when it
 is not the current one.
+
+**Stopping a task, and picking it back up.** A person (the owner or an
+admin) stops a task with **Stop** (`POST /internal/tasks/{id}/stop`,
+`api/stop.go`), whoever decides it: every live Run of the attempt stops in
+one transaction — phase Runs and the conductor aborted and kept in lux for a
+resume (`runs.keep`; `phases.Syncer.end` keeps an aborted conductor too), the
+conductor's children aborted as `AbortChildTx` does — the delivery is
+aborted with `State.Halt` naming the conductor and the step it waited at,
+and the task is `aborted` (`task.stopped`). The PR is untouched.
+`andRestart` starts the next attempt in the same request. Aborting one Run
+(`/internal/runs/{id}/abort`) is still there: a phase Run stops its step's
+Runs and the task as Stop does (`delivery.StopPhaseRunsTx`, shared); the
+conductor alone changes nothing about the task, and is not kept. A stopped
+task is picked back up (`api/recover.go`) by **Resume** (the same Runs, the
+stopped conductor among them, its whole conversation), **Try again** (the
+step again; under the conductor, a new conductor on the attempt, briefed
+with the note and what the stopped one did), or **Start over**. Start over
+takes a decider (default: whoever decided the stopped attempt); under the
+conductor attempt N+1 gets a new conductor Run of its own, briefed with the
+note and an account of attempt N (`delivery.StartPickedUpConductor`). A PR
+dude opened is closed; an adopted one (task source `pr`) stays open and N+1
+works on its head branch.
+
+**Close and Archive stop what is live.** `delivery.CloseTx` and
+`ArchiveTaskTx` refuse nothing for agents working or a PR open: in the same
+transaction they stop every live Run (`StopAllTx`, nothing kept), let go at
+once what a Stop kept, end the delivery, then close (`task.closed` names
+what it `stopped`). `closePullRequest` closes the task's open PRs on GitHub
+after the commit, each with "Closed with <KEY> as <resolution>: <note>",
+adopted ones included; without it they stay open. The owner or an admin.
 
 ### Delivery, end to end
 
