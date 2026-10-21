@@ -43,6 +43,7 @@ func TestABrainstormReadsItsLinkedProjectsAndNothingOfAnotherOrganisation(t *tes
 	for args, want := range map[string]string{
 		`{"project":"OTH"}`:       `no project "OTH" in this organisation`,
 		`{"project":"prj_other"}`: `no project "prj_other" in this organisation`,
+		`{"project":"Theirs"}`:    `no project "Theirs" in this organisation`,
 		`{"task":"OTH-1"}`:        `no task "OTH-1" in this organisation`,
 		`{"task":"wi_other"}`:     `no task "wi_other" in this organisation`,
 	} {
@@ -55,6 +56,16 @@ func TestABrainstormReadsItsLinkedProjectsAndNothingOfAnotherOrganisation(t *tes
 	status, got := f.post(t, linked, "settings", `{"task":"TEXT-1","section":"delivery"}`)
 	if status != 200 || field(got, "task", "key") != "TEXT-1" || field(got, "settings", 0, "project", "key") != "TEXT" {
 		t.Errorf("a task of the organisation: %d %v", status, got)
+	}
+	// A project of the organisation by key, name or id, and a task by id.
+	for _, name := range []string{"TWO", "two", "Two", "prj_two"} {
+		scopes, _ := f.settingsOf(t, none, `{"section":"delivery","project":"`+name+`"}`)["settings"].([]any)
+		if len(scopes) != 1 || field(scopes, 0, "project", "key") != "TWO" {
+			t.Errorf("project %s: %v", name, scopes)
+		}
+	}
+	if got := f.settingsOf(t, linked, `{"section":"delivery","task":"`+f.item+`"}`); field(got, "task", "key") != "TEXT-1" {
+		t.Errorf("task by id: %v", got["task"])
 	}
 }
 
@@ -116,7 +127,8 @@ func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	f.deliver(t, "running", string(policy), 1, 1)
 	mustExec(t, f.owner, `UPDATE workflow_runs SET state = jsonb_set(jsonb_set(state, '{limitGrants}', $2::jsonb), '{changedPaths}',
 		'["target/migrations/1.sql"]') WHERE task_id = $1`, f.item,
-		`[{"limit":"perReviewRound","extra":2,"by":"psn_bo","byName":"Bo","questionId":"q1","at":"2026-03-04T05:06:07Z"}]`)
+		`[{"limit":"perReviewRound","extra":2,"by":"psn_bo","byName":"Bo","questionId":"q1","at":"2026-03-04T05:06:07Z"},
+		  {"limit":"rerun","extra":1,"repo":"target","number":7,"head":"abc123","by":"psn_bo","byName":"Bo","questionId":"q2","at":"2026-03-04T05:06:07Z"}]`)
 	task, _ := f.settingsOf(t, token, `{}`)["task"].(map[string]any)
 	if d, _ := task["delivery"].(string); !strings.Contains(d, "held to") {
 		t.Errorf("live: %v", task["delivery"])
@@ -136,6 +148,10 @@ func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	}
 	if field(task, "raisedForThisTask", 0, "extra") != 2.0 || !strings.Contains(field(task, "raisedForThisTask", 0, "by").(string), "Bo") {
 		t.Errorf("raises: %v", task["raisedForThisTask"])
+	}
+	if field(task, "raisedForThisTask", 1, "limit") != "rerun" || field(task, "raisedForThisTask", 1, "pullRequest") != "target#7@abc123" ||
+		field(task, "raisedForThisTask", 0, "pullRequest") != nil {
+		t.Errorf("a rerun's pull request: %v", task["raisedForThisTask"])
 	}
 	if r, _ := task["reviewers"].([]any); len(r) != 4 || r[2] != "database" {
 		t.Errorf("reviewers for a migration: %v", task["reviewers"])

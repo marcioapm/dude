@@ -108,6 +108,15 @@ func TestSettingsLayersEachValueAsTheSettingsPageDoes(t *testing.T) {
 	if out["github"] != nil {
 		t.Errorf("section delivery answers github: %v", out["github"])
 	}
+	if status, got := f.post(t, token, "settings", `{"section":"bogus"}`); status != 422 ||
+		!strings.Contains(fmt.Sprint(got["error"]), "delivery, roles, prompts, github, network, capabilities, machines") {
+		t.Errorf("section bogus: %d %v", status, got)
+	}
+	roles := f.settingsOf(t, token, `{"section":"roles"}`)
+	if s := field(roles, "settings", 0).(map[string]any); s["delivery"] != nil || s["prompts"] != nil || roles["capabilities"] != nil ||
+		s["roles"] == nil {
+		t.Errorf("section roles: %v", s)
+	}
 	// dude's park and idle defaults may be the deployment's; a set one is not.
 	for key, noted := range map[string]bool{"parkAfterMinutes": true, "idleNudgeMinutes": true, "conductorWarmMinutes": false,
 		"maxAttemptsPerFinding": false} {
@@ -147,6 +156,15 @@ func TestSettingsLayersEachValueAsTheSettingsPageDoes(t *testing.T) {
 			t.Errorf("github %s: tool %s from %v, page %s", key, gotJSON, field(gh, key, "source"), wantJSON)
 		}
 	}
+
+	// A project's own reviewer rules are its, their globs people's text.
+	mustExec(t, f.owner, `UPDATE projects SET delivery_policy = '{"conditionalReviewers":[{"category":"database","whenPathsMatch":["db/**"]}]}'
+		WHERE id = $1`, f.project)
+	rules := field(f.settingsOf(t, token, `{"section":"delivery"}`), "settings", 0, "delivery", "conditionalReviewers")
+	if glob, _ := field(rules, "value", 0, "whenPathsMatch", 0).(string); field(rules, "source") != "project" ||
+		!strings.HasPrefix(glob, "⟦external ") || !strings.Contains(glob, "⟧db/**⟦/external ") {
+		t.Errorf("a project's conditionalReviewers: %v", rules)
+	}
 }
 
 // roleSettingsWorld is an organisation whose implementer runs on tier Big
@@ -157,8 +175,9 @@ func TestSettingsLayersEachValueAsTheSettingsPageDoes(t *testing.T) {
 func roleSettingsWorld(t *testing.T) (*fixture, string) {
 	f := setup(t)
 	token := f.conductor(t)
-	mustExec(t, f.owner, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES
-		('mtr_big', $1, 'Big', 'big-model'), ('mtr_small', $1, 'Small', 'small-model')`, f.org)
+	mustExec(t, f.owner, `INSERT INTO model_tiers (id, organization_id, name, model, headers, options) VALUES
+		('mtr_big', $1, 'Big', 'big-model', '{"X-Api-Key":"TIER-HEADER-SECRET"}', '{"apiKey":"TIER-OPTIONS-SECRET"}'),
+		('mtr_small', $1, 'Small', 'small-model', NULL, NULL)`, f.org)
 	mustExec(t, f.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES
 		('msz_l', $1, 'L', 8, 16384, 50)`, f.org)
 	mustExec(t, f.owner, `INSERT INTO images (id, organization_id, name) VALUES ('img_web', $1, 'web-img')`, f.org)
@@ -218,8 +237,19 @@ func TestSettingsRolesAreResolvedAsTheSettingsPageResolvesThem(t *testing.T) {
 	if field(impl, "label") != "Implementer" || field(roleIn(out, "qa_browser"), "label") != "Tester" {
 		t.Errorf("labels: %v %v", impl["label"], roleIn(out, "qa_browser")["label"])
 	}
+	// The project's secrets come with its roles.
+	if field(out, "settings", 0, "secrets", 0, "name") != "DB_PASSWORD" {
+		t.Errorf("section roles' secrets: %v", field(out, "settings", 0, "secrets"))
+	}
 
 	page := f.settingsRoute(t, "/v1/projects/"+f.project+"/settings")
+	sameRolesAsThePage(t, out, page)
+}
+
+// sameRolesAsThePage checks the tool's roles in out against the settings
+// page's: the same ids and values, and project-or-not alike.
+func sameRolesAsThePage(t *testing.T, out, page map[string]any) {
+	t.Helper()
 	for role, shown := range page["roles"].(map[string]any) {
 		got := roleIn(out, role)
 		if got == nil {
@@ -288,6 +318,60 @@ func TestABrainstormsRowIsItsSessionsOverTheOrganisations(t *testing.T) {
 	}
 }
 
+// A brainstorm with no linked project reads the organisation alone: no
+// role field, prompt or network list is the project's, and each role
+// agrees with /v1/settings/organization.
+func TestABrainstormWithNoProjectReadsTheOrganisationAlone(t *testing.T) {
+	f, _ := roleSettingsWorld(t)
+	token := f.session(t, "ssn_org", "", "")
+	out := f.settingsOf(t, token, `{}`)
+	if field(out, "settings", 0, "project") != nil || len(out["settings"].([]any)) != 1 {
+		t.Fatalf("scopes: %v", out["settings"])
+	}
+	impl, rev := roleIn(out, "implementer"), roleIn(out, "reviewer")
+	if field(impl, "tier", "value", "id") != "mtr_big" || field(impl, "tier", "source") != "organization" || impl["projectNotes"] != nil {
+		t.Errorf("implementer: %v", impl)
+	}
+	for _, r := range field(out, "settings", 0, "roles").([]any) {
+		for _, key := range []string{"tier", "harness", "timeLimitMinutes", "machineSize", "image"} {
+			if s := field(r, key, "source"); s == "project" {
+				t.Errorf("%v %s: from project", field(r, "role"), key)
+			}
+		}
+	}
+	if s := field(rev, "tier", "source"); s != "dude" || field(rev, "tier", "value") != nil {
+		t.Errorf("reviewer tier: %v", field(rev, "tier"))
+	}
+	for _, p := range field(out, "settings", 0, "prompts").([]any) {
+		m := p.(map[string]any)
+		if m["project"] != nil || m["role"] == "implementer" && m["organization"] != "saved" {
+			t.Errorf("prompt: %v", m)
+		}
+	}
+	net := field(out, "settings", 0, "network")
+	if field(net, "projectEgress") != nil || field(net, "mode") != nil || field(net, "organizationEgress", "source") != "organization" ||
+		!strings.Contains(fmt.Sprint(field(net, "organizationEgress", "value")), "api.example.com") {
+		t.Errorf("network: %v", net)
+	}
+
+	page := f.settingsRoute(t, "/v1/settings/organization")
+	sameRolesAsThePage(t, out, page)
+	for role, shown := range page["roles"].(map[string]any) {
+		var p map[string]any
+		for _, x := range field(out, "settings", 0, "prompts").([]any) {
+			if m := x.(map[string]any); m["role"] == role {
+				p = m
+			}
+		}
+		if saved := field(shown, "prompt", "organization", "versionId") != nil; saved != (field(p, "organization") == "saved") {
+			t.Errorf("%s prompt: page saved %v, tool %v", role, saved, field(p, "organization"))
+		}
+	}
+	if fmt.Sprint(field(page, "network", "egress", "value")) != "[api.example.com]" {
+		t.Errorf("page network: %v", page["network"])
+	}
+}
+
 // Prompts say built-in or saved, added to or replaced, and when and by
 // whom; network, capabilities and machines are each role's. Nothing the
 // web app shows only to admins, and no prompt or notes text, appears.
@@ -298,7 +382,8 @@ func TestSettingsShowNoSecretAndNoPromptText(t *testing.T) {
 		t.Fatalf("settings: %d %s", status, raw)
 	}
 	for _, s := range []string{"GH-CREDENTIAL-SECRET", "WEBHOOK-SECRET-VALUE", "OAUTH-CLIENT-SECRET-VALUE", "PROJECT-SECRET-VALUE",
-		"HINT-SECRET", "ORG-PROMPT-BODY-TEXT", "PROJECT-PROMPT-BODY-TEXT", "ORG-NOTES-SECRET-TEXT", "PROJECT-NOTES-SECRET-TEXT"} {
+		"HINT-SECRET", "ORG-PROMPT-BODY-TEXT", "PROJECT-PROMPT-BODY-TEXT", "ORG-NOTES-SECRET-TEXT", "PROJECT-NOTES-SECRET-TEXT",
+		"TIER-HEADER-SECRET", "TIER-OPTIONS-SECRET"} {
 		if bytes.Contains(raw, []byte(s)) {
 			t.Errorf("settings shows %s", s)
 		}
