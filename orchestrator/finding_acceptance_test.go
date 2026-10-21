@@ -2,10 +2,11 @@ package orchestrator_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
@@ -58,21 +59,22 @@ func TestEachReviewRunKeepsItsVerdicts(t *testing.T) {
 	if acceptance != fakeagent.FindingAcceptance {
 		t.Errorf("the finding was stored with acceptance %q, want %q", acceptance, fakeagent.FindingAcceptance)
 	}
-	caused := map[string]bool{}
 	causedRows, err := w.owner.Query(context.Background(), `SELECT title, caused_by_fix FROM review_findings WHERE task_id = $1`, wi)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for causedRows.Next() {
-		var name string
-		var c bool
-		if err := causedRows.Scan(&name, &c); err != nil {
-			causedRows.Close()
-			t.Fatal(err)
-		}
-		caused[name] = c
+	type causedRow struct {
+		Title  string
+		Caused bool
 	}
-	causedRows.Close()
+	causedList, err := pgx.CollectRows(causedRows, pgx.RowToStructByPos[causedRow])
+	if err != nil {
+		t.Fatal(err)
+	}
+	caused := map[string]bool{}
+	for _, r := range causedList {
+		caused[r.Title] = r.Caused
+	}
 	wantCaused := map[string]bool{title: true, "Said not caused by the fix": false, "Silent on the fix": false}
 	if fmt.Sprint(caused) != fmt.Sprint(wantCaused) {
 		t.Errorf("caused_by_fix by title = %v, want %v", caused, wantCaused)
@@ -82,18 +84,9 @@ func TestEachReviewRunKeepsItsVerdicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	var got []map[string]string
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			t.Fatal(err)
-		}
-		var v map[string]string
-		if err := json.Unmarshal(raw, &v); err != nil {
-			t.Fatal(err)
-		}
-		got = append(got, v)
+	got, err := pgx.CollectRows(rows, pgx.RowTo[map[string]string])
+	if err != nil {
+		t.Fatal(err)
 	}
 	want := []map[string]string{{}, {finding: "still"}, {finding: "fixed"}}
 	if len(got) < len(want) {
@@ -164,19 +157,14 @@ func TestAFindingWithoutACriterionIsFixedAsBefore(t *testing.T) {
 	if s := w.escalationReason(wi); s != "" {
 		t.Fatalf("the delivery stopped for a person: %s", s)
 	}
-	var stored []string
 	rows, err := w.owner.Query(context.Background(), `SELECT COALESCE(quote_literal(acceptance), 'NULL') FROM review_findings
 		WHERE task_id = $1`, wi)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var a string
-		if err := rows.Scan(&a); err != nil {
-			t.Fatal(err)
-		}
-		stored = append(stored, a)
+	stored, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(stored) != 1 || stored[0] != "NULL" {
 		t.Errorf("findings' acceptance = %v, want one NULL", stored)
