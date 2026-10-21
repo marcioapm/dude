@@ -1796,11 +1796,16 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 
 func writerKey(sc workflow.StepContext, st *State, phase string) string {
 	var parts []any
+	// Read, not spent: the step spends its direction once (directed).
+	d := st.Directed
+	if d != nil && d.Phase != "" && d.Phase != phase {
+		d = nil
+	}
 	switch phase {
 	case PhaseImplement:
 		parts = []any{":implement"}
 	case PhaseSimplify:
-		if d := directed(st, phase); d != nil {
+		if d != nil {
 			return conductorKey(sc, st, d, ":simplify")
 		}
 		return testRoundKey(sc, st, ":simplify")
@@ -1813,7 +1818,7 @@ func writerKey(sc workflow.StepContext, st *State, phase string) string {
 			parts = []any{":fix:", st.Iteration, ":test:", st.TestFixRounds}
 		}
 	}
-	if d := directed(st, phase); d != nil {
+	if d != nil {
 		if phase == PhaseFix {
 			parts = []any{":fix:", st.Iteration}
 		}
