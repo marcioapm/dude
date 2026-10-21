@@ -32,6 +32,10 @@ type settingsIn struct {
 // The sections settings answers, in its output's order.
 var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines"}
 
+// maxLinkedScopes is the most linked projects a session's unnamed read
+// shows a scope each for.
+const maxLinkedScopes = 3
+
 // Where a value is set, as settings says it.
 const (
 	sourceDude    = "dude"
@@ -103,6 +107,8 @@ type settingsOut struct {
 	Organization string            `json:"organization"`
 	Role         string            `json:"yourRole"`
 	Scopes       []scopeOut        `json:"settings"`
+	Linked       []projectRefOut   `json:"linkedProjects,omitempty"`
+	LinkedNote   string            `json:"linkedNote,omitempty"`
 	Task         *taskViewOut      `json:"task,omitempty"`
 	GitHub       any               `json:"github,omitempty"`
 	Capabilities []capabilitiesOut `json:"capabilities,omitempty"`
@@ -132,6 +138,14 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	org, projects, err := settingsScopes(ctx, tx, c, in)
 	if err != nil {
 		return out, err
+	}
+	if strings.TrimSpace(in.Project) == "" && len(projects) > maxLinkedScopes {
+		// Each project's scope is ~10 KiB: past a few, the organisation's
+		// alone and the list to name one from.
+		for _, p := range projects {
+			out.Linked = append(out.Linked, projectRefOut{Key: p.Key, Name: w.text(p.Name, 200)})
+		}
+		out.LinkedNote, projects = settingsText("linked", len(projects)), nil
 	}
 	if taskID != "" {
 		if out.Task, err = taskView(ctx, tx, w, taskID); err != nil {
@@ -363,7 +377,7 @@ func settingsText(name string, data any) string { return settingsTexts[name].Ren
 
 var settingsTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
-	for _, name := range []string{"external", "sources", "frozen", "reviewers"} {
+	for _, name := range []string{"external", "sources", "frozen", "reviewers", "linked"} {
 		out[name] = delivery.MustText("results/settings/" + name)
 	}
 	return out

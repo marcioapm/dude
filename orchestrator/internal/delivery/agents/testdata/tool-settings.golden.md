@@ -8,7 +8,7 @@ dude's settings as they apply here, each value with where it is set: dude (its b
   "properties": {
     "project": {
       "type": "string",
-      "description": "a project's id, key or name; default your task's project, or for a session each linked project"
+      "description": "a project's id, key or name; default your task's project, or for a session each linked project (past three, the organisation's settings and the linked projects to name one from)"
     },
     "task": {
       "type": "string",

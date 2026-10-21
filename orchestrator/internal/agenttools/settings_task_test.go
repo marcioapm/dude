@@ -57,6 +57,34 @@ func TestABrainstormReadsItsLinkedProjectsAndNothingOfAnotherOrganisation(t *tes
 	}
 }
 
+// A session linked to as many projects as it may be (50) reads, with no
+// project named, the organisation's settings and the list to name one
+// from: a result under the 64 KiB an agent tool's result is held to.
+func TestASessionAtItsLinkCapReadsABoundedResult(t *testing.T) {
+	f, _ := roleSettingsWorld(t)
+	token := f.session(t, "ssn_cap", "", "")
+	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models, delivery_policy)
+		SELECT 'prj_c' || i, $1, 'Project number ' || i, 'c' || i, 'C' || i, '{"reviewer":{"tier":"mtr_small"}}', '{"maxReviewIterations":9}'
+		FROM generate_series(1, 49) i`, f.org)
+	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id)
+		SELECT 'ssn_cap', id, organization_id FROM projects WHERE organization_id = $1`, f.org)
+	var raw json.RawMessage
+	if status := f.postAs(t, token, "settings", `{}`, &raw); status != 200 {
+		t.Fatalf("settings: %d %s", status, raw)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	if linked, _ := out["linkedProjects"].([]any); len(raw) > 64<<10 || len(linked) != 50 {
+		t.Errorf("50 linked projects: %d bytes, %d listed", len(raw), len(linked))
+	}
+	t.Logf("50 linked projects: %d bytes", len(raw))
+	// Three or fewer keep a scope each.
+	mustExec(t, f.owner, `DELETE FROM session_projects WHERE session_id = 'ssn_cap' AND project_id NOT IN ('prj_c1', 'prj_c2', 'prj_c3')`)
+	if scopes, _ := f.settingsOf(t, token, `{"section":"delivery"}`)["settings"].([]any); len(scopes) != 3 {
+		t.Errorf("three linked projects: %d scopes", len(scopes))
+	}
+}
+
 // A live delivery whose frozen maxReviewIterations and maxPrFixIterations
 // differ from today's shows both, today's with where it is set, and a raise
 // granted with request_limit; an ended delivery and none say what limits
