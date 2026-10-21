@@ -1,0 +1,50 @@
+/* AttemptDivider and EarlierTurns. Tokens only. */
+
+.divider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-8) 0;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  width: 100%;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+.rule {
+  flex: 1 1 var(--ds-space-24);
+  min-width: var(--ds-space-12);
+  height: 1px;
+  background: var(--ds-color-border);
+}
+
+.words {
+  max-width: 80%;
+  text-align: center;
+}
+
+.attempt {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+
+.note {
+  max-width: 80%;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+  text-align: center;
+}
+
+/* The earlier attempt's turns: whole, muted, nothing to answer. */
+.earlier {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  opacity: 0.62;
+}

@@ -74,8 +74,15 @@ export type { ComposerLinksProps, LinkableProject, RecentSession, RecentSessions
 export { Board } from "./Board.tsx";
 export type { BoardProps, BoardCardStartFocus } from "./Board.tsx";
 export { ArchiveDialog, ArchiveEpicDialog, ArchivedMark, CloseDialog, ResolutionMark, lifecycleMenuItems } from "./Lifecycle.tsx";
+export { LiveWork, liveWords } from "./LiveWork.tsx";
+export type { LiveItem, LiveState, LiveWorkProps } from "./LiveWork.tsx";
+export { DeciderField } from "./DeciderField.tsx";
+export type { DeciderFieldProps, NextDecider } from "./DeciderField.tsx";
+export { AttemptDivider, EarlierTurns } from "./AttemptDivider.tsx";
+export type { AttemptDividerProps, EarlierTurnsProps } from "./AttemptDivider.tsx";
 export type {
-  ArchiveDialogProps, ArchiveEpicDialogProps, CloseDecision, CloseDialogProps, LifecycleMenuOptions, LifecycleTask, LifecycleTaskRef, ResolutionMarkProps,
+  ArchiveDialogProps, ArchiveEpicDialogProps, ClosablePullRequest, CloseDecision, CloseDialogProps, LifecycleMenuOptions, LifecycleTask, LifecycleTaskRef,
+  ResolutionMarkProps,
 } from "./Lifecycle.tsx";
 export {
   AutoStartMark, DependencyStrip, HOW_LABEL, RelationChip, RelationList, RelationRow, StartGate, StartMenu,

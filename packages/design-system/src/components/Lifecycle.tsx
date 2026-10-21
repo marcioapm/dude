@@ -6,7 +6,7 @@
  */
 
 import { useState, useId, type ReactNode } from "react";
-import { RESOLUTION_LABEL, closedBy, keyList, lifecycleBusy, lifecycleEnded, type CloseResolution, type TaskResolution, type TaskStatus } from "@dude/domain";
+import { RESOLUTION_LABEL, closedBy, keyList, lifecycleEnded, type CloseResolution, type TaskResolution, type TaskStatus } from "@dude/domain";
 import { Icon } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -16,6 +16,7 @@ import { Dialog } from "../primitives/Dialog.tsx";
 import { Callout, Fieldset, FormStack } from "../primitives/Layout.tsx";
 import type { RowMenuItem } from "../primitives/RowMenu.tsx";
 import { Textarea } from "../primitives/Textarea.tsx";
+import { LiveWork, liveWords, type LiveItem } from "./LiveWork.tsx";
 import { RefLead } from "./RefLead.tsx";
 import { SearchPicker } from "./SearchPicker.tsx";
 import { StatusMark } from "./StatusMark.tsx";
@@ -61,7 +62,7 @@ export interface LifecycleTask {
   readonly status: TaskStatus;
   readonly resolution?: TaskResolution | null | undefined;
   readonly archived?: boolean | undefined;
-  /** A pull request of it is open on GitHub: refused as `review` whatever the status. */
+  /** A pull request of it is open on GitHub: Close and Archive ask whether to close it. */
   readonly pullRequestOpen?: boolean | undefined;
 }
 
@@ -75,16 +76,15 @@ export interface LifecycleMenuOptions {
   readonly onUnarchive?: (() => void) | undefined;
 }
 
-const BUSY_WORDS = { running: "Stop its agents first", review: "It has a pull request open" } as const;
-
 /**
  * The task `…` menu's lifecycle items, each disabled with its reason, in
- * the order the reasons are checked: who may not, then agents working,
- * then a pull request open, then the task's own lifecycle. Close… becomes
- * Reopen on a closed task, and Archive… becomes Unarchive on an archived one.
+ * the order the reasons are checked: who may not, then the task's own
+ * lifecycle. Agents working and a pull request open disable nothing: the
+ * dialog says what closing stops and asks about the pull request. Close…
+ * becomes Reopen on a closed task, and Archive… becomes Unarchive on an
+ * archived one.
  */
 export function lifecycleMenuItems(t: LifecycleTask, o: LifecycleMenuOptions): RowMenuItem[] {
-  const busy = lifecycleBusy(t.status) ?? (t.pullRequestOpen ? "review" : null);
   const reason = (state?: string | undefined) => o.notYours ?? state;
   const items: RowMenuItem[] = [];
   if (closedBy(t.resolution)) {
@@ -92,7 +92,7 @@ export function lifecycleMenuItems(t: LifecycleTask, o: LifecycleMenuOptions): R
       disabled: Boolean(o.notYours || t.archived), disabledReason: reason(t.archived ? "Unarchive it first, then reopen it" : undefined) });
   } else {
     const ended = lifecycleEnded(t.status, t.resolution);
-    const state = busy ? BUSY_WORDS[busy] : ended ? "Already ended" : undefined;
+    const state = ended ? "Already ended" : undefined;
     items.push({ id: "close", label: ended ? "Closed" : "Close…", icon: "circle-x", onSelect: o.onClose,
       disabled: Boolean(o.notYours || state), disabledReason: reason(state) });
   }
@@ -100,9 +100,8 @@ export function lifecycleMenuItems(t: LifecycleTask, o: LifecycleMenuOptions): R
     items.push({ id: "unarchive", label: "Unarchive", icon: "archive", onSelect: o.onUnarchive,
       disabled: Boolean(o.notYours), disabledReason: reason() });
   } else {
-    const state = busy ? BUSY_WORDS[busy] : undefined;
     items.push({ id: "archive", label: "Archive…", icon: "archive", onSelect: o.onArchive,
-      disabled: Boolean(o.notYours || state), disabledReason: reason(state) });
+      disabled: Boolean(o.notYours), disabledReason: reason() });
   }
   return items;
 }
@@ -125,6 +124,13 @@ export interface CloseDecision {
   readonly duplicateOf?: string | undefined;
   readonly note?: string | undefined;
   readonly removeRelations?: boolean | undefined;
+  readonly closePullRequest?: boolean | undefined;
+}
+
+export interface ClosablePullRequest {
+  readonly number: number;
+  /** "dude": opened for this task, ticked by default. "someone": the task was started from it, unticked by default. */
+  readonly openedBy: "dude" | "someone";
 }
 
 export interface CloseDialogProps {
@@ -151,6 +157,10 @@ export interface CloseDialogProps {
   readonly busy?: boolean | undefined;
   /** Where it is: the dialog's context line (a `Breadcrumb`). */
   readonly context?: ReactNode;
+  /** What closing stops: every live Run. Empty or absent: nothing is live and the dialog is as before. */
+  readonly live?: readonly LiveItem[] | undefined;
+  /** The task's open pull request: a Checkbox row asks whether to close it on GitHub too. */
+  readonly pullRequest?: ClosablePullRequest | undefined;
 }
 
 /**
@@ -159,19 +169,24 @@ export interface CloseDialogProps {
  * Mark done's and says so; a Duplicate picks the task it duplicates and
  * says what its blocking hands over; any other resolution with something
  * waiting on the task says it keeps waiting, and offers to remove the
- * relation in the same step.
+ * relation in the same step. With anything live it is a danger dialog that
+ * lists what stops first; with an open pull request it asks whether to
+ * close that too.
  */
 export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArchive, cantReproduceReason, find, onConfirm, refused, initial,
-  initialDuplicate, problem, busy, context }: CloseDialogProps) {
+  initialDuplicate, problem, busy, context, live = [], pullRequest }: CloseDialogProps) {
   const [why, setWhy] = useState<CloseResolution | null>(andArchive ? null : (initial ?? null));
   const [dup, setDup] = useState<LifecycleTaskRef | null>(initialDuplicate ?? null);
   const [unrelate, setUnrelate] = useState<CheckedState>(false);
+  const [closePR, setClosePR] = useState<CheckedState>(pullRequest?.openedBy === "dude");
   const [note, setNote] = useState("");
   const footId = useId();
   const keys = keyList(waiting.map((w) => w.key));
   const one = waiting.length === 1;
+  const stops = live.length > 0;
   const ready = why !== null && (why !== "duplicate" || dup !== null);
-  const label = andArchive ? "Close and archive"
+  const label = stops ? (andArchive ? "Stop, close and archive" : "Stop and close")
+    : andArchive ? "Close and archive"
     : why === "duplicate" && dup ? `Close as duplicate of ${dup.key}`
     : why ? `Close as ${RESOLUTION_LABEL[why]}` : "Close";
   const options: ChoiceOption<CloseResolution | "nothing_to_merge">[] = [
@@ -185,22 +200,30 @@ export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArch
   const confirm = () => {
     if (!why || !ready) return;
     void onConfirm({ resolution: why, ...(why === "duplicate" && dup ? { duplicateOf: dup.key } : {}),
-      ...(note.trim() ? { note: note.trim() } : {}), ...(why !== "duplicate" && unrelate === true ? { removeRelations: true } : {}) });
+      ...(note.trim() ? { note: note.trim() } : {}), ...(why !== "duplicate" && unrelate === true ? { removeRelations: true } : {}),
+      ...(pullRequest ? { closePullRequest: closePR === true } : {}) });
   };
   const hint = refused ?? (!why ? "Pick why it is closed." : why === "duplicate" && !dup ? "Pick the task it duplicates." : undefined);
+  const description = andArchive
+    ? `${t.key} hasn't ended, so archiving it closes it first: say why. ${stops ? "What is live stops now. " : ""}Both happen at once. To bring it back, Unarchive it, then Reopen it.`
+    : stops
+      ? "Closing says nobody will work on it, and why. What is live stops now and it ends here. Reopen brings it back to Backlog."
+      : "Closing says nobody will work on it, and why. It never ran, or it stopped: either way it ends here. Reopen brings it back to Backlog.";
   return (
     <Dialog open={open} onOpenChange={onOpenChange} size="md" context={context} title={andArchive ? `Close and archive ${t.key}` : `Close ${t.key}`}
-      description={andArchive
-        ? `${t.key} hasn't ended, so archiving it closes it first: say why. Both happen at once. To bring it back, Unarchive it, then Reopen it.`
-        : "Closing says nobody will work on it, and why. It never ran, or it stopped: either way it ends here. Reopen brings it back to Backlog."}
+      tone={stops ? "danger" : undefined} description={description}
       footerProblem={problem}
       footerStart={hint ? <span id={footId} className={styles["muted"]}>{hint}</span> : undefined}
       footer={<>
         <Button variant="quiet" onClick={() => onOpenChange(false)}>Cancel</Button>
-        <Button variant="primary" leadingIcon={andArchive ? "archive" : undefined} disabled={!ready || Boolean(refused) || busy}
+        <Button variant={stops ? "danger" : "primary"} solid={stops} leadingIcon={stops ? "stop" : andArchive ? "archive" : undefined}
+          disabled={!ready || Boolean(refused) || busy}
           aria-describedby={hint ? footId : undefined} onClick={confirm} data-testid="close-confirm">{label}</Button>
       </>}>
       <FormStack>
+        {stops ? (
+          <LiveWork className={styles["live"]} items={live} summary={`Closing stops ${liveWords(live)}. Nothing is kept to resume.`} />
+        ) : null}
         <ChoiceList<CloseResolution | "nothing_to_merge"> label="Why it is closed" value={why ?? ("" as CloseResolution)} options={options}
           onChange={(r) => r !== "nothing_to_merge" && setWhy(r)} data-testid="close-why" />
         {why === "duplicate" ? (
@@ -247,10 +270,26 @@ export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArch
             </div>
           </Callout>
         ) : null}
+        {pullRequest ? <PullRequestCloseRow pr={pullRequest} checked={closePR} onCheckedChange={setClosePR} /> : null}
         <Textarea label="Note (optional)" rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000}
           placeholder={andArchive ? "Said in Activity beside the close and the archive." : "Said in Activity beside the close."} />
       </FormStack>
     </Dialog>
+  );
+}
+
+/** Whether closing the task closes its open pull request on GitHub too: a `Checkbox` in a bordered row. */
+function PullRequestCloseRow({ pr, checked, onCheckedChange }: {
+  readonly pr: ClosablePullRequest; readonly checked: CheckedState; readonly onCheckedChange: (c: CheckedState) => void;
+}) {
+  const on = checked === true;
+  const description = pr.openedBy === "dude"
+    ? (on ? "dude opened it for this task; closed with a comment saying why. Its branch is kept." : `The task closes; #${pr.number} stays open on GitHub.`)
+    : (on ? "It was opened by someone else; dude closes it, with a comment saying why." : "It was opened by someone else; it stays open unless you tick this.");
+  return (
+    <div className={styles["prRow"]} data-testid="close-pull-request" data-opened-by={pr.openedBy}>
+      <Checkbox checked={checked} onCheckedChange={onCheckedChange} label={`Close pull request #${pr.number} on GitHub`} description={description} />
+    </div>
   );
 }
 

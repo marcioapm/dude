@@ -51,17 +51,17 @@ describe("ResolutionMark and ArchivedMark", () => {
 describe("the task menu's lifecycle items", () => {
   test("each disabled with its reason, in the order they are checked", () => {
     expect(items({ status: "received" }, {})).toEqual(["Close…", "Archive…"]);
-    expect(items({ status: "running" }, {})).toEqual(["Close… — Stop its agents first", "Archive… — Stop its agents first"]);
-    expect(items({ status: "awaiting_input" }, {})).toEqual(["Close… — Stop its agents first", "Archive… — Stop its agents first"]);
-    expect(items({ status: "review" }, {})).toEqual(["Close… — It has a pull request open", "Archive… — It has a pull request open"]);
-    expect(items({ status: "ready_to_merge" }, {})).toEqual(["Close… — It has a pull request open", "Archive… — It has a pull request open"]);
+    // Agents working and a pull request open disable nothing: the dialog says what closing stops.
+    expect(items({ status: "running" }, {})).toEqual(["Close…", "Archive…"]);
+    expect(items({ status: "awaiting_input" }, {})).toEqual(["Close…", "Archive…"]);
+    expect(items({ status: "review" }, {})).toEqual(["Close…", "Archive…"]);
+    expect(items({ status: "ready_to_merge" }, {})).toEqual(["Close…", "Archive…"]);
     expect(items({ status: "done", resolution: "nothing_to_merge" }, {})).toEqual(["Closed — Already ended", "Archive…"]);
     // A stopped task with no resolution hasn't ended: Close is offered.
     expect(items({ status: "aborted" }, {})).toEqual(["Close…", "Archive…"]);
     expect(items({ status: "failed" }, {})).toEqual(["Close…", "Archive…"]);
-    // Stopped with its pull request still open: refused as review is.
-    expect(items({ status: "aborted", pullRequestOpen: true }, {}))
-      .toEqual(["Close… — It has a pull request open", "Archive… — It has a pull request open"]);
+    expect(items({ status: "aborted", pullRequestOpen: true }, {})).toEqual(["Close…", "Archive…"]);
+    expect(items({ status: "running", pullRequestOpen: true }, {})).toEqual(["Close…", "Archive…"]);
     expect(items({ status: "aborted", resolution: "wont_do" }, {})).toEqual(["Reopen", "Archive…"]);
     expect(items({ status: "aborted", resolution: "wont_do", archived: true }, {})).toEqual(["Reopen — Unarchive it first, then reopen it", "Unarchive"]);
     // Who may not comes first, whatever the state.
@@ -126,6 +126,74 @@ describe("CloseDialog", () => {
     expect(document.getElementById(confirm.getAttribute("aria-describedby")!)!.textContent).toBe(NOT_YOURS);
     const cant = [...document.querySelectorAll('[role="radio"]')].find((r) => r.textContent?.startsWith("Can't reproduce"))!;
     expect(cant.textContent).toContain("Only for a bug");
+  });
+
+  const pick = async (label: string) =>
+    act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((r) => r.textContent?.startsWith(label))!.click());
+
+  test("while live: danger, what stops listed first, Stop and close; nothing live is the plain dialog", async () => {
+    const got: CloseDecision[] = [];
+    await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={(d) => { got.push(d); }}
+      live={[{ id: "c", role: "conductor", who: "Conductor", doing: "between turns", state: "waiting" },
+        { id: "r", role: "reviewer", who: "Reviewer", doing: "security" }]} />);
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("What is live stops now and it ends here.");
+    const live = document.querySelector('[data-testid="live-work"]')!;
+    expect(live.textContent).toContain("Closing stops the conductor and a reviewer. Nothing is kept to resume.");
+    // First in the form, before the resolutions.
+    expect(live.compareDocumentPosition(document.querySelector('[data-testid="close-why"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(live.querySelector('[aria-label="Live now"]')!.children.length).toBe(2);
+    await pick("Won't do");
+    const confirm = document.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!;
+    expect(confirm.textContent).toBe("Stop and close");
+    expect(confirm.querySelector('svg[data-icon="stop"]')).not.toBeNull();
+    await act(async () => confirm.click());
+    expect(got).toEqual([{ resolution: "wont_do" }]);
+    await act(async () => root?.unmount());
+    root = null;
+    await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={() => undefined} live={[]} />);
+    expect(document.querySelector('[data-testid="live-work"]')).toBeNull();
+    await pick("Won't do");
+    expect(document.querySelector('[data-testid="close-confirm"]')!.textContent).toBe("Close as Won't do");
+  });
+
+  test("dude's pull request: ticked, closed with the task; untick and it stays open", async () => {
+    const got: CloseDecision[] = [];
+    await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={(d) => { got.push(d); }}
+      pullRequest={{ number: 412, openedBy: "dude" }} />);
+    const row = document.querySelector('[data-testid="close-pull-request"]')!;
+    const box = row.querySelector<HTMLElement>('[role="checkbox"]')!;
+    expect(row.textContent).toContain("Close pull request #412 on GitHub");
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    expect(row.textContent).toContain("dude opened it for this task; closed with a comment saying why. Its branch is kept.");
+    await pick("Won't do");
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!.click());
+    await act(async () => box.click());
+    expect(row.textContent).toContain("The task closes; #412 stays open on GitHub.");
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!.click());
+    expect(got).toEqual([{ resolution: "wont_do", closePullRequest: true }, { resolution: "wont_do", closePullRequest: false }]);
+  });
+
+  test("an adopted pull request: unticked, left open unless ticked", async () => {
+    const got: CloseDecision[] = [];
+    await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={(d) => { got.push(d); }}
+      pullRequest={{ number: 9, openedBy: "someone" }} />);
+    const row = document.querySelector('[data-testid="close-pull-request"]')!;
+    expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("false");
+    expect(row.textContent).toContain("It was opened by someone else; it stays open unless you tick this.");
+    await pick("Won't do");
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!.click());
+    expect(got).toEqual([{ resolution: "wont_do", closePullRequest: false }]);
+  });
+
+  test("Close and archive while live: nothing chosen, Stop, close and archive", async () => {
+    await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} andArchive initial="wont_do" find={async () => []} onConfirm={() => undefined}
+      live={[{ id: "c", role: "conductor", who: "Conductor", doing: "deciding after review" }]} pullRequest={{ number: 412, openedBy: "dude" }} />);
+    expect(document.querySelector('[role="radio"][aria-checked="true"]')).toBeNull();
+    const confirm = document.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!;
+    expect([confirm.textContent, confirm.disabled]).toEqual(["Stop, close and archive", true]);
+    expect(document.querySelector('[data-testid="live-work"]')!.textContent).toContain("Closing stops the conductor.");
+    expect(document.querySelector('[data-testid="close-pull-request"]')).not.toBeNull();
   });
 });
 

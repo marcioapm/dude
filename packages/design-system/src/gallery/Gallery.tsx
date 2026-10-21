@@ -15,7 +15,7 @@ import { PeersSection } from "./sections/Peers.tsx";
 import { NavigationSection } from "./sections/Navigation.tsx";
 import { BoardSection } from "./sections/Board.tsx";
 import { RelationsSection } from "./sections/Relations.tsx";
-import { LifecycleSection } from "./sections/Lifecycle.tsx";
+import { LifecycleSection, StoppingSection } from "./sections/Lifecycle.tsx";
 import { ShellSection } from "./sections/Shell.tsx";
 import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
@@ -126,6 +126,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ch-message", "ChatMessage"],
       ["ch-conductor", "A task's Chat"],
       ["ch-conducted", "A conducted task"],
+      ["ch-decider-field", "Who decides the next attempt"],
+      ["ch-attempts", "Attempts"],
       ["ch-steer", "Steer delivery"],
       ["ch-thread", "ChatThread"],
       ["ch-question", "QuestionCard"],
@@ -199,6 +201,12 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["rel-picker", "RelationPicker"],
       ["rel-strip", "DependencyStrip"],
       ["rel-proposal", "ProposalCard: relations"],
+    ],
+  ],
+  [
+    "Stopping a task",
+    [
+      ["stopping-live", "LiveWork"],
     ],
   ],
   [
@@ -389,6 +397,7 @@ function Shell() {
           <NavigationSection mode={panes} />
           <BoardSection mode={panes} />
           <RelationsSection mode={panes} />
+          <StoppingSection mode={panes} />
           <LifecycleSection mode={panes} />
           <SettingsGallerySection mode={panes} />
           <ImagesGallerySection mode={panes} />

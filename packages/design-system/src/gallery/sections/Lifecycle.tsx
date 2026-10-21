@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import { ArchiveDialog, ArchiveEpicDialog, ArchivedMark, CloseDialog, ResolutionMark, lifecycleMenuItems, type LifecycleTask, type LifecycleTaskRef } from "../../components/Lifecycle.tsx";
+import { LiveWork, liveWords, type LiveItem } from "../../components/LiveWork.tsx";
 import { Board } from "../../components/Board.tsx";
 import { RelationList } from "../../components/Relations.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
@@ -44,7 +45,7 @@ function MenuOpen({ theme, task, notYours }: { readonly theme: string; readonly 
 
 const MENU_STATES: ReadonlyArray<readonly [string, LifecycleTask, string | undefined]> = [
   ["Backlog, the owner", { status: "received" }, undefined],
-  ["Running", { status: "running" }, undefined],
+  ["Running task: Close… and Archive… enabled", { status: "running" }, undefined],
   ["In review", { status: "review" }, undefined],
   ["Stopped, pull request open", { status: "aborted", pullRequestOpen: true }, undefined],
   ["Done, nothing to merge", { status: "done", resolution: "nothing_to_merge" }, undefined],
@@ -52,6 +53,10 @@ const MENU_STATES: ReadonlyArray<readonly [string, LifecycleTask, string | undef
   ["Closed and archived", { status: "aborted", resolution: "wont_do", archived: true }, undefined],
   ["A member", { status: "received" }, NOT_YOURS],
 ];
+
+const CONDUCTOR_BETWEEN: LiveItem = { id: "c", role: "conductor", who: "Conductor", doing: "between turns", state: "waiting" };
+const CONDUCTOR_DECIDING: LiveItem = { id: "c", role: "conductor", who: "Conductor", doing: "deciding after review" };
+const REVIEWER: LiveItem = { id: "r", role: "reviewer", who: "Reviewer", doing: "security" };
 
 const boardProject: NavProject = {
   id: "p_lc", name: "control-plane", archivedCount: 3,
@@ -64,6 +69,41 @@ const boardProject: NavProject = {
     { id: "f", key: "CP-62", title: "CSV export drops rows when a name has a comma", status: "received", people: [ana] },
   ],
 };
+
+const STOP_TEAM: LiveItem[] = [
+  { id: "c", role: "conductor", who: "Conductor", doing: "deciding after review" },
+  { id: "r1", role: "reviewer", who: "Reviewer", doing: "security" },
+  { id: "r2", role: "reviewer", who: "Reviewer", doing: "correctness" },
+  { id: "f", role: "implementer", who: "Fixer", doing: "the two findings", state: "queued" },
+];
+const DELIVER_REVIEWERS: LiveItem[] = [
+  { id: "r1", role: "reviewer", who: "Reviewer", doing: "security" },
+  { id: "r2", role: "reviewer", who: "Reviewer", doing: "correctness" },
+];
+
+/** What a stop stops, the parts the Stop dialog and CloseDialog share. */
+export function StoppingSection({ mode }: { readonly mode: PaneMode }) {
+  const states: ReadonlyArray<readonly [string, ReactNode]> = [
+    ["Conductor, 2 reviewers, a queued fixer", <LiveWork items={STOP_TEAM} summary={`Stopping stops ${liveWords(STOP_TEAM)}.`} />],
+    ["Deliver's reviewers only", <LiveWork items={DELIVER_REVIEWERS} summary={`Stopping stops ${liveWords(DELIVER_REVIEWERS)}.`} />],
+    ["The conductor between turns, alone", <LiveWork items={[CONDUCTOR_BETWEEN]} summary={`Stopping stops ${liveWords([CONDUCTOR_BETWEEN])}.`} />],
+  ];
+  return (
+    <Section id="stopping" title="Stopping a task"
+      intro="One Stop per task, and Close… / Archive… that stop what is live: the confirmation says what stops, first.">
+      <Block id="stopping-live" title="LiveWork"
+        note="One sentence, then a face per live Run: the live ring on those at work, none on one queued or a conductor between turns. A list named “Live now”. Wraps; never scrolls. liveWords(items) gives the sentence's list.">
+        <Panes mode={mode} surface>
+          <Col>
+            {states.map(([label, node]) => <Col key={label}><Caption>{label}</Caption>{node}</Col>)}
+            <Caption>390px</Caption>
+            <div style={{ width: 358 }}><LiveWork items={STOP_TEAM} summary={`Stopping stops ${liveWords(STOP_TEAM)}.`} /></div>
+          </Col>
+        </Panes>
+      </Block>
+    </Section>
+  );
+}
 
 export function LifecycleSection({ mode }: { readonly mode: PaneMode }) {
   return (
@@ -85,7 +125,7 @@ export function LifecycleSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block id="lifecycle-menu" title="The task menu's lifecycle"
-        note="Close… / Reopen and Archive… / Unarchive, shown to everyone and disabled with the reason: who may not, agents working, a pull request open, already ended, archived. Archive… on a task not ended opens Close and archive.">
+        note="Close… / Reopen and Archive… / Unarchive, shown to everyone and disabled with the reason: who may not, already ended, archived. Agents working and a pull request open disable nothing: the dialog says what closing stops. Archive… on a task not ended opens Close and archive.">
         <Panes mode={mode} surface>
           {(theme) => (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
@@ -108,17 +148,27 @@ export function LifecycleSection({ mode }: { readonly mode: PaneMode }) {
               cantReproduceReason="Only for a bug: there is nothing to reproduce in a feature" />}</Opens>
             <Opens label="A member">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find} onConfirm={() => s(false)} refused={NOT_YOURS} />}</Opens>
             <Opens label="Refused by the server">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find} onConfirm={() => s(false)}
-              problem="Stop its agents first: an agent of CP-63 is still working." />}</Opens>
+              problem="CP-63 is archived: unarchive it first." />}</Opens>
+            <Opens label="While live — conductor between turns">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
+              onConfirm={() => s(false)} live={[CONDUCTOR_BETWEEN]} />}</Opens>
+            <Opens label="While live — conductor + reviewer">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
+              onConfirm={() => s(false)} live={[CONDUCTOR_DECIDING, REVIEWER]} />}</Opens>
+            <Opens label="Open PR by dude (ticked)">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
+              onConfirm={() => s(false)} pullRequest={{ number: 412, openedBy: "dude" }} />}</Opens>
+            <Opens label="Adopted PR (unticked)">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
+              onConfirm={() => s(false)} pullRequest={{ number: 412, openedBy: "someone" }} />}</Opens>
           </Row>
         </Panes>
       </Block>
 
       <Block id="lifecycle-close-archive" title="Close and archive"
-        note="Archive… on a task that hasn't ended: the Close dialog titled Close and archive, nothing chosen, its primary disabled until a resolution is; a member sees it disabled with whose it is.">
+        note="Archive… on a task that hasn't ended: the Close dialog titled Close and archive, nothing chosen, its primary disabled until a resolution is; a member sees it disabled with whose it is. While live it lists what stops and reads Stop, close and archive.">
         <Panes mode={mode}>
           <Row>
             <Opens label="Close and archive CP-44">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP44} andArchive find={find} onConfirm={() => s(false)} />}</Opens>
             <Opens label="…as a member">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP44} andArchive find={find} onConfirm={() => s(false)} refused={NOT_YOURS} />}</Opens>
+            <Opens label="While live, with dude's PR">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP44} andArchive find={find} onConfirm={() => s(false)}
+              live={[CONDUCTOR_DECIDING, REVIEWER]} pullRequest={{ number: 412, openedBy: "dude" }} />}</Opens>
           </Row>
         </Panes>
       </Block>

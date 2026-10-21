@@ -561,6 +561,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   where "Sent as" would be. While the conductor asks, it steps back to the
   waiting line, as in an agent session; the answer is given in its
   question's turn.
+- **Attempts.** **`AttemptDivider`** marks where one attempt ends and the
+  next begins in a task's Chat: a rule, "Attempt 2 · started by Ana · 1m
+  ago", and the note quoted under it. A `separator` named "Attempt 2,
+  started by Ana". The earlier attempt's turns sit above it inside
+  **`EarlierTurns`** (a `group` named "Attempt 1's conversation"), muted but
+  whole; nothing in them can be answered.
 
 ### Peers (agents on an epic)
 
@@ -1066,6 +1072,23 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   in Closed says its resolution on its marks line (`ResolutionMark`), and
   its foot says "closed" where a stopped one says "stopped".
 
+### Stopping a task
+
+- **`LiveWork`** says what a stop would stop, at the top of its
+  confirmation: one sentence, then a face per live Run — the live ring on
+  those at work, none on those queued or a conductor between turns — with
+  who it is and what it is doing. A list named "Live now". Wraps; never
+  scrolls. `liveWords(items)` gives the sentence's list ("the conductor, 2
+  reviewers and a queued fixer"). The Stop dialog and `CloseDialog` show the
+  same list.
+- **`DeciderField`** is who decides the next attempt, inside a dialog that
+  starts one. A labelled `Segmented` of two, each with its driver's glyph
+  (`DriverIcons`); the one that decided the current attempt says "as now"
+  and is the default. One muted line under it says what the chosen one
+  does. The group's accessible name is its label; the hint is its
+  description. To change who decides the attempt running now, use
+  `DriverSwitch`.
+
 ### Lifecycle (closed, archived)
 
 - **Closed, archived.** Neutral, muted, never a tone: neither needs anyone.
@@ -1076,19 +1099,26 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The task's `…` menu carries the lifecycle** (`lifecycleMenuItems`):
   Close… (Reopen on a closed task), Archive… (Unarchive on an archived one),
   each shown to everyone and disabled with its reason, checked in order:
-  who may not ("Only Ana, the owner, or an admin can do this"), agents
-  working ("Stop its agents first"), a pull request open ("It has a pull
-  request open": `review` or `ready_to_merge`, or `pullRequestOpen` on any
-  other status), then the task's own state ("Already ended"; "Unarchive it
-  first, then reopen it").
+  who may not ("Only Ana, the owner, or an admin can do this"), then the
+  task's own state ("Already ended"; "Unarchive it first, then reopen it").
+  Agents working and a pull request open do not disable them: the dialog
+  says what closing stops and asks about the pull request.
 - **`CloseDialog`** is the decision: four resolutions as a `ChoiceList`, two
   disabled with why (Nothing to merge is Mark done's; Can't reproduce where
   the caller says so). Duplicate opens a `SearchPicker` that refuses the task
   itself and a duplicate ("pick that one") and says what the handover does.
   Any other resolution with something waiting on the task says it keeps
-  waiting, with **Remove the relation**. `andArchive` makes it Close and
-  archive: nothing chosen, one primary that does both. `refused` disables the
-  primary with whose decision it is.
+  waiting, with **Remove the relation**. **`live`**: with anything live the
+  dialog turns danger, lists it first (`LiveWork`, "Closing stops the
+  conductor and 1 reviewer. Nothing is kept to resume."), and its primary
+  says **Stop and close**; with nothing live it is the plain dialog.
+  **`pullRequest`**: a `Checkbox` "Close pull request #412 on GitHub",
+  ticked for a PR dude opened, unticked for one the task was started from
+  ("It was opened by someone else; it stays open unless you tick this");
+  unticked, the task closes and the PR stays open. `andArchive` makes it
+  Close and archive: nothing chosen, one primary that does both ("Stop,
+  close and archive" when live). `refused` disables the primary with whose
+  decision it is.
 - **`ArchiveDialog`** is the plain confirmation for an ended task; Keep it
   holds the focus. **`ArchiveEpicDialog`** refuses an epic with unended
   tasks, listing them, and offers to archive its ended ones.
