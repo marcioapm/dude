@@ -87,21 +87,23 @@ func imageCatalogue(ctx context.Context, tx pgx.Tx, w wrapper, org string, in se
 	if after != nil {
 		archived, name, id = &after.Archived, after.Name, after.ID
 	}
+	// The page is chosen first, so the laterals run over its rows only.
 	rows, err := tx.Query(ctx, `SELECT i.id, i.name, i.description, i.archived_at, i.id IS NOT DISTINCT FROM o.default_image_id,
 			pub.id, pub.number, pub.user_ref, pub.built_at, COALESCE(pub.can_run_containers, false),
 			pend.id, pend.number, pend.state,
 			EXISTS (SELECT 1 FROM image_versions d WHERE d.image_id = i.id AND d.state = 'draft'),
 			(SELECT COALESCE(json_agg(json_build_object('id', pi.id, 'name', pi.name) ORDER BY pi.name), '[]')
 			 FROM image_version_parents vp JOIN images pi ON pi.id = vp.parent_image_id WHERE vp.version_id = latest.id)
-		FROM images i JOIN organizations o ON o.id = i.organization_id
+		FROM (SELECT * FROM images i WHERE $1::boolean IS NULL OR (i.archived_at IS NOT NULL, i.name, i.id) > ($1, $2, $3)
+			ORDER BY i.archived_at IS NOT NULL, i.name, i.id LIMIT $4) i
+		JOIN organizations o ON o.id = i.organization_id
 		LEFT JOIN image_versions pub ON pub.id = i.published_version_id
 		LEFT JOIN LATERAL (SELECT v.id, v.number, v.state FROM image_versions v WHERE v.image_id = i.id AND v.number IS NOT NULL
 			AND v.number > COALESCE(pub.number, 0) AND v.state IN ('queued', 'building', 'pushing', 'failed')
 			ORDER BY v.number DESC LIMIT 1) pend ON true
 		LEFT JOIN LATERAL (SELECT v.id FROM image_versions v WHERE v.image_id = i.id
 			ORDER BY (v.state = 'draft') DESC, v.number DESC NULLS LAST LIMIT 1) latest ON true
-		WHERE $1::boolean IS NULL OR (i.archived_at IS NOT NULL, i.name, i.id) > ($1, $2, $3)
-		ORDER BY i.archived_at IS NOT NULL, i.name, i.id LIMIT $4`, archived, name, id, limit+1)
+		ORDER BY i.archived_at IS NOT NULL, i.name, i.id`, archived, name, id, limit+1)
 	if err != nil {
 		return nil, err
 	}
