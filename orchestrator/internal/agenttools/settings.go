@@ -32,7 +32,7 @@ type settingsIn struct {
 }
 
 // The sections settings answers, in its output's order.
-var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements", "servers", "memory"}
+var settingsSections = []string{"delivery", "roles", "prompts", "github", "network", "capabilities", "machines", "models", "judgements", "servers", "memory", "images"}
 
 // maxLinkedScopes is the most linked projects a session's unnamed read
 // shows a scope each for.
@@ -148,6 +148,7 @@ type settingsOut struct {
 	MachineSizes []sizeOut          `json:"machineSizes,omitempty"`
 	Memory       *memorySettingsOut `json:"memory,omitempty"`
 	Models       *modelsOut         `json:"models,omitempty"`
+	Images       *imagesOut         `json:"images,omitempty"`
 	Judgements   *judgementsOut     `json:"judgements,omitempty"`
 }
 
@@ -233,6 +234,12 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	}
 	if want("models") {
 		if out.Models, err = modelCatalogue(w, refs.tiers, c.Org, in); err != nil {
+			return out, err
+		}
+	}
+	if section == "images" {
+		// Explicit only: by default each role's image is in roles.
+		if out.Images, err = imageCatalogue(ctx, tx, w, c.Org, in); err != nil {
 			return out, err
 		}
 	}

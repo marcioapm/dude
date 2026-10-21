@@ -37,17 +37,42 @@ type modelCursor struct {
 	ID       string `json:"id"`
 }
 
+// catalogueLimit is an explicit catalogue section's page size.
+func catalogueLimit(limit int) (int, error) {
+	if limit == 0 {
+		return 20, nil
+	}
+	if limit < 1 || limit > 50 {
+		return 0, refuseText(settingsText("catalogue-limit", nil))
+	}
+	return limit, nil
+}
+
+// pageFit drops a page's trailing items, keeping at least one, until it
+// encodes to 40 KiB at most: a tool result is held to 64 KiB, and JSON
+// escaping can grow bounded text sixfold. It returns how many it kept.
+func pageFit(page any, n int, trim func(int)) (int, error) {
+	for ; n > 1; n-- {
+		encoded, err := json.Marshal(page)
+		if err != nil {
+			return 0, err
+		}
+		if len(encoded) <= 40<<10 {
+			return n, nil
+		}
+		trim(n - 1)
+	}
+	return n, nil
+}
+
 func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in settingsIn) (*modelsOut, error) {
 	out := &modelsOut{Count: len(tiers), Section: "models", Source: sourceOrg}
 	if in.Section != "models" {
 		return out, nil
 	}
-	limit := in.Limit
-	if limit == 0 {
-		limit = 20
-	}
-	if limit < 1 || limit > 50 {
-		return nil, refuseText(settingsText("catalogue-limit", nil))
+	limit, err := catalogueLimit(in.Limit)
+	if err != nil {
+		return nil, err
 	}
 	var after modelCursor
 	if in.Cursor != "" {
