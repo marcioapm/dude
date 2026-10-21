@@ -380,11 +380,7 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 	return err
 }
 
-// startOver starts the task's next attempt: a delivery of its own, on a
-// branch of its own, from the default branch, under the delivery policy the
-// settings give now. Not the last attempt's: that is frozen at its own
-// start, so it would ignore settings changed since and zero any policy
-// field added since.
+// startOver uses current settings, not the stopped attempt's frozen policy.
 func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, overridden bool) (string, error) {
 	projectID, policy, err := policyFor(ctx, tx, taskID)
 	if err != nil {

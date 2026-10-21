@@ -65,6 +65,15 @@ func (w *world) options(wi string) (actions []string, attempt int) {
 	return out.Actions, out.Attempt
 }
 
+func (w *world) closePullRequestAndAwaitAbort(wi string) {
+	w.t.Helper()
+	w.gh.Close(1)
+	w.until("the task to be aborted by the close", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "aborted"
+	})
+}
+
 func TestAnAbortedTaskOffersEveryWayBack(t *testing.T) {
 	w := newWorld(t)
 	wi, _ := w.aborted()
@@ -165,11 +174,7 @@ func TestStartingOverIsANewAttemptOnItsOwnBranch(t *testing.T) {
 	// A finding of attempt 1, left open, and a person closing its pull request.
 	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title)
 		SELECT 'f_old', organization_id, task_id, id, 'correctness', 'high', 'old' FROM runs WHERE task_id = $1 AND phase = 'review' LIMIT 1`, wi)
-	w.gh.Close(1)
-	w.until("the task to be aborted by the close", func() bool {
-		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.taskStatus(wi) == "aborted"
-	})
+	w.closePullRequestAndAwaitAbort(wi)
 	if got, _ := w.options(wi); strings.Join(got, " ") != "restart" {
 		t.Fatalf("a task whose pull request was closed offers %v", got)
 	}
@@ -194,10 +199,7 @@ func TestStartingOverIsANewAttemptOnItsOwnBranch(t *testing.T) {
 	}
 }
 
-// Start over runs under the settings as they are now, not as the last
-// attempt froze them: a reviewer required since, and resuming rounds
-// turned on since, both reach the new attempt. The scripted reviewer's
-// finding gives each attempt a second review round.
+// The scripted reviewer's finding gives each attempt a second review round.
 func TestStartingOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
 	w := newWorld(t)
 	wi := w.task()
@@ -211,11 +213,7 @@ func TestStartingOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
 	}
 	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy
 		|| '{"requiredReviewers":["correctness","performance"],"resumeRounds":true}' WHERE id = $1`, w.project)
-	w.gh.Close(1)
-	w.until("the task to be aborted by the close", func() bool {
-		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.taskStatus(wi) == "aborted"
-	})
+	w.closePullRequestAndAwaitAbort(wi)
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
 		t.Fatalf("restart: %d %v", status, body)
 	}
@@ -228,8 +226,7 @@ func TestStartingOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
 	}
 }
 
-// A Start over the settings cannot be read for is refused whole: the task
-// stays stopped, as it was, with every way back still offered.
+// Unreadable settings must leave the stopped task and its recovery options intact.
 func TestStartingOverUnderSettingsThatDoNotDecodeLeavesTheTaskStopped(t *testing.T) {
 	w := newWorld(t)
 	wi, _ := w.aborted()
