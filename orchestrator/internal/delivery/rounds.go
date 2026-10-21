@@ -313,9 +313,15 @@ func sameSpecTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (
 	if ResolveRole(was, p.ProjectModels, p.OrgModels).Context != settings.Context {
 		return false, nil
 	}
+	// The fixer's current prompts, as LoadPrompts selects them: the latest
+	// version of each layer. An empty org body is none (instructionFile
+	// drops it), and so is a project's empty add.
 	var saved bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM prompt_versions v JOIN runs r ON r.id = $1
-		WHERE v.role = $2 AND (v.project_id IS NULL OR v.project_id = r.project_id) AND btrim(v.body) <> '')`, p.ID, role).Scan(&saved)
+	err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT btrim(v.body) <> '' FROM prompt_versions v
+			WHERE v.role = $2 AND v.project_id IS NULL ORDER BY v.created_at DESC, v.id DESC LIMIT 1), false)
+		OR COALESCE((SELECT v.mode = 'replace' OR btrim(v.body) <> '' FROM prompt_versions v JOIN runs r ON r.id = $1
+			WHERE v.role = $2 AND v.project_id = r.project_id ORDER BY v.created_at DESC, v.id DESC LIMIT 1), false)`,
+		p.ID, role).Scan(&saved)
 	return !saved, err
 }
 

@@ -304,6 +304,72 @@ func TestAContinuingWritersSyncIsWaitedForFromItsResume(t *testing.T) {
 	}
 }
 
+// A fixer whose own settings differ from the implementer's — its tier, its
+// notes, its current saved prompt — is a replay given the implementer's
+// conversation, never the implementer resumed. A fixer prompt saved once
+// and since cleared (its latest version empty) is no difference.
+func TestAFixerWithItsOwnSettingsIsAReplayOfTheImplementer(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(w *world)
+		fresh bool
+	}{
+		{"tier", func(w *world) { w.onModel("fixer", "llm-fixer") }, true},
+		{"notes", func(w *world) {
+			mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{fixer}',
+				COALESCE(agent_models->'fixer', '{}'::jsonb) || '{"context":"Fix only what is named."}') WHERE id = $1`, w.project)
+		}, true},
+		{"current prompt", func(w *world) {
+			mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, role, body, created_by)
+				VALUES ('pv_fix_'||$1, $1, 'fixer', 'FIXER STANCE', 'key_x')`, w.org)
+		}, true},
+		{"cleared prompt", func(w *world) {
+			mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, role, body, created_by, created_at)
+				VALUES ('pv_fix_old_'||$1, $1, 'fixer', 'FIXER STANCE', 'key_x', now() - interval '1 hour'),
+				       ('pv_fix_new_'||$1, $1, 'fixer', '', 'key_x', now())`, w.org)
+			mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, created_by)
+				VALUES ('pv_fix_proj_'||$1, $1, $2, 'fixer', 'add', '', 'key_x')`, w.org, w.project)
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := resuming(t)
+			// Not a scripted model: lux is given dude's prompt itself.
+			w.onModel("implementer", "llm-implement")
+			tc.setup(w)
+			wi := w.task()
+			w.names(wi, w.repoID)
+			w.start(wi, resumingPolicy())
+			w.until("a fix completed", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'`, wi) >= 1
+			})
+			writers := w.writerRows(wi)
+			if len(writers) != 2 {
+				t.Fatalf("writers: %+v; want the implementer and one fixer", writers)
+			}
+			impl, fix := writers[0], writers[1]
+			if !tc.fresh {
+				if fix.Continues != impl.ID || fix.How != delivery.ContinuesResume || len(w.luxRunsOf("fix")) != 0 {
+					t.Fatalf("the fixer %+v; want the implementer %s resumed", fix, impl.ID)
+				}
+				return
+			}
+			if fix.Continues != impl.ID || fix.How != delivery.ContinuesReplay {
+				t.Fatalf("the fixer %+v; want a replay of the implementer %s", fix, impl.ID)
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'fresh' = 'spec_changed'`, fix.ID); n != 1 {
+				t.Error("the replay's run.created does not say its spec changed")
+			}
+			luxFix := w.luxRunsOf("fix")
+			if len(luxFix) != 1 || w.luxRunsOf("implement")[0].Resumed != 0 {
+				t.Fatalf("%d fixers submitted, implementer resumed %d times; want one fresh fixer and no resume", len(luxFix), w.luxRunsOf("implement")[0].Resumed)
+			}
+			if !strings.Contains(luxFix[0].Prompt(), "## The conversation so far") {
+				t.Fatal("the fresh fixer was not given the implementer's conversation")
+			}
+		})
+	}
+}
+
 func specOf(t *testing.T, raw []byte) lux.Spec {
 	t.Helper()
 	var spec lux.Spec
