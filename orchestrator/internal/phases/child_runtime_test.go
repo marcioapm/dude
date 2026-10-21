@@ -163,11 +163,12 @@ func TestChildRuntimeWriterFence(t *testing.T) {
 	}
 }
 
-// A conductor's writer child admitted before a pull request opened on the
-// task branch, and only then due to start, fails without reaching lux,
-// saying to use start_phase fix; with the pull request closed it starts.
+// A conductor's writer child admitted before a pull request opened (or a
+// draft) on the task branch, and only then due to start, fails without
+// reaching lux, saying to use start_phase fix; with the pull request
+// closed it starts.
 func TestAWriterChildAdmittedBeforeAPullRequestOpenedDoesNotStart(t *testing.T) {
-	for _, state := range []string{"open", "closed"} {
+	for _, state := range []string{"open", "draft", "closed"} {
 		t.Run(state, func(t *testing.T) {
 			w := newResumeWorld(t)
 			fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} })
