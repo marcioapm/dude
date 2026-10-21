@@ -256,6 +256,9 @@ func TestGoldenResumeRounds(t *testing.T) {
 	from, to := map[string]string{"api": "aaa111", "web": "ccc333"}, map[string]string{"api": "bbb222", "web": "ccc333"}
 	lastFix := []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}
 	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings(), lastFix))
+	// Two checkouts, the fix publishing only api: BaseRefs holds api alone.
+	golden(t, "resume-review-one-published", RoundMessage(PhaseReview, map[string]string{"api": "aaa111"},
+		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], lastFix))
 	golden(t, "resume-review-simplify-two", RoundMessage(PhaseReview, map[string]string{"api": "aaa111", "web": "ccc000"}, to,
 		rangeReason[RangeSimplify], nil, nil))
 	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1], nil))

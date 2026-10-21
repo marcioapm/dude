@@ -346,7 +346,7 @@ func Prompt(phase string, in PromptInput) string {
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
 		}
-		if note := lastFixNote(in.LastFix, len(in.Repositories)); note != "" {
+		if note := lastFixNote(in.LastFix); note != "" {
 			add(note)
 		}
 

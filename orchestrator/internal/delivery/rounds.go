@@ -348,7 +348,7 @@ func RoundMessage(phase string, from, to map[string]string, reason string, findi
 		Ranges                    []rng
 		Reason, Findings, LastFix string
 		Format, Summary           string
-	}{phase == PhaseTest, ranges, reason, list, lastFixNote(lastFix, len(to)), findingFormat, reviewSummary})
+	}{phase == PhaseTest, ranges, reason, list, lastFixNote(lastFix), findingFormat, reviewSummary})
 }
 
 // FixRange is what a fix Run published in one repository: its commits are
@@ -375,21 +375,14 @@ func LastFixTx(ctx context.Context, tx pgx.Tx, parent string) ([]FixRange, error
 	return slices.DeleteFunc(ranges, func(r FixRange) bool { return r.Base == "" }), err
 }
 
-// lastFixNote renders contracts/last-fix, naming each range's repository
-// when the Run has several checkouts; "" for no range.
-func lastFixNote(ranges []FixRange, checkouts int) string {
+// lastFixNote renders contracts/last-fix, each range under its repository's
+// name: the ranges list only repositories the fix published, so their count
+// cannot tell a one-checkout Run from a several-checkout one. "" for no range.
+func lastFixNote(ranges []FixRange) string {
 	if len(ranges) == 0 {
 		return ""
 	}
-	type named struct {
-		FixRange
-		Named bool
-	}
-	out := make([]named, len(ranges))
-	for i, r := range ranges {
-		out[i] = named{r, len(ranges) > 1 || checkouts > 1}
-	}
-	return render(lastFixTmpl, out)
+	return render(lastFixTmpl, ranges)
 }
 
 func findingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding, error) {
