@@ -128,6 +128,8 @@ file: path/to/file.ts
 line: 123
 title: One line naming the problem
 description: What is wrong and why it matters.
+acceptance: What must be observably true once this is fixed — an outcome or invariant someone can check, never how to fix it.
+caused_by_fix: yes | no
 suggested_fix: What to do instead.
 ```
 
