@@ -104,7 +104,7 @@ func TestASessionAtItsLinkCapReadsABoundedResult(t *testing.T) {
 func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	f, token := limitsWorld(t, `{}`)
 	mustExec(t, f.owner, `UPDATE organizations SET delivery_policy = '{"maxReviewIterations":8}' WHERE id = $1`, f.org)
-	mustExec(t, f.owner, `UPDATE projects SET delivery_policy = '{"maxPrFixIterations":6,"conductorEditLines":200}' WHERE id = $1`, f.project)
+	mustExec(t, f.owner, `UPDATE projects SET delivery_policy = '{"maxPrFixIterations":6,"conductorEditLines":200,"parkAfterMinutes":90}' WHERE id = $1`, f.project)
 
 	out := f.settingsOf(t, token, `{"section":"delivery"}`)
 	if d, _ := field(out, "task", "delivery").(string); !strings.Contains(d, "no delivery yet") || field(out, "task", "differsFromToday") != nil ||
@@ -176,6 +176,11 @@ func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	}
 	if field(task, "policy", "conductorEditLines", "value") != 200.0 || field(task, "policy", "conductorEditFiles", "value") != 3.0 {
 		t.Errorf("publish bounds: %v / %v", field(task, "policy", "conductorEditLines"), field(task, "policy", "conductorEditFiles"))
+	}
+	// The syncer parks by today's policy (runFrom), not the frozen default.
+	if field(task, "policy", "parkAfterMinutes", "value") != 90.0 || field(task, "policy", "parkAfterMinutes", "source") != "project" ||
+		field(task, "differsFromToday", "parkAfterMinutes") != nil {
+		t.Errorf("park: %v / %v", field(task, "policy", "parkAfterMinutes"), field(task, "differsFromToday", "parkAfterMinutes"))
 	}
 
 	mustExec(t, f.owner, `UPDATE workflow_runs SET status = 'completed' WHERE task_id = $1`, f.item)
