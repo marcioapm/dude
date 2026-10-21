@@ -42,6 +42,9 @@ func TestAnAttemptWaiverIsRefusedWhereThereIsNothingToCarry(t *testing.T) {
 	w := newWorld(t)
 	wi := w.unbackedUntilEscalated(0)
 	owner, _, _ := w.people(wi)
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->'detail' ? 'failures'`, wi); n != 0 {
+		t.Errorf("an escalation with no reported failure names failures")
+	}
 	for _, tc := range []struct{ action, note, scope string }{
 		// The held report's only problem is an unbacked pass.
 		{delivery.ActionWaive, "It is fine.", delivery.ScopeAttempt},
@@ -70,6 +73,11 @@ func TestOnlyTheOwnerOrAnAdminWaivesForTheAttempt(t *testing.T) {
 	w := newWorld(t)
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
 	_, admin, member := w.people(wi)
+	// The escalation names the failures an attempt waiver would cover.
+	if got := w.ids(`SELECT payload->'detail'->>'failures' FROM events WHERE task_id = $1 AND event_type = 'question.asked'`, wi); len(got) != 1 ||
+		got[0] != `[{"result": "fail", "command": "make test", "evidence": "TestClock needs a hardware clock"}]` {
+		t.Errorf("the escalation's failures are %q", got)
+	}
 	if code, body := w.decideScoped(member, wi, delivery.ActionWaive, "Needs a hardware clock.", delivery.ScopeAttempt); code != 403 {
 		t.Fatalf("a member's attempt waiver: %d %v", code, body)
 	}

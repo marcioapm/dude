@@ -1611,17 +1611,20 @@ const AUTO_END: Record<string, string> = {
   archived: "archived it, which ends start when unblocked",
 };
 
-type ChecksVerdict = { command?: string; result?: string; reason?: string; decision?: string; callId?: string };
+type ChecksVerdict = { command?: string; result?: string; reason?: string; decision?: string; callId?: string;
+  waiver?: { role?: string; note?: string } };
 
 /** A run.checks.judged event's outcome ("were verified") and its quote: the send-back message, then each verdict. */
 function checksJudgedLine(p: Record<string, unknown>): { outcome: string; quote: string } {
   let outcome: string;
   if (p.skipped) outcome = "were not model-checked";
   else if (p.waived) outcome = "were waived";
+  else if (p.carried && p.verified) outcome = "carried a person's waiver";
   else if (p.verified) outcome = "were verified";
   else outcome = "were not verified";
   const verdicts = Array.isArray(p.checks) ? p.checks as ChecksVerdict[] : [];
-  const details = verdicts.map((v) => `${v.command ?? "Check"}: ${v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}`).join("\n");
+  const details = verdicts.map((v) => `${v.command ?? "Check"}: ${v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}`
+    + (v.waiver ? `\nWaived by a person for the ${v.waiver.role ?? "earlier Run"}: ${v.waiver.note ?? ""}` : "")).join("\n");
   return { outcome, quote: [typeof p.message === "string" ? p.message : "", details].filter(Boolean).join("\n") };
 }
 

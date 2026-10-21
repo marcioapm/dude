@@ -45,8 +45,21 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	if st.Escalation != nil {
 		return nil
 	}
-	st.Escalation = &Escalation{Reason: ReasonChecksUnverified, At: d.Step,
-		Detail: map[string]any{"runId": runID, "message": message, "rounds": rounds}}
+	detail := map[string]any{"runId": runID, "message": message, "rounds": rounds}
+	// The reported failures an attempt waiver could carry (settleChecksTx),
+	// for a person to be offered that scope only when there are some.
+	turn, err := LatestTurnTx(ctx, tx, runID)
+	if err != nil {
+		return err
+	}
+	failures, err := heldFailuresTx(ctx, tx, runID, turn)
+	if err != nil {
+		return err
+	}
+	if len(failures) > 0 {
+		detail["failures"] = failures
+	}
+	st.Escalation = &Escalation{Reason: ReasonChecksUnverified, At: d.Step, Detail: detail}
 	if st.conducted() {
 		st.Escalations++
 		if _, err := RecordWakeTx(ctx, tx, org, taskID, "escalation", fmt.Sprintf("%s:escalation:%d", d.WorkflowID, st.Escalations),

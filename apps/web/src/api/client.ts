@@ -1521,9 +1521,12 @@ export class ApiClient {
     return this.#request("POST", `/v1/tasks/${taskId}/recover`, { action, note, ...start });
   }
 
-  /** How delivery goes on after it stopped for a person: the task's owner decides. */
-  decide(taskId: string, action: EscalationAction, note: string): Promise<{ action: EscalationAction }> {
-    return this.#request("POST", `/v1/tasks/${taskId}/decide`, { action, note });
+  /**
+   * How delivery goes on after it stopped for a person: the task's owner decides. scope "attempt" offers a
+   * checks waiver to later Runs of the attempt reporting the same failure.
+   */
+  decide(taskId: string, action: EscalationAction, note: string, scope?: "attempt"): Promise<{ action: EscalationAction }> {
+    return this.#request("POST", `/v1/tasks/${taskId}/decide`, { action, note, ...(scope ? { scope } : {}) });
   }
 
   // -- intervention (plan §24) --------------------------------------------
