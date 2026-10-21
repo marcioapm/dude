@@ -15,7 +15,7 @@ import (
 // refused in the words of a project or task that is not there.
 func TestABrainstormReadsItsLinkedProjectsAndNothingOfAnotherOrganisation(t *testing.T) {
 	f := setup(t)
-	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_two', $1, 'Two', 'two', 'TWO')`, f.org)
+	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_two', $1, 'Second', 'two', 'TWO')`, f.org)
 	linked := f.session(t, "ssn_two", "", "")
 	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES
 		('ssn_two', $1, $2), ('ssn_two', 'prj_two', $2)`, f.project, f.org)
@@ -58,7 +58,7 @@ func TestABrainstormReadsItsLinkedProjectsAndNothingOfAnotherOrganisation(t *tes
 		t.Errorf("a task of the organisation: %d %v", status, got)
 	}
 	// A project of the organisation by key, name or id, and a task by id.
-	for _, name := range []string{"TWO", "two", "Two", "prj_two"} {
+	for _, name := range []string{"TWO", "two", "Second", "second", "prj_two"} {
 		scopes, _ := f.settingsOf(t, none, `{"section":"delivery","project":"`+name+`"}`)["settings"].([]any)
 		if len(scopes) != 1 || field(scopes, 0, "project", "key") != "TWO" {
 			t.Errorf("project %s: %v", name, scopes)
