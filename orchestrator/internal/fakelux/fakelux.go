@@ -2792,11 +2792,8 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			sha, err = commit(path, base, branch, files, run.behavior.Message)
 			if err == nil && work != "" && sha != base {
 				// lux pushes what is in the checkout: the scripted commit
-				// made in the repository is the checkout's too, its objects
-				// fetched in (HEAD is left where the agent's edits are).
-				if out, ferr := exec.Command("git", "-C", work, "fetch", "-q", path, sha).CombinedOutput(); ferr != nil {
-					err = fmt.Errorf("fetching the commit into the checkout: %v: %s", ferr, out)
-				}
+				// made in the repository is the checkout's too.
+				err = committedIn(work, path, sha)
 			}
 		}
 		switch {
