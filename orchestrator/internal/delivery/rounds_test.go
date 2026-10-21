@@ -239,6 +239,61 @@ func TestAKeptReviewerIsLetGoWhenItsTaskEnds(t *testing.T) {
 	}
 }
 
+// writerWorld is newRoundWorld with a kept implementer, completed at its
+// head bbb from base aaa on a commit (detached), whose lux Run a fix round
+// may take over; tier is the project's implementer tier.
+func writerWorld(t *testing.T) *roundWorld {
+	w := newRoundWorld(t)
+	w.exec(t, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('tier_im_'||$1, $1, 'Building', 'fake/scripted')`, w.org)
+	w.exec(t, `UPDATE projects SET agent_models = jsonb_build_object('implementer', jsonb_build_object('tier', 'tier_im_'||$2::text)) WHERE id = $1`,
+		w.project, w.org)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, base_refs, heads,
+			ended_at, keep, kept_until, lux_run_id, model, model_tier, harness)
+		VALUES ('run_im', $1, $2, $3, 1, 'completed', 'implement', 'implementer', 'agent', '{"api":"aaa"}',
+			'{"api":{"sha":"bbb"}}', now() - interval '1 hour', true, now() + interval '1 day', 'lrun_im', 'fake/scripted', 'Building', 'opencode')`,
+		w.org, w.project, w.task)
+	return w
+}
+
+// fix creates a fix round going on from the kept implementer, from bbb.
+func (w *roundWorld) fix(t *testing.T, key string) string {
+	t.Helper()
+	id, err := (&delivery.Store{DB: w.app}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
+		TaskID: w.task, Phase: delivery.PhaseFix, Key: key, Attempt: 1,
+		BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_im"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A resumed fixer is told what a fresh one's prompt would carry and its
+// conversation lacks: the task as edited after its last round ended, and
+// what people decided since. Nothing from before its round ended.
+func TestAResumedFixerIsToldTheTaskEditedAndDecidedSinceItsRound(t *testing.T) {
+	w := writerWorld(t)
+	w.exec(t, `UPDATE tasks SET acceptance_criteria = '["amounts are in cents"]' WHERE id = $1`, w.task)
+	w.exec(t, `INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+		VALUES ('ev_old_edit', $1, 'task.updated', $2, 'human', 'p', 'test', '{"goal":"x"}', now() - interval '2 hours'),
+		       ('ev_edit', $1, 'task.updated', $2, 'human', 'p', 'test', '{"acceptanceCriteria":["amounts are in cents"]}', now())`, w.org, w.task)
+	w.exec(t, `INSERT INTO questions (id, organization_id, task_id, prompt, items, status, answer, answered_at)
+		VALUES ('q_old', $1, $2, 'Old question?', '[{"question":"Old question?"}]', 'answered', 'old answer', now() - interval '2 hours'),
+		       ('q_new', $1, $2, 'Floats or cents?', '[{"question":"Floats or cents?"}]', 'answered', 'use cents, not floats', now())`, w.org, w.task)
+	id := w.fix(t, "f1")
+	if got := w.str(t, `SELECT COALESCE(continues_how, '') FROM runs WHERE id = $1`, id); got != delivery.ContinuesResume {
+		t.Fatalf("the fix %s, want the implementer resumed", got)
+	}
+	text := w.str(t, `SELECT text FROM directives WHERE run_id = $1`, id)
+	for _, want := range []string{"the task was changed", "- amounts are in cents", "Floats or cents?", "use cents, not floats"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the round message lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Old question?") {
+		t.Errorf("the round message repeats a decision from before its round:\n%s", text)
+	}
+}
+
 // A fix goes on from the attempt's last writer: its implementer, until a
 // fixer has run, then that fixer; never a simplifier. Its round started
 // where the writer left its checkouts: its published head.

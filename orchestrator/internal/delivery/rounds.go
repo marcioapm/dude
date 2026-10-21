@@ -410,6 +410,13 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 		}
 		message = FixRoundMessage(p.BaseRefs, in.BaseRefs, p.Phase != PhaseFix,
 			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools})
+		since, err := sinceLastRoundTx(ctx, tx, in.TaskID, p.ID)
+		if err != nil {
+			return "", err
+		}
+		if since != "" {
+			message += "\n\n" + since
+		}
 	} else {
 		reason := ""
 		if in.ReviewRange != nil {
@@ -421,6 +428,43 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 		message += "\n\n" + render(fromConductorTmpl, note)
 	}
 	return message, nil
+}
+
+// sinceLastRoundTx is what a resumed writer was not told and a fresh one's
+// prompt carries (its task section): the task as it is now, when its
+// title, goal or criteria were edited after the predecessor's round ended
+// (as ResumeKeptTx tells it), and what people decided since; "" for
+// neither.
+func sinceLastRoundTx(ctx context.Context, tx pgx.Tx, taskID, predecessor string) (string, error) {
+	var title, goal string
+	var criteria []byte
+	var edited bool
+	if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria, EXISTS (SELECT 1 FROM events e
+			WHERE e.task_id = t.id AND e.event_type = 'task.updated'
+			  AND (e.payload ? 'title' OR e.payload ? 'goal' OR e.payload ? 'acceptanceCriteria')
+			  AND e.occurred_at > (SELECT ended_at FROM runs WHERE id = $2))
+		FROM tasks t WHERE t.id = $1`, taskID, predecessor).Scan(&title, &goal, &criteria, &edited); err != nil {
+		return "", err
+	}
+	rows, err := tx.Query(ctx, `SELECT q.prompt, q.answer FROM questions q
+		WHERE q.task_id = $1 AND q.status = 'answered' AND q.answer IS NOT NULL
+		  AND q.answered_at > (SELECT ended_at FROM runs WHERE id = $2) ORDER BY q.answered_at`, taskID, predecessor)
+	if err != nil {
+		return "", err
+	}
+	decisions, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Decision])
+	if err != nil {
+		return "", err
+	}
+	var parts []string
+	if edited {
+		parts = append(parts, changedTask(title, goal, criteria))
+	}
+	if len(decisions) > 0 {
+		// The task section's decisions alone.
+		parts = append(parts, strings.TrimSpace(PromptInput{Decisions: decisions}.task()))
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // FixRoundMessage renders contracts/resume/fix-round: from and to are each
