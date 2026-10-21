@@ -414,6 +414,13 @@ type Candidate struct {
 	// The heads at which a person accepted a review round whose reviewers
 	// failed: promotion takes them as reviewed (unreviewedHeads).
 	Accepted map[string]string `json:"accepted,omitempty"`
+	// Opened by a writer of the review loop while a pull request was open
+	// (writerCandidate), not by a pull request's fix: once promoted, the
+	// delivery goes on as that loop would have (beforePR).
+	Loop bool `json:"loop,omitempty"`
+	// Set by writerCandidate in the step that opens it, until phase has
+	// read the pull requests' heads (or a replay's Run's). Never persisted.
+	opening bool
 }
 
 // PRFixCharge is a round (its PRFixKey) charged to the pull requests in
@@ -431,6 +438,8 @@ type PRFixCharge struct {
 type PromotedRefresh struct {
 	Tries int      `json:"tries,omitempty"`
 	Repos []string `json:"repos"`
+	// The step after it: "" for prFixLanded, "beforePR" past a loop's candidate.
+	Next string `json:"next,omitempty"`
 }
 
 // promotedRefreshRetries bounds the attempts after the first at refreshing
@@ -546,6 +555,11 @@ func key(sc workflow.StepContext, st *State, parts ...any) string {
 // While a pull request's fix is checked, what a Run publishes goes to the
 // candidate branch.
 func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, phase, k string, extra func(*PhaseRun)) (string, error) {
+	if c := st.Candidate; c != nil && c.opening {
+		if err := w.openCandidate(ctx, sc, st, k); err != nil {
+			return "", err
+		}
+	}
 	in := PhaseRun{TaskID: st.TaskID, Phase: phase, WorkflowID: sc.WorkflowRunID, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
 	if st.Candidate != nil && Publishes[phase] {
 		in.Branch = st.Candidate.Branch
@@ -595,6 +609,9 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 			SleepUntil: time.Now().Add(blockedRecheck)}, nil
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
+		return workflow.Result{}, err
+	}
+	if err := w.writerCandidate(ctx, sc, st); err != nil {
 		return workflow.Result{}, err
 	}
 	k := key(sc, st, ":implement")
@@ -897,12 +914,16 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 		if st.Integration != nil {
 			return workflow.Result{Next: "test", State: st}, nil
 		}
-		if st.ActingOnPR && st.Candidate == nil {
+		if st.ActingOnPR && (st.Candidate == nil || st.Candidate.Loop) {
 			// A failed test's fix must be tested before returning to the PR.
 			if st.RetestDue {
 				return workflow.Result{Next: "test", State: st}, nil
 			}
-			return workflow.Result{Next: "openPullRequest", State: st}, nil
+			// A loop's candidate goes on to the simplifier and the test
+			// before it is promoted.
+			if st.Candidate == nil {
+				return workflow.Result{Next: "openPullRequest", State: st}, nil
+			}
 		}
 		return workflow.Result{Next: st.afterReview(), State: st}, nil
 	}
@@ -990,6 +1011,9 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 			ours = append(ours, ids...)
 		}
 		open = slices.DeleteFunc(open, func(id string) bool { return !slices.Contains(ours, id) })
+	}
+	if err := w.writerCandidate(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
 	}
 	k := key(sc, st, ":fix:", st.Iteration)
 	if st.Integration != nil {
@@ -1098,6 +1122,9 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 		return workflow.Result{}, err
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
+		return workflow.Result{}, err
+	}
+	if err := w.writerCandidate(ctx, sc, st); err != nil {
 		return workflow.Result{}, err
 	}
 	k := testRoundKey(sc, st, ":simplify")
@@ -1778,6 +1805,70 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	return park("awaitPRFix", st, []string{runID}), nil
 }
 
+// writerCandidate sends a review-loop writer (implement, fix, simplify) to a
+// candidate branch while a pull request is open on the task branch and no
+// candidate is out: the pull request then moves only by promotion, once
+// the loop reviewed (and tested) what the writer did. Called before the
+// step's key, which names the candidate's round; the round is uncharged,
+// as an integration's is. What the candidate starts from is settled by
+// phase, once the key is known (openCandidate).
+func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st *State) error {
+	if st.Candidate != nil {
+		return nil
+	}
+	var open bool
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		open, err = pullRequestOpenOnTx(ctx, tx, st.TaskID, st.taskBranch(st.TaskID))
+		return err
+	}); err != nil || !open {
+		return err
+	}
+	st.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
+	st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), Loop: true, opening: true}
+	return nil
+}
+
+// openCandidate settles where a candidate writerCandidate opened starts:
+// a replayed step's Run's heads, or else each open pull request's head as
+// GitHub has it (a person may have pushed), with the last round's
+// candidate branch and pending resolutions dropped, as prFix does.
+func (w *steps) openCandidate(ctx context.Context, sc workflow.StepContext, st *State, k string) error {
+	c := st.Candidate
+	c.opening = false
+	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
+	if err != nil {
+		return err
+	}
+	if existing != "" {
+		if st.Heads, _, err = w.s.runBaseRefs(ctx, sc.OrganizationID, existing); err != nil {
+			return err
+		}
+		c.From = maps.Clone(st.Heads)
+		return nil
+	}
+	if err := w.s.abandonCandidate(ctx, sc.OrganizationID, st); err != nil {
+		return err
+	}
+	if w.forges == nil {
+		c.From = maps.Clone(st.Heads)
+		return nil
+	}
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil {
+		return err
+	}
+	if gh != nil {
+		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
+			return err
+		}
+		if err := w.s.dropCandidateBranches(ctx, sc.OrganizationID, st, gh); err != nil {
+			return forgeWait(err)
+		}
+	}
+	c.From = maps.Clone(st.Heads)
+	return nil
+}
+
 // candidateBranch is the delivery's CandidateBranch: beside its task
 // branch, which a delivery from before attempts were kept names alone.
 // Always under dude/: an adopted source's head branch is a person's, and
@@ -2231,7 +2322,13 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 		w.s.refreshBodies(ctx, sc.OrganizationID, st, w.forges, slices.Sorted(maps.Keys(moved)), true, true)
 	}
 	st.Candidate = nil
-	return w.escalate(ctx, sc, st, ReasonPullRequestMoved, detail)
+	res, err := w.escalate(ctx, sc, st, ReasonPullRequestMoved, detail)
+	if err == nil && c.Loop {
+		// A loop's candidate fixed no pull request feedback: a retry is the
+		// loop's fix again, on a candidate from what the branch holds now.
+		st.Escalation.Step = "fix"
+	}
+	return res, err
 }
 
 // candidateMoved is what follows a fix reaching the pull requests (heads,
@@ -2240,9 +2337,11 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 // verification brought up to the commit they show, and back to waiting.
 func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
 	promoted := len(heads) > 0 && st.Candidate != nil
+	loop := st.Candidate != nil && st.Candidate.Loop
 	st.Candidate = nil
-	if st.Integration == nil {
-		// An integration's comments are the fix's after it (openPullRequest).
+	if st.Integration == nil && !loop {
+		// An integration's comments are the fix's after it (openPullRequest);
+		// a loop's candidate fixed none.
 		st.PRFeedback = nil
 	}
 	if len(heads) > 0 && !promoted {
@@ -2264,16 +2363,24 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 			return workflow.Result{}, err
 		}
 	}
-	// The fix may have changed a repository no pull request is open for yet:
-	// that one gets its own, alongside the others.
-	prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
-	if errors.As(err, new(forge.OwnerAuthorizationError)) {
-		return w.awaitOwnerAuthorization(ctx, sc, st, err)
+	// A loop's candidate goes on as its loop would have (beforePR): the
+	// pull request step opens one for a repository newly changed, through
+	// the Open or Draft where one is due.
+	next := ""
+	if loop {
+		next = "beforePR"
+	} else {
+		// The fix may have changed a repository no pull request is open for
+		// yet: that one gets its own, alongside the others.
+		prIDs, err := w.s.OpenPullRequests(ctx, sc.OrganizationID, st, w.forges)
+		if errors.As(err, new(forge.OwnerAuthorizationError)) {
+			return w.awaitOwnerAuthorization(ctx, sc, st, err)
+		}
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		st.PullRequestIDs = prIDs
 	}
-	if err != nil {
-		return workflow.Result{}, err
-	}
-	st.PullRequestIDs = prIDs
 	// The fast-forward updated the PRs; they are back with the reviewers.
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "pull request updated"); err != nil {
 		return workflow.Result{}, err
@@ -2286,8 +2393,11 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 		if err != nil {
 			return workflow.Result{}, err
 		}
-		st.PromotedRefresh = &PromotedRefresh{Repos: repos}
+		st.PromotedRefresh = &PromotedRefresh{Repos: repos, Next: next}
 		return workflow.Result{Next: "refreshPromoted", State: st}, nil
+	}
+	if loop {
+		return w.beforePR(ctx, sc, st, "")
 	}
 	return w.prFixLanded(ctx, sc, st)
 }
@@ -2383,15 +2493,21 @@ func (w *steps) refreshPromoted(ctx context.Context, sc workflow.StepContext) (w
 		return workflow.Result{}, err
 	}
 	if pr := st.PromotedRefresh; pr != nil {
-		pr.Tries++
-		last := pr.Tries > promotedRefreshRetries
-		failed, after := w.s.refreshPromoted(ctx, sc.OrganizationID, st, w.forges, pr.Repos, last)
-		if len(failed) > 0 && !last {
-			pr.Repos = failed
-			return workflow.Result{Next: "refreshPromoted", State: st, SleepUntil: time.Now().Add(max(after, forgeWaitMin))}, nil
+		if len(pr.Repos) > 0 {
+			pr.Tries++
+			last := pr.Tries > promotedRefreshRetries
+			failed, after := w.s.refreshPromoted(ctx, sc.OrganizationID, st, w.forges, pr.Repos, last)
+			if len(failed) > 0 && !last {
+				pr.Repos = failed
+				return workflow.Result{Next: "refreshPromoted", State: st, SleepUntil: time.Now().Add(max(after, forgeWaitMin))}, nil
+			}
+			pr.Repos = nil
+			return workflow.Result{Next: "refreshPromoted", State: st}, nil
 		}
 		st.PromotedRefresh = nil
-		return workflow.Result{Next: "refreshPromoted", State: st}, nil
+		if pr.Next == "beforePR" {
+			return w.beforePR(ctx, sc, st, "")
+		}
 	}
 	return w.prFixLanded(ctx, sc, st)
 }
