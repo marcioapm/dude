@@ -102,14 +102,13 @@ def test_close_and_archive_is_one_write(client: ApiClient, project: dict, owner_
 
 
 def test_every_refusal_says_why_by_its_code(client: ApiClient, project: dict, org: dict, owner_dsn: str):
+    # Running and in review are not refused: Close and Archive stop what is live and close.
     running, review = _task(client, project, "Running"), _task(client, project, "In review")
     execute(owner_dsn, "UPDATE tasks SET status = 'running' WHERE id = %s", (running["id"],))
     execute(owner_dsn, "UPDATE tasks SET status = 'review' WHERE id = %s", (review["id"],))
-    for route in ("close", "archive"):
-        assert _refused(client.post(f"/v1/tasks/{running['id']}/{route}", {"resolution": "wont_do"}), 409, "running")["message"] \
-            .startswith("Stop its agents first")
-        assert _refused(client.post(f"/v1/tasks/{review['id']}/{route}", {"resolution": "wont_do"}), 409, "review")["message"] \
-            .startswith("It has a pull request open")
+    assert client.post(f"/v1/tasks/{running['id']}/close", {"resolution": "wont_do"}).status_code == 200
+    assert client.post(f"/v1/tasks/{review['id']}/archive", {"resolution": "wont_do"}).status_code == 200
+    assert (_get(client, running["id"])["resolution"], _get(client, review["id"])["resolution"]) == ("wont_do", "wont_do")
 
     # loop: closing as a duplicate whose handover would make a task wait on itself.
     canonical, dup, waiting = _task(client, project, "A"), _task(client, project, "B"), _task(client, project, "C")

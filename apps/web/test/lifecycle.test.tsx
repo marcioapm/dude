@@ -17,6 +17,7 @@ import { ArchiveEpicConfirm, epicRef } from "../src/screens/actions.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { ApiError, type TaskDetail } from "../src/api/client.ts";
+import type { CloseDecision } from "@dude/design-system/components";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -75,13 +76,17 @@ const menuItems = async (page: HTMLElement) => {
 const itemText = (el: HTMLElement) => el.textContent ?? "";
 
 describe("the fixture client's lifecycle", () => {
-  test("refuses a running task as the orchestrator does, by code", async () => {
+  test("closes a running task as the orchestrator does, stopping what is live; refuses Reopen and Unarchive by code", async () => {
     const client = new FixtureClient("a");
     const code = async (p: Promise<unknown>) => p.then(() => "ok", (e: unknown) => (e as ApiError).code);
-    expect(await code(client.closeTask(TASK_ID, { resolution: "wont_do" }))).toBe("running");
-    expect(await code(client.archiveTask(TASK_ID, { resolution: "wont_do" }))).toBe("running");
     expect(await code(client.reopenTask(TASK_ID))).toBe("conflict");
     expect(await code(client.unarchiveTask(TASK_ID))).toBe("conflict");
+    expect(await code(client.closeTask(TASK_ID, { resolution: "wont_do", closePullRequest: true }))).toBe("ok");
+    const task = await client.getTask(TASK_ID);
+    expect(task.runs.every((r) => ["completed", "failed", "aborted"].includes(r.status))).toBe(true);
+    const closed = (await client.events({ taskId: TASK_ID })).events.findLast((e) => e.eventType === "task.closed")!;
+    expect((closed.payload.stopped as string[]).length).toBeGreaterThan(0);
+    expect(closed.payload.pullRequestClosed).toBe(true);
     expect((await client.archivedTasks(TASK_ID)).tasks).toEqual([]);
   });
 });
@@ -189,6 +194,75 @@ describe("the task page's lifecycle", () => {
       expect(i.getAttribute("aria-disabled")).toBe("true");
       expect(itemText(i)).toContain("Only Ana, the owner, or an admin can do this");
     }
+  });
+});
+
+describe("Close and Archive while live", () => {
+  const pick = async (dialog: HTMLElement, label: string) =>
+    act(async () => [...dialog.querySelectorAll<HTMLElement>('[role="radio"]')].find((r) => r.textContent?.startsWith(label))!.click());
+
+  /** A running conductor task: its conductor between turns and an implementer at work; its PR as given; its closes recorded. */
+  async function liveTask(prs: Array<typeof PULL_REQUEST>, source?: TaskDetail["source"]) {
+    const client = new FixtureClient("a");
+    const base = await client.getTask(TASK_ID);
+    const conductor = { ...base.runs[0]!, id: "run_cond_live", role: "conductor" as const, phase: null, category: null, status: "paused" as const };
+    const task: TaskDetail = { ...base, status: "running", decider: "conductor", runs: [conductor, ...base.runs], ...(source ? { source } : {}) };
+    client.getTask = async () => task;
+    client.listPullRequests = async () => ({ pullRequests: prs });
+    const sent: Array<[string, CloseDecision]> = [];
+    client.closeTask = async (_id, d) => { sent.push(["close", d]); return {}; };
+    client.archiveTask = async (_id, d) => { sent.push(["archive", d!]); return {}; };
+    return { client, sent };
+  }
+  const openFromMenu = async (page: HTMLElement, label: string) => {
+    const item = (await menuItems(page)).find((i) => itemText(i).startsWith(label))!;
+    expect(item.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => item.click());
+    return until(() => document.querySelector<HTMLElement>('[role="dialog"]'), "the dialog");
+  };
+
+  test("on a running conductor task, Close… is enabled; the dialog lists what stops and says Stop and close", async () => {
+    const { client, sent } = await liveTask([]);
+    const page = await taskPage(client);
+    const dialog = await openFromMenu(page, "Close");
+    const live = dialog.querySelector<HTMLElement>('[data-testid="live-work"]')!;
+    expect(live.textContent).toContain("Closing stops the conductor and an implementer. Nothing is kept to resume.");
+    expect(dialog.querySelector('[data-testid="close-pull-request"]')).toBeNull();
+    await pick(dialog, "Won't do");
+    const confirm = dialog.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!;
+    expect(confirm.textContent).toBe("Stop and close");
+    await act(async () => confirm.click());
+    expect(sent).toEqual([["close", { resolution: "wont_do" }]]);
+  });
+
+  test("dude's open PR is ticked to close with the task; the decision says so", async () => {
+    const { client, sent } = await liveTask([{ ...PULL_REQUEST, state: "open", number: 412 }]);
+    const page = await taskPage(client);
+    const dialog = await openFromMenu(page, "Close");
+    const row = await until(() => dialog.querySelector<HTMLElement>('[data-testid="close-pull-request"]'), "the PR row");
+    expect(row.getAttribute("data-opened-by")).toBe("dude");
+    expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("true");
+    await pick(dialog, "Won't do");
+    await act(async () => dialog.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!.click());
+    expect(sent).toEqual([["close", { resolution: "wont_do", closePullRequest: true }]]);
+  });
+
+  test("Archive… on a live task with an adopted PR: Close and archive, nothing chosen, the PR unticked", async () => {
+    const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: "r", repository: "web-console",
+      title: "Pause split", mode: "review" as const };
+    const { client, sent } = await liveTask([{ ...PULL_REQUEST, state: "open", number: 412 }], source);
+    const page = await taskPage(client);
+    const dialog = await openFromMenu(page, "Archive");
+    expect(dialog.textContent).toContain("Close and archive WC-214");
+    expect(dialog.querySelector('[role="radio"][aria-checked="true"]')).toBeNull();
+    const row = await until(() => dialog.querySelector<HTMLElement>('[data-testid="close-pull-request"]'), "the PR row");
+    expect(row.getAttribute("data-opened-by")).toBe("someone");
+    expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("false");
+    await pick(dialog, "Won't do");
+    const confirm = dialog.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!;
+    expect(confirm.textContent).toBe("Stop, close and archive");
+    await act(async () => confirm.click());
+    expect(sent).toEqual([["archive", { resolution: "wont_do", closePullRequest: false }]]);
   });
 });
 

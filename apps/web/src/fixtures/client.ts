@@ -16,7 +16,7 @@ import type { NavProject } from "@dude/design-system";
 import { canStart, canStop, feedbackHolds } from "@dude/design-system";
 import type { AddServer, AgentEgressMode, PersistedEvent, ProjectSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
 import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, DEFAULT_SECRET_RECIPIENTS, EPIC_NOTES_MAX, egressAllows, egressProblem, SECRET_RECIPIENTS_REQUIRED, secretHint, secretNameProblem } from "@dude/domain";
-import { EventTypes, PULL_REQUEST_OPEN, STOP_AGENTS_FIRST, TERMINAL_RUN_STATUSES, UNARCHIVE_FIRST, closedBy, lifecycleBusy, lifecycleEnded } from "@dude/domain";
+import { EventTypes, TERMINAL_RUN_STATUSES, UNARCHIVE_FIRST, closedBy, lifecycleEnded } from "@dude/domain";
 import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
@@ -454,13 +454,15 @@ export class FixtureClient extends ApiClient {
   #closeHere(d: CloseDecision, andArchived: boolean): string {
     const t = this.#task;
     if (t.archivedAt) throw new ApiError(409, "archived", `${t.key} is archived: unarchive it first.`);
-    const busy = lifecycleBusy(t.status);
-    if (busy === "running") throw new ApiError(409, "running", `${STOP_AGENTS_FIRST}: ${t.key} is in progress.`);
-    if (busy === "review") throw new ApiError(409, "review", `${PULL_REQUEST_OPEN}: ${t.key} is in review.`);
+    // What is live stops with the close, nothing kept.
+    const now = new Date().toISOString();
+    const stopped = t.runs.filter((r) => !TERMINAL_RUN_STATUSES.includes(r.status)).map((r) => r.id);
     this.#task = { ...t, status: "aborted", resolution: d.resolution, duplicateOf: d.duplicateOf ?? null,
+      runs: t.runs.map((r) => (stopped.includes(r.id) ? { ...r, status: "aborted" as const, endedAt: now } : r)),
       closedBy: { id: YOU, name: PEOPLE[0]!.name, photoUrl: null, online: true } };
     return this.#lifecycleEvent(EventTypes.TaskClosed, { resolution: d.resolution, ...(d.duplicateOf ? { duplicateOf: d.duplicateOf } : {}),
-      ...(d.note ? { note: d.note } : {}), ...(andArchived ? { andArchived: true } : {}) });
+      ...(d.note ? { note: d.note } : {}), ...(andArchived ? { andArchived: true } : {}), ...(stopped.length ? { stopped } : {}),
+      ...(d.closePullRequest !== undefined ? { pullRequestClosed: d.closePullRequest } : {}) });
   }
   override async closeTask(_taskId: string, d: CloseDecision): Promise<unknown> {
     await wait(150);
