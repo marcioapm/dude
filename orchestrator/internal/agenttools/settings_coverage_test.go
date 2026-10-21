@@ -393,14 +393,21 @@ func TestSettingsCataloguesArePagedBoundedAndTenantScoped(t *testing.T) {
 			t.Errorf("invalid catalogue args %s: %d", args, status)
 		}
 	}
+	// Another organisation's project, with a recipe and a judgement tier.
+	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_oth', $1, 'Theirs', 'theirs', 'OTH')`, other)
+	mustExec(t, f.owner, `INSERT INTO project_servers (project_id, organization_id, name, port, command) VALUES ('prj_oth', $1, 'web', 3000, 'OTHER-RECIPE-CANARY')`, other)
+	mustExec(t, f.owner, `UPDATE organizations SET judgement_tier_id = 'mtr_other' WHERE id = $1`, other)
 	for _, section := range []string{"models", "judgements", "servers", "memory"} {
-		args := `{"section":"` + section + `","project":"foreign"}`
-		if status, _ := f.post(t, token, "settings", args); status != 422 {
-			t.Errorf("foreign scope %s: %d", section, status)
+		for _, project := range []string{"foreign", "OTH", "prj_oth", "Theirs"} {
+			args := `{"section":"` + section + `","project":"` + project + `"}`
+			status, got := f.post(t, token, "settings", args)
+			if raw, _ := json.Marshal(got); status != 422 || strings.Contains(string(raw), "OTHER-RECIPE-CANARY") {
+				t.Errorf("foreign scope %s: %d %s", args, status, raw)
+			}
 		}
 		out := f.settingsOf(t, token, `{"section":"`+section+`"}`)
 		raw, _ := json.Marshal(out)
-		for _, secret := range []string{"TIER-HEADER-SECRET", "TIER-OPTIONS-SECRET", "ORG-PROMPT-BODY-TEXT", "PROJECT-PROMPT-BODY-TEXT", "PROJECT-SECRET-VALUE", "HINT-SECRET", "OTHER-SECRET", "OTHER-MODEL"} {
+		for _, secret := range []string{"TIER-HEADER-SECRET", "TIER-OPTIONS-SECRET", "ORG-PROMPT-BODY-TEXT", "PROJECT-PROMPT-BODY-TEXT", "PROJECT-SECRET-VALUE", "HINT-SECRET", "OTHER-SECRET", "OTHER-MODEL", "OTHER-RECIPE-CANARY", "mtr_other"} {
 			if strings.Contains(string(raw), secret) {
 				t.Errorf("%s leaks %s", section, secret)
 			}

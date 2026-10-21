@@ -12,7 +12,7 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	f, token := roleSettingsWorld(t)
 	mustExec(t, f.owner, `INSERT INTO project_servers(project_id,organization_id,name,port,command,setup,workdir,env,autostart_in_previews)
  VALUES($1,$2,'web',3000,'bun run dev','bun install','app','[{"name":"PUBLIC_HOST","value":"RECIPE-ENV-SECRET"}]',true)`, f.project, f.org)
-	mustExec(t, f.owner, `UPDATE projects SET preview_image_id='img_web',preview_settings='{"idleTimeoutMinutes":37,"firstWakeTimeoutMinutes":42,"wakeTimeoutMinutes":9,"egress":["example.com"],"machineSize":"msz_l"}' WHERE id=$1`, f.project)
+	mustExec(t, f.owner, `UPDATE projects SET preview_image_id='img_web',preview_settings='{"image":"ghcr.io/x/preview:1","idleTimeoutMinutes":37,"firstWakeTimeoutMinutes":42,"wakeTimeoutMinutes":9,"egress":["example.com"],"machineSize":"msz_l"}' WHERE id=$1`, f.project)
 	route := f.settingsRoute(t, "/v1/projects/"+f.project+"/servers")
 	rules := map[string]coverageRule{}
 	for _, k := range []string{"name", "command", "setup", "workdir", "port", "autostartInPreviews"} {
@@ -53,6 +53,9 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 		actual := field(got, "previews", k, "value")
 		want := field(route, "previews", k)
 		if s, ok := actual.(string); ok {
+			if !strings.HasPrefix(s, "⟦external ") {
+				t.Errorf("preview %s not external text: %q", k, s)
+			}
 			actual = unwrapped(s)
 		}
 		if k == "egress" {
@@ -61,13 +64,12 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 		if !reflect.DeepEqual(actual, want) {
 			t.Errorf("preview %s: %v != %v", k, actual, want)
 		}
-		source := "project"
-		if k == "image" {
-			source = "dude"
-		}
-		if field(got, "previews", k, "source") != source {
+		if field(got, "previews", k, "source") != "project" {
 			t.Errorf("preview %s source: %v", k, field(got, "previews", k))
 		}
+	}
+	if field(got, "previews", "image", "value") == nil {
+		t.Error("preview image unset in fixture")
 	}
 	schemaRules := map[string]coverageRule{}
 	for _, k := range previewKeys {

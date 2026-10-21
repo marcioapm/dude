@@ -378,8 +378,18 @@ func TestASessionsInvestigatorRowIsTheOneItsBrainstormStarts(t *testing.T) {
 
 	inv = roleIn(f.settingsOf(t, conductor, `{}`), "investigator")
 	if field(inv, "tier", "value", "id") != "mtr_small" || field(inv, "tier", "source") != "project" ||
-		field(inv, "machineSize", "source") != "project" {
+		field(inv, "machineSize", "source") != "project" || field(inv, "timeLimitMinutes", "value") != 30.0 ||
+		field(inv, "timeLimitMinutes", "source") != "project" || field(inv, "timeLimitMinutes", "note") != nil {
 		t.Errorf("a conductor's investigator: %v", inv)
+	}
+	// A task's investigator takes the project's saved prompt.
+	mustExec(t, f.owner, `INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, created_by, created_at)
+		VALUES ('pv_inv', $1, $2, 'investigator', 'replace', 'x', 'psn_ana', '2026-02-03T04:05:06Z')`, f.org, f.project)
+	for _, p := range field(f.settingsOf(t, conductor, `{"section":"prompts"}`), "settings", 0, "prompts").([]any) {
+		if m := p.(map[string]any); m["role"] == "investigator" && (m["organization"] != "dude" || m["note"] != nil || m["project"] != "replace" ||
+			field(m, "projectSaved", "savedAt") != "2026-02-03T04:05:06Z") {
+			t.Errorf("a conductor's investigator prompt: %v", m)
+		}
 	}
 }
 

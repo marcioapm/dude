@@ -85,6 +85,15 @@ func TestSettingsImagesMatchTheMemberLibrary(t *testing.T) {
 	if err := classifyResponse(page, imageRules()); err != nil {
 		t.Fatal(err)
 	}
+	// A leaf the route adds fails classification; its answer is copied so
+	// the comparisons below read the route as it is.
+	var mutated map[string]any
+	encoded, _ := json.Marshal(page)
+	_ = json.Unmarshal(encoded, &mutated)
+	mutated["images"].([]any)[0].(map[string]any)["newLeaf"] = 1
+	if err := classifyResponse(mutated, imageRules()); err == nil || !strings.Contains(err.Error(), "unclassified images.*.newLeaf") {
+		t.Fatalf("added image leaf: %v", err)
+	}
 	out := f.settingsOf(t, token, `{"section":"images","limit":50}`)
 	if field(out, "images", "next") != nil || field(out, "images", "source") != "organization" {
 		t.Errorf("one page: %v", out["images"])
