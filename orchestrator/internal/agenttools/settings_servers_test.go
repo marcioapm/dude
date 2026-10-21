@@ -141,7 +141,7 @@ func TestSettingsServersAreBoundedForThreeFullProjects(t *testing.T) {
 		}
 		if note, _ := field(servers, "note").(string); len(recipes) < 10 {
 			noted = true
-			if !strings.Contains(note, fmt.Sprintf("%d of 10 recipes shown", len(recipes))) || !strings.Contains(note, "project") {
+			if !strings.Contains(note, fmt.Sprintf("%d of 10 recipes shown", len(recipes))) || !strings.Contains(note, "name one project") {
 				t.Errorf("note: %q", note)
 			}
 		} else if note != "" {
@@ -150,5 +150,15 @@ func TestSettingsServersAreBoundedForThreeFullProjects(t *testing.T) {
 	}
 	if len(scopes) != 3 || shown == 0 || shown == 30 || !noted {
 		t.Errorf("%d scopes, %d recipes shown, noted %v", len(scopes), shown, noted)
+	}
+	// One project named: naming a project again would show the same recipes,
+	// so the note points at its Servers page instead.
+	mustExec(t, f.owner, `INSERT INTO project_servers (project_id, organization_id, name, port, command, setup)
+		SELECT 'prj_s2', $1, 'more' || i, 4000 + i, left(repeat('&<>', 334), 1000), left(repeat('<&>', 334), 1000)
+		FROM generate_series(1, 30) i`, f.org)
+	one := field(f.settingsOf(t, token, `{"section":"servers","project":"prj_s2"}`), "settings", 0, "servers")
+	note, _ := field(one, "note").(string)
+	if recipes, _ := field(one, "recipes").([]any); len(recipes) >= 40 || !strings.Contains(note, "Servers settings page") || strings.Contains(note, "name one project") {
+		t.Errorf("one named project: %d recipes, note %q", len(recipes), note)
 	}
 }

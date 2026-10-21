@@ -146,7 +146,10 @@ func serversFit(projects []projectRow, out map[string]*serversOut) error {
 			s.Recipes = append(s.Recipes, r)
 		}
 		if len(s.Recipes) < s.Count {
-			s.Note = settingsText("servers-shown", map[string]int{"Shown": len(s.Recipes), "Count": s.Count})
+			s.Note = settingsText("servers-shown", struct {
+				Shown, Count int
+				Several      bool
+			}{len(s.Recipes), s.Count, len(projects) > 1})
 			used += len(s.Note) + 10
 		}
 	}

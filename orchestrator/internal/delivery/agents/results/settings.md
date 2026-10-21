@@ -8,7 +8,7 @@
 
 {{- define "results/settings/catalogue-cursor"}}invalid settings catalogue cursor for this organisation{{end}}
 
-{{- define "results/settings/servers-shown"}}{{.Shown}} of {{.Count}} recipes shown; name one project with `project` for its recipes.{{end}}
+{{- define "results/settings/servers-shown"}}{{.Shown}} of {{.Count}} recipes shown; {{if .Several}}name one project with `project` for its recipes{{else}}the rest are on the project's Servers settings page{{end}}.{{end}}
 
 {{- define "results/settings/session-child-prompt"}}per-run child prompt, not saved org/project prompts{{end}}
 
