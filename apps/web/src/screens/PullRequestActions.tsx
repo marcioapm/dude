@@ -98,7 +98,8 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
   const blocked = mergeBlockedBy(pr) ?? held;
   const how = method ?? defaultMethod;
   const off = notAllowed !== undefined;
-  const refusedTip = (button: ReactNode) => off ? <Tooltip content={notAllowed}><span tabIndex={0}>{button}</span></Tooltip> : button;
+  // Always wrapped, the tooltip only switched: the button is not remounted when notAllowed changes.
+  const refusedTip = (button: ReactNode) => <Tooltip content={notAllowed} disabled={!off}><span tabIndex={off ? 0 : -1}>{button}</span></Tooltip>;
   const facts: PullRequestActionSlots["facts"] = {};
   if (pr.checks.some(prCheckFailed)) {
     facts.checks = refusedTip(
