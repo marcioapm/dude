@@ -244,10 +244,21 @@ func (s *Server) registerWebhooks(w http.ResponseWriter, r *http.Request, org st
 // backgroundRegistration bounds a connect's background registration.
 const backgroundRegistration = 10 * time.Minute
 
+// pullRequestActionVerbs are the actions ownerOrAdmin guards, as its
+// refusal words them. With resolve-conflicts (ownerOnly), they are every
+// action pullRequestAction takes: none is allowed without its check.
+var pullRequestActionVerbs = map[string]string{
+	"merge":         "merge",
+	"update-branch": "update the branch of",
+	"rerun-failed":  "re-run the failed checks of",
+	"reviewers":     "ask for reviewers on",
+}
+
 // pullRequestAction does to a pull request what a person asked, on GitHub.
 func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org string) error {
 	id, action := r.PathValue("id"), r.PathValue("action")
-	if !slices.Contains([]string{"merge", "update-branch", "rerun-failed", "reviewers", "resolve-conflicts"}, action) {
+	verb, guarded := pullRequestActionVerbs[action]
+	if !guarded && action != "resolve-conflicts" {
 		return fail(http.StatusNotFound, "not_found", "no pull request action %q", action)
 	}
 	var body struct {
@@ -265,10 +276,19 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 	}
 	var checks []byte
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		return tx.QueryRow(r.Context(), `SELECT pr.number, pr.state::text, COALESCE(pr.head_sha, ''), r.url, r.name,
+		if err := tx.QueryRow(r.Context(), `SELECT pr.number, pr.state::text, COALESCE(pr.head_sha, ''), r.url, r.name,
 				pr.project_id, pr.task_id, pr.checks_json, pr.mergeable_state
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, id).
-			Scan(&pr.Number, &pr.State, &pr.HeadSHA, &pr.URL, &pr.Repo, &pr.ProjectID, &pr.TaskID, &checks, &pr.Mergeable)
+			Scan(&pr.Number, &pr.State, &pr.HeadSHA, &pr.URL, &pr.Repo, &pr.ProjectID, &pr.TaskID, &checks, &pr.Mergeable); err != nil {
+			return err
+		}
+		// These run on GitHub as dude's token, which may do what the person
+		// could not: the task's owner or an admin only, before GitHub is asked.
+		// resolve-conflicts is the owner's escalation decision (ownerOnly).
+		if guarded {
+			return ownerOrAdmin(r.Context(), tx, pr.TaskID, principalOf(r), verb)
+		}
+		return nil
 	})
 	if db.IsNotFound(err) {
 		return fail(http.StatusNotFound, "not_found", "pull request %s not found", id)

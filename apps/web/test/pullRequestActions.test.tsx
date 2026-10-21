@@ -3,11 +3,13 @@
  * that could not be read, and Merge stays off with the reason.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PullRequest } from "@dude/domain";
-import type { ApiClient } from "../src/api/client.ts";
+import type { ApiClient, TaskDetail } from "../src/api/client.ts";
+import type { People } from "../src/people.tsx";
 import { PullRequestActions } from "../src/screens/PullRequestActions.tsx";
+import { notYours } from "../src/screens/TaskLifecycle.tsx";
 
 const denied = { name: "GitHub check runs", status: "unavailable", conclusion: "", diagnostic: "check_runs_forbidden" };
 const pr = (over: Partial<PullRequest>): PullRequest => ({
@@ -194,6 +196,172 @@ describe("asking for a review", () => {
     await settle();
     expect(asked).toEqual([["tom", "acme/platform"]]);
     expect(container.querySelectorAll('[data-testid="pr-review-ask"]').length).toBe(0);
+    await unmount();
+  });
+});
+
+const four = ["pr-merge", "pr-update-branch", "pr-rerun", "pr-request-review"];
+const buttons = (c: HTMLElement) => four.map((id) => c.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`));
+
+// Each of the four is off, and focusing its wrapper shows tip.
+async function expectFourRefused(c: HTMLElement, tip: string): Promise<void> {
+  const { act, until } = await import("./dom.ts");
+  for (const [i, b] of buttons(c).entries()) {
+    expect(b ? b.disabled : `${four[i]} missing`).toBe(true);
+    await act(async () => (b!.parentElement as HTMLElement).focus());
+    const shown = await until(() => document.querySelector("[role=tooltip]"), `${four[i]}'s tooltip`);
+    expect(shown.textContent).toBe(tip);
+    await act(async () => (b!.parentElement as HTMLElement).blur());
+    await until(() => (document.querySelector("[role=tooltip]") ? null : true), `${four[i]}'s tooltip gone`);
+  }
+}
+
+describe("who may act on it", () => {
+  // Behind on its base, a failed check to re-run, and read as ready (Merge not blocked): all four are offered.
+  const actionable = pr({ behindBy: 2, display: "ready",
+    checks: [{ name: "lint", status: "completed", conclusion: "failure" }] });
+  const task = { owner: { id: "per_ana", name: "Ana Ribeiro" } } as Pick<TaskDetail, "owner">;
+  const shownTo = async (people: { you: string | null; me: { role: string } | null }, on: Pick<TaskDetail, "owner"> = task) => {
+    const { mount } = await import("./dom.ts");
+    return mount(
+      <PullRequestActions client={{} as ApiClient} pr={actionable} defaultMethod="squash" onChanged={() => {}}
+        notAllowed={notYours(on, people as Pick<People, "you" | "me">)}>
+        {({ facts, merge }) => <div>{facts.checks}{facts.base}{facts.reviews}{merge}</div>}
+      </PullRequestActions>,
+    );
+  };
+
+  test("a member who is neither the owner nor an admin sees the four off, saying who can", async () => {
+    const { container, unmount } = await shownTo({ you: "per_bo", me: { role: "member" } });
+    await expectFourRefused(container, "Only Ana, the owner, or an admin can do this");
+    await unmount();
+  });
+
+  for (const [who, people] of [["the owner", { you: "per_ana", me: { role: "member" } }], ["an admin", { you: "per_cy", me: { role: "admin" } }]] as const) {
+    test(`${who} sees the four on`, async () => {
+      const { act, settle, until } = await import("./dom.ts");
+      const { container, unmount } = await shownTo(people);
+      expect(buttons(container).map((b) => b ? b.disabled : "missing")).toEqual([false, false, false, false]);
+      // Focused past the tooltip's open delay: no refusal, and no extra tab stop on the wrapper.
+      // Merge keeps its own tooltip, saying what it does.
+      for (const [i, b] of buttons(container).entries()) {
+        const wrapper = b!.parentElement as HTMLElement;
+        await act(async () => wrapper.focus());
+        await settle(600);
+        const tip = document.querySelector("[role=tooltip]");
+        if (four[i] === "pr-merge") expect(tip?.textContent).toBe("Merges it on GitHub: squash and merge");
+        else expect(tip ? `${four[i]}'s tooltip: "${tip.textContent}"` : null).toBeNull();
+        expect(wrapper.tabIndex).toBe(-1);
+        await act(async () => wrapper.blur());
+        await until(() => (document.querySelector("[role=tooltip]") ? null : true), `${four[i]}'s tooltip gone`);
+      }
+      await unmount();
+    });
+  }
+
+  test("while one action runs, the others are off, Request review too", async () => {
+    const { click, mount } = await import("./dom.ts");
+    const client = { updatePullRequestBranch: () => new Promise(() => {}) } as unknown as ApiClient;
+    const { container, unmount } = await mount(
+      <PullRequestActions client={client} pr={actionable} defaultMethod="squash" onChanged={() => {}}>
+        {({ facts, merge }) => <div>{facts.checks}{facts.base}{facts.reviews}{merge}</div>}
+      </PullRequestActions>,
+    );
+    await click(container.querySelector('[data-testid="pr-update-branch"]')!);
+    expect(buttons(container).map((b) => b ? b.disabled : "missing")).toEqual([true, true, true, true]);
+    await unmount();
+  });
+
+  test("on a blocked pull request, Merge's tooltip says who can, not what blocks it", async () => {
+    const { act, mount, until } = await import("./dom.ts");
+    const blocked = pr({ display: "ci_red", checkState: "failing", checks: [{ name: "lint", status: "completed", conclusion: "failure" }] });
+    const { container, unmount } = await mount(
+      <PullRequestActions client={{} as ApiClient} pr={blocked} defaultMethod="squash" onChanged={() => {}}
+        notAllowed={notYours(task, { you: "per_bo", me: { role: "member" } } as Pick<People, "you" | "me">)}>
+        {({ merge }) => <div>{merge}</div>}
+      </PullRequestActions>,
+    );
+    const merge = container.querySelector<HTMLButtonElement>('[data-testid="pr-merge"]')!;
+    expect(merge.disabled).toBe(true);
+    await act(async () => (merge.parentElement as HTMLElement).focus());
+    const tip = await until(() => document.querySelector("[role=tooltip]"), "Merge's tooltip");
+    expect(tip.textContent).toBe("Only Ana, the owner, or an admin can do this");
+    await unmount();
+  });
+
+  describe("a task with no owner", () => {
+    const unowned = { owner: null } as Pick<TaskDetail, "owner">;
+
+    test("a member sees the four off: only an admin can", async () => {
+      const { container, unmount } = await shownTo({ you: "per_bo", me: { role: "member" } }, unowned);
+      await expectFourRefused(container, "Only an admin can do this: the task has no owner");
+      await unmount();
+    });
+
+    test("an admin sees the four on", async () => {
+      const { container, unmount } = await shownTo({ you: "per_cy", me: { role: "admin" } }, unowned);
+      expect(buttons(container).map((b) => b ? b.disabled : "missing")).toEqual([false, false, false, false]);
+      await unmount();
+    });
+  });
+});
+
+describe("who may act on it, on the task page", () => {
+  // The fixture's task, owned by Ana, with a pull request on which all four are offered.
+  const page = async (role: "member" | "admin" | "unknown") => {
+    const { mount, until } = await import("./dom.ts");
+    const { TooltipProvider, ToastProvider } = await import("@dude/design-system/primitives");
+    const { FixtureClient } = await import("../src/fixtures/client.ts");
+    const { PULL_REQUEST, TASK_ID } = await import("../src/fixtures/data.ts");
+    const { PeopleProvider } = await import("../src/people.tsx");
+    const { TaskScreen } = await import("../src/screens/TaskScreen.tsx");
+    const client = new FixtureClient("a");
+    const base = await client.getTask(TASK_ID);
+    const task: TaskDetail = { ...base, owner: { id: "u_ana", name: "Ana Ribeiro", photoUrl: null, online: false } };
+    client.getTask = async () => task;
+    client.listPullRequests = async () => ({ pullRequests: [{ ...PULL_REQUEST, behindBy: 2, display: "ready", checkState: "failing",
+      checks: [{ name: "lint", status: "completed", conclusion: "failure" }] }] });
+    const listed = await client.listPeople();
+    let reads = 0;
+    client.listPeople = role === "unknown" ? () => new Promise(() => {})
+      : async () => {
+        reads++;
+        return { ...listed, people: listed.people.map((p) => (p.id === listed.you ? { ...p, role } : p)) };
+      };
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    await until(() => container.querySelector('[data-testid="pr-merge"]'), "Merge on the task page");
+    return { container, unmount, peopleRead: () => reads };
+  };
+  // The page keeps the tab picked per task.
+  afterEach(() => localStorage.clear());
+
+  test("a member who is not the owner sees the four off, saying who can", async () => {
+    const { until } = await import("./dom.ts");
+    const { container, unmount } = await page("member");
+    await until(() => (buttons(container)[0]?.disabled ? true : null), "Merge off once people are read");
+    await expectFourRefused(container, "Only Ana, the owner, or an admin can do this");
+    await unmount();
+  });
+
+  test("an admin sees the four on", async () => {
+    const { settle, until } = await import("./dom.ts");
+    const { container, unmount, peopleRead } = await page("admin");
+    // The four are on until people are read too: only after a read does "on" mean the admin may act.
+    await until(() => peopleRead() > 0 || null, "people read");
+    await settle(100);
+    expect(buttons(container).map((b) => b ? b.disabled : "missing")).toEqual([false, false, false, false]);
+    await unmount();
+  });
+
+  test("while people are being read, none is off for who may not be allowed", async () => {
+    const { settle } = await import("./dom.ts");
+    const { container, unmount } = await page("unknown");
+    await settle(100);
+    expect(buttons(container).map((b) => b ? b.disabled : "missing")).toEqual([false, false, false, false]);
     await unmount();
   });
 });
