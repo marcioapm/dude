@@ -466,9 +466,15 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 		return false, nil
 	}
 	var summary, verify []byte
-	if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('childId',child_run_id,'profile',profile,'status',status,
-		'findings',findings,'verdicts',verdicts,'commits',commits,'artifactIds',artifact_ids,'modelCostUsd',cost_usd,'stale',stale), verify
-		FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND NOT stale`, p.Parent, p.Child, p.Generation).Scan(&summary, &verify); err != nil {
+	// A failed child's own error says why (a refusal before it started has
+	// no reply to quote); bounded like the summary's other fields.
+	if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('childId',c.child_run_id,'profile',c.profile,'status',c.status,
+		'findings',c.findings,'verdicts',c.verdicts,'commits',c.commits,'artifactIds',c.artifact_ids,'modelCostUsd',c.cost_usd,'stale',c.stale)
+		|| CASE WHEN c.status = 'failed' AND COALESCE(r.error, '') <> '' THEN jsonb_build_object('error', left(r.error, $4)) ELSE '{}' END,
+		c.verify
+		FROM child_results c LEFT JOIN runs r ON r.id = c.child_run_id
+		WHERE c.parent_run_id=$1 AND c.child_run_id=$2 AND c.generation=$3 AND NOT c.stale`,
+		p.Parent, p.Child, p.Generation, childErrorChars).Scan(&summary, &verify); err != nil {
 		return false, err
 	}
 	reply, err := childFinalReplyTx(ctx, tx, p.Child)
@@ -498,6 +504,9 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 	}
 	return true, nil
 }
+
+// childErrorChars bounds the failed child's error in its result summary.
+const childErrorChars = 500
 
 // childResultText is the parent's directive: the summary, then the child's
 // final reply quoted and bounded (childReplyExcerpt), when it said one.

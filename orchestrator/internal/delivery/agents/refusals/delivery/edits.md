@@ -9,3 +9,5 @@
 {{- define "refusals/delivery/edits/your-checkout-has-no-repository-you"}}your checkout has no repository you may change: nothing can be published{{end}}
 
 {{- define "refusals/delivery/edits/publish-yours-under-way-you-are"}}a publish of yours is under way: you are woken when it is done{{end}}
+
+{{- define "refusals/delivery/edits/pull-request-open-on-branch"}}a pull request is open on this branch, so changes reach it only after review on a candidate: use start_phase fix with a note saying what to change{{end}}

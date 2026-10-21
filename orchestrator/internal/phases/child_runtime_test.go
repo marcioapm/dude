@@ -163,6 +163,82 @@ func TestChildRuntimeWriterFence(t *testing.T) {
 	}
 }
 
+// A conductor's writer child admitted before a pull request opened (or a
+// draft) on the task branch, and only then due to start, fails without
+// reaching lux, saying to use start_phase fix; with the pull request
+// closed it starts.
+func TestAWriterChildAdmittedBeforeAPullRequestOpenedDoesNotStart(t *testing.T) {
+	for _, state := range []string{"open", "draft", "closed"} {
+		t.Run(state, func(t *testing.T) {
+			w := newResumeWorld(t)
+			fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} })
+			srv := httptest.NewServer(fake.Handler())
+			t.Cleanup(srv.Close)
+			t.Cleanup(fake.Close)
+			w.s.Lux = lux.New(srv.URL, "k")
+			w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+			w.s.Agent.DefaultImage = "test/image:latest"
+			w.exec(`UPDATE organizations SET default_image_id=NULL WHERE id=$1`, w.run.Org)
+			w.exec(`UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org)
+			w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object('implementer', jsonb_build_object('tier', (SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org)
+			w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status,kind)
+				VALUES('run_parent',$1,$2,$3,1,'conductor','running','agent')`, w.run.Org, w.run.ProjectID, w.run.TaskID)
+			w.exec(`UPDATE tasks SET status='review' WHERE id=$1`, w.run.TaskID)
+			w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state)
+				VALUES('wf_child_pr',$1,$2,'task.delivery','child-pr','waiting','awaitPullRequest',
+				('{"attempt":1,"taskId":"' || $2 || '","projectId":"' || $3 || '","branch":"dude/' || $2 || '/attempt-1"}')::jsonb)`,
+				w.run.Org, w.run.TaskID, w.run.ProjectID)
+			// The child, admitted while no pull request was open.
+			w.exec(`UPDATE runs SET source_kind='task_conductor', parent_run_id='run_parent', child_profile='implementer',
+				child_capabilities='{"publishCode":true}', phase='implement', role='implementer', status='pending', control='none',
+				lux_run_id=NULL, lux_state=NULL, dude_pause=NULL, branch='dude/' || task_id || '/attempt-1' WHERE id=$1`, w.run.ID)
+			w.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_pr', $1, $2, 'target', 'https://github.com/acme/target')`,
+				w.run.Org, w.run.ProjectID)
+			w.exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
+				VALUES ('pr_child', $1, $2, $3, 'repo_pr', 1, 'https://github.com/acme/target/pull/1', 'dude/' || $3 || '/attempt-1', 'main', 'aaa', 'T', $4::pull_request_state)`,
+				w.run.Org, w.run.ProjectID, w.run.TaskID, state)
+			r := w.run
+			r.SourceKind, r.Phase, r.Role = string(delivery.ChildParentTaskConductor), delivery.PhaseImplement, "implementer"
+			r.Status, r.LuxRunID, r.LuxState, r.DudePause = statusPending, "", "", ""
+			if err := w.s.submit(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			var status, reason string
+			if err := w.owner.QueryRow(w.ctx, `SELECT status::text, COALESCE(error, '') FROM runs WHERE id=$1`, r.ID).Scan(&status, &reason); err != nil {
+				t.Fatal(err)
+			}
+			if state == "closed" {
+				if len(fake.Runs()) != 1 {
+					t.Fatalf("with the pull request closed: %d lux Runs, status %s %q", len(fake.Runs()), status, reason)
+				}
+				return
+			}
+			if len(fake.Runs()) != 0 {
+				t.Errorf("the writer child reached lux")
+			}
+			if status != "failed" || !strings.Contains(reason, "a pull request is open on this branch") || !strings.Contains(reason, "start_phase fix") {
+				t.Errorf("the writer child: %s %q, want failed saying a pull request is open", status, reason)
+			}
+			// Its conductor is told why, not only that it failed.
+			store := &delivery.Store{DB: w.s.DB}
+			if n, err := settleCollectedChildren(w.ctx, store); err != nil || n != 1 {
+				t.Fatalf("settled %d %v", n, err)
+			}
+			if n, err := store.EnqueueChildResults(w.ctx); err != nil || n != 1 {
+				t.Fatalf("delivered %d %v", n, err)
+			}
+			var text string
+			if err := w.owner.QueryRow(w.ctx, `SELECT d.text FROM child_result_outbox o JOIN directives d ON d.id = o.directive_id
+				WHERE o.child_run_id = $1`, r.ID).Scan(&text); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(text, `"status": "failed"`) || !strings.Contains(text, "a pull request is open on this branch") {
+				t.Errorf("the conductor's result: %s", text)
+			}
+		})
+	}
+}
+
 func TestChildReplacementWriterWaitsForLivePredecessor(t *testing.T) {
 	w := newResumeWorld(t)
 	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status)
