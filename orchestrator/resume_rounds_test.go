@@ -64,7 +64,7 @@ func TestAContinuationLuxCannotResumeIsReplayed(t *testing.T) {
 			w.names(wi, w.repoID)
 			var once sync.Once
 			w.lux.BeforeStart(func(id string) {
-				if fix := w.luxRunsOf("fix"); len(fix) == 1 && fix[0].ID == id {
+				if w.fixStarts(id) {
 					once.Do(func() {
 						if why == "lost" {
 							w.lux.ForgetRun(w.luxRunsOf("review")[0].ID)
@@ -110,7 +110,7 @@ func TestChangedImageReplacesContinuedReviewer(t *testing.T) {
 	w.names(wi, w.repoID)
 	var once sync.Once
 	w.lux.BeforeStart(func(id string) {
-		if fix := w.luxRunsOf("fix"); len(fix) == 1 && fix[0].ID == id {
+		if w.fixStarts(id) {
 			once.Do(func() {
 				mustExec(t, w.owner, `UPDATE projects SET runtime_image = 'agent:image-b' WHERE id=$1`, w.project)
 			})
@@ -147,6 +147,16 @@ func resumingPolicy() delivery.Policy {
 	p := scriptedPolicy()
 	p.ResumeRounds = true
 	return p
+}
+
+// fixStarts says luxRunID's placement is the first fix round's: a fixer
+// submitted to lux, or the implementer's lux Run taken back up for it.
+func (w *world) fixStarts(luxRunID string) bool {
+	if fix := w.luxRunsOf("fix"); len(fix) == 1 && fix[0].ID == luxRunID {
+		return true
+	}
+	impl := w.luxRunsOf("implement")
+	return len(impl) == 1 && impl[0].ID == luxRunID && impl[0].Resumed == 1
 }
 
 // luxRunsOf are the fake lux's Runs of a dude phase, in submit order;
@@ -264,7 +274,7 @@ func TestAnUnresumableReviewerIsReplacedByAFreshRunGivenItsConversation(t *testi
 	w.names(wi, w.repoID)
 	var once sync.Once
 	w.lux.BeforeStart(func(luxRunID string) {
-		if fix := w.luxRunsOf("fix"); len(fix) == 1 && fix[0].ID == luxRunID {
+		if w.fixStarts(luxRunID) {
 			once.Do(func() { w.lux.CancelInLux(w.luxRunsOf("review")[0].ID) })
 		}
 	})
@@ -319,7 +329,7 @@ func TestABlankSessionOnResumeIsReplacedByAFreshRun(t *testing.T) {
 	w.names(wi, w.repoID)
 	var once sync.Once
 	w.lux.BeforeStart(func(luxRunID string) {
-		if fix := w.luxRunsOf("fix"); len(fix) == 1 && fix[0].ID == luxRunID {
+		if w.fixStarts(luxRunID) {
 			once.Do(func() { w.lux.LoseSession(w.luxRunsOf("review")[0].ID) })
 		}
 	})

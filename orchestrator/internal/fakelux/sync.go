@@ -80,6 +80,13 @@ func (s *Server) safeSync(run *Run, spec map[string]any, repo specRepo, sr lux.S
 		ev["status"], ev["error"] = "failed", operationUnknown(err)
 		return
 	}
+	if pushed := run.pushedTo[repo.Name]; pushed != "" && op == "" {
+		// A scripted writer commits in the repository, not its checkout:
+		// as lux's, the checkout is at what it pushed.
+		if _, err := git("fetch", "-q", "origin", pushed); err == nil {
+			_, _ = git("checkout", "-q", "--detach", pushed)
+		}
+	}
 	from, _ := git("rev-parse", "HEAD")
 	status, _ := git("status", "--porcelain", "--untracked-files=no")
 	ahead, behind := count(to+"..HEAD"), count("HEAD.."+to)

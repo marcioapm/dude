@@ -593,6 +593,9 @@ func (s *Server) deliverQueued(run *Run) {
 	}
 	for i := range run.queued {
 		s.accept(run, &run.queued[i])
+		if s.scriptedAgent && strings.HasPrefix(run.queued[i].text, "## A new round") {
+			s.writerRound(run)
+		}
 	}
 	s.consume(run)
 	// Input after a resume is what a paused agent was waiting for: it
@@ -856,6 +859,23 @@ func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 // with each repository at the commit its checkout is at now. Only a
 // reviewer's or tester's: their step depends on the tree they check.
 // Callers hold s.mu.
+// writerRound is a scripted implementer's or fixer's next round, told it
+// by a round message: a fixer's step, its commit naming the round so each
+// is a change. Callers hold s.mu.
+func (s *Server) writerRound(run *Run) {
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	labels, _ := spec["labels"].(map[string]any)
+	phase, _ := labels["dude.phase"].(string)
+	model, _ := labels["dude.model"].(string)
+	if phase != "implement" && phase != "fix" {
+		return
+	}
+	run.behavior = s.Decide(map[string]any{"labels": map[string]any{"dude.phase": "fix", "dude.model": model,
+		"dude.run": fmt.Sprintf("%s-round-%d", run.ID, run.turnsEnded)}})
+	run.woken = true
+}
+
 func (s *Server) replay(run *Run, spec map[string]any) {
 	labels, _ := spec["labels"].(map[string]any)
 	if phase, _ := labels["dude.phase"].(string); phase != "review" && phase != "test" {
@@ -2735,6 +2755,10 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 		}
 		path := s.repoPath(repo.URL)
 		base := head(path, repo.Ref)
+		if run.pushedTo[repo.Name] != "" && run.at[repo.Name] != "" {
+			// A later round's: its checkout moved on from the spec's ref.
+			base = run.at[repo.Name]
+		}
 		var sha string
 		var err error
 		work, op := "", ""
@@ -2789,6 +2813,11 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 				run.pushedTo = map[string]string{}
 			}
 			run.pushedTo[repo.Name] = sha
+			if run.at == nil {
+				run.at = map[string]string{}
+			}
+			// The checkout is at what it pushed.
+			run.at[repo.Name] = sha
 		}
 		results = append(results, result)
 	}

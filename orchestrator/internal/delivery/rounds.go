@@ -290,7 +290,7 @@ func handOverTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun, p prede
 		FROM runs o WHERE n.id = $1 AND o.id = $2`, created, p.ID, luxRunID); err != nil {
 		return "", err
 	}
-	text, err := roundMessageTx(ctx, tx, in, p.BaseRefs)
+	text, err := roundMessageTx(ctx, tx, in, p)
 	if err != nil {
 		return "", err
 	}
@@ -317,48 +317,88 @@ func continuesEventTx(ctx context.Context, tx pgx.Tx, ref RunRef, from, how stri
 
 // roundMessageTx is a resumed Run's next input: what changed since its
 // last round, per repository from its predecessor's checkout to the new
-// head; the findings it judges (in.FindingIDs, answered by position, as a
-// fresh Run's prompt lists them); and, for a reviewer, how it reports.
-func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, from map[string]string) (string, error) {
+// head; then, for a reviewer or tester, the findings it judges
+// (in.FindingIDs, answered by position, as a fresh Run's prompt lists
+// them) and how it reports; for a fixer, what it fixes (FixRoundMessage).
+func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (string, error) {
 	findings, err := findingsInOrderTx(ctx, tx, in.FindingIDs)
 	if err != nil {
 		return "", err
 	}
-	reason := ""
-	if in.ReviewRange != nil {
-		reason = rangeReason[in.ReviewRange.Of]
+	var message string
+	if in.Phase == PhaseFix {
+		people, err := FeedbackItemsTx(ctx, tx, in.TaskID, in.FeedbackItemIDs)
+		if err != nil {
+			return "", err
+		}
+		// The predecessor's tools are the new row's: a token was made for
+		// it only when dude serves them (phases' toolsToken).
+		var tools bool
+		if err := tx.QueryRow(ctx, `SELECT mcp_token_hash IS NOT NULL FROM runs WHERE id = $1`, p.ID).Scan(&tools); err != nil {
+			return "", err
+		}
+		message = FixRoundMessage(p.BaseRefs, in.BaseRefs, p.Phase != PhaseFix,
+			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools})
+	} else {
+		reason := ""
+		if in.ReviewRange != nil {
+			reason = rangeReason[in.ReviewRange.Of]
+		}
+		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings)
 	}
-	message := RoundMessage(in.Phase, from, in.BaseRefs, reason, findings)
 	if note := strings.TrimSpace(in.ConductorNote); note != "" {
 		message += "\n\n" + render(fromConductorTmpl, note)
 	}
 	return message, nil
 }
 
-// RoundMessage renders contracts/resume/round: from and to are each
-// repository's commit at the last round and now.
-func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding) string {
-	type rng struct {
-		Repo, From string
-		Named      bool
+// FixRoundMessage renders contracts/resume/fix-round: from and to are each
+// repository's commit at the writer's last push and now; contract, a
+// writer that was not a fixer (the implementer), whose instruction file
+// lacks the fix contract; in, what the round fixes, as Prompt(PhaseFix)
+// gives it.
+func FixRoundMessage(from, to map[string]string, contract bool, in PromptInput) string {
+	c := ""
+	if contract {
+		c = fixContract
 	}
-	var ranges []rng
+	return render(fixRoundTmpl, struct {
+		Ranges   []roundRange
+		Contract string
+		Sections []string
+	}{roundRanges(from, to), c, fixSections(in)})
+}
+
+type roundRange struct {
+	Repo, From string
+	Named      bool
+}
+
+// roundRanges are the repositories whose commit moved from from to to.
+func roundRanges(from, to map[string]string) []roundRange {
+	var ranges []roundRange
 	for _, repo := range slices.Sorted(maps.Keys(to)) {
 		if from[repo] == "" || from[repo] == to[repo] {
 			continue
 		}
-		ranges = append(ranges, rng{repo, from[repo], len(to) > 1})
+		ranges = append(ranges, roundRange{repo, from[repo], len(to) > 1})
 	}
+	return ranges
+}
+
+// RoundMessage renders contracts/resume/round: from and to are each
+// repository's commit at the last round and now.
+func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
 	}
 	return render(roundTmpl, struct {
 		Test             bool
-		Ranges           []rng
+		Ranges           []roundRange
 		Reason, Findings string
 		Format, Summary  string
-	}{phase == PhaseTest, ranges, reason, list, findingFormat, reviewSummary})
+	}{phase == PhaseTest, roundRanges(from, to), reason, list, findingFormat, reviewSummary})
 }
 
 func findingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding, error) {

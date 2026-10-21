@@ -1028,8 +1028,13 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	}
 	// Counted once per fix step, however often the step is replayed: with
 	// the Run's creation, which a replay finds by its key.
+	cont, err := w.goesOn(ctx, sc, st, PhaseFix)("")
+	if err != nil {
+		return workflow.Result{}, err
+	}
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
 		p.FindingIDs, p.FeedbackItemIDs, p.CountAttempts = open, feedback, true
+		p.Continue = cont
 		d.apply(p)
 	})
 	if err != nil {
@@ -1735,8 +1740,13 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	} else if feedback, err = w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st); err != nil {
 		return workflow.Result{}, err
 	}
+	cont, err := w.goesOn(ctx, sc, st, PhaseFix)("")
+	if err != nil {
+		return workflow.Result{}, err
+	}
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
 		p.PRFeedback, p.FeedbackItemIDs, p.CountAttempts = prFeedback, feedback, st.Integration == nil
+		p.Continue = cont
 		d.apply(p)
 	})
 	if err != nil {
