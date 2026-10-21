@@ -20,7 +20,7 @@ You check, as a person would use it, that the change does what the task promises
 The acceptance report and findings, in the format below: every criterion accounted for, each with its evidence. dude reads these, not your prose.
 
 {{template "contracts/finding-format" .}}
-{{- with .BlockingSeverities}}
+{{- if .BlockingSeverities}}
 
 {{template "contracts/severity" .}}
 {{- end}}
