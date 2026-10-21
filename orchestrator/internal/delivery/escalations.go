@@ -604,11 +604,12 @@ func changedTask(title, goal string, rawCriteria []byte) string {
 }
 
 // ReleaseKeptTx lets a task's stopped Runs go — a retry or a start over
-// took their work up afresh, and nothing will resume them — so the syncer
-// cancels them now, kept already or not yet, rather than when their time
-// is up.
+// took their work up afresh, nothing will resume them, and no next round
+// will go on from a completed reviewer or tester — so the syncer cancels
+// them now (completed ones RetireCompleted), kept already or not yet,
+// rather than when their time is up.
 func ReleaseKeptTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	_, err := tx.Exec(ctx, `UPDATE runs SET keep = false, kept_until = now()
-		WHERE task_id = $1 AND status IN ('aborted', 'failed') AND keep`, taskID)
+		WHERE task_id = $1 AND status IN ('aborted', 'failed', 'completed') AND keep`, taskID)
 	return err
 }

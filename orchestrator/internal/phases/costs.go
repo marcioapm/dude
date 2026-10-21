@@ -145,14 +145,17 @@ func (c *Costs) store(ctx context.Context, r costRun, cost lux.RunCost) error {
 	compute, hasCompute := cost.FamilyUSD(lux.FamilyCompute)
 	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var changed bool
+		// A Run that took over its predecessor's lux Run is charged only for
+		// the cost reported after its inherited base.
 		err := tx.QueryRow(ctx, `WITH old AS (
 				SELECT lux_ai_usd, lux_compute_usd, lux_cost_status FROM runs WHERE id = $1 FOR UPDATE)
-			UPDATE runs SET lux_ai_usd = $2::numeric, lux_compute_usd = $3::numeric, lux_cost_status = $4,
+			UPDATE runs SET lux_ai_usd = CASE WHEN $2::numeric IS NOT NULL THEN GREATEST($2::numeric - lux_ai_base, 0) END,
+				lux_compute_usd = CASE WHEN $3::numeric IS NOT NULL THEN GREATEST($3::numeric - lux_compute_base, 0) END, lux_cost_status = $4,
 				lux_cost_read_at = now(), lux_cost_next_at = CASE
 					WHEN $4 = 'final' OR runs.ended_at < now() - make_interval(secs => $6) THEN NULL
 					ELSE now() + make_interval(secs => $5) END
 			FROM old WHERE runs.id = $1
-			RETURNING old.lux_ai_usd IS DISTINCT FROM $2::numeric OR old.lux_compute_usd IS DISTINCT FROM $3::numeric
+			RETURNING old.lux_ai_usd IS DISTINCT FROM runs.lux_ai_usd OR old.lux_compute_usd IS DISTINCT FROM runs.lux_compute_usd
 				OR old.lux_cost_status IS DISTINCT FROM $4`,
 			r.ID, decimalOrNil(ai, hasAI), decimalOrNil(compute, hasCompute), cost.Status, c.every().Seconds(),
 			costPatience.Seconds()).Scan(&changed)

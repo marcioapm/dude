@@ -275,6 +275,27 @@ func TestACompletedRunIsTerminatedInLuxOnceCollected(t *testing.T) {
 	}
 }
 
+// A completed reviewer kept for its next round is not terminated while its
+// keep lasts; once the keep is over (or let go), it is.
+func TestAKeptCompletedReviewerIsRetiredOnceItsKeepIsOver(t *testing.T) {
+	w := newResumeWorld(t)
+	fake := w.onCallLux(nil)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, lux_run_id, lux_state,
+			lux_stop_reason, ended_at, keep, kept_until)
+		VALUES ('run_kept_rv', $1, 'prj_'||$1, 'wi_'||$1, 1, 'review', 'completed', 'lrun_kept_rv', 'stopped', 'complete', now(),
+			true, now() + interval '1 hour')`, w.run.Org)
+	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 0 {
+		t.Fatalf("retired %d, %v; want none while kept", n, err)
+	}
+	w.exec(`UPDATE runs SET kept_until = now() - interval '1 second' WHERE id = 'run_kept_rv'`)
+	if n, err := w.s.RetireCompleted(w.ctx); err != nil || n != 1 {
+		t.Fatalf("retired %d, %v; want the expired keep", n, err)
+	}
+	if got := fake.Calls(); !slices.Equal(got, []string{"cancel lrun_kept_rv"}) {
+		t.Errorf("asked lux %v", got)
+	}
+}
+
 // lux refusing a terminate for good (unknown, already terminated) counts as
 // terminated; lux unhealthy (503), or a failure that is not lux's answer,
 // leaves the Run to ask again and ends the batch, so the Runs behind it

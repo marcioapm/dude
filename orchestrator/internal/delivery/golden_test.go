@@ -248,6 +248,25 @@ func TestGoldenReviewPrompts(t *testing.T) {
 	golden(t, "prompt-review-adopted-quiet", Prompt(PhaseReview, adopted))
 }
 
+// A next round's texts: a resumed reviewer's and tester's round message,
+// and a fresh reviewer's prompt given its predecessor's conversation and
+// the commits since its round.
+func TestGoldenResumeRounds(t *testing.T) {
+	from, to := map[string]string{"api": "aaa111", "web": "ccc333"}, map[string]string{"api": "bbb222", "web": "ccc333"}
+	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings()))
+	golden(t, "resume-review-simplify-two", RoundMessage(PhaseReview, map[string]string{"api": "aaa111", "web": "ccc000"}, to,
+		rangeReason[RangeSimplify], nil))
+	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1]))
+	// A round on the same head (a retry): nothing to name as changed.
+	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil))
+	in := goldenTask()
+	in.Category = "correctness"
+	in.ReviewBase, in.ReviewOf, in.Findings = map[string]string{"api": "aaa111"}, RangeSinceLastRound, goldenFindings()
+	in.Replay = replayHeading("You: One problem: the totals are rounded per line.")
+	in.RestartNote = "The previous round's agent could not be taken back up (lux says the run is terminated); you are given its conversation instead."
+	golden(t, "prompt-review-range-since-last-round", Prompt(PhaseReview, in))
+}
+
 func TestGoldenImplementAndFixPrompts(t *testing.T) {
 	for _, cli := range []bool{false, true} {
 		in := goldenTask()

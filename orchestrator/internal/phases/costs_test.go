@@ -223,6 +223,27 @@ func TestCostsAreStoredAsLuxReportsThemUntilFinal(t *testing.T) {
 	}
 }
 
+// A continuation took over a lux Run whose cumulative cost already
+// included its predecessor's rounds: only the amount beyond the bases it
+// took over at is its own.
+func TestAContinuationIsChargedOnlyBeyondItsBase(t *testing.T) {
+	f := newCostFixture(t)
+	f.run("run_a", "")
+	if _, err := f.owner.Exec(f.ctx, `UPDATE runs SET lux_ai_base = 0.5, lux_compute_base = 0.2 WHERE id = 'run_a'`); err != nil {
+		t.Fatal(err)
+	}
+	f.lux.set("lux_run_a", lux.RunCost{Status: lux.CostIncomplete,
+		ByFamily: []lux.FamilyCost{usd(lux.FamilyAI, "0.8"), usd(lux.FamilyCompute, "0.3")}})
+	f.sweep()
+	if s := f.stored("run_a"); str(s.AI) != "0.3" || str(s.Compute) != "0.1" {
+		t.Fatalf("ai %s compute %s, want 0.3 / 0.1 beyond the bases", str(s.AI), str(s.Compute))
+	}
+	f.sweep()
+	if n := len(f.reported("run_a")); n != 1 {
+		t.Errorf("%d cost events after an unchanged read, want 1", n)
+	}
+}
+
 // Amounts in another currency are not USD; the families lux has not
 // priced stay unreported (NULL), not zero.
 func TestOnlyUSDAmountsAreKept(t *testing.T) {

@@ -61,6 +61,10 @@ type Policy struct {
 	// either, the publish is refused and the work delegated.
 	ConductorEditLines int `json:"conductorEditLines"`
 	ConductorEditFiles int `json:"conductorEditFiles"`
+	// A reviewer's or tester's next round takes over its previous round's
+	// agent, conversation and workspace (continueOrCreateTx), rather than
+	// starting a fresh one.
+	ResumeRounds bool `json:"resumeRounds"`
 }
 
 func DefaultPolicy() Policy {
@@ -85,6 +89,7 @@ func DefaultPolicy() Policy {
 		ConductorWarmMinutes: 5,
 		ConductorEditLines:   60,
 		ConductorEditFiles:   3,
+		ResumeRounds:         true,
 	}
 }
 

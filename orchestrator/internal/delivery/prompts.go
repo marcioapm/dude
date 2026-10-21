@@ -86,6 +86,9 @@ type PromptInput struct {
 	// The task's epic as the Run is briefed on it (EpicBriefing): its
 	// peers, the notes in force, messages held for it. "" off an epic.
 	Coordination string
+	// A review or test that goes on from its previous round with a fresh
+	// agent: that round's conversation (Replay), first in its message.
+	Replay string
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -170,7 +173,7 @@ const (
 
 // rangeReason says why a review covers only its range, by ReviewRange.Of:
 // agents/contracts/review-range/<of>.md.
-var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix)
+var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix, RangeSinceLastRound)
 
 // reviewScope is what this review covers, in its first message: the whole
 // branch when base is empty, else the commits named, per repository, to
@@ -316,6 +319,9 @@ func Prompt(phase string, in PromptInput) string {
 	var sections []string
 	add := func(s ...string) { sections = append(sections, s...) }
 	in = in.withImages()
+	if in.Replay != "" {
+		add(in.Replay)
+	}
 
 	switch phase {
 	case PhaseImplement:

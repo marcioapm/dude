@@ -450,7 +450,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	return &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests"},
+		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -732,6 +732,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		maps.DeleteFunc(attempted, func(c string, _ []string) bool { return !slices.Contains(retrying, c) })
 	}
 	toJudge := judgedBy(st.Policy, categories, attempted)
+	goesOn := w.goesOn(ctx, sc, st, PhaseReview)
 	var runIDs []string
 	for _, c := range categories {
 		k := key(sc, st, ":review:", st.Iteration, ":", c)
@@ -741,10 +742,15 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if d != nil {
 			k = conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
 		}
+		cont, err := goesOn(c)
+		if err != nil {
+			return workflow.Result{}, err
+		}
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
 				p.ReviewRange = reviewRange
+				p.Continue = cont
 				d.apply(p)
 				if st.Integration != nil {
 					p.PRFeedback = []forge.ActionableFeedback{{Source: "integration", Repo: st.Integration.Repo, Body: integrationReviewBrief(st.Integration.MergeSHA)}}
@@ -1176,8 +1182,13 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	cont, err := w.goesOn(ctx, sc, st, PhaseTest)("")
+	if err != nil {
+		return workflow.Result{}, err
+	}
 	runID, err := w.phase(ctx, sc, st, PhaseTest, k, func(p *PhaseRun) {
 		p.BlockingSeverities, p.FindingIDs = st.Policy.BlockingSeverities, judge
+		p.Continue = cont
 		d.apply(p)
 	})
 	if err != nil {

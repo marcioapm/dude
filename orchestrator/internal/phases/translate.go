@@ -255,8 +255,9 @@ func (t *translator) load(ctx context.Context, tx pgx.Tx) error {
 	var open []string
 	var state []byte
 	u := &t.usage
+	// Store this row's share: the harness total less its inherited base.
 	if err := tx.QueryRow(ctx, `SELECT agent_session_epoch, agent_message_buffer, agent_thought_buffer, open_tool_calls,
-		agent_cost_usd::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, harness_state,
+		(agent_cost_usd + agent_cost_base)::float8, context_tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, harness_state,
 		cardinality(project_secret_names) = 0
 		FROM runs WHERE id = $1`, t.run.ID).
 		Scan(&t.sessionEpoch, &message, &thought, &open, &u.cost, &u.context, &u.input, &u.output, &u.cacheRead, &u.cacheWrite, &state,
@@ -325,7 +326,7 @@ func (t *translator) save(ctx context.Context, tx pgx.Tx, cursor string, afterEv
 	// (open_tool_calls_at): what "open for how long" is measured from. A
 	// child's line (runs.children) is stamped when its event was saved.
 	_, err = tx.Exec(ctx, `UPDATE runs SET agent_message_buffer = $2, agent_thought_buffer = $3,
-		agent_cost_usd = $4, context_tokens = $5, input_tokens = $6, output_tokens = $7,
+		agent_cost_usd = GREATEST($4 - agent_cost_base, 0), context_tokens = $5, input_tokens = $6, output_tokens = $7,
 		cache_read_tokens = $8, cache_write_tokens = $9, open_tool_calls = $10,
 		open_tool_calls_at = COALESCE((SELECT jsonb_object_agg(c, COALESCE(open_tool_calls_at->c, to_jsonb(now())))
 			FROM unnest($10::text[]) c), '{}'),
@@ -514,6 +515,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		return err
 	case "git.sync":
 		if err := recordSyncedBase(ctx, tx, t.run.ID, f.EventData); err != nil {
+			return err
+		}
+		if err := syncedBase(ctx, tx, t.run, d); err != nil {
 			return err
 		}
 		if t.run.conductor() {
@@ -996,10 +1000,13 @@ func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id s
 	}
 	t.Warning = ""
 	had := t.SessionID
-	// A Run from before the session was kept: the last one its events name.
+	// A Run from before the session was kept: the last one its events name,
+	// or, for a Run that took its predecessor's lux Run over, the
+	// predecessor's.
 	if had == "" {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT CASE event_type WHEN $2 THEN payload->>'externalSessionId' ELSE payload->>'to' END
-		FROM events WHERE run_id = $1 AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1), '')`,
+		FROM events WHERE run_id IN ($1, (SELECT continues_run_id FROM runs WHERE id = $1 AND continues_how = 'resume'))
+		  AND event_type IN ($2, $3) ORDER BY cursor DESC LIMIT 1), '')`,
 			t.run.ID, evSessionStarted, evSessionReplaced).Scan(&had); err != nil {
 			return err
 		}

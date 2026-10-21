@@ -431,6 +431,11 @@ func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	if w.escalationReason(wi) != "" {
 		t.Fatal(w.escalationReason(wi))
 	}
+	// resumeRounds is off in this world: no finished reviewer holds its lux
+	// Run (the integration clause on its own: TestAnIntegrationReviewerIsNotKeptForANextRound).
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase IN ('review', 'test') AND status='completed' AND keep`, wi); n != 0 {
+		t.Errorf("%d completed review/test Runs kept with resumeRounds off", n)
+	}
 	// An integration fixer publishes on the candidate. A person's item stays
 	// the candidate after it is given the comment.
 	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 0 {
