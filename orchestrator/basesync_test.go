@@ -218,6 +218,10 @@ func TestBeforePRConflictingBaseIsResolvedReviewedAndTested(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='test' AND status='completed'`, wi); n < 2 {
 		t.Fatalf("verification was not repeated: %d", n)
 	}
+	// No pull request is open: the integration publishes to the task branch itself.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND branch LIKE '%-candidate'`, wi); n != 0 {
+		t.Fatalf("%d Runs on a candidate with no pull request open\n%s", n, w.describeRuns())
+	}
 }
 
 // The merge before a pull request opens, for a repository with none yet
