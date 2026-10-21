@@ -316,6 +316,13 @@ func TestABrainstormsRowIsItsSessionsOverTheOrganisations(t *testing.T) {
 	if field(roleIn(out, "reviewer"), "tier", "source") != "project" {
 		t.Errorf("reviewer: %v", roleIn(out, "reviewer"))
 	}
+	// The size the brainstorm's agent raised its session to.
+	mustExec(t, f.owner, `UPDATE sessions SET agent_machine = '{"sizeId":"msz_l","moveId":"mmv_1","askedBy":"run_b","reason":"r",
+		"at":"2026-03-04T05:06:07Z"}' WHERE id = 'ssn_tier'`)
+	if m := field(roleIn(f.settingsOf(t, token, `{}`), "brainstorm"), "machineSize"); field(m, "value", "id") != "msz_l" ||
+		field(m, "source") != "session" {
+		t.Errorf("a raised brainstorm's machine: %v", m)
+	}
 }
 
 // A brainstorm with no linked project reads the organisation alone: no
