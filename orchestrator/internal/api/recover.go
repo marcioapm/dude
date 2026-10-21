@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -233,19 +235,30 @@ func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org str
 	return nil
 }
 
-// recoverTask picks a stopped task back up.
+// recoverTask picks a stopped task back up. Start over may name who decides
+// the new attempt (decider); by default whoever decided the stopped one.
 func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string) error {
 	taskID := r.PathValue("id")
 	var body struct {
-		Action string `json:"action"`
-		Note   string `json:"note"`
+		Action  string `json:"action"`
+		Note    string `json:"note"`
+		Decider string `json:"decider"`
 		// Start over past open blockers (Start anyway): a person only.
 		Override bool `json:"override"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
+	switch body.Decider {
+	case "", delivery.DeciderConductor, delivery.DeciderPolicy:
+	default:
+		return fail(http.StatusBadRequest, "bad_request", "decider is conductor or policy")
+	}
+	if body.Decider != "" && body.Action != "restart" {
+		return fail(http.StatusBadRequest, "bad_request", "decider is who decides the next attempt: only with restart")
+	}
 	note := strings.TrimSpace(body.Note)
+	p := principalOf(r)
 	var override *delivery.Override
 	if body.Action == "restart" {
 		o, err := overrideFor(r, startOverride{Override: body.Override, Note: note}, "deliver")
@@ -254,10 +267,14 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		}
 		override = o
 	}
-	var wfID string
+	var wfID, decider string
 	var closePRs []string
 	attempt := 0
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		live, err := delivery.LockLiveWorkTx(r.Context(), tx, taskID)
+		if err != nil {
+			return err
+		}
 		t, err := loadStopped(r.Context(), tx, taskID, true)
 		if err != nil {
 			return err
@@ -273,19 +290,22 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			return fail(http.StatusBadRequest, "bad_request", "%q is not a way to pick task %s back up; one of %s",
 				body.Action, taskID, strings.Join(t.actions(), ", "))
 		}
-		if err := ownerOnly(r.Context(), tx, taskID, principalOf(r).Person, "pick up"); err != nil {
+		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "pick up"); err != nil {
 			return err
 		}
+		writer := delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person}
+		decider = t.decider()
 		// Starting over is a fresh attempt from the default branch: a start,
 		// guarded as one (path 6). Resume and Try again carry on the same
 		// attempt: blockers don't hold them, a person's Close or Archive
 		// does (path 7).
 		if body.Action == "restart" {
-			r, err := s.restartTx(r.Context(), tx, org, taskID, t, note, override, "a person picked it back up: restart")
+			res, err := s.restartTx(r.Context(), tx, org, taskID, t, live, writer, note, body.Decider, override,
+				"a person picked it back up: restart")
 			if err != nil {
 				return err
 			}
-			wfID, attempt, closePRs = r.WorkflowID, r.Attempt, r.ClosePRs
+			wfID, attempt, closePRs, decider = res.WorkflowID, res.Attempt, res.ClosePRs, res.Decider
 		} else {
 			if err := delivery.RefuseLifecycleTx(r.Context(), tx, taskID); err != nil {
 				return pickUpRefusal(err)
@@ -304,6 +324,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 			if body.Action != "resume" {
+				if decider == delivery.DeciderConductor {
+					if err := endLiveConductorTx(r.Context(), tx, org, t.ProjectID, taskID, live, "a person tried again"); err != nil {
+						return err
+					}
+				}
 				if err := delivery.ReleaseKeptTx(r.Context(), tx, taskID); err != nil {
 					return err
 				}
@@ -312,10 +337,18 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			if err := pickUp(r.Context(), tx, org, t, body.Action, note); err != nil {
 				return err
 			}
+			// Try again under the conductor: a new conductor on this
+			// attempt, told the note, with the stopped one's conversation.
+			if body.Action == "retry" && decider == delivery.DeciderConductor {
+				if _, err := delivery.StartPickedUpConductor(r.Context(), tx, delivery.PickUp{Writer: writer, Note: note,
+					Org: org, Project: t.ProjectID, TaskID: taskID}); err != nil {
+					return err
+				}
+			}
 		}
 		return humanEvent(r.Context(), tx, org, "", runInfo{ProjectID: t.ProjectID, TaskID: taskID}, "task.recovered",
-			principalOf(r), map[string]any{"action": body.Action, "note": note, "attempt": max(attempt, t.Attempt),
-				"runIds": db.NonNil(t.Kept)})
+			p, map[string]any{"action": body.Action, "note": note, "attempt": max(attempt, t.Attempt),
+				"runIds": db.NonNil(t.Kept), "decider": decider})
 	})
 	var taken delivery.SourceRefusal
 	if errors.As(err, &taken) {
@@ -326,13 +359,13 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		if body.Action != "restart" {
 			path = body.Action
 		}
-		return s.refusedStart(r.Context(), org, taskID, path, principalOf(r), err)
+		return s.refusedStart(r.Context(), org, taskID, path, p, err)
 	}
 	// The last attempt's pull requests are closed after: best effort, as a
 	// person can close one on GitHub, and the new attempt does not wait on it.
 	s.closePullRequests(r.Context(), org, closePRs)
 	s.kick()
-	write(w, http.StatusOK, map[string]any{"taskId": taskID, "action": body.Action, "workflowRunId": wfID})
+	write(w, http.StatusOK, map[string]any{"taskId": taskID, "action": body.Action, "workflowRunId": wfID, "decider": decider})
 	return nil
 }
 
@@ -359,18 +392,33 @@ func recordPickUpNote(ctx context.Context, tx pgx.Tx, org, taskID, note string) 
 type restarted struct {
 	WorkflowID string
 	Attempt    int
+	// Who decides it, and its conductor ("" under Deliver).
+	Decider, Conductor string
 	// The stopped attempt's pull requests, closed after the commit.
 	ClosePRs []string
 }
 
 // restartTx starts a stopped task over as its next attempt: a start,
 // guarded as one (path 6), out of aborted with reason, what was kept for a
-// resume let go, and a new delivery.
-func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t stoppedTask, note string,
-	override *delivery.Override, reason string) (restarted, error) {
+// resume let go, a conductor still live ended, and a new delivery decided
+// by decider ("" for the stopped attempt's). Under the conductor, the
+// attempt gets a new one, briefed with the note and what the last did.
+// The caller holds LockLiveWorkTx's locks, then the delivery's
+// (loadStopped); live is the conductor it found.
+func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t stoppedTask, live string, w delivery.Writer,
+	note, decider string, override *delivery.Override, reason string) (restarted, error) {
 	var out restarted
 	if err := delivery.GuardStartTx(ctx, tx, org, taskID, override); err != nil {
 		return out, err
+	}
+	if decider == "" {
+		decider = t.decider()
+	}
+	out.Decider = decider
+	if decider == delivery.DeciderConductor {
+		if err := endLiveConductorTx(ctx, tx, org, t.ProjectID, taskID, live, reason); err != nil {
+			return out, err
+		}
 	}
 	if err := reopenTask(ctx, tx, org, t.ProjectID, taskID, reason); err != nil {
 		return out, err
@@ -385,11 +433,37 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 	if out.Attempt, err = delivery.NextAttemptTx(ctx, tx, taskID, t.State.Attempt); err != nil {
 		return out, err
 	}
-	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, t.ProjectID, t.State.Policy, out.Attempt, override != nil); err != nil {
+	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, t.ProjectID, t.State.Policy, out.Attempt, decider, w, override != nil); err != nil {
 		return out, err
 	}
 	out.ClosePRs = t.State.PullRequestIDs
-	return out, nil
+	if decider != delivery.DeciderConductor {
+		return out, nil
+	}
+	out.Conductor, err = delivery.StartPickedUpConductor(ctx, tx, delivery.PickUp{Writer: w, Note: note, Attempt: out.Attempt,
+		Earlier: t.Attempt, ClosedPRs: out.ClosePRs, Org: org, Project: t.ProjectID, TaskID: taskID})
+	return out, err
+}
+
+// endLiveConductorTx ends the task's conductor still live as its attempt
+// is picked back up afresh (Try again, Start over): aborted and not kept,
+// its children let go. Each attempt has its own.
+func endLiveConductorTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, live, reason string) error {
+	if live == "" {
+		return nil
+	}
+	if _, err := delivery.StopChildrenTx(ctx, tx, taskID); err != nil {
+		return err
+	}
+	return delivery.AbortConductorTx(ctx, tx, delivery.RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: live}, reason, false)
+}
+
+// decider is who decided the stopped attempt.
+func (t stoppedTask) decider() string {
+	if t.State.Decider == delivery.DeciderConductor {
+		return delivery.DeciderConductor
+	}
+	return delivery.DeciderPolicy
 }
 
 // reopenTask takes a stopped task out of aborted (or failed): the one move
@@ -438,10 +512,18 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 	return err
 }
 
-// startOver starts the task's next attempt: a delivery of its own, on a
-// branch of its own, from the default branch.
-func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectID string, policy delivery.Policy, attempt int, overridden bool) (string, error) {
+// startOver starts the task's next attempt: a delivery of its own, decided
+// by decider, on a branch of its own from the default branch — or, for a
+// task started from existing work, on that work's head branch again
+// (delivery.NewState), whose adopted pull request it carries on.
+func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectID string, policy delivery.Policy, attempt int,
+	decider string, w delivery.Writer, overridden bool) (string, error) {
 	// The last attempt's delivery is over, whatever state it stopped in.
+	var was string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT state->>'decider' FROM workflow_runs WHERE task_id = $1
+		ORDER BY created_at DESC LIMIT 1), '')`, taskID).Scan(&was); err != nil {
+		return "", err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = 'completed', wake_at = NULL,
 			awaiting_signals = '[]'::jsonb, locked_by = NULL, locked_until = NULL
 		WHERE task_id = $1 AND status <> 'completed'`, taskID); err != nil {
@@ -452,11 +534,21 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectI
 		return "", err
 	}
 	st.Attempt, st.Overridden = attempt, overridden
-	return s.Workflow.StartTx(ctx, tx, workflow.StartOptions{
+	if decider == delivery.DeciderConductor {
+		st.Decider = decider
+	}
+	id, err := s.Workflow.StartTx(ctx, tx, workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: org, TaskID: taskID,
 		IdempotencyKey: fmt.Sprintf("delivery:%s:attempt-%d", taskID, attempt),
 		Input:          st,
 	})
+	if err != nil || cmp.Or(was, delivery.DeciderPolicy) == decider {
+		return id, err
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: delivery.EvDeciderChanged, OrganizationID: org, ProjectID: projectID,
+		TaskID: taskID, ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator, CorrelationID: taskID,
+		Payload: map[string]any{"from": cmp.Or(was, delivery.DeciderPolicy), "to": decider, "why": "start over"}})
+	return id, err
 }
 
 // closePullRequests closes an attempt's pull requests still open on GitHub.

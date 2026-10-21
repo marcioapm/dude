@@ -311,7 +311,8 @@ func TestAConductorInANewAttemptStartsFromTheDefaultBranch(t *testing.T) {
 		return fakelux.Behaviour{Reply: "ok"}
 	}
 	mustExec(t, e.owner, `UPDATE tasks SET status = 'aborted' WHERE id = $1`, e.task)
-	if status, body := e.call("/internal/tasks/"+e.task+"/recover", map[string]any{"action": "restart"}); status != 200 {
+	// Deliver decides attempt 2, so its implementer runs while a conductor talks.
+	if status, body := e.call("/internal/tasks/"+e.task+"/recover", map[string]any{"action": "restart", "decider": "policy"}); status != 200 {
 		t.Fatalf("restart: %d %v", status, body)
 	}
 	e.until("attempt 2's implementer", func() bool {

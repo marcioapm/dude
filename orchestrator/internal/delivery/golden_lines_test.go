@@ -140,5 +140,10 @@ func TestGoldenPublishAndUnblockWords(t *testing.T) {
 	}
 	add("not-moved", strings.Join(notMovedParts(map[string]string{"web": "the branch\nmoved"}, map[string]string{"api": "1111111aaaa"}), "; "))
 	add("talk-when-unblocked", talkWhenUnblocked("Ana", "GLD-8"))
+	add("picked-up-retry", render(pickedUpTmpl, pickedUp{Who: "Ana", Note: "Use the new API."}))
+	add("picked-up-restart", render(pickedUpTmpl, pickedUp{Who: "Ana", Attempt: 2, Earlier: &earlierAttempt{N: 1,
+		Runs:         []string{"conductor aborted", "implement completed", "review (security) aborted"},
+		PullRequests: []earlierPR{{Repo: "api", Number: 412}, {Repo: "web", Number: 9, Kept: true}}}}))
+	add("picked-up-restart-nothing", render(pickedUpTmpl, pickedUp{Who: "Ana", Attempt: 3, Earlier: &earlierAttempt{N: 2}}))
 	goldenTexts(t, "publish-unblock-words", lines)
 }

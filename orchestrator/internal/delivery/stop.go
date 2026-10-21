@@ -171,7 +171,7 @@ func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep 
 func HaltDeliveryTx(ctx context.Context, tx pgx.Tx, org string, d *Delivery, conductor, why, actorType, actorID string) error {
 	st := d.State
 	st.Halt = &Halt{Conductor: conductor}
-	if d.Status == "waiting" && len(st.PendingRunIDs) == 0 {
+	if len(st.PendingRunIDs) == 0 {
 		st.Halt.At = d.Step
 	}
 	if e := st.Escalation; e != nil && e.Decided == nil {

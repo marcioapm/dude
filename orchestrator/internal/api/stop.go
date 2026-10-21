@@ -109,12 +109,13 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 		if err != nil {
 			return err
 		}
-		res, err := s.restartTx(r.Context(), tx, org, taskID, t, note, nil, "a person stopped it and started it over")
+		res, err := s.restartTx(r.Context(), tx, org, taskID, t, "", delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person},
+			note, next, nil, "a person stopped it and started it over")
 		if err != nil {
 			return err
 		}
 		closePRs = res.ClosePRs
-		out["status"], out["attempt"], out["workflowRunId"], out["decider"] = "running", res.Attempt, res.WorkflowID, next
+		out["status"], out["attempt"], out["workflowRunId"], out["decider"] = "running", res.Attempt, res.WorkflowID, res.Decider
 		return humanEvent(r.Context(), tx, org, "", ri, "task.recovered", p, map[string]any{"action": "restart", "note": note,
 			"attempt": res.Attempt, "runIds": []string{}, "decider": next, "via": "stop"})
 	})
