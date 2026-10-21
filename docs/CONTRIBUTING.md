@@ -139,7 +139,11 @@ transaction they stop every live Run of the task, any attempt's
 once what a Stop kept, end the delivery, then close (`task.closed` names
 what it `stopped`). `closePullRequest` closes the task's open PRs on GitHub
 after the commit, each with "Closed with <KEY> as <resolution>: <note>",
-adopted ones included; without it they stay open. The owner or an admin.
+adopted ones included; without it they stay open. `task.closed` records
+only the request (`pullRequestCloseRequested`); what GitHub did is a
+`pull_request.action` `close` per pull request, by the person who closed,
+with `closed: true` or the `error`, and the sync's `pull_request.closed`
+follows only a close that happened. The owner or an admin.
 
 ### Delivery, end to end
 

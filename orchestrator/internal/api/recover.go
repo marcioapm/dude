@@ -561,16 +561,33 @@ func (s *Server) closePullRequests(ctx context.Context, org string, ids []string
 // each with comment first when one is given; adopted ones too only with
 // adopted (a person asked). Best effort, as closePullRequests.
 func (s *Server) closePullRequestsSaying(ctx context.Context, org string, ids []string, comment string, adopted bool) {
+	s.closeOnForge(ctx, org, ids, comment, adopted, nil)
+}
+
+// closedOnForge is what GitHub did with one pull request asked closed:
+// err nil when it closed it.
+type closedOnForge struct {
+	ProjectID, TaskID, Repo string
+	Number                  int
+	Err                     error
+}
+
+// closeOnForge closes the pull requests still open on GitHub, as
+// closePullRequestsSaying, telling done what came of each one it tried.
+func (s *Server) closeOnForge(ctx context.Context, org string, ids []string, comment string, adopted bool, done func(closedOnForge)) {
 	if len(ids) == 0 || s.Forges == nil {
 		return
 	}
 	type openPR struct {
-		Number int
-		URL    string
+		Number            int
+		URL               string
+		Repo              string
+		ProjectID, TaskID string
 	}
 	var prs []openPR
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT p.number, r.url FROM pull_requests p JOIN repositories r ON r.id = p.repository_id
+		rows, err := tx.Query(ctx, `SELECT p.number, r.url, r.name, t.project_id, p.task_id FROM pull_requests p
+			JOIN repositories r ON r.id = p.repository_id JOIN tasks t ON t.id = p.task_id
 			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft') AND (NOT p.adopted OR $2)`, ids, adopted)
 		if err != nil {
 			return err
@@ -580,13 +597,25 @@ func (s *Server) closePullRequestsSaying(ctx context.Context, org string, ids []
 	}); err != nil || len(prs) == 0 {
 		return
 	}
+	report := func(p openPR, err error) {
+		if done != nil {
+			done(closedOnForge{ProjectID: p.ProjectID, TaskID: p.TaskID, Repo: p.Repo, Number: p.Number, Err: err})
+		}
+	}
 	gh, err := s.Forges.For(ctx, org)
 	if err != nil || gh == nil {
+		if err == nil {
+			err = errors.New("no GitHub connection for the organization")
+		}
+		for _, p := range prs {
+			report(p, err)
+		}
 		return
 	}
 	for _, p := range prs {
 		slug := forge.SlugFromURL(p.URL)
 		if slug == "" {
+			report(p, fmt.Errorf("no GitHub repository in %q", p.URL))
 			continue
 		}
 		if comment != "" {
@@ -594,8 +623,10 @@ func (s *Server) closePullRequestsSaying(ctx context.Context, org string, ids []
 				s.Log.Warn("commenting on a pull request before closing it failed", "pr", p.Number, "repo", slug, "error", err)
 			}
 		}
-		if err := gh.ClosePullRequest(ctx, slug, p.Number); err != nil && s.Log != nil {
+		err := gh.ClosePullRequest(ctx, slug, p.Number)
+		if err != nil && s.Log != nil {
 			s.Log.Warn("closing a pull request failed", "pr", p.Number, "repo", slug, "error", err)
 		}
+		report(p, err)
 	}
 }

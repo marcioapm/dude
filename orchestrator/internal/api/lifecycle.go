@@ -134,7 +134,14 @@ func (s *Server) taskDecision(w http.ResponseWriter, r *http.Request, org string
 		closed = o.Closed
 	}
 	if closed != nil && len(closed.PullRequests) > 0 {
-		s.closePullRequestsSaying(r.Context(), org, closed.PullRequests, closed.Comment, true)
+		// Each outcome in its own transaction: the close is committed whatever GitHub says.
+		s.closeOnForge(r.Context(), org, closed.PullRequests, closed.Comment, true, func(c closedOnForge) {
+			if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+				return delivery.RecordPullRequestCloseTx(r.Context(), tx, org, closed.Actor, c.ProjectID, c.TaskID, c.Repo, c.Number, c.Err)
+			}); err != nil && s.Log != nil {
+				s.Log.Warn("recording a pull request's close failed", "pr", c.Number, "repo", c.Repo, "error", err)
+			}
+		})
 	}
 	s.kick()
 	write(w, http.StatusOK, out)

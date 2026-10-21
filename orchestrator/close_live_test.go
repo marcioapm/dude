@@ -6,10 +6,12 @@ package orchestrator_test
 // only when asked.
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -41,7 +43,7 @@ func TestClosingAConductorTaskWithNothingToBuild(t *testing.T) {
 		t.Errorf("the delivery did not end")
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.closed'
-		AND payload->'stopped' = jsonb_build_array($2::text) AND NOT payload ? 'pullRequestClosed' AND actor_id = $3`, task, conductor, ana); n != 1 {
+		AND payload->'stopped' = jsonb_build_array($2::text) AND NOT payload ? 'pullRequestCloseRequested' AND actor_id = $3`, task, conductor, ana); n != 1 {
 		t.Errorf("task.closed does not name the conductor it stopped: %s",
 			w.str(`SELECT payload::text FROM events WHERE task_id = $1 AND event_type = 'task.closed'`, task))
 	}
@@ -113,8 +115,12 @@ func TestClosingInReviewClosesDudesPullRequestWhenAsked(t *testing.T) {
 		t.Fatalf("a pull request nobody asked to close is %s", p.State)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.closed'
-		AND payload->>'pullRequestClosed' = 'false'`, kept); n != 1 {
+		AND payload->>'pullRequestCloseRequested' = 'false'`, kept); n != 1 {
 		t.Errorf("task.closed does not say the pull request was left open")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'close'`, kept); n != 0 {
+		t.Errorf("a close nobody asked for was recorded")
 	}
 	closed := w.reviewing()
 	w.assignOwner(closed, ana)
@@ -132,8 +138,56 @@ func TestClosingInReviewClosesDudesPullRequestWhenAsked(t *testing.T) {
 		t.Errorf("the closing comment: %+v, want %q", p.Comments, want)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.closed'
-		AND payload->>'pullRequestClosed' = 'true'`, closed); n != 1 {
-		t.Errorf("task.closed does not say the pull request was closed")
+		AND payload->>'pullRequestCloseRequested' = 'true'`, closed); n != 1 {
+		t.Errorf("task.closed does not say closing the pull request was asked for")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'close' AND (payload->>'number')::int = 2 AND payload->>'closed' = 'true'
+		AND NOT payload ? 'error' AND actor_id = $2`, closed, ana); n != 1 {
+		t.Errorf("GitHub's close is not recorded as done, by Ana")
+	}
+}
+
+// GitHub refuses the close: the task is closed all the same, the pull
+// request stays open, and the ledger says the close was asked and failed —
+// never that it was closed.
+func TestClosingWhenGitHubRefusesToCloseThePullRequestSaysSo(t *testing.T) {
+	w := newWorld(t)
+	task := w.reviewing()
+	ana := w.ownedBy(task, "Ana")
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/pulls/") {
+				return http.StatusForbidden
+			}
+			return 0
+		}
+	})
+	status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do", "closePullRequest": true})
+	if status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	if s, r := w.taskStatus(task), w.resolutionOf(task); s != "aborted" || r != "wont_do" {
+		t.Fatalf("the task is %s %s", s, r)
+	}
+	if p := w.gh.Pull(1); p.State != "open" {
+		t.Fatalf("the pull request GitHub refused to close is %s", p.State)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.closed'
+		AND payload->>'pullRequestCloseRequested' = 'true' AND NOT payload ? 'pullRequestClosed'`, task); n != 1 {
+		t.Errorf("task.closed: %s", w.str(`SELECT payload::text FROM events WHERE task_id = $1 AND event_type = 'task.closed'`, task))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'close' AND (payload->>'number')::int = 1 AND payload ? 'error' AND NOT payload ? 'closed'`, task); n != 1 {
+		t.Errorf("the failed close is not recorded: %s", w.str(`SELECT COALESCE(string_agg(payload::text, ' '), '') FROM events
+			WHERE task_id = $1 AND event_type = 'pull_request.action'`, task))
+	}
+	w.sync()
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.closed'`, task); n != 0 {
+		t.Errorf("the ledger says the pull request was closed")
+	}
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND state = 'open'`, task); n != 1 {
+		t.Errorf("the pull request is not open in dude's record")
 	}
 }
 

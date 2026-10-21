@@ -462,7 +462,7 @@ export class FixtureClient extends ApiClient {
       closedBy: { id: YOU, name: PEOPLE[0]!.name, photoUrl: null, online: true } };
     return this.#lifecycleEvent(EventTypes.TaskClosed, { resolution: d.resolution, ...(d.duplicateOf ? { duplicateOf: d.duplicateOf } : {}),
       ...(d.note ? { note: d.note } : {}), ...(andArchived ? { andArchived: true } : {}), ...(stopped.length ? { stopped } : {}),
-      ...(d.closePullRequest !== undefined ? { pullRequestClosed: d.closePullRequest } : {}) });
+      ...(d.closePullRequest !== undefined ? { pullRequestCloseRequested: d.closePullRequest } : {}) });
   }
   override async closeTask(_taskId: string, d: CloseDecision): Promise<unknown> {
     await wait(150);

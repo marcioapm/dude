@@ -44,6 +44,16 @@ describe("merging", () => {
 });
 
 describe("activity", () => {
+  test("a Close that asked dude to close it: closed, or GitHub refused, by the person who closed the task", () => {
+    const done = pullRequestActivity(event("pull_request.action", { action: "close", closed: true }, "per_ana"), false);
+    expect(done?.text).toBe("closed #41 on GitHub with the task");
+    expect(done?.actorId).toBe("per_ana");
+    const refusedClose = pullRequestActivity(event("pull_request.action", { action: "close", error: "github 403: Resource not accessible" }, "per_ana"), false);
+    expect(refusedClose?.text).toBe("asked to close #41 with the task; GitHub did not close it");
+    expect(refusedClose?.quote).toBe("github 403: Resource not accessible");
+    expect(refusedClose?.text).not.toContain("closed #41");
+  });
+
   test("dude opening it, and whom it asked", () => {
     expect(pullRequestActivity(event("pull_request.opened", { draft: true, reviewersRequested: ["cy", "bo"] }), false)?.text)
       .toBe("opened #41 as a draft, asking cy and bo to review");

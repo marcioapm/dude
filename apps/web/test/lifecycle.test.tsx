@@ -86,7 +86,8 @@ describe("the fixture client's lifecycle", () => {
     expect(task.runs.every((r) => ["completed", "failed", "aborted"].includes(r.status))).toBe(true);
     const closed = (await client.events({ taskId: TASK_ID })).events.findLast((e) => e.eventType === "task.closed")!;
     expect((closed.payload.stopped as string[]).length).toBeGreaterThan(0);
-    expect(closed.payload.pullRequestClosed).toBe(true);
+    expect(closed.payload.pullRequestCloseRequested).toBe(true);
+    expect(closed.payload).not.toHaveProperty("pullRequestClosed");
     expect((await client.archivedTasks(TASK_ID)).tasks).toEqual([]);
   });
 });

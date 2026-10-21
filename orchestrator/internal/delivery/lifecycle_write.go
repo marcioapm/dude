@@ -132,7 +132,9 @@ type Closed struct {
 	// comment each is closed with.
 	PullRequests []string `json:"-"`
 	Comment      string   `json:"-"`
-	eventID      string
+	// Who asked: each close's outcome is theirs.
+	Actor   Actor `json:"-"`
+	eventID string
 }
 
 // CloseTx closes a task with a resolution, stopping what is live on it
@@ -291,16 +293,37 @@ func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, stoppe
 	if err != nil {
 		return out, err
 	}
+	// The close only asks: whether GitHub closed each pull request is
+	// recorded after the commit (RecordPullRequestCloseTx).
 	if len(open) > 0 {
-		payload["pullRequestClosed"] = in.ClosePullRequest
+		payload["pullRequestCloseRequested"] = in.ClosePullRequest
 	}
 	if in.ClosePullRequest {
 		out.PullRequests = open
 		out.Comment = closedComment(t.Key, in.Resolution, in.Note)
+		out.Actor = in.Actor
 	}
 	id, err := ledger.Append(ctx, tx, in.Actor.event(org, t.ProjectID, t.ID, EvTaskClosed, payload))
 	out.eventID = id
 	return out, err
+}
+
+// ActionClosePullRequest is a pull request a person's Close asked dude to
+// close on GitHub (pull_request.action).
+const ActionClosePullRequest = "close"
+
+// RecordPullRequestCloseTx records what GitHub did with a pull request a
+// Close asked dude to close: `closed` on success, the error otherwise. The
+// sync records the state change itself (pull_request.closed) when it reads it.
+func RecordPullRequestCloseTx(ctx context.Context, tx pgx.Tx, org string, a Actor, projectID, taskID, repo string, number int, closeErr error) error {
+	payload := map[string]any{"action": ActionClosePullRequest, "repo": repo, "number": number}
+	if closeErr != nil {
+		payload["error"] = clip(closeErr.Error(), 500)
+	} else {
+		payload["closed"] = true
+	}
+	_, err := ledger.Append(ctx, tx, a.event(org, projectID, taskID, EvPullRequestAction, payload))
+	return err
 }
 
 // closedComment is what a pull request closed with its task says on
