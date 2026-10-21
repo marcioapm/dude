@@ -1719,9 +1719,18 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		st.Integration.Polls = 0
 	}
 	// PR feedback fixes, and an open pull request's integration, are checked
-	// on a candidate before promotion. One before the pull request opened
-	// has no pull request to keep its merge from.
-	if st.Integration == nil || !st.Integration.BeforePR {
+	// on a candidate before promotion. One before a pull request opened has
+	// none to keep its merge from, unless another repository's is open: the
+	// fixer may change that one too.
+	candidate := st.Integration == nil || !st.Integration.BeforePR
+	if !candidate && len(st.PullRequestIDs) > 0 {
+		open, err := w.openPRRepos(ctx, sc, st)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		candidate = len(open) > 0
+	}
+	if candidate {
 		st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), From: maps.Clone(st.Heads)}
 	}
 	d := directed(st, PhaseFix)
