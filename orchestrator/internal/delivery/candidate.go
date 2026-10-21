@@ -283,6 +283,30 @@ func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, mov
 	})
 }
 
+// discardLoopCandidateTx reopens the findings a refused loop candidate's Runs
+// resolved outside the moved repositories and returns the round's first
+// writer phase. A round's Runs are those whose creation key carries
+// ":candidate:<round>" (key), optionally followed by its retry suffix.
+func discardLoopCandidateTx(ctx context.Context, tx pgx.Tx, taskID, workflowID string, attempt, round int, moved []string) (string, error) {
+	inRound := `r.task_id = $1 AND r.attempt = ` + attemptOr + ` AND starts_with(r.creation_key, $3)
+		AND (r.creation_key LIKE '%:candidate:' || $4::int OR r.creation_key LIKE '%:candidate:' || $4::int || ':retry:%')`
+	// A finding naming no repository may concern any of them: reopened.
+	if _, err := tx.Exec(ctx, `UPDATE review_findings f SET status = 'open', resolved_by_run_id = NULL,
+			resolution_note = 'its fix never reached the pull request', updated_at = now()
+		FROM runs r WHERE r.id = f.resolved_by_run_id AND f.status = 'resolved' AND `+inRound+`
+		  AND (f.repo IS NULL OR NOT f.repo = ANY($5))`, taskID, attempt, workflowID, round, moved); err != nil {
+		return "", err
+	}
+	var phase string
+	err := tx.QueryRow(ctx, `SELECT r.phase::text FROM runs r WHERE `+inRound+`
+		AND r.phase IN ('implement', 'fix', 'simplify') ORDER BY r.created_at, r.id LIMIT 1`,
+		taskID, attempt, workflowID, round).Scan(&phase)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	return phase, err
+}
+
 // AbandonCandidateTx reopens the pending resolutions of the candidate
 // branch's Runs (task, attempt; 0 for the task's current) when its round
 // ends without reaching the pull request: the next fixer is given them.

@@ -2332,6 +2332,23 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 	if err := w.s.CandidateMovedTx(ctx, sc.OrganizationID, st, moved); err != nil {
 		return workflow.Result{}, err
 	}
+	// A loop candidate's findings resolved only on its discarded heads are
+	// obligations again, and its retry is the writer step it opened with.
+	retryStep := "fix"
+	if c.Loop {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			phase, err := discardLoopCandidateTx(ctx, tx, st.TaskID, sc.WorkflowRunID, st.Attempt, c.Round, slices.Sorted(maps.Keys(moved)))
+			if phase == PhaseImplement {
+				retryStep = "implementRun"
+			} else if phase == PhaseSimplify {
+				retryStep = "simplify"
+			}
+			return err
+		}); err != nil {
+			return workflow.Result{}, err
+		}
+		st.SimplifyBase = nil
+	}
 	// A person's push refused an integration candidate; close its live
 	// resolving-conflicts activity before escalating the moved pull request.
 	if st.Integration != nil {
@@ -2360,8 +2377,8 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 	res, err := w.escalate(ctx, sc, st, ReasonPullRequestMoved, detail)
 	if err == nil && c.Loop {
 		// A loop's candidate fixed no pull request feedback: a retry is the
-		// loop's fix again, on a candidate from what the branch holds now.
-		st.Escalation.Step = "fix"
+		// loop's writer again, on a candidate from what the branch holds now.
+		st.Escalation.Step = retryStep
 	}
 	return res, err
 }

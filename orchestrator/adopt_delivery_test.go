@@ -495,61 +495,130 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 }
 
 // A person pushes to the pull request dude adopted while its first review
-// loop's fix is checked on the candidate: the promotion does not overwrite
-// their commit. The delivery stops for a person (pull_request_moved), and
-// the pull request stays at the person's commit, which nothing of dude's
-// reached.
+// loop's writer is checked on the candidate: the promotion does not
+// overwrite their commit. The delivery stops for a person
+// (pull_request_moved), and the pull request stays at the person's commit.
+// Trying again is the loop's own writer on a candidate from their commit,
+// given what the discarded candidate was given: the finding whose fix never
+// reached the pull request, or the implementer's assignment.
 func TestAPersonsPushDuringAnAdoptedPullRequestsFirstLoopRefusesItsPromotion(t *testing.T) {
-	w := newWorld(t)
-	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
-	w.gh.Review(n, "ana", "APPROVED")
-	var once sync.Once
-	var person string
-	armed := w.gated(func(step, next string) {
-		if step == "awaitFix" && next == "review" {
-			once.Do(func() {
-				person = w.commitFileIn(w.gh.Repo, "feature/greet", "PERSON.md", "mine\n", "A person's push")
+	for _, tc := range []struct {
+		name, mode, writer, gate string
+		resume                   bool
+	}{
+		{"review/fresh", delivery.ModeReview, "fix", "awaitFix", false},
+		{"review/resumed", delivery.ModeReview, "fix", "awaitFix", true},
+		{"continue", delivery.ModeContinue, "implement", "awaitImplement", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			if tc.resume {
+				mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
+			}
+			// Named models: lux is given each writer's prompt itself, which the
+			// scripted agent still plays.
+			w.onModel("fixer", "llm-fix")
+			w.onModel("implementer", "llm-impl")
+			// One pull request fix round: a retry the prFix path took would spend it.
+			mustExec(t, w.owner, `UPDATE forge_credentials SET settings = settings || '{"fixRoundsPerPr":1}' WHERE organization_id = $1`, w.org)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+			w.gh.Review(n, "ana", "APPROVED")
+			var once sync.Once
+			var person string
+			armed := w.gated(func(step, next string) {
+				if step == tc.gate && next == "review" {
+					once.Do(func() {
+						person = w.commitFileIn(w.gh.Repo, "feature/greet", "PERSON.md", "mine\n", "A person's push")
+					})
+				}
 			})
-		}
-	})
-	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
-	moved := len(w.gh.BranchLog("feature/greet"))
-	armed.Store(true)
-	w.startDelivery(wi)
-	w.until("refused", func() bool { return w.escalationReason(wi) != "" })
-	if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
-		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
-	}
-	if got := w.gh.SHA("feature/greet"); person == "" || got != person {
-		t.Fatalf("feature/greet at %s, want the person's %s", got, person)
-	}
-	// No API write of dude's moved it: the person's push is its only move.
-	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 0 {
-		t.Errorf("dude moved feature/greet to %v", moves)
-	}
-	w.writersOnCandidate(wi, nil, "fix")
+			wi := w.adopted("pr", n, "feature/greet", "main", tc.mode)
+			moved := len(w.gh.BranchLog("feature/greet"))
+			armed.Store(true)
+			w.startDelivery(wi)
+			w.until("refused", func() bool { return w.escalationReason(wi) != "" })
+			if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+				t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+			}
+			if got := w.gh.SHA("feature/greet"); person == "" || got != person {
+				t.Fatalf("feature/greet at %s, want the person's %s", got, person)
+			}
+			// No API write of dude's moved it: the person's push is its only move.
+			if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 0 {
+				t.Errorf("dude moved feature/greet to %v", moves)
+			}
+			w.writersOnCandidate(wi, nil, tc.writer)
+			// The discarded candidate's fix resolved the review's finding there.
+			var findingIDs []string
+			var title, acceptance string
+			_ = w.owner.QueryRow(context.Background(), `SELECT finding_ids FROM runs WHERE task_id = $1 AND phase = 'fix'
+				ORDER BY created_at LIMIT 1`, wi).Scan(&findingIDs)
+			if len(findingIDs) != 1 {
+				t.Fatalf("the candidate's fix was given %v, want the review's one finding\n%s", findingIDs, w.describeRuns())
+			}
+			_ = w.owner.QueryRow(context.Background(), `SELECT title, COALESCE(acceptance, '') FROM review_findings WHERE id = $1`,
+				findingIDs[0]).Scan(&title, &acceptance)
+			earlier := w.runsSoFar(wi)
 
-	// Trying again is the loop's fix, on a candidate from the person's
-	// commit, and the pull request moves once more, by promotion, over it.
-	if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
-		t.Fatal(code, body)
-	}
-	w.until("the retried fix promoted", func() bool {
-		return w.waitingOnPR(wi) && len(w.gh.BranchLog("feature/greet")) > moved
-	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND base_refs->>'target' = $2
-		AND branch LIKE '%-candidate'`, wi, person); n != 1 {
-		t.Errorf("%d fixes on a candidate from the person's commit, want 1\n%s", n, w.describeRuns())
-	}
-	if w.fixes(wi) != 0 {
-		t.Error("the retry was a pull request fix, not the loop's")
-	}
-	head := w.gh.SHA("feature/greet")
-	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != head {
-		t.Errorf("feature/greet moved to %v, want one promotion", moves)
-	}
-	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", person, head).CombinedOutput(); err != nil {
-		t.Errorf("the promoted head %s does not hold the person's commit: %v %s", head, err, out)
+			// Trying again: every move it makes is checked when asked.
+			check := w.prShowsOnlyChecked(t, wi, "target", "feature/greet", false)
+			if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
+				t.Fatal(code, body)
+			}
+			w.until("the retried loop promoted", func() bool {
+				return w.waitingOnPR(wi) && len(w.gh.BranchLog("feature/greet")) > moved
+			})
+			check()
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)
+				AND base_refs->>'target' = $4 AND branch LIKE '%-candidate'`, wi, tc.writer, earlier, person); n != 1 {
+				t.Errorf("%d %s Runs on a candidate from the person's commit, want 1\n%s", n, tc.writer, w.describeRuns())
+			}
+			// The retry's fixer is told the finding again, as the original was.
+			var retryFix string
+			var retryIDs []string
+			_ = w.owner.QueryRow(context.Background(), `SELECT id, finding_ids FROM runs WHERE task_id = $1 AND phase = 'fix'
+				AND id <> ALL($2) ORDER BY created_at LIMIT 1`, wi, earlier).Scan(&retryFix, &retryIDs)
+			if !slices.Contains(retryIDs, findingIDs[0]) {
+				t.Errorf("the retry's fix was given %v, want the discarded candidate's finding %s", retryIDs, findingIDs[0])
+			}
+			given := w.promptOf(retryFix)
+			if lr := w.luxRunOf(retryFix); lr != "" {
+				given += strings.Join(w.lux.Inputs(lr), "\n")
+			}
+			if !strings.Contains(given, title) || acceptance != "" && !strings.Contains(given, acceptance) {
+				t.Errorf("the retry's fixer was not told %q (acceptance %q):\n%s", title, acceptance, given)
+			}
+			if tc.mode == delivery.ModeContinue {
+				// The implementer's assignment, not a generic fix in its place.
+				var retryImpl string
+				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+					AND id <> ALL($2)`, wi, earlier).Scan(&retryImpl)
+				if retryImpl == "" || !strings.Contains(w.promptOf(retryImpl), "Say hello") {
+					t.Errorf("the retry's implementer %q was not given the task\n%s", retryImpl, w.describeRuns())
+				}
+			}
+			// The loop's retry is reviewed as the loop is, never as a pull request fix.
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND id <> ALL($2)
+				AND review_range->>'of' = $3`, wi, earlier, delivery.RangePullRequestFix); n != 0 {
+				t.Errorf("%d reviews of the retry over a pull request fix's range", n)
+			}
+			head := w.gh.SHA("feature/greet")
+			if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != head {
+				t.Errorf("feature/greet moved to %v, want one promotion", moves)
+			}
+			if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", person, head).CombinedOutput(); err != nil {
+				t.Errorf("the promoted head %s does not hold the person's commit: %v %s", head, err, out)
+			}
+			// The pull request's one fix round is still there for its feedback.
+			w.gh.Comment(n, "alice", "Please rename the greeting.")
+			w.until("the feedback fixed", func() bool {
+				w.sync()
+				return w.fixes(wi) == 1 && w.gh.SHA("feature/greet") != head && w.waitingOnPR(wi)
+			})
+			if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+				t.Errorf("after the feedback the delivery escalated %q", r)
+			}
+		})
 	}
 }
 
