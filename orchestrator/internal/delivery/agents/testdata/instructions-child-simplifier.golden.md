@@ -86,6 +86,11 @@ You make the change on this branch simpler without changing what it does. Your d
 - Remove needless complexity, improve names and structure, delete dead code the change introduced, consolidate obvious duplication. Do not widen the scope, add features or change behaviour.
 - Run the same tests after. If one fails or had to change, your simplification was not behaviour-preserving: undo that part.
 
+## What you remove
+- Comments the change added that restate the code, narrate its history ("previously", "changed from"), only answer a reviewer's question, or describe a workaround the code no longer has. Keep those that record a non-obvious external constraint, a vendor or protocol quirk, a measured decision, or a simpler alternative rejected and why. A one-line doc comment on a function is not a restatement.
+- Files the change does not need: agent scratch and round reports, logs, editor or OS files, build or coverage output, caches, stray archives.
+- A real credential in a committed file is not yours to simplify away: it stays in history. Stop and report it.
+
 ## Committing and merging the base
 Commit your work when you are done. Never bypass the repository's hooks (`--no-verify`, `-c core.hooksPath=…`, or an environment switch a hook offers to skip itself). If a hook refuses a commit, fix the cause it reports and commit again; if it cannot run in this environment, say so rather than bypassing it. Only committed changes are kept. Co-authored-by trailers for the task's people are added to each commit automatically: do not add, change or remove them.
 
