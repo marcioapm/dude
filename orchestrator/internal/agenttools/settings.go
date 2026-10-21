@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
@@ -68,8 +69,13 @@ type projectRow struct {
 }
 
 type scopeOut struct {
-	Project  *projectRefOut      `json:"project,omitempty"`
-	Delivery map[string]valueOut `json:"delivery,omitempty"`
+	Project  *projectRefOut         `json:"project,omitempty"`
+	Delivery map[string]valueOut    `json:"delivery,omitempty"`
+	Roles    []roleOut              `json:"roles,omitempty"`
+	Secrets  []secretOut            `json:"secrets,omitempty"`
+	Prompts  []promptOut            `json:"prompts,omitempty"`
+	Network  *networkOut            `json:"network,omitempty"`
+	Machines map[string]machineRole `json:"machines,omitempty"`
 }
 
 type projectRefOut struct {
@@ -78,13 +84,19 @@ type projectRefOut struct {
 }
 
 type settingsOut struct {
-	External     string     `json:"external"`
-	Sources      string     `json:"sources"`
-	Organization string     `json:"organization"`
-	Role         string     `json:"yourRole"`
-	Scopes       []scopeOut `json:"settings"`
-	GitHub       any        `json:"github,omitempty"`
+	External     string            `json:"external"`
+	Sources      string            `json:"sources"`
+	Organization string            `json:"organization"`
+	Role         string            `json:"yourRole"`
+	Scopes       []scopeOut        `json:"settings"`
+	GitHub       any               `json:"github,omitempty"`
+	Capabilities []capabilitiesOut `json:"capabilities,omitempty"`
+	MachineSizes []sizeOut         `json:"machineSizes,omitempty"`
 }
+
+// settingsRoles are the roles the settings pages list, in their order.
+var settingsRoles = []string{delivery.RoleConductor, delivery.RoleBrainstorm, "investigator", "implementer", "reviewer", "fixer",
+	"simplifier", "qa_browser"}
 
 func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (settingsOut, error) {
 	var out settingsOut
@@ -107,6 +119,37 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			scopes = append(scopes, settingsLayers{org: org, project: &projects[i]})
 		}
 	}
+	grants := map[string]capabilities.Grants{}
+	for _, role := range settingsRoles {
+		if grants[role], err = capabilities.Resolve(ctx, tx, capabilities.Agent{Role: settingsToolRole(role), Org: c.Org}); err != nil {
+			return out, err
+		}
+	}
+	// Everything the sections resolve over, each read once for all scopes.
+	var refs roleRefs
+	var secrets map[string][]secretOut
+	if want("roles") || want("machines") {
+		if refs.sizes, err = delivery.LoadSizes(ctx, tx); err != nil {
+			return out, err
+		}
+	}
+	if want("roles") {
+		if refs.tiers, err = delivery.LoadTiers(ctx, tx); err != nil {
+			return out, err
+		}
+		if refs.images, err = imageNames(ctx, tx); err != nil {
+			return out, err
+		}
+		if secrets, err = projectSecrets(ctx, tx, projects); err != nil {
+			return out, err
+		}
+	}
+	var prompts map[promptKey]promptRow
+	if want("prompts") {
+		if prompts, err = latestPrompts(ctx, tx, projects); err != nil {
+			return out, err
+		}
+	}
 	for _, l := range scopes {
 		s := scopeOut{}
 		if l.project != nil {
@@ -115,6 +158,24 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		if want("delivery") {
 			if s.Delivery, err = deliveryOut(w, l); err != nil {
 				return out, err
+			}
+		}
+		if want("roles") {
+			s.Roles = rolesOut(w, l, refs)
+			if l.project != nil {
+				s.Secrets = secrets[l.project.ID]
+			}
+		}
+		if want("prompts") {
+			s.Prompts = promptsOut(w, l, prompts)
+		}
+		if want("network") {
+			s.Network = networkOf(w, l, grants)
+		}
+		if want("machines") {
+			s.Machines = map[string]machineRole{}
+			for _, role := range settingsRoles {
+				s.Machines[role] = machineOf(w, l, refs.sizes, role)
 			}
 		}
 		out.Scopes = append(out.Scopes, s)
@@ -126,7 +187,28 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 		}
 		out.GitHub = githubOut(w, gh, set)
 	}
+	if want("capabilities") {
+		for _, role := range settingsRoles {
+			cs := capabilitiesOut{Role: role, Label: delivery.RoleName(role), Yours: role == c.Role, Granted: []capabilityOut{}}
+			for _, cap := range grants[role].Granted() {
+				cs.Granted = append(cs.Granted, capabilityOut{Key: string(cap.Key), Description: cap.Description})
+			}
+			out.Capabilities = append(out.Capabilities, cs)
+		}
+	}
+	if want("machines") {
+		out.MachineSizes = sizesOut(w, refs.sizes)
+	}
 	return out, nil
+}
+
+// settingsToolRole is the role a settings role's Runs are given tools as:
+// the fixer is the implementer's Run (instructions.go's toolRoleOf).
+func settingsToolRole(role string) string {
+	if role == "fixer" {
+		return "implementer"
+	}
+	return role
 }
 
 // settingsScopes reads the organisation's row and the projects the call is

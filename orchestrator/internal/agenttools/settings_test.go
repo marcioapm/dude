@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/api"
@@ -137,5 +139,162 @@ func TestSettingsLayersEachValueAsTheSettingsPageDoes(t *testing.T) {
 		if !bytes.Equal(gotJSON, wantJSON) && key != "reviewLogins" || field(gh, key, "source") != want {
 			t.Errorf("github %s: tool %s from %v, page %s", key, gotJSON, field(gh, key, "source"), wantJSON)
 		}
+	}
+}
+
+// roleSettingsWorld is an organisation whose implementer runs on tier Big
+// at 90 minutes on size L in image web-img, with notes; the project moves
+// the reviewer to tier Small and gives it notes, and the fixer has nothing
+// of its own. It has a GitHub credential, a webhook secret, an OAuth
+// client secret, a project secret, and saved prompts.
+func roleSettingsWorld(t *testing.T) (*fixture, string) {
+	f := setup(t)
+	token := f.conductor(t)
+	mustExec(t, f.owner, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES
+		('mtr_big', $1, 'Big', 'big-model'), ('mtr_small', $1, 'Small', 'small-model')`, f.org)
+	mustExec(t, f.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES
+		('msz_l', $1, 'L', 8, 16384, 50)`, f.org)
+	mustExec(t, f.owner, `INSERT INTO images (id, organization_id, name) VALUES ('img_web', $1, 'web-img')`, f.org)
+	mustExec(t, f.owner, `UPDATE organizations SET default_agent_models = $2::jsonb, agent_egress = '{api.example.com}' WHERE id = $1`, f.org,
+		`{"implementer":{"tier":"mtr_big","timeLimitMinutes":90,"machineSize":"msz_l","image":"img_web","context":"ORG-NOTES-SECRET-TEXT"}}`)
+	mustExec(t, f.owner, `UPDATE projects SET agent_models = $2::jsonb, agent_egress = '{docs.example.com}', agent_egress_mode = 'only'
+		WHERE id = $1`, f.project, `{"reviewer":{"tier":"mtr_small","context":"PROJECT-NOTES-SECRET-TEXT"}}`)
+	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name) VALUES ('psn_ana', $1, 'Ana')`, f.org)
+	mustExec(t, f.owner, `INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, created_by, created_at) VALUES
+		('pv_1', $1, NULL, 'implementer', NULL, 'ORG-PROMPT-BODY-TEXT', 'psn_ana', '2026-01-02T03:04:05Z'),
+		('pv_2', $1, $2, 'reviewer', 'replace', 'PROJECT-PROMPT-BODY-TEXT', 'psn_ana', '2026-02-03T04:05:06Z'),
+		('pv_3', $1, $2, 'implementer', 'add', '  ', 'psn_ana', '2026-02-03T04:05:06Z')`, f.org, f.project)
+	mustExec(t, f.owner, `INSERT INTO forge_credentials (id, organization_id, auth, secret, api_base_url, webhook_secret, oauth_client_id,
+			oauth_client_secret) VALUES ('fc_r', $1, 'pat', 'GH-CREDENTIAL-SECRET', 'http://127.0.0.1:1', 'WEBHOOK-SECRET-VALUE', 'client',
+			'OAUTH-CLIENT-SECRET-VALUE')`, f.org)
+	mustExec(t, f.owner, `INSERT INTO project_secrets (project_id, organization_id, name, value, hint, recipients)
+		VALUES ($1, $2, 'DB_PASSWORD', 'PROJECT-SECRET-VALUE', 'HINT-SECRET', '{implementer,previews}')`, f.project, f.org)
+	return f, token
+}
+
+// roleIn is the tool's row for role in its first scope's roles.
+func roleIn(out map[string]any, role string) map[string]any {
+	roles, _ := field(out, "settings", 0, "roles").([]any)
+	for _, r := range roles {
+		if m, _ := r.(map[string]any); m["role"] == role {
+			return m
+		}
+	}
+	return nil
+}
+
+// Each role's tier (with the model it resolves to), harness, time limit,
+// machine size and image, with the layer each is set in; the fixer's
+// taken from the implementer says so. What the settings page shows of
+// each role (/v1/projects/:id/settings) agrees on the ids and on
+// project-or-not. Notes say only that they are set.
+func TestSettingsRolesAreResolvedAsTheSettingsPageResolvesThem(t *testing.T) {
+	f, token := roleSettingsWorld(t)
+	out := f.settingsOf(t, token, `{"section":"roles"}`)
+	impl, rev, fixer := roleIn(out, "implementer"), roleIn(out, "reviewer"), roleIn(out, "fixer")
+	if field(impl, "tier", "source") != "organization" || field(impl, "tier", "value", "id") != "mtr_big" ||
+		!strings.Contains(field(impl, "tier", "value", "model").(string), "big-model") ||
+		field(impl, "timeLimitMinutes", "value") != 90.0 || field(impl, "timeLimitMinutes", "source") != "organization" ||
+		field(impl, "machineSize", "value", "id") != "msz_l" || field(impl, "image", "value", "id") != "img_web" ||
+		field(impl, "harness", "value") != "opencode" || field(impl, "harness", "source") != "dude" || impl["projectNotes"] != false {
+		t.Errorf("implementer: %v", impl)
+	}
+	if field(rev, "tier", "source") != "project" || field(rev, "tier", "value", "id") != "mtr_small" || rev["projectNotes"] != true ||
+		field(rev, "timeLimitMinutes", "value") != 120.0 || field(rev, "timeLimitMinutes", "source") != "dude" {
+		t.Errorf("reviewer: %v", rev)
+	}
+	if field(fixer, "tier", "value", "id") != "mtr_big" || field(fixer, "tier", "followsImplementer") != true ||
+		field(fixer, "machineSize", "followsImplementer") != true || field(fixer, "image", "followsImplementer") != true ||
+		field(fixer, "tier", "source") != "organization" || field(fixer, "machineSize", "source") != "organization" {
+		t.Errorf("fixer: %v", fixer)
+	}
+	if field(impl, "label") != "Implementer" || field(roleIn(out, "qa_browser"), "label") != "Tester" {
+		t.Errorf("labels: %v %v", impl["label"], roleIn(out, "qa_browser")["label"])
+	}
+
+	page := f.settingsRoute(t, "/v1/projects/"+f.project+"/settings")
+	for role, shown := range page["roles"].(map[string]any) {
+		got := roleIn(out, role)
+		if got == nil {
+			t.Errorf("%s: on the page, not in the tool", role)
+			continue
+		}
+		for key, id := range map[string][]any{"tier": {"tier", "value", "id"}, "machineSize": {"machineSize", "value", "id"},
+			"image": {"image", "value", "id"}, "harness": {"harness", "value"}, "timeLimitMinutes": {"timeLimitMinutes", "value"}} {
+			pageValue, toolValue := field(shown, key, "value"), field(got, id...)
+			if key == "machineSize" && pageValue == nil {
+				// The page's null is the organisation's default size.
+				if field(got, "machineSize", "source") != "dude" {
+					t.Errorf("%s machineSize: page default, tool %v", role, field(got, "machineSize"))
+				}
+				continue
+			}
+			if key == "timeLimitMinutes" && pageValue == nil {
+				pageValue = 120.0
+			}
+			if pageValue != toolValue {
+				t.Errorf("%s %s: page %v, tool %v", role, key, pageValue, toolValue)
+			}
+			pageProject := field(shown, key, "source") == "project" && field(shown, key, "followsImplementer") != true
+			if pageProject != (field(got, key, "source") == "project") && field(got, key, "followsImplementer") != true {
+				t.Errorf("%s %s: page from %v, tool from %v", role, key, field(shown, key, "source"), field(got, key, "source"))
+			}
+		}
+	}
+}
+
+// Prompts say built-in or saved, added to or replaced, and when and by
+// whom; network, capabilities and machines are each role's. Nothing the
+// web app shows only to admins, and no prompt or notes text, appears.
+func TestSettingsShowNoSecretAndNoPromptText(t *testing.T) {
+	f, token := roleSettingsWorld(t)
+	var raw json.RawMessage
+	if status := f.postAs(t, token, "settings", `{}`, &raw); status != 200 {
+		t.Fatalf("settings: %d %s", status, raw)
+	}
+	for _, s := range []string{"GH-CREDENTIAL-SECRET", "WEBHOOK-SECRET-VALUE", "OAUTH-CLIENT-SECRET-VALUE", "PROJECT-SECRET-VALUE",
+		"HINT-SECRET", "ORG-PROMPT-BODY-TEXT", "PROJECT-PROMPT-BODY-TEXT", "ORG-NOTES-SECRET-TEXT", "PROJECT-NOTES-SECRET-TEXT"} {
+		if bytes.Contains(raw, []byte(s)) {
+			t.Errorf("settings shows %s", s)
+		}
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	prompts, _ := field(out, "settings", 0, "prompts").([]any)
+	byRole := map[string]map[string]any{}
+	for _, p := range prompts {
+		m := p.(map[string]any)
+		byRole[m["role"].(string)] = m
+	}
+	if p := byRole["implementer"]; p["organization"] != "saved" || field(p, "organizationSaved", "savedAt") != "2026-01-02T03:04:05Z" ||
+		!strings.Contains(field(p, "organizationSaved", "savedBy").(string), "Ana") || p["project"] != "inherit" {
+		t.Errorf("implementer's prompts: %v", p)
+	}
+	if p := byRole["reviewer"]; p["organization"] != "dude" || p["project"] != "replace" {
+		t.Errorf("reviewer's prompts: %v", p)
+	}
+	if secrets := field(out, "settings", 0, "secrets"); fmt.Sprint(secrets) != "[map[name:DB_PASSWORD recipients:[implementer previews]]]" {
+		t.Errorf("secrets: %v", secrets)
+	}
+	net := field(out, "settings", 0, "network")
+	if field(net, "mode", "value") != "only" || field(net, "mode", "source") != "project" ||
+		!strings.Contains(fmt.Sprint(field(net, "projectEgress", "value")), "docs.example.com") ||
+		field(net, "brainstormAnywhere", "source") != "dude" || field(net, "web", 0, "webSearch") != true {
+		t.Errorf("network: %v", net)
+	}
+	caps, _ := out["capabilities"].([]any)
+	var yours []string
+	for _, c := range caps {
+		if m := c.(map[string]any); m["yours"] == true {
+			for _, g := range m["granted"].([]any) {
+				yours = append(yours, g.(map[string]any)["key"].(string))
+			}
+		}
+	}
+	if !slices.Contains(yours, "settings.read") || !slices.Contains(yours, "conduct") || len(caps) != 8 {
+		t.Errorf("capabilities: yours %v of %d roles", yours, len(caps))
+	}
+	if field(out, "settings", 0, "machines", "implementer", "value", "id") != "msz_l" || len(out["machineSizes"].([]any)) < 2 {
+		t.Errorf("machines: %v %v", field(out, "settings", 0, "machines"), out["machineSizes"])
 	}
 }

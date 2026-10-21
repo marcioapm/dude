@@ -176,6 +176,17 @@ func (g Grants) Without(keys ...Key) Grants {
 
 func (g Grants) Has(k Key) bool { return slices.Contains(g.keys, k) }
 
+// Granted are the capabilities g grants, in All's order.
+func (g Grants) Granted() []Capability {
+	var out []Capability
+	for _, c := range All {
+		if g.Has(c.Key) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // Tool says some granted capability unlocks the dude tool name.
 func (g Grants) Tool(name string) bool {
 	return g.unlocks(func(c Capability) []string { return c.Tools }, name)
