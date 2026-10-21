@@ -64,7 +64,7 @@ func TestABrainstormReadsItsLinkedProjectsAndNothingOfAnotherOrganisation(t *tes
 func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	f, token := limitsWorld(t, `{}`)
 	mustExec(t, f.owner, `UPDATE organizations SET delivery_policy = '{"maxReviewIterations":8}' WHERE id = $1`, f.org)
-	mustExec(t, f.owner, `UPDATE projects SET delivery_policy = '{"maxPrFixIterations":6}' WHERE id = $1`, f.project)
+	mustExec(t, f.owner, `UPDATE projects SET delivery_policy = '{"maxPrFixIterations":6,"conductorEditLines":200}' WHERE id = $1`, f.project)
 
 	out := f.settingsOf(t, token, `{"section":"delivery"}`)
 	if d, _ := field(out, "task", "delivery").(string); !strings.Contains(d, "no delivery yet") || field(out, "task", "differsFromToday") != nil ||
@@ -74,7 +74,13 @@ func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 
 	frozen := delivery.DefaultPolicy()
 	frozen.MaxReviewIterations, frozen.MaxPRFixIterations = 5, 3
-	policy, _ := json.Marshal(frozen)
+	// Frozen with conductorEditLines 60 and, as before the key existed, no
+	// conductorEditFiles.
+	var stored map[string]any
+	raw, _ := json.Marshal(frozen)
+	_ = json.Unmarshal(raw, &stored)
+	delete(stored, "conductorEditFiles")
+	policy, _ := json.Marshal(stored)
 	f.deliver(t, "running", string(policy), 1, 1)
 	mustExec(t, f.owner, `UPDATE workflow_runs SET state = jsonb_set(jsonb_set(state, '{limitGrants}', $2::jsonb), '{changedPaths}',
 		'["target/migrations/1.sql"]') WHERE task_id = $1`, f.item,
@@ -104,6 +110,18 @@ func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	}
 	if d, _ := task["differsFromToday"].(map[string]any); len(d) != 2 {
 		t.Errorf("differs in %d keys, want the two changed: %v", len(d), d)
+	}
+	// A publish is bounded by today's policy: the task view says what the
+	// limits tool (PublishLimitsTx) says, not the frozen 60 or a frozen 0.
+	_, limits := f.post(t, token, "limits", `{}`)
+	for key, want := range map[string][2]any{"conductorEditLines": {field(limits, "publish", "linesPerPublish"), "project"},
+		"conductorEditFiles": {field(limits, "publish", "filesPerPublish"), "dude"}} {
+		if field(task, "policy", key, "value") != want[0] || field(task, "policy", key, "source") != want[1] {
+			t.Errorf("%s: %v, want %v as limits says", key, field(task, "policy", key), want)
+		}
+	}
+	if field(task, "policy", "conductorEditLines", "value") != 200.0 || field(task, "policy", "conductorEditFiles", "value") != 3.0 {
+		t.Errorf("publish bounds: %v / %v", field(task, "policy", "conductorEditLines"), field(task, "policy", "conductorEditFiles"))
 	}
 
 	mustExec(t, f.owner, `UPDATE workflow_runs SET status = 'completed' WHERE task_id = $1`, f.item)

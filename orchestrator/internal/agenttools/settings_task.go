@@ -88,6 +88,11 @@ func taskView(ctx context.Context, tx pgx.Tx, w wrapper, taskID string) (*taskVi
 	held, today := reflect.ValueOf(l.Policy), reflect.ValueOf(l.Now)
 	for i, k := range delivery.PolicyKeys() {
 		v, now := held.Field(i).Interface(), today.Field(i).Interface()
+		if slices.Contains(delivery.LivePolicyKeys, k) {
+			// Applied as it is now, whatever the delivery froze (or, frozen
+			// before the key existed, decoded as zero).
+			v = now
+		}
 		out.Policy[k] = valueOut{Value: v, Source: sourceOf(l.NowSetIn[k])}
 		if l.Delivery == delivery.DeliveryLive && !reflect.DeepEqual(v, now) {
 			if out.Differs == nil {
