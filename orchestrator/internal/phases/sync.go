@@ -2708,9 +2708,12 @@ const retirable = `(r.status = 'completed' AND r.lux_run_id IS NOT NULL AND r.lu
 
 // keptBranch (SQL, over runs r): a writer whose per-Run branch publish
 // left for its next round: one finish kept (kept_until set, released or
-// not), or a continuation, which pushes to its predecessor's.
+// not), or a continuation, which pushes to its predecessor's; and any
+// writer that failed or was aborted, since publish may have skipped the
+// delete for a finish that then failed (another repository's advance, a
+// refused resolution).
 const keptBranch = `(r.phase IN ('implement', 'fix') AND COALESCE(r.push_branch, '') <> ''
-	AND (r.kept_until IS NOT NULL OR r.continues_how IS NOT DISTINCT FROM 'resume'))`
+	AND (r.kept_until IS NOT NULL OR r.continues_how IS NOT DISTINCT FROM 'resume' OR r.status IN ('failed', 'aborted')))`
 
 // releaseBranch deletes a released writer's per-Run branch from each
 // repository the task may change. Best effort, as publish's delete: one

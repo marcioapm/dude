@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -368,6 +370,40 @@ func TestAFixerWithItsOwnSettingsIsAReplayOfTheImplementer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A writer kept for its next round leaves its per-Run branch at publish;
+// when its finish then fails — here a second repository's task branch
+// cannot be moved — the branch it left is deleted with the Run.
+func TestAWriterThatFailsAfterPublishingHasItsBranchDeleted(t *testing.T) {
+	w := resuming(t)
+	wi := w.task()
+	w.addWeb(wi, "write")
+	task := delivery.BranchFor(wi, 1)
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method != http.MethodGet && r.Method != http.MethodDelete && strings.Contains(r.URL.Path, "/git/refs") &&
+				(strings.HasSuffix(r.URL.Path, "/heads/"+task) || r.Method == http.MethodPost) {
+				return http.StatusUnprocessableEntity
+			}
+			return 0
+		}
+	})
+	w.start(wi, resumingPolicy())
+	var impl fixRow
+	w.until("an implementer failed after target's publish", func() bool {
+		for _, r := range w.writerRows(wi) {
+			if r.Phase == "implement" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed'`, r.ID) == 1 {
+				impl = r
+				return true
+			}
+		}
+		return false
+	})
+	if impl.Branch == "" || w.gh.SHA(task) == "" {
+		t.Fatalf("implementer %+v, target's task branch at %q; want target published before the failure", impl, w.gh.SHA(task))
+	}
+	w.until("the failed writer's branch deleted", func() bool { return w.gh.SHA(impl.Branch) == "" })
 }
 
 func specOf(t *testing.T, raw []byte) lux.Spec {
