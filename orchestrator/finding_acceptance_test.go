@@ -16,7 +16,8 @@ import (
 // A re-review's verdicts are kept on its Run, a still as much as a fixed:
 // the finding is judged still after the first fix and fixed after the
 // second, and each review Run reads back what it said of it. The finding
-// keeps the criterion and caused_by_fix it was raised with.
+// keeps the criterion and caused_by_fix it was raised with, as do two
+// low ones beside it: one saying caused_by_fix no, one not saying.
 func TestEachReviewRunKeepsItsVerdicts(t *testing.T) {
 	w := newWorld(t)
 	var reviews int
@@ -26,7 +27,9 @@ func TestEachReviewRunKeepsItsVerdicts(t *testing.T) {
 		case "review":
 			switch reviews++; reviews {
 			case 1:
-				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "caused_by_fix: yes\n```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "caused_by_fix: yes\n" +
+					"---\nseverity: low\ncategory: correctness\ntitle: Said not caused by the fix\ndescription: D.\ncaused_by_fix: no\n" +
+					"---\nseverity: low\ncategory: correctness\ntitle: Silent on the fix\ndescription: D.\n```\n"}
 			case 2:
 				return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
 			case 3:
@@ -46,14 +49,33 @@ func TestEachReviewRunKeepsItsVerdicts(t *testing.T) {
 	if s := w.escalationReason(wi); s != "" {
 		t.Fatalf("the delivery stopped for a person: %s", s)
 	}
+	const title = "FACTORY.md does not record the fix"
 	var finding, acceptance string
-	var causedByFix bool
-	if err := w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(acceptance, ''), caused_by_fix FROM review_findings WHERE task_id = $1`, wi).
-		Scan(&finding, &acceptance, &causedByFix); err != nil {
+	if err := w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(acceptance, '') FROM review_findings
+		WHERE task_id = $1 AND title = $2`, wi, title).Scan(&finding, &acceptance); err != nil {
 		t.Fatal(err)
 	}
-	if acceptance != fakeagent.FindingAcceptance || !causedByFix {
-		t.Errorf("the finding was stored with acceptance %q, caused_by_fix %v; want %q, true", acceptance, causedByFix, fakeagent.FindingAcceptance)
+	if acceptance != fakeagent.FindingAcceptance {
+		t.Errorf("the finding was stored with acceptance %q, want %q", acceptance, fakeagent.FindingAcceptance)
+	}
+	caused := map[string]bool{}
+	causedRows, err := w.owner.Query(context.Background(), `SELECT title, caused_by_fix FROM review_findings WHERE task_id = $1`, wi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for causedRows.Next() {
+		var name string
+		var c bool
+		if err := causedRows.Scan(&name, &c); err != nil {
+			causedRows.Close()
+			t.Fatal(err)
+		}
+		caused[name] = c
+	}
+	causedRows.Close()
+	wantCaused := map[string]bool{title: true, "Said not caused by the fix": false, "Silent on the fix": false}
+	if fmt.Sprint(caused) != fmt.Sprint(wantCaused) {
+		t.Errorf("caused_by_fix by title = %v, want %v", caused, wantCaused)
 	}
 	rows, err := w.owner.Query(context.Background(), `SELECT verdicts FROM runs WHERE task_id = $1 AND phase = 'review'
 		ORDER BY created_at, id`, wi)
