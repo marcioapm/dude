@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
+	"github.com/marciomartins/dude/orchestrator/internal/memory"
 )
 
 // settingsOf is what the settings tool answers token for args.
@@ -33,8 +35,18 @@ func (f *fixture) settingsOf(t *testing.T, token, args string) map[string]any {
 // over the fixture's database and an orchestrator API on it.
 func (f *fixture) settingsRoute(t *testing.T, path string) map[string]any {
 	t.Helper()
+	return f.settingsRouteWith(t, path, nil, nil)
+}
+
+// settingsRouteWith is settingsRoute with the orchestrator API given an
+// embedder and an indexer, for the memory index page.
+func (f *fixture) settingsRouteWith(t *testing.T, path string, e embeddings.Embedder, indexer interface {
+	Health() memory.Health
+	Resume()
+}) map[string]any {
+	t.Helper()
 	orch := httptest.NewServer((&api.Server{DB: f.app, Token: "svc", Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Kick: func() {}}).Handler())
+		Kick: func() {}, Embedder: e, Indexer: indexer}).Handler())
 	defer orch.Close()
 	_, file, _, _ := runtime.Caller(0)
 	cmd := exec.Command("bun", "run", "orchestrator/testdata/settings-route.ts", f.org, "psn_member", path)
