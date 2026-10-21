@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -58,16 +59,26 @@ func (m Mention) told(body string) string {
 // person's message is delivered — to its live conductor, or to one it
 // starts, briefed — except that it changes nobody's decisions and answers
 // no open question. Once per comment: a mention already in Chat, by its
-// feedback id, is not delivered again. Returns whether it was delivered.
-// Takes the task's Chat lock.
+// feedback id, is not delivered again. On a task its owner stopped
+// (HaltedTx) it is not delivered: dude says so in Chat, once, and a
+// conductor beside the kept one is never started. Returns whether it was
+// delivered. Takes the task's Chat lock.
 func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 	if err := LockChat(ctx, tx, m.TaskID); err != nil {
 		return false, err
 	}
 	var seen bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
-		AND payload->'github'->>'feedbackId' = $3)`, m.TaskID, EvChatMessage, m.Feedback.ID).Scan(&seen); err != nil || seen {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
+		AND (event_type = $2 OR event_type = $3 AND payload->>'about' = $4)
+		AND payload->'github'->>'feedbackId' = $5)`, m.TaskID, EvChatMessage, EvChatNotice, aboutMentionHeld, m.Feedback.ID).
+		Scan(&seen); err != nil || seen {
 		return false, err
+	}
+	if halted, err := HaltedTx(ctx, tx, m.TaskID); err != nil || halted {
+		if err != nil {
+			return false, err
+		}
+		return false, mentionHeldTx(ctx, tx, m)
 	}
 	body := clipBytes(strings.TrimSpace(m.Feedback.Body), ChatMessageMax)
 	w := Writer{ActorType: ledger.ActorIntegration, ActorID: "github:" + m.Feedback.Author, Name: m.Feedback.Author + " (GitHub)",
@@ -103,6 +114,26 @@ func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 		return false, err
 	}
 	return true, ChatEvent(ctx, tx, ref, w, map[string]any{"text": text, "directiveId": directiveID})
+}
+
+// aboutMentionHeld is dude's notice that a mention on a stopped task was
+// not passed on.
+const aboutMentionHeld = "mention_held"
+
+// mentionHeldTx says in the task's Chat that a mention reached a stopped
+// task and was not passed on, naming the comment (github, as a
+// chat.message carries it).
+func mentionHeldTx(ctx context.Context, tx pgx.Tx, m Mention) error {
+	key, err := TaskKeyOf(ctx, tx, m.TaskID)
+	if err != nil {
+		return err
+	}
+	text := fmt.Sprintf("%s wrote to dude on pull request #%d while %s was stopped: it was not passed on. "+
+		"Resume, Try again or Start over, then write in Chat.", m.Feedback.Author, m.Number, key)
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: m.Org, ProjectID: m.ProjectID,
+		TaskID: m.TaskID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
+		CorrelationID: m.TaskID, Payload: map[string]any{"about": aboutMentionHeld, "text": text, "github": m.github()}})
+	return err
 }
 
 // clipBytes cuts s to at most n bytes, on a character boundary, saying so.

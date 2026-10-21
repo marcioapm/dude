@@ -104,16 +104,9 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 		stoppedRuns = e.RunIDs()
 	}
 	if h := t.State.Halt; h != nil && h.Conductor != "" {
-		// Unless a later message in Chat started another since.
-		var later bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs n JOIN runs h ON h.id = $2
-			WHERE n.task_id = $1 AND n.role = 'conductor' AND n.kind = 'agent' AND n.created_at > h.created_at)`,
-			taskID, h.Conductor).Scan(&later); err != nil {
-			return t, err
-		}
-		if !later {
-			stoppedRuns = append(slices.Clone(stoppedRuns), h.Conductor)
-		}
+		// No conductor starts while the task is halted (delivery.HaltedTx),
+		// so the one the Stop kept is still the task's.
+		stoppedRuns = append(slices.Clone(stoppedRuns), h.Conductor)
 	}
 	if len(stoppedRuns) == 0 {
 		return t, nil

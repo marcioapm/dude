@@ -6,11 +6,15 @@ package orchestrator_test
 // an adopted pull request stays open for the next attempt.
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // stoppedAtDecision is a conductor task stopped by its owner at its first
@@ -337,6 +341,72 @@ func TestAWakeAfterAStopWaitsForThePickUp(t *testing.T) {
 	})
 	w.until("the reason delivered to the kept conductor", func() bool {
 		return w.count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_after_stop' AND conductor_run_id = $1`, conductor) == 1
+	})
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("conductors after the resume: %v", got)
+	}
+}
+
+// A message in Chat on a task its owner stopped is refused, saying how to
+// go on: no conductor is started beside the kept one, which Resume then
+// takes up.
+func TestChatOnAStoppedTaskIsRefusedUntilItIsPickedUp(t *testing.T) {
+	w := conducting(t)
+	task, ana, conductor := w.stoppedAtDecision()
+	key := w.str(`SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, task)
+	status, body := w.chat(task, "What happened?")
+	e, _ := body["error"].(map[string]any)
+	if status != 409 || e["code"] != "stopped" || e["message"] != key+" is stopped: Resume, Try again or Start over first" {
+		t.Fatalf("chat on a stopped task: %d %v", status, body)
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Fatalf("chat on a stopped task started a conductor: %v", got)
+	}
+	w.pickUp(ana, task, map[string]any{"action": "resume"})
+	w.until("the kept conductor resumed", func() bool {
+		r := w.luxRunFor(conductor)
+		return r != nil && r.Resumed == 1
+	})
+	if status, body := w.chat(task, "Go on."); status != 200 || body["runId"] != conductor {
+		t.Fatalf("chat after the resume: %d %v", status, body)
+	}
+}
+
+// A pull request mention on a stopped task starts no conductor and is not
+// passed on: dude says so in Chat, once, and the kept conductor is what
+// Resume takes up.
+func TestAMentionOnAStoppedTaskIsNotPassedOn(t *testing.T) {
+	w := conducting(t)
+	task, ana, conductor := w.stoppedAtDecision()
+	m := delivery.Mention{Org: w.org, ProjectID: w.project, TaskID: task, Repo: "target", Number: 1,
+		Feedback: forge.Feedback{ID: "issue-comment-77", Author: "alice", Body: "@dude why?", Kind: forge.KindComment}}
+	for range 2 {
+		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			delivered, err := delivery.MentionTx(context.Background(), tx, m)
+			if delivered {
+				t.Errorf("a mention on a stopped task was delivered")
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.syncs(3)
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Fatalf("a mention on a stopped task started a conductor: %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+		AND payload->>'about' = 'mention_held' AND payload->'github'->>'feedbackId' = 'issue-comment-77'
+		AND payload->>'text' LIKE 'alice wrote to dude on pull request #1 while % was stopped: it was not passed on.%'`, task); n != 1 {
+		t.Errorf("%d notices of the mention held, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.message'`, task); n != 1 {
+		t.Errorf("the mention became a message in Chat")
+	}
+	w.pickUp(ana, task, map[string]any{"action": "resume"})
+	w.until("the kept conductor resumed", func() bool {
+		r := w.luxRunFor(conductor)
+		return r != nil && r.Resumed == 1
 	})
 	if got := w.conductorRuns(task); len(got) != 1 {
 		t.Errorf("conductors after the resume: %v", got)

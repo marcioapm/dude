@@ -103,6 +103,17 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 			}
 			return err
 		}
+		// A task its owner stopped keeps its conductor for a resume: no
+		// message reaches it, nor starts another, until it is picked up.
+		if halted, err := delivery.HaltedTx(r.Context(), tx, taskID); err != nil {
+			return err
+		} else if halted {
+			key, err := delivery.TaskKeyOf(r.Context(), tx, taskID)
+			if err != nil {
+				return err
+			}
+			return fail(http.StatusConflict, "stopped", "%s is stopped: Resume, Try again or Start over first", key)
+		}
 		decider, err := s.decideFor(r.Context(), tx, org, taskID, writer, talk, override)
 		if err != nil {
 			return err
