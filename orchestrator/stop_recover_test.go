@@ -225,6 +225,94 @@ func TestStartingOverAnAdoptedPullRequestCarriesItOn(t *testing.T) {
 	}
 }
 
+// Stopped with both on lux, the conductor at work and a reviewer it
+// started mid-turn: Resume takes up both of the same lux Runs, the
+// conductor still decides, and the reviewer's finish is what moves the
+// parked delivery on to its next decision.
+func TestResumingAConductorAndItsLiveReviewerOnLuxTakesBothUp(t *testing.T) {
+	w := conducting(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
+			// Mid-review until the resume's note wakes it.
+			b.Hang = true
+		}
+		return b
+	}
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	w.implemented(task)
+	w.must(task, "start_phase", `{"phase":"review"}`)
+	w.until("a reviewer at work on lux", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'
+			AND lux_run_id IS NOT NULL AND lux_state = 'running'`, task) > 0
+	})
+	reviewers := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY id`, task)
+	conductorLux := w.luxRunOf(conductor)
+	if conductorLux == "" {
+		t.Fatal("the conductor is not on lux")
+	}
+	reviewerLux := map[string]string{}
+	for _, id := range reviewers {
+		reviewerLux[id] = w.luxRunOf(id)
+	}
+
+	w.stop(ana, task, map[string]any{"note": "hold on"})
+	w.until("the conductor and every reviewer to be kept", func() bool {
+		if !w.keptRun(conductor) {
+			return false
+		}
+		for _, id := range reviewers {
+			if !w.keptRun(id) {
+				return false
+			}
+		}
+		return true
+	})
+
+	out := w.pickUp(ana, task, map[string]any{"action": "resume", "note": "Go on."})
+	if out["decider"] != "conductor" {
+		t.Errorf("resume answered %v", out)
+	}
+	w.until("the conductor's own lux Run resumed and running", func() bool {
+		r := w.luxRunFor(conductor)
+		return r != nil && r.Resumed == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, conductor) == 1
+	})
+	if got := w.luxRunOf(conductor); got != conductorLux {
+		t.Errorf("conductor lux Run %q after resume, want %q", got, conductorLux)
+	}
+	for _, id := range reviewers {
+		w.until("reviewer "+id+"'s own lux Run resumed", func() bool {
+			r := w.luxRunFor(id)
+			return r != nil && r.Resumed == 1
+		})
+		if got := w.luxRunOf(id); got != reviewerLux[id] {
+			t.Errorf("reviewer %s lux Run %q after resume, want %q", id, got, reviewerLux[id])
+		}
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("a resume made a new conductor: %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, task); n != len(reviewers) {
+		t.Errorf("%d reviewers after resume, want the %d resumed", n, len(reviewers))
+	}
+	if d := w.decider(task); d != "conductor" {
+		t.Errorf("after the resume %s decides", d)
+	}
+	w.until("the resumed reviewers' finish to move the delivery to after review", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'`, task) == len(reviewers) &&
+			w.decisionAt(task) == delivery.PointReviewed
+	})
+	if s := w.taskStatus(task); s != "running" {
+		t.Errorf("a resumed task is %s", s)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, conductor); n != 1 {
+		t.Errorf("the conductor is no longer running after the review")
+	}
+}
+
 func slicesContainsSub(items []string, want string) bool {
 	for _, s := range items {
 		if strings.Contains(s, want) {
