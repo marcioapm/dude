@@ -6,6 +6,8 @@
 
 Rounds each line, then sums.
 
+Done when: An export's total equals the invoice page's total to the cent.
+
 Suggested: Sum in cents, round once.
 
 ### [medium] No test for an empty month

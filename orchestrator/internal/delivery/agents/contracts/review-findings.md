@@ -4,6 +4,8 @@
 
 `{{.File}}{{if gt .Line 0}}:{{.Line}}{{end}}`{{end}}{{with .Description}}
 
-{{.}}{{end}}{{with .SuggestedFix}}
+{{.}}{{end}}{{with .Acceptance}}
+
+Done when: {{.}}{{end}}{{with .SuggestedFix}}
 
 Suggested: {{.}}{{end}}{{end}}

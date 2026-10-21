@@ -89,6 +89,8 @@ type PromptInput struct {
 	// A review or test that goes on from its previous round with a fresh
 	// agent: that round's conversation (Replay), first in its message.
 	Replay string
+	// Review phase following a fix: what that fix published (LastFixTx).
+	LastFix []FixRange
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -343,6 +345,9 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
+		}
+		if note := lastFixNote(in.LastFix, len(in.Repositories)); note != "" {
+			add(note)
 		}
 
 	case PhaseFix:

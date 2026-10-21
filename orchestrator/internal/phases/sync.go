@@ -1377,6 +1377,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var decisions []delivery.Decision
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
+	var lastFix []delivery.FixRange
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
@@ -1520,6 +1521,17 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A preview item's picture is said attached only when it goes with
 		// this prompt (PromptAttachments had room for it).
 		delivery.MarkPictures(peopleFeedback, taskImages)
+		// A review after a fix is told that fix's commits, to answer
+		// caused_by_fix by.
+		if r.Phase == delivery.PhaseReview && stored == nil {
+			var parent string
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(parent_run_id, '') FROM runs WHERE id = $1`, r.ID).Scan(&parent); err != nil {
+				return err
+			}
+			if lastFix, err = delivery.LastFixTx(ctx, tx, parent); err != nil {
+				return err
+			}
+		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
@@ -1582,7 +1594,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of

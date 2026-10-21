@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -78,5 +80,74 @@ func TestEachReviewRunKeepsItsVerdicts(t *testing.T) {
 		if fmt.Sprint(got[i]) != fmt.Sprint(v) {
 			t.Errorf("review %d's verdicts = %v, want %v", i+1, got[i], v)
 		}
+	}
+}
+
+// A finding's criterion reaches whoever acts on it next: the fixer, and
+// the re-reviewer judging it, resumed (its round message) or fresh (its
+// first message). The re-review, whose parent is the fix, is told that
+// fix's commits; the first review (parent: the implementer) and the
+// simplifier's range review (parent: the simplifier) are told none.
+func TestTheCriterionAndTheLastFixReachTheNextRounds(t *testing.T) {
+	for _, resume := range []bool{true, false} {
+		t.Run(fmt.Sprintf("resume=%v", resume), func(t *testing.T) {
+			world, policy := newWorld, scriptedPolicy()
+			if resume {
+				world, policy = resuming, resumingPolicy()
+			}
+			// Real models' names, so lux is given each prompt itself; the
+			// scripted agent plays them all the same.
+			w := world(t)
+			w.onModel("reviewer", "llm-review")
+			w.onModel("fixer", "llm-fix")
+			wi := w.task()
+			w.names(wi, w.repoID)
+			w.start(wi, policy)
+			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+
+			fixes := w.luxRunsOf("fix")
+			if len(fixes) != 1 {
+				t.Fatalf("%d fixers, want one", len(fixes))
+			}
+			if !strings.Contains(fixes[0].Prompt(), fakeagent.FindingAcceptance) {
+				t.Errorf("the fixer was not given the criterion:\n%s", fixes[0].Prompt())
+			}
+			// What the fix and the simplifier each published: base..head.
+			published := func(phase string) string {
+				var r string
+				if err := w.owner.QueryRow(context.Background(), `SELECT h.value->>'base' || '..' || (h.value->>'sha')
+					FROM runs r, jsonb_each(r.heads) h WHERE r.task_id = $1 AND r.phase = $2`, wi, phase).Scan(&r); err != nil {
+					t.Fatal(err)
+				}
+				return r
+			}
+			implementRange, fixRange, simplifyRange := published("implement"), published("fix"), published("simplify")
+			if reviews := w.reviewRows(wi); len(reviews) != 3 || (reviews[1].How == delivery.ContinuesResume) != resume {
+				t.Fatalf("review Runs %+v; want three, the re-review resumed: %v", reviews, resume)
+			}
+
+			// What each review round was given, in order: the first round,
+			// the re-review after the fix, the simplifier's range review.
+			var rounds []string
+			for _, lr := range w.luxRunsOf("review") {
+				rounds = append(rounds, lr.Prompt())
+				rounds = append(rounds, w.lux.Inputs(lr.ID)...)
+			}
+			if len(rounds) != 3 {
+				t.Fatalf("%d review rounds' messages, want 3: %q", len(rounds), rounds)
+			}
+			if strings.Contains(rounds[0], implementRange) {
+				t.Errorf("the first review, after the implementer, is told a last fix:\n%s", rounds[0])
+			}
+			if !strings.Contains(rounds[1], fakeagent.FindingAcceptance) {
+				t.Errorf("the re-review was not given the criterion:\n%s", rounds[1])
+			}
+			if !strings.Contains(rounds[1], fixRange) {
+				t.Errorf("the re-review after the fix is not told its commits %s:\n%s", fixRange, rounds[1])
+			}
+			if strings.Contains(rounds[2], fixRange) || strings.Contains(rounds[2], simplifyRange) {
+				t.Errorf("the simplifier's range review is told a last fix (%s or %s):\n%s", fixRange, simplifyRange, rounds[2])
+			}
+		})
 	}
 }
