@@ -61,7 +61,7 @@ func TestThePullRequestChecksAccountIsTheCurrentAttempts(t *testing.T) {
 // theirs can close, so a recorded command never breaks the account's markdown.
 func TestAChecksRowKeepsItsMarkdownWhole(t *testing.T) {
 	long := strings.Repeat("ü", 400)
-	j := gatedJudgement{Role: "Fixer", Checks: []struct{ Command, Result, Decision, Reason, CallID string }{
+	j := gatedJudgement{Role: "Fixer", Checks: []gatedCheck{
 		{Command: "echo `date` ``x``", Result: "pass", CallID: "mcall_1"},
 		{Command: "`make check`", Decision: "no", Reason: "exit\n1"},
 		{Command: "`" + long, Result: strings.Repeat("é", 400), Reason: strings.Repeat("r", 400), CallID: strings.Repeat("i", 400)},
@@ -79,13 +79,38 @@ func TestAChecksRowKeepsItsMarkdownWhole(t *testing.T) {
 	}
 }
 
+// A Run that carried a person's waiver is listed among the waivers, naming
+// whose waiver and why, and its check is shown waived with the judge's
+// reason and the Run waived for, never backed; one whose carried judgement
+// was not verified is not backed.
+func TestACarriedWaiverIsAccountedAsTheWaiverItCarries(t *testing.T) {
+	w := &CarriedWaiver{RunID: "run_impl", Role: "Implementer", Note: "Needs a hardware clock."}
+	carried := gatedJudgement{Role: "Fixer", Verified: true, Carried: true, Checks: []gatedCheck{
+		{Command: "make test", Result: "waived", Decision: "yes", Reason: "the same TestClock failure", CallID: "mcall_1", Waiver: w},
+		{Command: "missing checks", Result: "pass", Decision: "no", CallID: "mcall_2"},
+	}}
+	runs := []gatedJudgement{{Role: "Implementer", Verified: true, Waived: true, Message: "Needs a hardware clock."}, carried,
+		{Role: "Simplifier", Carried: true}}
+	want := "### Checks\nChecks were waived by a person:\n" +
+		"- Implementer: Needs a hardware clock.\n" +
+		"- Fixer: carried the Implementer's waiver of the same failure: Needs a hardware clock.\n\n" +
+		"- **Implementer** — waived\n" +
+		"- **Fixer** — waiver carried\n" +
+		"  - `make test` — **waived** — the same TestClock failure — carried from a person's waiver of the Implementer's report (`run_impl`) (`mcall_1`)\n" +
+		"  - `missing checks` — **pass** (`mcall_2`)\n" +
+		"- **Simplifier** — not backed"
+	if got := checksAccountText(runs, prBodyMax); got != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", got, want)
+	}
+}
+
 // oversized is a Run whose every check is a run of backticks: its full row
 // fences to over checksRowsMax.
 func oversized(t *testing.T, j gatedJudgement) gatedJudgement {
 	t.Helper()
 	ticks := strings.Repeat("`", 400)
 	for range 31 {
-		j.Checks = append(j.Checks, struct{ Command, Result, Decision, Reason, CallID string }{ticks, ticks, "", ticks, ticks})
+		j.Checks = append(j.Checks, gatedCheck{Command: ticks, Result: ticks, Reason: ticks, CallID: ticks})
 	}
 	if n := utf8.RuneCountInString(checksRow(j)); n <= checksRowsMax {
 		t.Fatalf("the backtick row is %d characters, within checksRowsMax", n)
@@ -119,7 +144,7 @@ func TestTheNewestRunIsAlwaysInTheChecksAccount(t *testing.T) {
 		[]gatedJudgement{
 			{Role: "Implementer", Verified: true, Waived: true, Message: "CI hardware."},
 			oversized(t, gatedJudgement{Role: "Fixer", Verified: true}),
-			{Role: "Fixer", Checks: []struct{ Command, Result, Decision, Reason, CallID string }{{Command: "make check", Result: "pass", Decision: "no"}}},
+			{Role: "Fixer", Checks: []gatedCheck{{Command: "make check", Result: "pass", Decision: "no"}}},
 			oversized(t, gatedJudgement{Role: "Simplifier", Verified: true}),
 		},
 		"### Checks\nChecks were waived by a person:\n- Implementer: CI hardware.\n\n" +

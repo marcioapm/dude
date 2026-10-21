@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -130,6 +131,48 @@ func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 	}
 	if n := j.waiverQuestions(); n != 2 {
 		t.Errorf("%d waiver questions, want one each for the fixer and simplifier", n)
+	}
+	// The pull request says the later Runs carried the person's waiver, of
+	// whose report and why; never that they were backed.
+	var implementer string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&implementer)
+	carried := "  - `" + fakeagent.FailingCommand + "` — **waived** — the recorded call says so — carried from a person's waiver of the Implementer's report (`" +
+		implementer + "`) (`mcall_test`)\n" +
+		"  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
+	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+
+		"- Implementer: TestClock needs a hardware clock CI lacks.\n"+
+		"- Fixer: carried the Implementer's waiver of the same failure: TestClock needs a hardware clock CI lacks.\n"+
+		"- Simplifier: carried the Implementer's waiver of the same failure: TestClock needs a hardware clock CI lacks.\n\n"+
+		"- **Implementer** — waived\n"+
+		"- **Fixer** — waiver carried\n"+carried+"\n"+
+		"- **Simplifier** — waiver carried\n"+carried; got != want {
+		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A fixer that goes on from the implementer's Run (resumed rounds) is a
+// later Run of the attempt too: it carries the waiver.
+func TestAResumedFixerCarriesTheImplementersWaiver(t *testing.T) {
+	w := resuming(t)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
+	j := &scriptedJudge{}
+	w.syncer.Judge = j
+	w.onModel("implementer", fakeagent.ChecksPreexistingModel)
+	w.onModel("simplifier", fakeagent.ChecksPreexistingModel)
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.start(wi, resumingPolicy())
+	w.until("the checks escalation", func() bool { return w.checksEscalations(wi) == 1 })
+	owner, _, _ := w.people(wi)
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestClock needs a hardware clock CI lacks.", delivery.ScopeAttempt); code != 200 {
+		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
+	}
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if writers := w.writerRows(wi); len(writers) != 2 || writers[1].How != delivery.ContinuesResume || writers[1].Continues != writers[0].ID {
+		t.Fatalf("writers %+v, want the fixer resuming the implementer", writers)
+	}
+	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:unverified,implement:waived,fix:carried,simplify:carried" {
+		t.Errorf("judged %s", got)
 	}
 }
 
