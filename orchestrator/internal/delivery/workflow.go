@@ -611,14 +611,11 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "implementing"); err != nil {
 		return workflow.Result{}, err
 	}
-	if err := w.writerCandidate(ctx, sc, st); err != nil {
+	if err := w.writerCandidate(ctx, sc, st, PhaseImplement); err != nil {
 		return workflow.Result{}, err
 	}
-	k := key(sc, st, ":implement")
+	k := writerKey(sc, st, PhaseImplement)
 	d := directed(st, PhaseImplement)
-	if d != nil {
-		k = conductorKey(sc, st, d, ":implement")
-	}
 	// Feedback submitted before any work: the implementer is given it.
 	feedback, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
 	if err != nil {
@@ -1012,16 +1009,12 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		}
 		open = slices.DeleteFunc(open, func(id string) bool { return !slices.Contains(ours, id) })
 	}
-	if err := w.writerCandidate(ctx, sc, st); err != nil {
+	if err := w.writerCandidate(ctx, sc, st, PhaseFix); err != nil {
 		return workflow.Result{}, err
 	}
-	k := key(sc, st, ":fix:", st.Iteration)
-	if st.Integration != nil {
-		k = key(sc, st, ":integration:", st.Integration.RunID, ":fix:", st.Iteration)
-	}
+	k := writerKey(sc, st, PhaseFix)
 	if len(st.TestFindingIDs) > 0 {
 		// A failed test's findings, those still open, in a Run of their own.
-		k = key(sc, st, ":fix:", st.Iteration, ":test:", st.TestFixRounds)
 		all, err := w.s.FixFindings(ctx, sc.OrganizationID, st)
 		if err != nil {
 			return workflow.Result{}, err
@@ -1034,7 +1027,6 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	}
 	d := directed(st, PhaseFix)
 	if d != nil {
-		k = conductorKey(sc, st, d, ":fix:", st.Iteration)
 		if len(d.FindingIDs) > 0 {
 			// Only those of the conductor's that are still open.
 			open = slices.DeleteFunc(slices.Clone(d.FindingIDs), func(id string) bool { return !slices.Contains(open, id) })
@@ -1124,14 +1116,11 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "simplifying"); err != nil {
 		return workflow.Result{}, err
 	}
-	if err := w.writerCandidate(ctx, sc, st); err != nil {
+	if err := w.writerCandidate(ctx, sc, st, PhaseSimplify); err != nil {
 		return workflow.Result{}, err
 	}
-	k := testRoundKey(sc, st, ":simplify")
+	k := writerKey(sc, st, PhaseSimplify)
 	d := directed(st, PhaseSimplify)
-	if d != nil {
-		k = conductorKey(sc, st, d, ":simplify")
-	}
 	runID, err := w.phase(ctx, sc, st, PhaseSimplify, k, d.apply)
 	if err != nil {
 		return workflow.Result{}, err
@@ -1805,15 +1794,62 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	return park("awaitPRFix", st, []string{runID}), nil
 }
 
-// writerCandidate sends a review-loop writer (implement, fix, simplify) to a
-// candidate branch while a pull request is open on the task branch and no
-// candidate is out: the pull request then moves only by promotion, once
-// the loop reviewed (and tested) what the writer did. Called before the
-// step's key, which names the candidate's round; the round is uncharged,
-// as an integration's is. What the candidate starts from is settled by
-// phase, once the key is known (openCandidate).
-func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st *State) error {
+func writerKey(sc workflow.StepContext, st *State, phase string) string {
+	var parts []any
+	switch phase {
+	case PhaseImplement:
+		parts = []any{":implement"}
+	case PhaseSimplify:
+		if d := directed(st, phase); d != nil {
+			return conductorKey(sc, st, d, ":simplify")
+		}
+		return testRoundKey(sc, st, ":simplify")
+	case PhaseFix:
+		parts = []any{":fix:", st.Iteration}
+		if st.Integration != nil {
+			parts = []any{":integration:", st.Integration.RunID, ":fix:", st.Iteration}
+		}
+		if len(st.TestFindingIDs) > 0 {
+			parts = []any{":fix:", st.Iteration, ":test:", st.TestFixRounds}
+		}
+	}
+	if d := directed(st, phase); d != nil {
+		if phase == PhaseFix {
+			parts = []any{":fix:", st.Iteration}
+		}
+		return conductorKey(sc, st, d, parts...)
+	}
+	return key(sc, st, parts...)
+}
+
+// writerCandidate recovers this step's persisted writer before live PR routing.
+// A new writer starts from the PR heads on an uncharged candidate; settle
+// those heads before continuation planning measures the writer's delta.
+func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st *State, phase string) error {
 	if st.Candidate != nil {
+		return nil
+	}
+	proposed := *st
+	proposed.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
+	proposed.Candidate = &Candidate{Round: proposed.PRFixKey, Branch: st.candidateBranch(), Loop: true, opening: true}
+	for _, snapshot := range []*State{st, &proposed} {
+		existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, writerKey(sc, snapshot, phase))
+		if err != nil {
+			return err
+		}
+		if existing == "" {
+			continue
+		}
+		heads, branch, err := w.s.runBaseRefs(ctx, sc.OrganizationID, existing)
+		if err != nil {
+			return err
+		}
+		st.Heads = heads
+		if branch == proposed.Candidate.Branch {
+			st.PRFixKey, st.Candidate = proposed.PRFixKey, proposed.Candidate
+			st.Candidate.opening = false
+			st.Candidate.From = maps.Clone(heads)
+		}
 		return nil
 	}
 	var open bool
@@ -1823,9 +1859,8 @@ func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st
 	}); err != nil || !open {
 		return err
 	}
-	st.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
-	st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), Loop: true, opening: true}
-	return nil
+	st.PRFixKey, st.Candidate = proposed.PRFixKey, proposed.Candidate
+	return w.openCandidate(ctx, sc, st, writerKey(sc, st, phase))
 }
 
 // openCandidate settles where a candidate writerCandidate opened starts:

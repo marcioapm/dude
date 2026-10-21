@@ -3,7 +3,10 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -74,6 +77,83 @@ func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
 				t.Fatalf("candidate on %q, want the Run's %q", got.Candidate.Branch, runBranch)
 			}
 		})
+	}
+}
+
+func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
+	for _, phase := range []string{PhaseImplement, PhaseFix, PhaseSimplify} {
+		for _, candidate := range []bool{false, true} {
+			t.Run(phase+map[bool]string{false: "/closed-to-open", true: "/open-to-closed"}[candidate], func(t *testing.T) {
+				app, owner := dbtest.Open(t)
+				org := dbtest.Org(t, owner)
+				ctx := context.Background()
+				st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Branch: "dude/wi_e/attempt-1",
+					PullRequestIDs: []string{"pr_t"}, Heads: map[string]string{"target": "stale"}, Iteration: 2,
+					PRFixKey: 3, PRIteration: 1, PRFixes: map[string]int{"target": 1}}
+				saved := *st
+				branch, prState := "", "open"
+				if candidate {
+					saved.Candidate = &Candidate{Round: 4}
+					branch, prState = st.candidateBranch(), "closed"
+				}
+				sc := workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org}
+				for _, q := range []struct {
+					sql  string
+					args []any
+				}{
+					{`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`, nil},
+					{`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`, nil},
+					{`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_t', $1, 'prj_e', 'target', 'https://github.com/acme/target')`, nil},
+					{`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
+					 VALUES ('pr_t', $1, 'prj_e', 'wi_e', 'repo_t', 1, 'https://github.com/acme/target/pull/1', 'dude/wi_e/attempt-1', 'main', 'person', 'Greet', $2::pull_request_state)`, []any{prState}},
+					{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
+					 VALUES ('run_saved', $1, 'prj_e', 'wi_e', 1, $2, 'implementer', 'agent', 'pending', '{"target":"saved"}', $3, NULLIF($4, ''))`, []any{phase, writerKey(sc, &saved, phase), branch}},
+				} {
+					if _, err := owner.Exec(ctx, q.sql, append([]any{org}, q.args...)...); err != nil {
+						t.Fatal(err)
+					}
+				}
+				sc.State, _ = json.Marshal(st)
+				w := &steps{s: &Store{DB: app}, forges: forgeOf{}}
+				step := map[string]func(context.Context, workflow.StepContext) (workflow.Result, error){PhaseImplement: w.implementRun, PhaseFix: w.fix, PhaseSimplify: w.simplify}[phase]
+				res, err := step(ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := res.State.(*State)
+				if !reflect.DeepEqual(got.PendingRunIDs, []string{"run_saved"}) {
+					t.Fatalf("replayed Runs = %v", got.PendingRunIDs)
+				}
+				if !reflect.DeepEqual(got.Heads, map[string]string{"target": "saved"}) {
+					t.Fatalf("base refs = %v", got.Heads)
+				}
+				if (got.Candidate != nil) != candidate {
+					t.Fatalf("candidate = %+v", got.Candidate)
+				}
+				wantRound := 3
+				if candidate {
+					wantRound = 4
+					if got.Candidate.Branch != branch || !reflect.DeepEqual(got.Candidate.From, got.Heads) {
+						t.Fatalf("candidate = %+v", got.Candidate)
+					}
+				}
+				if got.PRFixKey != wantRound || got.PRIteration != 1 || !reflect.DeepEqual(got.PRFixes, st.PRFixes) || got.PRFixCharged != nil {
+					t.Fatalf("replay changed budgets: %+v", got)
+				}
+				if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+					var count int
+					if err := tx.QueryRow(ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_e'`).Scan(&count); err != nil {
+						return err
+					}
+					if count != 1 {
+						t.Errorf("Runs = %d, want 1", count)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 
