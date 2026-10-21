@@ -212,7 +212,8 @@ func committedIn(work, bare, sha string) error {
 		return err
 	}
 	if paths := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00"); paths[0] != "" {
-		return git(append([]string{"checkout", "-q", sha, "--"}, paths...)...)
+		// restore, unlike checkout, removes a path HEAD has and sha lacks.
+		return git(append([]string{"restore", "-q", "--source=" + sha, "--staged", "--worktree", "--"}, paths...)...)
 	}
 	return nil
 }
