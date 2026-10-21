@@ -81,3 +81,56 @@ func TestChecksEscalationSurvivesLeasedWaitTransition(t *testing.T) {
 		t.Fatalf("task status %s", status)
 	}
 }
+
+// An attempt waiver covers only the held report's reported failures: a
+// not-run beside them is not carried, and a report whose only non-pass is
+// not-run has nothing to carry and is refused, deciding nothing.
+func TestAnAttemptWaiverCoversOnlyReportedFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, checks string
+		covers       string
+	}{
+		{"a fail beside a not-run", `[{"command":"make test","result":"fail","reason":"TestClock"},{"command":"make e2e","result":"not-run","reason":"no browser"}]`,
+			`[{"result": "fail", "command": "make test", "evidence": "TestClock"}]`},
+		{"a not-run alone", `[{"command":"make e2e","result":"not-run","reason":"no browser"}]`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, owner := dbtest.Open(t)
+			ctx := context.Background()
+			org := dbtest.Org(t, owner)
+			for _, q := range []string{
+				`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_w',$1,'W','w','W')`,
+				`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_w',$1,'prj_w',1,'W','W','running')`,
+				`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status) VALUES('run_w',$1,'prj_w','wi_w',1,'implement','running')`,
+				`INSERT INTO workflow_runs(id,organization_id,workflow_type,idempotency_key,task_id,status,step,state)
+					VALUES('wf_w',$1,'` + WorkflowType + `','w','wi_w','waiting','awaitImplement','{"taskId":"wi_w","projectId":"prj_w","attempt":1}')`,
+				`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+					('ev_w',$1,'run.checks.judged','run_w','wi_w','system','dude','test',
+					jsonb_build_object('turn',0,'verified',false,'escalated',true,'message','held','checks','` + tc.checks + `'::jsonb))`,
+			} {
+				if _, err := owner.Exec(ctx, q, org); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+				if err := EscalateChecksTx(ctx, tx, org, "wi_w", "run_w", "held", 0); err != nil {
+					return err
+				}
+				return DecideEscalationTx(ctx, tx, org, "wi_w", EscalationDecision{Action: ActionWaive, Note: "Accepted.", Scope: ScopeAttempt,
+					ActorType: "human", ActorID: "per_ana", Person: "per_ana"})
+			})
+			var covers string
+			_ = owner.QueryRow(ctx, `SELECT COALESCE(max(payload->>'covers'), '') FROM events WHERE run_id = 'run_w' AND event_type = $1`,
+				EvRunChecksDecided).Scan(&covers)
+			if tc.covers == "" {
+				if e, ok := err.(EscalationError); !ok || e.Kind != "bad_request" || covers != "" {
+					t.Fatalf("a not-run alone: %v, covers %q", err, covers)
+				}
+				return
+			}
+			if err != nil || covers != tc.covers {
+				t.Fatalf("%v, covers %s", err, covers)
+			}
+		})
+	}
+}

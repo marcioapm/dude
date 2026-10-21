@@ -199,6 +199,10 @@ func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 		{"a waived not-run", failingTest, func(w *harnessWorld) {
 			waive(w, w.run, delivery.ScopeAttempt, delivery.Check{Command: "make test", Result: delivery.CheckNotRun})
 		}},
+		// Not carried in v1, whatever a recorded waiver says it covers.
+		{"a not-run report of a waived not-run", strings.Replace(failingTest, "result: fail", "result: not-run", 1), func(w *harnessWorld) {
+			waive(w, w.run, delivery.ScopeAttempt, delivery.Check{Command: "make test", Result: delivery.CheckNotRun})
+		}},
 		{"one of two failures waived", failingTest + "  - command: make lint\n    result: fail\n    evidence: one issue\n",
 			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }},
 		{"another attempt's waiver", failingTest, func(w *harnessWorld) {
