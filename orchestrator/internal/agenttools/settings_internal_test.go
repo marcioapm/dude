@@ -82,3 +82,51 @@ func TestSettingsStatementsDoNotGrowWithLinkedProjects(t *testing.T) {
 		t.Errorf("statements: %d with catalogue and recipe data, %d before", many, three)
 	}
 }
+
+// The images section reads a page in as many statements with one image as
+// with fifty, each with a published version, a pending build and a parent.
+func TestSettingsImagesStatementsDoNotGrowWithImages(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	count := func() (int, int) {
+		t.Helper()
+		var n, images int
+		if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+			c := &countingTx{Tx: tx}
+			out, err := readSettings(ctx, c, Caller{Org: org, Role: "conductor", grants: capabilities.Default("conductor")},
+				settingsIn{Section: "images", Limit: 50})
+			n, images = c.n, len(out.Images.Images)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n, images
+	}
+	seed := func(from, to int) {
+		t.Helper()
+		for _, q := range []string{
+			`INSERT INTO images (id, organization_id, name) SELECT 'img_'||i||'_'||$1, $1, 'i'||i FROM generate_series($2::int, $3::int) i`,
+			`INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state, user_ref) SELECT
+				'v1_'||i||'_'||$1, $1, 'img_'||i||'_'||$1, 1, 'FROM x', 'published', 'r' FROM generate_series($2::int, $3::int) i`,
+			`INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state) SELECT
+				'v2_'||i||'_'||$1, $1, 'img_'||i||'_'||$1, 2, 'FROM x', 'queued' FROM generate_series($2::int, $3::int) i`,
+			`UPDATE images SET published_version_id = 'v1_'||i||'_'||$1 FROM generate_series($2::int, $3::int) i
+				WHERE id = 'img_'||i||'_'||$1`,
+			`INSERT INTO image_version_parents (organization_id, version_id, parent_image_id) SELECT
+				$1, 'v2_'||i||'_'||$1, 'img_1_'||$1 FROM generate_series(greatest($2::int, 2), $3::int) i`,
+		} {
+			if _, err := owner.Exec(ctx, q, org, from, to); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	seed(1, 1)
+	one, n1 := count()
+	seed(2, 50)
+	fifty, n50 := count()
+	if n1 != 1 || n50 != 50 || one != fifty {
+		t.Errorf("statements: %d for %d image, %d for %d", one, n1, fifty, n50)
+	}
+	t.Logf("images section: %d statements for 1 and for 50 images", fifty)
+}
