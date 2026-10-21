@@ -374,6 +374,11 @@ func TestAFixerWithItsOwnSettingsIsAReplayOfTheImplementer(t *testing.T) {
 			mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, role, body, created_by)
 				VALUES ('pv_fix_'||$1, $1, 'fixer', 'FIXER STANCE', 'key_x')`, w.org)
 		}, true},
+		{"project replace, empty", func(w *world) {
+			// An empty replace still drops the org's prompt for the fixer.
+			mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, created_by)
+				VALUES ('pv_fix_proj_'||$1, $1, $2, 'fixer', 'replace', '', 'key_x')`, w.org, w.project)
+		}, true},
 		{"cleared prompt", func(w *world) {
 			mustExec(t, w.owner, `INSERT INTO prompt_versions (id, organization_id, role, body, created_by, created_at)
 				VALUES ('pv_fix_old_'||$1, $1, 'fixer', 'FIXER STANCE', 'key_x', now() - interval '1 hour'),
