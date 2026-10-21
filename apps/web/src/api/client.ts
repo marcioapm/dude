@@ -41,6 +41,8 @@ import type {
   Verification,
   RecoverAction,
   RecoveryOptions,
+  StopRequest,
+  StopResult,
   Repository,
   PullRequest,
   PauseMode,
@@ -123,6 +125,8 @@ export type {
   VerdictStatus,
   RecoverAction,
   RecoveryOptions,
+  StopRequest,
+  StopResult,
   Person,
   PersonDetail,
   PersonRef,
@@ -1519,6 +1523,11 @@ export class ApiClient {
   /** Pick a stopped task back up — the task's owner does — with a note for the agents. */
   recover(taskId: string, action: RecoverAction, note: string, start: { override?: true } = {}): Promise<{ action: RecoverAction }> {
     return this.#request("POST", `/v1/tasks/${taskId}/recover`, { action, note, ...start });
+  }
+
+  /** Stop the whole task where it stands, or stop it and start its next attempt (who decides it: `decider`). Owner or admin. */
+  stopTask(taskId: string, stop: StopRequest): Promise<StopResult> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/stop`, stop);
   }
 
   /** How delivery goes on after it stopped for a person: the task's owner decides. */

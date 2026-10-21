@@ -364,6 +364,19 @@ async function recoverTask(ctx: RequestContext): Promise<Response> {
     await ctx.request.text(), ctx.principal);
 }
 
+const stopInput = z.object({
+  andRestart: z.boolean().optional(),
+  decider: z.enum(["conductor", "policy"]).optional(),
+  note: z.string().max(2000).optional(),
+}).strict();
+
+/** Stop the whole task where it stands, or stop it and start its next attempt: owner or admin. */
+async function stopTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, stopInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/stop`,
+    JSON.stringify(input), ctx.principal);
+}
+
 async function listTasks(ctx: RequestContext): Promise<Response> {
   const projectId = ctx.url.searchParams.get("projectId");
   const status = ctx.url.searchParams.get("status");
@@ -676,6 +689,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/decider", setDecider);
   router.get("/v1/tasks/:id/recover", recoveryOptions);
   router.post("/v1/tasks/:id/recover", recoverTask);
+  router.post("/v1/tasks/:id/stop", stopTask);
   router.post("/v1/projects/:id/sources/check", checkSource);
   router.get("/v1/projects/:id/sources/repositories", sourceRepositories);
   router.get("/v1/projects/:id/sources/repositories/:repo/branches", sourceBranches);

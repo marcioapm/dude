@@ -95,10 +95,23 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 		_ = json.Unmarshal(state, &t.State)
 	}
 	// The Runs it stopped on: those the stopped step was waiting on, or the
-	// failed Run the escalation named.
+	// failed Run the escalation named; and the conductor a person's Stop
+	// stopped with them, which a resume goes on with too.
 	stoppedRuns := t.State.PendingRunIDs
 	if e := t.State.Stopped; e != nil && e.RunID() != "" {
 		stoppedRuns = e.RunIDs()
+	}
+	if h := t.State.Halt; h != nil && h.Conductor != "" {
+		// Unless a later message in Chat started another since.
+		var later bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs n JOIN runs h ON h.id = $2
+			WHERE n.task_id = $1 AND n.role = 'conductor' AND n.kind = 'agent' AND n.created_at > h.created_at)`,
+			taskID, h.Conductor).Scan(&later); err != nil {
+			return t, err
+		}
+		if !later {
+			stoppedRuns = append(slices.Clone(stoppedRuns), h.Conductor)
+		}
 	}
 	if len(stoppedRuns) == 0 {
 		return t, nil
@@ -142,13 +155,17 @@ func (t stoppedTask) stopped() bool {
 }
 
 // retryStep is the step a retry runs again, "" when there is none: the one
-// an escalation stopped at, or the one that made the Runs an abort stopped.
+// an escalation stopped at, the one that made the Runs an abort stopped,
+// or the one a person's Stop found the delivery waiting at.
 func (t stoppedTask) retryStep() string {
 	if e := t.State.Stopped; e != nil {
 		return e.Step
 	}
 	if t.Step != nil && len(t.State.PendingRunIDs) > 0 {
 		return delivery.AbortedRetryStep[*t.Step]
+	}
+	if h := t.State.Halt; h != nil {
+		return h.At
 	}
 	return ""
 }
@@ -164,6 +181,9 @@ func (t stoppedTask) resumeAt() string {
 	if t.Step != nil && delivery.AbortedRetryStep[*t.Step] != "" {
 		return *t.Step
 	}
+	if h := t.State.Halt; h != nil {
+		return h.At
+	}
 	return ""
 }
 
@@ -176,7 +196,7 @@ func (t stoppedTask) actions() []string {
 		return nil
 	}
 	var out []string
-	closedPR := t.State.Stopped == nil && len(t.State.PendingRunIDs) == 0
+	closedPR := t.State.Stopped == nil && t.State.Halt == nil && len(t.State.PendingRunIDs) == 0
 	if t.resumeAt() != "" {
 		out = append(out, "resume")
 	}
@@ -261,9 +281,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		// attempt: blockers don't hold them, a person's Close or Archive
 		// does (path 7).
 		if body.Action == "restart" {
-			if err := delivery.GuardStartTx(r.Context(), tx, org, taskID, override); err != nil {
+			r, err := s.restartTx(r.Context(), tx, org, taskID, t, note, override, "a person picked it back up: restart")
+			if err != nil {
 				return err
 			}
+			wfID, attempt, closePRs = r.WorkflowID, r.Attempt, r.ClosePRs
 		} else {
 			if err := delivery.RefuseLifecycleTx(r.Context(), tx, taskID); err != nil {
 				return pickUpRefusal(err)
@@ -274,33 +296,18 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 					return err
 				}
 			}
-		}
-		// Out of aborted, the one way: the status change says who and why.
-		if err := reopenTask(r.Context(), tx, org, t.ProjectID, taskID, "a person picked it back up: "+body.Action); err != nil {
-			return err
-		}
-		if note != "" {
-			if err := delivery.RecordDecisionTx(r.Context(), tx, org, taskID,
-				"The work stopped. How should it go on?", note); err != nil {
+			// Out of aborted, the one way: the status change says who and why.
+			if err := reopenTask(r.Context(), tx, org, t.ProjectID, taskID, "a person picked it back up: "+body.Action); err != nil {
 				return err
 			}
-		}
-		if body.Action != "resume" {
-			if err := delivery.ReleaseKeptTx(r.Context(), tx, taskID); err != nil {
+			if err := recordPickUpNote(r.Context(), tx, org, taskID, note); err != nil {
 				return err
 			}
-		}
-		switch body.Action {
-		case "restart":
-			if attempt, err = delivery.NextAttemptTx(r.Context(), tx, taskID, t.State.Attempt); err != nil {
-				return err
+			if body.Action != "resume" {
+				if err := delivery.ReleaseKeptTx(r.Context(), tx, taskID); err != nil {
+					return err
+				}
 			}
-			st := t.State
-			if wfID, err = s.startOver(r.Context(), tx, org, taskID, t.ProjectID, st.Policy, attempt, override != nil); err != nil {
-				return err
-			}
-			closePRs = st.PullRequestIDs
-		default:
 			wfID = *t.WorkflowID
 			if err := pickUp(r.Context(), tx, org, t, body.Action, note); err != nil {
 				return err
@@ -339,6 +346,52 @@ func pickUpRefusal(err error) error {
 	return err
 }
 
+// recordPickUpNote keeps a person's note on picking the task back up, for
+// every agent from then on (delivery.Decisions).
+func recordPickUpNote(ctx context.Context, tx pgx.Tx, org, taskID, note string) error {
+	if note == "" {
+		return nil
+	}
+	return delivery.RecordDecisionTx(ctx, tx, org, taskID, "The work stopped. How should it go on?", note)
+}
+
+// restarted is what a Start over started.
+type restarted struct {
+	WorkflowID string
+	Attempt    int
+	// The stopped attempt's pull requests, closed after the commit.
+	ClosePRs []string
+}
+
+// restartTx starts a stopped task over as its next attempt: a start,
+// guarded as one (path 6), out of aborted with reason, what was kept for a
+// resume let go, and a new delivery.
+func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t stoppedTask, note string,
+	override *delivery.Override, reason string) (restarted, error) {
+	var out restarted
+	if err := delivery.GuardStartTx(ctx, tx, org, taskID, override); err != nil {
+		return out, err
+	}
+	if err := reopenTask(ctx, tx, org, t.ProjectID, taskID, reason); err != nil {
+		return out, err
+	}
+	if err := recordPickUpNote(ctx, tx, org, taskID, note); err != nil {
+		return out, err
+	}
+	if err := delivery.ReleaseKeptTx(ctx, tx, taskID); err != nil {
+		return out, err
+	}
+	var err error
+	if out.Attempt, err = delivery.NextAttemptTx(ctx, tx, taskID, t.State.Attempt); err != nil {
+		return out, err
+	}
+	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, t.ProjectID, t.State.Policy, out.Attempt, override != nil); err != nil {
+		return out, err
+	}
+	out.ClosePRs = t.State.PullRequestIDs
+	return out, nil
+}
+
 // reopenTask takes a stopped task out of aborted (or failed): the one move
 // out of those SetTaskStatusTx refuses.
 func reopenTask(ctx context.Context, tx pgx.Tx, org, projectID, taskID, reason string) error {
@@ -357,7 +410,11 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 	rc := &delivery.Recover{Action: action}
 	if action == "resume" {
 		rc.At = t.resumeAt()
-		st.PendingRunIDs = append(slices.Clone(t.Kept), t.Unstarted...)
+		// The step waits on its phase Runs again; the conductor a Stop
+		// kept is no step's to wait on.
+		st.PendingRunIDs = slices.DeleteFunc(append(slices.Clone(t.Kept), t.Unstarted...), func(id string) bool {
+			return st.Halt != nil && id == st.Halt.Conductor
+		})
 		if err := escalationFailure(delivery.ResumeKeptTx(ctx, tx, org, t.ProjectID, st.TaskID, t.Kept, note)); err != nil {
 			return err
 		}

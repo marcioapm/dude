@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	s.githubRoutes(mux)
 	s.sourceRoutes(mux)
 	s.recoverRoutes(mux)
+	s.stopRoutes(mux)
 	s.lifecycleRoutes(mux)
 	s.stallRoutes(mux)
 	s.serverRoutes(mux)
@@ -1031,17 +1032,8 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			// stopping it: the next message in Chat starts another, so
 			// nothing is kept to resume.
 			conductor = true
-			// Its publishes that moved nothing are refused; one moving the
-			// task branch finishes first (409).
-			if err := tx.QueryRow(r.Context(), `SELECT id FROM runs WHERE id = $1 FOR NO KEY UPDATE`, runID).Scan(&runID); err != nil {
-				return err
-			}
-			if err := delivery.RefuseUnmovedTx(r.Context(), tx, delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID,
-				RunID: runID}, "your conductor was stopped before it was published"); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
-				control_reason = $2, ended_at = now() WHERE id = $1`, runID, db.Nullable(body.Reason)); err != nil {
+			ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
+			if err := delivery.AbortConductorTx(r.Context(), tx, ref, body.Reason, false); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(r.Context(), `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false WHERE parent_run_id=$1 AND source_kind='task_conductor' AND status IN ('pending','scheduled','starting','running','paused')`, runID); err != nil {
@@ -1052,36 +1044,8 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 		// The step it is part of stops with it — the reviewers beside it, the
 		// whole of a delivery — each kept, so the task can be picked back up
 		// where it stopped (phases.Syncer.end).
-		// Kept: one lux has (keep has no meaning for one it never had).
-		rows, err := tx.Query(r.Context(), `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
-			control_reason = $3, ended_at = now(), keep = lux_run_id IS NOT NULL
-			WHERE (id = $1 OR task_id = $2 AND kind = 'agent' AND phase IS NOT NULL) AND source_kind IS NULL
-			  AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
-			RETURNING id`,
-			runID, ri.TaskID, db.Nullable(body.Reason))
-		if err != nil {
+		if _, err := delivery.StopPhaseRunsTx(r.Context(), tx, org, ri.ProjectID, ri.TaskID, runID, body.Reason, true); err != nil {
 			return err
-		}
-		aborted, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return err
-		}
-		for _, id := range aborted {
-			ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: id}
-			if err := phases.FailUnreadTx(r.Context(), tx, ref, time.Time{}, phases.UnreadRunAborted); err != nil {
-				return err
-			}
-		}
-		// A pull request fix being checked on its candidate stops short of
-		// the pull request: what its fixers resolved is open again. The
-		// candidate stays in the state, so a recovery may still promote it;
-		// the items stay open for the next pull request fix round.
-		if d, err := delivery.ReadDelivery(r.Context(), tx, ri.TaskID); err != nil {
-			return err
-		} else if d != nil && d.Live() && d.State.Candidate != nil {
-			if err := delivery.AbandonCandidateTx(r.Context(), tx, org, ri.TaskID, d.State.Attempt, d.State.Candidate.Branch); err != nil {
-				return err
-			}
 		}
 		// The task stops too: an aborted Run should not leave its work
 		// item looking like it is still progressing.

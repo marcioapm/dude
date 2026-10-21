@@ -152,6 +152,8 @@ type State struct {
 	// A person picking a stopped task back up (Recover), while the workflow
 	// carries it out.
 	Recover *Recover `json:"recover,omitempty"`
+	// A person stopped the whole task (Stop), until it is picked back up.
+	Halt *Halt `json:"halt,omitempty"`
 
 	// Who takes the decisions: DeciderPolicy ("" from before the conductor
 	// decided anything) or DeciderConductor. Written from outside the steps
@@ -201,6 +203,15 @@ type Recover struct {
 	// Retry: the step to run again. Why it stopped (State.Stopped, nil for
 	// an abort) says what budget it gets back.
 	Step string `json:"step,omitempty"`
+}
+
+// Halt is a person's Stop of the task: the conductor it stopped, if one was
+// live, kept so a resume goes on with it; and the step the delivery waited
+// at with no phase Run at work (a decision, the pull requests), which a
+// pick-up waits at again.
+type Halt struct {
+	Conductor string `json:"conductor,omitempty"`
+	At        string `json:"at,omitempty"`
 }
 
 type Escalation struct {
@@ -2728,10 +2739,21 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 	if rc == nil {
 		return workflow.Result{}, fmt.Errorf("nothing to recover")
 	}
-	e := st.Stopped
-	st.Recover, st.Stopped = nil, nil
+	e, halted := st.Stopped, st.Halt
+	st.Recover, st.Stopped, st.Halt = nil, nil, nil
 	if rc.Action == "resume" {
-		return park(rc.At, st, st.PendingRunIDs), nil
+		if len(st.PendingRunIDs) > 0 {
+			return park(rc.At, st, st.PendingRunIDs), nil
+		}
+		// Stopped where no phase Run was at work (a decision, the pull
+		// request wait): the step it was at runs again, and waits again.
+		return workflow.Result{Next: rc.At, State: st}, nil
+	}
+	if e == nil && halted != nil && halted.At != "" && rc.Step == halted.At {
+		// Nothing of the step's own to run again: it waits again, for its
+		// decision or its pull requests, with no budget given back.
+		st.PendingRunIDs = nil
+		return workflow.Result{Next: rc.Step, State: st}, nil
 	}
 	return retry(st, rc.Step, e), nil
 }

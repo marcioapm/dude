@@ -131,6 +131,17 @@ test("the lifecycle routes forward the person's decision to the orchestrator, an
   expect(forwarded[4]!.body).toEqual({ withEndedTasks: true });
 });
 
+test("Stop forwards the person's stop to the orchestrator; what it could never accept is refused first", async () => {
+  forwarded.length = 0;
+  const t = await task("running");
+  expect((await call("POST", `/v1/tasks/${t}/stop`, { andRestart: true, decider: "conductor", note: "Wrong approach" })).status).toBe(200);
+  for (const body of [{ decider: "someone" }, { andRestart: "yes" }, { note: "x".repeat(2001) }, { whatever: 1 }]) {
+    expect((await call("POST", `/v1/tasks/${t}/stop`, body)).status).toBe(400);
+  }
+  expect(forwarded).toEqual([{ method: "POST", path: `/internal/tasks/${t}/stop`,
+    body: { andRestart: true, decider: "conductor", note: "Wrong approach" } }]);
+});
+
 test("what Close could never accept is refused before the orchestrator is asked", async () => {
   forwarded.length = 0;
   const t = await task();
