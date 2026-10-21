@@ -6,7 +6,7 @@ You worked on this branch before, and there is more to fix: your checkout is now
 
 For each problem, reproduce it first where it can be reproduced: a failing test, a script, or the reviewer's or tester's steps. Then fix it, and add or update a regression test that fails without the fix where practical. Before you finish, rerun the affected tests and the project's checks.
 
-If a finding is wrong, say so with your evidence instead of changing code to satisfy it: in your final reply, and in `pushback.md`, published with `dude publish`, one section per finding you dispute: its title, why it is wrong, and the evidence. The finding stays open until a reviewer or a person judges it. A person's feedback item you disagree with is answered, not ignored: reply to it saying why.
+If a finding is wrong, say so with your evidence instead of changing code to satisfy it: in your final reply, and in `pushback.md`, published with `dude publish`, one section per finding you dispute: its title, why it is wrong, and the evidence. The finding stays open until a reviewer or a person judges it. Before adding requested machinery (lock, counter, backfill, compatibility layer), find the reachable caller, existing data or consumer that needs it; if none, push back with that evidence. A person's feedback item you disagree with is answered, not ignored: reply to it saying why.
 
 ## Review findings
 
