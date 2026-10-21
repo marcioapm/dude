@@ -244,6 +244,12 @@ func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
 	var rels map[string]*TaskRelationsOut
 	start := time.Now()
 	if err := in(func(tx pgx.Tx) error {
+		// A custom plan, not dbtest's generic one: the scan this guards costs
+		// ~4.5 s under either, but the generic plan doubles the linear 0.12 s,
+		// which a shared CI runner then pushes past the limit.
+		if _, err := tx.Exec(context.Background(), `SELECT set_config('plan_cache_mode', 'force_custom_plan', true)`); err != nil {
+			return err
+		}
 		var err error
 		rels, err = RelationsOf(context.Background(), tx, ids)
 		return err
