@@ -65,7 +65,7 @@ const allowUpdateBranch prShowsOption = 1
 // cannot hide an earlier move. check fails the test unless every head the
 // branch moved to since was a SHA reviewed (and with test, tested) when
 // asked, or GitHub's merge of such a SHA onto the branch (its second
-// parent), and the branch is still at the last of them: a git push, which
+// parent), and the branch is at one of them: a git push, which
 // the fake's BranchLog does not record, fails it too. A move by
 // update-branch (a merge of the base the request saw onto the head it saw)
 // fails it unless allowUpdateBranch is given. It chains to any Intercept
@@ -130,17 +130,21 @@ func (w *world) prShowsOnlyChecked(t testing.TB, task, repo, branch string, test
 		t.Helper()
 		mu.Lock()
 		defer mu.Unlock()
+		// The head first, then the log: a move landing between the two
+		// reads is in the log, not taken for a git push.
+		cur := gh.SHA(branch)
+		moves := gh.BranchLog(branch)[before:]
 		last := start
-		for _, head := range gh.BranchLog(branch)[before:] {
+		for _, head := range moves {
 			last = head
 			at := head
 			missing, ok := asked[head]
 			update := -1
 			if parents := gh.Parents(head); !ok && len(parents) == 2 {
 				at = parents[1]
-				// An update-branch that moved the branch made exactly this
-				// merge; one GitHub refused made none, and excuses nothing.
 				if missing, ok = asked[at]; !ok {
+					// An update-branch that moved the branch made exactly this
+					// merge; one GitHub refused made none, and excuses nothing.
 					update = slices.Index(updates, [2]string{parents[0], parents[1]})
 				}
 			}
@@ -156,7 +160,7 @@ func (w *world) prShowsOnlyChecked(t testing.TB, task, repo, branch string, test
 				t.Fatalf("%s's %s moved to %s by no write dude asked for", repo, branch, head)
 			}
 		}
-		if cur := gh.SHA(branch); cur != last {
+		if cur != last && !slices.Contains(moves, cur) {
 			t.Fatalf("%s's %s is at %s, which no API write moved it to (a git push)", repo, branch, cur)
 		}
 	}
@@ -284,6 +288,19 @@ func TestPRShowsOnlyCheckedFailsWhatWasNotChecked(t *testing.T) {
 			sha := ahead(branch, "after the refusal")
 			w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
 			api("PATCH", "/git/refs/heads/"+branch, map[string]any{"sha": sha})
+		}, want: "by no write dude asked for"},
+		// An update-branch credit excuses only the merge it made: the first
+		// update-branch's merge spends its own credit, and the refused
+		// second one, asked at another (head, base), leaves a credit that
+		// must not excuse the unasked merge of a later base.
+		{name: "an update-branch excuses only its own merge", pr: true, opts: []prShowsOption{allowUpdateBranch}, move: func(branch string, number int) {
+			updateBranch(branch, number)
+			if status := api("PUT", fmt.Sprintf("/pulls/%d/update-branch", number), map[string]any{"expected_head_sha": "0000000"}); status != 422 {
+				t.Errorf("a stale update-branch answered %d, want 422", status)
+			}
+			w.gh.AdvanceBase("main", branch+": base again")
+			w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+			api("POST", "/merges", map[string]any{"base": branch, "head": "main"})
 		}, want: "by no write dude asked for"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
