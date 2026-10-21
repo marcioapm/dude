@@ -292,6 +292,19 @@ func TestAResumedFixerIsToldTheTaskEditedAndDecidedSinceItsRound(t *testing.T) {
 	if strings.Contains(text, "Old question?") {
 		t.Errorf("the round message repeats a decision from before its round:\n%s", text)
 	}
+	t.Run("an edit before its round, and only a priority since", func(t *testing.T) {
+		w := writerWorld(t)
+		w.exec(t, `INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+			VALUES ('ev_old_edit', $1, 'task.updated', $2, 'human', 'p', 'test', '{"goal":"x"}', now() - interval '2 hours'),
+			       ('ev_priority', $1, 'task.updated', $2, 'human', 'p', 'test', '{"priority":"high"}', now())`, w.org, w.task)
+		id := w.fix(t, "f1")
+		if got := w.str(t, `SELECT COALESCE(continues_how, '') FROM runs WHERE id = $1`, id); got != delivery.ContinuesResume {
+			t.Fatalf("the fix %s, want the implementer resumed", got)
+		}
+		if text := w.str(t, `SELECT text FROM directives WHERE run_id = $1`, id); strings.Contains(text, "the task was changed") {
+			t.Errorf("the round message says the task was changed:\n%s", text)
+		}
+	})
 }
 
 // A resumed fixer is pointed at the dude CLI only where a fresh fixer
