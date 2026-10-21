@@ -140,14 +140,14 @@ func (w *childWorld) raceEnder(end func(context.Context, pgx.Tx, string) error,
 // A conductor's start_agent and a person ending the task at once: the
 // start, between the locks it takes, is never refused for a deadlock, nor
 // is the ending. The start goes first and makes its child; the ending,
-// waiting on it, sees that child working (Close and Archive refuse it,
-// running) or ends it as the task ends (a status change aborts children).
+// waiting on it, finds that child working and stops it (Close, Archive)
+// or ends it as the task ends (a status change aborts children).
 func TestAChildStartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 	for _, e := range enders {
 		t.Run(e.name, func(t *testing.T) {
 			w := newChildWorld(t)
-			// Parked at its start with no pull request open, so Close and
-			// Archive get past the task's own state to its agents.
+			// Parked at its start with no pull request open: the child is
+			// the only Run Close and Archive find live.
 			w.exec(`UPDATE tasks SET status = 'queued' WHERE id = 'wi_life'`)
 			w.exec(`UPDATE pull_requests SET state = 'closed' WHERE id = 'pr_life'`)
 			in := w.in
@@ -202,21 +202,19 @@ func TestAChildRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 
 func assertEnderAfterChild(t *testing.T, w *childWorld, ender string, endErr error, child string) {
 	t.Helper()
-	if ender == "set_status" {
-		if endErr != nil {
-			t.Fatalf("set_status: %v", endErr)
-		}
-		var stop string
-		if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason, '') FROM runs WHERE id = $1`, child).Scan(&stop); err != nil {
-			t.Fatal(err)
-		}
-		if stop != "parent-ended" {
-			t.Fatalf("child after the task ended: stop reason %q", stop)
-		}
-		return
+	if endErr != nil {
+		t.Fatalf("%s: %v", ender, endErr)
 	}
-	var busy LifecycleRefusal
-	if !errors.As(endErr, &busy) || busy.Code != "running" {
-		t.Fatalf("%s with the child working: %v", ender, endErr)
+	want := "parent-ended"
+	if ender != "set_status" {
+		// Close and Archive stop the child as they end the task (StopAllTx).
+		want = "aborted"
+	}
+	var stop string
+	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason, '') FROM runs WHERE id = $1`, child).Scan(&stop); err != nil {
+		t.Fatal(err)
+	}
+	if stop != want {
+		t.Fatalf("child after the %s: stop reason %q, want %q", ender, stop, want)
 	}
 }

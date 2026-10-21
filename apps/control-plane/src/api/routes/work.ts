@@ -267,6 +267,7 @@ const closeInput = z.object({
   duplicateOf: z.string().min(1).max(200).optional(),
   note: z.string().max(2000).optional(),
   removeRelations: z.boolean().optional(),
+  closePullRequest: z.boolean().optional(),
 }).strict();
 
 const archiveInput = closeInput.partial({ resolution: true });

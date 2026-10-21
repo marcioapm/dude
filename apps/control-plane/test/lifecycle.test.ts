@@ -115,7 +115,7 @@ const refusals = async (id: string, reason: string) =>
 test("the lifecycle routes forward the person's decision to the orchestrator, and answer as it answered", async () => {
   forwarded.length = 0;
   const t = await task();
-  expect((await call("POST", `/v1/tasks/${t}/close`, { resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false })).status).toBe(200);
+  expect((await call("POST", `/v1/tasks/${t}/close`, { resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false, closePullRequest: true })).status).toBe(200);
   expect((await call("POST", `/v1/tasks/${t}/reopen`)).status).toBe(200);
   const archived = await call("POST", `/v1/tasks/${t}/archive`);
   expect(archived.status).toBe(409);
@@ -127,7 +127,7 @@ test("the lifecycle routes forward the person's decision to the orchestrator, an
     `POST /internal/tasks/${t}/close`, `POST /internal/tasks/${t}/reopen`, `POST /internal/tasks/${t}/archive`,
     `POST /internal/tasks/${t}/unarchive`, "POST /internal/epics/epc_x/archive", "POST /internal/epics/epc_x/unarchive",
   ]);
-  expect(forwarded[0]!.body).toEqual({ resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false });
+  expect(forwarded[0]!.body).toEqual({ resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false, closePullRequest: true });
   expect(forwarded[4]!.body).toEqual({ withEndedTasks: true });
 });
 

@@ -554,6 +554,13 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectI
 // closePullRequests closes an attempt's pull requests still open on GitHub.
 // Best effort: the pull request sync records the close either way.
 func (s *Server) closePullRequests(ctx context.Context, org string, ids []string) {
+	s.closePullRequestsSaying(ctx, org, ids, "", false)
+}
+
+// closePullRequestsSaying closes the pull requests still open on GitHub,
+// each with comment first when one is given; adopted ones too only with
+// adopted (a person asked). Best effort, as closePullRequests.
+func (s *Server) closePullRequestsSaying(ctx context.Context, org string, ids []string, comment string, adopted bool) {
 	if len(ids) == 0 || s.Forges == nil {
 		return
 	}
@@ -564,7 +571,7 @@ func (s *Server) closePullRequests(ctx context.Context, org string, ids []string
 	var prs []openPR
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT p.number, r.url FROM pull_requests p JOIN repositories r ON r.id = p.repository_id
-			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft') AND NOT p.adopted`, ids)
+			WHERE p.id = ANY($1) AND p.state IN ('open', 'draft') AND (NOT p.adopted OR $2)`, ids, adopted)
 		if err != nil {
 			return err
 		}
@@ -578,10 +585,17 @@ func (s *Server) closePullRequests(ctx context.Context, org string, ids []string
 		return
 	}
 	for _, p := range prs {
-		if slug := forge.SlugFromURL(p.URL); slug != "" {
-			if err := gh.ClosePullRequest(ctx, slug, p.Number); err != nil && s.Log != nil {
-				s.Log.Warn("closing an earlier attempt's pull request failed", "pr", p.Number, "repo", slug, "error", err)
+		slug := forge.SlugFromURL(p.URL)
+		if slug == "" {
+			continue
+		}
+		if comment != "" {
+			if _, err := gh.Comment(ctx, slug, p.Number, comment); err != nil && s.Log != nil {
+				s.Log.Warn("commenting on a pull request before closing it failed", "pr", p.Number, "repo", slug, "error", err)
 			}
+		}
+		if err := gh.ClosePullRequest(ctx, slug, p.Number); err != nil && s.Log != nil {
+			s.Log.Warn("closing a pull request failed", "pr", p.Number, "repo", slug, "error", err)
 		}
 	}
 }

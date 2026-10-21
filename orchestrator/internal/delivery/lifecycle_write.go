@@ -27,15 +27,9 @@ const (
 	EvEpicUnarchived = "epic.unarchived"
 )
 
-// The menu's words for a task Close and Archive refuse.
-const (
-	StopAgentsFirst = "Stop its agents first"
-	PullRequestOpen = "It has a pull request open"
-)
-
 // LifecycleRefusal is a lifecycle write refused: Code is the 409's
-// (running, review, not_ended, kind, loop, unfinished, archived, conflict)
-// or bad_request; Details go with it.
+// (not_ended, kind, loop, unfinished, archived, conflict) or bad_request;
+// Details go with it.
 type LifecycleRefusal struct {
 	Code, Msg string
 	Details   map[string]any
@@ -73,9 +67,29 @@ func (t lifecycleTask) ended() bool {
 	return t.Status == "done" || t.Status == "aborted" && t.Resolution != ""
 }
 
-// lockLifecycleTask locks the task's delivery, then its row
+// lockLifecycleTask stops what is live on the task — every Run, nothing
+// kept (StopAllTx, whose locks come first) — then reads the task, its
+// delivery and its row locked (LockEscalationTx's order).
+func lockLifecycleTask(ctx context.Context, tx pgx.Tx, org, taskID, why string) (lifecycleTask, Stopped, error) {
+	t := lifecycleTask{ID: taskID}
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tasks WHERE id = $1)`, taskID).Scan(&exists); err != nil {
+		return t, Stopped{}, err
+	}
+	if !exists {
+		return t, Stopped{}, lifecycleRefuse("not_found", "task %s not found", taskID)
+	}
+	stopped, err := StopAllTx(ctx, tx, org, taskID, why, false)
+	if err != nil {
+		return t, stopped, err
+	}
+	t, err = readLifecycleTask(ctx, tx, taskID)
+	return t, stopped, err
+}
+
+// readLifecycleTask locks the task's delivery, then its row
 // (LockEscalationTx's order), and reads it.
-func lockLifecycleTask(ctx context.Context, tx pgx.Tx, taskID string) (lifecycleTask, error) {
+func readLifecycleTask(ctx context.Context, tx pgx.Tx, taskID string) (lifecycleTask, error) {
 	t := lifecycleTask{ID: taskID}
 	d, err := LoadDelivery(ctx, tx, taskID)
 	if err != nil {
@@ -92,33 +106,6 @@ func lockLifecycleTask(ctx context.Context, tx pgx.Tx, taskID string) (lifecycle
 	return t, err
 }
 
-// refuseBusy refuses a task with agents working or a pull request open,
-// in the menu's words: Close and Archive wait for those to end.
-func refuseBusy(ctx context.Context, tx pgx.Tx, t lifecycleTask) error {
-	switch t.Status {
-	case "review", "ready_to_merge":
-		return lifecycleRefuse("review", "%s: %s is in review. Closing it is GitHub's or Mark done's.", PullRequestOpen, t.Key)
-	case "running", "awaiting_input":
-		return lifecycleRefuse("running", "%s: %s is in progress.", StopAgentsFirst, t.Key)
-	}
-	// Its phase Runs: a conductor talks about the work and stays, read-only
-	// once the task has ended. Its pull requests: one still open refuses
-	// whatever the status (a stopped task can keep one).
-	var live, open bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE task_id = $1 AND kind = 'agent' AND phase IS NOT NULL
-		AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')),
-		EXISTS (SELECT 1 FROM pull_requests WHERE task_id = $1 AND state = 'open')`, t.ID).Scan(&live, &open); err != nil {
-		return err
-	}
-	if live {
-		return lifecycleRefuse("running", "%s: an agent of %s is still working.", StopAgentsFirst, t.Key)
-	}
-	if open {
-		return lifecycleRefuse("review", "%s: close it on GitHub first.", PullRequestOpen)
-	}
-	return nil
-}
-
 // CloseInput is a person's Close.
 type CloseInput struct {
 	TaskID, Resolution, Note string
@@ -126,7 +113,10 @@ type CloseInput struct {
 	DuplicateOf string
 	// Delete the blocks edges from it in the same transaction.
 	RemoveRelations bool
-	Actor           Actor
+	// Close the task's open pull requests on GitHub too, once committed
+	// (ClosedPullRequests); left open otherwise.
+	ClosePullRequest bool
+	Actor            Actor
 }
 
 // Closed is what a Close wrote.
@@ -136,34 +126,37 @@ type Closed struct {
 	DuplicateOf string   `json:"duplicateOf,omitempty"`
 	HandedOver  []string `json:"handedOver,omitempty"`
 	Removed     []string `json:"removedRelations,omitempty"`
-	eventID     string
+	// The Runs the close stopped.
+	Stopped []string `json:"stopped,omitempty"`
+	// The open pull requests to close on GitHub after the commit, and the
+	// comment each is closed with.
+	PullRequests []string `json:"-"`
+	Comment      string   `json:"-"`
+	eventID      string
 }
 
-// CloseTx closes a task with a resolution: refused while agents work on it
-// or a pull request is open, on an ended or archived task, as Nothing to
-// merge (Mark done's), and as a duplicate of itself, of a duplicate, or one
-// that would close a loop.
+// CloseTx closes a task with a resolution, stopping what is live on it
+// first (nothing kept): refused on an ended or archived task, as Nothing
+// to merge (Mark done's), and as a duplicate of itself, of a duplicate, or
+// one that would close a loop — each refusal rolls the stop back with it.
 func CloseTx(ctx context.Context, tx pgx.Tx, org string, in CloseInput) (Closed, error) {
-	t, err := lockLifecycleTask(ctx, tx, in.TaskID)
+	t, stopped, err := lockLifecycleTask(ctx, tx, org, in.TaskID, "closed")
 	if err != nil {
 		return Closed{}, err
 	}
 	if t.Archived {
 		return Closed{}, lifecycleRefuse("archived", "%s is archived: unarchive it first.", t.Key)
 	}
-	if err := refuseBusy(ctx, tx, t); err != nil {
-		return Closed{}, err
-	}
 	if t.ended() {
 		return Closed{}, lifecycleRefuse("conflict", "%s has already ended.", t.Key)
 	}
-	return closeTx(ctx, tx, org, t, in, false)
+	return closeTx(ctx, tx, org, t, stopped, in, false)
 }
 
 // closeTx is Close past the task's own state checks, which CloseTx and
 // ArchiveTaskTx make.
-func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, in CloseInput, andArchived bool) (Closed, error) {
-	out := Closed{Key: t.Key, Resolution: in.Resolution}
+func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, stopped Stopped, in CloseInput, andArchived bool) (Closed, error) {
+	out := Closed{Key: t.Key, Resolution: in.Resolution, Stopped: stopped.All()}
 	switch in.Resolution {
 	case ResolutionWontDo, ResolutionDuplicate:
 	case ResolutionCantReproduce:
@@ -225,8 +218,8 @@ func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, in Clo
 			out.HandedOver = append(out.HandedOver, d.Key)
 		}
 	}
-	// A delivery parked with no agent working (at its start, or on its
-	// blockers) ends with the task; its kept Runs are let go.
+	// The delivery ends with the task, whatever it was waiting on; what was
+	// kept for a resume is let go at once (a Stop's, an escalation's).
 	if d := t.Delivery; d != nil && d.Live() {
 		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = 'completed', wake_at = NULL, awaiting_signals = '[]'::jsonb,
 			locked_by = NULL, locked_until = NULL WHERE id = $1`, d.WorkflowID); err != nil {
@@ -287,9 +280,37 @@ func closeTx(ctx context.Context, tx pgx.Tx, org string, t lifecycleTask, in Clo
 	if andArchived {
 		payload["andArchived"] = true
 	}
+	if len(out.Stopped) > 0 {
+		payload["stopped"] = out.Stopped
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM pull_requests WHERE task_id = $1 AND state IN ('open', 'draft') ORDER BY created_at, id`, t.ID)
+	if err != nil {
+		return out, err
+	}
+	open, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return out, err
+	}
+	if len(open) > 0 {
+		payload["pullRequestClosed"] = in.ClosePullRequest
+	}
+	if in.ClosePullRequest {
+		out.PullRequests = open
+		out.Comment = closedComment(t.Key, in.Resolution, in.Note)
+	}
 	id, err := ledger.Append(ctx, tx, in.Actor.event(org, t.ProjectID, t.ID, EvTaskClosed, payload))
 	out.eventID = id
 	return out, err
+}
+
+// closedComment is what a pull request closed with its task says on
+// GitHub: the task, its resolution, and the note.
+func closedComment(key, resolution, note string) string {
+	s := fmt.Sprintf("Closed with %s as %s", key, ResolutionLabel[resolution])
+	if n := strings.TrimSpace(note); n != "" {
+		return s + ": " + clip(n, 2000)
+	}
+	return s + "."
 }
 
 // duplicateTarget is the task a duplicate is closed as one of, by key or
@@ -366,7 +387,7 @@ func notifyRelations(ctx context.Context, tx pgx.Tx, org, a, b string) error {
 // Backlog (received) with its runs kept, and a duplicate's edge removed,
 // so what it handed over comes back. Refused on an archived task.
 func ReopenTx(ctx context.Context, tx pgx.Tx, org, taskID string, a Actor) error {
-	t, err := lockLifecycleTask(ctx, tx, taskID)
+	t, err := readLifecycleTask(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
@@ -419,10 +440,10 @@ type Archived struct {
 // ArchiveTaskTx archives a task: one that has ended at once; one that
 // hasn't, closed with in.Resolution first, in the same transaction (one
 // batch: task.closed, then task.archived caused by it); without one,
-// refused not_ended. Refused while agents work on it or a pull request is
-// open, as Close is.
+// refused not_ended. What is live on it stops first, nothing kept, as Close
+// stops it; an ended task's kept Runs are let go too.
 func ArchiveTaskTx(ctx context.Context, tx pgx.Tx, org string, in ArchiveInput) (Archived, error) {
-	t, err := lockLifecycleTask(ctx, tx, in.TaskID)
+	t, stopped, err := lockLifecycleTask(ctx, tx, org, in.TaskID, "archived")
 	if err != nil {
 		return Archived{}, err
 	}
@@ -430,22 +451,26 @@ func ArchiveTaskTx(ctx context.Context, tx pgx.Tx, org string, in ArchiveInput) 
 	if t.Archived {
 		return out, lifecycleRefuse("conflict", "%s is already archived.", t.Key)
 	}
-	if err := refuseBusy(ctx, tx, t); err != nil {
-		return out, err
-	}
 	payload := map[string]any{}
 	causation := ""
 	if !t.ended() {
 		if in.Resolution == "" {
 			return out, lifecycleRefuse("not_ended", "%s hasn't ended: archiving it needs a resolution.", t.Key)
 		}
-		closed, err := closeTx(ctx, tx, org, t, in.CloseInput, true)
+		closed, err := closeTx(ctx, tx, org, t, stopped, in.CloseInput, true)
 		if err != nil {
 			return out, err
 		}
 		out.Closed = &closed
 		payload["viaClose"] = true
 		causation = closed.eventID
+	} else {
+		if err := ReleaseKeptTx(ctx, tx, t.ID); err != nil {
+			return out, err
+		}
+		if s := stopped.All(); len(s) > 0 {
+			payload["stopped"] = s
+		}
 	}
 	if err := archiveRowTx(ctx, tx, t.ID, in.Actor.Person); err != nil {
 		return out, err
@@ -474,7 +499,7 @@ func UnarchiveTaskTx(ctx context.Context, tx pgx.Tx, org, taskID string, a Actor
 	if err != nil && !db.IsNotFound(err) {
 		return err
 	}
-	t, err := lockLifecycleTask(ctx, tx, taskID)
+	t, err := readLifecycleTask(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
