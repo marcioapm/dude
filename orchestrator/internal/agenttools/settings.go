@@ -89,6 +89,7 @@ type settingsOut struct {
 	Organization string            `json:"organization"`
 	Role         string            `json:"yourRole"`
 	Scopes       []scopeOut        `json:"settings"`
+	Task         *taskViewOut      `json:"task,omitempty"`
 	GitHub       any               `json:"github,omitempty"`
 	Capabilities []capabilitiesOut `json:"capabilities,omitempty"`
 	MachineSizes []sizeOut         `json:"machineSizes,omitempty"`
@@ -106,9 +107,22 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	}
 	want := func(s string) bool { return section == "" || section == s }
 	w := newWrapper()
+	taskID, taskProject, err := settingsTask(ctx, tx, c, in.Task)
+	if err != nil {
+		return out, err
+	}
+	if strings.TrimSpace(in.Task) != "" && strings.TrimSpace(in.Project) == "" {
+		// A task named alone is read in its own project.
+		in.Project = taskProject
+	}
 	org, projects, err := settingsScopes(ctx, tx, c, in)
 	if err != nil {
 		return out, err
+	}
+	if taskID != "" {
+		if out.Task, err = taskView(ctx, tx, w, taskID); err != nil {
+			return out, err
+		}
 	}
 	out.External, out.Sources = settingsText("external", delivery.ExternalText(w.id, "…")), settingsText("sources", nil)
 	out.Organization, out.Role = w.text(org.Name, 200), c.Role
