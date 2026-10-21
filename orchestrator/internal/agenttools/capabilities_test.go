@@ -12,18 +12,18 @@ import (
 // Each role's tools under its default capabilities: as the per-role role
 // lists gave them before capabilities existed, plus the conductor's and
 // brainstorm's runs.read, pr.refresh and limits.read tools, the
-// conductor's limits.request and verify, and the brainstorm's
-// session.checkout. A grant changed in
+// conductor's limits.request and verify, the brainstorm's
+// session.checkout, and both's settings.read. A grant changed in
 // capabilities.Defaults shows here as a diff to read.
 var toolsBeforeCapabilities = map[string]string{
 	"conductor": "list_machine_sizes request_machine list_tasks list_epics ask_person emit_event list_repositories request_repository " +
 		"create_task search_memory get_memory remember run_diff findings pull_requests start_phase start_agent steer restart_run decide " +
 		"dismiss_finding decide_escalation update_task reply_on_pull_request publish request_review resolve_thread mark_ready " +
 		"rerun_failed_checks sync_base github_search github_issue github_pull_request github_check_log message wait_for_reply note " +
-		"feedback feedback_reply limits run_chat refresh_pull_requests request_limit verify",
+		"feedback feedback_reply limits run_chat refresh_pull_requests request_limit verify settings",
 	"brainstorm": "list_machine_sizes request_machine github_search github_issue github_pull_request github_check_log list_tasks " +
 		"list_epics list_repositories pull_requests findings search_memory get_memory remember propose relate ask_person name_session " +
-		"start_agent run_chat refresh_pull_requests refresh_checkout",
+		"start_agent run_chat refresh_pull_requests refresh_checkout settings",
 	"implementer": "list_machine_sizes request_machine list_tasks list_epics ask_person emit_event list_repositories request_repository " +
 		"create_task search_memory get_memory remember run_diff reply_on_pull_request resolve_thread sync_base message wait_for_reply " +
 		"note feedback feedback_reply feedback_resolve",

@@ -46,6 +46,11 @@ type grantedOut struct {
 	At    string `json:"at"`
 }
 
+// grantedOf is one person's raise as limits and settings show it.
+func grantedOf(g delivery.LimitGrant) grantedOut {
+	return grantedOut{Extra: g.Extra, By: g.ByName, At: g.At.UTC().Format(time.RFC3339)}
+}
+
 // grantsFor are the grants of limit (a rerun's, at that head) over base,
 // from source.
 func grantsFor(grants []delivery.LimitGrant, limit, repo string, number int, head, source string, base int) grantsOut {
@@ -53,7 +58,7 @@ func grantsFor(grants []delivery.LimitGrant, limit, repo string, number int, hea
 	total := base
 	for _, g := range grants {
 		if g.Raises(limit, repo, number, head) {
-			out.Granted = append(out.Granted, grantedOut{Extra: g.Extra, By: g.ByName, At: g.At.UTC().Format(time.RFC3339)})
+			out.Granted = append(out.Granted, grantedOf(g))
 			total += g.Extra
 		}
 	}

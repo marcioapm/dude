@@ -39,6 +39,61 @@ func TestASessionAgentWithoutSessionCheckoutHasNoRefreshCheckout(t *testing.T) {
 	}
 }
 
+// A conductor and a brainstorm resolved without settings.read are not given
+// settings on any surface (POST /tools/{name}, GET /tools, MCP tools/list
+// and tools/call), while the same roles with their defaults are.
+func TestARunWithoutSettingsReadIsNotGivenSettingsOnAnySurface(t *testing.T) {
+	srv := &agenttools.Server{}
+	srv.ResolveCapabilitiesWith(func(_ context.Context, _ pgx.Tx, a capabilities.Agent) (capabilities.Grants, error) {
+		if a.Run == "run_cond_less" || a.Session == "ssn_less" {
+			return capabilities.Default(a.Role).Without(capabilities.SettingsRead), nil
+		}
+		return capabilities.Default(a.Role), nil
+	})
+	f := setupWith(t, srv)
+	// A second task, for the second conductor: a task has one live conductor.
+	mustExec(t, f.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+		VALUES ('wi_less', $1, $2, 2, 'Other', 'running')`, f.org, f.project)
+	lessToken, hash := agenttools.NewToken()
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, mcp_token_hash)
+		VALUES ('run_cond_less', $1, $2, 'wi_less', 1, 'running', 'conductor', $3)`, f.org, f.project, hash)
+	with := map[string]string{"conductor": f.conductor(t), "brainstorm": f.session(t, "ssn_more", "", "")}
+	less := map[string]string{"conductor": lessToken, "brainstorm": f.session(t, "ssn_less", "", "")}
+	for role, token := range less {
+		if status, out := f.post(t, token, "settings", `{}`); status != 404 || out["error"] != "no tool settings for this Run" {
+			t.Errorf("%s without settings.read: POST %d %v", role, status, out)
+		}
+		if _, ok := f.getTools(t, token)["settings"]; ok {
+			t.Errorf("%s without settings.read: GET /tools lists settings", role)
+		}
+		cs, err := f.connect(t, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := cs.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tl := range list.Tools {
+			if tl.Name == "settings" {
+				t.Errorf("%s without settings.read: MCP tools/list lists settings", role)
+			}
+		}
+		if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "settings", Arguments: map[string]any{}}); err == nil {
+			t.Errorf("%s without settings.read: MCP tools/call settings succeeded", role)
+		}
+		cs.Close()
+	}
+	for role, token := range with {
+		if _, ok := f.getTools(t, token)["settings"]; !ok {
+			t.Errorf("%s with its defaults: GET /tools lacks settings", role)
+		}
+		if status, out := f.post(t, token, "settings", `{"section":"capabilities"}`); status != 200 {
+			t.Errorf("%s with its defaults: POST settings %d %v", role, status, out)
+		}
+	}
+}
+
 // A Run resolved without memory is not given search_memory on any of the
 // server's surfaces (GET /tools, POST /tools/{name}, MCP tools/list and
 // tools/call), and is refused it as it is refused a tool its role never

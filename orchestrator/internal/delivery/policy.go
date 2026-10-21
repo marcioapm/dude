@@ -67,6 +67,12 @@ type Policy struct {
 	ResumeRounds bool `json:"resumeRounds"`
 }
 
+// LivePolicyKeys are the Policy keys dude reads from the project's and
+// organisation's policy as it is now, never from a delivery's frozen
+// State.Policy: the syncer's park, idle and warm limits (phases runFrom)
+// and one conductor publish's bounds (PublishLimitsTx).
+var LivePolicyKeys = []string{"parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes", "conductorEditLines", "conductorEditFiles"}
+
 func DefaultPolicy() Policy {
 	return Policy{
 		BlockingSeverities: []string{"blocking", "high"},

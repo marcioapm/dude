@@ -123,6 +123,37 @@ func TestTheConductorsContractNamesOnlyGrantedActions(t *testing.T) {
 	}
 }
 
+// The settings paragraph is rendered from the Run's grant of settings.read
+// and of nothing else: granted alone it renders, and every other
+// capability of the conductor's and the brainstorm's without it renders
+// nothing.
+func TestTheSettingsParagraphIsKeyedOnSettingsRead(t *testing.T) {
+	tmpl := mustTemplate("contracts/settings")
+	alone := capabilities.Of(capabilities.SettingsRead)
+	for _, role := range []string{RoleConductor, RoleBrainstorm} {
+		less := capabilities.Default(role).Without(capabilities.SettingsRead)
+		with := InstructionsInput{Tools: true, CLI: true, Grants: &alone}.data(role)
+		without := InstructionsInput{Tools: true, CLI: true, Grants: &less}.data(role)
+		if render(tmpl, with) == "" || render(tmpl, without) != "" {
+			t.Errorf("%s: with settings.read alone %d bytes, with all else %d bytes", role, len(render(tmpl, with)), len(render(tmpl, without)))
+		}
+	}
+}
+
+// The conductor's and the brainstorm's instruction files without
+// settings.read, as a golden: the wording a reduced grant reads.
+func TestGoldenInstructionsWithoutSettingsRead(t *testing.T) {
+	for _, role := range []string{RoleConductor, RoleBrainstorm} {
+		less := capabilities.Default(role).Without(capabilities.SettingsRead)
+		in := goldenTask()
+		in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+		in.Repositories, in.Anywhere = readOnlyRepos(), role == RoleBrainstorm
+		ii := in.InstructionsInput()
+		ii.Grants = &less
+		golden(t, "instructions-"+role+"-without-settings", Instructions(role, "correctness", ii))
+	}
+}
+
 // The shell form of each dude tool the instruction files show, as
 // cmd/dude parses it.
 var toolCommands = map[string][]string{
@@ -138,7 +169,7 @@ var toolCommands = map[string][]string{
 	"dismiss_finding": {"dude finding dismiss"}, "decide_escalation": {"dude escalation decide"},
 	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},
 	"refresh_pull_requests": {"dude prs --refresh", "--refresh"}, "run_chat": {"dude chat"}, "limits": {"dude limits"},
-	"request_limit": {"dude limit request"}, "verify": {"dude verify"},
+	"request_limit": {"dude limit request"}, "verify": {"dude verify"}, "settings": {"dude settings"},
 }
 
 // Prose in which a tool's name is an ordinary word, or a flag of another
@@ -160,9 +191,10 @@ var notTheTool = map[string][]string{
 		"Each message reaches you", "comes to you as a message"},
 	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
 		"`low` or `note`", "`note` is an observation", "| low | note", "is a `note`", "a design note", "and a note)"},
-	"propose": {"before you propose anything"},
-	"publish": {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code"},
-	"verify":  {"could not verify", "`--no-verify`", "a reason a person could verify"},
+	"propose":  {"before you propose anything"},
+	"publish":  {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code"},
+	"verify":   {"could not verify", "`--no-verify`", "a reason a person could verify"},
+	"settings": {"and its own settings (which reviewers run"},
 }
 
 // Mentions of a tool the role's defaults never grant, which the goldens

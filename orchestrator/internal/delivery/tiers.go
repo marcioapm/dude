@@ -10,8 +10,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-
-	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
 // Tier is a tier as a Run is built from it: its name, the model it
@@ -28,24 +26,51 @@ type Tier struct {
 // transaction. It returns the reason in words a Run fails with when the role
 // names no tier, names one that is gone, or its tier names no model yet.
 func TierFor(ctx context.Context, tx pgx.Tx, role string, settings RoleSettings) (Tier, string, error) {
+	if settings.Tier == "" {
+		return TierIn(nil, role, settings)
+	}
+	tiers, err := loadTiers(ctx, tx, `WHERE id = $1`, settings.Tier)
+	if err != nil {
+		return Tier{}, "", err
+	}
+	return TierIn(tiers, role, settings)
+}
+
+// LoadTiers reads every tier of the organization, by id, for TierIn.
+func LoadTiers(ctx context.Context, tx pgx.Tx) (map[string]Tier, error) {
+	return loadTiers(ctx, tx, ``)
+}
+
+func loadTiers(ctx context.Context, tx pgx.Tx, where string, args ...any) (map[string]Tier, error) {
+	rows, err := tx.Query(ctx, `SELECT id, name, COALESCE(model, ''), COALESCE(effort, ''), options, headers FROM model_tiers `+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load model tier: %w", err)
+	}
+	out := map[string]Tier{}
+	for rows.Next() {
+		var t Tier
+		if err := rows.Scan(&t.ID, &t.Name, &t.Model, &t.Effort, &t.Options, &t.Headers); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("load model tier: %w", err)
+		}
+		out[t.ID] = t
+	}
+	return out, rows.Err()
+}
+
+// TierIn is TierFor over tiers already read (LoadTiers).
+func TierIn(tiers map[string]Tier, role string, settings RoleSettings) (Tier, string, error) {
 	who := RoleName(role)
 	if settings.Tier == "" {
 		return Tier{}, fmt.Sprintf("The %s runs on no model tier. An admin picks one in Agents.", who), nil
 	}
-	t := Tier{ID: settings.Tier}
-	var model *string
-	err := tx.QueryRow(ctx, `SELECT name, model, COALESCE(effort, ''), options, headers FROM model_tiers WHERE id = $1`, settings.Tier).
-		Scan(&t.Name, &model, &t.Effort, &t.Options, &t.Headers)
-	if db.IsNotFound(err) {
+	t, ok := tiers[settings.Tier]
+	if !ok {
 		return Tier{}, fmt.Sprintf("The %s's model tier no longer exists. An admin picks another in Agents.", who), nil
 	}
-	if err != nil {
-		return Tier{}, "", fmt.Errorf("load model tier: %w", err)
-	}
-	if model == nil {
+	if t.Model == "" {
 		return t, fmt.Sprintf("The %s runs on %s, which names no model yet. An admin sets it in Models.", who, t.Name), nil
 	}
-	t.Model = *model
 	return t, "", nil
 }
 
