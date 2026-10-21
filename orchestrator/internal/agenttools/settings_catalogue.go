@@ -56,14 +56,14 @@ func catalogueLimit(limit int) (int, error) {
 const pageBytes = 40 << 10
 
 // pageFit drops a page's trailing items, keeping at least one, until it
-// encodes to pageBytes at most. It returns how many it kept.
-func pageFit(page any, n int, trim func(int)) (int, error) {
+// encodes to budget at most. It returns how many it kept.
+func pageFit(page any, n, budget int, trim func(int)) (int, error) {
 	for ; n > 1; n-- {
 		encoded, err := json.Marshal(page)
 		if err != nil {
 			return 0, err
 		}
-		if len(encoded) <= pageBytes {
+		if len(encoded) <= budget {
 			return n, nil
 		}
 		trim(n - 1)
@@ -71,7 +71,8 @@ func pageFit(page any, n int, trim func(int)) (int, error) {
 	return n, nil
 }
 
-func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in settingsIn) (*modelsOut, error) {
+// modelCatalogue pages the tiers into budget encoded bytes.
+func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in settingsIn, budget int) (*modelsOut, error) {
 	out := &modelsOut{Count: len(tiers), Section: "models", Source: sourceOrg}
 	if in.Section != "models" {
 		return out, nil
@@ -120,7 +121,7 @@ func modelCatalogue(w wrapper, tiers map[string]delivery.Tier, org string, in se
 		if err != nil {
 			return nil, err
 		}
-		if len(encoded) > pageBytes && len(out.Tiers) > 1 {
+		if len(encoded) > budget && len(out.Tiers) > 1 {
 			out.Tiers = out.Tiers[:len(out.Tiers)-1]
 			next()
 			break

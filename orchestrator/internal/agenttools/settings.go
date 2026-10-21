@@ -232,14 +232,23 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			return out, err
 		}
 	}
+	// A catalogue page shares the result with the linked projects' list.
+	budget := pageBytes
+	if out.Linked != nil {
+		linked, err := json.Marshal(out.Linked)
+		if err != nil {
+			return out, err
+		}
+		budget -= len(linked)
+	}
 	if want("models") {
-		if out.Models, err = modelCatalogue(w, refs.tiers, c.Org, in); err != nil {
+		if out.Models, err = modelCatalogue(w, refs.tiers, c.Org, in, budget); err != nil {
 			return out, err
 		}
 	}
 	if section == "images" {
 		// Explicit only: by default each role's image is in roles.
-		if out.Images, err = imageCatalogue(ctx, tx, w, c.Org, in); err != nil {
+		if out.Images, err = imageCatalogue(ctx, tx, w, c.Org, in, budget); err != nil {
 			return out, err
 		}
 	}

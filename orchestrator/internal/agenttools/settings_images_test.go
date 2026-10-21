@@ -239,6 +239,23 @@ func TestSettingsImagesPageALargeLibraryAndStayInTheOrganisation(t *testing.T) {
 	if !reflect.DeepEqual(got, want) || len(got) != 134 || pages < 3 {
 		t.Errorf("paged %d images over %d pages, route lists %d; same order: %v", len(got), pages, len(want), reflect.DeepEqual(got, want))
 	}
+	// A session past its three linked projects, each named in 200 escaped
+	// characters, still gets each catalogue page under the result bound.
+	session := f.session(t, "ssn_linked", "", "")
+	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix)
+		SELECT 'prj_l' || i, $1, repeat('<', 200), 'l' || i, 'L' || i FROM generate_series(1, 49) i`, f.org)
+	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id)
+		SELECT 'ssn_linked', id, organization_id FROM projects WHERE organization_id = $1`, f.org)
+	for _, section := range []string{"images", "models"} {
+		var raw json.RawMessage
+		if status := f.postAs(t, session, "settings", `{"section":"`+section+`","limit":50}`, &raw); status != 200 {
+			t.Fatalf("%s: %d %s", section, status, raw)
+		}
+		t.Logf("%s with 50 linked projects: %d bytes", section, len(raw))
+		if len(raw) > 64<<10 {
+			t.Errorf("%s with 50 linked projects: %d bytes", section, len(raw))
+		}
+	}
 	// A cursor of another section, of another organisation, or not a cursor is refused.
 	models, _ := field(f.settingsOf(t, token, `{"section":"models","limit":1}`), "models", "next").(string)
 	first, _ := field(f.settingsOf(t, token, `{"section":"images","limit":1}`), "images", "next").(string)

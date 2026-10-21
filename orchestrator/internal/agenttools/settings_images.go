@@ -72,8 +72,9 @@ func decodeImageCursor(org, s string) (*imageCursor, error) {
 }
 
 // imageCatalogue reads one page in one statement, ordered as the route lists
-// images (archived last, by name) with id breaking ties.
-func imageCatalogue(ctx context.Context, tx pgx.Tx, w wrapper, org string, in settingsIn) (*imagesOut, error) {
+// images (archived last, by name) with id breaking ties, and fits it into
+// budget encoded bytes.
+func imageCatalogue(ctx context.Context, tx pgx.Tx, w wrapper, org string, in settingsIn, budget int) (*imagesOut, error) {
 	limit, err := catalogueLimit(in.Limit)
 	if err != nil {
 		return nil, err
@@ -143,7 +144,7 @@ func imageCatalogue(ctx context.Context, tx pgx.Tx, w wrapper, org string, in se
 	if fetched > limit {
 		out.Images = out.Images[:limit]
 	}
-	n, err := pageFit(out, len(out.Images), func(n int) { out.Images = out.Images[:n] })
+	n, err := pageFit(out, len(out.Images), budget, func(n int) { out.Images = out.Images[:n] })
 	if err != nil {
 		return nil, err
 	}
