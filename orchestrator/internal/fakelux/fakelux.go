@@ -279,6 +279,9 @@ type Run struct {
 	harness *harnessSay
 	// Turns the agent finished (went idle after), for TurnsEnded.
 	turnsEnded int
+	// A writer's next round was just told it (writerRound): its tool calls
+	// are this turn's, once, as a first turn's are.
+	roundCalls bool
 	// Its next failTurns turns fail at once with failWith (FailTurns).
 	failTurns int
 	failWith  string
@@ -594,7 +597,7 @@ func (s *Server) deliverQueued(run *Run) {
 	for i := range run.queued {
 		s.accept(run, &run.queued[i])
 		if s.scriptedAgent && strings.HasPrefix(run.queued[i].text, "## A new round") {
-			s.writerRound(run)
+			s.writerRound(run, run.queued[i].text)
 		}
 	}
 	s.consume(run)
@@ -857,8 +860,10 @@ func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 
 // writerRound is a scripted implementer's or fixer's next round, told it
 // by a round message: a fixer's step, its commit naming the round so each
-// is a change. Callers hold s.mu.
-func (s *Server) writerRound(run *Run) {
+// is a change, carrying out the "tool: NAME {json}" lines the message's
+// feedback names, as a fresh scripted fixer does from its prompt
+// (CallsLabel). Callers hold s.mu.
+func (s *Server) writerRound(run *Run, message string) {
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
 	labels, _ := spec["labels"].(map[string]any)
@@ -867,8 +872,14 @@ func (s *Server) writerRound(run *Run) {
 	if phase != "implement" && phase != "fix" {
 		return
 	}
-	run.behavior = s.Decide(map[string]any{"labels": map[string]any{"dude.phase": "fix", "dude.model": model,
-		"dude.run": fmt.Sprintf("%s-round-%d", run.ID, run.turnsEnded)}})
+	round := map[string]any{"dude.phase": "fix", "dude.model": model,
+		"dude.run": fmt.Sprintf("%s-round-%d", run.ID, run.turnsEnded)}
+	if calls := fakeagent.ConductorCalls(message); len(calls) > 0 {
+		raw, _ := json.Marshal(calls)
+		round[fakeagent.CallsLabel] = string(raw)
+	}
+	run.behavior = s.Decide(map[string]any{"labels": round})
+	run.roundCalls = len(run.behavior.CallTools) > 0
 	run.woken = true
 }
 
@@ -1854,6 +1865,11 @@ func (s *Server) turn(run *Run) {
 		}
 		s.edit(run, b.Edits)
 		s.save(run, b.PublishNow, b.Descriptions)
+	} else if run.roundCalls {
+		run.roundCalls = false
+		for _, c := range b.CallTools {
+			s.callTool(run, c[0], c[1])
+		}
 	}
 	if asking {
 		s.callTool(run, "ask_person", b.Ask)
