@@ -69,6 +69,19 @@ func TestGoldenWakeLines(t *testing.T) {
 	})
 }
 
+// What the checks gate asks the judge about a person's attempt waiver, and
+// what it says of a failure the waiver did not cover.
+func TestGoldenChecksWaiverTexts(t *testing.T) {
+	w := map[string]any{"Role": "Implementer", "RunID": "run_impl", "Note": "Needs a hardware clock\nCI lacks.",
+		"Command": "make test", "Evidence": "TestClock needs a hardware clock", "Calls": []string{"- bash {\"command\":\"make test\"}\n  status: error, exit code 1"},
+		"Omitted": 3}
+	goldenLines(t, "checks-waiver", [][2]string{
+		{"question", MustText("notices/checks/waived").Render(Check{Command: "make test", Result: CheckFail})},
+		{"context", MustText("notices/checks/waived-context").Render(w)},
+		{"not-covered", MustText("notices/checks/not-covered").Render(map[string]string{"Role": "Implementer", "Reason": "TestGreeting fails too"})},
+	})
+}
+
 // A stalled Run with everything a stall says: open calls of each kind, a
 // child waiting on a permission, processes, usage, files, tools, plan.
 func goldenStall() Stall {
