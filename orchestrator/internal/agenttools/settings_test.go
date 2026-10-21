@@ -352,7 +352,7 @@ func TestASessionsInvestigatorRowIsTheOneItsBrainstormStarts(t *testing.T) {
 	out := f.settingsOf(t, token, `{"section":"prompts"}`)
 	for _, p := range field(out, "settings", 0, "prompts").([]any) {
 		if m := p.(map[string]any); m["role"] == "investigator" {
-			if m["organization"] != "per-run child prompt, not saved org/project prompts" || m["organizationSaved"] != nil || m["project"] != nil || m["projectSaved"] != nil {
+			if m["organization"] != "per-run" || m["note"] != "per-run child prompt, not saved org/project prompts" || m["organizationSaved"] != nil || m["project"] != nil || m["projectSaved"] != nil {
 				t.Errorf("session investigator prompt: %v", m)
 			}
 		}

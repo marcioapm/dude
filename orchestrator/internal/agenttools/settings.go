@@ -296,9 +296,12 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 			}
 		}
 		if want("servers") {
-			if l.project != nil {
+			switch {
+			case l.project != nil:
 				s.Servers = servers[l.project.ID]
-			} else {
+			case out.Linked != nil:
+				s.Servers = &serversOut{Source: "linked-projects-not-named", Section: "servers"}
+			default:
 				s.Servers = &serversOut{Source: "no-project", Section: "servers"}
 			}
 		}

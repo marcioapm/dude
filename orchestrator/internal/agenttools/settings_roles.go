@@ -216,13 +216,15 @@ type savedOut struct {
 type promptOut struct {
 	Role  string `json:"role"`
 	Label string `json:"label"`
-	// "dude" for its built-in prompt, or "saved".
+	// "dude" for its built-in prompt, "saved", or "per-run" for a session's
+	// investigator, which runs on the prompt its brainstorm gives it.
 	Organization string    `json:"organization"`
 	OrgSaved     *savedOut `json:"organizationSaved,omitempty"`
 	// A project's: "inherit" (the organisation's as it is), "add" (after
 	// it) or "replace" (in its place).
 	Project      string    `json:"project,omitempty"`
 	ProjectSaved *savedOut `json:"projectSaved,omitempty"`
+	Note         string    `json:"note,omitempty"`
 }
 
 // latestPrompts are the current prompt versions of the organisation and of
@@ -259,7 +261,7 @@ func promptsOut(w wrapper, scope settingsLayers, rows map[promptKey]promptRow) [
 		l := scope.of(role)
 		p := promptOut{Role: role, Label: delivery.RoleName(role), Organization: sourceDude}
 		if role == settingsInvestigator && scope.session != nil {
-			p.Organization = settingsText("session-child-prompt", nil)
+			p.Organization, p.Note = "per-run", settingsText("session-child-prompt", nil)
 			out = append(out, p)
 			continue
 		}
