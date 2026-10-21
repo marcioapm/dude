@@ -245,7 +245,8 @@ func (s *Server) registerWebhooks(w http.ResponseWriter, r *http.Request, org st
 const backgroundRegistration = 10 * time.Minute
 
 // pullRequestActionVerbs are the actions ownerOrAdmin guards, as its
-// refusal words them.
+// refusal words them. With resolve-conflicts (ownerOnly), they are every
+// action pullRequestAction takes: none is allowed without its check.
 var pullRequestActionVerbs = map[string]string{
 	"merge":         "merge",
 	"update-branch": "update the branch of",
@@ -256,7 +257,8 @@ var pullRequestActionVerbs = map[string]string{
 // pullRequestAction does to a pull request what a person asked, on GitHub.
 func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org string) error {
 	id, action := r.PathValue("id"), r.PathValue("action")
-	if !slices.Contains([]string{"merge", "update-branch", "rerun-failed", "reviewers", "resolve-conflicts"}, action) {
+	verb, guarded := pullRequestActionVerbs[action]
+	if !guarded && action != "resolve-conflicts" {
 		return fail(http.StatusNotFound, "not_found", "no pull request action %q", action)
 	}
 	var body struct {
@@ -283,7 +285,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		// These run on GitHub as dude's token, which may do what the person
 		// could not: the task's owner or an admin only, before GitHub is asked.
 		// resolve-conflicts is the owner's escalation decision (ownerOnly).
-		if verb, ok := pullRequestActionVerbs[action]; ok {
+		if guarded {
 			return ownerOrAdmin(r.Context(), tx, pr.TaskID, principalOf(r), verb)
 		}
 		return nil
