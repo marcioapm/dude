@@ -1,0 +1,308 @@
+package phases
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/judge"
+)
+
+// waiverFake answers the waiver question with waived (or err), Backed with
+// yes and Missing with no, counting the waiver questions it was asked.
+type waiverFake struct {
+	waived     string
+	err        error
+	unrecorded bool
+	// missing answers Missing; "" is no.
+	missing string
+	asked   []judge.Ask
+}
+
+func (f *waiverFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
+	f.asked = append(f.asked, a)
+	id := "call_test"
+	if f.unrecorded {
+		id = ""
+	}
+	switch {
+	case strings.Contains(a.Question, "waived a reported failure"):
+		if f.err != nil {
+			return judge.Judgement{Decision: judge.Yes, CallID: id}, f.err
+		}
+		return judge.Judgement{Decision: f.waived, CallID: id, Reasoning: "the same TestClock failure"}, nil
+	case strings.Contains(a.Question, "reported pass"):
+		return judge.Judgement{Decision: judge.Yes, CallID: id, Reasoning: "backed"}, nil
+	case f.missing != "":
+		return judge.Judgement{Decision: f.missing, CallID: id, Reasoning: "a check is missing"}, nil
+	}
+	return judge.Judgement{Decision: judge.No, CallID: id, Reasoning: "nothing missing"}, nil
+}
+
+func (f *waiverFake) waiverQuestions() int {
+	n := 0
+	for _, a := range f.asked {
+		if strings.Contains(a.Question, "waived a reported failure") {
+			n++
+		}
+	}
+	return n
+}
+
+const failingTest = "checks:\n  - command: make test\n    result: fail\n    evidence: TestClock needs a hardware clock\n"
+
+// waive records a person's waiver on the harness's Run, of scope, covering
+// covers, then ends the turn the next report is judged at.
+func waive(w *harnessWorld, r phaseRun, scope string, covers ...delivery.Check) {
+	w.t.Helper()
+	payload := map[string]any{"action": delivery.ActionWaive, "note": "Needs a hardware clock CI lacks."}
+	if scope != "" {
+		payload["scope"], payload["person"], payload["turn"], payload["covers"] = scope, "per_ana", 1, covers
+	}
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
+		return w.s.event(context.Background(), tx, r, delivery.EvRunChecksDecided, "human", payload)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// endTurn ends the Run's current turn, as lux reports it.
+func endTurn(w *harnessWorld) {
+	w.t.Helper()
+	w.feed(map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "busy"}},
+		map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "idle"}})
+}
+
+var heldFailure = delivery.Check{Command: "make test", Result: delivery.CheckFail, Evidence: "TestClock needs a hardware clock"}
+
+// A later turn of the waived Run reporting the waived failure again carries
+// the waiver once the judge says it is the same failure; anything less from
+// the judge, or no tier, leaves it rejected and never skipped.
+func TestAWaivedFailurePassesOnlyOnTheJudgesYes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		waived     string
+		err        error
+		unrecorded bool
+		verified   bool
+	}{
+		{"yes", judge.Yes, nil, false, true},
+		{"no", judge.No, nil, false, false},
+		{"unsure", judge.Unsure, nil, false, false},
+		{"judge error", "", errors.New("proxy timed out"), false, false},
+		{"recorded nowhere", judge.Yes, nil, true, false},
+		{"no tier", "", judge.ErrOff, false, false},
+		{"no model", "", judge.ErrNoModel, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+			// The command is compared trimmed.
+			checksReply(w, strings.Replace(failingTest, "make test", `"  make test "`, 1))
+			endTurn(w)
+			fake := &waiverFake{waived: tc.waived, err: tc.err, unrecorded: tc.unrecorded}
+			w.s.Judge = fake
+			got, err := w.s.judgeChecks(context.Background(), w.run)
+			if err != nil || got.Verified != tc.verified || got.Skipped || fake.waiverQuestions() != 1 {
+				t.Fatalf("%+v %v, %d waiver questions", got, err, fake.waiverQuestions())
+			}
+			if !tc.verified {
+				if got.Carried || len(got.Verdicts) != 1 || got.Verdicts[0].Result == checksWaived || got.Verdicts[0].Waiver != nil {
+					t.Fatalf("a failure not carried was recorded %+v", got)
+				}
+				return
+			}
+			// Carried with the waiver it rests on, and the Missing question
+			// still asked over the whole report.
+			v := got.Verdicts[0]
+			if !got.Carried || len(got.Verdicts) != 2 || v.Result != checksWaived || v.CallID != "call_test" || v.Waiver == nil ||
+				v.Waiver.RunID != w.run.ID || v.Waiver.Note != "Needs a hardware clock CI lacks." || v.Waiver.Person != "per_ana" ||
+				got.Verdicts[1].Command != "missing checks" || got.Verdicts[1].Result != "pass" {
+				t.Fatalf("carried %+v", got)
+			}
+		})
+	}
+}
+
+// A carried failure changes nothing for the rest of the report: each pass
+// is still asked Backed, and a missing check still rejects the turn.
+func TestBesideACarriedFailureThePassesAreBackedAndMissingIsAsked(t *testing.T) {
+	report := failingTest + "  - command: make lint\n    result: pass\n    evidence: clean\n"
+	for _, tc := range []struct {
+		missing  string
+		verified bool
+	}{{"", true}, {judge.Yes, false}} {
+		t.Run("missing "+tc.missing, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+			checksReply(w, report)
+			endTurn(w)
+			fake := &waiverFake{waived: judge.Yes, missing: tc.missing}
+			w.s.Judge = fake
+			got, err := w.s.judgeChecks(context.Background(), w.run)
+			if err != nil || got.Verified != tc.verified || len(fake.asked) != 3 || len(got.Verdicts) != 3 ||
+				got.Verdicts[0].Result != checksWaived || got.Verdicts[1].Command != "make lint" || got.Verdicts[1].Result != "pass" {
+				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
+			}
+		})
+	}
+}
+
+// The judge reads both Runs' evidence: the waived report's failure and the
+// person's note beside this Run's own calls.
+func TestTheWaiverQuestionShowsTheWaivedFailure(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feed(map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1",
+		"title": "bash", "kind": "execute", "status": "in_progress", "rawInput": map[string]any{"command": "make test"}}},
+		map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1",
+			"status": "failed", "rawOutput": map[string]any{"output": "FAIL: TestClock", "metadata": map[string]any{"exit": 1}}}})
+	waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+	checksReply(w, failingTest)
+	endTurn(w)
+	fake := &waiverFake{waived: judge.Yes}
+	w.s.Judge = fake
+	if _, err := w.s.judgeChecks(context.Background(), w.run); err != nil {
+		t.Fatal(err)
+	}
+	_, waived, ok := strings.Cut(fake.asked[0].Context, "### The waived failure\n")
+	if !ok {
+		t.Fatalf("no waived failure in the context:\n%s", clip(fake.asked[0].Context))
+	}
+	want := "A person waived the Implementer's report at its Run " + w.run.ID + ", saying:\n" +
+		"    Needs a hardware clock CI lacks.\n" +
+		"That report said \"make test\" failed:\n" +
+		"    TestClock needs a hardware clock\n\n" +
+		"### The tool calls the Implementer's Run recorded up to the waiver, in order\n\n" +
+		"- bash {\"command\":\"make test\"}\n  status: error, exit code 1\n  output:\n    FAIL: TestClock"
+	if waived != want {
+		t.Fatalf("the waived failure reads\n%s\nwant\n%s", waived, want)
+	}
+}
+
+// Only an attempt waiver of the same failing command, decided before the
+// turn ended, in the Run's own task and attempt, is a candidate; nothing
+// else asks the judge, and the report is rejected as before.
+func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		report string
+		setup  func(w *harnessWorld)
+	}{
+		{"a run-scoped waiver", failingTest, func(w *harnessWorld) { waive(w, w.run, "", heldFailure) }},
+		{"another command", strings.Replace(failingTest, "make test", "make lint", 1),
+			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }},
+		{"a not-run report of the waived command", strings.Replace(failingTest, "result: fail", "result: not-run", 1),
+			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }},
+		{"a waived not-run", failingTest, func(w *harnessWorld) {
+			waive(w, w.run, delivery.ScopeAttempt, delivery.Check{Command: "make test", Result: delivery.CheckNotRun})
+		}},
+		{"one of two failures waived", failingTest + "  - command: make lint\n    result: fail\n    evidence: one issue\n",
+			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }},
+		{"another attempt's waiver", failingTest, func(w *harnessWorld) {
+			waive(w, w.otherRun(t, "run_old", w.run.TaskID, 0), delivery.ScopeAttempt, heldFailure)
+			mustOwner(t, w, `UPDATE runs SET attempt = 2 WHERE id = $1`, w.run.ID)
+		}},
+		{"another task's waiver", failingTest, func(w *harnessWorld) {
+			mustOwner(t, w, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_other_'||$1, $1, $2, 2, 'T', 'G')`,
+				w.run.Org, w.run.ProjectID)
+			waive(w, w.otherRun(t, "run_other", "wi_other_"+w.run.Org, 1), delivery.ScopeAttempt, heldFailure)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			tc.setup(w)
+			checksReply(w, tc.report)
+			endTurn(w)
+			fake := &waiverFake{waived: judge.Yes}
+			w.s.Judge = fake
+			got, err := w.s.judgeChecks(context.Background(), w.run)
+			if err != nil || got.Verified || got.Carried || len(fake.asked) != 0 {
+				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
+			}
+		})
+	}
+	t.Run("a waiver after the turn ended", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		checksReply(w, failingTest)
+		endTurn(w)
+		waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+		fake := &waiverFake{waived: judge.Yes}
+		w.s.Judge = fake
+		if got, err := w.s.judgeChecks(context.Background(), w.run); err != nil || got.Verified || len(fake.asked) != 0 {
+			t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
+		}
+	})
+}
+
+// A fixer's Run on the pull request's candidate branch is a Run of the same
+// attempt: it may carry an implementer's attempt waiver.
+func TestACandidateFixOfTheAttemptCarriesTheWaiver(t *testing.T) {
+	w := newHarnessWorld(t)
+	waive(w, w.otherRun(t, "run_impl", w.run.TaskID, 1), delivery.ScopeAttempt, heldFailure)
+	mustOwner(t, w, `UPDATE runs SET phase = 'fix', branch = $2 WHERE id = $1`, w.run.ID, delivery.CandidateBranch(w.run.TaskID, 1))
+	w.run.Phase = "fix"
+	checksReply(w, failingTest)
+	endTurn(w)
+	fake := &waiverFake{waived: judge.Yes}
+	w.s.Judge = fake
+	got, err := w.s.judgeChecks(context.Background(), w.run)
+	if err != nil || !got.Verified || !got.Carried || got.Verdicts[0].Waiver.RunID != "run_impl_"+w.run.Org {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// A restart while the judge weighs the waiver records nothing; the next
+// process asks again, and one after that reads the carried verdict.
+func TestARestartJudgesAWaivedFailureAgain(t *testing.T) {
+	w := newHarnessWorld(t)
+	waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+	checksReply(w, failingTest)
+	endTurn(w)
+	ctx, stop := context.WithCancel(context.Background())
+	cut := &interruptingJudge{stop: stop}
+	w.s.Judge = cut
+	if ok, _, err := w.s.checksBeforePush(ctx, w.run); ok || err == nil || cut.calls != 1 {
+		t.Fatalf("an interrupted judgement: pass %v, %v", ok, err)
+	}
+	if n := w.countEvents(delivery.EvRunChecksJudged); n != 0 {
+		t.Fatalf("%d verdicts recorded for an interrupted judgement", n)
+	}
+	again := &Syncer{DB: w.s.DB, Judge: &waiverFake{waived: judge.Yes}}
+	if ok, _, err := again.checksBeforePush(context.Background(), w.run); !ok || err != nil {
+		t.Fatalf("judged again: pass %v, %v", ok, err)
+	}
+	after := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
+	if ok, _, err := after.checksBeforePush(context.Background(), w.run); !ok || err != nil {
+		t.Fatalf("after the carried verdict: pass %v, %v", ok, err)
+	}
+	var carried bool
+	if err := w.owner.QueryRow(context.Background(), `SELECT (payload->>'carried')::bool AND payload->'checks'->0->'waiver'->>'runId' = $1
+		AND NOT payload ? 'waived' FROM events WHERE run_id = $1 AND event_type = $2`, w.run.ID, delivery.EvRunChecksJudged).Scan(&carried); err != nil || !carried {
+		t.Fatalf("the recorded judgement is not carried: %v", err)
+	}
+}
+
+// otherRun adds a running implementer Run of the harness's project, task
+// and attempt, named prefix_<org>.
+func (w *harnessWorld) otherRun(t *testing.T, prefix, taskID string, attempt int) phaseRun {
+	t.Helper()
+	id := prefix + "_" + w.run.Org
+	if attempt == 0 {
+		attempt = 1
+	}
+	mustOwner(t, w, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status)
+		VALUES ($1, $2, $3, $4, $5, 'implement', 'running')`, id, w.run.Org, w.run.ProjectID, taskID, attempt)
+	r := w.run
+	r.ID, r.TaskID = id, taskID
+	return r
+}
+
+func mustOwner(t *testing.T, w *harnessWorld, sql string, args ...any) {
+	t.Helper()
+	if _, err := w.owner.Exec(context.Background(), sql, args...); err != nil {
+		t.Fatal(err)
+	}
+}

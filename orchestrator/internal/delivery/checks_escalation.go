@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -154,4 +155,58 @@ func heldFailuresTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) ([
 		}
 	}
 	return out, nil
+}
+
+// CarriedWaiver is a person's attempt-scoped waiver a later report's
+// failure of Covered may be the same as: who waived it, why, and the Run
+// and turn it was held at.
+type CarriedWaiver struct {
+	RunID   string `json:"runId"`
+	Role    string `json:"role"`
+	Turn    int64  `json:"turn"`
+	Person  string `json:"person,omitempty"`
+	Note    string `json:"note"`
+	Cursor  int64  `json:"cursor"`
+	Covered Check  `json:"-"`
+}
+
+// InheritableWaiverTx is the newest attempt-scoped checks waiver of the
+// judged Run's task and attempt, decided before the turn that ended at
+// cursor before, covering a reported failure of the same command
+// (trimmed). It is only a candidate for the judge, never a pass by
+// itself; nil for none.
+func InheritableWaiverTx(ctx context.Context, tx pgx.Tx, runID string, before int64, failed Check) (*CarriedWaiver, error) {
+	if failed.Result != CheckFail {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT e.run_id, src.phase::text, e.cursor, e.payload
+		FROM runs judged JOIN runs src ON src.task_id = judged.task_id AND src.attempt = judged.attempt
+		JOIN events e ON e.run_id = src.id
+		WHERE judged.id = $1 AND e.event_type = $2 AND e.payload->>'action' = $3 AND e.payload->>'scope' = $4
+		  AND e.cursor < $5
+		ORDER BY e.cursor DESC`, runID, EvRunChecksDecided, ActionWaive, ScopeAttempt, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var w CarriedWaiver
+		var phase string
+		var p struct {
+			Note   string  `json:"note"`
+			Person string  `json:"person"`
+			Turn   int64   `json:"turn"`
+			Covers []Check `json:"covers"`
+		}
+		if err := rows.Scan(&w.RunID, &phase, &w.Cursor, &p); err != nil {
+			return nil, err
+		}
+		for _, c := range p.Covers {
+			if c.Result == failed.Result && strings.TrimSpace(c.Command) == strings.TrimSpace(failed.Command) {
+				w.Role, w.Turn, w.Person, w.Note, w.Covered = RoleName(PromptRoleForPhase[phase]), p.Turn, p.Person, p.Note, c
+				return &w, nil
+			}
+		}
+	}
+	return nil, rows.Err()
 }
