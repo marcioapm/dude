@@ -3,7 +3,10 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -140,6 +143,68 @@ func specOf(t *testing.T, raw []byte) lux.Spec {
 		t.Fatal(err)
 	}
 	return spec
+}
+
+// A continuing fixer whose checkout its resume's fast-forward cannot bring
+// to the round's head (here: a tracked file changed in it, which lux's
+// fast-forward keeps, as it keeps a diverged one) never hears its round:
+// dude replaces it in its slot with a fresh fixer given the implementer's
+// conversation. The finding's attempt is counted once, and the delivery
+// goes on.
+func TestAFixerWhoseCheckoutDidNotSyncIsReplacedByAFreshOne(t *testing.T) {
+	w := resuming(t)
+	// Not a scripted model: lux is given dude's prompt itself, which
+	// fakelux's scripted agent plays all the same.
+	w.onModel("implementer", "llm-implement")
+	wi := w.task()
+	w.names(wi, w.repoID)
+	var once sync.Once
+	w.lux.BeforeStart(func(id string) {
+		if !w.fixStarts(id) {
+			return
+		}
+		once.Do(func() {
+			var spec lux.Spec
+			_ = json.Unmarshal(w.luxRunsOf("implement")[0].Spec, &spec)
+			work, err := w.lux.Checkout(id, spec.Git.Repositories[0].Name)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(work, "FACTORY.md"), []byte("edited in the checkout\n"), 0o644)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		})
+	})
+	w.start(wi, resumingPolicy())
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	writers := w.writerRows(wi)
+	if len(writers) < 3 {
+		t.Fatalf("writers: %+v; want the implementer, its continuation and the fresh fixer", writers)
+	}
+	impl, cont, fresh := writers[0], writers[1], writers[2]
+	if cont.Continues != impl.ID || cont.How != delivery.ContinuesResume || fresh.Continues != impl.ID || fresh.How != delivery.ContinuesReplay {
+		t.Fatalf("writers %+v; want the continuation replaced by a replay of the implementer", writers)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND replaced_by = $2`, cont.ID, fresh.ID); n != 1 {
+		t.Fatal("the continuation was not replaced in its slot")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.restarted' AND payload->>'by' = 'dude'`, cont.ID); n != 1 {
+		t.Fatal("no run.restarted by dude")
+	}
+	for _, in := range w.lux.Inputs(w.luxRunsOf("implement")[0].ID) {
+		if strings.HasPrefix(in, "## A new round") {
+			t.Fatalf("the unsynced continuation heard its round:\n%s", in)
+		}
+	}
+	if luxFix := w.luxRunsOf("fix"); len(luxFix) != 1 || !strings.Contains(luxFix[0].Prompt(), "## The conversation so far") {
+		t.Fatalf("%d fixers submitted; want one given the implementer's conversation", len(luxFix))
+	}
+	if n := w.count(`SELECT max(fix_attempts) FROM review_findings WHERE task_id = $1`, wi); n != 1 {
+		t.Fatalf("fix attempts %d, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1`, wi); n != 0 {
+		t.Fatalf("%d questions asked of a person, want the delivery not escalated", n)
+	}
 }
 
 // A kept writer's per-Run branch outlives its publish only while the
