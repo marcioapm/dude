@@ -106,6 +106,8 @@ export interface RunScreenProps {
   chat?: ChatVariant | undefined;
   /** What its end strip says of a session that stopped, beyond how it ended. */
   stopped?: StoppedRun | undefined;
+  /** On its task's page, a task in progress: Abort's dialog points at the task's Stop, which this opens. */
+  stopTask?: { readonly key: string; readonly open: () => void } | undefined;
   titleSelector?: ((title: ReactNode) => ReactNode) | undefined;
 }
 
@@ -188,7 +190,7 @@ const STATUS_EVENTS: ReadonlySet<string> = new Set([
 
 const PREPARING_EVERY_MS = 4000;
 
-export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat, stopped, titleSelector }: RunScreenProps) {
+export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, onOpenServers, onBack, task: given, chat, stopped, stopTask, titleSelector }: RunScreenProps) {
   const [view, setView] = useState<SessionView>("chat");
   // The bar's slot where Changes draws the diff's own controls.
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null);
@@ -976,6 +978,17 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
         >
           <Textarea label="Why (optional)" hint="Shown in the conversation beside your name." rows={2} value={abortReason}
             onChange={(e) => setAbortReason(e.target.value)} />
+          {stopTask ? (
+            <p className="abortStopHint" data-testid="abort-stop-hint">
+              To stop the whole task, or start it over, use Stop on the task.{" "}
+              <Button size="sm" variant="quiet" leadingIcon="stop" data-testid="abort-stop-task" onClick={() => {
+                setConfirmAbort(false);
+                stopTask.open();
+              }}>
+                Stop {stopTask.key}…
+              </Button>
+            </p>
+          ) : null}
         </Dialog>
       ) : null}
     </div>

@@ -111,14 +111,15 @@ describe("the epic archive dialog callback", () => {
 });
 
 describe("the task page's lifecycle", () => {
-  test("a task in progress: Close… and Archive… are there, each disabled with Stop its agents first", async () => {
+  test("a task in progress: Close… and Archive… are there and enabled, after Stop…", async () => {
     const page = await taskPage(new FixtureClient("a"));
     const items = await menuItems(page);
+    expect(itemText(items[0]!)).toContain("Stop…");
     const close = items.find((i) => itemText(i).startsWith("Close"))!;
     const archive = items.find((i) => itemText(i).startsWith("Archive"))!;
     for (const i of [close, archive]) {
-      expect(i.getAttribute("aria-disabled")).toBe("true");
-      expect(itemText(i)).toContain("Stop its agents first");
+      expect(i.getAttribute("aria-disabled")).toBeNull();
+      expect(itemText(i)).not.toContain("Stop its agents first");
     }
   });
 
@@ -170,13 +171,13 @@ describe("the task page's lifecycle", () => {
     expect(items.find((t) => t.startsWith("Closed"))).toContain("Already ended");
   });
 
-  test("a stopped task with its pull request still open: Close… and Archive… are disabled, saying so", async () => {
+  test("a stopped task with its pull request still open: Close… and Archive… are enabled", async () => {
     const client = await clientWith({ status: "aborted" });
     client.listPullRequests = async () => ({ pullRequests: [{ ...PULL_REQUEST, state: "open" }] });
     const page = await taskPage(client);
     const items = (await menuItems(page)).filter((i) => /^(Close|Archive)/.test(itemText(i)));
-    expect(items.map(itemText)).toEqual(["Close…. It has a pull request open", "Archive…. It has a pull request open"]);
-    for (const i of items) expect(i.getAttribute("aria-disabled")).toBe("true");
+    expect(items.map(itemText)).toEqual(["Close…", "Archive…"]);
+    for (const i of items) expect(i.getAttribute("aria-disabled")).toBeNull();
   });
 
   test("a member sees the lifecycle disabled with whose decision it is", async () => {

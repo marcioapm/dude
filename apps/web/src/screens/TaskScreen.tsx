@@ -92,6 +92,7 @@ import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { TaskMenu, notYours, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
+import { StopButton, StopDialog, inProgress, liveItemsOf, openPullRequestOf, stopMenuItem } from "./TaskStop.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
@@ -321,6 +322,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // A stopped task's ways back, read again whenever the page is.
   const recovery = useRecoveryOptions(client, item);
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
+  const [stopping, setStopping] = useState(false);
   // What it waits on and what waits on it: with the page's reads, and on relations.changed.
   const { relations, reload: reloadRelations } = useRelations(client, taskId, version + relationsVersion);
   // Close, Reopen, Archive, Unarchive: the header's menu, the notices, the dialogs.
@@ -462,6 +464,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       : retried ? { setAside: "retry" }
       : pickUpHere ? { onPickUp: setPickingUp, keptUntil } : undefined),
     [earlier, shownConductor, current, toCurrent, retried, pickUpHere, keptUntil]);
+  // Session Abort points at the task's Stop while there is one to use; one value while it says the same.
+  const stopKey = item && !earlier && inProgress(item) && !(people.me && notYours(item, people)) ? (item.key ?? "this task") : null;
+  const stopFromSession = useMemo(() => (stopKey ? { key: stopKey, open: () => setStopping(true) } : undefined), [stopKey]);
 
   // Each running phase's plan: the last it wrote, as the transcript has it.
   const plans = useMemo<Plans>(() => {
@@ -512,6 +517,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   latest.current.toCurrent = () => pickAttempt(current);
 
   const started = currentPhases.length > 0;
+  // Stop: the header's and the menu's, on the current attempt of a task in progress, whoever decides it.
+  const stoppable = !earlier && inProgress(item);
+  const refusedStop = people.me ? notYours(item, people) : undefined;
   // Where Deliver is offered, Talk it through is beside it: a task nothing
   // has started, neither delivered nor talked through, on its current
   // attempt (an earlier one is only to read).
@@ -605,10 +613,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               Mark done
             </Button>
           ) : null}
+          {stoppable ? <StopButton onStop={() => setStopping(true)} notYours={refusedStop} /> : null}
           <Button variant="quiet" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
             Edit
           </Button>
-          {!earlier ? <TaskMenu items={lifecycle.items} /> : null}
+          {!earlier ? <TaskMenu items={stoppable ? [stopMenuItem(() => setStopping(true), refusedStop), ...lifecycle.items] : lifecycle.items} /> : null}
         </span>
       </header>
 
@@ -672,6 +681,14 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
       {lifecycle.dialogs}
+      {stopping ? (
+        <StopDialog client={client} task={item} attempt={current} live={liveItemsOf(item)} pullRequest={openPullRequestOf(item, pullRequests)}
+          onClose={() => setStopping(false)}
+          onDone={() => {
+            setStopping(false);
+            void load();
+          }} />
+      ) : null}
       {pickingUp && stop && recovery ? (
         <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp}
           onEdit={() => {
@@ -876,7 +893,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               {openRun ? (
                 <FeedbackProvider value={sessionFeedback}>
                   <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
-                    stopped={openStopped} titleSelector={sessionSelector} />
+                    stopped={openStopped} titleSelector={sessionSelector} stopTask={stopFromSession} />
                 </FeedbackProvider>
               ) : null}
             </div>

@@ -16,13 +16,13 @@ import type { NavProject } from "@dude/design-system";
 import { canStart, canStop, feedbackHolds } from "@dude/design-system";
 import type { AddServer, AgentEgressMode, PersistedEvent, ProjectSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
 import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, DEFAULT_SECRET_RECIPIENTS, EPIC_NOTES_MAX, egressAllows, egressProblem, SECRET_RECIPIENTS_REQUIRED, secretHint, secretNameProblem } from "@dude/domain";
-import { EventTypes, PULL_REQUEST_OPEN, STOP_AGENTS_FIRST, UNARCHIVE_FIRST, closedBy, lifecycleBusy, lifecycleEnded } from "@dude/domain";
+import { EventTypes, PULL_REQUEST_OPEN, STOP_AGENTS_FIRST, TERMINAL_RUN_STATUSES, UNARCHIVE_FIRST, closedBy, lifecycleBusy, lifecycleEnded } from "@dude/domain";
 import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
+import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type StopRequest, type StopResult, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
@@ -422,6 +422,25 @@ export class FixtureClient extends ApiClient {
     this.#recovery = null;
     this.#task = { ...this.#task, status: "running" };
     return { action };
+  }
+
+  // Stop, as the orchestrator does it (api/stop.go): every live Run aborted, the task aborted; or the next attempt started.
+  override async stopTask(_taskId: string, stop: StopRequest): Promise<StopResult> {
+    await wait(150);
+    const t = this.#task;
+    if (["received", "intake", "awaiting_confirmation", "queued", "done", "aborted", "failed"].includes(t.status)) {
+      throw new ApiError(409, "not_in_progress", `task ${t.id} is ${t.status}: only a task in progress can be stopped`);
+    }
+    const now = new Date().toISOString();
+    const runs = t.runs.map((r) => (TERMINAL_RUN_STATUSES.includes(r.status) ? r : { ...r, status: "aborted" as const, endedAt: now }));
+    if (!stop.andRestart) {
+      this.#task = { ...t, runs, status: "aborted" };
+      this.#recovery = { taskId: t.id, actions: ["resume", "retry", "restart"], attempt: Math.max(1, ...runs.map((r) => r.attempt)), keptUntil: null };
+      return { taskId: t.id, status: "aborted" };
+    }
+    const attempt = Math.max(1, ...runs.map((r) => r.attempt)) + 1;
+    this.#task = { ...t, runs, status: "running", decider: stop.decider ?? t.decider };
+    return { taskId: t.id, status: "running", attempt };
   }
 
   // Lifecycle, as the orchestrator answers it (delivery/lifecycle_write.go): the same refusals, by code.
