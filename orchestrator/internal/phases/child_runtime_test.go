@@ -218,6 +218,22 @@ func TestAWriterChildAdmittedBeforeAPullRequestOpenedDoesNotStart(t *testing.T) 
 			if status != "failed" || !strings.Contains(reason, "a pull request is open on this branch") || !strings.Contains(reason, "start_phase fix") {
 				t.Errorf("the writer child: %s %q, want failed saying a pull request is open", status, reason)
 			}
+			// Its conductor is told why, not only that it failed.
+			store := &delivery.Store{DB: w.s.DB}
+			if n, err := settleCollectedChildren(w.ctx, store); err != nil || n != 1 {
+				t.Fatalf("settled %d %v", n, err)
+			}
+			if n, err := store.EnqueueChildResults(w.ctx); err != nil || n != 1 {
+				t.Fatalf("delivered %d %v", n, err)
+			}
+			var text string
+			if err := w.owner.QueryRow(w.ctx, `SELECT d.text FROM child_result_outbox o JOIN directives d ON d.id = o.directive_id
+				WHERE o.child_run_id = $1`, r.ID).Scan(&text); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(text, `"status": "failed"`) || !strings.Contains(text, "a pull request is open on this branch") {
+				t.Errorf("the conductor's result: %s", text)
+			}
 		})
 	}
 }
