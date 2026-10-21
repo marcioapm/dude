@@ -248,22 +248,26 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 - **What an open pull request may show.** While a pull request is open, its
   branch moves only by `promoteCandidate`, to a candidate head that was
   reviewed and, when the policy tests, tested. This holds for a pull request
-  fix, an open pull request's integration, and a merge of the base before
-  another repository's pull request opens while one is already open (the
-  integration fixer may change that one too). Deliberately outside it are
-  base merges GitHub makes: dude's `update-branch` when a pull request is
-  behind, a person's **Update branch**, and a promotion merged onto a head
-  GitHub already merged the base into. For those, GitHub's "Dismiss stale
-  pull request approvals when new commits are pushed" is the recommended
-  branch protection setting. A clean base merge GitHub makes before the
-  pull request opens (`syncBeforePR`) counts as reviewed: it is tested, and
-  the pull request opens at it. A person's Chat message may lead the
+  fix, an open pull request's integration, and the integration fixer of a
+  base merge that conflicts before another repository's pull request opens
+  while one is already open (that fixer may change the open one too).
+  Deliberately outside it are base merges GitHub makes: dude's
+  `update-branch` when a pull request is behind, a person's **Update
+  branch**, and a promotion merged onto a head GitHub already merged the
+  base into. For those, GitHub's "Dismiss stale pull request approvals when
+  new commits are pushed" is the recommended branch protection setting. A
+  clean base merge GitHub makes before the pull request opens
+  (`syncBeforePR`) counts as reviewed: it is tested, and the pull request
+  opens at it. A person's Chat message may lead the
   conductor to request reviewers, re-run checks, mark a pull request ready
-  or resolve threads, within the conductor's limits; it can never merge or
-  update the branch. The remaining gaps are being closed: an adopted pull
-  request's first loop (#202), a review or test the conductor starts at the
-  pull request wait (#203), and a conductor's publish or writer child while
-  a pull request is open (#204).
+  or resolve threads, within the conductor's limits; it can never merge a
+  pull request or press **Update branch**, and its publish while a pull
+  request is open is #204, below. The remaining gaps are being closed: an
+  adopted pull request's first loop (#202), a review or test the conductor
+  starts at the pull request wait (#203), a conductor's publish or writer
+  child while a pull request is open (#204), and a fix after a failed test
+  of a clean base merge before a pull request opened, while another
+  repository's is open.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.
