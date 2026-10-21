@@ -147,8 +147,59 @@ func TestPullRequestActionsRefuseAMemberWhoIsNotOwnerOrAdmin(t *testing.T) {
 	}
 }
 
-// The task's owner, and an admin who is not, may act: one check guards the
-// four actions, so one action stands for them.
+// githubActed is how many times GitHub did what action asks.
+func (w *prActionWorld) githubActed(action string) int {
+	w.t.Helper()
+	var n int
+	w.gh.Set(func(s *fakegithub.Server) {
+		switch action {
+		case "merge":
+			n = len(s.Merges)
+		case "update-branch":
+			n = len(s.Updates)
+		case "rerun-failed":
+			n = len(s.JobsRerun) + len(s.Rerequested)
+		case "reviewers":
+			n = len(s.ReviewRequests)
+		default:
+			w.t.Fatalf("no count for %s", action)
+		}
+	})
+	return n
+}
+
+// An admin who does not own the task may take each action, and GitHub does it.
+func TestPullRequestActionsAllowAnAdminEach(t *testing.T) {
+	for _, c := range prActionBodies {
+		t.Run(c.action, func(t *testing.T) {
+			w := newPRActionWorld(t)
+			if code, errCode, msg := w.act("per_admin", c.action, c.body); code != http.StatusOK {
+				t.Fatalf("%d %s %s", code, errCode, msg)
+			}
+			if n := w.githubActed(c.action); n == 0 {
+				t.Errorf("GitHub did not %s", c.verb)
+			}
+		})
+	}
+}
+
+// Who may act is answered before whether the pull request still can be:
+// a non-owner learns only that it is not theirs.
+func TestPullRequestActionsOnAMergedPullRequestRefuseANonOwnerFirst(t *testing.T) {
+	w := newPRActionWorld(t)
+	w.exec(`UPDATE pull_requests SET state = 'merged' WHERE id = 'pr_one'`)
+	if code, errCode, _ := w.act("per_member", "reviewers", `{"logins":["cy"]}`); code != http.StatusForbidden || errCode != "not_owner" {
+		t.Errorf("a member: %d %s, want 403 not_owner", code, errCode)
+	}
+	if code, errCode, msg := w.act("per_owner", "reviewers", `{"logins":["cy"]}`); code != http.StatusConflict || msg != "the pull request is merged" {
+		t.Errorf("the owner: %d %s %q, want 409 %q", code, errCode, msg, "the pull request is merged")
+	}
+	if reqs := w.gh.Requests(); len(reqs) != 0 {
+		t.Errorf("GitHub was asked %v", reqs)
+	}
+}
+
+// The task's owner and an admin who is not may each act, and each is recorded.
 func TestPullRequestActionsAllowTheOwnerAndAnAdmin(t *testing.T) {
 	w := newPRActionWorld(t)
 	for i, person := range []string{"per_owner", "per_admin"} {
@@ -175,6 +226,9 @@ func TestPullRequestActionsOnAnUnownedTaskAreTheAdmins(t *testing.T) {
 	}
 	if reqs := w.gh.Requests(); len(reqs) != 0 {
 		t.Fatalf("GitHub was asked %v", reqs)
+	}
+	if n := w.actions(); n != 0 {
+		t.Fatalf("%d actions recorded for a refused request", n)
 	}
 	if code, errCode, msg := w.act("per_admin", "reviewers", `{"logins":["cy"]}`); code != http.StatusOK {
 		t.Fatalf("an admin on an unowned task: %d %s %s", code, errCode, msg)
