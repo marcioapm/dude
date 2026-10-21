@@ -137,7 +137,7 @@ func TestIntegrationRoundsStayFresh(t *testing.T) {
 			for _, phase := range []string{PhaseReview, PhaseTest, PhaseImplement, PhaseFix, PhaseSimplify} {
 				p := DefaultPolicy()
 				p.ResumeRounds = enabled
-				if got, want := RoundContinues(p, phase, integration), enabled && !integration && (phase == PhaseReview || phase == PhaseTest); got != want {
+				if got, want := RoundContinues(p, phase, integration), enabled && !integration && (phase == PhaseReview || phase == PhaseTest || phase == PhaseFix); got != want {
 					t.Fatalf("%s enabled=%v integration=%v: %v", phase, enabled, integration, got)
 				}
 			}

@@ -1,4 +1,4 @@
-An independent child finished. Read its report and artifacts as needed. This result takes no delivery decision and authorizes no further publication; the commits listed under `commits` are already pushed to the task's branch, and so are on any pull request open from it.
+An independent child finished. Read its report and artifacts as needed. This result takes no delivery decision and authorizes no further publication; the commits listed under `commits` are already pushed to the task's branch.
 
 {{.Summary}}{{with .Reply}}
 

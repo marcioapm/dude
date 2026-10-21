@@ -56,9 +56,12 @@ def test_delivery_opens_a_pull_request(client: ApiClient, forge_project: dict, f
     log = fake_github.branch_log(pr["headBranch"])
     assert len(log) == 4, log
 
-    # Each phase pushed a branch of its own, and dude tidied them away.
+    # Each phase pushed a branch of its own, and dude tidied them away, but
+    # the writers': the fixer took the implementer's Run over and pushed on
+    # its branch, which stays while that Run is kept for a next fix round.
+    implementer = next(r for r in client.task_runs(task["id"]) if r["phase"] == "implement")
     leftovers = [b for b in fake_github.branches() if "/run-" in b]
-    assert leftovers == [], leftovers
+    assert leftovers == [f"dude/{task['id']}/run-{implementer['id']}"], leftovers
 
     wait_until(
         lambda: _task(client, task["id"])["status"] == "review",

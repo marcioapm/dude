@@ -99,10 +99,45 @@ func refuseWriterAdmissionTx(ctx context.Context, tx pgx.Tx, taskID, excludeRunI
 	if publishing {
 		return refuseText(rChildTaskPublishing)
 	}
-	if d != nil && d.State.Candidate != nil {
+	if d == nil {
+		return nil
+	}
+	if d.State.Candidate != nil {
 		return refusef("%s", refusedCandidate)
 	}
-	return nil
+	return refusePullRequestOpenTx(ctx, tx, taskID, d)
+}
+
+// refusePullRequestOpenTx is pullRequestOpenTx as a Refusal.
+func refusePullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) error {
+	why, err := pullRequestOpenTx(ctx, tx, taskID, d)
+	if err == nil && why != "" {
+		err = refuseText(why)
+	}
+	return err
+}
+
+// WriterChildRefusedTx is why a conductor's writer child admitted earlier
+// may not start now, "" when it may (pullRequestOpenTx).
+func WriterChildRefusedTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return "", err
+	}
+	return pullRequestOpenTx(ctx, tx, taskID, d)
+}
+
+// pullRequestOpenTx is why nothing but promotion may write the delivery's
+// task branch now, "" when it may: a pull request is open on it, and only
+// a candidate reviewed (and tested) reaches it. Open (or draft) is as the
+// pull request syncer last recorded it.
+func pullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (string, error) {
+	var open bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft'))`, taskID, d.Branch(taskID)).Scan(&open); err != nil || !open {
+		return "", err
+	}
+	return rPullRequestOpenOnBranch, nil
 }
 
 // ConductPublish is publish: the task's live conductor asks for what it
@@ -163,6 +198,9 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	}
 	if d.State.Candidate != nil {
 		return "", refusef("%s", refusedCandidate)
+	}
+	if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
+		return "", err
 	}
 	id := ids.New("pub")
 	if _, err := tx.Exec(ctx, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, message,
@@ -289,11 +327,12 @@ func claimed(n int) string { return fmt.Sprintf("claim_token = $%d", n) }
 
 // publishEligibleTx is why the publish may not go on now, "" when it may:
 // what ConductPublish checked, again — its conductor live and not ending,
-// its checkout writable, it still deciding, no other writer, and the
-// delivery and attempt it was asked on still the task's, not ended. With
-// lock, the task's Chat lock, then the conductor's Run, then the
-// delivery's row are held for the rest of tx: what ending or replacing the
-// conductor, changing the decider and starting a writer take.
+// its checkout writable, it still deciding, no other writer, no candidate
+// and no pull request open on the task branch, and the delivery and
+// attempt it was asked on still the task's, not ended. With lock, the
+// task's Chat lock, then the conductor's Run, then the delivery's row are
+// held for the rest of tx: what ending or replacing the conductor,
+// changing the decider and starting a writer take.
 func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (*Delivery, string, error) {
 	runLock, load := "", ReadDelivery
 	if lock {
@@ -344,7 +383,8 @@ func publishEligibleTx(ctx context.Context, tx pgx.Tx, p PublishOf, lock bool) (
 		// the pull request before the fix being checked does, unchecked.
 		return d, refusedCandidate, nil
 	}
-	return d, "", nil
+	why, err := pullRequestOpenTx(ctx, tx, p.TaskID, d)
+	return d, why, err
 }
 
 // PublishEligibleTx is why the publish may not go on now, "" when it may

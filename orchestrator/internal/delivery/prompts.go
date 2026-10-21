@@ -353,35 +353,7 @@ func Prompt(phase string, in PromptInput) string {
 		}
 
 	case PhaseFix:
-		if len(in.Findings) > 0 {
-			add(render(reviewFindingsTmpl, in.Findings))
-		}
-		if len(in.PRFeedback) > 0 {
-			type item struct {
-				forge.ActionableFeedback
-				Tools bool
-			}
-			var items, bots []item
-			for _, f := range in.PRFeedback {
-				if f.Source == forge.SourceBot {
-					bots = append(bots, item{f, in.Tools})
-					continue
-				}
-				items = append(items, item{f, in.Tools})
-			}
-			if len(items) > 0 {
-				add(render(prFeedbackTmpl, items))
-			}
-			if len(bots) > 0 {
-				add(render(prFeedbackBotsTmpl, bots))
-			}
-			if in.Tools {
-				add(fixerGitHubNote)
-			}
-		}
-		if len(in.Feedback) > 0 {
-			add(FeedbackText(in.Feedback, in.CLI))
-		}
+		add(fixSections(in)...)
 		add(render(taskForContextTmpl, in.task()))
 
 	case PhaseSimplify:
@@ -424,4 +396,41 @@ func Prompt(phase string, in PromptInput) string {
 		add(in.Machine)
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+// fixSections are what a fixer is given to fix, in its prompt and in a
+// resumed fixer's round message alike: review findings, pull request
+// feedback, people's feedback.
+func fixSections(in PromptInput) []string {
+	var sections []string
+	if len(in.Findings) > 0 {
+		sections = append(sections, render(reviewFindingsTmpl, in.Findings))
+	}
+	if len(in.PRFeedback) > 0 {
+		type item struct {
+			forge.ActionableFeedback
+			Tools bool
+		}
+		var items, bots []item
+		for _, f := range in.PRFeedback {
+			if f.Source == forge.SourceBot {
+				bots = append(bots, item{f, in.Tools})
+				continue
+			}
+			items = append(items, item{f, in.Tools})
+		}
+		if len(items) > 0 {
+			sections = append(sections, render(prFeedbackTmpl, items))
+		}
+		if len(bots) > 0 {
+			sections = append(sections, render(prFeedbackBotsTmpl, bots))
+		}
+		if in.Tools {
+			sections = append(sections, fixerGitHubNote)
+		}
+	}
+	if len(in.Feedback) > 0 {
+		sections = append(sections, FeedbackText(in.Feedback, in.CLI))
+	}
+	return sections
 }

@@ -227,6 +227,100 @@ func TestAFastForwardSyncMovesOnlyWhenNothingIsLost(t *testing.T) {
 	})
 }
 
+// A writer's checkout after it pushed is where the agent committed: on
+// the branch it was checked out on, or detached. A fast-forward sync to a
+// later sha moves only the detached one, as lux's.
+func TestAWritersCheckoutFastForwardsToAShaOnlyWhenDetached(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, want string
+		detached   bool
+	}{
+		{"on its branch: kept", lux.SyncKept, false},
+		{"detached: fast-forwarded", "fast-forward", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			gitInit(t, repo)
+			ref := "main"
+			if tc.detached {
+				ref = gitIn(t, repo, "rev-parse", "main")
+			}
+			fake := fakelux.New(repo, "k", nil)
+			_, c, runID := startedWith(t, fake, lux.Spec{Image: lux.Image{Ref: "x"}, Workload: lux.Workload{Adapter: "generic"},
+				Git: &lux.Git{Repositories: []lux.Repository{{Name: "app", URL: "file://" + repo, Ref: ref}},
+					Push: &lux.Push{Branch: "pub"}}})
+			work, err := fake.Checkout(runID, "app")
+			if err != nil {
+				t.Fatal(err)
+			}
+			commitFile(t, work, "mine\n", "mine")
+			if res := pushN(t, c, runID, 1); res.Status != "pushed" {
+				t.Fatalf("push: %+v", res)
+			}
+			// Someone else's commit on top of the push (a simplifier's).
+			gitIn(t, repo, "checkout", "-q", "pub")
+			gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "S")
+			gitIn(t, repo, "checkout", "-q", "main")
+			target := gitIn(t, repo, "rev-parse", "pub")
+			before := gitIn(t, work, "rev-parse", "HEAD")
+			if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: target, Mode: lux.SyncFastForward}}, nil); err != nil {
+				t.Fatal(err)
+			}
+			ev := lastSync(t, c, runID)
+			if ev["status"] != tc.want || ev["behind"] != 1.0 && tc.want == lux.SyncKept {
+				t.Fatalf("git.sync %v, want %s", ev, tc.want)
+			}
+			at := gitIn(t, work, "rev-parse", "HEAD")
+			if tc.detached && at != target || !tc.detached && (at != before || gitIn(t, work, "symbolic-ref", "HEAD") != "refs/heads/main") {
+				t.Fatalf("HEAD at %s (was %s), target %s", at, before, target)
+			}
+		})
+	}
+}
+
+// A checkout first made after the Run pushed a scripted commit is cloned
+// at the ref's current tip. When main gained a file after the push, that
+// file is in the clone's HEAD and absent from the pushed commit: the
+// checkout is left exactly at the pushed commit, so a sync to it is
+// up-to-date, as lux reports for the checkout the agent committed in.
+func TestACheckoutMadeAfterThePushIsAtThePushedCommitWhenMainGainedAFile(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	gitInit(t, repo)
+	fake := fakelux.New(repo, "k", func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Commit: map[string]string{"mine.txt": "mine\n"}, Hang: true}
+	})
+	_, c, runID := startedWith(t, fake, lux.Spec{Image: lux.Image{Ref: "x"}, Workload: lux.Workload{Adapter: "opencode", Prompt: "go"},
+		Git: &lux.Git{Repositories: []lux.Repository{{Name: "app", URL: "file://" + repo, Ref: "main"}},
+			Push: &lux.Push{Branch: "pub"}}})
+	res := pushN(t, c, runID, 1)
+	if res.Status != "pushed" {
+		t.Fatalf("push: %+v", res)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "late.txt"), []byte("late\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", "late.txt")
+	gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "late")
+	work, err := fake.Checkout(runID, "app")
+	if err != nil {
+		t.Fatalf("checkout after main gained a file: %v", err)
+	}
+	if got := gitIn(t, work, "rev-parse", "HEAD"); got != res.Commit {
+		t.Fatalf("HEAD %s, want the pushed %s", got, res.Commit)
+	}
+	if st := gitIn(t, work, "status", "--porcelain"); st != "" {
+		t.Fatalf("checkout not at the pushed commit: %q", st)
+	}
+	if err := c.SyncRun(ctx, runID, "s1", []lux.SyncRef{{Repo: "app", Ref: res.Commit, Mode: lux.SyncFastForward}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ev := lastSync(t, c, runID); ev["status"] != "up-to-date" || ev["ahead"] != 0.0 || ev["behind"] != 0.0 || ev["dirty"] != nil {
+		t.Errorf("git.sync %v, want up-to-date", ev)
+	}
+}
+
 // A lux from before sync modes refuses a safe mode with a 409, on a sync
 // and a resume, and still takes move.
 func TestALuxWithoutSyncModesRefusesThem(t *testing.T) {

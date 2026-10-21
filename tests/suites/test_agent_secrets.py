@@ -55,9 +55,19 @@ def _lux(env, path: str) -> dict:
     return res.json()
 
 
+# The lux Run a run was submitted as: its own, or, once a next round took it
+# over (continues_how = resume), the one the latest round holds. lux keeps
+# the spec it was submitted with.
+_SUBMITTED = """WITH RECURSIVE chain AS (
+    SELECT id, lux_run_id, 0 AS depth FROM runs WHERE id = %s
+    UNION ALL
+    SELECT r.id, r.lux_run_id, c.depth + 1 FROM runs r JOIN chain c ON r.continues_run_id = c.id AND r.continues_how = 'resume')
+  SELECT lux_run_id FROM chain WHERE lux_run_id IS NOT NULL ORDER BY depth DESC LIMIT 1"""
+
+
 def _lux_spec(client: ApiClient, env, run_id: str) -> dict:
-    lux_run = wait_until(lambda: (rows := query(env.owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (run_id,)))
-                         and rows[0]["lux_run_id"], timeout=60, message=f"run {run_id} never reached lux")
+    lux_run = wait_until(lambda: (rows := query(env.owner_dsn, _SUBMITTED, (run_id,))) and rows[0]["lux_run_id"],
+                         timeout=60, message=f"run {run_id} never reached lux")
     return _lux(env, f"/v1/runs/{lux_run}")["spec"]
 
 

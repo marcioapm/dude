@@ -55,9 +55,18 @@ const (
 const EvRunContinues = "run.continues"
 
 // RoundContinues says whether a phase's next round goes on from its last:
-// a reviewer's or tester's, outside an integration.
+// a reviewer's, tester's or fixer's, outside an integration.
 func RoundContinues(p Policy, phase string, integration bool) bool {
-	return p.ResumeRounds && !integration && (phase == PhaseReview || phase == PhaseTest)
+	return p.ResumeRounds && !integration && len(goesOnFrom[phase]) > 0
+}
+
+// goesOnFrom is, per phase whose rounds go on, the phases its predecessor
+// may be of: a fix goes on from the attempt's last writer, its previous
+// fixer or else its implementer.
+var goesOnFrom = map[string][]string{
+	PhaseReview: {PhaseReview},
+	PhaseTest:   {PhaseTest},
+	PhaseFix:    {PhaseFix, PhaseImplement},
 }
 
 // notIntegration (SQL, over runs): not an integration review, which is
@@ -65,23 +74,31 @@ func RoundContinues(p Policy, phase string, integration bool) bool {
 const notIntegration = `NOT (pr_feedback @> '[{"source":"integration"}]')`
 
 // Predecessor is the Run a next round would go on from, and where its
-// checkouts were.
+// checkouts were when its round ended.
 type Predecessor struct {
 	ID       string
 	BaseRefs map[string]string
 }
 
-// PreviousRound is the latest completed Run of phase and category in the
-// task's attempt (0: its highest), nil for none.
+// roundEnd (SQL, over runs r): where a Run's checkouts were when its round
+// ended: where they started, each repository it published moved to its
+// head.
+const roundEnd = `(r.base_refs || COALESCE((SELECT jsonb_object_agg(h.key, h.value->>'sha')
+	FROM jsonb_each(CASE WHEN jsonb_typeof(r.heads) = 'object' THEN r.heads ELSE '{}' END) h
+	WHERE COALESCE(h.value->>'sha', '') <> ''), '{}'::jsonb))`
+
+// PreviousRound is the latest completed Run phase's next round goes on
+// from (goesOnFrom), of category in the task's attempt (0: its highest),
+// nil for none.
 func (s *Store) PreviousRound(ctx context.Context, org, taskID string, attempt int, phase, category string) (*Predecessor, error) {
 	var p *Predecessor
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var found Predecessor
-		err := tx.QueryRow(ctx, `SELECT id, base_refs FROM runs
-			WHERE task_id = $1 AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1), 1)
-			  AND phase = $3::run_phase AND category IS NOT DISTINCT FROM $4 AND status = 'completed'
-			  AND replaced_by IS NULL AND source_kind IS NULL AND `+notIntegration+`
-			ORDER BY ended_at DESC, id DESC LIMIT 1`, taskID, attempt, phase, db.Nullable(category)).Scan(&found.ID, &found.BaseRefs)
+		err := tx.QueryRow(ctx, `SELECT r.id, `+roundEnd+` FROM runs r
+			WHERE r.task_id = $1 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1), 1)
+			  AND r.phase = ANY($3::run_phase[]) AND r.category IS NOT DISTINCT FROM $4 AND r.status = 'completed'
+			  AND r.replaced_by IS NULL AND r.source_kind IS NULL AND `+notIntegration+`
+			ORDER BY r.ended_at DESC, r.id DESC LIMIT 1`, taskID, attempt, goesOnFrom[phase], db.Nullable(category)).Scan(&found.ID, &found.BaseRefs)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -162,7 +179,7 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	c := in.Continue
 	in.Continue = nil
 	var p predecessorRow
-	err := tx.QueryRow(ctx, `SELECT r.id, r.base_refs, r.phase::text, COALESCE(r.category, ''),
+	err := tx.QueryRow(ctx, `SELECT r.id, `+roundEnd+`, r.phase::text, COALESCE(r.category, ''),
 			r.keep AND COALESCE(r.kept_until > now(), false) AND r.lux_run_id IS NOT NULL
 			  AND r.lux_stop_reason IS DISTINCT FROM 'cancel' AND r.artifacts_due_at IS NULL,
 			r.keep AND COALESCE(r.kept_until > now(), false) AND r.lux_run_id IS NOT NULL
@@ -174,7 +191,7 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 		FOR UPDATE OF r`, c.Predecessor, in.TaskID, collectWait.Seconds()).
 		Scan(&p.ID, &p.BaseRefs, &p.Phase, &p.Category, &p.Kept, &p.Collecting, &p.Model, &p.Tier, &p.Effort, &p.Harness,
 			&p.ProjectModels, &p.OrgModels)
-	if db.IsNotFound(err) || err == nil && (p.Phase != in.Phase || p.Category != in.Category) {
+	if db.IsNotFound(err) || err == nil && (!slices.Contains(goesOnFrom[in.Phase], p.Phase) || p.Category != in.Category) {
 		return createPhaseRunTx(ctx, tx, org, in)
 	}
 	if err != nil {
@@ -194,25 +211,79 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	if err != nil {
 		return "", err
 	}
-	if p.Kept && sameSpec && in.Tier == "" {
-		return handOverTx(ctx, tx, org, in, p)
+	moved, err := headMovedTx(ctx, tx, in, p)
+	if err != nil {
+		return "", err
 	}
-	if p.Collecting && sameSpec && in.Tier == "" {
-		// Its last exit's files are still being collected onto it: the
-		// handover waits for them, a little.
-		return "", workflow.Wait{After: time.Second, Why: "the previous round's files are still being collected"}
+	if sameSpec && !moved && in.Tier == "" {
+		if p.Kept {
+			return handOverTx(ctx, tx, org, in, p)
+		}
+		if p.Collecting {
+			// Its last exit's files are still being collected onto it: the
+			// handover waits for them, a little.
+			return "", workflow.Wait{After: time.Second, Why: "the previous round's files are still being collected"}
+		}
 	}
 	if err := releaseRunTx(ctx, tx, p.ID); err != nil {
 		return "", err
+	}
+	switch {
+	case !sameSpec:
+		in.freshReason = "spec_changed"
+	case moved:
+		in.freshReason = "head_moved"
 	}
 	in.Replays = p.ID
 	return createPhaseRunTx(ctx, tx, org, in)
 }
 
+// headMovedTx says whether a writer predecessor's checkout cannot be
+// fast-forwarded to the round's head: lux moves a checkout to a commit
+// only when it is detached, and a lux Run first submitted with no commit
+// for a repository (the implementer of new work) checked that repository
+// out on its branch. Such a checkout is synced only when the head is still
+// where the predecessor's round ended.
+func headMovedTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (bool, error) {
+	if !Publishes[p.Phase] {
+		return false, nil
+	}
+	// The resumed chain's first row is the one its lux Run was submitted for.
+	var submitted map[string]string
+	if err := tx.QueryRow(ctx, `WITH RECURSIVE chain AS (
+			SELECT id, continues_run_id, continues_how, base_refs FROM runs WHERE id = $1
+			UNION ALL
+			SELECT r.id, r.continues_run_id, r.continues_how, r.base_refs FROM runs r JOIN chain c ON r.id = c.continues_run_id
+			WHERE c.continues_how = 'resume')
+		SELECT base_refs FROM chain WHERE continues_how IS DISTINCT FROM 'resume'`, p.ID).Scan(&submitted); err != nil {
+		return false, err
+	}
+	for repo, head := range in.BaseRefs {
+		if submitted[repo] == "" && head != "" && head != p.BaseRefs[repo] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SecretRecipients is the project-secret recipient a Run is, by the
+// settings role it runs as; "" for a Run that is given no project secret.
+var SecretRecipients = map[string]string{
+	"implementer": "implementer",
+	"fixer":       "fixer",
+	"simplifier":  "simplifier",
+	"reviewer":    "reviewer",
+	"qa_browser":  "tester",
+}
+
 // sameSpecTx says whether the predecessor runs on what a fresh Run of the
-// role would now: lux keeps a Run's model, tier, effort and harness from
-// its submit. Its project secrets are checked at its resume (phases'
-// roundSecrets), where the recipient a phase is given them as is known.
+// role would now: lux keeps a Run's model, tier, effort, harness and the
+// names of its project secrets from its submit, and its instruction file.
+// A fixer going on from the implementer runs on the implementer's: the
+// same only while the fixer's settings resolve to it, its recipient is
+// given the same secret names, and it has no saved prompt or notes of its
+// own. Grants are not compared: capabilities.Resolve is the role's
+// defaults alone, and a fixer's are the implementer's (toolRoleOf).
 func sameSpecTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (bool, error) {
 	role := PromptRoleFor(in.Phase, RoleForPhase[in.Phase])
 	settings := ResolveRole(role, p.ProjectModels, p.OrgModels)
@@ -228,7 +299,32 @@ func sameSpecTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (
 		// The scripted agent's label: it stands in for OpenCode.
 		harness = HarnessOpenCode
 	}
-	return tier.Model == p.Model && tier.Name == p.Tier && tier.Effort == p.Effort && harness == settings.HarnessName(), nil
+	if tier.Model != p.Model || tier.Name != p.Tier || tier.Effort != p.Effort || harness != settings.HarnessName() {
+		return false, nil
+	}
+	var same bool
+	if err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT s.name FROM project_secrets s WHERE s.project_id = r.project_id AND $2 = ANY(s.recipients) ORDER BY s.name)
+			= ARRAY(SELECT n FROM unnest(r.project_secret_names) n ORDER BY n)
+		FROM runs r WHERE r.id = $1`, p.ID, SecretRecipients[role]).Scan(&same); err != nil || !same {
+		return false, err
+	}
+	was := PromptRoleFor(p.Phase, RoleForPhase[p.Phase])
+	if was == role {
+		return true, nil
+	}
+	if ResolveRole(was, p.ProjectModels, p.OrgModels).Context != settings.Context {
+		return false, nil
+	}
+	// The fixer's current prompts, as LoadPrompts selects them: the latest
+	// version of each layer. An empty org body is none (instructionFile
+	// drops it), and so is a project's empty add.
+	var saved bool
+	err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT btrim(v.body) <> '' FROM prompt_versions v
+			WHERE v.role = $2 AND v.project_id IS NULL ORDER BY v.created_at DESC, v.id DESC LIMIT 1), false)
+		OR COALESCE((SELECT v.mode = 'replace' OR btrim(v.body) <> '' FROM prompt_versions v JOIN runs r ON r.id = $1
+			WHERE v.role = $2 AND v.project_id = r.project_id ORDER BY v.created_at DESC, v.id DESC LIMIT 1), false)`,
+		p.ID, role).Scan(&saved)
+	return !saved, err
 }
 
 // releaseRunTx lets a kept Run go: RetireCompleted, or the syncer's end,
@@ -273,7 +369,7 @@ func handOverTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun, p prede
 		FROM runs o WHERE n.id = $1 AND o.id = $2`, created, p.ID, luxRunID); err != nil {
 		return "", err
 	}
-	text, err := roundMessageTx(ctx, tx, in, p.BaseRefs)
+	text, err := roundMessageTx(ctx, tx, in, p)
 	if err != nil {
 		return "", err
 	}
@@ -300,55 +396,141 @@ func continuesEventTx(ctx context.Context, tx pgx.Tx, ref RunRef, from, how stri
 
 // roundMessageTx is a resumed Run's next input: what changed since its
 // last round, per repository from its predecessor's checkout to the new
-// head; the findings it judges (in.FindingIDs, answered by position, as a
-// fresh Run's prompt lists them); and, for a reviewer, how it reports.
-func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, from map[string]string) (string, error) {
+// head; then, for a reviewer or tester, the findings it judges
+// (in.FindingIDs, answered by position, as a fresh Run's prompt lists
+// them) and how it reports; for a fixer, what it fixes (FixRoundMessage).
+func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (string, error) {
 	findings, err := findingsInOrderTx(ctx, tx, in.FindingIDs)
 	if err != nil {
 		return "", err
 	}
-	reason := ""
-	if in.ReviewRange != nil {
-		reason = rangeReason[in.ReviewRange.Of]
-	}
-	var lastFix []FixRange
-	if in.Phase == PhaseReview {
-		if lastFix, err = LastFixTx(ctx, tx, in.ParentRunID); err != nil {
+	var message string
+	if in.Phase == PhaseFix {
+		people, err := FeedbackItemsTx(ctx, tx, in.TaskID, in.FeedbackItemIDs)
+		if err != nil {
 			return "", err
 		}
+		// The predecessor's tools are the new row's: a token was made for
+		// it only when dude serves them (phases' toolsToken); the CLI is
+		// there only when lux serves them in the container, as a fresh
+		// fixer's prompt has it.
+		var tools bool
+		if err := tx.QueryRow(ctx, `SELECT mcp_token_hash IS NOT NULL FROM runs WHERE id = $1`, p.ID).Scan(&tools); err != nil {
+			return "", err
+		}
+		message = FixRoundMessage(p.BaseRefs, in.BaseRefs, p.Phase != PhaseFix,
+			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools && in.toolsService})
+		since, err := sinceLastRoundTx(ctx, tx, in.TaskID, p.ID)
+		if err != nil {
+			return "", err
+		}
+		if since != "" {
+			message += "\n\n" + since
+		}
+	} else {
+		reason := ""
+		if in.ReviewRange != nil {
+			reason = rangeReason[in.ReviewRange.Of]
+		}
+		var lastFix []FixRange
+		if in.Phase == PhaseReview {
+			if lastFix, err = LastFixTx(ctx, tx, in.ParentRunID); err != nil {
+				return "", err
+			}
+		}
+		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, lastFix)
 	}
-	message := RoundMessage(in.Phase, from, in.BaseRefs, reason, findings, lastFix)
 	if note := strings.TrimSpace(in.ConductorNote); note != "" {
 		message += "\n\n" + render(fromConductorTmpl, note)
 	}
 	return message, nil
 }
 
-// RoundMessage renders contracts/resume/round: from and to are each
-// repository's commit at the last round and now; lastFix, the commits of
-// the fix this round follows (LastFixTx).
-func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, lastFix []FixRange) string {
-	type rng struct {
-		Repo, From string
-		Named      bool
+// sinceLastRoundTx is what a resumed writer was not told and a fresh one's
+// prompt carries (its task section): the task as it is now, when its
+// title, goal or criteria were edited after the predecessor's round ended
+// (as ResumeKeptTx tells it), and what people decided since; "" for
+// neither.
+func sinceLastRoundTx(ctx context.Context, tx pgx.Tx, taskID, predecessor string) (string, error) {
+	var title, goal string
+	var criteria []byte
+	var edited bool
+	if err := tx.QueryRow(ctx, `SELECT title, goal, acceptance_criteria, EXISTS (SELECT 1 FROM events e
+			WHERE e.task_id = t.id AND e.event_type = 'task.updated'
+			  AND (e.payload ? 'title' OR e.payload ? 'goal' OR e.payload ? 'acceptanceCriteria')
+			  AND e.occurred_at > (SELECT ended_at FROM runs WHERE id = $2))
+		FROM tasks t WHERE t.id = $1`, taskID, predecessor).Scan(&title, &goal, &criteria, &edited); err != nil {
+		return "", err
 	}
-	var ranges []rng
+	rows, err := tx.Query(ctx, `SELECT q.prompt, q.answer FROM questions q
+		WHERE q.task_id = $1 AND q.status = 'answered' AND q.answer IS NOT NULL
+		  AND q.answered_at > (SELECT ended_at FROM runs WHERE id = $2) ORDER BY q.answered_at`, taskID, predecessor)
+	if err != nil {
+		return "", err
+	}
+	decisions, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Decision])
+	if err != nil {
+		return "", err
+	}
+	var parts []string
+	if edited {
+		parts = append(parts, changedTask(title, goal, criteria))
+	}
+	if len(decisions) > 0 {
+		// The task section's decisions alone.
+		parts = append(parts, strings.TrimSpace(PromptInput{Decisions: decisions}.task()))
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// FixRoundMessage renders contracts/resume/fix-round: from and to are each
+// repository's commit at the writer's last push and now; contract, a
+// writer that was not a fixer (the implementer), whose instruction file
+// lacks the fix contract; in, what the round fixes, as Prompt(PhaseFix)
+// gives it.
+func FixRoundMessage(from, to map[string]string, contract bool, in PromptInput) string {
+	c := ""
+	if contract {
+		c = fixContract
+	}
+	return render(fixRoundTmpl, struct {
+		Ranges   []roundRange
+		Contract string
+		Sections []string
+	}{roundRanges(from, to), c, fixSections(in)})
+}
+
+type roundRange struct {
+	Repo, From string
+	Named      bool
+}
+
+// roundRanges are the repositories whose commit moved from from to to.
+func roundRanges(from, to map[string]string) []roundRange {
+	var ranges []roundRange
 	for _, repo := range slices.Sorted(maps.Keys(to)) {
 		if from[repo] == "" || from[repo] == to[repo] {
 			continue
 		}
-		ranges = append(ranges, rng{repo, from[repo], len(to) > 1})
+		ranges = append(ranges, roundRange{repo, from[repo], len(to) > 1})
 	}
+	return ranges
+}
+
+// RoundMessage renders contracts/resume/round: from and to are each
+// repository's commit at the last round and now; lastFix, the commits of
+// the fix this round follows (LastFixTx).
+func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, lastFix []FixRange) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
 	}
 	return render(roundTmpl, struct {
 		Test                      bool
-		Ranges                    []rng
+		Ranges                    []roundRange
 		Reason, Findings, LastFix string
 		Format, Summary           string
-	}{phase == PhaseTest, ranges, reason, list, lastFixNote(lastFix), findingFormat, reviewSummary})
+	}{phase == PhaseTest, roundRanges(from, to), reason, list, lastFixNote(lastFix), findingFormat, reviewSummary})
 }
 
 // FixRange is what a fix Run published in one repository: its commits are
