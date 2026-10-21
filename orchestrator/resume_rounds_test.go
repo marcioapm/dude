@@ -51,10 +51,12 @@ func TestDirectedResumedReviewReceivesConductorNote(t *testing.T) {
 	t.Fatal("resumed agent did not receive conductor note")
 }
 
-// A continuation lux can no longer resume as it is — lux lost the Run
-// (404), or the reviewer's phase was given a project secret during the
-// fix — is replaced in its slot by a fresh Run replaying the first round;
-// the fresh Run carries the new secret.
+// A next round lux can no longer resume as it is is given a fresh Run
+// replaying the first round. Lux lost the Run (404): the continuation is
+// made and replaced in its slot at its resume. The reviewer's phase was
+// given a project secret during the fix: seen when the round is created
+// (sameSpecTx compares the recipient's secret names), so no continuation
+// is made; the replay says why on its run.created and carries the secret.
 func TestAContinuationLuxCannotResumeIsReplayed(t *testing.T) {
 	for _, why := range []string{"lost", "secret"} {
 		t.Run(why, func(t *testing.T) {
@@ -77,6 +79,32 @@ func TestAContinuationLuxCannotResumeIsReplayed(t *testing.T) {
 			w.start(wi, resumingPolicy())
 			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 			reviews := w.reviewRows(wi)
+			if why == "secret" {
+				if len(reviews) < 2 {
+					t.Fatalf("%d review Runs, want the first and its replay", len(reviews))
+				}
+				first, fresh := reviews[0], reviews[1]
+				if fresh.Continues != first.ID || fresh.How != delivery.ContinuesReplay {
+					t.Fatalf("the re-review %s continues %q (%s), want %s replayed", fresh.ID, fresh.Continues, fresh.How, first.ID)
+				}
+				if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND continues_how = 'resume'
+					AND continues_run_id = $2`, wi, first.ID); n != 0 {
+					t.Fatal("a continuation of the first round was made, want none")
+				}
+				if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'fresh' = 'spec_changed'`,
+					fresh.ID); n != 1 {
+					t.Error("the replay's run.created does not say its spec changed")
+				}
+				luxReviews := w.luxRunsOf("review")
+				var spec lux.Spec
+				if err := json.Unmarshal(luxReviews[1].Spec, &spec); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := projectSecretsOf(spec)["REVIEW_TOKEN"]; !ok {
+					t.Errorf("the fresh reviewer was not given the new secret: %v", projectSecretsOf(spec))
+				}
+				return
+			}
 			if len(reviews) != 4 {
 				t.Fatalf("%d review Runs, want the first, its continuation, the replay and the simplifier's range review", len(reviews))
 			}
@@ -86,16 +114,6 @@ func TestAContinuationLuxCannotResumeIsReplayed(t *testing.T) {
 			}
 			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND replaced_by = $2`, cont.ID, fresh.ID); n != 1 {
 				t.Fatal("the continuation was not replaced by the fresh Run")
-			}
-			if why == "secret" {
-				luxReviews := w.luxRunsOf("review")
-				var spec lux.Spec
-				if err := json.Unmarshal(luxReviews[len(luxReviews)-1].Spec, &spec); err != nil {
-					t.Fatal(err)
-				}
-				if _, ok := projectSecretsOf(spec)["REVIEW_TOKEN"]; !ok {
-					t.Errorf("the fresh reviewer was not given the new secret: %v", projectSecretsOf(spec))
-				}
 			}
 		})
 	}
