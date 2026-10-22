@@ -77,31 +77,44 @@ const (
 // person; an answer or a withdrawal, the conductor's included, signals the
 // step to run again. People's feedback wakes it too: it goes to a fixer
 // first, as the step would send it.
+//
+// Once held, the step goes on only when nothing else on the task waits on a
+// person either (waitBlockedElse; EndConductorWait wakes it as the last such
+// input settles), and only then takes the task off awaiting_input. While it
+// holds, waitBlocked keeps EndConductorWait from ending that wait.
 func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, st *State, step string) (workflow.Result, bool, error) {
 	var open []OpenReviewQuestion
+	blocked := false
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		open, err = openReviewQuestionsTx(ctx, tx, st.TaskID, st.Attempt, nil)
-		return err
+		if open, err = openReviewQuestionsTx(ctx, tx, st.TaskID, st.Attempt, nil); err != nil || len(open) > 0 || !st.QuestionsHeld {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT `+waitBlockedElse+` FROM tasks t WHERE t.id = $1`, st.TaskID).Scan(&blocked)
 	}); err != nil {
 		return workflow.Result{}, false, err
 	}
-	if len(open) == 0 {
-		if st.QuestionsHeld {
-			// Released: the task works again until the step says otherwise.
-			st.QuestionsHeld = false
-			return workflow.Result{}, false, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", reasonQuestionsSettled)
+	if len(open) == 0 && !blocked {
+		if !st.QuestionsHeld {
+			return workflow.Result{}, false, nil
 		}
-		return workflow.Result{}, false, nil
+		st.QuestionsHeld = false
+		return workflow.Result{}, false, w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			_, err := SetTaskStatusTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID, "awaiting_input", "running", reasonQuestionsSettled)
+			return err
+		})
 	}
 	// A pull request merged or closed meanwhile makes the question moot:
 	// the delivery ends as the pull request loop would end it, and nothing
 	// held is published.
 	if res, ended, err := w.heldPullRequestEnded(ctx, sc, st); ended || err != nil {
+		st.QuestionsHeld = false
 		return res, true, err
 	}
 	st.QuestionsHeld = true
-	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reasonQuestionsOpen); err != nil {
-		return workflow.Result{}, false, err
+	if len(open) > 0 {
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reasonQuestionsOpen); err != nil {
+			return workflow.Result{}, false, err
+		}
 	}
 	return workflow.Result{Next: step, State: st,
 		AwaitSignals: []string{SignalReviewQuestion, SignalHumanFeedback, SignalPullRequestEnded}}, true, nil

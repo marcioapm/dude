@@ -244,12 +244,22 @@ func TestAQuestionOnAPullRequestFixHoldsItsPromotion(t *testing.T) {
 // the question is open.
 func TestTheConductorsAnswerReleasesTheHold(t *testing.T) {
 	w, task, id := questioned(t)
+	w.conductedHold(task)
+	w.must(task, "answer_review_question", `{"id":"`+id+`","answer":"In UTC: config/billing.yml sets zone: UTC."}`)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+}
+
+// conductedHold takes a conducted delivery whose reviewer asked a question
+// to the pull request gate, has the person answer Open and the conductor
+// decide to open it, and waits until it is held there by the question.
+func (w *world) conductedHold(task string) {
+	w.t.Helper()
 	w.must(task, "decide", `{"action":"next"}`)
 	w.finishSimplifierReview(task)
 	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
 	w.must(task, "decide", `{"action":"ask_person"}`)
 	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
-		t.Fatalf("answer: %d %v", status, out)
+		w.t.Fatalf("answer: %d %v", status, out)
 	}
 	w.must(task, "decide", `{"action":"open_pull_request"}`)
 	w.until("held at the pull request, or a pull request", func() bool {
@@ -259,8 +269,41 @@ func TestTheConductorsAnswerReleasesTheHold(t *testing.T) {
 		w.pump()
 	}
 	if n := len(w.gh.Pulls()); n != 0 {
-		t.Fatalf("%d pull requests opened with a question open", n)
+		w.t.Fatalf("%d pull requests opened with a question open", n)
 	}
-	w.must(task, "answer_review_question", `{"id":"`+id+`","answer":"In UTC: config/billing.yml sets zone: UTC."}`)
-	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if s := w.taskStatus(task); s != "awaiting_input" {
+		w.t.Fatalf("task %s while held, want awaiting_input", s)
+	}
+}
+
+// Releasing the hold does not end another wait on a person: the conductor
+// asks the owner something while the question holds the pull request; the
+// reviewer's question answered, the task still waits on the conductor's,
+// and nothing opens. Answered too, the delivery opens the pull request.
+func TestReleasingTheHoldLeavesAnotherQuestionWaiting(t *testing.T) {
+	w, task, id := questioned(t)
+	w.conductedHold(task)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", `{"question":"May the export run at night?"}`)
+	ask := w.conductorQuestion(task)
+	if ask == "" {
+		t.Fatal("the conductor's question was not recorded")
+	}
+	if status, out := w.callAs(ana, "/internal/review-questions/"+id+"/answer", map[string]any{"answer": "In UTC."}); status != 200 {
+		t.Fatalf("answer: %d %v", status, out)
+	}
+	for range 5 {
+		w.pump()
+	}
+	if s := w.taskStatus(task); s != "awaiting_input" {
+		t.Fatalf("task %s with the conductor's question open, want awaiting_input", s)
+	}
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened with the conductor's question open", n)
+	}
+	if status, out := w.callAs(ana, "/internal/questions/"+ask+"/answer", map[string]any{"text": "Yes."}); status != 200 {
+		t.Fatalf("answer the conductor: %d %v", status, out)
+	}
+	w.until("the pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
 }
