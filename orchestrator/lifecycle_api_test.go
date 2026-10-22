@@ -228,26 +228,22 @@ func TestCloseRemovesItsRelationsWhenAsked(t *testing.T) {
 	}
 }
 
-// Running and in review are refused in the menu's words, Close and
-// Archive alike.
-func TestCloseAndArchiveRefuseRunningAndReview(t *testing.T) {
+// Close and Archive refuse nothing for agents working or a pull request
+// open: each stops what is live (see close_live_test.go). A task in
+// review, a stopped one with its pull request open, and one whose agent
+// works under a queued status all close.
+func TestCloseAndArchiveTakeRunningAndReview(t *testing.T) {
 	w := newWorld(t)
 	task, _ := w.aborted()
 	ana := w.ownedBy(task, "Ana")
-	// A task whose agents are working.
-	running := w.task()
-	w.assignOwner(running, ana)
-	mustExec(t, w.owner, `UPDATE tasks SET status = 'running' WHERE id = $1`, running)
 	review := w.task()
 	w.assignOwner(review, ana)
 	mustExec(t, w.owner, `UPDATE tasks SET status = 'review' WHERE id = $1`, review)
-	// Queued, its status says nothing of the agent that works on it.
 	working := w.task()
 	w.assignOwner(working, ana)
 	mustExec(t, w.owner, `UPDATE tasks SET status = 'queued' WHERE id = $1`, working)
 	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 		VALUES ('run_working_' || $3, $1, $2, $3, 1, 'running', 'implement', 'implementer')`, w.org, w.project, working)
-	// Stopped, with its pull request still open: any open one refuses.
 	stoppedPR := w.task()
 	w.assignOwner(stoppedPR, ana)
 	mustExec(t, w.owner, `UPDATE tasks SET status = 'aborted' WHERE id = $1`, stoppedPR)
@@ -255,22 +251,20 @@ func TestCloseAndArchiveRefuseRunningAndReview(t *testing.T) {
 			head_branch, base_branch, head_sha, title, state)
 		VALUES ('pr_o_' || $1, $2, $3, $1, $4, 8000 + (SELECT number FROM tasks WHERE id = $1), 'u', 'h', 'main', 's', 't', 'open')`,
 		stoppedPR, w.org, w.project, w.repoID)
-	for _, c := range []struct{ task, code, words string }{{running, "running", "Stop its agents first"}, {review, "review", "It has a pull request open"},
-		{working, "running", "Stop its agents first"}, {stoppedPR, "review", "It has a pull request open: close it on GitHub first."}} {
-		for _, route := range []string{"close", "archive"} {
-			status, body := w.callAs(ana, "/internal/tasks/"+c.task+"/"+route, map[string]any{"resolution": "wont_do"})
-			e, _ := body["error"].(map[string]any)
-			if status != 409 || e["code"] != c.code || !strings.HasPrefix(e["message"].(string), c.words) {
-				t.Fatalf("%s on a %s task: %d %v", route, c.code, status, body)
-			}
+	for i, c := range []string{review, working, stoppedPR, task} {
+		route := []string{"close", "archive"}[i%2]
+		if status, body := w.callAs(ana, "/internal/tasks/"+c+"/"+route, map[string]any{"resolution": "wont_do"}); status != 200 {
+			t.Fatalf("%s: %d %v", route, status, body)
 		}
-		if w.resolutionOf(c.task) != "" || w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND archived_at IS NOT NULL`, c.task) != 0 {
-			t.Fatal("a refused close or archive wrote something")
+		if w.resolutionOf(c) != "wont_do" {
+			t.Fatalf("%s did not close it", route)
 		}
 	}
-	// A stopped task (aborted by a person, no resolution) can be closed.
-	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
-		t.Fatalf("close a stopped task: %d %v", status, body)
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'aborted' AND NOT keep`, working); n != 1 {
+		t.Fatal("the working agent was not stopped")
+	}
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND state = 'open'`, stoppedPR); n != 1 {
+		t.Fatal("a pull request nobody asked to close was closed")
 	}
 }
 

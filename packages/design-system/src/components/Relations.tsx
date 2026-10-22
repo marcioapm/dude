@@ -5,6 +5,7 @@ import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Button, IconButton, type ButtonProps } from "../primitives/Button.tsx";
 import { RowMenu, type RowMenuItem } from "../primitives/RowMenu.tsx";
+import { RefusedButton } from "../primitives/RefusedButton.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
 import type { NavRelated } from "../util/navModel.ts";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
@@ -172,30 +173,14 @@ export interface StartGateProps {
  * anyway…, which opens the confirmation naming the blockers.
  */
 export function StartGate({ blockers, starts, onStartAnyway, onStartWhenUnblocked, startWhenUnblockedRefused }: StartGateProps) {
-  const reasonId = useId();
-  const refusedId = useId();
   const reason = blockedReason(blockers);
   return (
     <span className={styles["gate"]} data-testid="start-gate">
-      <span id={reasonId} className="ds-sr-only">{reason}</span>
       {starts.map((s) => (
-        <Tooltip key={s.id} content={reason} side="bottom">
-          {/* A focusable wrapper: a disabled button takes no pointer or focus, so its tooltip would never open.
-              The wrapper is the control assistive tech meets (a button's children are presentational). */}
-          <span className={styles["gateTrigger"]} tabIndex={0} role="button" aria-disabled="true" aria-label={s.label}
-            aria-describedby={reasonId} data-testid={`gate-${s.id}`}>
-            <Button variant="secondary" leadingIcon={s.icon} disabled>{s.label}</Button>
-          </span>
-        </Tooltip>
+        <RefusedButton key={s.id} reason={reason} label={s.label} variant="secondary" leadingIcon={s.icon} data-testid={`gate-${s.id}`} />
       ))}
       {onStartWhenUnblocked && startWhenUnblockedRefused ? (
-        <Tooltip content={startWhenUnblockedRefused} side="bottom">
-          <span className={styles["gateTrigger"]} tabIndex={0} role="button" aria-disabled="true" aria-label="Start when unblocked…"
-            aria-describedby={refusedId}>
-            <span id={refusedId} className="ds-sr-only">{startWhenUnblockedRefused}</span>
-            <Button variant="quiet" leadingIcon="play" disabled>Start when unblocked…</Button>
-          </span>
-        </Tooltip>
+        <RefusedButton reason={startWhenUnblockedRefused} label="Start when unblocked…" variant="quiet" leadingIcon="play" />
       ) : onStartWhenUnblocked ? (
         <Button variant="quiet" leadingIcon="play" onClick={onStartWhenUnblocked} data-testid="start-when-unblocked">Start when unblocked…</Button>
       ) : null}

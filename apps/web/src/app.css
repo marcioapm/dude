@@ -621,6 +621,10 @@ body {
   align-items: center;
   gap: var(--ds-space-8);
 }
+/* Session Abort's pointer to the task's Stop: one muted line, its link after it. */
+.abortStopHint {
+  margin: var(--ds-space-12) 0 0;
+}
 .taskHead {
   display: flex;
   flex-wrap: wrap;

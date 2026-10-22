@@ -103,6 +103,9 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 			}
 			return err
 		}
+		if err := refuseHalted(r.Context(), tx, taskID); err != nil {
+			return err
+		}
 		decider, err := s.decideFor(r.Context(), tx, org, taskID, writer, talk, override)
 		if err != nil {
 			return err
@@ -236,6 +239,9 @@ func (s *Server) retryConductor(w http.ResponseWriter, r *http.Request, org stri
 			}
 			return err
 		}
+		if err := refuseHalted(r.Context(), tx, taskID); err != nil {
+			return err
+		}
 		var err error
 		runID, err = delivery.RetryConductor(r.Context(), tx, org, projectID, taskID, writer)
 		return err
@@ -246,6 +252,22 @@ func (s *Server) retryConductor(w http.ResponseWriter, r *http.Request, org stri
 	s.kick()
 	write(w, http.StatusCreated, map[string]any{"runId": runID, "taskId": taskID, "created": true})
 	return nil
+}
+
+// refuseHalted is 409 stopped on a task its owner stopped and nobody picked
+// up yet: it keeps its conductor for a resume, so no message reaches it and
+// no other conductor starts (Chat, Talk it through, Try again). The caller
+// holds the task's Chat lock.
+func refuseHalted(ctx context.Context, tx pgx.Tx, taskID string) error {
+	halted, err := delivery.HaltedTx(ctx, tx, taskID)
+	if err != nil || !halted {
+		return err
+	}
+	key, err := delivery.TaskKeyOf(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	return fail(http.StatusConflict, "stopped", "%s is stopped: Resume, Try again or Start over first", key)
 }
 
 // decideFor settles who decides the task's delivery as a person writes in

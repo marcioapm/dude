@@ -9,7 +9,8 @@ import styles from "./Button.module.css";
  * - `secondary`: any other action. The default.
  * - `quiet`: row and toolbar actions, text until hovered.
  * - `danger`: loses work. Red text; `solid` only inside the confirmation
- *   that asks whether to do it.
+ *   that asks whether to do it; `quiet` among quiet header actions (no wash
+ *   until hovered).
  * Links navigate; buttons act.
  */
 export type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";
@@ -25,6 +26,8 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   readonly block?: boolean | undefined;
   /** `danger` only: filled red, for the confirming button of a destructive dialog. */
   readonly solid?: boolean | undefined;
+  /** `danger` only: transparent until hovered, beside quiet actions (a header's Stop). */
+  readonly quiet?: boolean | undefined;
   readonly children?: ReactNode;
 }
 
@@ -45,6 +48,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     loading = false,
     block = false,
     solid = false,
+    quiet = false,
     className,
     children,
     disabled,
@@ -60,6 +64,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         styles["root"],
         VARIANT_CLASS[variant],
         variant === "danger" && solid && styles["solid"],
+        variant === "danger" && quiet && !solid && styles["quietDanger"],
         (variant === "primary" || (variant === "danger" && solid)) && styles["filled"],
         size !== "md" && styles[size],
         loading && styles["loading"],
@@ -68,6 +73,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       )}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
+      data-variant={variant}
+      data-weight={variant === "danger" ? (solid ? "solid" : quiet ? "quiet" : undefined) : undefined}
       {...rest}
     >
       {leadingIcon ? <Icon name={leadingIcon} /> : null}

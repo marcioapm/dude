@@ -5,7 +5,6 @@ package orchestrator_test
 // open pull request is checked before the pull request shows it").
 
 import (
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -14,10 +13,10 @@ import (
 )
 
 // An integration whose review failed waits for a person with its merge on
-// the candidate. Close and Archive are refused and write nothing; the
-// candidate is neither promoted nor dropped, and once the person accepts
-// it is promoted with no further review, as without the refused calls.
-func TestCloseAndArchiveRefuseATaskWhoseIntegrationCandidateIsOut(t *testing.T) {
+// the candidate. Archive with no resolution is refused and writes nothing;
+// Close ends the delivery there, and the candidate is never promoted onto
+// the pull request.
+func TestClosingATaskWhoseIntegrationCandidateIsOutNeverPromotesIt(t *testing.T) {
 	w := newWorld(t)
 	w.toolsWithSync()
 	wi := w.reviewing()
@@ -44,38 +43,31 @@ func TestCloseAndArchiveRefuseATaskWhoseIntegrationCandidateIsOut(t *testing.T) 
 	}
 	events := w.count(`SELECT count(*) FROM events WHERE task_id = $1`, wi)
 
-	for _, route := range []string{"close", "archive"} {
-		status, body := w.callAs(ana, "/internal/tasks/"+wi+"/"+route, map[string]any{"resolution": "wont_do"})
-		e, _ := body["error"].(map[string]any)
-		msg, _ := e["message"].(string)
-		if status != 409 || e["code"] != "running" || !strings.HasPrefix(msg, "Stop its agents first") {
-			t.Fatalf("%s with the candidate out: %d %v", route, status, body)
-		}
-	}
-	if w.resolutionOf(wi) != "" || w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND archived_at IS NOT NULL`, wi) != 0 {
-		t.Fatal("a refused close or archive wrote the task")
+	// Archive with no resolution is refused, and writes nothing.
+	status, body := w.callAs(ana, "/internal/tasks/"+wi+"/archive", map[string]any{})
+	if s, code := w.refusal(status, body); s != 409 || code != "not_ended" {
+		t.Fatalf("archive with no resolution, the candidate out: %d %v", status, body)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1`, wi); n != events {
-		t.Fatalf("a refused close or archive wrote %d events", n-events)
+		t.Fatalf("a refused archive wrote %d events", n-events)
+	}
+	// Close ends the delivery with the candidate out: it is never promoted.
+	if status, body := w.callAs(ana, "/internal/tasks/"+wi+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close with the candidate out: %d %v", status, body)
+	}
+	crashing.Store(false)
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	for range 5 {
+		w.sync()
+		w.pump()
 	}
 	if got := w.gh.SHA(branch); got != before {
-		t.Fatalf("the pull request moved to %s on a refused close, from %s", got, before)
+		t.Fatalf("the pull request moved to %s after the close, from %s", got, before)
 	}
 	if n := w.count(integrationCompleted, wi); n != 0 {
-		t.Fatalf("integration-completed %d before the person decided", n)
+		t.Fatalf("integration-completed %d after the close", n)
 	}
-
-	crashing.Store(false)
-	reviews := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review'`, wi)
-	if code, body := w.decide(ana, wi, "accept", "Read the merge myself."); code != 200 {
-		t.Fatal(code, body)
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
-	w.until("promoted", func() bool { w.sync(); return w.gh.SHA(branch) != before && w.count(integrationCompleted, wi) == 1 })
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review'`, wi); n != reviews {
-		t.Fatalf("%d reviews after the person accepted", n-reviews)
-	}
-	if w.resolutionOf(wi) != "" || w.taskStatus(wi) != "review" {
-		t.Fatalf("after promotion: resolution %q, status %q", w.resolutionOf(wi), w.taskStatus(wi))
+	if w.resolutionOf(wi) != "wont_do" {
+		t.Fatalf("not closed: resolution %q", w.resolutionOf(wi))
 	}
 }

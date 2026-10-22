@@ -20,7 +20,7 @@ export interface TaskHistoryLine {
 export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; decider?: string }, findings: readonly Finding[],
   pullRequests: readonly PullRequest[], costUsd: number | null, format: (usd: number) => string, events?: readonly PersistedEvent[]): TaskHistoryLine {
   const phases = task.runs.filter((r) => r.phase);
-  const attempt = Math.max(0, ...phases.map((r) => r.attempt));
+  const attempt = Math.max(0, ...task.runs.filter((r) => r.kind !== "preview").map((r) => r.attempt));
   const ran = phases.filter((r) => r.attempt === attempt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   const steps: string[] = [];

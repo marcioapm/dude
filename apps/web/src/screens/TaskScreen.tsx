@@ -78,7 +78,7 @@ import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
-import { ChatSection } from "./ChatSection.tsx";
+import { ChatSection, stoppedForPickUp } from "./ChatSection.tsx";
 import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { TaskMachineRaises } from "./actions.tsx";
@@ -94,6 +94,7 @@ import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { TaskMenu, notYours, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
+import { StopButton, StopDialog, inProgress, liveItemsOf, openPullRequestsOf, stopMenuItem } from "./TaskStop.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
@@ -327,12 +328,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // A stopped task's ways back, read again whenever the page is.
   const recovery = useRecoveryOptions(client, item);
   const [pickingUp, setPickingUp] = useState<RecoverAction | null>(null);
+  const [stopping, setStopping] = useState(false);
   // What it waits on and what waits on it: with the page's reads, and on relations.changed.
   const { relations, reload: reloadRelations } = useRelations(client, taskId, version + relationsVersion);
   // Close, Reopen, Archive, Unarchive: the header's menu, the notices, the dialogs.
   const waiting = useMemo(() => waitingOn(relations?.blocks ?? []), [relations]);
-  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting,
-    pullRequestOpen: pullRequests.some((p) => p.state === "open"), onChanged: reload });
+  // What Stop, Close, Archive and the pick-up name: the task's open pull requests and its live Runs.
+  const openPrs = item ? openPullRequestsOf(item, pullRequests) : [];
+  const live = item ? liveItemsOf(item) : [];
+  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting, pullRequests: openPrs, live, onChanged: reload });
 
   const deliver = async () => {
     setDelivering(true);
@@ -366,14 +370,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   };
 
   // Every attempt, newest first; the current is the highest. The one shown:
-  // the open session's, else the one picked, else the current.
+  // the open session's (a conductor's too), else the one picked, else the current.
   const attempts = useMemo(() => attemptsOf(item?.runs ?? []), [item]);
   const byId = useMemo(() => runsById(item?.runs ?? []), [item]);
   const current = attempts[0] ?? 1;
   const many = attempts.length > 1;
-  // The task's conductor is no attempt's: its session opens on the attempt the place says.
   const openedRow = openedRun ? byId.get(openedRun) : undefined;
-  const shown = openedRow && !isConductor(openedRow) ? attemptOfRun(openedRow, current)
+  const shown = openedRow ? attemptOfRun(openedRow, current)
     : chosenAttempt !== null && attempts.includes(chosenAttempt) ? chosenAttempt : current;
   const earlier = shown !== current;
 
@@ -423,7 +426,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         return { n, findings: theirs.findings.length, files: fileCount(theirs.artifacts) };
       }),
       // Newest first, the task's conductor above them all, on every attempt.
-      sessions: (item?.runs ?? []).filter((r) => isConductor(r) || attemptOfRun(r, current) === shown)
+      sessions: (item?.runs ?? []).filter((r) => attemptOfRun(r, current) === shown)
         .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
   }, [findings, questions, artifacts, verifications, allPrs, item, byId, attempts, current, shown]);
@@ -462,14 +465,15 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const retried = shownRun ? retriedRun(byId.get(shownRun), item?.runs ?? []) : false;
   // Only ever the current attempt's: what stopped the task is a Run of it.
   const pickUpHere = canPickUp && shownRun !== null && shownRun === stoppedOn;
-  // The task's conductor is never set aside with an attempt: it stays as on any attempt.
-  const shownRow = shownRun !== null ? byId.get(shownRun) : undefined;
-  const shownConductor = shownRow !== undefined && isConductor(shownRow);
+  // A Run of an earlier attempt, its conductor included, is set aside with it.
   const openStopped = useMemo<StoppedRun | undefined>(
-    () => (earlier && !shownConductor ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
+    () => (earlier ? { setAside: "restart", toCurrent: { attempt: current, go: toCurrent } }
       : retried ? { setAside: "retry" }
       : pickUpHere ? { onPickUp: setPickingUp, keptUntil } : undefined),
-    [earlier, shownConductor, current, toCurrent, retried, pickUpHere, keptUntil]);
+    [earlier, current, toCurrent, retried, pickUpHere, keptUntil]);
+  // Session Abort points at the task's Stop while there is one to use; one value while it says the same.
+  const stopKey = item && !earlier && inProgress(item) && !(people.me && notYours(item, people)) ? (item.key ?? "this task") : null;
+  const stopFromSession = useMemo(() => (stopKey ? { key: stopKey, open: () => setStopping(true) } : undefined), [stopKey]);
 
   // Each running phase's plan: the last it wrote, as the transcript has it.
   const plans = useMemo<Plans>(() => {
@@ -520,6 +524,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   latest.current.toCurrent = () => pickAttempt(current);
 
   const started = currentPhases.length > 0;
+  // Stop: the header's and the menu's, on the current attempt of a task in progress, whoever decides it.
+  const stoppable = !earlier && inProgress(item);
+  const refusedStop = people.me ? notYours(item, people) : undefined;
   // Where Deliver is offered, Talk it through is beside it: a task nothing
   // has started, neither delivered nor talked through, on its current
   // attempt (an earlier one is only to read).
@@ -532,10 +539,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   };
   // Overview's StartChoice cards offer both then; the header's buttons are for every other tab.
   const startInHeader = startable && tab !== "overview";
-  const stopped = item.status === "aborted" || item.status === "failed";
   // The pick-up is the current attempt's: an earlier one is only to read. A
   // closed task is picked back up by none of the ways: its notice offers Reopen.
-  const stop = stopped && !earlier && !item.resolution && !item.archivedAt ? stopOfTask : null;
+  const stop = stoppedForPickUp(item) && !earlier ? stopOfTask : null;
+  const closed = item.status === "aborted" && !!item.resolution;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   const { prs, mine, others, sessions } = parts;
@@ -573,12 +580,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // the current attempt's: an earlier one has none to show.
   const showServers = !earlier && Boolean(servers.data && (servers.data.run || servers.data.recipes.length > 0));
   // The one open is the one asked for, else the one picked on first sight
-  // (what was running, else the newest). On an earlier attempt, first sight
-  // is of that attempt's own sessions, not the task's conductor above them.
-  const firstSight = earlier ? sessions.filter((r) => !isConductor(r)) : sessions;
+  // (what was running, else the newest).
   const openRun = (openedRun && sessions.some((r) => r.id === openedRun) ? openedRun : undefined)
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
-    ?? (firstSight.find((r) => r.status === "running") ?? firstSight[0] ?? sessions[0])?.id;
+    ?? (sessions.find((r) => r.status === "running") ?? sessions[0])?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
   latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
@@ -624,10 +629,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               Mark done
             </Button>
           ) : null}
+          {stoppable ? <StopButton onStop={() => setStopping(true)} notYours={refusedStop} /> : null}
           <Button variant="quiet" leadingIcon="edit" onClick={() => setEditing(true)} data-testid="edit-task">
             Edit
           </Button>
-          {!earlier ? <TaskMenu items={lifecycle.items} /> : null}
+          {!earlier ? <TaskMenu items={stoppable ? [stopMenuItem(() => setStopping(true), refusedStop), ...lifecycle.items] : lifecycle.items} /> : null}
         </span>
       </header>
 
@@ -665,7 +671,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
       {item.escalation || stop || aside || problem || blocked || openOrDraft || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
-          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
+          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
           {!earlier ? lifecycle.notice : null}
           {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
@@ -696,7 +702,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )) : null}
           {stop ? (
             <StoppedNotice task={item} stop={stop} options={recovery} owner={owner?.name ?? null} you={yours}
-              onOpenRun={onOpenRun} onChoose={setPickingUp} />
+              pullRequests={openPrs} onOpenRun={onOpenRun} onChoose={setPickingUp} />
           ) : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
           {commentingNotices}
@@ -707,8 +713,16 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
       ) : null}
       {lifecycle.dialogs}
+      {stopping ? (
+        <StopDialog client={client} task={item} attempt={current} live={live} pullRequests={openPrs}
+          onClose={() => setStopping(false)}
+          onDone={() => {
+            setStopping(false);
+            void load();
+          }} />
+      ) : null}
       {pickingUp && stop && recovery ? (
-        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp}
+        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp} pullRequests={openPrs}
           onEdit={() => {
             setPickingUp(null);
             setEditing(true);
@@ -729,7 +743,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Tab value="findings" count={mine.findings.length > 0 ? mine.findings.length : undefined}
             tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
           <Tab value="sessions" count={sessions.length > 0 ? sessions.length : undefined}
-            tooltip={many ? <>Attempt {shown}'s sessions{conductors.length > 0 ? ", and the task's conductor" : ""}</> : undefined}>Sessions</Tab>
+            tooltip={many ? <>Attempt {shown}'s sessions</> : undefined}>Sessions</Tab>
           <Tab value="feedback" count={!earlier && feedback.blocking > 0 ? feedback.blocking : undefined}
             tooltip={!earlier && feedback.blocking > 0 ? `${plural(feedback.blocking, "item")} not yet handled: they hold the merge`
               : many ? `Attempt ${shown}'s feedback` : undefined}>Feedback</Tab>
@@ -741,7 +755,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
         <TabPanel value="chat" fill>
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
-            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status }))} ledgers={endedLedgers}
+            earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status, attempt: r.attempt }))} ledgers={endedLedgers}
             findings={findings} pullRequests={pullRequests}
             events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} onBack={onBack}
             driverControl={driverControl} canSwitchDriver={yours && !earlier} />
@@ -894,8 +908,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     onClick={() => showFinding(about.id)}>{about.title}</Button>
                 ) : undefined };
             })}
-              // An earlier attempt's are only to read; the API refuses anyone but the owner, and the form says so first.
-              {...(!earlier ? {
+              openLabel={closed ? "unanswered when it closed" : undefined}
+              // Earlier attempts and closed tasks are only to read; the API refuses anyone but the owner.
+              {...(!earlier && !closed ? {
                 onAnswer: async (id: string, answer: string) => { await client.answerReviewQuestion(id, answer); reload(); },
                 onWithdraw: async (id: string, reason: string) => { await client.withdrawReviewQuestion(id, reason); reload(); },
                 notAllowed: yours || people.you === null ? undefined : `Only ${owner ? firstName(owner.name) : "the task's owner"}, its owner, answers its reviewers' questions.`,
@@ -926,7 +941,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               {openRun ? (
                 <FeedbackProvider value={sessionFeedback}>
                   <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
-                    stopped={openStopped} titleSelector={sessionSelector} />
+                    stopped={openStopped} titleSelector={sessionSelector} stopTask={stopFromSession} />
                 </FeedbackProvider>
               ) : null}
             </div>
@@ -1034,7 +1049,7 @@ function AttemptPicker({ client, taskId, item, byId, attempts, prs, events, peop
  * when, their note, how it had ended, and the way to the current one.
  * Neutral: nothing is wrong and nobody is needed.
  */
-function EarlierBar({ attempt, current, aside, conductorOpen, onCurrent }: { attempt: number; current: number; aside: SetAside; conductorOpen: boolean; onCurrent: () => void }) {
+function EarlierBar({ attempt, current, aside, onCurrent }: { attempt: number; current: number; aside: SetAside; onCurrent: () => void }) {
   return (
     <Callout tone="neutral" data-testid="earlier-bar">
       <div className="escalation">
@@ -1045,8 +1060,7 @@ function EarlierBar({ attempt, current, aside, conductorOpen, onCurrent }: { att
           {aside.note ? <>: “{aside.note}”</> : "."}
         </p>
         <p className="earlierSecond">
-          {/* The task's conductor, open under the bar, is not the attempt's and can still be steered. */}
-          {aside.how ? `It had ${aside.how}. ` : null}What it left is here to read; nothing in it can be {conductorOpen ? "merged or resumed" : "merged, resumed or steered"}.{" "}
+          {aside.how ? `It had ${aside.how}. ` : null}What it left is here to read; nothing in it can be merged, resumed or steered.{" "}
           <Button size="sm" variant="secondary" trailingIcon="arrow-right" onClick={onCurrent} data-testid="go-current">
             Go to attempt {current} (current)
           </Button>
@@ -1401,7 +1415,6 @@ interface ActivityLine {
   personName: string;
   id: string;
   at: string;
-  /** Null for a line about the task's conductor, which is no attempt's. */
   attempt: number | null;
   who: ReactNode;
   text: ReactNode;
@@ -1425,6 +1438,20 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
   // Who a Run is ("implementer", "correctness reviewer"), not its stage.
   const doer = (runId: string | null) => (runId && labels.get(runId)) || "agent";
   const session = (runId: string | null) => (runId && labels.has(runId) ? { label: "Open session", runId, tab: "sessions" } : undefined);
+  // The Runs each Stop aborted, and the attempt each Stop and start over began.
+  const stops = events.filter((e) => e.eventType === "task.stopped");
+  const stopNamed = (e: PersistedEvent) => stops.some((s) => Array.isArray(s.payload.runIds) && s.payload.runIds.includes(e.runId));
+  const restartOf = (stop: PersistedEvent) => {
+    const r = events.find((e) => e.eventType === "task.recovered" && e.payload.via === "stop" && e.cursor > stop.cursor);
+    return typeof r?.payload.attempt === "number" ? r.payload.attempt : null;
+  };
+  // Written between a Stop and start over's stop and its start: that stop's line says it.
+  const withinStopRestart = (e: PersistedEvent) => {
+    const stop = stops.findLast((s) => s.cursor < e.cursor);
+    if (stop?.payload.andRestart !== true) return false;
+    const started = events.find((r) => r.eventType === "task.recovered" && r.payload.via === "stop" && r.cursor > stop.cursor);
+    return started !== undefined && started.cursor > e.cursor;
+  };
   for (const e of events) {
     const by = humanActor(e);
     const name = actorName(by, people.names);
@@ -1465,10 +1492,28 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         if (by) out.push({ ...base, who: face, text: <>{person} resumed the {doer(e.runId)}</> });
         break;
       case "run.aborted":
+        // A Stop's abort of each Run is said once, by the task.stopped line that names them.
+        if (p.by === "stop" && stopNamed(e)) break;
         out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {doer(e.runId)}</>,
           quote: p.reason ? String(p.reason) : undefined, open: session(e.runId) });
         break;
+      case "task.stopped": {
+        const runIds = Array.isArray(p.runIds) ? p.runIds.filter((id): id is string => typeof id === "string") : [];
+        const stoppedWhat = runIds.length ? <span className="muted"> · stopped {stoppedList(runIds.map((id) => doer(id)))}</span> : null;
+        const next = p.andRestart === true ? restartOf(e) : null;
+        // The attempt it stopped is its Runs'; Stop and start over's next attempt began in the same write.
+        const attempt = (runIds.length ? attemptOf({ ...e, runId: runIds[0]! }) : null) ?? (next !== null ? next - 1 : attemptOf(e) ?? current);
+        const decides = p.nextDecider === "conductor" ? "the conductor decides" : p.nextDecider === "policy" ? "Deliver decides" : null;
+        out.push({ ...base, kind: "decisions", who: face, quote: p.note ? String(p.note) : undefined,
+          text: p.andRestart === true
+            ? <>{person} stopped attempt {attempt} and started attempt {next ?? attempt + 1}{decides ? <span className="muted"> · {decides}</span> : null}{stoppedWhat}</>
+            : <>{person} stopped the task{stoppedWhat}</> });
+        out[lines]!.attempt = attempt;
+        continue;
+      }
       case "task.recovered":
+        // Stop and start over: the stop's line says it.
+        if (p.via === "stop") break;
         out.push({ ...base, who: face, quote: p.note ? String(p.note) : undefined,
           text: <>{person} picked the task back up: {p.action === "resume" ? "resumed where it stopped"
             : p.action === "retry" ? "tried again with a new agent" : <>started over as attempt {String(p.attempt ?? "")}</>}</> });
@@ -1479,8 +1524,8 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       }
       case "task.decider_changed":
-        // Talk it through's own start line says it; the change is not said twice.
-        if (p.why === "talk it through") break;
+        // Talk it through's own start line says it; the change is not said twice. Nor Stop and start over's.
+        if (p.why === "talk it through" || withinStopRestart(e)) break;
         out.push({ ...base, kind: "decisions", who: face ?? <DudeMark size={32} />,
           text: <>{by ? person : <b>{dude}</b>} {p.to === "policy" ? "let Deliver finish it"
             : p.why === "a person wrote in Chat" ? "wrote in Chat, which gave the decisions to the conductor"
@@ -1614,6 +1659,13 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
 }
 
 const HOW: Record<string, string> = { deliver: "Deliver", talk: "Talk it through" };
+
+/** The Runs a Stop aborted, by who they are: "the conductor and 2 correctness reviewers". */
+function stoppedList(doers: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const d of doers) counts.set(d, (counts.get(d) ?? 0) + 1);
+  return keyList([...counts].map(([d, n]) => (n === 1 ? `the ${d}` : `${n} ${d}s`)));
+}
 
 /**
  * A lifecycle event in Activity's words, after who did it

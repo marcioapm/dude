@@ -103,7 +103,7 @@ describe("the projection", () => {
 
   test("the conductor's digest goes just before the briefing that carried it", () => {
     const c = project([
-      ev(EventTypes.ChatMessage, { text: "What's up?" }),
+      { ...ev(EventTypes.ChatMessage, { text: "What's up?" }), actor: { type: "human", id: "u_marcio" } },
       ev(EventTypes.ConductorDigest, { since: "2026-10-12T13:44:00Z", through: "2026-10-12T14:20:00Z", where: "briefing", task: "ABS-2", more: 2,
         messages: [{ message: "pm_1", at: "2026-10-12T13:43:00Z", from: "ABS-4", to: "ABS-2", text: "Which body?", replyTo: null, answeredAt: "2026-10-12T13:49:00Z" }],
         notes: [{ at: "2026-10-12T13:51:00Z", n: 4, change: "replaced", was: 3, line: "note 4, ABS-2's implementer, replaces note 3: body" }],
@@ -231,7 +231,7 @@ describe("the turns, drawn", () => {
 
   test("the digest is one folded line saying what it holds", () => {
     const [, digest] = draw([
-      ev(EventTypes.ChatMessage, { text: "What's up?" }),
+      { ...ev(EventTypes.ChatMessage, { text: "What's up?" }), actor: { type: "human", id: "u_marcio" } },
       ev(EventTypes.ConductorDigest, { since: "2026-10-12T13:44:00Z", through: "2026-10-12T14:20:00Z", where: "briefing", task: "ABS-2", more: 0,
         messages: [{ message: "pm_1", at: "2026-10-12T13:43:00Z", from: "ABS-4", to: "ABS-2", text: "Which body?", replyTo: null, answeredAt: null }],
         notes: [], peers: [{ task: "ABS-1", status: "review", at: "2026-10-12T14:12:00Z" }] }),

@@ -94,8 +94,8 @@ function pr(p: Record<string, unknown>): string {
   return typeof p.number === "number" ? `Pull request #${p.number}` : "The pull request";
 }
 
-/** What dude's notices about a task's relations are about: they show in Chat whoever decides, conductor or not. */
-const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_failed", "auto_start_set"]);
+/** What dude's notices shown in Chat whoever decides, conductor or not, are about: the task's relations, and a pull request mention a stopped task did not pass on. */
+const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_failed", "auto_start_set", "mention_held"]);
 
 /** dude's notices about what the task waits on — unblocked, started when unblocked, or not — oldest first. */
 export function relationNotices(events: readonly PersistedEvent[]): ConductedLine[] {

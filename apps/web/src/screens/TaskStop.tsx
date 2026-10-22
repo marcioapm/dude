@@ -1,0 +1,207 @@
+/**
+ * One Stop per task: the header's Stop and the `…` menu's Stop… open the
+ * same dialog, which stops every live Run of the task, any attempt's (conductor and
+ * Deliver alike) — Stop here, kept for a resume — or stops it and starts
+ * the next attempt, decided by whoever the reader picks (DeciderField,
+ * defaulting to who decided this one). Owner or admin; anyone else sees
+ * it disabled with whose decision it is.
+ */
+
+import { useState, type ReactNode } from "react";
+import { DeciderField, LiveWork, liveWords, pullRequestNumbers, type LiveItem, type NextDecider } from "@dude/design-system/components";
+import { Button, ChoiceList, Dialog, RefusedButton, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
+import type { RowMenuItem } from "@dude/design-system/primitives";
+import { NOT_STARTED_STATUSES, PHASE_DOER, TERMINAL_RUN_STATUSES, isConductor, reviewerCategoryInSentence } from "@dude/domain";
+import type { ApiClient, PullRequest, Run, TaskDetail } from "../api/client.ts";
+import { errorText } from "../hooks/useSave.tsx";
+import { isAdoptedPr } from "../attempts.ts";
+
+/** Between its start and its end: what Stop stops. */
+export function inProgress(task: Pick<TaskDetail, "status">): boolean {
+  return !NOT_STARTED_STATUSES.includes(task.status) && !["done", "aborted", "failed"].includes(task.status);
+}
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** A live Run as LiveWork shows it: who, what it is doing, and whether it is at work. */
+function liveItem(run: Run, task: Pick<TaskDetail, "awaitingDecision">): LiveItem {
+  const role = run.role ?? "implementer";
+  if (isConductor(run)) {
+    const deciding = task.awaitingDecision !== null;
+    return { id: run.id, role, who: "Conductor", doing: deciding ? "deciding" : run.status === "paused" ? "between turns" : "talking",
+      state: run.status === "running" ? "working" : "waiting" };
+  }
+  const doer = run.phase ? (PHASE_DOER[run.phase] ?? run.phase) : "agent";
+  const queued = run.status === "pending" || run.status === "scheduled";
+  return { id: run.id, role, who: cap(doer), doing: run.category ? reviewerCategoryInSentence(run.category) : run.phase ?? "",
+    state: queued ? "queued" : "working" };
+}
+
+/** The task's live Runs, whatever their attempt: its conductor first, then the rest, oldest first. */
+export function liveItemsOf(task: Pick<TaskDetail, "runs" | "awaitingDecision">): LiveItem[] {
+  const live = task.runs.filter((r) => r.kind !== "preview" && !TERMINAL_RUN_STATUSES.includes(r.status));
+  return [...live].sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || a.createdAt.localeCompare(b.createdAt))
+    .map((r) => liveItem(r, task));
+}
+
+/** "The conductor and 2 reviewers are working; a fixer is queued." */
+function liveSummary(items: readonly LiveItem[]): string {
+  const working = items.filter((i) => i.state !== "queued");
+  const queued = items.filter((i) => i.state === "queued").map((i) => ({ ...i, state: undefined }));
+  if (items.length === 0) return "Nothing is running now: the delivery waits.";
+  const are = (n: number) => (n === 1 ? "is" : "are");
+  const first = working.length ? `${cap(liveWords(working))} ${are(working.length)} working` : "";
+  const then = queued.length ? `${liveWords(queued)} ${are(queued.length)} queued` : "";
+  return `${first && then ? `${first}; ${then}` : cap(first || then)}.`;
+}
+
+/** The task's open pull request, and who opened it: a task started from one never closes it. */
+export interface OpenPullRequest {
+  readonly number: number;
+  readonly openedBy: "dude" | "someone";
+}
+
+/** Every open pull request of the task, as a Close closes them all when asked; the adopted one by its repository and number (isAdoptedPr). */
+export function openPullRequestsOf(task: Pick<TaskDetail, "source">, prs: readonly PullRequest[]): OpenPullRequest[] {
+  return prs.filter((p) => p.state === "open" || p.state === "draft")
+    .map((p) => ({ number: p.number, openedBy: isAdoptedPr(p, task.source) ? "someone" : "dude" }));
+}
+
+/** The pull requests named in a sentence, with the verb that agrees: "#12 stays", "#12 and #14 stay". */
+export function prsAnd(prs: readonly OpenPullRequest[], one: string, many: string): string {
+  return `${pullRequestNumbers(prs)} ${prs.length === 1 ? one : many}`;
+}
+
+/** The task's open pull requests split as a restart treats them: the adopted one carried on, dude's closed. */
+export function prsByOpener(prs: readonly OpenPullRequest[]): { adopted: OpenPullRequest | undefined; ours: OpenPullRequest[] } {
+  return { adopted: prs.find((p) => p.openedBy === "someone"), ours: prs.filter((p) => p.openedBy === "dude") };
+}
+
+/** The `…` menu's Stop…, first: danger, disabled for anyone who may not. */
+export function stopMenuItem(onStop: () => void, notYours: string | undefined): RowMenuItem {
+  return { id: "stop", label: "Stop…", icon: "stop", tone: "danger", onSelect: onStop,
+    description: "Stop it here, or stop it and start a new attempt", disabled: Boolean(notYours), disabledReason: notYours };
+}
+
+/** The header's Stop: quiet, danger ink, its glyph; it opens the dialog. Refused, it stays reachable for its reason. */
+export function StopButton({ onStop, notYours }: { readonly onStop: () => void; readonly notYours: string | undefined }) {
+  if (!notYours) {
+    return <Button variant="danger" quiet leadingIcon="stop" onClick={onStop} data-testid="task-stop">Stop</Button>;
+  }
+  return <RefusedButton reason={notYours} label="Stop" variant="danger" quiet leadingIcon="stop" data-testid="task-stop" />;
+}
+
+type Way = "stop" | "restart";
+type Effect = { what: string; how: "kept" | "new" | "gone"; text: ReactNode };
+
+function effects(way: Way, decider: NextDecider, next: NextDecider, attempt: number, branch: string, prs: readonly OpenPullRequest[],
+  headBranch: string | null): Effect[] {
+  const mono = (s: string) => <span className="ds-mono">{s}</span>;
+  const n = attempt + 1;
+  if (way === "stop") {
+    return [
+      { what: "Sessions", how: "kept", text: "Every stopped agent's conversation and workspace, kept a while: Resume carries on from them." },
+      decider === "conductor"
+        ? { what: "Conductor", how: "kept", text: "Stopped with the rest; on Resume the same conductor goes on with its whole conversation." }
+        : { what: "Deliver", how: "kept", text: "Parked where it was; on Resume it goes on from there." },
+      { what: "Branch", how: "kept", text: mono(branch) },
+      ...(prs.length ? [{ what: "Pull request", how: "kept" as const,
+        text: `${prsAnd(prs, "stays", "stay")} open; Resume carries on with ${prs.length === 1 ? "it" : "them"}.` }] : []),
+    ];
+  }
+  const { adopted, ours } = prsByOpener(prs);
+  const closed: Effect[] = ours.length
+    ? [{ what: "Pull request", how: "gone", text: `${pullRequestNumbers(ours)}, opened by dude on attempt ${attempt}'s branch, ${ours.length === 1 ? "is" : "are"} closed. Attempt ${n} opens its own.` }]
+    : [];
+  const where: Effect[] = adopted && headBranch
+    ? [{ what: "Branch", how: "kept", text: <>{mono(headBranch)}, PR #{adopted.number}'s: attempt {n} works on it from where attempt {attempt} left it.</> },
+      { what: "Pull request", how: "kept", text: `#${adopted.number} stays open — attempt ${n} continues on it. Its author opened it; dude never closes it.` },
+      ...closed]
+    : [{ what: "Branch", how: "new", text: <>A new branch for attempt {n}, from the default branch. Attempt {attempt}'s is kept.</> }, ...closed];
+  return [
+    ...where,
+    { what: "Sessions", how: "new", text: `The whole pipeline again. Attempt ${attempt}'s stay to read.` },
+    next === "conductor"
+      ? { what: "Conductor", how: "new", text: `A new one, briefed with your note and what attempt ${attempt} did. Attempt ${attempt}'s Chat stays above a divider.` }
+      : { what: "Deliver", how: "new", text: `Runs attempt ${n} to the pull request on its own, with your note. Chat stays open to the conductor.` },
+  ];
+}
+
+/** The Stop dialog: Stop here, or Stop and start the next attempt. */
+export function StopDialog({ client, task, attempt, live, pullRequests = [], onClose, onDone }: {
+  client: ApiClient;
+  task: TaskDetail;
+  /** The current attempt: Stop and start makes the next. */
+  attempt: number;
+  live: readonly LiveItem[];
+  /** Every open pull request of the task (openPullRequestsOf). */
+  pullRequests?: readonly OpenPullRequest[] | undefined;
+  onClose: () => void;
+  onDone: (restarted: boolean) => void;
+}) {
+  const decider: NextDecider = task.decider === "conductor" ? "conductor" : "deliver";
+  const [way, setWay] = useState<Way>("stop");
+  const [next, setNext] = useState<NextDecider>(decider);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const key = task.key ?? "this task";
+  const n = attempt + 1;
+  // A Run's pushed branch, else the one the attempt's delivery named, pushed to or not.
+  const branch = task.runs.find((r) => r.attempt === attempt && r.branch)?.branch
+    ?? task.deciders?.findLast((d) => d.attempt === attempt && d.branch)?.branch ?? "its branch";
+  const { adopted } = prsByOpener(pullRequests);
+  const ways: ChoiceOption<Way>[] = [
+    { value: "stop", icon: "stop", label: "Stop here",
+      description: `Everything stops: every agent at work, the conductor included. What they were doing is kept for a while so you can Resume.` },
+    { value: "restart", icon: "git-branch", label: `Stop and start attempt ${n}`,
+      description: adopted ? `A fresh start on PR #${adopted.number}'s branch: new sessions, the whole thing again, pushing to the same PR.`
+        : "A fresh start from the default branch: new branch, new sessions, the whole thing again." },
+  ];
+  const go = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await client.stopTask(task.id, way === "stop" ? { note: note.trim() }
+        : { andRestart: true, decider: next === "conductor" ? "conductor" : "policy", note: note.trim() });
+      onDone(way === "restart");
+    } catch (err) {
+      setProblem(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} tone="danger" size="md" title={`Stop ${key}?`} footerProblem={problem}
+      footer={<>
+        <Button variant="quiet" onClick={onClose}>Cancel</Button>
+        <Button variant="danger" solid leadingIcon="stop" loading={busy} disabled={busy} onClick={() => void go()} data-testid="stop-confirm">
+          {way === "stop" ? "Stop" : `Stop and start attempt ${n}`}
+        </Button>
+      </>}>
+      <div className="pickUp" data-testid="stop-dialog">
+        <LiveWork items={live} summary={liveSummary(live)} />
+        <ChoiceList<Way> label="How to stop it" value={way} onChange={setWay} options={ways} data-testid="stop-way" />
+        <div className="pickUpWhatItDoes">
+          {ways.map(({ value: w }) => (
+            <div key={w} className="pickUpWay" data-shown={w === way}>
+              {w === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={decider} /> : null}
+              <ul className="pickUpEffects" aria-label="What it does">
+                {effects(w, decider, next, attempt, branch, pullRequests, task.source?.headBranch ?? null).map((e) => (
+                  <li key={`${e.what}-${e.how}`} data-how={e.how}>
+                    <span className="pickUpWhat">{e.what}</span>
+                    <span className="pickUpHow">{e.how === "gone" ? "closed" : e.how}</span>
+                    <span>{e.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <Textarea label={way === "restart" ? "Why, and what to do differently (optional)" : "Why (optional)"} rows={3} value={note}
+          onChange={(e) => setNote(e.target.value)} maxLength={2000} data-testid="stop-note"
+          hint={way === "restart" ? "Every agent of the next attempt reads it." : "Shown on the task and in Chat beside your name; Resume and Try again pass it on."} />
+      </div>
+    </Dialog>
+  );
+}

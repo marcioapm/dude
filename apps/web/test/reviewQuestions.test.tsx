@@ -184,6 +184,19 @@ test("a task held by an open question says so where it waits on a person", async
   expect(page.querySelectorAll("[data-testid=questions-hold]").length).toBe(0);
 });
 
+for (const resolution of [null, "wont_do"] as const) test(`an aborted task ${resolution ? "closed" : "stopped"} shows its reviewers' questions appropriately`, async () => {
+  const client = new FixtureClient("d");
+  const task = await client.getTask(TASK_ID);
+  client.getTask = async () => ({ ...task, status: "aborted", resolution, heldByQuestions: false });
+  const page = await findingsTab(client);
+  const list = await until(() => page.querySelector('[data-testid=review-questions]'), "the reviewers' questions");
+  expect(text(list.querySelector("header"))).toContain(resolution ? "1 unanswered when it closed" : "1 open");
+  expect(list.querySelectorAll("[data-testid=review-question-form]").length).toBe(resolution ? 0 : 1);
+  expect(list.querySelectorAll("[data-question]").length).toBe(1);
+  expect(text(list)).toContain("Is the invoice option meant for annual plans only?");
+  expect(page.querySelectorAll("[data-testid=questions-hold]").length).toBe(0);
+});
+
 test("an agent's question asked while a reviewer's question is open shows no hold notice", async () => {
   const client = new FixtureClient("d");
   const task = await client.getTask(TASK_ID);

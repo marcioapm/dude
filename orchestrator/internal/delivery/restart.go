@@ -45,14 +45,30 @@ type Restart struct {
 
 // RestartRunTx aborts a live phase Run the task's delivery waits on and
 // creates its replacement in the same slot, in one transaction, under the
-// task's lock order (LockEscalationTx: delivery → task, then the Run). The
-// caller holds the Chat lock first where it takes it (the conductor's
-// tool). Refused (Refusal) for a Run not of the task, not one the delivery
-// waits on, or already ended. Returns the new Run.
+// task's lock order: Chat (taken here, reentrant for a caller already
+// holding it), the delivery and the task (LockEscalationTx), then the Run.
+// A caller holds no delivery, task or Run lock before it. Refused (Refusal)
+// for a Run not of the task, not one the delivery waits on, or already
+// ended. Returns the new Run.
 func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart) (string, error) {
+	return restartRunTx(ctx, tx, org, taskID, in, nil)
+}
+
+// restartRunTx is RestartRunTx; betweenLocks, when given, runs once the
+// task's locks are held and before the Run's (child_lock_order_test.go).
+func restartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart, betweenLocks func()) (string, error) {
+	// The replacement's insert takes a key share on the conductor's row
+	// (conductor_run_id, parent_run_id), which Stop, Close and Archive lock
+	// after Chat and before the delivery: Chat first serialises the two.
+	if err := LockChat(ctx, tx, taskID); err != nil {
+		return "", err
+	}
 	projectID, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil {
 		return "", err
+	}
+	if betweenLocks != nil {
+		betweenLocks()
 	}
 	var runTask, phase, category, status, role string
 	var attempt int

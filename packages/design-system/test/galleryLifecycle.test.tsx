@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { PaneDensityContext } from "../src/gallery/Frame.tsx";
-import { LifecycleSection } from "../src/gallery/sections/Lifecycle.tsx";
+import { LifecycleSection, StoppingSection } from "../src/gallery/sections/Lifecycle.tsx";
+import { ChatSection } from "../src/gallery/sections/Chat.tsx";
 import { NavigationSection } from "../src/gallery/sections/Navigation.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
@@ -34,6 +35,33 @@ test("the Lifecycle section draws every block in both themes and densities", asy
   expect(el.querySelectorAll('#lifecycle-marks [data-testid="resolution-mark"]').length).toBe(5 * 4);
   // The open menus say their reasons.
   expect(el.querySelector("#lifecycle-menu")!.textContent).toContain("Unarchive it first, then reopen it");
+  expect(el.querySelector("#lifecycle-menu")!.textContent).not.toContain("Stop its agents first");
+  expect(el.querySelector("#lifecycle-menu")!.textContent).not.toContain("It has a pull request open");
+});
+
+test("the Stopping section draws LiveWork in both themes and densities, and at 390px", async () => {
+  const el = await mount(<StoppingSection mode="both" />);
+  const panes = [...el.querySelectorAll("#stopping-live [data-theme][data-density]")].map((p) => `${p.getAttribute("data-theme")} ${p.getAttribute("data-density")}`);
+  expect(new Set(panes)).toEqual(new Set(["dark comfortable", "light comfortable", "dark compact", "light compact"]));
+  const first = el.querySelector('#stopping-live [data-testid="live-work"]')!;
+  expect(first.textContent).toContain("Stopping stops the conductor, 2 reviewers and a queued fixer.");
+  expect(el.querySelectorAll('#stopping-live [data-testid="live-work"]').length).toBe(4 * 4);
+});
+
+test("Chat's Who decides and Attempts blocks draw in every pane", async () => {
+  const el = await mount(<ChatSection mode="both" />);
+  for (const id of ["ch-decider-field", "ch-attempts"]) {
+    const panes = [...el.querySelectorAll(`#${id} [data-theme][data-density]`)].map((p) => `${p.getAttribute("data-theme")} ${p.getAttribute("data-density")}`);
+    expect(new Set(panes)).toEqual(new Set(["dark comfortable", "light comfortable", "dark compact", "light compact"]));
+  }
+  expect(el.querySelectorAll('#ch-decider-field [data-testid="decider-field"]').length).toBe(4 * 4);
+  expect(el.querySelector('#ch-attempts hr[aria-label]')!.getAttribute("aria-label")).toBe("Attempt 2, started by Ana");
+  expect(el.querySelector('#ch-attempts [role="group"]')!.getAttribute("aria-label")).toBe("Attempt 1's conversation");
+  // The earlier Run line is read, not opened: no chevron in any pane's group.
+  const groups = [...el.querySelectorAll('#ch-attempts [role="group"]')];
+  expect(groups.length).toBeGreaterThan(0);
+  expect(groups.map((g) => g.querySelectorAll("[data-role]").length > 0)).not.toContain(false);
+  expect(groups.map((g) => g.querySelectorAll('svg[data-icon="chevron-right"]').length)).toEqual(groups.map(() => 0));
 });
 
 test("#nav-tree-epics: every epic row leads with one layers glyph; no task row has one", async () => {

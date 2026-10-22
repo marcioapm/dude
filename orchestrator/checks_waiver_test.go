@@ -354,3 +354,69 @@ func TestRetryAndStopAfterACarriedWaiverAndStartOverInheritsNothing(t *testing.T
 		t.Errorf("%d implementers in the new attempt", n)
 	}
 }
+
+// stoppedAtTheFixersEscalation is a delivery whose implementer's failure
+// the owner waived for the attempt, stopped by the owner's Stop while the
+// fixer's further failure waits on a person: j was asked once, about it.
+func (w *world) stoppedAtTheFixersEscalation(j *scriptedJudge) (wi, owner string) {
+	w.t.Helper()
+	w.onModel("fixer", fakeagent.ChecksNewFailureModel)
+	wi = w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
+	owner, _, _ = w.people(wi)
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
+		w.t.Fatalf("the owner's attempt waiver: %d %v", code, body)
+	}
+	w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
+	w.stop(owner, wi, map[string]any{})
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'escalation' IS NULL
+		AND state->'stopped'->>'reason' = $2`, wi, delivery.ReasonChecksUnverified); n != 1 {
+		w.t.Fatalf("the delivery after the stop: %s", w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, wi))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvRunChecksDecided); n != 1 {
+		w.t.Fatalf("%d checks decisions, want the waiver alone: the Stop decides none", n)
+	}
+	if n := j.waiverQuestions(); n != 1 {
+		w.t.Fatalf("%d waiver questions before the pick-up, want the fixer's", n)
+	}
+	return wi, owner
+}
+
+// Stopped at a later checks escalation, Start over is a new attempt: its
+// implementer's same failure is held, the earlier attempt's waiver never
+// weighed against it.
+func TestStartingOverAfterAStopAtTheChecksGateCarriesNoWaiver(t *testing.T) {
+	w := newWorld(t)
+	j := &scriptedJudge{}
+	wi, owner := w.stoppedAtTheFixersEscalation(j)
+	w.pickUp(owner, wi, map[string]any{"action": "restart"})
+	w.until("the new attempt's implementer held", func() bool { return w.checksEscalations(wi) == 3 })
+	if n := j.waiverQuestions(); n != 1 {
+		t.Errorf("%d waiver questions, want none about the new attempt", n)
+	}
+	if got := w.ids(`SELECT r.attempt::text FROM events e JOIN runs r ON r.id = e.run_id WHERE e.task_id = $1
+		AND e.event_type = $2 AND r.phase = 'implement' AND NOT e.payload ? 'waived' ORDER BY e.cursor`, wi, delivery.EvRunChecksJudged); strings.Join(got, ",") != "1,2" {
+		t.Errorf("the implementers' judged attempts are %v, want each held", got)
+	}
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Errorf("%d pull requests opened past the new attempt's held implementer", n)
+	}
+}
+
+// Resume after the same Stop stays in the attempt: the fixer taken back up
+// reports its failure again, and it is weighed against the attempt's
+// waiver once more before it is held.
+func TestResumingAfterAStopAtTheChecksGateKeepsTheAttemptsWaiver(t *testing.T) {
+	w := newWorld(t)
+	j := &scriptedJudge{}
+	wi, owner := w.stoppedAtTheFixersEscalation(j)
+	fixer := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi)
+	w.until("the fixer kept", func() bool { return w.keptRun(fixer) })
+	w.pickUp(owner, wi, map[string]any{"action": "resume"})
+	w.until("the fixer held again", func() bool { return w.checksEscalations(wi) == 3 })
+	if n := j.waiverQuestions(); n != 2 {
+		t.Errorf("%d waiver questions, want the resumed fixer's too", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt <> 1`, wi); n != 0 {
+		t.Errorf("%d Runs outside the first attempt after Resume", n)
+	}
+}

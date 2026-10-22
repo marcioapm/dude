@@ -510,6 +510,27 @@ export const recoveryOptionsSchema = z.object({
 });
 export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
 
+/**
+ * A person's Stop of the whole task (`POST /v1/tasks/:id/stop`): every live
+ * Run of the task, whatever its attempt, stops, kept for a resume; with
+ * `andRestart` its next
+ * attempt starts at once, decided by `decider` (the stopped attempt's by
+ * default).
+ */
+export const stopRequestSchema = z.object({
+  andRestart: z.boolean().optional(),
+  decider: deciderSchema.optional(),
+  note: z.string().max(2000).optional(),
+});
+export type StopRequest = z.infer<typeof stopRequestSchema>;
+
+export const stopResultSchema = z.object({
+  taskId: z.string(),
+  status: z.enum(["aborted", "running"]),
+  attempt: z.number().int().optional(),
+});
+export type StopResult = z.infer<typeof stopResultSchema>;
+
 export const escalationSchema = z.object({
   reason: z.string(),
   /** Per reason: `runId` and `error` for a phase that failed, `findingIds`, `iterations`, PR counts. */

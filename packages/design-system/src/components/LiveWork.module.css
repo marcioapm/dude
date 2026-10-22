@@ -1,0 +1,39 @@
+/* LiveWork: what a stop stops. Tokens only; wraps, never scrolls. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+
+.summary {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-strong);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8) var(--ds-space-16);
+}
+
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+}
+
+.who {
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+
+.doing {
+  color: var(--ds-color-text-muted);
+}

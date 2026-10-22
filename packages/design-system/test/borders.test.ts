@@ -68,6 +68,10 @@ const ALLOWED: Record<string, Record<string, string>> = {
   "packages/design-system/src/components/ThinkingBlock.module.css": { ".body": "the thinking rail" },
   "packages/design-system/src/components/ToolCallCard.module.css": { ".preStderr": "stderr's tone", ".badExit .preStderr": "stderr's tone" },
   "packages/design-system/src/primitives/Toast.module.css": { ".root": "the toast's tone" },
+  "packages/design-system/src/components/Lifecycle.module.css": {
+    ".live": "what a close stops, set apart from the decision on the sunken band",
+    ".prRow": "the pull request's own question, apart from the resolutions",
+  },
   "packages/design-system/src/styles/base.css": { "::-webkit-scrollbar-thumb": "transparent padding round the thumb" },
 };
 

@@ -222,28 +222,26 @@ func TestAChildImplementerIsRefusedOnceAPersonEndsTheTask(t *testing.T) {
 			if err != nil {
 				t.Fatalf("writer child on a live delivery: %v", err)
 			}
-			// Parked at its start with no pull request open: only the
-			// child writer stands between the task and a person's ending.
+			// Parked at its start with no pull request open: the child
+			// writer is all that works when a person ends the task, and
+			// the ending stops it.
 			w.exec(`UPDATE tasks SET status = 'queued' WHERE id = 'wi_life'`)
 			w.exec(`UPDATE pull_requests SET state = 'closed' WHERE id = 'pr_life'`)
-			end := func() error {
-				return w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-					close := CloseInput{TaskID: "wi_life", Resolution: ResolutionWontDo, Actor: Actor{ActorType: "system", ActorID: "test"}}
-					if ending == "archived" {
-						_, err := ArchiveTaskTx(w.ctx, tx, w.org, ArchiveInput{CloseInput: close})
-						return err
-					}
-					_, err := CloseTx(w.ctx, tx, w.org, close)
+			if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+				close := CloseInput{TaskID: "wi_life", Resolution: ResolutionWontDo, Actor: Actor{ActorType: "system", ActorID: "test"}}
+				if ending == "archived" {
+					_, err := ArchiveTaskTx(w.ctx, tx, w.org, ArchiveInput{CloseInput: close})
 					return err
-				})
-			}
-			var busy LifecycleRefusal
-			if err := end(); !errors.As(err, &busy) || busy.Code != "running" {
+				}
+				_, err := CloseTx(w.ctx, tx, w.org, close)
+				return err
+			}); err != nil {
 				t.Fatalf("%s with a child writer working: %v", ending, err)
 			}
-			w.exec(`UPDATE runs SET status = 'aborted', ended_at = now() WHERE id = $1`, writer)
-			if err := end(); err != nil {
-				t.Fatalf("%s: %v", ending, err)
+			var stop string
+			if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(child_stop_reason, '') FROM runs WHERE id = $1 AND control = 'abort'`,
+				writer).Scan(&stop); err != nil || stop != "aborted" {
+				t.Fatalf("the child writer after the %s: %q %v", ending, stop, err)
 			}
 			runs := w.count("runs")
 

@@ -7,7 +7,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { ArchiveDialog, ArchivedMark, CloseDialog, ResolutionMark, lifecycleMenuItems,
-  type CloseDecision, type LifecycleTaskRef } from "@dude/design-system/components";
+  type ClosablePullRequest, type CloseDecision, type LifecycleTaskRef, type LiveItem } from "@dude/design-system/components";
 import { Button, Callout, RowMenu } from "@dude/design-system/primitives";
 import { firstName, scopeTasks, type NavProject } from "@dude/design-system";
 import { RESOLUTION_LABEL, closedBy, lifecycleEnded, notStarted } from "@dude/domain";
@@ -42,15 +42,17 @@ export interface LifecycleControl {
 }
 
 /** What the task page needs of its lifecycle. `onChanged` re-reads the page. Called before the task is read: then nothing. */
-export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, pullRequestOpen, onChanged }: {
+export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, pullRequests = [], live = [], onChanged }: {
   client: ApiClient;
   task: TaskDetail | null;
   people: People;
   tree: ReadonlyArray<NavProject>;
   /** The not-started tasks it blocks: what waits on it. */
   waiting: ReadonlyArray<LifecycleTaskRef>;
-  /** One of its pull requests is open on GitHub. */
-  pullRequestOpen: boolean;
+  /** Its open pull requests on GitHub, and who opened each: Close and Archive ask whether to close them. */
+  pullRequests?: readonly ClosablePullRequest[] | undefined;
+  /** What is live on it: Close and Archive stop it. */
+  live?: readonly LiveItem[] | undefined;
   onChanged: () => void;
 }): LifecycleControl {
   const [dialog, setDialog] = useState<"close" | "closeArchive" | "archive" | null>(null);
@@ -65,7 +67,7 @@ export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, p
   const task = maybe;
   const refused = notYours(task, people);
   const archived = Boolean(task.archivedAt);
-  const life = { status: task.status, resolution: task.resolution, archived, pullRequestOpen };
+  const life = { status: task.status, resolution: task.resolution, archived, pullRequestOpen: pullRequests.length > 0 };
   const ended = lifecycleEnded(life.status, life.resolution);
   const act = async (fn: () => Promise<unknown>, keep = false) => {
     setBusy(true);
@@ -122,7 +124,8 @@ export function useTaskLifecycle({ client, task: maybe, people, tree, waiting, p
     <>
       {dialog === "close" || dialog === "closeArchive" ? (
         <CloseDialog open onOpenChange={(o) => !o && setDialog(null)} task={ref} waiting={waiting} andArchive={dialog === "closeArchive"}
-          find={find} onConfirm={close(dialog === "closeArchive")} refused={refused} problem={problem} busy={busy} />
+          find={find} onConfirm={close(dialog === "closeArchive")} refused={refused} problem={problem} busy={busy}
+          live={live} pullRequests={pullRequests} />
       ) : null}
       {dialog === "archive" ? (
         <ArchiveDialog open onOpenChange={(o) => !o && setDialog(null)} task={ref} onConfirm={() => void act(() => client.archiveTask(task.id), true)}

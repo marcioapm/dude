@@ -2257,14 +2257,17 @@ func (r *Run) Prompt() string {
 	return spec.Workload.Prompt
 }
 
+// chunks splits s into pieces of at most n characters, never inside one:
+// each piece goes out as a JSON string, where a split character is U+FFFD.
 func chunks(s string, n int) []string {
 	var out []string
-	for len(s) > n {
-		out = append(out, s[:n])
-		s = s[n:]
+	r := []rune(s)
+	for len(r) > n {
+		out = append(out, string(r[:n]))
+		r = r[n:]
 	}
-	if s != "" {
-		out = append(out, s)
+	if len(r) > 0 {
+		out = append(out, string(r))
 	}
 	return out
 }

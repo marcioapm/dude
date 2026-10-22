@@ -125,6 +125,38 @@ export function Callout({ tone = "neutral", className, children, ...rest }: Call
   );
 }
 
+export interface CalloutActionsProps extends HTMLAttributes<HTMLUListElement> {
+  /** The list's accessible name: "Ways to pick it back up". */
+  readonly label: string;
+  /** Each way: its key, its button, and the sentence saying what it does. */
+  readonly items: ReadonlyArray<{ readonly id: string; readonly action: ReactNode; readonly line: ReactNode }>;
+}
+
+/**
+ * Inside a Callout, the ways out of it: each button beside the sentence
+ * saying what it does, in one muted line; the pairs stack, button above
+ * its sentence, when the callout is narrow (its own width, not the
+ * viewport's). With an `id`, each sentence gets one the caller names in
+ * its button's aria-describedby: `calloutActionLineId(id, item.id)`.
+ */
+export function CalloutActions({ label, items, className, id, ...rest }: CalloutActionsProps) {
+  return (
+    <div className={styles["calloutActionsBox"]}>
+      <ul className={cx(styles["calloutActions"], className)} aria-label={label} id={id} {...rest}>
+        {items.map((it) => (
+          <li key={it.id} className={styles["calloutAction"]}>
+            {it.action}
+            <span id={id ? calloutActionLineId(id, it.id) : undefined} className={styles["calloutActionLine"]}>{it.line}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** The id of a CalloutActions item's sentence, for its button's aria-describedby. */
+export const calloutActionLineId = (listId: string, itemId: string) => `${listId}-${itemId}`;
+
 export interface KeyValueListProps extends HTMLAttributes<HTMLDListElement> {
   readonly items: ReadonlyArray<{ readonly label: ReactNode; readonly value: ReactNode; readonly mono?: boolean | undefined }>;
 }
