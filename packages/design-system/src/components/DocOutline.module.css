@@ -1,0 +1,125 @@
+/*
+ * DocOutline: a guide's pages, the current page's sections under it, and
+ * in its place while searching, what the search found. The sidebar's
+ * nav-row type; no borders, the current section in bold.
+ */
+
+.root {
+  min-width: 0;
+}
+.pages,
+.sections,
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.page,
+.section {
+  display: block;
+  padding: var(--ds-space-2) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-accent-text);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.page {
+  font-size: var(--ds-text-nav);
+}
+.page:hover,
+.section:hover {
+  background: var(--ds-color-hover-wash);
+}
+.page:focus-visible,
+.section:focus-visible,
+.result:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: -2px;
+}
+.page[aria-current="page"] {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-semibold);
+}
+/* The current page's sections, set in under it in secondary ink. */
+.sections {
+  display: flex;
+  flex-direction: column;
+  padding: var(--ds-space-2) 0 var(--ds-space-6) var(--ds-space-12);
+}
+.section {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.section[aria-current="location"] {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-semibold);
+}
+
+/* -- Search results, in the list's place. -- */
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  min-width: 0;
+}
+.count,
+.empty {
+  margin: 0;
+  padding: 0 var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.empty {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.list[hidden] {
+  display: none;
+}
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-6) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  cursor: pointer;
+  min-width: 0;
+}
+.active {
+  background: var(--ds-color-hover-wash);
+}
+.heading {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.pageTitle {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+/* Three lines of the section, then an ellipsis. */
+.snippet {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-normal);
+  color: var(--ds-color-text-secondary);
+}
+/* The words searched: the selection's tint, the text's own ink. */
+.mark {
+  background: var(--ds-color-selection);
+  color: inherit;
+  border-radius: var(--ds-radius-mark);
+}

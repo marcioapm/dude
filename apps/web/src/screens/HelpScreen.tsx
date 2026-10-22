@@ -1,12 +1,14 @@
 /**
  * Help: dude's own guide, the pages the orchestrator embeds — the same
- * text agents find with search_memory and link people to. A list of the
- * pages, and the page picked; a section named in the URL is scrolled to.
+ * text agents find with search_memory and link people to. Beside the page,
+ * kept in view: a search over the guide, and the pages with the current
+ * one's sections, the one in view in bold. A section named in the URL is
+ * scrolled to; picking one names it in the URL.
  */
 
-import { useEffect, useState, type ReactElement } from "react";
-import { Markdown, ScreenHeader } from "@dude/design-system/components";
-import { Callout, Spinner } from "@dude/design-system/primitives";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
+import { DocOutline, DocSearchResults, Markdown, ScreenHeader, docResultId, type DocSearchResult } from "@dude/design-system/components";
+import { Callout, SearchField, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient, HelpPage } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { formatPlace } from "../place.ts";
@@ -23,18 +25,47 @@ function resolveHelpLinks(text: string): string {
   );
 }
 
+/** The bounds the search route holds to: at most this many words read, this many sections found. */
+export const HELP_QUERY_MAX = 200;
+export const HELP_RESULTS_MAX = 20;
+/** Milliseconds after the last key before the guide is searched. */
+export const HELP_SEARCH_DELAY = 200;
+
+/**
+ * The section in view: the last whose top has reached `line` (the list's
+ * top, plus a little), else the first. `tops` are in document order.
+ */
+export function sectionInView(tops: ReadonlyArray<{ readonly anchor: string; readonly top: number }>, line: number): string | undefined {
+  let seen = tops[0]?.anchor;
+  for (const t of tops) if (t.top <= line) seen = t.anchor;
+  return seen;
+}
+
+/** A guide section's id (`<page>#<anchor>`) and title (`<page> — <heading>`) as Help shows them. */
+export function docResult(r: { readonly id: string; readonly title: string; readonly snippet: string }, pages: ReadonlyArray<HelpPage>): DocSearchResult {
+  const [page = "", anchor = ""] = r.id.split("#");
+  const pageTitle = pages.find((p) => p.slug === page)?.title ?? r.title.split(" — ")[0] ?? page;
+  const heading = r.title.startsWith(`${pageTitle} — `) ? r.title.slice(pageTitle.length + 3) : anchor ? r.title : "";
+  return { page, anchor, heading, pageTitle, snippet: r.snippet };
+}
+
 type HelpScreenProps = {
   client: ApiClient;
   page?: string | undefined;
   section?: string | undefined;
   onPage: (page: string) => void;
+  /** A section picked from the list or a search: the URL names it. */
+  onSection?: ((page: string, section: string) => void) | undefined;
 };
 
-export function HelpScreen({ client, page, section, onPage }: HelpScreenProps): ReactElement {
+export function HelpScreen({ client, page, section, onPage, onSection }: HelpScreenProps): ReactElement {
   const [pages, setPages] = useState<HelpPage[] | null>(null);
   const [shown, setShown] = useState<HelpPage | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [inView, setInView] = useState<string | undefined>(section);
   const slug = page ?? (pages?.some((p) => p.slug === "overview") ? "overview" : pages?.[0]?.slug);
+  const articleRef = useRef<HTMLElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let current = true;
@@ -66,38 +97,108 @@ export function HelpScreen({ client, page, section, onPage }: HelpScreenProps): 
 
   useEffect(() => {
     if (shown && section) document.getElementById(helpSectionId(section))?.scrollIntoView({ block: "start" });
+    setInView(section);
   }, [shown, section]);
+
+  // The section in view follows the scroll of whatever scrolls the page (the app's main pane).
+  useEffect(() => {
+    if (!shown) return;
+    const follow = () => {
+      const article = articleRef.current;
+      if (!article) return;
+      const line = (listRef.current?.getBoundingClientRect().top ?? 0) + 24;
+      const tops = [...article.querySelectorAll<HTMLElement>("section[data-anchor]")]
+        .filter((s) => s.dataset["anchor"])
+        .map((s) => ({ anchor: s.dataset["anchor"]!, top: s.getBoundingClientRect().top }));
+      setInView(sectionInView(tops, line));
+    };
+    follow();
+    document.addEventListener("scroll", follow, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", follow, { capture: true });
+  }, [shown]);
+
+  const openSection = useCallback((p: string, anchor: string) => {
+    if (!anchor) return onPage(p);
+    if (onSection) onSection(p, anchor);
+    else onPage(p);
+    // The same section again moves no URL: scroll to it here too.
+    if (p === shown?.slug) document.getElementById(helpSectionId(anchor))?.scrollIntoView({ block: "start" });
+  }, [onPage, onSection, shown?.slug]);
+
+  // -- search --
+  const listId = useId();
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<DocSearchResult[] | null>(null);
+  const [active, setActive] = useState(0);
+  const latest = useRef(0);
+  const words = query.trim().slice(0, HELP_QUERY_MAX);
+  useEffect(() => {
+    const mine = ++latest.current;
+    if (!words) {
+      setFound(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      client.searchMemory({ q: words, types: "doc", limit: HELP_RESULTS_MAX }).then(
+        (out) => {
+          if (mine !== latest.current) return;
+          setFound(out.results.filter((r) => r.type === ("doc" as string)).map((r) => docResult(r, pages ?? [])));
+          setActive(0);
+        },
+        (err: unknown) => {
+          if (mine !== latest.current) return;
+          setFound([]);
+          setProblem(`Could not search the guide: ${errorText(err)}`);
+        },
+      );
+    }, HELP_SEARCH_DELAY);
+    return () => clearTimeout(t);
+  }, [client, words, pages]);
+  const searching = words.length > 0;
+  const results = searching ? found : null;
+  const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    const n = results?.length ?? 0;
+    if (e.key === "Escape" && query) {
+      e.preventDefault();
+      setQuery("");
+    } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && n) {
+      e.preventDefault();
+      const next = (active + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+      setActive(next);
+      document.getElementById(docResultId(listId, next))?.scrollIntoView?.({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const r = results?.[active];
+      if (r) openSection(r.page, r.anchor);
+    }
+  };
 
   return (
     <div className="helpScreen" data-testid="help">
       <ScreenHeader title="Help" />
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       <div className="helpLayout">
-        <nav aria-label="Guide pages" className="helpPages">
-          {pages === null ? <Spinner label="Loading…" /> : (
-            <ul>
-              {pages.map((p) => (
-                <li key={p.slug}>
-                  <a href={formatPlace({ view: "help", page: p.slug })} aria-current={p.slug === slug ? "page" : undefined}
-                    data-testid="help-page-link" onClick={(e) => {
-                      e.preventDefault();
-                      onPage(p.slug);
-                    }}>
-                    {p.title}
-                  </a>
-                </li>
-              ))}
-            </ul>
+        <div className="helpPages" ref={listRef} data-testid="help-nav">
+          <SearchField value={query} onValueChange={setQuery} onKeyDown={onSearchKey} label="Search the guide" placeholder="Search the guide"
+            maxLength={HELP_QUERY_MAX} role="combobox" aria-expanded={Boolean(results?.length)} aria-controls={listId} aria-autocomplete="list"
+            aria-activedescendant={results?.length ? docResultId(listId, active) : undefined} data-testid="help-search" />
+          {searching ? (
+            <DocSearchResults results={results} query={words} active={active} onActiveChange={setActive} listId={listId}
+              onOpen={(r) => openSection(r.page, r.anchor)} />
+          ) : pages === null ? <Spinner label="Loading…" /> : (
+            <DocOutline pages={pages} current={slug} currentSection={slug === shown?.slug ? inView : undefined}
+              href={(p, s) => formatPlace({ view: "help", page: p, ...(s ? { section: s } : {}) })}
+              onPage={onPage} onSection={openSection} />
           )}
-        </nav>
-        <article className="helpPage" data-testid="help-page" data-page={shown?.slug}>
+        </div>
+        <article className="helpPage" ref={articleRef} data-testid="help-page" data-page={shown?.slug}>
           {shown ? (
             <>
               <h1>{shown.title}</h1>
               {shown.sections.map((s) => (
                 <section key={s.anchor} id={helpSectionId(s.anchor)} data-anchor={s.anchor}>
                   {s.heading ? <h2>{s.heading}</h2> : null}
-                  <Markdown variant="document" linkTarget="_self" source={resolveHelpLinks(s.text ?? "")} />
+                  <Markdown variant="document" unmeasured linkTarget="_self" source={resolveHelpLinks(s.text ?? "")} />
                 </section>
               ))}
             </>

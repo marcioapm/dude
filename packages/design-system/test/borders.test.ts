@@ -46,7 +46,7 @@ const ALLOWED: Record<string, Record<string, string>> = {
   "packages/design-system/src/components/QuestionCard.module.css": {
     ".ownField": "a field's edge", ".ownField:focus": "focus", ".noteField": "a field's edge", ".noteField:focus-within": "focus",
   },
-  "packages/design-system/src/components/Sidebar.module.css": { ".search": "a field's edge", ".search:hover": "a field's edge", ".search:focus-within": "focus" },
+  "packages/design-system/src/primitives/SearchField.module.css": { ".root": "a field's edge", ".root:hover": "a field's edge", ".root:focus-within": "focus" },
   "packages/design-system/src/components/DiffView.module.css": { ".gutter": "a diff's gutter" },
   "packages/design-system/src/components/MarkdownDocument.module.css": { ".editing": "a field's edge, while it is one" },
   "packages/design-system/src/components/Markdown.module.css": {

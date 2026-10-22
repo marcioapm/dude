@@ -1394,6 +1394,31 @@ here.
   and matched words are not highlighted in a hue. `SearchResultList` is the
   ordered list of them. The widths before the lead are the row's own
   custom properties, so the body indents with them.
+- **The guide (Help)** is not drawn with `SearchResultRow`: a guide section
+  has no rank worth showing, no lead in the sidebar's grammar (`RefLead`
+  has no doc type, and a section is not a thing you act on) and its snippet
+  is the point, not a detail behind a click; a 248px column cannot hold the
+  row's trailing facts. Help uses three pieces instead:
+  - **SearchField** (primitive) — the sidebar's "Find work…" box, made one
+    component: a wash at rest, a hairline on hover, the accent ring on focus,
+    a ✕ once there are words or the `shortcut` before. Named by `label`, never
+    its placeholder. The caller owns the keys (`onKeyDown`) and when to
+    search. `Sidebar`'s search is one.
+  - **DocOutline** — the guide's pages; under the current one, its `##`
+    sections (`currentSection` in bold, `aria-current="location"`). Every
+    entry is a link (`href`), so a modified click opens a tab; a plain click
+    is the caller's (`onPage`, `onSection`), which scrolls and names the
+    section in the URL. For a document's own headings, `outline` in
+    `util/markdown.ts` builds the list; the guide's sections come from its
+    API, already split.
+  - **DocSearchResults** — what a guide search found, in the list's place:
+    "N sections" (a `status`, so it is read out), then a listbox of
+    sections — heading, page title, a three-line snippet — with the query's
+    words in `<mark>` on the selection tint (`markWords`: a word matched by
+    its stem's first letters, as the search's English stemming finds it). The
+    field drives it: ↑↓ move (`aria-activedescendant`), Enter opens, Escape
+    clears; a press opens without taking the field's focus. Nothing found
+    says so in words.
 - **RefLead** is what a thing is, in the sidebar's grammar, wherever tasks,
   epics, projects and memories are named side by side: a task's
   `StatusMark` and its key in mono, the `layers` glyph for an epic, a

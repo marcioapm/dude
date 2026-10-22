@@ -1,0 +1,77 @@
+/*
+ * SearchField: a field that looks like the rows around it, not a form
+ * control — the sidebar's "Find work…" and the guide's "Search the guide".
+ * A wash at rest, a hairline on hover, the accent ring on focus; a ✕ to
+ * clear once there are words, else the shortcut that reaches it.
+ */
+
+.root {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-control-md);
+  padding: 0 var(--ds-space-8);
+  background: var(--ds-color-active-wash);
+  border: 1px solid transparent;
+  border-radius: var(--ds-radius-control);
+  color: var(--ds-color-text-primary);
+  min-width: 0;
+  transition:
+    border-color var(--ds-duration-fast) var(--ds-ease-standard),
+    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.root:hover {
+  border-color: var(--ds-color-border-subtle);
+}
+.root:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.icon {
+  color: var(--ds-color-text-muted);
+  flex-shrink: 0;
+}
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font-size: var(--ds-text-nav);
+  color: inherit;
+}
+/* The box's own frame is the focus ring: no second one inside it. */
+.input:focus-visible {
+  outline: none;
+}
+.input::placeholder {
+  color: var(--ds-color-text-muted);
+}
+.input::-webkit-search-cancel-button {
+  display: none;
+}
+.kbd {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--ds-radius-mark);
+  color: var(--ds-color-text-muted);
+}
+.clear {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: none;
+  color: var(--ds-color-text-muted);
+}
+.clear:hover {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-active-wash);
+}

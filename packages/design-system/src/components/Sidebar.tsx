@@ -6,6 +6,7 @@ import { Icon, type IconName } from "../icons/index.tsx";
 import { IconButton, type IconButtonProps } from "../primitives/Button.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
+import { SearchField } from "../primitives/SearchField.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import {
@@ -397,31 +398,17 @@ export function Sidebar({
       ) : null}
 
 
-      <div className={styles["search"]}>
-        <Icon name="search" size={14} className={styles["searchIcon"]} />
-        <input
-          ref={searchRef}
-          id={searchId}
-          className={styles["searchInput"]}
-          type="search"
-          value={q}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onSearchKey}
-          placeholder="Find work…"
-          aria-label="Find tasks, people, epics"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        {q ? (
-          <button type="button" className={styles["searchClear"]} aria-label="Clear search" onClick={() => setQuery("")}>
-            <Icon name="close" size={10} />
-          </button>
-        ) : (
-          <kbd className={styles["searchKbd"]} aria-hidden>
-            /
-          </kbd>
-        )}
-      </div>
+      <SearchField
+        ref={searchRef}
+        id={searchId}
+        className={styles["search"]}
+        value={q}
+        onValueChange={setQuery}
+        onKeyDown={onSearchKey}
+        placeholder="Find work…"
+        label="Find tasks, people, epics"
+        shortcut="/"
+      />
 
       {onWaitingSelect ? (
         <nav className={styles["waiting"]} aria-label="Waiting">

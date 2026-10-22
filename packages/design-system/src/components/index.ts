@@ -165,6 +165,8 @@ export { RemovableList } from "./RemovableList.tsx";
 export type { RemovableItem, RemovableListProps } from "./RemovableList.tsx";
 export { SearchPicker } from "./SearchPicker.tsx";
 export type { SearchPickerProps } from "./SearchPicker.tsx";
+export { DocOutline, DocSearchResults, docResultId, markWords, queryWords } from "./DocOutline.tsx";
+export type { DocOutlinePage, DocOutlineProps, DocOutlineSection, DocSearchResult, DocSearchResultsProps } from "./DocOutline.tsx";
 export { FitBar, MachineChip, MachineRaises, MachineTip, ProportionBar, ReservedSwatch, UsedBy } from "./Machines.tsx";
 export type { FitBarProps, MachineChipProps, MachineRaise, MachineRaisesProps, ProportionBarProps, ProportionSegment } from "./Machines.tsx";
 export { GivenTo, GivenToFieldset, SecretsChip, SECRETS_TIP_SOURCE } from "./Secrets.tsx";

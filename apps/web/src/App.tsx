@@ -461,7 +461,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (place?.view === "help") {
-    main = <HelpScreen client={client} page={place.page} section={place.section} onPage={(page) => go({ view: "help", page })} />;
+    main = <HelpScreen client={client} page={place.page} section={place.section} onPage={(page) => go({ view: "help", page })}
+      onSection={(page, section) => go({ view: "help", page, section })} />;
   } else if (place?.view === "sessions") {
     main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
   } else if (place?.view === "brainstorm") {

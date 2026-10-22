@@ -30,6 +30,8 @@ export { Skeleton, SkeletonLines, Spinner, EmptyState } from "./Feedback.tsx";
 export type { SkeletonProps, EmptyStateProps } from "./Feedback.tsx";
 export { ScrollArea } from "./ScrollArea.tsx";
 export type { ScrollAreaProps } from "./ScrollArea.tsx";
+export { SearchField } from "./SearchField.tsx";
+export type { SearchFieldProps } from "./SearchField.tsx";
 export { Textarea, textareaHeight, TEXTAREA_LINE_PX, TEXTAREA_PADDING_PX } from "./Textarea.tsx";
 export type { TextareaProps } from "./Textarea.tsx";
 export { SecretField, secretLength } from "./SecretField.tsx";

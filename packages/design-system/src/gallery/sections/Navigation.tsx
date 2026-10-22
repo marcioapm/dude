@@ -3,6 +3,8 @@ import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode 
 import { NavTree, NavTreeRow } from "../../components/NavTree.tsx";
 import { Sidebar, SidebarSessions, type SidebarSession } from "../../components/Sidebar.tsx";
 import { ProfileMenu } from "../../components/OrgSwitcher.tsx";
+import { DocOutline, DocSearchResults, type DocOutlinePage, type DocSearchResult } from "../../components/DocOutline.tsx";
+import { SearchField } from "../../primitives/SearchField.tsx";
 import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { Button } from "../../primitives/Button.tsx";
@@ -120,6 +122,13 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
               </div>
             ))}
           </div>
+        </Panes>
+      </Block>
+
+      <Block id="nav-guide" title="SearchField / DocOutline / DocSearchResults"
+        note="The guide's column (Help): SearchField at the top (the sidebar's Find work box, one component), then DocOutline — the pages, and under the current one its sections, the one in view in bold — or, while there are words, DocSearchResults in its place: N sections, each its heading, its page and a snippet with the words marked. ↑↓ move, Enter opens, Escape clears.">
+        <Panes mode={mode} surface>
+          <GuideDemo />
         </Panes>
       </Block>
     </Section>
@@ -293,6 +302,68 @@ function SidebarDemo() {
         </div>
       </div>
     </Col>
+  );
+}
+
+const GUIDE: DocOutlinePage[] = [
+  { slug: "accounts", title: "Accounts and organisations", sections: [{ anchor: "keys", heading: "Keys" }] },
+  { slug: "delivery", title: "Delivering a task", sections: [
+    { anchor: "the-pipeline", heading: "The pipeline" }, { anchor: "which-reviewers-run", heading: "Which reviewers run" },
+    { anchor: "which-findings-block", heading: "Which findings block" }, { anchor: "when-the-loop-stops", heading: "When the loop stops" },
+  ] },
+  { slug: "github", title: "GitHub", sections: [] },
+  { slug: "memory", title: "Memory", sections: [] },
+];
+const GUIDE_FOUND: DocSearchResult[] = [
+  { page: "delivery", anchor: "which-reviewers-run", heading: "Which reviewers run", pageTitle: "Delivering a task",
+    snippet: "API joins for /routes/ or /api/. Documentation never runs by default. Tick it under Reviewers every delivery runs to have each round check the docs." },
+  { page: "why", anchor: "a-reviewer-didnt-run", heading: "A reviewer didn't run", pageTitle: "Why is dude doing this?",
+    snippet: "Documentation runs only where an organisation or project makes it a required reviewer. See Delivering a task." },
+];
+
+/** The guide's column: search, then the outline or what the search found. */
+function GuideDemo() {
+  const [query, setQuery] = useState("");
+  const [section, setSection] = useState("which-reviewers-run");
+  const [active, setActive] = useState(0);
+  const found = query.trim() ? (query.includes("zz") ? [] : GUIDE_FOUND) : null;
+  const column = (body: ReactNode, label: string) => (
+    <Col style={{ width: 248 }}>
+      <Caption>{label}</Caption>
+      {body}
+    </Col>
+  );
+  return (
+    <Row top>
+      {column(
+        <>
+          <SearchField value={query} label="Search the guide" placeholder="Search the guide" onValueChange={setQuery}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQuery("");
+              if (e.key === "ArrowDown" && found?.length) setActive((active + 1) % found.length);
+              if (e.key === "ArrowUp" && found?.length) setActive((active - 1 + found.length) % found.length);
+            }} />
+          {found ? (
+            <DocSearchResults results={found} query={query} active={active} onActiveChange={setActive} onOpen={(r) => setSection(r.anchor)} listId="gallery-guide" />
+          ) : (
+            <DocOutline pages={GUIDE} current="delivery" currentSection={section} href={(p, s) => `#${p}${s ? `/${s}` : ""}`}
+              onPage={() => undefined} onSection={(_, s) => setSection(s)} />
+          )}
+        </>, "live: type, or pick a section",
+      )}
+      {column(
+        <>
+          <SearchField value="documentation reviewer" label="Search the guide" onValueChange={() => undefined} />
+          <DocSearchResults results={GUIDE_FOUND} query="documentation reviewer" active={0} onActiveChange={() => undefined} onOpen={() => undefined} listId="gallery-guide-found" />
+        </>, "searching: 2 sections",
+      )}
+      {column(
+        <>
+          <SearchField value="zebra" label="Search the guide" onValueChange={() => undefined} />
+          <DocSearchResults results={[]} query="zebra" active={0} onActiveChange={() => undefined} onOpen={() => undefined} listId="gallery-guide-none" />
+        </>, "nothing found",
+      )}
+    </Row>
   );
 }
 

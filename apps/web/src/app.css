@@ -974,31 +974,27 @@ body {
   font-size: var(--ds-text-xs);
 }
 
-/* Help: a list of the guide's pages beside the page; layout only. */
-.helpScreen {
-  padding: var(--ds-space-16) var(--ds-space-24);
-}
+/* Help: the guide's search and pages beside the page; layout only. `.main`
+   pads the screen, and the list stays in view as the page scrolls. */
 .helpLayout {
   display: flex;
   gap: var(--ds-space-24);
   align-items: flex-start;
 }
 .helpPages {
-  flex: 0 0 200px;
-}
-.helpPages ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--ds-space-4);
-}
-.helpPages a[aria-current="page"] {
-  font-weight: 600;
+  position: sticky;
+  top: 0;
+  flex: 0 0 248px;
+  width: 248px;
+  max-height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
 }
 .helpPage {
   flex: 1 1 auto;
-  max-width: 72ch;
+  min-width: 0;
 }
 .helpPage section {
   scroll-margin-top: var(--ds-space-16);
