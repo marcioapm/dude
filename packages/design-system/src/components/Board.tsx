@@ -8,7 +8,7 @@ import { statusSpec } from "../tokens/status.ts";
 import { sumTriage } from "../tokens/triage.ts";
 import { firstName, formatDuration } from "../util/format.ts";
 import { toMs, useNow } from "../util/useNow.ts";
-import { liveSessions, navKey, ownerAgents, projectPeople, shownDriver, taskOwner, waitingWords, type NavEpic, type NavProject, type NavRef, type NavRow, type NavSession, type NavTask } from "../util/navModel.ts";
+import { liveSessions, navKey, ownerAgents, projectPeople, shownDriver, taskOwner, waitingWords, type NavEpic, type NavProject, type NavRef, type NavSession, type NavTask } from "../util/navModel.ts";
 import {
   BOARD_COLUMN_KINDS,
   BOARD_COLUMN_SPECS,
@@ -49,7 +49,7 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
   /** A task or one of its sessions; the card is marked current. */
   readonly selected?: NavRef | null | undefined;
   /** A needs-you card hands over the asking session, so one click lands on the question. */
-  readonly onSelect?: ((ref: NavRef, node: NavRow["node"]) => void) | undefined;
+  readonly onSelect?: ((ref: NavRef, node: NavTask | NavSession) => void) | undefined;
   /** Cards shown per column before "N more". Urgent cards are never behind it. */
   readonly cap?: number | undefined;
   /** Data has not arrived yet. Skeleton columns instead of "nothing here". */

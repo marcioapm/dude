@@ -325,7 +325,7 @@ export interface NavRow {
   readonly expanded: boolean;
   /** Set when the filter forced this row open; the chevron is inert. */
   readonly forced: boolean;
-  readonly node: NavProject | NavEpic | NavTask | NavRun | NavSession;
+  readonly node: NavProject | NavEpic | NavTask | NavRun;
   /** Project / epic / task: bucket counts of the tasks inside. */
   readonly counts: TriageCounts | null;
   /** Task: its own bucket. */
@@ -339,7 +339,7 @@ interface Ctx {
   readonly rows: NavRow[];
   /** No query and no triage filter: only work in progress is listed. */
   readonly trimmed: boolean;
-  /** The selected task's row key, listed even when the trim would drop it. */
+  /** The row key that stands for the selection (a task, or an epic); listed even when the trim would drop it. */
   readonly pinned: string | null;
 }
 
@@ -392,14 +392,24 @@ function eligibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavT
 
 function listed(ctx: Ctx, eligible: ReadonlyArray<NavTask>): NavTask[] {
   if (!ctx.trimmed) return [...eligible];
-  return eligible.filter((wi) => inProgress(wi.status) || navKey({ kind: "task", id: wi.id }) === ctx.pinned);
+  const pinnedTask = ctx.pinned?.startsWith("task:") ? ctx.pinned.slice("task:".length) : null;
+  return eligible.filter((wi) => inProgress(wi.status) || wi.id === pinnedTask);
 }
 
-/** The row that stands for the selection: a session's or run's task, else the selection itself. */
+/** The id of the task a ref is or belongs to (a session's or run's task); null for projects, epics and unknown refs. */
+export function taskOf(projects: ReadonlyArray<NavProject>, ref: NavRef): string | null {
+  if (ref.kind === "task") return ref.id;
+  if (ref.kind !== "session" && ref.kind !== "run") return null;
+  const key = ancestorKeys(projects, ref).findLast((k) => k.startsWith("task:"));
+  return key ? key.slice("task:".length) : null;
+}
+
+/** The row that stands for the selection: its task, or the epic itself. A project's header needs no pin. */
 function pinnedKey(projects: ReadonlyArray<NavProject>, selected: NavRef | null | undefined): string | null {
-  if (!selected) return null;
-  if (selected.kind !== "session" && selected.kind !== "run") return navKey(selected);
-  return ancestorKeys(projects, selected).findLast((k) => k.startsWith("task:")) ?? null;
+  if (!selected || selected.kind === "project") return null;
+  if (selected.kind === "epic") return navKey(selected);
+  const task = taskOf(projects, selected);
+  return task ? navKey({ kind: "task", id: task }) : null;
 }
 
 /**

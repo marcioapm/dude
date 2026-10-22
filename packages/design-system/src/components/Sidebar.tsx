@@ -157,8 +157,7 @@ export function projectCountWords(c: TriageCounts): string {
  *               others is the inbox's Others tab, not a row here)
  *   sessions    the `sessions` slot (`SidebarSessions`)
  *   projects    Everyone / Mine, then the tree: projects with their faces,
- *               epics, tasks with their people, and under a task only the
- *               agents working now
+ *               epics, tasks with their people
  *   band        on its own shade: you, and your menu
  *
  * Calm at fifty tasks: colour is on faces and marks, and the one amber

@@ -157,11 +157,15 @@ describe("a task is a leaf", () => {
 });
 
 describe("the selection always has a row", () => {
+  // Two attempts: r1 failed, r (the current one) completed.
   const shipped = task("shipped", "done", {
-    runs: [{ id: "r", attempt: 1, status: "completed", sessions: [{ id: "orc", role: "conductor", status: "completed", children: [{ id: "imp", role: "implementer", status: "completed" }] }] }],
+    runs: [
+      { id: "r1", attempt: 1, status: "failed", sessions: [{ id: "orc1", role: "conductor", status: "failed" }] },
+      { id: "r", attempt: 2, status: "completed", sessions: [{ id: "orc", role: "conductor", status: "completed", children: [{ id: "imp", role: "implementer", status: "completed" }] }] },
+    ],
   });
   const live = task("live", "running", { runs: [{ id: "r2", attempt: 1, status: "running", sessions: [{ id: "work", role: "implementer", status: "running" }] }] });
-  const p: NavProject = { id: "p", name: "Web", epics: [{ id: "e", title: "Billing", tasks: [shipped, live] }] };
+  const p: NavProject = { id: "p", name: "Web", epics: [{ id: "e", title: "Billing", tasks: [shipped, task("also", "done"), live] }] };
 
   const selectedRow = (el: HTMLElement) => allByRole(el, "treeitem").filter((r) => r.getAttribute("aria-selected") === "true").map((r) => r.getAttribute("data-nav-key"));
 
@@ -178,10 +182,20 @@ describe("the selection always has a row", () => {
   test.each([
     ["a running task's session", { kind: "session", id: "work" }, "task:live"],
     ["a done task's nested session", { kind: "session", id: "imp" }, "task:shipped"],
-  ] as const)("selecting %s highlights its task", async (_, ref, key) => {
+    ["a done task's earlier attempt", { kind: "run", id: "r1" }, "task:shipped"],
+  ] as const)("selecting %s lists and highlights its task", async (_, ref, key) => {
+    expect(keys([p], { selected: ref as NavRef })).toContain(key);
     const el = await mount(<NavTree projects={[p]} selected={ref as NavRef} />);
     expect(selectedRow(el)).toEqual([key]);
     expect(el.querySelector('[data-kind="session"]')).toBeNull();
+    expect(el.querySelector('[data-kind="run"]')).toBeNull();
+  });
+
+  test("a project whose only listed row is the selected done task opens to it", async () => {
+    const lone: NavProject = { id: "p", name: "Web", tasks: [task("d", "done")] };
+    const el = await mount(<NavTree projects={[lone]} selected={{ kind: "task", id: "d" }} />);
+    expect(selectedRow(el)).toEqual(["task:d"]);
+    expect(byRole(el, "treeitem", "Web").getAttribute("aria-expanded")).toBe("true");
   });
 
   test("a session in a folded project and epic unfolds them to its task", async () => {
@@ -192,9 +206,53 @@ describe("the selection always has a row", () => {
     await act(async () => root!.render(<TooltipProvider>{tree(overrides)}</TooltipProvider>));
     expect(selectedRow(host!)).toEqual(["task:shipped"]);
   });
+});
 
-  test("a search drops the pin: the selection is listed only if it matches", () => {
+describe("a search drops the pin: the selection is listed only if it matches", () => {
+  const p: NavProject = {
+    id: "p",
+    name: "Web",
+    epics: [
+      { id: "e", title: "Billing", tasks: [task("shipped", "done"), task("live", "running")] },
+      { id: "quiet", title: "Docs", tasks: [task("old", "done")] },
+    ],
+    tasks: [task("plan", "awaiting_confirmation")],
+  };
+
+  test("a query", () => {
     expect(keys([p], { query: "task live", selected: { kind: "task", id: "shipped" } })).toEqual(["project:p", "epic:e", "task:live"]);
+    expect(keys([p], { query: "task live", selected: { kind: "epic", id: "quiet" } })).toEqual(["project:p", "epic:e", "task:live"]);
+  });
+
+  test("the needs-you filter", () => {
+    expect(keys([p], { triage: "needs_you", selected: { kind: "task", id: "shipped" } })).toEqual(["project:p", "task:plan"]);
+    expect(keys([p], { triage: "needs_you", selected: { kind: "epic", id: "quiet" } })).toEqual(["project:p", "task:plan"]);
+  });
+});
+
+describe("Mine keeps its own rule over the pin", () => {
+  const me = { id: "me", name: "Me" };
+  const them = { id: "them", name: "Them" };
+  const p: NavProject = {
+    id: "p",
+    name: "Web",
+    epics: [
+      { id: "e", title: "Billing", tasks: [task("mine-done", "done", { people: [me] }), task("theirs-done", "done", { people: [them] }), task("mine-live", "running", { people: [me] })] },
+      { id: "theirs", title: "Docs", tasks: [task("doc", "done", { people: [them] })] },
+    ],
+  };
+  const mine = (selected: NavRef): NavFilter => ({ person: "me", you: "me", selected });
+
+  test("a selected done task that is not yours is not listed", () => {
+    expect(keys([p], mine({ kind: "task", id: "theirs-done" }), OPEN)).toEqual(["project:p", "epic:e", "task:mine-live"]);
+  });
+
+  test("a selected epic with nothing of yours is not listed", () => {
+    expect(keys([p], mine({ kind: "epic", id: "theirs" }), OPEN)).toEqual(["project:p", "epic:e", "task:mine-live"]);
+  });
+
+  test("a selected done task that is yours is listed", () => {
+    expect(keys([p], mine({ kind: "task", id: "mine-done" }), OPEN)).toEqual(["project:p", "epic:e", "task:mine-done", "task:mine-live"]);
   });
 });
 
@@ -206,6 +264,12 @@ describe("the sidebar's no-matches state", () => {
     const el = await mount(<Sidebar projects={[p]} you="me" mine />);
     expect(el.textContent).toContain("Nothing of yours in progress.");
     expect(allByRole(el, "treeitem").length).toBe(0);
+  });
+
+  test("Mine with your only task done and selected lists it, not the empty state", async () => {
+    const el = await mount(<Sidebar projects={[p]} you="me" mine selected={{ kind: "task", id: "old" }} />);
+    expect(allByRole(el, "treeitem").map((r) => r.getAttribute("data-nav-key"))).toEqual(["project:p", "task:old"]);
+    expect(el.textContent).not.toContain("Nothing of yours in progress.");
   });
 
   test("a query finds the done task the default view leaves out", async () => {

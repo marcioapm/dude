@@ -12,6 +12,7 @@ import {
   projectPeople,
   ownerAgents,
   shownDriver,
+  taskOf,
   type NavEpic,
   type NavFilter,
   type NavOverrides,
@@ -102,7 +103,9 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
   // A session has no row of its own: its task's row stands for it.
   const selectedKey = useMemo(() => {
     if (!selected || rows.some((r) => r.key === chosenKey)) return chosenKey;
-    return [...ancestorKeys(projects, selected)].reverse().find((k) => k.startsWith("task:") && rows.some((r) => r.key === k)) ?? chosenKey;
+    const task = taskOf(projects, selected);
+    const taskKey = task ? navKey({ kind: "task", id: task }) : null;
+    return taskKey && rows.some((r) => r.key === taskKey) ? taskKey : chosenKey;
   }, [selected, chosenKey, rows, projects]);
 
   // Selection is always visible: opening a deep node from elsewhere (a
@@ -117,8 +120,7 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
     lastRevealed.current = chosenKey;
     // Pinned open, not just opened: an ancestor open only by default (a
     // project with something active) would fold under the selection once
-    // that settles. Only projects and epics fold; a session's task and
-    // parent sessions in the path have no chevron to pin.
+    // that settles. Only projects and epics fold; tasks are leaves.
     const closed = path.filter((k) => (k.startsWith("project:") || k.startsWith("epic:")) && overrides.get(k) !== true);
     if (closed.length === 0) return;
     setOverrides((prev) => {
@@ -424,13 +426,18 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     );
   }
 
-  const r = row.node as NavRun;
-  return (
-    <div {...common} className={cx(styles["row"], styles["run"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
-      {chevron}
-      <StatusBadge status={r.status} variant="dot" iconOnly className={styles["mark"]} />
-      <span className={styles["runTitle"]}>Attempt {r.attempt}</span>
-      {menuSlot}
-    </div>
-  );
+  if (kind === "run") {
+    const r = row.node as NavRun;
+    return (
+      <div {...common} className={cx(styles["row"], styles["run"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
+        {chevron}
+        <StatusBadge status={r.status} variant="dot" iconOnly className={styles["mark"]} />
+        <span className={styles["runTitle"]}>Attempt {r.attempt}</span>
+        {menuSlot}
+      </div>
+    );
+  }
+
+  const unknown: never = kind;
+  return unknown;
 }
