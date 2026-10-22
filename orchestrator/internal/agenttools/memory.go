@@ -87,6 +87,7 @@ func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, s
 			}
 			page, anchor, _ := strings.Cut(r.ID, "#")
 			hit.ID, hit.Link = docPrefix+r.ID, guide.Link(c.env.publicURL, slug, page, anchor)
+			hit.Snippet = guide.Resolve(hit.Snippet, c.env.publicURL, slug)
 		}
 		hits = append(hits, hit)
 	}
@@ -137,6 +138,7 @@ func getDoc(ctx context.Context, tx pgx.Tx, c Caller, id string) (docOut, error)
 		return docOut{}, err
 	}
 	out.Link = guide.Link(c.env.publicURL, slug, page, anchor)
+	out.Text = guide.Resolve(out.Text, c.env.publicURL, slug)
 	return out, nil
 }
 

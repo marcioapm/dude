@@ -41,9 +41,9 @@ People add memories in **Settings → Memory → Memories**.
 
 **Settings → Memory** has three pages, on the organisation and on each project:
 
-- **Search** — what an agent finds when it calls `search_memory`. Each result shows its rank by words and by meaning. Switch to **As the agent sees it** to see exactly what the agent gets.
+- **Search** — organisation and project memories, tasks, epics and projects, ranked by words and meaning. **As the agent sees it** shows these results in the agent's format. Agents also search dude's built-in guide sections, which are not shown here.
 - **Memories** — what people, dude and agents chose to remember. Archive one to take it out of every search; restore it to bring it back.
-- **Index** — everything `search_memory` can find, and the embeddings that let it search by meaning.
+- **Index** — the organisation's indexed memories and work, and their embeddings for search by meaning. Built-in guide sections and their embeddings are not managed on this page.
 
 ## The index
 

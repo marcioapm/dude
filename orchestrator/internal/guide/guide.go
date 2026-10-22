@@ -234,6 +234,19 @@ func HashPath(org, page, anchor string) string {
 	return p
 }
 
+var helpDestination = regexp.MustCompile(`\]\(help:([a-z0-9]+(?:-[a-z0-9]+)*)(?:#([a-z0-9]+(?:-[a-z0-9]+)*)?)?\)`)
+var truncatedHelpLink = regexp.MustCompile(`\[([^\]\n]*)\]\(help:[^\s)]*$`)
+
+// Resolve maps built-in guide Markdown destinations to this caller's Help URLs.
+func Resolve(text, base, org string) string {
+	// A search headline can end mid-destination; retain its label, not a broken link.
+	text = truncatedHelpLink.ReplaceAllString(text, "$1")
+	return helpDestination.ReplaceAllStringFunc(text, func(link string) string {
+		parts := helpDestination.FindStringSubmatch(link)
+		return "](" + Link(base, org, parts[1], parts[2]) + ")"
+	})
+}
+
 // Link is a page or section's link: base (dude's public origin) then its
 // hash path, or the hash path alone when there is no base.
 func Link(base, org, page, anchor string) string {

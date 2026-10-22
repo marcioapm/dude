@@ -23,7 +23,7 @@ export function HelpScreen({ client, page, section, onPage }: {
   const [pages, setPages] = useState<HelpPage[] | null>(null);
   const [shown, setShown] = useState<HelpPage | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const slug = page ?? pages?.[0]?.slug;
+  const slug = page ?? (pages?.some((p) => p.slug === "overview") ? "overview" : pages?.[0]?.slug);
 
   useEffect(() => {
     let current = true;
@@ -86,7 +86,10 @@ export function HelpScreen({ client, page, section, onPage }: {
               {shown.sections.map((s) => (
                 <section key={s.anchor} id={helpSectionId(s.anchor)} data-anchor={s.anchor}>
                   {s.heading ? <h2>{s.heading}</h2> : null}
-                  <Markdown variant="document" source={s.text ?? ""} />
+                  <Markdown variant="document" linkTarget="_self" source={(s.text ?? "").replace(
+                    /\]\(help:([a-z0-9]+(?:-[a-z0-9]+)*)(?:#([a-z0-9]+(?:-[a-z0-9]+)*)?)?\)/g,
+                    (_, page: string, section?: string) => `](${formatPlace({ view: "help", page, ...(section ? { section } : {}) })})`,
+                  )} />
                 </section>
               ))}
             </>

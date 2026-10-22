@@ -284,7 +284,7 @@ function SearchPage({ client, scope, projects, version, onOpen }: {
   return (
     <>
       <SettingsHeader title="Search"
-        description="What an agent finds when it calls search_memory: memories, tasks, epics and projects, ranked by their words and their meaning together." />
+        description="Search organisation and project memories, tasks, epics and projects by words and meaning. Agents also search dude's built-in guide, which is not shown here." />
       <form className="memoryToolbar" onSubmit={(e) => {
         e.preventDefault();
         // Enter searches now; the pause's search is not needed too.

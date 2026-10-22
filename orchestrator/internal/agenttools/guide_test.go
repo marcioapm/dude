@@ -77,7 +77,7 @@ func TestAnAgentFindsAndReadsTheGuide(t *testing.T) {
 	var got struct{ ID, Type, Title, Text, Link string }
 	_ = json.Unmarshal([]byte(body), &got)
 	if status != 200 || got.ID != wantID || got.Type != "doc" || got.Title != wantTitle ||
-		got.Text != want.Text || got.Link != wantLink || strings.Contains(body, "⟦external") {
+		got.Text != guide.Resolve(want.Text, "https://dude.example", slug) || got.Link != wantLink || strings.Contains(body, "⟦external") {
 		t.Errorf("get_memory doc: %d %s", status, body)
 	}
 	// The intro's anchor is empty: the page's link alone.
@@ -92,6 +92,43 @@ func TestAnAgentFindsAndReadsTheGuide(t *testing.T) {
 	}
 	if status, body := f.raw(t, token, "search_memory", `{"query": "x", "types": ["docs"]}`); status != 422 || !strings.Contains(body, "and doc") {
 		t.Errorf("bad type: %d %s", status, body)
+	}
+}
+
+func TestGuideCrossLinksInAgentOutputs(t *testing.T) {
+	for _, base := range []string{"", "https://dude.example"} {
+		t.Run(base, func(t *testing.T) {
+			f := setupWith(t, &agenttools.Server{PublicURL: base})
+			p, err := guide.Parse("overview", []byte("---\ntitle: Overview\n---\n## Links\nCrosslinks [memory](help:memory#searching) and [intro](help:overview#)."))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := guide.Sync(context.Background(), f.app, "test", []guide.Page{p}); err != nil {
+				t.Fatal(err)
+			}
+			slug := orgSlug(t, f)
+			token := f.session(t, "ssn_links", "", "")
+			status, body := f.raw(t, token, "search_memory", `{"query":"Crosslinks", "types":["doc"]}`)
+			if status != 200 {
+				t.Fatalf("search: %d %s", status, body)
+			}
+			found := hits(t, body)
+			if len(found) != 1 || found[0].ID != "doc:overview#links" || found[0].Title != "Overview — Links" ||
+				found[0].Link != guide.Link(base, slug, "overview", "links") ||
+				!strings.Contains(found[0].Snippet, "]("+guide.Link(base, slug, "memory", "searching")+")") ||
+				strings.Contains(found[0].Snippet, "](help:") {
+				t.Fatalf("search links: %+v", found)
+			}
+			status, body = f.raw(t, token, "get_memory", `{"id":"doc:overview#links"}`)
+			var got struct{ ID, Title, Text, Link string }
+			if err := json.Unmarshal([]byte(body), &got); err != nil {
+				t.Fatal(err)
+			}
+			if status != 200 || got.ID != found[0].ID || got.Title != found[0].Title || got.Link != found[0].Link ||
+				got.Text != guide.Resolve(p.Sections[0].Text, base, slug) || strings.Contains(got.Text, "](help:") {
+				t.Fatalf("get links: %d %+v", status, got)
+			}
+		})
 	}
 }
 

@@ -1,7 +1,7 @@
 package guide
 
 import (
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -96,8 +96,51 @@ func TestBuiltInGuide(t *testing.T) {
 	if _, ok := PageBy("nope"); ok {
 		t.Error("found a page that does not exist")
 	}
-	if got := Covers()["settings:delivery"]; !slices.Contains(got, "delivery") {
-		t.Errorf("covers settings:delivery: %v", got)
+}
+
+func TestCoversOf(t *testing.T) {
+	got := CoversOf([]Page{{Slug: "a", Covers: []string{"tool:x"}}, {Slug: "b", Covers: []string{"tool:x", "settings:y"}}})
+	want := map[string][]string{"tool:x": {"a", "b"}, "settings:y": {"b"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("covers %v, want %v", got, want)
+	}
+}
+
+func TestBuiltInHelpTargetsExist(t *testing.T) {
+	count := 0
+	for _, p := range Pages() {
+		for _, s := range p.Sections {
+			for _, match := range helpDestination.FindAllStringSubmatch(s.Text, -1) {
+				count++
+				target, ok := PageBy(match[1])
+				if !ok {
+					t.Errorf("%s#%s: missing page %s", p.Slug, s.Anchor, match[1])
+					continue
+				}
+				if _, ok := target.Section(match[2]); !ok {
+					t.Errorf("%s#%s: missing section %s#%s", p.Slug, s.Anchor, match[1], match[2])
+				}
+			}
+		}
+	}
+	if count == 0 {
+		t.Fatal("no guide links checked")
+	}
+}
+
+func TestResolve(t *testing.T) {
+	text := "**See** [the guide](help:overview#) and [search](help:memory#searching).\n[web](https://example.com) [other](other:memory#searching) `unchanged`."
+	for _, base := range []string{"", "https://dude.example/"} {
+		want := "**See** [the guide](" + Link(base, "acme co/one", "overview", "") + ") and [search](" + Link(base, "acme co/one", "memory", "searching") + ").\n[web](https://example.com) [other](other:memory#searching) `unchanged`."
+		if got := Resolve(text, base, "acme co/one"); got != want {
+			t.Errorf("resolved %q, want %q", got, want)
+		}
+	}
+}
+
+func TestResolveTruncatedSnippet(t *testing.T) {
+	if got := Resolve("See [memory](help:memory#search", "", "acme"); got != "See memory" {
+		t.Errorf("truncated snippet: %q", got)
 	}
 }
 
