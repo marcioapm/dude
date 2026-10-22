@@ -303,3 +303,39 @@ func TestAResumedRunsLuxReadIsSpacedAndOnlyForAMove(t *testing.T) {
 		})
 	}
 }
+
+// A person's Resume of a Run parked after its turn ended, which lux placed
+// again itself, is taken up live with that turn kept done and nothing sent;
+// one parked mid-turn starts a new turn with the carry-on.
+func TestAPersonsResumeTakenUpLiveKeepsAnEndedTurn(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		turnDone bool
+		kept     int
+		nudges   int
+	}{
+		{"turn ended", true, 1, 0},
+		{"mid-turn", false, 0, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.exec(`UPDATE runs SET control = 'resume', turn_done_at = CASE WHEN $2 THEN now() END,
+				agent_busy_at = now() - interval '1 minute' WHERE id = $1`, w.run.ID, c.turnDone)
+			r := w.run
+			r.Control, r.TurnDone = "resume", c.turnDone
+			taken, changes, err := w.s.takeUpLive(w.ctx, r, "running")
+			if err != nil || !taken || changes {
+				t.Fatalf("taken %v, changes %v, err %v; want taken", taken, changes, err)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND dude_pause IS NULL`); n != 1 {
+				t.Errorf("not running after the take-up")
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL AND agent_busy_at IS NOT NULL`); n != c.kept {
+				t.Errorf("%d Runs kept their ended turn, want %d", n, c.kept)
+			}
+			if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`); n != c.nudges {
+				t.Errorf("%d directives queued, want %d", n, c.nudges)
+			}
+		})
+	}
+}
