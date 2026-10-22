@@ -295,11 +295,10 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			if attempt, err = delivery.NextAttemptTx(r.Context(), tx, taskID, t.State.Attempt); err != nil {
 				return err
 			}
-			st := t.State
-			if wfID, err = s.startOver(r.Context(), tx, org, taskID, t.ProjectID, st.Policy, attempt, override != nil); err != nil {
+			if wfID, err = s.startOver(r.Context(), tx, org, taskID, attempt, override != nil); err != nil {
 				return err
 			}
-			closePRs = st.PullRequestIDs
+			closePRs = t.State.PullRequestIDs
 		default:
 			wfID = *t.WorkflowID
 			if err := pickUp(r.Context(), tx, org, t, body.Action, note); err != nil {
@@ -381,9 +380,12 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 	return err
 }
 
-// startOver starts the task's next attempt: a delivery of its own, on a
-// branch of its own, from the default branch.
-func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectID string, policy delivery.Policy, attempt int, overridden bool) (string, error) {
+// startOver uses current settings, not the stopped attempt's frozen policy.
+func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, overridden bool) (string, error) {
+	projectID, policy, err := policyFor(ctx, tx, taskID)
+	if err != nil {
+		return "", err
+	}
 	// The last attempt's delivery is over, whatever state it stopped in.
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = 'completed', wake_at = NULL,
 			awaiting_signals = '[]'::jsonb, locked_by = NULL, locked_until = NULL
