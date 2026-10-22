@@ -232,6 +232,15 @@ func TestAnyChangeInAnyCheckoutKeepsTheRunGated(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"sequencer in progress", func(w *unchangedWorld) {
+			seq := filepath.Join(w.dir("web"), ".git", "sequencer")
+			if err := os.MkdirAll(seq, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(seq, "todo"), []byte("pick "+w.bases["web"]+" start\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newUnchangedWorld(t, "api", "web")

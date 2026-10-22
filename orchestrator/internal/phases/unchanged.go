@@ -15,11 +15,11 @@ import (
 // unchangedScript says, per repository, whether its checkout is exactly
 // where it started: HEAD at the given commit, nothing staged, unstaged or
 // untracked (ignored files aside, which nothing commits or pushes), and no
-// merge, rebase, cherry-pick or revert under way. Arguments: name, checkout,
-// starting commit, per repository. Each prints one line, "clean <name>
-// <head>" or "changed <name> <head>"; a checkout that is missing or that git
-// cannot read prints "fail <name>" and the script exits 4. Read-only POSIX
-// sh: git status refreshes the index's stat cache at most.
+// merge, rebase, cherry-pick, revert or sequencer under way. Arguments:
+// name, checkout, starting commit, per repository. Each prints one line,
+// "clean <name> <head>" or "changed <name> <head>"; a checkout that is
+// missing or that git cannot read prints "fail <name>" and the script exits
+// 4. Read-only POSIX sh: git status refreshes the index's stat cache at most.
 const unchangedScript = `set -u
 status=0
 while [ $# -ge 3 ]; do
@@ -32,7 +32,7 @@ while [ $# -ge 3 ]; do
   for ref in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD; do
     git -C "$dir" rev-parse -q --verify "$ref" > /dev/null 2>&1 && op=$ref
   done
-  for d in rebase-merge rebase-apply; do
+  for d in rebase-merge rebase-apply sequencer/todo; do
     if ! p=$(git -C "$dir" rev-parse --git-path "$d"); then op=unknown; continue; fi
     case $p in /*) ;; *) p=$dir/$p ;; esac
     [ -e "$p" ] && op=$d
