@@ -62,6 +62,13 @@ export function checksMessage(e: Escalation): string {
   return e.reason === "checks_unverified" && typeof message === "string" ? message.trim() : "";
 }
 
+/** A checks escalation's reported failures a waiver may cover for the attempt; none for any other. */
+export function checksFailures(e: Escalation): string[] {
+  const list = e.detail?.failures;
+  if (e.reason !== "checks_unverified" || !Array.isArray(list)) return [];
+  return list.flatMap((f) => (typeof f === "object" && f !== null && typeof f.command === "string" ? [f.command as string] : []));
+}
+
 export function escalationWords(e: Escalation): EscalationWords {
   const d = e.detail ?? {};
   const num = (k: string) => (typeof d[k] === "number" ? (d[k] as number) : 0);

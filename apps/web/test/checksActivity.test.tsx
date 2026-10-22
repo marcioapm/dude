@@ -55,6 +55,19 @@ describe("checks judgements in the task's Activity", () => {
     ]);
   });
 
+  test("conflicting flags preserve waiver and no-tier precedence, and unchanged precedes carried", () => {
+    for (const [flags, outcome] of [
+      [{ skipped: true, waived: true, unchanged: true, carried: true }, "were not model-checked"],
+      [{ waived: true, unchanged: true, carried: true }, "were waived"],
+      [{ unchanged: true, carried: true }, "were not needed: it changed nothing"],
+      [{ carried: true }, "carried a person's waiver"],
+      [{ carried: true, verified: false }, "were not verified"],
+    ] as const) {
+      const lines = activityLines([judged(simp.id, { verified: true, checks: [], ...flags }, 1)], people, [simp], [], 1);
+      expect(lines.map((l) => textOf(l.text))).toEqual([`The simplifier's checks ${outcome}`]);
+    }
+  });
+
   test("a judged turn still reads as verified, and no-tier as not model-checked", () => {
     const lines = activityLines([
       judged(impl.id, { turn: 1, round: 0, verified: true, message: "", checks: [] }, 1),

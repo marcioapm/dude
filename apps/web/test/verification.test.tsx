@@ -102,9 +102,9 @@ test("a pull request's fix still being checked is labelled the candidate's, not 
 
 async function banner(reason: string, actions: EscalationAction[], opts: { owner?: string; you?: string; admin?: boolean; detail?: Record<string, unknown> } = {}) {
   const client = new FixtureClient("a");
-  const sent: Array<[EscalationAction, string]> = [];
-  client.decide = async (_task, action, note) => {
-    sent.push([action, note]);
+  const sent: Array<[EscalationAction, string] | [EscalationAction, string, string]> = [];
+  client.decide = async (_task, action, note, scope) => {
+    sent.push(scope ? [action, note, scope] : [action, note]);
     return { action };
   };
   const task = { ...taskFor("a"), owner: { id: opts.owner ?? YOU, name: opts.owner ? "Ana" : "Márcio", photoUrl: null, online: false },
@@ -204,4 +204,32 @@ test("an admin who is not the owner may waive unverified checks, and nothing els
   await typeNote(admin.page, "Reviewed the risk.");
   await click(admin.page.querySelector("[data-testid=escalation-waive]")!);
   expect(admin.sent).toEqual([["waive", "Reviewed the risk."]]);
+});
+
+const failingDetail = { ...checksDetail, failures: [{ command: "make test", result: "fail", evidence: "TestClock needs a hardware clock" }] };
+
+test("a waiver of reported failures is the Run's alone unless the person ticks later Runs", async () => {
+  const runOnly = await banner("checks_unverified", ["retry", "waive", "stop"], { detail: failingDetail });
+  const box = runOnly.page.querySelector<HTMLElement>("[data-testid=escalation-later-runs] [role=checkbox]")!;
+  expect(box.getAttribute("aria-checked")).toBe("false");
+  expect(runOnly.page.querySelector("[data-testid=escalation-later-runs]")?.textContent).toBe("Apply to later Runs in this attempt" +
+    "A later Run's failure of make test passes only if a model judges it the same failure; anything new is held as now.");
+  await typeNote(runOnly.page, "Needs a hardware clock.");
+  await click(runOnly.page.querySelector("[data-testid=escalation-waive]")!);
+  expect(runOnly.sent).toEqual([["waive", "Needs a hardware clock."]]);
+
+  const attempt = await banner("checks_unverified", ["retry", "waive", "stop"], { detail: failingDetail });
+  await click(attempt.page.querySelector<HTMLElement>("[data-testid=escalation-later-runs] [role=checkbox]")!);
+  // Ticked, it changes nothing but a waiver.
+  await click(attempt.page.querySelector("[data-testid=escalation-retry]")!);
+  await typeNote(attempt.page, "Needs a hardware clock.");
+  await click(attempt.page.querySelector("[data-testid=escalation-waive]")!);
+  expect(attempt.sent).toEqual([["retry", ""], ["waive", "Needs a hardware clock.", "attempt"]]);
+});
+
+test("later Runs are not offered when the held report has no reported failure", async () => {
+  const { page } = await banner("checks_unverified", ["retry", "waive", "stop"], { detail: checksDetail });
+  expect(count(page, "[data-testid=escalation-later-runs]")).toBe(0);
+  const blocked = await banner("test_blocked", ["retry", "waive", "stop"], { detail: { ...failingDetail, runId: "run_test" } });
+  expect(count(blocked.page, "[data-testid=escalation-later-runs]")).toBe(0);
 });

@@ -432,6 +432,23 @@ describe("Activity's started lines", () => {
     return activityLines(events, people, runs, [], 1).map((l) => renderToStaticMarkup(<>{l.text}</>).replace(/<[^>]+>/g, ""));
   };
 
+  test("a judgement that carried a person's waiver says so, quoting the waiver; it never reads verified", () => {
+    const judged = (payload: Record<string, unknown>) => ({ ...created("r_fix", payload), eventType: "run.checks.judged" } as PersistedEvent);
+    const runs = [run("r_fix", "fix", "implementer")];
+    const carried = judged({ turn: 9, verified: true, carried: true, message: "", checks: [
+      { command: "make test", result: "waived", decision: "yes", reason: "the same TestClock failure", callId: "mcall_1",
+        waiver: { runId: "r_impl", role: "Implementer", note: "Needs a hardware clock." } },
+      { command: "missing checks", result: "pass", decision: "no", callId: "mcall_2" }] });
+    expect(said([carried], runs)).toEqual(["The fixer&#x27;s checks carried a person&#x27;s waiver"]);
+    const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
+    expect(activityLines([carried], people, runs, [], 1).map((l) => l.quote)).toEqual([
+      "make test: waived — the same TestClock failure (judgement mcall_1)\nWaived by a person for the Implementer: Needs a hardware clock.\n" +
+      "missing checks: pass (judgement mcall_2)"]);
+    // A carried failure the rest of the report then failed is not verified.
+    expect(said([judged({ turn: 9, verified: false, carried: true, message: "", checks: [] })], runs))
+      .toEqual(["The fixer&#x27;s checks were not verified"]);
+  });
+
   test("a checks-finished decision is dude's, while a person's decision names them", () => {
     const decision = { ...created(null, { action: "wait" }), eventType: "task.decided" } as PersistedEvent;
     expect(said([decision], [])).toEqual([`${dudeName(TASK_ID)} decided how delivery goes on: wait`]);

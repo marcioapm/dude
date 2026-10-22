@@ -378,6 +378,36 @@ func TestAWaiverCarriesTheOwnersOwnWords(t *testing.T) {
 	}
 }
 
+// The conductor's waiver is the held Run's alone: decide_escalation takes
+// no scope, so it never widens a waiver to later Runs of the attempt.
+func TestTheConductorsWaiverTakesNoScope(t *testing.T) {
+	var ana string
+	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
+	w.must(task, "ask_person", blockedQuestion)
+	if status, out := w.answerAs(ana, task, "Ship it, and the same for later Runs."); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	w.refused(task, "decide_escalation", `{"action":"waive","scope":"attempt"}`, `unknown field "scope"`)
+	if d := w.decided(task); d != nil {
+		t.Fatalf("a scoped waiver decided the escalation: %v", d)
+	}
+}
+
+// An attempt scope is a checks waiver's alone: the owner's waiver of a
+// blocked test with it is refused, deciding nothing.
+func TestABlockedTestsWaiverTakesNoAttemptScope(t *testing.T) {
+	var ana string
+	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
+	code, body := w.callAs(ana, "/internal/tasks/"+task+"/decide",
+		map[string]any{"action": delivery.ActionWaive, "note": "The app needs a GPU.", "scope": delivery.ScopeAttempt})
+	if e, _ := body["error"].(map[string]any); code != 400 || e["code"] != "bad_request" {
+		t.Fatalf("a scoped waiver of a blocked test: %d %v, want 400 bad_request", code, body)
+	}
+	if d := w.decided(task); d != nil {
+		t.Fatalf("a refused waiver decided the escalation: %v", d)
+	}
+}
+
 // An owner's answer that is a choice of the question — one asked before
 // waivers were refused as choices — is no reason: the conductor may not
 // waive on it, note or not.

@@ -8,15 +8,17 @@
  *
  * Shipping past a test's failed criteria (accept), a check it could not
  * make or an unbacked checks report (waive) is also an organisation admin's
- * to take, and needs a reason: those ask for it before they are sent.
+ * to take, and needs a reason: those ask for it before they are sent. A
+ * checks waiver whose report has reported failures may also be offered to
+ * later Runs of the attempt, only when the person ticks it.
  */
 
 import { useState } from "react";
-import { Button, Callout, Textarea } from "@dude/design-system/primitives";
+import { Button, Callout, Checkbox, Textarea } from "@dude/design-system/primitives";
 import { Markdown } from "@dude/design-system/components";
 import { runLabel } from "@dude/domain";
 import type { ApiClient, EscalationAction, Person, TaskDetail } from "../api/client.ts";
-import { checksMessage, escalationWords, needsReason, testCriteria } from "../escalation.ts";
+import { checksFailures, checksMessage, escalationWords, needsReason, testCriteria } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { MonoWords } from "../monoWords.tsx";
 
@@ -62,7 +64,10 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
   const words = escalationWords(task.escalation);
   const criteria = testCriteria(task.escalation);
   const sentBack = checksMessage(task.escalation);
+  const failures = checksFailures(task.escalation);
   const [note, setNote] = useState("");
+  // A checks waiver for later Runs of the attempt too; off unless ticked.
+  const [laterRuns, setLaterRuns] = useState(false);
   const [busy, setBusy] = useState<EscalationAction | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   // The action waiting on its reason, once picked.
@@ -84,7 +89,7 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
     setBusy(action);
     setProblem(null);
     try {
-      await client.decide(task.id, action, note);
+      await client.decide(task.id, action, note, action === "waive" && laterRuns && failures.length > 0 ? "attempt" : undefined);
       setNote("");
       setReasoning(null);
       onDecided();
@@ -136,6 +141,13 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
               rows={2} value={note} onChange={(e) => setNote(e.target.value)} required={required}
               error={required && !note.trim() ? `Say why: it is kept with the ${reason === "checks_unverified" ? "checks" : "test's"} verdict and on the pull request.` : undefined}
               hint="Kept with the task: every agent from here on is told it." data-testid="escalation-note" />
+            {failures.length > 0 && actions.includes("waive") ? (
+              <div data-testid="escalation-later-runs">
+                <Checkbox checked={laterRuns} onCheckedChange={(c) => setLaterRuns(c === true)}
+                  label="Apply to later Runs in this attempt"
+                  description={`A later Run's failure of ${failures.join(", ")} passes only if a model judges it the same failure; anything new is held as now.`} />
+              </div>
+            ) : null}
             <div className="escalationActions">
               {actions.map((action) => (
                 <Button key={action} size="sm" variant={action === "stop" ? "quiet" : action === actions[0] ? "primary" : "secondary"}

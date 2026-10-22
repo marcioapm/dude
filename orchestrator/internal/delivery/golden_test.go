@@ -443,7 +443,7 @@ func TestGoldenMachineOffers(t *testing.T) {
 // implementer, a backed fixer and a simplifier that changed nothing, each
 // with the commits it published.
 func TestGoldenTesterWriterChecks(t *testing.T) {
-	type check = struct{ Command, Result, Decision, Reason, CallID string }
+	type check = gatedCheck
 	runs := []gatedJudgement{
 		{Role: "Implementer", Verified: true, Waived: true, Message: "Three tests fail on main as well; tracked separately.",
 			Heads: map[string]RunHead{"api": {SHA: "1111111aaaaaaa"}}},

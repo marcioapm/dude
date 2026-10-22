@@ -35,6 +35,8 @@ const (
 	mNotWayGoOnAfterOne                   = "%q is not a way to go on after %s; one of %s"
 	mNeedsNoteSayWhyTaskMay               = "%s needs a note: say why the task may ship with %s"
 	mWhatStoppedNoLongerKeptResume        = "what stopped is no longer kept to resume; try again or start over"
+	mScopeOnlyForChecksWaiver             = "scope %q is not one this decision takes: \"run\", or \"attempt\" only when waiving unverified checks"
+	mNothingToCarryInAttempt              = "nothing in the held report is a reported failure a later Run could repeat; waive it for this Run only"
 	mDraftidsAndSubmissionkeyAreRequired  = "draftIds and a submissionKey are required"
 	mDraftsAreNotYourDraftsOn             = "%d of the %d drafts are not your drafts on this task's current attempt: nothing was submitted"
 	mSubmissionKeyWasUsedForAnother       = "submission key %q was used for another batch: use a new key for new drafts"
