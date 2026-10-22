@@ -157,7 +157,7 @@ export interface CloseDialogProps {
   readonly busy?: boolean | undefined;
   /** Where it is: the dialog's context line (a `Breadcrumb`). */
   readonly context?: ReactNode;
-  /** What closing stops: every live Run. Empty or absent: nothing is live and the dialog is as before. */
+  /** What closing stops: every live Run. Empty or absent: nothing is live, and the dialog neither lists nor warns. */
   readonly live?: readonly LiveItem[] | undefined;
   /** The task's open pull requests, every one the close would touch: one Checkbox row asks whether to close them on GitHub too. */
   readonly pullRequests?: readonly ClosablePullRequest[] | undefined;
@@ -281,7 +281,6 @@ export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArch
 
 /** "#12", "#12 and #14", "#12, #14 and #15". */
 export const pullRequestNumbers = (prs: ReadonlyArray<Pick<ClosablePullRequest, "number">>) => keyList(prs.map((p) => `#${p.number}`));
-const numbers = pullRequestNumbers;
 
 /**
  * Whether closing the task closes its open pull requests on GitHub too: one
@@ -296,19 +295,19 @@ function PullRequestCloseRow({ prs, checked, onCheckedChange }: {
   const theirs = prs.filter((p) => p.openedBy === "someone");
   const one = prs.length === 1;
   // One pull request is "it"; several are named, each group with its own hint.
-  const name = (group: readonly ClosablePullRequest[], it: string) => (one ? it : numbers(group));
+  const name = (group: readonly ClosablePullRequest[], it: string) => (one ? it : pullRequestNumbers(group));
   const are = (group: readonly ClosablePullRequest[], singular: string, plural: string) => (group.length === 1 ? singular : plural);
   const description = [
     ours.length === 0 ? null : on
       ? `dude opened ${name(ours, "it")} for this task; closed with a comment saying why. ${are(ours, "Its branch is", "Their branches are")} kept.`
-      : `The task closes; ${numbers(ours)} ${are(ours, "stays", "stay")} open on GitHub.`,
+      : `The task closes; ${pullRequestNumbers(ours)} ${are(ours, "stays", "stay")} open on GitHub.`,
     theirs.length === 0 ? null : on
       ? `${name(theirs, "It")} ${are(theirs, "was", "were")} opened by someone else; dude closes ${are(theirs, "it", "them")}, with a comment saying why.`
       : `${name(theirs, "It")} ${are(theirs, "was", "were")} opened by someone else; ${are(theirs, "it stays", "they stay")} open unless you tick this.`,
   ].filter((s) => s !== null).join(" ");
   return (
     <div className={styles["prRow"]} data-testid="close-pull-request" data-opened-by={theirs.length === 0 ? "dude" : ours.length === 0 ? "someone" : "both"}>
-      <Checkbox checked={checked} onCheckedChange={onCheckedChange} label={`Close pull request${one ? "" : "s"} ${numbers(prs)} on GitHub`}
+      <Checkbox checked={checked} onCheckedChange={onCheckedChange} label={`Close pull request${one ? "" : "s"} ${pullRequestNumbers(prs)} on GitHub`}
         description={description} />
     </div>
   );

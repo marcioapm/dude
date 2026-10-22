@@ -327,8 +327,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const { relations, reload: reloadRelations } = useRelations(client, taskId, version + relationsVersion);
   // Close, Reopen, Archive, Unarchive: the header's menu, the notices, the dialogs.
   const waiting = useMemo(() => waitingOn(relations?.blocks ?? []), [relations]);
-  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting,
-    pullRequests: item ? openPullRequestsOf(item, pullRequests) : [], live: item ? liveItemsOf(item) : [], onChanged: reload });
+  // What Stop, Close, Archive and the pick-up name: the task's open pull requests and its live Runs.
+  const openPrs = item ? openPullRequestsOf(item, pullRequests) : [];
+  const live = item ? liveItemsOf(item) : [];
+  const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting, pullRequests: openPrs, live, onChanged: reload });
 
   const deliver = async () => {
     setDelivering(true);
@@ -665,7 +667,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )) : null}
           {stop ? (
             <StoppedNotice task={item} stop={stop} options={recovery} owner={owner?.name ?? null} you={yours}
-              pullRequests={openPullRequestsOf(item, pullRequests)} onOpenRun={onOpenRun} onChoose={setPickingUp} />
+              pullRequests={openPrs} onOpenRun={onOpenRun} onChoose={setPickingUp} />
           ) : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
           {commentingNotices}
@@ -677,7 +679,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       ) : null}
       {lifecycle.dialogs}
       {stopping ? (
-        <StopDialog client={client} task={item} attempt={current} live={liveItemsOf(item)} pullRequests={openPullRequestsOf(item, pullRequests)}
+        <StopDialog client={client} task={item} attempt={current} live={live} pullRequests={openPrs}
           onClose={() => setStopping(false)}
           onDone={() => {
             setStopping(false);
@@ -685,7 +687,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           }} />
       ) : null}
       {pickingUp && stop && recovery ? (
-        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp} pullRequests={openPullRequestsOf(item, pullRequests)}
+        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp} pullRequests={openPrs}
           onEdit={() => {
             setPickingUp(null);
             setEditing(true);
