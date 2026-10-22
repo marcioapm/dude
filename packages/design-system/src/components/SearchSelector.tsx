@@ -45,9 +45,10 @@ export function SearchSelector<T>({ title, label, options, optionKey, searchText
   }, [options, searchText]);
   // Measured whenever it is open, so a selector mounted already open is placed like one opened by a press.
   useLayoutEffect(() => {
+    if (!open) return;
     const box = anchor?.current?.getBoundingClientRect();
     const mine = trigger?.getBoundingClientRect();
-    if (open && box && mine) setOffsets({ side: Math.max(0, box.bottom - mine.bottom), align: box.left - mine.left });
+    if (box && mine) setOffsets({ side: Math.max(0, box.bottom - mine.bottom), align: box.left - mine.left });
   }, [open, anchor, trigger]);
   const setOpen = (next: boolean) => {
     if (controlled === undefined) setOwn(next);
