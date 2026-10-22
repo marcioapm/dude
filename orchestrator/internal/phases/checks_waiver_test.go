@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -19,7 +20,9 @@ type waiverFake struct {
 	unrecorded bool
 	// missing answers Missing; "" is no.
 	missing string
-	asked   []judge.Ask
+	// offAfterWaiver: every question but the waiver's finds no tier.
+	offAfterWaiver bool
+	asked          []judge.Ask
 }
 
 func (f *waiverFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
@@ -28,12 +31,14 @@ func (f *waiverFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judg
 	if f.unrecorded {
 		id = ""
 	}
+	waiverQ := strings.Contains(a.Question, "waived a reported failure")
 	switch {
-	case strings.Contains(a.Question, "waived a reported failure"):
-		if f.err != nil {
-			return judge.Judgement{Decision: judge.Yes, CallID: id}, f.err
-		}
+	case waiverQ && f.err != nil:
+		return judge.Judgement{Decision: judge.Yes, CallID: id}, f.err
+	case waiverQ:
 		return judge.Judgement{Decision: f.waived, CallID: id, Reasoning: "the same TestClock failure"}, nil
+	case f.offAfterWaiver:
+		return judge.Judgement{}, judge.ErrOff
 	case strings.Contains(a.Question, "reported pass"):
 		return judge.Judgement{Decision: judge.Yes, CallID: id, Reasoning: "backed"}, nil
 	case f.missing != "":
@@ -153,12 +158,45 @@ func TestBesideACarriedFailureThePassesAreBackedAndMissingIsAsked(t *testing.T) 
 			endTurn(w)
 			fake := &waiverFake{waived: judge.Yes, missing: tc.missing}
 			w.s.Judge = fake
-			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified != tc.verified || len(fake.asked) != 3 || len(got.Verdicts) != 3 ||
+			pass, _, err := w.s.checksBeforePush(context.Background(), w.run)
+			var got checksDecision
+			if err == nil {
+				err = w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
+					var raw []byte
+					if err := tx.QueryRow(context.Background(), `SELECT payload FROM events WHERE run_id = $1 AND event_type = $2`,
+						w.run.ID, delivery.EvRunChecksJudged).Scan(&raw); err != nil {
+						return err
+					}
+					return json.Unmarshal(raw, &got)
+				})
+			}
+			if err != nil || pass != tc.verified || got.Verified != tc.verified || len(fake.asked) != 3 || len(got.Verdicts) != 3 ||
 				got.Verdicts[0].Result != checksWaived || got.Verdicts[1].Command != "make lint" || got.Verdicts[1].Result != "pass" {
 				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 			}
+			// The send-back names the missing check alone, never the
+			// carried failure or the backed pass.
+			if !tc.verified {
+				if want := checksText.Render(got.Verdicts[2:]); got.Verdicts[2].Command != "missing checks" || got.Message != want {
+					t.Fatalf("the send-back is\n%s\nwant\n%s", got.Message, want)
+				}
+			}
 		})
+	}
+}
+
+// A tier gone between the waiver's question and the rest of the report's
+// leaves the carried turn rejected, never skipped.
+func TestNoTierAfterACarryIsARejectionNotASkip(t *testing.T) {
+	w := newHarnessWorld(t)
+	waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+	checksReply(w, failingTest)
+	endTurn(w)
+	fake := &waiverFake{waived: judge.Yes, offAfterWaiver: true}
+	w.s.Judge = fake
+	got, err := w.s.judgeChecks(context.Background(), w.run)
+	if err != nil || got.Verified || got.Skipped || got.Carried || fake.waiverQuestions() != 1 || len(fake.asked) != 2 {
+		t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 	}
 }
 
@@ -171,6 +209,11 @@ func TestTheWaiverQuestionShowsTheWaivedFailure(t *testing.T) {
 		map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1",
 			"status": "failed", "rawOutput": map[string]any{"output": "FAIL: TestClock", "metadata": map[string]any{"exit": 1}}}})
 	waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+	// A call after the waiver is this Run's, never the waived failure's.
+	w.feed(map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t2",
+		"title": "bash", "kind": "execute", "status": "in_progress", "rawInput": map[string]any{"command": "make test -run TestGreeting"}}},
+		map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t2",
+			"status": "completed", "rawOutput": map[string]any{"output": "ok", "metadata": map[string]any{"exit": 0}}}})
 	checksReply(w, failingTest)
 	endTurn(w)
 	fake := &waiverFake{waived: judge.Yes}
