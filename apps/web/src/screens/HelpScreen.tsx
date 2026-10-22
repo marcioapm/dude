@@ -146,10 +146,8 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
   useEffect(() => {
     const mine = ++latest.current;
     setSearchProblem(null);
-    if (!words) {
-      setFound(null);
-      return;
-    }
+    setFound(null);
+    if (!words) return;
     const t = setTimeout(() => {
       client.searchMemory({ q: words, types: "doc", limit: HELP_RESULTS_MAX }).then(
         (out) => {

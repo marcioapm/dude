@@ -278,6 +278,8 @@ describe("searching the guide", () => {
     await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
     const input = field(container);
     await type(input, "ze");
+    await settle(60);
+    expect(client.asked).toEqual([]);
     await type(input, "zebra");
     const empty = await until(() => container.querySelector("[data-testid=help-search-empty]"), "the empty state");
     expect(empty.textContent).toBe("Nothing in the guide matches “zebra”.");
@@ -308,6 +310,22 @@ describe("searching the guide", () => {
     await until(() => (container.querySelectorAll("[data-testid=help-search-result]").length === 2 ? true : null), "the results");
     expect(container.querySelector("[data-testid=help-search-error]")).toBeNull();
     expect(container.querySelectorAll("[role=alert]").length).toBe(0);
+  });
+
+  test("Enter cannot open the previous query's result while the next search is pending", async () => {
+    const opened: string[] = [];
+    const { container, unmount } = await mount(<HelpScreen client={new Searching("a")} page="memory" onPage={() => {}}
+      onSection={(p, s) => opened.push(`${p}/${s}`)} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "reviewer");
+    await until(() => container.querySelector("[data-testid=help-search-result]"), "the results");
+    await type(input, "zebra");
+    await key(input, "Enter");
+    expect(opened).toEqual([]);
+    expect(container.querySelector("[data-testid=help-search-count]")?.textContent).toBe("Searching…");
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
   });
 
   test("a slower answer to an earlier query does not replace the later query's results", async () => {
