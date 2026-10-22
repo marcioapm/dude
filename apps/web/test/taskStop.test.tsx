@@ -178,13 +178,24 @@ describe("the Stop dialog", () => {
 
   test("Stop here names the attempt's branch from its delivery when nothing was pushed yet; with none named, its branch", async () => {
     const unpushed = (await new FixtureClient("a").getTask(TASK_ID)).runs.map((r) => ({ ...r, branch: null }));
-    const named = await open({ runs: unpushed, deciders: [{ attempt: 1, decider: "conductor", branch: "dude/wi_1/attempt-1" }] });
-    expect(shownEffects(named).find((e) => e.startsWith("Branch"))).toBe("Branchkeptdude/wi_1/attempt-1");
-    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    for (const unmount of mounted) await unmount();
-    mounted = [];
-    const unnamed = await open({ runs: unpushed, deciders: [{ attempt: 1, decider: "conductor", branch: null }] });
-    expect(shownEffects(unnamed).find((e) => e.startsWith("Branch"))).toBe("Branchkeptits branch");
+    const reopen = async (patch: Partial<TaskDetail>) => {
+      await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+      return open(patch);
+    };
+    const branchRow = (dialog: HTMLElement) => shownEffects(dialog).find((e) => e.startsWith("Branch"));
+    // Attempt 1's delivery, not a later attempt's listed after it.
+    const named = await open({ runs: unpushed, deciders: [{ attempt: 1, decider: "conductor", branch: "dude/wi_1/attempt-1" },
+      { attempt: 2, decider: "policy", branch: "dude/wi_1/attempt-2" }] });
+    expect(branchRow(named)).toBe("Branchkeptdude/wi_1/attempt-1");
+    const unnamed = await reopen({ runs: unpushed, deciders: [{ attempt: 1, decider: "conductor", branch: null },
+      { attempt: 2, decider: "policy", branch: "dude/wi_1/attempt-2" }] });
+    expect(branchRow(unnamed)).toBe("Branchkeptits branch");
+    // A Run's pushed branch (an adopted PR's head) wins over the one the delivery named.
+    const pushed = await reopen({ runs: unpushed.map((r, i) => (i === 0 ? { ...r, branch: "feature/greet" } : r)),
+      deciders: [{ attempt: 1, decider: "conductor", branch: "dude/wi_1/attempt-1" }] });
+    expect(branchRow(pushed)).toBe("Branchkeptfeature/greet");
   });
 
   test("two open PRs: Stop here keeps both; Stop and start closes dude's both, naming each", async () => {
