@@ -159,8 +159,8 @@ export interface CloseDialogProps {
   readonly context?: ReactNode;
   /** What closing stops: every live Run. Empty or absent: nothing is live and the dialog is as before. */
   readonly live?: readonly LiveItem[] | undefined;
-  /** The task's open pull request: a Checkbox row asks whether to close it on GitHub too. */
-  readonly pullRequest?: ClosablePullRequest | undefined;
+  /** The task's open pull requests, every one the close would touch: one Checkbox row asks whether to close them on GitHub too. */
+  readonly pullRequests?: readonly ClosablePullRequest[] | undefined;
 }
 
 /**
@@ -174,11 +174,12 @@ export interface CloseDialogProps {
  * close that too.
  */
 export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArchive, cantReproduceReason, find, onConfirm, refused, initial,
-  initialDuplicate, problem, busy, context, live = [], pullRequest }: CloseDialogProps) {
+  initialDuplicate, problem, busy, context, live = [], pullRequests = [] }: CloseDialogProps) {
   const [why, setWhy] = useState<CloseResolution | null>(andArchive ? null : (initial ?? null));
   const [dup, setDup] = useState<LifecycleTaskRef | null>(initialDuplicate ?? null);
   const [unrelate, setUnrelate] = useState<CheckedState>(false);
-  const [closePR, setClosePR] = useState<CheckedState>(pullRequest?.openedBy === "dude");
+  // Ticked only when dude opened every one: someone else's is never closed unless asked.
+  const [closePR, setClosePR] = useState<CheckedState>(pullRequests.length > 0 && pullRequests.every((p) => p.openedBy === "dude"));
   const [note, setNote] = useState("");
   const footId = useId();
   const keys = keyList(waiting.map((w) => w.key));
@@ -201,7 +202,7 @@ export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArch
     if (!why || !ready) return;
     void onConfirm({ resolution: why, ...(why === "duplicate" && dup ? { duplicateOf: dup.key } : {}),
       ...(note.trim() ? { note: note.trim() } : {}), ...(why !== "duplicate" && unrelate === true ? { removeRelations: true } : {}),
-      ...(pullRequest ? { closePullRequest: closePR === true } : {}) });
+      ...(pullRequests.length > 0 ? { closePullRequest: closePR === true } : {}) });
   };
   const hint = refused ?? (!why ? "Pick why it is closed." : why === "duplicate" && !dup ? "Pick the task it duplicates." : undefined);
   const description = andArchive
@@ -270,7 +271,7 @@ export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArch
             </div>
           </Callout>
         ) : null}
-        {pullRequest ? <PullRequestCloseRow pr={pullRequest} checked={closePR} onCheckedChange={setClosePR} /> : null}
+        {pullRequests.length > 0 ? <PullRequestCloseRow prs={pullRequests} checked={closePR} onCheckedChange={setClosePR} /> : null}
         <Textarea label="Note (optional)" rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000}
           placeholder={andArchive ? "Said in Activity beside the close and the archive." : "Said in Activity beside the close."} />
       </FormStack>
@@ -278,17 +279,36 @@ export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArch
   );
 }
 
-/** Whether closing the task closes its open pull request on GitHub too: a `Checkbox` in a bordered row. */
-function PullRequestCloseRow({ pr, checked, onCheckedChange }: {
-  readonly pr: ClosablePullRequest; readonly checked: CheckedState; readonly onCheckedChange: (c: CheckedState) => void;
+/** "#12", "#12 and #14", "#12, #14 and #15". */
+const numbers = (prs: readonly ClosablePullRequest[]) => keyList(prs.map((p) => `#${p.number}`));
+
+/**
+ * Whether closing the task closes its open pull requests on GitHub too: one
+ * `Checkbox` in a bordered row naming each. One someone else opened (the
+ * task was started from it) is named with its own hint.
+ */
+function PullRequestCloseRow({ prs, checked, onCheckedChange }: {
+  readonly prs: readonly ClosablePullRequest[]; readonly checked: CheckedState; readonly onCheckedChange: (c: CheckedState) => void;
 }) {
   const on = checked === true;
-  const description = pr.openedBy === "dude"
-    ? (on ? "dude opened it for this task; closed with a comment saying why. Its branch is kept." : `The task closes; #${pr.number} stays open on GitHub.`)
-    : (on ? "It was opened by someone else; dude closes it, with a comment saying why." : "It was opened by someone else; it stays open unless you tick this.");
+  const ours = prs.filter((p) => p.openedBy === "dude");
+  const theirs = prs.filter((p) => p.openedBy === "someone");
+  const one = prs.length === 1;
+  // One pull request is "it"; several are named, each group with its own hint.
+  const name = (group: readonly ClosablePullRequest[], it: string) => (one ? it : numbers(group));
+  const are = (group: readonly ClosablePullRequest[], singular: string, plural: string) => (group.length === 1 ? singular : plural);
+  const description = [
+    ours.length === 0 ? null : on
+      ? `dude opened ${name(ours, "it")} for this task; closed with a comment saying why. ${are(ours, "Its branch is", "Their branches are")} kept.`
+      : `The task closes; ${numbers(ours)} ${are(ours, "stays", "stay")} open on GitHub.`,
+    theirs.length === 0 ? null : on
+      ? `${name(theirs, "It")} ${are(theirs, "was", "were")} opened by someone else; dude closes ${are(theirs, "it", "them")}, with a comment saying why.`
+      : `${name(theirs, "It")} ${are(theirs, "was", "were")} opened by someone else; ${are(theirs, "it stays", "they stay")} open unless you tick this.`,
+  ].filter((s) => s !== null).join(" ");
   return (
-    <div className={styles["prRow"]} data-testid="close-pull-request" data-opened-by={pr.openedBy}>
-      <Checkbox checked={checked} onCheckedChange={onCheckedChange} label={`Close pull request #${pr.number} on GitHub`} description={description} />
+    <div className={styles["prRow"]} data-testid="close-pull-request" data-opened-by={theirs.length === 0 ? "dude" : ours.length === 0 ? "someone" : "both"}>
+      <Checkbox checked={checked} onCheckedChange={onCheckedChange} label={`Close pull request${one ? "" : "s"} ${numbers(prs)} on GitHub`}
+        description={description} />
     </div>
   );
 }

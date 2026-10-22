@@ -14,6 +14,7 @@ import type { RowMenuItem } from "@dude/design-system/primitives";
 import { NOT_STARTED_STATUSES, PHASE_DOER, TERMINAL_RUN_STATUSES, isConductor, reviewerCategoryInSentence } from "@dude/domain";
 import type { ApiClient, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
+import { isAdoptedPr } from "../attempts.ts";
 
 /** Between its start and its end: what Stop stops. */
 export function inProgress(task: Pick<TaskDetail, "status">): boolean {
@@ -36,7 +37,7 @@ function liveItem(run: Run, task: Pick<TaskDetail, "awaitingDecision">): LiveIte
     state: queued ? "queued" : "working" };
 }
 
-/** The task's live Runs: its conductor's first, then the current attempt's, oldest first. */
+/** The task's live Runs, whatever their attempt: its conductor first, then the rest, oldest first. */
 export function liveItemsOf(task: Pick<TaskDetail, "runs" | "awaitingDecision">): LiveItem[] {
   const live = task.runs.filter((r) => r.kind !== "preview" && !TERMINAL_RUN_STATUSES.includes(r.status));
   return [...live].sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || a.createdAt.localeCompare(b.createdAt))
@@ -61,10 +62,13 @@ export interface OpenPullRequest {
 }
 
 export function openPullRequestOf(task: Pick<TaskDetail, "source">, prs: readonly PullRequest[]): OpenPullRequest | undefined {
-  const pr = prs.find((p) => p.state === "open" || p.state === "draft");
-  if (!pr) return undefined;
-  const adopted = task.source?.kind === "pr" && task.source.number === pr.number;
-  return { number: pr.number, openedBy: adopted ? "someone" : "dude" };
+  return openPullRequestsOf(task, prs)[0];
+}
+
+/** Every open pull request of the task, as a Close closes them all when asked; the adopted one by its repository and number (isAdoptedPr). */
+export function openPullRequestsOf(task: Pick<TaskDetail, "source">, prs: readonly PullRequest[]): OpenPullRequest[] {
+  return prs.filter((p) => p.state === "open" || p.state === "draft")
+    .map((p) => ({ number: p.number, openedBy: isAdoptedPr(p, task.source) ? "someone" : "dude" }));
 }
 
 /** The `…` menu's Stop…, first: danger, disabled for anyone who may not. */
@@ -145,7 +149,7 @@ export function StopDialog({ client, task, attempt, live, pullRequest, onClose, 
   const adopted = pullRequest?.openedBy === "someone";
   const ways: ChoiceOption<Way>[] = [
     { value: "stop", icon: "stop", label: "Stop here",
-      description: `Everything stops: ${decider === "conductor" ? "the conductor, every agent it or Deliver started" : "every agent Deliver started"}. What they were doing is kept for a while so you can Resume.` },
+      description: `Everything stops: every agent at work, the conductor included. What they were doing is kept for a while so you can Resume.` },
     { value: "restart", icon: "git-branch", label: `Stop and start attempt ${n}`,
       description: adopted ? `A fresh start on PR #${pullRequest.number}'s branch: new sessions, the whole thing again, pushing to the same PR.`
         : "A fresh start from the default branch: new branch, new sessions, the whole thing again." },

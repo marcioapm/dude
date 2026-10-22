@@ -92,7 +92,7 @@ import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { TaskMenu, notYours, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
-import { StopButton, StopDialog, inProgress, liveItemsOf, openPullRequestOf, stopMenuItem } from "./TaskStop.tsx";
+import { StopButton, StopDialog, inProgress, liveItemsOf, openPullRequestOf, openPullRequestsOf, stopMenuItem } from "./TaskStop.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
@@ -328,7 +328,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Close, Reopen, Archive, Unarchive: the header's menu, the notices, the dialogs.
   const waiting = useMemo(() => waitingOn(relations?.blocks ?? []), [relations]);
   const lifecycle = useTaskLifecycle({ client, task: item, people, tree: tree ?? [], waiting,
-    pullRequest: item ? openPullRequestOf(item, pullRequests) : undefined, live: item ? liveItemsOf(item) : [], onChanged: reload });
+    pullRequests: item ? openPullRequestsOf(item, pullRequests) : [], live: item ? liveItemsOf(item) : [], onChanged: reload });
 
   const deliver = async () => {
     setDelivering(true);

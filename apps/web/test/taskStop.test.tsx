@@ -13,7 +13,8 @@ import { PULL_REQUEST, TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
-import type { StopRequest, TaskDetail } from "../src/api/client.ts";
+import { ApiError, type StopRequest, type TaskDetail } from "../src/api/client.ts";
+import { openPullRequestsOf } from "../src/screens/TaskStop.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -124,6 +125,27 @@ describe("the Stop dialog", () => {
     expect(stops).toEqual([{ note: "Wrong plan" }]);
   });
 
+  test("Stop here says every agent at work stops, the conductor included, under Deliver too", async () => {
+    const dialog = await open({ decider: "policy" });
+    const here = [...dialog.querySelectorAll<HTMLElement>('[role="radio"]')].find((r) => r.textContent?.startsWith("Stop here"))!;
+    expect(here.textContent).toContain("Everything stops: every agent at work, the conductor included.");
+  });
+
+  test("a refused Stop keeps the dialog open and says why in its footer", async () => {
+    const client = await clientWith({ status: "running" });
+    client.stopTask = async () => {
+      throw new ApiError(409, "not_in_progress", "task wi_1 is aborted: only a task in progress can be stopped");
+    };
+    const page = await taskPage(client);
+    await act(async () => page.querySelector<HTMLElement>('[data-testid="task-stop"]')!.click());
+    await until(() => document.querySelector('[data-testid="stop-dialog"]'), "the Stop dialog");
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="stop-confirm"]')!.click());
+    const said = await until(() => [...document.querySelectorAll<HTMLElement>('[role="dialog"] *')]
+      .find((e) => e.children.length === 0 && e.textContent === "task wi_1 is aborted: only a task in progress can be stopped") ?? null, "the refusal in the footer");
+    expect(said.closest('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="stop-dialog"]')).not.toBeNull();
+  });
+
   test("Stop and start attempt 2: who decides defaults to now; dude's PR is closed; the decider is sent", async () => {
     const stops: StopRequest[] = [];
     const dialog = await open({ decider: "conductor" }, [{ ...PULL_REQUEST, state: "open", number: 412 }], stops);
@@ -140,7 +162,7 @@ describe("the Stop dialog", () => {
   });
 
   test("an adopted PR: attempt 2 continues on it, and it stays open", async () => {
-    const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: "r", repository: "web-console",
+    const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: "repo_wc", repository: "web-console",
       title: "Pause split", mode: "review" as const };
     const dialog = await open({ decider: "policy", source } as Partial<TaskDetail>, [{ ...PULL_REQUEST, state: "open", number: 412 }]);
     await pick(dialog, "Stop and start attempt 2");
@@ -176,5 +198,20 @@ describe("session Abort", () => {
     expect(link.textContent).toBe("Stop WC-214…");
     await act(async () => link.click());
     expect(opened).toBe(1);
+  });
+});
+
+describe("the pull requests a Close would touch", () => {
+  const source = { kind: "pr", repositoryId: "repo_wc", number: 9 } as unknown as TaskDetail["source"];
+  test("every open one, the adopted one by its repository and number", () => {
+    const prs = [
+      { ...PULL_REQUEST, id: "a", number: 12, state: "open" as const },
+      { ...PULL_REQUEST, id: "b", number: 9, state: "draft" as const },
+      // Another repository's #9 is not the one the task was started from.
+      { ...PULL_REQUEST, id: "c", number: 9, repositoryId: "repo_other", state: "open" as const },
+      { ...PULL_REQUEST, id: "d", number: 3, state: "merged" as const },
+    ];
+    expect(openPullRequestsOf({ source }, prs)).toEqual([
+      { number: 12, openedBy: "dude" }, { number: 9, openedBy: "someone" }, { number: 9, openedBy: "dude" }]);
   });
 });

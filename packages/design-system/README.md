@@ -1112,10 +1112,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   dialog turns danger, lists it first (`LiveWork`, "Closing stops the
   conductor and 1 reviewer. Nothing is kept to resume."), and its primary
   says **Stop and close**; with nothing live it is the plain dialog.
-  **`pullRequest`**: a `Checkbox` "Close pull request #412 on GitHub",
-  ticked for a PR dude opened, unticked for one the task was started from
-  ("It was opened by someone else; it stays open unless you tick this");
-  unticked, the task closes and the PR stays open. `andArchive` makes it
+  **`pullRequests`**: every open pull request the close would touch, in one
+  `Checkbox` row: "Close pull request #412 on GitHub", or "Close pull
+  requests #12 and #14 on GitHub" for several. Ticked when dude opened every
+  one, unticked when any was the one the task was started from, which is
+  named with its own hint ("#9 was opened by someone else; it stays open
+  unless you tick this"); unticked, the task closes and the PRs stay open.
+  `andArchive` makes it
   Close and archive: nothing chosen, one primary that does both ("Stop,
   close and archive" when live). `refused` disables the primary with whose
   decision it is.

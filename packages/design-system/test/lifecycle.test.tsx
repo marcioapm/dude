@@ -160,7 +160,7 @@ describe("CloseDialog", () => {
   test("dude's pull request: ticked, closed with the task; untick and it stays open", async () => {
     const got: CloseDecision[] = [];
     await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={(d) => { got.push(d); }}
-      pullRequest={{ number: 412, openedBy: "dude" }} />);
+      pullRequests={[{ number: 412, openedBy: "dude" }]} />);
     const row = document.querySelector('[data-testid="close-pull-request"]')!;
     const box = row.querySelector<HTMLElement>('[role="checkbox"]')!;
     expect(row.textContent).toContain("Close pull request #412 on GitHub");
@@ -177,7 +177,7 @@ describe("CloseDialog", () => {
   test("an adopted pull request: unticked, left open unless ticked", async () => {
     const got: CloseDecision[] = [];
     await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={(d) => { got.push(d); }}
-      pullRequest={{ number: 9, openedBy: "someone" }} />);
+      pullRequests={[{ number: 9, openedBy: "someone" }]} />);
     const row = document.querySelector('[data-testid="close-pull-request"]')!;
     expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("false");
     expect(row.textContent).toContain("It was opened by someone else; it stays open unless you tick this.");
@@ -186,9 +186,31 @@ describe("CloseDialog", () => {
     expect(got).toEqual([{ resolution: "wont_do", closePullRequest: false }]);
   });
 
+  test("several pull requests: one row names each, as the close would touch them", async () => {
+    const got: CloseDecision[] = [];
+    await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={(d) => { got.push(d); }}
+      pullRequests={[{ number: 12, openedBy: "dude" }, { number: 14, openedBy: "dude" }]} />);
+    const row = document.querySelector('[data-testid="close-pull-request"]')!;
+    expect(row.textContent).toContain("Close pull requests #12 and #14 on GitHub");
+    expect(row.textContent).toContain("dude opened #12 and #14 for this task; closed with a comment saying why. Their branches are kept.");
+    expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("true");
+    await pick("Won't do");
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!.click());
+    expect(got).toEqual([{ resolution: "wont_do", closePullRequest: true }]);
+  });
+
+  test("dude's pull request beside the adopted one: unticked, the adopted one named with its hint", async () => {
+    await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} find={async () => []} onConfirm={() => undefined}
+      pullRequests={[{ number: 12, openedBy: "dude" }, { number: 9, openedBy: "someone" }]} />);
+    const row = document.querySelector('[data-testid="close-pull-request"]')!;
+    expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("false");
+    expect(row.textContent).toContain("Close pull requests #12 and #9 on GitHub");
+    expect(row.textContent).toContain("The task closes; #12 stays open on GitHub. #9 was opened by someone else; it stays open unless you tick this.");
+  });
+
   test("Close and archive while live: nothing chosen, Stop, close and archive", async () => {
     await mount(<CloseDialog open onOpenChange={() => undefined} task={CP63} andArchive initial="wont_do" find={async () => []} onConfirm={() => undefined}
-      live={[{ id: "c", role: "conductor", who: "Conductor", doing: "deciding after review" }]} pullRequest={{ number: 412, openedBy: "dude" }} />);
+      live={[{ id: "c", role: "conductor", who: "Conductor", doing: "deciding after review" }]} pullRequests={[{ number: 412, openedBy: "dude" }]} />);
     expect(document.querySelector('[role="radio"][aria-checked="true"]')).toBeNull();
     const confirm = document.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!;
     expect([confirm.textContent, confirm.disabled]).toEqual(["Stop, close and archive", true]);

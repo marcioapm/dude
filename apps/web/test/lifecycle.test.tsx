@@ -249,7 +249,7 @@ describe("Close and Archive while live", () => {
   });
 
   test("Archive… on a live task with an adopted PR: Close and archive, nothing chosen, the PR unticked", async () => {
-    const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: "r", repository: "web-console",
+    const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: "repo_wc", repository: "web-console",
       title: "Pause split", mode: "review" as const };
     const { client, sent } = await liveTask([{ ...PULL_REQUEST, state: "open", number: 412 }], source);
     const page = await taskPage(client);

@@ -154,9 +154,13 @@ export function LifecycleSection({ mode }: { readonly mode: PaneMode }) {
             <Opens label="While live — conductor + reviewer">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
               onConfirm={() => s(false)} live={[CONDUCTOR_DECIDING, REVIEWER]} />}</Opens>
             <Opens label="Open PR by dude (ticked)">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
-              onConfirm={() => s(false)} pullRequest={{ number: 412, openedBy: "dude" }} />}</Opens>
+              onConfirm={() => s(false)} pullRequests={[{ number: 412, openedBy: "dude" }]} />}</Opens>
             <Opens label="Adopted PR (unticked)">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
-              onConfirm={() => s(false)} pullRequest={{ number: 412, openedBy: "someone" }} />}</Opens>
+              onConfirm={() => s(false)} pullRequests={[{ number: 412, openedBy: "someone" }]} />}</Opens>
+            <Opens label="Two PRs by dude (two repositories)">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
+              onConfirm={() => s(false)} pullRequests={[{ number: 12, openedBy: "dude" }, { number: 14, openedBy: "dude" }]} />}</Opens>
+            <Opens label="dude's PR and the adopted one">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP63} initial="wont_do" find={find}
+              onConfirm={() => s(false)} pullRequests={[{ number: 12, openedBy: "dude" }, { number: 9, openedBy: "someone" }]} />}</Opens>
           </Row>
         </Panes>
       </Block>
@@ -168,7 +172,7 @@ export function LifecycleSection({ mode }: { readonly mode: PaneMode }) {
             <Opens label="Close and archive CP-44">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP44} andArchive find={find} onConfirm={() => s(false)} />}</Opens>
             <Opens label="…as a member">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP44} andArchive find={find} onConfirm={() => s(false)} refused={NOT_YOURS} />}</Opens>
             <Opens label="While live, with dude's PR">{(o, s) => <CloseDialog open={o} onOpenChange={s} task={CP44} andArchive find={find} onConfirm={() => s(false)}
-              live={[CONDUCTOR_DECIDING, REVIEWER]} pullRequest={{ number: 412, openedBy: "dude" }} />}</Opens>
+              live={[CONDUCTOR_DECIDING, REVIEWER]} pullRequests={[{ number: 412, openedBy: "dude" }]} />}</Opens>
           </Row>
         </Panes>
       </Block>

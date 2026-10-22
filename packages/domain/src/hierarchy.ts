@@ -509,7 +509,8 @@ export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
 
 /**
  * A person's Stop of the whole task (`POST /v1/tasks/:id/stop`): every live
- * Run of its attempt stops, kept for a resume; with `andRestart` its next
+ * Run of the task, whatever its attempt, stops, kept for a resume; with
+ * `andRestart` its next
  * attempt starts at once, decided by `decider` (the stopped attempt's by
  * default).
  */
