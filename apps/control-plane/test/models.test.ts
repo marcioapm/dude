@@ -121,6 +121,18 @@ for (const path of paths) {
     expect(reset.status).toBe(200);
     expect((await body(reset)).roles.implementer.tier).toMatchObject({ value: inherited, source: "organization" });
   });
+
+  test(`${path} takes the documentation reviewer and refuses a category dude has no reviewer for`, async () => {
+    const res = await call("PATCH", path, { delivery: { requiredReviewers: ["correctness", "documentation"] } });
+    expect(res.status).toBe(200);
+    expect((await body(res)).delivery.requiredReviewers.value).toEqual(["correctness", "documentation"]);
+    const before = await (await call("GET", path)).json();
+    const refused = await call("PATCH", path, { delivery: { requiredReviewers: ["correctness", "style"] } });
+    expect(refused.status).toBe(400);
+    expect((await body(refused)).error.message).toContain("delivery.requiredReviewers.1");
+    expect(await (await call("GET", path)).json()).toEqual(before);
+    expect((await call("PATCH", path, { delivery: { requiredReviewers: null } })).status).toBe(200);
+  });
 }
 
 test("project create and update refuse a role's model without changing anything", async () => {
