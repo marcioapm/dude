@@ -145,10 +145,16 @@ func TestResolveTruncatedSnippet(t *testing.T) {
 }
 
 func TestLink(t *testing.T) {
-	if got := Link("https://dude.example/", "acme co", "settings", "delivery"); got != "https://dude.example/#/o/acme%20co/help/settings/delivery" {
-		t.Errorf("link %q", got)
-	}
-	if got := Link("", "acme", "memory", ""); got != "#/o/acme/help/memory" {
-		t.Errorf("relative link %q", got)
+	for _, tc := range []struct{ base, org, page, anchor, want string }{
+		{"https://dude.example/", "acme co", "settings", "delivery", "https://dude.example/#/o/acme%20co/help/settings/delivery"},
+		{"https://dude.example", "acme", "memory", "", "https://dude.example/#/o/acme/help/memory"},
+		{"", "acme", "memory", "", "#/o/acme/help/memory"},
+		{"", "acme co/one", "a/b", "c/d", "#/o/acme%20co%2Fone/help/a%2Fb/c%2Fd"},
+		{"/", "acme", "memory", "", "/#/o/acme/help/memory"},
+		{"https://dude.example//", "acme", "memory", "", "https://dude.example//#/o/acme/help/memory"},
+	} {
+		if got := Link(tc.base, tc.org, tc.page, tc.anchor); got != tc.want {
+			t.Errorf("Link(%q, %q, %q, %q) = %q, want %q", tc.base, tc.org, tc.page, tc.anchor, got, tc.want)
+		}
 	}
 }

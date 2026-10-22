@@ -224,16 +224,6 @@ func CoversOf(ps []Page) map[string][]string {
 	return out
 }
 
-// HashPath is the web app's place of a page or section in organization
-// org: `#/o/<org>/help/<page>[/<anchor>]` (apps/web/src/place.ts).
-func HashPath(org, page, anchor string) string {
-	p := "#/o/" + url.PathEscape(org) + "/help/" + url.PathEscape(page)
-	if anchor != "" {
-		p += "/" + url.PathEscape(anchor)
-	}
-	return p
-}
-
 var helpDestination = regexp.MustCompile(`\]\(help:([a-z0-9]+(?:-[a-z0-9]+)*)(?:#([a-z0-9]+(?:-[a-z0-9]+)*)?)?\)`)
 var truncatedHelpLink = regexp.MustCompile(`\[([^\]\n]*)\]\(help:[^\s)]*$`)
 
@@ -250,8 +240,12 @@ func Resolve(text, base, org string) string {
 // Link is a page or section's link: base (dude's public origin) then its
 // hash path, or the hash path alone when there is no base.
 func Link(base, org, page, anchor string) string {
-	if base == "" {
-		return HashPath(org, page, anchor)
+	link := "#/o/" + url.PathEscape(org) + "/help/" + url.PathEscape(page)
+	if anchor != "" {
+		link += "/" + url.PathEscape(anchor)
 	}
-	return strings.TrimSuffix(base, "/") + "/" + HashPath(org, page, anchor)
+	if base != "" {
+		link = strings.TrimSuffix(base, "/") + "/" + link
+	}
+	return link
 }

@@ -150,7 +150,7 @@ func TestASessionsAgentFindsTheGuideWithARelativeLink(t *testing.T) {
 		page, anchor, ok := strings.Cut(strings.TrimPrefix(h.ID, "doc:"), "#")
 		if h.Type == "doc" && ok {
 			found = true
-			if want := guide.HashPath(slug, page, anchor); h.Link != want {
+			if want := guide.Link("", slug, page, anchor); h.Link != want {
 				t.Errorf("%s linked %q, want %q", h.ID, h.Link, want)
 			}
 		}
