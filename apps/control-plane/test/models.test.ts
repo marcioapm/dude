@@ -5,7 +5,7 @@ import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
-import { promptRoleSchema, ROLE_MODEL_REMOVED } from "@dude/domain";
+import { promptRoleSchema, REVIEWER_CATEGORIES, ROLE_MODEL_REMOVED } from "@dude/domain";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const NAME = `dude_models_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
@@ -120,6 +120,24 @@ for (const path of paths) {
     const reset = await call("PATCH", path, { roles: { implementer: { tier: null } } });
     expect(reset.status).toBe(200);
     expect((await body(reset)).roles.implementer.tier).toMatchObject({ value: inherited, source: "organization" });
+  });
+
+  test(`${path} takes the documentation reviewer and refuses a category dude has no reviewer for`, async () => {
+    try {
+      const res = await call("PATCH", path, { delivery: { requiredReviewers: ["correctness", "documentation"] } });
+      expect(res.status).toBe(200);
+      expect((await body(res)).delivery.requiredReviewers.value).toEqual(["correctness", "documentation"]);
+      const before = await (await call("GET", path)).json();
+      const refused = await call("PATCH", path, { delivery: { requiredReviewers: ["correctness", "style"] } });
+      expect(refused.status).toBe(400);
+      const error = (await body(refused)).error;
+      expect(error.message).toBe("request body failed validation");
+      const allowed = REVIEWER_CATEGORIES.map((c) => `'${c}'`).join(" | ");
+      expect(error.details.fieldErrors.delivery).toEqual([`Invalid enum value. Expected ${allowed}, received 'style'`]);
+      expect(await (await call("GET", path)).json()).toEqual(before);
+    } finally {
+      expect((await call("PATCH", path, { delivery: { requiredReviewers: null } })).status).toBe(200);
+    }
   });
 }
 
