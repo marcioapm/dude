@@ -18,6 +18,8 @@ import (
 // agent is requested with.
 type Tier struct {
 	ID, Name, Model, Effort string
+	Description             string
+	Position                int
 	Options                 map[string]any
 	Headers                 map[string]string
 }
@@ -42,14 +44,14 @@ func LoadTiers(ctx context.Context, tx pgx.Tx) (map[string]Tier, error) {
 }
 
 func loadTiers(ctx context.Context, tx pgx.Tx, where string, args ...any) (map[string]Tier, error) {
-	rows, err := tx.Query(ctx, `SELECT id, name, COALESCE(model, ''), COALESCE(effort, ''), options, headers FROM model_tiers `+where, args...)
+	rows, err := tx.Query(ctx, `SELECT id, name, COALESCE(model, ''), COALESCE(effort, ''), options, headers, description, position FROM model_tiers `+where, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load model tier: %w", err)
 	}
 	out := map[string]Tier{}
 	for rows.Next() {
 		var t Tier
-		if err := rows.Scan(&t.ID, &t.Name, &t.Model, &t.Effort, &t.Options, &t.Headers); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Model, &t.Effort, &t.Options, &t.Headers, &t.Description, &t.Position); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("load model tier: %w", err)
 		}

@@ -252,3 +252,154 @@ func TestThePullRequestChecksAccountIsBounded(t *testing.T) {
 		t.Errorf("the rows open with %q, want %q", lines[0], want)
 	}
 }
+
+// A Run that changed nothing is shown as such, never as backed: it neither
+// hides an earlier Run's waiver nor turns an unverified account verified,
+// and alone its headline says no checks were needed.
+func TestAnUnchangedRunIsItsOwnStatusInTheChecksAccount(t *testing.T) {
+	unchanged := gatedJudgement{Role: "Simplifier", Verified: true, Unchanged: true}
+	for _, c := range []struct {
+		name string
+		runs []gatedJudgement
+		want string
+	}{{
+		"after a waived implementer",
+		[]gatedJudgement{{Role: "Implementer", Verified: true, Waived: true, Message: "Pre-existing failures on main."}, unchanged},
+		"### Checks\nChecks were waived by a person:\n- Implementer: Pre-existing failures on main.\n\n" +
+			"- **Implementer** — waived\n- **Simplifier** — no changes; checks not needed",
+	}, {
+		"after a skipped implementer",
+		[]gatedJudgement{{Role: "Implementer", Verified: true, Skipped: true}, unchanged},
+		"### Checks\nChecks not model-checked, set a judgement tier in the organisation's settings.\n\n" +
+			"- **Implementer** — not model-checked\n- **Simplifier** — no changes; checks not needed",
+	}, {
+		"after a backed implementer",
+		[]gatedJudgement{{Role: "Implementer", Verified: true}, unchanged},
+		"### Checks\nChecks were verified against the Run's recorded commands.\n\n" +
+			"- **Implementer** — backed\n- **Simplifier** — no changes; checks not needed",
+	}, {
+		"alone",
+		[]gatedJudgement{unchanged},
+		"### Checks\nNo gated Run changed anything; no checks were needed.\n\n- **Simplifier** — no changes; checks not needed",
+	}} {
+		if got := checksAccountText(c.runs, prBodyMax); got != c.want {
+			t.Errorf("%s: the checks account is\n%s\nwant\n%s", c.name, got, c.want)
+		}
+	}
+}
+
+// A tester is told its own attempt's writers' checks only, each with the
+// commits that Run published, and a resumed tester's round message carries
+// the same account: a waiver of an earlier attempt is not this attempt's.
+func TestATesterIsToldItsAttemptsWriterChecks(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, q := range []string{
+		`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_wc',$1,'WC','wc','WC')`,
+		`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_wc',$1,'prj_wc',1,'WC','WC','running')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,created_at)
+			VALUES('run_wc0',$1,'prj_wc','wi_wc',1,'implement','completed',now()-interval '2 hours')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,heads,created_at)
+			VALUES('run_wc1',$1,'prj_wc','wi_wc',2,'implement','completed','{"api":{"sha":"` + a + `","changedPaths":[]}}',now()-interval '1 hour')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,heads,created_at)
+			VALUES('run_wc2',$1,'prj_wc','wi_wc',2,'simplify','completed','{}',now()-interval '30 minutes')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,base_refs)
+			VALUES('run_wct',$1,'prj_wc','wi_wc',2,'test','completed','{"api":"` + b + `"}')`,
+		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+			('ev_wc0',$1,'run.checks.judged','run_wc0','wi_wc','human','usr','test','{"turn":1,"verified":true,"waived":true,"message":"Old attempt.","checks":[]}'),
+			('ev_wc1',$1,'run.checks.judged','run_wc1','wi_wc','human','usr','test','{"turn":1,"verified":true,"waived":true,"message":"Fails on main too.","checks":[]}'),
+			('ev_wc2',$1,'run.checks.judged','run_wc2','wi_wc','system','dude','test','{"turn":1,"verified":true,"unchanged":true,"message":"No changes.","checks":[]}')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var text, round string
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		if text, err = WriterChecksTx(ctx, tx, "wi_wc", 2); err != nil {
+			return err
+		}
+		round, err = roundMessageTx(ctx, tx, PhaseRun{Phase: PhaseTest, TaskID: "wi_wc", Attempt: 2, BaseRefs: map[string]string{"api": b}},
+			predecessorRow{Predecessor: Predecessor{ID: "run_wct", BaseRefs: map[string]string{"api": a}}, Phase: PhaseTest})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"- Implementer (api@aaaaaaa): waived: Fails on main too.", "- Simplifier: no changes; checks not needed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the account lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Old attempt.") {
+		t.Errorf("an earlier attempt's waiver is in this attempt's account:\n%s", text)
+	}
+	if !strings.HasSuffix(round, text) {
+		t.Errorf("the resumed tester's round message does not end with the account:\n%s", round)
+	}
+}
+
+// A Run whose runs.heads are not in the published shape loses only its
+// heads: the pull request's account and the tester's writer checks still
+// carry its outcome and its waiver.
+func TestAWriterRunWithUnreadableHeadsStillHasItsChecksAccounted(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	for _, q := range []string{
+		`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_wh',$1,'WH','wh','WH')`,
+		`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_wh',$1,'prj_wh',1,'WH','WH','running')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,heads)
+			VALUES('run_wh1',$1,'prj_wh','wi_wh',1,'implement','completed','{"api":"` + strings.Repeat("a", 40) + `"}')`,
+		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+			('ev_wh1',$1,'run.checks.judged','run_wh1','wi_wh','human','usr','test','{"turn":1,"verified":true,"waived":true,"message":"Fails on main too.","checks":[]}')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var account, text string
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		runs, err := gatedRuns(ctx, tx, &State{TaskID: "wi_wh", ProjectID: "prj_wh", Attempt: 1})
+		if err != nil {
+			return err
+		}
+		account = checksAccountText(runs, prBodyMax)
+		text, err = WriterChecksTx(ctx, tx, "wi_wh", 1)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "### Checks\nChecks were waived by a person:\n- Implementer: Fails on main too.\n\n- **Implementer** — waived"; account != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", account, want)
+	}
+	if !strings.Contains(text, "- Implementer: waived: Fails on main too.") {
+		t.Errorf("the writer checks lack the waived implementer:\n%s", text)
+	}
+}
+
+// The account keeps the newest Runs that fit its bound, and with none, the
+// newest alone without its checks.
+func TestTheWriterChecksAccountIsBounded(t *testing.T) {
+	type check = gatedCheck
+	var runs []gatedJudgement
+	for i := range 60 {
+		j := gatedJudgement{Role: fmt.Sprintf("Fixer %d", i), Verified: true}
+		for k := range 30 {
+			j.Checks = append(j.Checks, check{Command: fmt.Sprintf("check %d %s", k, strings.Repeat("x", 280)), Result: "pass", Reason: strings.Repeat("r", 280)})
+		}
+		runs = append(runs, j)
+	}
+	text := writerChecksText(runs, writerChecksMax)
+	if n := utf8.RuneCountInString(text); n > writerChecksMax {
+		t.Errorf("the account is %d characters, over %d", n, writerChecksMax)
+	}
+	if !strings.Contains(text, "- Fixer 59: backed") || strings.Contains(text, "- Fixer 0:") {
+		t.Errorf("the account does not keep the newest Runs:\n%s", text[:min(len(text), 500)])
+	}
+	small := writerChecksText(runs, 10)
+	if !strings.Contains(small, "- Fixer 59: backed") || strings.Contains(small, "check 0") {
+		t.Errorf("with no room, the account is not the newest Run alone:\n%s", small)
+	}
+}

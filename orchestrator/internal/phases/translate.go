@@ -402,7 +402,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		// when that is the silence the clocks move on, it moves with them,
 		// so a move is not a change of facts. Another silence stays put.
 		var was string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_state, '') FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID).Scan(&was); err != nil {
+		var away bool
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(lux_state, ''), left_running_at IS NOT NULL FROM runs WHERE id = $1 FOR UPDATE`,
+			t.run.ID).Scan(&was, &away); err != nil {
 			return err
 		}
 		var facts, since *string
@@ -431,8 +433,11 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return err
 		}
 		// Waiting for a host, or no longer: the Run page reads why again
-		// (its waitingReason), as a preview's state change has it do.
-		if lux.Waiting(state) || lux.Waiting(was) {
+		// (its waitingReason), as a preview's state change has it do. Back
+		// from away (left_running_at set: a move or a resume, often through
+		// scheduled or starting rather than a wait) is announced once, so
+		// the chat's start ends even if the agent stays idle.
+		if lux.Waiting(state) || lux.Waiting(was) || state == "running" && away {
 			if err := s.event(ctx, tx, t.run, EvServersChanged, ledger.ActorSystem,
 				map[string]any{"taskId": t.run.TaskID, "runId": t.run.ID, "change": "state", "luxState": state}); err != nil {
 				return err

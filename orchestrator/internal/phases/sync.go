@@ -1393,6 +1393,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var lastFix []delivery.FixRange
+	var writerChecks string
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
@@ -1536,6 +1537,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A preview item's picture is said attached only when it goes with
 		// this prompt (PromptAttachments had room for it).
 		delivery.MarkPictures(peopleFeedback, taskImages)
+		// A tester is told what its attempt's writers checked, so it does
+		// not rediscover failures already known or waived.
+		if r.Phase == delivery.PhaseTest && stored == nil {
+			if writerChecks, err = delivery.WriterChecksTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+				return err
+			}
+		}
 		// A review after a fix is told that fix's commits, to answer
 		// caused_by_fix by.
 		if r.Phase == delivery.PhaseReview && stored == nil {
@@ -1610,6 +1618,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
+		WriterChecks: writerChecks,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of
@@ -2129,6 +2138,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	heads := map[string]delivery.RunHead{}
 	branch := ""
 	if pushes {
+		if delivery.ChecksGated[r.Phase] {
+			if refused, err := s.unchangedPushRefused(ctx, r); refused || err != nil {
+				return true, err
+			}
+		}
 		var err error
 		if heads, branch, err = s.publish(ctx, r); err != nil {
 			// A forge that is down or rate-limiting will answer later; a

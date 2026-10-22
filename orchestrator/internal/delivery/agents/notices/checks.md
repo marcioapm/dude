@@ -28,6 +28,7 @@ That report said {{printf "%q" .Command}} failed:
 {{define "notices/checks/skip"}}Checks not model-checked: no judgement tier. Set a judgement tier in the organisation's settings to verify checks reports before publication.{{end}}
 {{define "notices/checks/unparseable"}}missing or unparseable checks YAML block{{end}}
 {{define "notices/checks/unestablished"}}the judgement did not establish verification{{end}}
+{{define "notices/checks/unchanged"}}No changes; checks not needed. When the turn ended, every repository this Run may push was at the commit it started from, with nothing staged, unstaged or untracked.{{end}}
 {{define "notices/checks/account-compact"}}- **{{.Role}}** — {{.Status}}
   - {{.Count}} {{if eq .Count 1}}check{{else}}checks{{end}} reported; checks omitted from this account: see the task's Activity.{{end}}
 {{define "notices/checks/account-omitted"}}Checks account omitted: see the task's Activity.{{end}}

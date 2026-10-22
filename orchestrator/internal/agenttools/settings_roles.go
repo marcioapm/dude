@@ -41,6 +41,7 @@ type roleValueOut struct {
 	Value              any    `json:"value"`
 	Source             string `json:"source"`
 	FollowsImplementer bool   `json:"followsImplementer,omitempty"`
+	Note               string `json:"note,omitempty"`
 }
 
 type roleOut struct {
@@ -115,6 +116,9 @@ func rolesOut(w wrapper, scope settingsLayers, refs roleRefs) []roleOut {
 		r.Harness.Value = rs.HarnessName()
 		r.TimeLimitMinutes = layerSource(l, from.TimeLimit)
 		r.TimeLimitMinutes.Value = rs.TimeLimit()
+		if role == settingsInvestigator && scope.session != nil {
+			r.TimeLimitMinutes = roleValueOut{Source: sourceDude, Note: settingsText("session-child-limit", nil)}
+		}
 		r.MachineSize = machineOf(w, l, refs.sizes, role)
 		known := func(id string) bool { _, ok := refs.images[id]; return ok }
 		id, imgFrom := images.RoleImageFrom(role, l.projectModels(), l.org.AgentModels, known)
@@ -212,13 +216,15 @@ type savedOut struct {
 type promptOut struct {
 	Role  string `json:"role"`
 	Label string `json:"label"`
-	// "dude" for its built-in prompt, or "saved".
+	// "dude" for its built-in prompt, "saved", or "per-run" for a session's
+	// investigator, which runs on the prompt its brainstorm gives it.
 	Organization string    `json:"organization"`
 	OrgSaved     *savedOut `json:"organizationSaved,omitempty"`
 	// A project's: "inherit" (the organisation's as it is), "add" (after
 	// it) or "replace" (in its place).
 	Project      string    `json:"project,omitempty"`
 	ProjectSaved *savedOut `json:"projectSaved,omitempty"`
+	Note         string    `json:"note,omitempty"`
 }
 
 // latestPrompts are the current prompt versions of the organisation and of
@@ -254,6 +260,11 @@ func promptsOut(w wrapper, scope settingsLayers, rows map[promptKey]promptRow) [
 	for _, role := range settingsRoles {
 		l := scope.of(role)
 		p := promptOut{Role: role, Label: delivery.RoleName(role), Organization: sourceDude}
+		if role == settingsInvestigator && scope.session != nil {
+			p.Organization, p.Note = "per-run", settingsText("session-child-prompt", nil)
+			out = append(out, p)
+			continue
+		}
 		if r, ok := rows[promptKey{role, ""}]; ok {
 			p.Organization, p.OrgSaved = "saved", saved(r)
 		}

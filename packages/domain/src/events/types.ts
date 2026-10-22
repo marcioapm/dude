@@ -361,7 +361,7 @@ export const EventTypes = {
   RunCreated: "run.created",
   RunStarted: "run.started",
   RunCompleted: "run.completed",
-  /** Checks-gate verdict for a Run turn: `{turn, round, verified, skipped?, waived?, checks, message}`. */
+  /** Checks-gate verdict for a Run turn: `{turn, round, verified, skipped?, waived?, unchanged?, epoch?, heads?, checks, message}`; `unchanged` is a turn that changed nothing it could push, so no report was judged. */
   RunChecksJudged: "run.checks.judged",
   /** A person's checks-gate decision: `{action, note}`. */
   RunChecksDecided: "run.checks.decided",

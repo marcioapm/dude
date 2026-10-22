@@ -208,8 +208,14 @@ func TestEveryStopLeavesTheFinalDiffThroughLuxsBeforeStopHook(t *testing.T) {
 				return w.count(`SELECT count(*) FROM run_diffs WHERE run_id = $1 AND final
 					AND files @> '[{"path": "a.md", "status": "A", "additions": 1}]'`, runID) == 1
 			})
-			if calls := w.lux.CallsOf(luxID); slices.Contains(calls, "exec") {
-				t.Errorf("dude read the diff itself: %v", calls)
+			// A finished writer's checkouts are inspected through exec by the
+			// checks gate (unchanged or not); no diff dude read is recorded.
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.diff.updated'
+				AND NOT (payload->>'final')::boolean`, runID); n != 0 {
+				t.Errorf("dude read the diff itself: %d live diffs recorded", n)
+			}
+			if calls := w.lux.CallsOf(luxID); c.name != "finished" && slices.Contains(calls, "exec") {
+				t.Errorf("dude ran a command in the container before the stop: %v", calls)
 			}
 			// Announced as a summary, and never listed as a file for people.
 			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.diff.updated'

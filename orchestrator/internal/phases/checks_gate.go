@@ -28,6 +28,7 @@ var (
 	checksMany          = delivery.MustText("notices/checks/many")
 	checksUnparseable   = delivery.MustText("notices/checks/unparseable")
 	checksUnestablished = delivery.MustText("notices/checks/unestablished")
+	checksUnchanged     = delivery.MustText("notices/checks/unchanged")
 )
 
 // checksCountMax bounds the judge calls one report costs, one per check
@@ -60,6 +61,14 @@ type checksDecision struct {
 	Carried  bool            `json:"carried,omitempty"`
 	Verdicts []checksVerdict `json:"checks"`
 	Message  string          `json:"message"`
+	// Unchanged: a fresh inspection at this turn found every repository the
+	// Run may push at its starting commit with nothing staged, unstaged or
+	// untracked (unchangedBeforePush), so no report was judged. Epoch is
+	// the agent session placement it was inspected in; Heads each
+	// repository's HEAD then.
+	Unchanged bool              `json:"unchanged,omitempty"`
+	Epoch     int               `json:"epoch,omitempty"`
+	Heads     map[string]string `json:"heads,omitempty"`
 }
 
 // checksBeforePush judges the report the Run's latest turn ended with,
@@ -70,14 +79,23 @@ type checksDecision struct {
 // escalation it leads to, are written in one transaction, only if the
 // Run's latest turn is still the one judged. A restart before that commit
 // judges the turn again; one after it reads the recorded verdict.
+//
+// A turn that changed nothing the Run may push (unchangedBeforePush) is
+// recorded as such and passes without a report or a judge: there is no
+// work of its own for checks to cover. That decision is reused only in the
+// agent session placement it was inspected in.
 func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted bool, err error) {
 	var turn int64
+	var epoch int
 	var previous *checksDecision
 	var rounds int
 	var rawSettings []byte
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
 		if turn, err = delivery.LatestTurnTx(ctx, tx, r.ID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT agent_session_epoch FROM runs WHERE id = $1`, r.ID).Scan(&epoch); err != nil {
 			return err
 		}
 		var raw []byte
@@ -105,11 +123,18 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	if err != nil {
 		return false, false, err
 	}
-	if previous != nil {
+	if previous != nil && (!previous.Unchanged || previous.Epoch == epoch) {
 		return previous.Verified, false, nil
 	}
-	d, err := s.judgeChecks(ctx, r)
+	heads, unchanged, err := s.unchangedBeforePush(ctx, r)
 	if err != nil {
+		return false, true, err
+	}
+	var d checksDecision
+	if unchanged {
+		d = checksDecision{Verified: true, Unchanged: true, Epoch: epoch, Heads: heads, Verdicts: []checksVerdict{},
+			Message: checksUnchanged.Render(nil)}
+	} else if d, err = s.judgeChecks(ctx, r); err != nil {
 		return false, true, err
 	}
 	d.Turn, d.Round = turn, rounds
@@ -125,7 +150,11 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 		if err != nil {
 			return err
 		}
-		if current != turn {
+		var nowEpoch int
+		if err := tx.QueryRow(ctx, `SELECT agent_session_epoch FROM runs WHERE id = $1`, r.ID).Scan(&nowEpoch); err != nil {
+			return err
+		}
+		if current != turn || d.Unchanged && nowEpoch != epoch {
 			return errRetry
 		}
 		raw, _ := json.Marshal(d)

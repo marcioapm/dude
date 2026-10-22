@@ -90,6 +90,21 @@ func TestASessionAtItsLinkCapReadsABoundedResult(t *testing.T) {
 		t.Errorf("50 linked projects: %d bytes, %d listed", len(raw), len(linked))
 	}
 	t.Logf("50 linked projects: %d bytes", len(raw))
+	// Servers, asked for with no project named: the organisation's scope,
+	// saying the linked projects were not named, and none's recipes.
+	mustExec(t, f.owner, `INSERT INTO project_servers (project_id, organization_id, name, port, command)
+		SELECT id, organization_id, 'web', 3000, 'LINKED-RECIPE-CANARY' FROM projects WHERE organization_id = $1`, f.org)
+	if status := f.postAs(t, token, "settings", `{"section":"servers"}`, &raw); status != 200 {
+		t.Fatalf("servers: %d %s", status, raw)
+	}
+	out = nil
+	_ = json.Unmarshal(raw, &out)
+	scopes, _ := out["settings"].([]any)
+	if linked, _ := out["linkedProjects"].([]any); len(scopes) != 1 || field(scopes, 0, "project") != nil || len(linked) != 50 ||
+		field(scopes, 0, "servers", "source") != "linked-projects-not-named" || field(scopes, 0, "servers", "recipes") != nil ||
+		strings.Contains(string(raw), "LINKED-RECIPE-CANARY") {
+		t.Errorf("servers past the link cap: %d linked, %v", len(linked), scopes)
+	}
 	// Three or fewer keep a scope each.
 	mustExec(t, f.owner, `DELETE FROM session_projects WHERE session_id = 'ssn_cap' AND project_id NOT IN ('prj_c1', 'prj_c2', 'prj_c3')`)
 	if scopes, _ := f.settingsOf(t, token, `{"section":"delivery"}`)["settings"].([]any); len(scopes) != 3 {
