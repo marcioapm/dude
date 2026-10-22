@@ -3,6 +3,9 @@ package delivery
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,22 +25,27 @@ func isDeadlock(err error) bool {
 }
 
 // waitForLockWaiter returns once a backend in the test's database waits on
-// a heavyweight lock: the ender is queued behind the held transaction.
-func (w *childWorld) waitForLockWaiter() {
-	w.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+// a heavyweight lock: the ender is queued behind the held transaction. An
+// error when ended closes first (the ender finished without waiting) or
+// ctx ends.
+func (w *childWorld) waitForLockWaiter(ctx context.Context, ended <-chan struct{}) error {
+	for {
 		var n int
-		if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM pg_stat_activity
+		if err := w.owner.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
 			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&n); err != nil {
-			w.t.Fatal(err)
+			return fmt.Errorf("polling for a lock waiter: %w", err)
 		}
 		if n > 0 {
-			return
+			return nil
 		}
-		time.Sleep(5 * time.Millisecond)
+		select {
+		case <-ended:
+			return errors.New("the ender ended without waiting on a lock")
+		case <-ctx.Done():
+			return fmt.Errorf("the ender never waited on a lock: %w", ctx.Err())
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
-	w.t.Fatal("the ender never waited on a lock")
 }
 
 // The two orders themselves, with nothing of dude's code: Postgres refuses
@@ -45,37 +53,46 @@ func (w *childWorld) waitForLockWaiter() {
 // inversion.
 func TestOpposedTaskAndDeliveryLocksDeadlock(t *testing.T) {
 	w := newChildWorld(t)
+	ctx, cancel := context.WithTimeout(w.ctx, raceTimeout)
+	defer cancel()
 	begin := func() pgx.Tx {
-		tx, err := w.s.DB.Pool.Begin(w.ctx)
+		tx, err := w.s.DB.Pool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
-		if _, err := tx.Exec(w.ctx, `SELECT set_config('app.organization_id', $1, true)`, w.org); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, w.org); err != nil {
 			t.Fatal(err)
 		}
 		return tx
 	}
 	taskFirst, deliveryFirst := begin(), begin()
-	if _, err := taskFirst.Exec(w.ctx, `SELECT 1 FROM tasks WHERE id = 'wi_life' FOR UPDATE`); err != nil {
+	if _, err := taskFirst.Exec(ctx, `SELECT 1 FROM tasks WHERE id = 'wi_life' FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadDelivery(w.ctx, deliveryFirst, "wi_life"); err != nil {
+	if _, err := LoadDelivery(ctx, deliveryFirst, "wi_life"); err != nil {
 		t.Fatal(err)
 	}
 	errs := make(chan error, 2)
 	go func() {
-		_, err := LoadDelivery(w.ctx, taskFirst, "wi_life")
+		_, err := LoadDelivery(ctx, taskFirst, "wi_life")
 		errs <- err
 	}()
-	w.waitForLockWaiter()
+	if err := w.waitForLockWaiter(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
 	go func() {
-		_, err := deliveryFirst.Exec(w.ctx, `SELECT 1 FROM tasks WHERE id = 'wi_life' FOR NO KEY UPDATE`)
+		_, err := deliveryFirst.Exec(ctx, `SELECT 1 FROM tasks WHERE id = 'wi_life' FOR NO KEY UPDATE`)
 		errs <- err
 	}()
 	deadlocks := 0
 	for range 2 {
-		err := <-errs
+		var err error
+		select {
+		case err = <-errs:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
 		if isDeadlock(err) {
 			deadlocks++
 			continue
@@ -111,30 +128,115 @@ var enders = []struct {
 	}},
 }
 
+// raceTimeout bounds one race: both transactions, their SQL and the lock
+// witness.
+const raceTimeout = 15 * time.Second
+
 // raceEnder runs hold in a transaction that pauses at its hook, starts the
 // ender once the hook is reached, lets hold go on once the ender waits on
-// a lock, and returns both transactions' errors.
+// a lock, and returns both transactions' errors. Both run under one
+// deadline context, which their SQL takes. On every exit the hook is
+// released, the context cancelled when the harness itself failed, and both
+// goroutines joined before it returns, so no transaction outlives it into
+// the fixture's cleanup. err is the harness's failure: the hook never
+// reached, the ender never waiting on a lock, the deadline.
 func (w *childWorld) raceEnder(end func(context.Context, pgx.Tx, string) error,
-	hold func(tx pgx.Tx, between func()) error) (holdErr, endErr error) {
-	w.t.Helper()
+	hold func(ctx context.Context, tx pgx.Tx, between func()) error) (holdErr, endErr, err error) {
+	ctx, cancel := context.WithTimeout(w.ctx, raceTimeout)
+	defer cancel()
 	reached, release := make(chan struct{}), make(chan struct{})
-	holdDone, endDone := make(chan error, 1), make(chan error, 1)
+	held, ended := make(chan struct{}), make(chan struct{})
+	var reachOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	var wg sync.WaitGroup
+	var hErr, eErr error
+	defer func() {
+		unblock()
+		if err != nil {
+			cancel()
+		}
+		wg.Wait()
+		holdErr, endErr = hErr, eErr
+		if err == nil && ctx.Err() != nil {
+			err = fmt.Errorf("the race outlived its deadline: %w", ctx.Err())
+		}
+	}()
+	wg.Add(1)
 	go func() {
-		holdDone <- w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-			return hold(tx, func() { close(reached); <-release })
+		defer wg.Done()
+		defer close(held)
+		hErr = w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			return hold(ctx, tx, func() {
+				reachOnce.Do(func() { close(reached) })
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			})
 		})
 	}()
 	select {
 	case <-reached:
-	case err := <-holdDone:
-		w.t.Fatalf("held transaction ended before its hook: %v", err)
+	case <-held:
+		return nil, nil, fmt.Errorf("the held transaction ended before its hook: %v", hErr)
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("the held transaction never reached its hook: %w", ctx.Err())
 	}
+	wg.Add(1)
 	go func() {
-		endDone <- w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error { return end(w.ctx, tx, w.org) })
+		defer wg.Done()
+		defer close(ended)
+		eErr = w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error { return end(ctx, tx, w.org) })
 	}()
-	w.waitForLockWaiter()
-	close(release)
-	return <-holdDone, <-endDone
+	if werr := w.waitForLockWaiter(ctx, ended); werr != nil {
+		return nil, nil, werr
+	}
+	return nil, nil, nil
+}
+
+// The harness's own failures unwind: an ender refused before it waits on
+// any lock, or a held transaction that fails before its hook, end the race
+// within its deadline with the harness's error, and the held transaction's
+// locks are free once it returns.
+func TestTheRaceHarnessUnwindsWhenTheRaceNeverHappens(t *testing.T) {
+	refused := errors.New("refused before any lock")
+	cases := []struct {
+		name string
+		end  func(context.Context, pgx.Tx, string) error
+		hold func(context.Context, pgx.Tx, func()) error
+		want string
+	}{
+		{"an ender that never waits",
+			func(context.Context, pgx.Tx, string) error { return refused },
+			func(ctx context.Context, tx pgx.Tx, between func()) error {
+				if _, _, err := LockEscalationTx(ctx, tx, "wi_life"); err != nil {
+					return err
+				}
+				between()
+				return nil
+			},
+			"the ender ended without waiting on a lock"},
+		{"a hold that fails before its hook",
+			func(context.Context, pgx.Tx, string) error { return nil },
+			func(context.Context, pgx.Tx, func()) error { return refused },
+			"the held transaction ended before its hook"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newChildWorld(t)
+			start := time.Now()
+			holdErr, endErr, err := w.raceEnder(c.end, c.hold)
+			if took := time.Since(start); took > raceTimeout/3 {
+				t.Errorf("the race took %s to fail", took)
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("harness error %v (hold %v, end %v), want %q", err, holdErr, endErr, c.want)
+			}
+			if _, err := w.owner.Exec(w.ctx, `SELECT 1 FROM workflow_runs WHERE id = 'wf_life' FOR UPDATE NOWAIT`); err != nil {
+				t.Fatalf("the delivery is still locked after the race returned: %v", err)
+			}
+		})
+	}
 }
 
 // A conductor's start_agent and a person ending the task at once: the
@@ -153,11 +255,14 @@ func TestAChildStartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 			in := w.in
 			in.Key = "raced"
 			var child string
-			startErr, endErr := w.raceEnder(e.end, func(tx pgx.Tx, between func()) error {
+			startErr, endErr, err := w.raceEnder(e.end, func(ctx context.Context, tx pgx.Tx, between func()) error {
 				var err error
-				child, err = startChildTx(w.ctx, tx, in, between)
+				child, err = startChildTx(ctx, tx, in, between)
 				return err
 			})
+			if err != nil {
+				t.Fatalf("race: %v (start %v, %s %v)", err, startErr, e.name, endErr)
+			}
 			if isDeadlock(startErr) || isDeadlock(endErr) {
 				t.Fatalf("deadlock: start %v, %s %v", startErr, e.name, endErr)
 			}
@@ -184,11 +289,14 @@ func TestAChildRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 			w.exec(`UPDATE tasks SET status = 'queued' WHERE id = 'wi_life'`)
 			w.exec(`UPDATE pull_requests SET state = 'closed' WHERE id = 'pr_life'`)
 			var next string
-			restartErr, endErr := w.raceEnder(e.end, func(tx pgx.Tx, between func()) error {
+			restartErr, endErr, err := w.raceEnder(e.end, func(ctx context.Context, tx pgx.Tx, between func()) error {
 				var err error
-				next, err = restartChildTx(w.ctx, tx, w.org, "wi_life", writer, "again", between)
+				next, err = restartChildTx(ctx, tx, w.org, "wi_life", writer, "again", between)
 				return err
 			})
+			if err != nil {
+				t.Fatalf("race: %v (restart %v, %s %v)", err, restartErr, e.name, endErr)
+			}
 			if isDeadlock(restartErr) || isDeadlock(endErr) {
 				t.Fatalf("deadlock: restart %v, %s %v", restartErr, e.name, endErr)
 			}
@@ -212,15 +320,18 @@ func TestARunRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 			w := newChildWorld(t)
 			w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 				VALUES ('run_impl', $1, 'prj_life', 'wi_life', 3, 'running', 'implement', 'implementer')`, w.org)
-			restartErr, endErr := w.raceEnder(e.end, func(tx pgx.Tx, between func()) error {
-				if _, _, err := LockEscalationTx(w.ctx, tx, "wi_life"); err != nil {
+			restartErr, endErr, err := w.raceEnder(e.end, func(ctx context.Context, tx pgx.Tx, between func()) error {
+				if _, _, err := LockEscalationTx(ctx, tx, "wi_life"); err != nil {
 					return err
 				}
 				between()
 				// RestartRunTx's own lock on the Run it replaces.
-				_, err := tx.Exec(w.ctx, `SELECT id FROM runs WHERE id = 'run_impl' FOR UPDATE`)
+				_, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id = 'run_impl' FOR UPDATE`)
 				return err
 			})
+			if err != nil {
+				t.Fatalf("race: %v (restart %v, %s %v)", err, restartErr, e.name, endErr)
+			}
 			if isDeadlock(restartErr) || isDeadlock(endErr) {
 				t.Fatalf("deadlock: restart %v, %s %v", restartErr, e.name, endErr)
 			}
@@ -271,12 +382,15 @@ func TestTheSyncersRestartOfAnAttributedRunAndATaskEndingSerialise(t *testing.T)
 				VALUES ('run_impl', $1, 'prj_life', 'wi_life', 3, 'running', 'review', 'reviewer', 'run_parent')`, w.org)
 			w.exec(`UPDATE workflow_runs SET step = 'review', state = jsonb_set(state, '{pendingRunIds}', '["run_impl"]') WHERE id = 'wf_life'`)
 			var next string
-			restartErr, endErr := w.raceEnder(e.end, func(tx pgx.Tx, between func()) error {
+			restartErr, endErr, err := w.raceEnder(e.end, func(ctx context.Context, tx pgx.Tx, between func()) error {
 				var err error
-				next, err = restartRunTx(w.ctx, tx, w.org, "wi_life", Restart{RunID: "run_impl", ByDude: true,
+				next, err = restartRunTx(ctx, tx, w.org, "wi_life", Restart{RunID: "run_impl", ByDude: true,
 					Note: "a secret is no longer given", Actor: Writer{ActorType: "system", ActorID: "dude"}}, between)
 				return err
 			})
+			if err != nil {
+				t.Fatalf("race: %v (restart %v, %s %v)", err, restartErr, e.name, endErr)
+			}
 			if isDeadlock(restartErr) || isDeadlock(endErr) {
 				t.Fatalf("deadlock: restart %v, %s %v", restartErr, e.name, endErr)
 			}
