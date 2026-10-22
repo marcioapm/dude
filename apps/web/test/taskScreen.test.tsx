@@ -212,6 +212,29 @@ describe("task rail filtering", () => {
     await until(() => trigger.getAttribute("data-state") === "closed" ? true : null, "a pick closing the picker");
   });
 
+  test("opening and closing the session picker does not re-render the open RunScreen", async () => {
+    const memo = RunScreen as unknown as { type: (props: RunScreenProps) => ReactNode };
+    const screen = memo.type;
+    let renders = 0;
+    memo.type = (props) => { renders++; return screen(props); };
+    try {
+      const page = await taskPage(new FixtureClient("d"), { tab: "sessions" });
+      await until(() => page.querySelector('[data-testid="run-screen"]'), "the loaded run");
+      await settle(500);
+      renders = 0;
+      const trigger = page.querySelector<HTMLElement>('[data-testid="search-selector-trigger"]')!;
+      await sessionOptions(page);
+      expect(trigger.getAttribute("data-state")).toBe("open");
+      await act(async () => { document.querySelector('input[role="combobox"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+      await until(() => trigger.getAttribute("data-state") === "closed" ? true : null, "Escape closing the picker");
+      expect(renders).toBe(0);
+    } finally {
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+      memo.type = screen;
+    }
+  });
+
   test("Files kind counts stay put and Download all reads only displayed latest versions", async () => {
     const client = new FixtureClient("a");
     const artifact = (id: string, name: string, contentType: string) => ({ id, name, phase: "implement", role: "implementer", contentType, sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" }) as Artifact;
