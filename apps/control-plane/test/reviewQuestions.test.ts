@@ -35,7 +35,7 @@ let admin: SQL;
 let owner: SQL;
 let app: SQL;
 let router: Router;
-let ana: { key: string };
+let ana: { key: string; personId: string };
 let cy: { key: string };
 let orchestrator: ReturnType<typeof Bun.serve>;
 const forwarded: Array<{ path: string; body: unknown; person: string | null }> = [];
@@ -149,7 +149,8 @@ test("answer and withdraw forward to the orchestrator with who asks, and answer 
     ["/internal/review-questions/rvq_1/answer", { answer: "UTC" }],
     ["/internal/review-questions/rvq_2/answer", { answer: "Yes" }],
   ]);
-  expect(forwarded.every((f) => f.person !== null && f.person !== "")).toBe(true);
+  expect(ana.personId).toBeTruthy();
+  expect(forwarded.map((f) => f.person)).toEqual([ana.personId, ana.personId, ana.personId]);
 });
 
 test("another organization's question is not found, and nothing is forwarded", async () => {
