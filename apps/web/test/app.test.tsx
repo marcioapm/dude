@@ -614,6 +614,32 @@ describe("the sidebar's rail", () => {
     expect(localStorage.getItem("dude.sidebar")).toBe("full");
   });
 
+  test("folding with the profile menu open closes it, by [ and by the chevron, and it stays closed unfolded", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    const band = () => page.querySelector<HTMLElement>("[data-testid=my-settings-button]");
+    await until(() => (band()?.textContent?.includes("Márcio") ? true : null), "who you are");
+    const openMenu = () =>
+      act(async () => void band()!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const menu = () => document.querySelector("[role=menu]");
+    // [ folds to the rail; the menu does not follow, and unfolding does not bring it back.
+    await openMenu();
+    await until(menu, "the menu");
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(menu()).toBeNull();
+    await click(page.querySelector("[data-testid=rail-expand]")!);
+    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+    expect(menu()).toBeNull();
+    // The sidebar's own chevron folds it too, and closes the menu the same way.
+    await openMenu();
+    await until(menu, "the menu again");
+    await click(page.querySelector("[data-testid=sidebar-collapse]")!);
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(menu()).toBeNull();
+    await click(page.querySelector("[data-testid=rail-expand]")!);
+    expect(menu()).toBeNull();
+  });
+
   test("a reload keeps the rail; a project's face opens its board; the chevron expands it", async () => {
     localStorage.setItem("dude.sidebar", "rail");
     const page = await app("", new FixtureClient("a"));
