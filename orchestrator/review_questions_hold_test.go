@@ -18,10 +18,17 @@ const heldQuestion = "Is a retry expected after a timeout?"
 // questionDoc is a reviewer's reply's question document.
 const questionDoc = "```yaml\n---\nquestion: " + heldQuestion + "\nneeded_from: operations\n```\n"
 
+// twoQuestionsDoc asks heldQuestion and a second question.
+const twoQuestionsDoc = "```yaml\n---\nquestion: " + heldQuestion + "\nneeded_from: operations\n" +
+	"---\nquestion: Must a retry keep the request's id?\nneeded_from: product\n```\n"
+
 // asksOnce has the first review ask heldQuestion (with the scripted
 // agent's blocking finding too, when finding), and every later review
 // judge the fix as fixed.
-func (w *world) asksOnce(finding bool) {
+func (w *world) asksOnce(finding bool) { w.asksFirst(finding, questionDoc) }
+
+// asksFirst is asksOnce asking doc's questions.
+func (w *world) asksFirst(finding bool, doc string) {
 	var reviews int
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		labels, _ := spec["labels"].(map[string]any)
@@ -30,9 +37,9 @@ func (w *world) asksOnce(finding bool) {
 			if reviews++; reviews > 1 {
 				return fakelux.Behaviour{Reply: "Reviewed the fix.\n\n" + fakeagent.Verdict}
 			}
-			reply := "One thing I could not establish.\n\n" + questionDoc
+			reply := "One thing I could not establish.\n\n" + doc
 			if finding {
-				reply = "One problem:\n\n```yaml\n" + fakeagent.Finding + "```\n\n" + questionDoc
+				reply = "One problem:\n\n```yaml\n" + fakeagent.Finding + "```\n\n" + doc
 			}
 			return fakelux.Behaviour{Reply: reply}
 		case "implement", "fix":
@@ -73,15 +80,81 @@ func (w *world) heldAtThePullRequest(wi string) {
 // reviewQuestionOf is the task's one reviewer question's id.
 func (w *world) reviewQuestionOf(wi string) string {
 	w.t.Helper()
-	rows, err := w.owner.Query(context.Background(), `SELECT id FROM review_questions WHERE task_id = $1`, wi)
+	ids := w.reviewQuestionIDs(wi)
+	if len(ids) != 1 {
+		w.t.Fatalf("questions %v, want one", ids)
+	}
+	return ids[0]
+}
+
+// reviewQuestionIDs are the task's reviewer questions' ids, as asked.
+func (w *world) reviewQuestionIDs(wi string) []string {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT id FROM review_questions WHERE task_id = $1 ORDER BY created_at, n`, wi)
 	if err != nil {
 		w.t.Fatal(err)
 	}
 	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil || len(ids) != 1 {
-		w.t.Fatalf("questions %v (%v), want one", ids, err)
+	if err != nil {
+		w.t.Fatal(err)
 	}
-	return ids[0]
+	return ids
+}
+
+// settle answers (verb answer) or withdraws a reviewer question as person.
+func (w *world) settle(person, id, verb string) {
+	w.t.Helper()
+	body := map[string]any{"answer": "Exactly one retry."}
+	if verb == "withdraw" {
+		body = map[string]any{"reason": "The retry was removed."}
+	}
+	if status, out := w.callAs(person, "/internal/review-questions/"+id+"/"+verb, body); status != 200 {
+		w.t.Fatalf("%s %s: %d %v", verb, id, status, out)
+	}
+}
+
+// With two questions open, settling one re-reads the rest: still held
+// until the last is settled, at the pull request (none opened) and at a
+// pull request fix's promotion (its branch unmoved).
+func TestTheHoldWaitsForTheLastOfTwoQuestions(t *testing.T) {
+	t.Run("pull request", func(t *testing.T) {
+		w := newWorld(t)
+		w.asksFirst(false, twoQuestionsDoc)
+		wi := w.task()
+		ana := w.person("Ana")
+		w.assignOwner(wi, ana)
+		w.deliver(wi)
+		w.heldAtThePullRequest(wi)
+		ids := w.reviewQuestionIDs(wi)
+		if len(ids) != 2 {
+			t.Fatalf("questions %v, want two", ids)
+		}
+		w.settle(ana, ids[0], "answer")
+		w.heldAtThePullRequest(wi)
+		w.settle(ana, ids[1], "withdraw")
+		w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	})
+	t.Run("promotion", func(t *testing.T) {
+		w := newWorld(t)
+		ana := w.person("Ana")
+		wi, before := w.heldAtPromotion(ana, twoQuestionsDoc)
+		ids := w.reviewQuestionIDs(wi)
+		if len(ids) != 2 {
+			t.Fatalf("questions %v, want two", ids)
+		}
+		w.settle(ana, ids[0], "answer")
+		for range 5 {
+			w.sync()
+			w.pump()
+		}
+		w.notPromoted(wi, before)
+		if s := w.taskStatus(wi); s != "awaiting_input" {
+			t.Fatalf("task %s with a question still open, want awaiting_input", s)
+		}
+		w.settle(ana, ids[1], "withdraw")
+		w.until("the promotion", func() bool { w.sync(); return w.head(wi) != before })
+		w.until("the pull request in review", func() bool { w.sync(); return w.taskStatus(wi) == "review" })
+	})
 }
 
 // The owner's decision 1: a policy delivery whose reviewer asked a question
@@ -153,8 +226,8 @@ func TestTheFixLoopRunsAndThenTheQuestionHoldsThePullRequest(t *testing.T) {
 // heldAtPromotion is a delivery with its pull request open whose fix, for
 // a person's comment, was reviewed by a reviewer who asked heldQuestion:
 // held at promoteCandidate, the pull request's branch still at before.
-// owner owns the task.
-func (w *world) heldAtPromotion(owner string) (wi, before string) {
+// owner owns the task; doc is the reviewer's questions.
+func (w *world) heldAtPromotion(owner, doc string) (wi, before string) {
 	w.t.Helper()
 	wi = w.reviewing()
 	w.assignOwner(wi, owner)
@@ -166,7 +239,7 @@ func (w *world) heldAtPromotion(owner string) (wi, before string) {
 		b := scripted(spec)
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
 			if reviews++; reviews == 1 {
-				b.Reply += "\n" + questionDoc
+				b.Reply += "\n" + doc
 			}
 		}
 		return b
@@ -211,7 +284,7 @@ func TestAPullRequestEndedWhileItsPromotionIsHeldEndsTheDelivery(t *testing.T) {
 	} {
 		t.Run(c.how, func(t *testing.T) {
 			w := newWorld(t)
-			wi, before := w.heldAtPromotion(w.person("Ana"))
+			wi, before := w.heldAtPromotion(w.person("Ana"), questionDoc)
 			c.end(w)
 			w.until("the task "+c.status, func() bool { w.sync(); return w.taskStatus(wi) == c.status })
 			w.until("the delivery ended", func() bool {
@@ -231,7 +304,7 @@ func TestAPullRequestEndedWhileItsPromotionIsHeldEndsTheDelivery(t *testing.T) {
 func TestAQuestionOnAPullRequestFixHoldsItsPromotion(t *testing.T) {
 	w := newWorld(t)
 	ana := w.person("Ana")
-	wi, before := w.heldAtPromotion(ana)
+	wi, before := w.heldAtPromotion(ana, questionDoc)
 	if status, out := w.callAs(ana, "/internal/review-questions/"+w.reviewQuestionOf(wi)+"/answer", map[string]any{"answer": "Yes, once."}); status != 200 {
 		t.Fatalf("answer: %d %v", status, out)
 	}
