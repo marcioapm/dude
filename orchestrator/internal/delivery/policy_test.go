@@ -211,8 +211,12 @@ func TestARequiredDocumentationReviewerRunsInCatalogueOrderWithItsOwnAspect(t *t
 	// correctness one an unknown category falls back to.
 	text := Instructions("reviewer", "documentation", InstructionsInput{Tools: true})
 	for c, focus := range reviewFocus {
-		if want := map[bool]int{true: 1, false: 0}[c == "documentation"]; strings.Count(text, focus) != want {
-			t.Errorf("the documentation reviewer's instructions hold the %s aspect %d times, want %d", c, strings.Count(text, focus), want)
+		want := 0
+		if c == "documentation" {
+			want = 1
+		}
+		if got := strings.Count(text, focus); got != want {
+			t.Errorf("the documentation reviewer's instructions hold the %s aspect %d times, want %d", c, got, want)
 		}
 	}
 }
