@@ -334,9 +334,10 @@ func TestADecisionInsideTheGraceNeitherResumesNorParks(t *testing.T) {
 				t.Fatalf("%s: %d %v", action, code, body)
 			}
 			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-			// Past the grace: nothing parks or resumes it.
-			time.Sleep(2500 * time.Millisecond)
+			// Past any grace: nothing parks or resumes it.
+			w.syncer.ParkAfter = 50 * time.Millisecond
 			for range 5 {
+				time.Sleep(20 * time.Millisecond)
 				w.pump()
 			}
 			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`, runID); n != 0 {

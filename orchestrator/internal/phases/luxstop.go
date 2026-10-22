@@ -547,11 +547,8 @@ func (r phaseRun) resumeInput() string {
 	return resumeNudge
 }
 
-// keepsTurn: a Run parked for a person after its turn ended, which only
-// the checks gate's hold does (delivery.ChecksHeld), resumed with nothing
-// queued: by a waiver, or by a person's Resume before deciding. Its ended
-// turn is the one the decision judges: kept done, with no new turn, so
-// finish pushes it once waived.
+// keepsTurn: person-parked after its turn ended (only the checks hold does
+// this), nothing queued: resumed without starting a turn.
 func (r phaseRun) keepsTurn() bool {
 	return r.TurnDone && r.DudePause == "person" && !r.HasDirectives
 }

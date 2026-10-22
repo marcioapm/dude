@@ -796,13 +796,13 @@ const openQuestion = `EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AN
 // a person: a question, or a repository it said it cannot go on without.
 const PersonAsk = `(` + openQuestion + `
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking)
-	OR ` + ChecksHeld + `)`
+	OR ` + checksHeld + `)`
 
-// ChecksHeld is true (SQL, over a Run aliased r) while the task's delivery
+// checksHeld is true (SQL, over a Run aliased r) while the task's delivery
 // waits on a person's undecided checks escalation (ReasonChecksUnverified)
 // of this Run. The decision sets escalation.decided in its own
 // transaction, which ends it.
-const ChecksHeld = `EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = '` + WorkflowType + `'
+const checksHeld = `EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = '` + WorkflowType + `'
 	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = '` + ReasonChecksUnverified + `'
 	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided'))`
 

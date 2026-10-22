@@ -82,6 +82,49 @@ func TestChecksEscalationSurvivesLeasedWaitTransition(t *testing.T) {
 	}
 }
 
+// A checks escalation is a person's ask of the held Run alone, until it is
+// decided: another Run of the task (its conductor) is not asked anything.
+func TestAChecksEscalationAsksAPersonOfTheHeldRunUntilDecided(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	for _, q := range []string{
+		`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_h',$1,'H','h','H')`,
+		`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_h',$1,'prj_h',1,'H','H','running')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status) VALUES('run_held',$1,'prj_h','wi_h',1,'implement','running')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status) VALUES('run_other',$1,'prj_h','wi_h',1,'review','running')`,
+		`INSERT INTO workflow_runs(id,organization_id,workflow_type,idempotency_key,task_id,status,step,state)
+			VALUES('wf_h',$1,'` + WorkflowType + `','h','wi_h','waiting','awaitImplement','{"taskId":"wi_h","projectId":"prj_h","attempt":1}')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asked := func() (held, other bool) {
+		t.Helper()
+		if err := owner.QueryRow(ctx, `SELECT bool_or(r.id = 'run_held' AND `+PersonAsk+`), bool_or(r.id = 'run_other' AND `+PersonAsk+`)
+			FROM runs r WHERE r.task_id = 'wi_h'`).Scan(&held, &other); err != nil {
+			t.Fatal(err)
+		}
+		return held, other
+	}
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return EscalateChecksTx(ctx, tx, org, "wi_h", "run_held", "held", 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if held, other := asked(); !held || other {
+		t.Errorf("undecided: held Run asked %v, other Run asked %v; want true, false", held, other)
+	}
+	if _, err := owner.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{escalation,decided}', '{"action":"waive"}')
+		WHERE id = 'wf_h'`); err != nil {
+		t.Fatal(err)
+	}
+	if held, other := asked(); held || other {
+		t.Errorf("decided: held Run asked %v, other Run asked %v; want neither", held, other)
+	}
+}
+
 // An attempt waiver covers only the held report's reported failures: a
 // not-run beside them is not carried, and a report whose only non-pass is
 // not-run has nothing to carry and is refused, deciding nothing.
