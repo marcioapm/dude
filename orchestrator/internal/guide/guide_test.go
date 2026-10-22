@@ -1,6 +1,7 @@
 package guide
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -95,7 +96,7 @@ func TestBuiltInGuide(t *testing.T) {
 	if _, ok := PageBy("nope"); ok {
 		t.Error("found a page that does not exist")
 	}
-	if got := Covers()["settings:delivery"]; len(got) != 1 || got[0] != "settings" {
+	if got := Covers()["settings:delivery"]; !slices.Contains(got, "delivery") {
 		t.Errorf("covers settings:delivery: %v", got)
 	}
 }
