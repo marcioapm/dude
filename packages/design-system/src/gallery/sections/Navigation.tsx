@@ -51,7 +51,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-tree"
         title="NavTree"
-        note="Project → Epic → Task → Session, rendered flat with aria-level so keyboard movement is index arithmetic. Each level has its own row grammar: projects are sticky small-caps headers, epics lead with the layers glyph and carry a total, tasks lead with a status dot and a mono key and trail with who is working (agent squares) and who is involved (human circles), sessions sit on a guide line behind a role avatar. Earlier Runs fold into one 'Attempt n' row each. Click a chevron or use ←→ to fold; a needs-you row opens by default down to the asking session, and a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
+        note="Project → Epic → Task, rendered flat with aria-level so keyboard movement is index arithmetic. Unsearched, the tree lists only work in progress — running, in review, ready to merge — and the selection; Backlog and Done are the board's, and a search finds them. An epic with nothing in progress is left out; a project keeps its header without a chevron. Each level has its own row grammar: projects are sticky small-caps headers, epics lead with the layers glyph and carry a total, tasks lead with a mono key and trail with their one state and who is involved, the agent working now on the owner's face. A task is a leaf; selecting one of its sessions selects it. Click a chevron or use ←→ to fold; a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
       >
         <Panes mode={mode} surface>
           <TreeDemo />
@@ -71,7 +71,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-tree-menus"
         title="NavTree — row menus"
-        note="Projects, epics and tasks get a '…' menu from the app via menuItems (or a menu render prop for full control); the tree knows nothing about the actions. The trigger reserves no space on any row: on hover or focus it takes the trailing people's, epic count's or session plan's place. Nested rows show a border-colour guide per ancestor level through the chevrons. The trigger is visible on hover and focus and stays out of the tab order: with a row focused, Shift+F10 or the context-menu key opens it, as does right-click, and focus returns to the row when it closes so ↑↓ keep working. Rows that return no items draw nothing. Try: focus a row, Shift+F10, ↓, Enter."
+        note="Projects, epics and tasks get a '…' menu from the app via menuItems (or a menu render prop for full control); the tree knows nothing about the actions. The trigger reserves no space on any row: on hover or focus it takes the trailing people's or epic count's place. Nested rows show a border-colour guide per ancestor level through the chevrons. The trigger is visible on hover and focus and stays out of the tab order: with a row focused, Shift+F10 or the context-menu key opens it, as does right-click, and focus returns to the row when it closes so ↑↓ keep working. Rows that return no items draw nothing. Try: focus a row, Shift+F10, ↓, Enter."
       >
         <Panes mode={mode} surface>
           <TreeMenuDemo />
@@ -165,6 +165,7 @@ function CountsLine({ counts }: { readonly counts: TriageCounts }) {
 }
 
 function TreeDemo() {
+  // A session's ref, as a notification opens it: its task's row is the one selected.
   const [selected, setSelected] = useState<NavRef | null>({ kind: "session", id: "s_2401-orc" });
   const counts = useMemo(() => globalCounts(navProjects), []);
   return (
