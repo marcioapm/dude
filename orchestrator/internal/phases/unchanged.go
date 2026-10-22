@@ -37,7 +37,7 @@ while [ $# -ge 3 ]; do
     case $p in /*) ;; *) p=$dir/$p ;; esac
     [ -e "$p" ] && op=$d
   done
-  if [ "$head" = "$base" ] && [ -z "$st" ] && [ -z "$op" ]; then
+  if [ -z "$st" ] && [ -z "$op" ]; then
     echo "clean $name $head"
   else
     echo "changed $name $head"
