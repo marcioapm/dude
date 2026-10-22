@@ -235,14 +235,14 @@ describe("task rail filtering", () => {
     }
   });
 
-  // The URL of another tab names no session: a runId would keep Sessions shown.
-  for (const [left, to] of [["another session", { tab: "sessions", runId: "run_d4" }], ["another tab", { tab: "overview", runId: undefined }]] as const) {
+  // Another tab's URL names no session (a runId would keep Sessions shown); Overview's names no tab.
+  for (const [left, to] of [["another session", { tab: "sessions", runId: "run_d4" }], ["another tab", { tab: undefined, runId: undefined }]] as const) {
     test(`the session picker is closed after ${left} and back`, async () => {
       const client = new FixtureClient("d");
       const getRun = client.getRun.bind(client);
       const read: string[] = [];
       client.getRun = async (id) => { const run = await getRun(id); read.push(id); return run; };
-      type Place = { tab: "overview" | "sessions"; runId: string | undefined };
+      type Place = { tab: "sessions" | undefined; runId: string | undefined };
       let go: (place: Place) => void = () => {};
       function Host() {
         const [place, setPlace] = useState<Place>({ tab: "sessions", runId: "run_d2" });
@@ -260,6 +260,7 @@ describe("task rail filtering", () => {
       expect(trigger()!.getAttribute("data-state")).toBe("open");
       await act(async () => go(to));
       await settle();
+      if (to.tab === undefined) expect(selectedTab(page)).toStartWith("Overview");
       await act(async () => go({ tab: "sessions", runId: "run_d2" }));
       await loaded(2);
       await settle();
