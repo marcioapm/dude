@@ -37,12 +37,7 @@ func questioned(t *testing.T) (*world, string, string) {
 	w.implemented(task)
 	w.carriedOut(task, "decide", `{"action":"next"}`)
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	var id string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM review_questions WHERE task_id = $1`, task).Scan(&id)
-	if id == "" {
-		t.Fatal("the reviewer's question was not stored")
-	}
-	return w, task, id
+	return w, task, w.reviewQuestionOf(task)
 }
 
 // The conductor answers a reviewer's question with answer_review_question:

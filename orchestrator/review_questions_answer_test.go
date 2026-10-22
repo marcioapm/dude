@@ -173,8 +173,7 @@ func TestAnAnsweredReviewQuestionReachesTheNextReviewerAndTheFixer(t *testing.T)
 	if len(qs) != 1 {
 		t.Fatalf("questions = %+v, want the first reviewer's", qs)
 	}
-	var id string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM review_questions WHERE task_id = $1`, wi).Scan(&id)
+	id := w.reviewQuestionOf(wi)
 	if status, body := w.callAs(ana, "/internal/review-questions/"+id+"/answer", map[string]any{"answer": answered}); status != 200 {
 		t.Fatalf("answer: %d %v", status, body)
 	}
