@@ -249,9 +249,12 @@ func TestStoppingAtAnEscalationClosesItsQuestion(t *testing.T) {
 	w.pickUp(ana, task, map[string]any{"action": "retry"})
 	runs := w.conductorRuns(task)
 	next := runs[len(runs)-1]
-	for range 5 {
-		w.pump()
-	}
+	// Past the wake window: whatever is still pending is told to the new
+	// conductor before the checks below.
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 hour' WHERE task_id = $1 AND delivered_at IS NULL`, task)
+	w.until("every pending reason told", func() bool {
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL AND key NOT LIKE 'base-moved:%'`, task) == 0
+	})
 	const banner = "decided the escalation on the banner"
 	if p := w.str(`SELECT prompt FROM runs WHERE id = $1`, next); strings.Contains(p, banner) {
 		t.Errorf("the new conductor's briefing tells it a banner decision:\n%s", p)
