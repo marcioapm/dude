@@ -59,7 +59,7 @@ Under the conductor, the conductor can leave a finding as it is with `dismiss_fi
 
 A reviewer that cannot establish a fact it needs (what the product should do, how something is configured where it runs) asks instead of guessing. Its question shows on the task's Findings tab, above the findings, with why it matters and who can answer it. It is never sent to the fixer.
 
-The task's owner answers it there, or withdraws it with a reason when it no longer matters. An answer is recorded as a decision, so every later reviewer and fixer reads it. The next reviewer of the same kind sees the question and its answer.
+The task's owner answers it there, or withdraws it with a reason when it no longer matters. Your answer is recorded as a decision on the task, which the fixer reads. The next reviewer of the same kind sees the question and its answer.
 
 **While a reviewer's question is open, dude does not open the pull request**, and does not move a fix onto an open pull request. Review and fixing of the other findings go on. The task waits on you until every question of the attempt is answered or withdrawn.
 
