@@ -66,9 +66,9 @@ describe("DeciderField", () => {
     const group = el.querySelector('[role="group"]')!;
     expect(group.getAttribute("aria-label")).toBe("Who decides attempt 2");
     const hint = document.getElementById(group.getAttribute("aria-describedby")!)!;
-    expect(hint.textContent).toContain("A new conductor, briefed with your note and what the last attempt did");
+    expect(hint.textContent).toBe("A new conductor, briefed with your note and what attempt 1 did. Each finished step comes back to it, in Chat, with you.");
     const buttons = [...group.querySelectorAll("button")];
-    expect(buttons.map((b) => b.textContent)).toEqual(["Conductoras now", "Deliver"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["The conductoras now", "Deliver"]);
     expect(buttons[0]!.querySelector('svg[data-icon="conductor"]')).not.toBeNull();
     expect(buttons[1]!.querySelector('svg[data-icon="zap"]')).not.toBeNull();
     expect(buttons[0]!.getAttribute("aria-pressed")).toBe("true");
@@ -78,7 +78,7 @@ describe("DeciderField", () => {
 
   test("a Deliver attempt marks Deliver as now and says what Deliver does", async () => {
     const el = await mount(<DeciderField attempt={3} value="deliver" previous="deliver" onChange={() => undefined} />);
-    expect([...el.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Conductor", "Deliveras now"]);
+    expect([...el.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["The conductor", "Deliveras now"]);
     expect(el.textContent).toContain("Deliver runs attempt 3 to the pull request on its own");
   });
 });

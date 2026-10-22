@@ -23,11 +23,11 @@ export interface DeciderFieldProps {
   readonly className?: string | undefined;
 }
 
-const NAME: Record<NextDecider, string> = { conductor: "Conductor", deliver: "Deliver" };
+const NAME: Record<NextDecider, string> = { conductor: "The conductor", deliver: "Deliver" };
 
 function hint(v: NextDecider, attempt: number): string {
   return v === "conductor"
-    ? `A new conductor, briefed with your note and what the last attempt did, decides attempt ${attempt}'s steps with you in Chat.`
+    ? `A new conductor, briefed with your note and what attempt ${attempt - 1} did. Each finished step comes back to it, in Chat, with you.`
     : `Deliver runs attempt ${attempt} to the pull request on its own; a message in Chat still reaches a conductor, who decides nothing.`;
 }
 

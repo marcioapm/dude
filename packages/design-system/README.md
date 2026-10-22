@@ -1082,10 +1082,13 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   reviewers and a queued fixer"). The Stop dialog and `CloseDialog` show the
   same list.
 - **`DeciderField`** is who decides the next attempt, inside a dialog that
-  starts one. A labelled `Segmented` of two, each with its driver's glyph
+  starts one. A labelled `Segmented` of two, "The conductor" and "Deliver",
+  each with its driver's glyph
   (`DriverIcons`); the one that decided the current attempt says "as now"
   and is the default. One muted line under it says what the chosen one
-  does. The group's accessible name is its label; the hint is its
+  does ("A new conductor, briefed with your note and what attempt 1 did.
+  Each finished step comes back to it, in Chat, with you."). The group's
+  accessible name is its label; the hint is its
   description. To change who decides the attempt running now, use
   `DriverSwitch`.
 
