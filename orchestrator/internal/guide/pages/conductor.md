@@ -78,4 +78,6 @@ Its commits are reviewed like any other before the pull request.
 
 ## When the conductor is read-only
 
-When Deliver takes the decisions, or the task is merged or closed, the conductor is read-only. It reads the code and dude's records but changes nothing, starts nothing and decides nothing. Asked for a change then, it offers to create a follow-up task.
+When Deliver takes the decisions, the conductor takes no delivery decision: it does not publish, start a phase or decide a step. It can still steer its task's running agents with `steer`. Asked for a change, it offers to create a follow-up task.
+
+When the task is merged or closed, the conductor takes no delivery decision and its steering is refused too.

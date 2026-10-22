@@ -12,7 +12,7 @@ There are three places:
 - **Project settings** — General, Repositories, Servers, Network, Agents, Delivery and Memory.
 - **Your settings** — yours, not the organisation's: your profile and keys, your organisations, GitHub authorization, appearance and notifications.
 
-Every member can see the organisation's and projects' settings. Only an organisation admin can change them.
+Every member can see the organisation's and projects' settings, except Invitations, which only admins see. Only an organisation admin can change them.
 
 ## Organisation and project settings
 

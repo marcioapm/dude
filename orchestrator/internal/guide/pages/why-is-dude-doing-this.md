@@ -57,7 +57,7 @@ A review of the simplifier's changes, or of a pull request fix, covers only that
 
 ## The security reviewer ran on a small change
 
-It ran because a changed path matched its globs: `**/auth/**`, `**/payments/**` or `**/*credential*` by default. Change them in **Settings → Delivery**.
+It ran because a changed path matched its globs: `**/auth/**`, `**/payments/**` or `**/*credential*` by default. **Settings → Delivery** changes the required reviewers; these conditional path rules have no editor in the web app.
 
 ## An agent is parked or idle
 

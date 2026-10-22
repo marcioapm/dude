@@ -14,7 +14,7 @@ Everything one organisation holds is separate from every other's.
 
 Each person in an organisation is a **member** or an **admin**.
 
-- **Every member** can create, deliver and steer tasks, start brainstorm sessions, search and add memories, and see every settings page.
+- **Every member** can create, deliver and steer tasks, start brainstorm sessions, search and add memories, and see the settings pages except Invitations, which only admins see.
 - **Admins** also manage the organisation: its members, invitations and settings — GitHub, Agents, Network, Models, Judgements, Machines, Images, Delivery, and each project's settings. Only an admin creates a project.
 
 There is no project-level admin: changing a project's settings takes an organisation admin.

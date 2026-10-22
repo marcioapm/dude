@@ -47,4 +47,4 @@ One tier can also answer dude's one-question decisions. That choice is on its ow
 
 ## What agents can read
 
-Agents read the organisation's tiers with `settings`, section `models`: each tier's name, description, effort, order, and whether its model is set. They never see a tier's options or headers. Section `roles` shows which tier each role is on, and where that is set.
+Agents read the organisation's tiers with `settings`, section `models`: each tier's name, description, effort, order, requested model id, and whether that model is set. They never see a tier's options or headers. Section `roles` shows which tier each role is on, and where that is set.

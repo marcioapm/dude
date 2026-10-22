@@ -33,7 +33,7 @@ A size a Run raised also applies to that role's later Runs on the task (an imple
 
 An **image** is what an agent, server or preview works in: its operating system, toolchains and tools. **Settings → Images** is the organisation's image library.
 
-Each image has a Containerfile. dude adds its own layer under it. Editing an image starts a build; publishing a version makes it the one everything uses. Everything that uses an image gets the new version once it builds. Each image's history shows every version with its changes, and **Publish again** brings an older one back.
+Each image has a Containerfile. dude adds its own layer under it. **Save draft** keeps an edit without building it; the published image is unchanged. **Build & publish** queues a build, and the new version is the one everything uses once it builds. Each image's history shows every version with its changes, and **Publish again** brings an older one back.
 
 One published image can be **the default base**. Without any other choice, agents work in it.
 

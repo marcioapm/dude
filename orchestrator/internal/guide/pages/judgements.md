@@ -8,7 +8,7 @@ Some of dude's decisions are better made by reading than by rule. For those, dud
 
 A **judgement** is one call to a model, with no agent and no tools. dude asks one question and reads back **yes**, **no** or **unsure**, with how sure the model is and why.
 
-Judgements **fail closed**. If the model gives no usable answer, or judgements are off, the caller does what it does without one. A judgement never makes dude take a step it would not take otherwise.
+Judgements **fail closed**. When judgements are off or have no model, the caller skips that check. When they are on, an error, a malformed answer or **unsure** does not count as a pass: a phase's checks are marked unverified and sent back, or escalated after their rounds. A judgement never makes dude take a step it would not take otherwise.
 
 Every call is recorded: what was asked, what the model answered, how long it took and how many tokens it used.
 
