@@ -9,7 +9,7 @@ import type { NavProject } from "@dude/design-system";
 import { MIN, iso, serverLogs, serverLogsExited, serverScenarios, serverRecipes, type ServerScenario } from "@dude/design-system/fixtures/servers";
 import type { ServerLogLine } from "@dude/design-system";
 import { EventTypes, SETTINGS_ROLES } from "@dude/domain";
-import type { AgentMachine, Finding, Machine, MachineMove, MachineRaisedPayload, MachineRequestedPayload, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, Raise, RefusedName, Run, SessionDetail, SettingsResponse, Task, TaskServers } from "@dude/domain";
+import type { AgentMachine, Finding, Machine, MachineMove, MachineRaisedPayload, MachineRequestedPayload, MachineSizeWithUse, ModelTierUse, ModelTierWithUse, PersistedEvent, PullRequest, Raise, RefusedName, ReviewQuestion, Run, SessionDetail, SettingsResponse, Task, TaskServers } from "@dude/domain";
 import type { Member, ProjectDetail, ReviewerCandidate, RunDetail, TaskDetail, TaskMetrics } from "../api/client.ts";
 
 export const ORG = { id: "org_example", name: "Example" };
@@ -152,6 +152,15 @@ export const FINDINGS: Finding[] = [
   { id: "f2", taskId: TASK_ID, runId: "run_d2", category: "correctness", severity: "medium", status: "resolved", file: "apps/web/src/checkout/useTotals.ts", line: 12, title: "VAT recomputed on every render", description: "useTotals recalculates without memoising.", suggestedFix: "useMemo on the inputs.", resolutionNote: "", resolvedByRunId: "run_d4", fixAttempts: 1, createdAt: iso(140 * MIN) },
   { id: "f3", taskId: TASK_ID, runId: "run_d2", category: "correctness", severity: "low", status: "accepted", file: null, line: null, title: "Funnel event names differ from the analytics plan", description: "step_2 vs payment_step.", suggestedFix: "", resolutionNote: "Analytics will map them.", resolvedByRunId: null, fixAttempts: 0, createdAt: iso(140 * MIN) },
   { id: "f4", taskId: TASK_ID, runId: "run_d2", category: "correctness", topic: "css", severity: "note", status: "open", file: "apps/web/src/checkout/PaymentStep.module.css", line: 3, title: "Unused class .legacy", description: "", suggestedFix: "", resolutionNote: "", resolvedByRunId: null, fixAttempts: 0, createdAt: iso(140 * MIN) },
+];
+
+/** A reviewer's open question about f1, and one withdrawn, which the Findings tab leaves out. */
+export const REVIEW_QUESTIONS: ReviewQuestion[] = [
+  { id: "rvq_1", taskId: TASK_ID, runId: "run_d2", category: "correctness", findingId: "f1", question: "Is the invoice option meant for annual plans only?",
+    whyItMatters: "f1 is blocking only if monthly plans must never see it.", evidenceChecked: "Read PaymentStep.tsx and the plan settings; neither says.",
+    neededFrom: "product", status: "open", answer: null, createdAt: iso(139 * MIN) },
+  { id: "rvq_2", taskId: TASK_ID, runId: "run_d2", category: "correctness", findingId: null, question: "Is the legacy checkout still reachable?",
+    whyItMatters: "", evidenceChecked: "", neededFrom: "operations", status: "withdrawn", answer: null, createdAt: iso(139 * MIN) },
 ];
 
 // -- Started over: attempt 1 set aside, attempt 2 at work ----------------------

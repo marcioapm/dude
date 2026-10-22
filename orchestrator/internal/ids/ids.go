@@ -41,6 +41,8 @@ const (
 	FeedbackReply = "fbr"
 	// A call dude sent a model directly (migration 142).
 	ModelCall = "mcl"
+	// A reviewer's question (migration 175).
+	ReviewQuestion = "rvq"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

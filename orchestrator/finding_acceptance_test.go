@@ -121,7 +121,7 @@ func TestAReportedAgainReviewKeepsOnlyItsLatestVerdicts(t *testing.T) {
 		{map[string]bool{"b": false}, `{"b": "still"}`},
 		{nil, `{}`},
 	} {
-		if err := phases.RecordFindings(ctx, w.app, w.org, run, nil, report.verdicts); err != nil {
+		if err := phases.RecordFindings(ctx, w.app, w.org, run, nil, report.verdicts, nil); err != nil {
 			t.Fatal(err)
 		}
 		var stored string
