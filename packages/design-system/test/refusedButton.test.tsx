@@ -8,6 +8,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Button } from "../src/primitives/Button.tsx";
 import { RefusedButton } from "../src/primitives/RefusedButton.tsx";
+import { CalloutActions, calloutActionLineId } from "../src/primitives/Layout.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 
 let root: Root | null = null;
@@ -40,6 +41,19 @@ describe("Button danger, quiet", () => {
     expect(plain).toEqual(["danger", null]);
     expect(solid).toEqual(["danger", "solid"]);
     expect(other).toEqual(["secondary", null]);
+  });
+});
+
+describe("CalloutActions", () => {
+  test("a named list; each button described by its own sentence", async () => {
+    const el = await mount(<CalloutActions id="ways" label="Ways to pick it back up" items={[
+      { id: "resume", action: <Button aria-describedby={calloutActionLineId("ways", "resume")}>Resume…</Button>, line: "The same agent goes on." },
+      { id: "retry", action: <Button aria-describedby={calloutActionLineId("ways", "retry")}>Try again…</Button>, line: "A new agent." },
+    ]} />);
+    const list = el.querySelector('[aria-label="Ways to pick it back up"]')!;
+    expect(list.tagName).toBe("UL");
+    const described = [...list.querySelectorAll("button")].map((b) => [b.textContent, document.getElementById(b.getAttribute("aria-describedby")!)?.textContent]);
+    expect(described).toEqual([["Resume…", "The same agent goes on."], ["Try again…", "A new agent."]]);
   });
 });
 

@@ -981,7 +981,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
           <Textarea label="Why (optional)" hint="Shown in the conversation beside your name." rows={2} value={abortReason}
             onChange={(e) => setAbortReason(e.target.value)} />
           {stopTask ? (
-            <p className="abortStopHint" data-testid="abort-stop-hint">
+            <p className="abortStopHint ds-hint" data-testid="abort-stop-hint">
               To stop the whole task, or start it over, use Stop on the task.{" "}
               <Button size="sm" variant="quiet" leadingIcon="stop" data-testid="abort-stop-task" onClick={() => {
                 setConfirmAbort(false);

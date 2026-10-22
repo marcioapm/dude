@@ -23,7 +23,7 @@ import { useToast } from "../../primitives/Toast.tsx";
 import { Tooltip } from "../../primitives/Tooltip.tsx";
 import { EmptyState, Skeleton, SkeletonLines, Spinner } from "../../primitives/Feedback.tsx";
 import { ScrollArea } from "../../primitives/ScrollArea.tsx";
-import { Callout, Fieldset, FormActions, FormRow, FormStack, KeyValueList, Page, PageHeader, Section as PageSection } from "../../primitives/Layout.tsx";
+import { Callout, CalloutActions, calloutActionLineId, Fieldset, FormActions, FormRow, FormStack, KeyValueList, Page, PageHeader, Section as PageSection } from "../../primitives/Layout.tsx";
 import { StepList, StepRow } from "../../components/StepList.tsx";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
@@ -514,7 +514,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="p-form" title="Form layout, Fieldset, Callout, KeyValueList" note="FormStack keeps a form to a readable width; FormRow puts fields side by side; Fieldset groups controls under one question with the Input anatomy (label, hint, error); FormActions puts the primary first and a note after. Callout says why something failed where it failed — not a toast, and never for agent events. KeyValueList is facts about a thing; mono for identifiers.">
+      <Block id="p-form" title="Form layout, Fieldset, Callout, KeyValueList" note="FormStack keeps a form to a readable width; FormRow puts fields side by side; Fieldset groups controls under one question with the Input anatomy (label, hint, error); FormActions puts the primary first and a note after. Callout says why something failed where it failed — not a toast, and never for agent events. CalloutActions puts the ways out of a Callout in it, each button beside its sentence, stacking on the callout's own width. KeyValueList is facts about a thing; mono for identifiers.">
         <Panes mode={mode} surface>
           <FormStack>
             <Callout tone="danger">url must be an https, ssh or git:// URL</Callout>
@@ -530,6 +530,23 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
               <Button variant="primary">Save</Button>
             </FormActions>
             <Callout tone="success">Connected as marcioapm · scopes: repo</Callout>
+            <Callout tone="attention">
+              Ana stopped the task: “wrong plan”.
+              <CalloutActions id="gallery-ways" label="Ways to pick it back up" items={[
+                { id: "resume", action: <Button size="sm" variant="primary" leadingIcon="play" aria-describedby={calloutActionLineId("gallery-ways", "resume")}>Resume…</Button>,
+                  line: "The same conductor goes on, with its whole conversation and its agents." },
+                { id: "retry", action: <Button size="sm" leadingIcon="retry" aria-describedby={calloutActionLineId("gallery-ways", "retry")}>Try again…</Button>,
+                  line: "A new conductor on this attempt, briefed with what the stopped one did." },
+              ]} />
+            </Callout>
+            <div style={{ maxWidth: 320 }}>
+              <Callout tone="attention">
+                Narrow: each button over its sentence.
+                <CalloutActions label="Ways to pick it back up" items={[
+                  { id: "restart", action: <Button size="sm" leadingIcon="git-branch">Start over…</Button>, line: "Attempt 2 on a new branch." },
+                ]} />
+              </Callout>
+            </div>
             <KeyValueList
               items={[
                 { label: "Account", value: "marcioapm" },

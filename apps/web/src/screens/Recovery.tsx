@@ -14,7 +14,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { shortId } from "@dude/design-system";
 import { DeciderField, Duration, ROLE_LABEL, type NextDecider } from "@dude/design-system/components";
-import { Button, Callout, ChoiceList, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
+import { Button, Callout, CalloutActions, ChoiceList, calloutActionLineId, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
 import { DECISION_POINT_LABEL, EventTypes, blockedRefusal, isConductor, runDoer, runLabel, type DecisionPoint, type PersistedEvent } from "@dude/domain";
 import { refusedBlockers, type ApiClient, type RecoverAction, type RecoveryOptions, type Run, type TaskDetail, type TaskSource } from "../api/client.ts";
 import { actorName, humanActor } from "../api/conversation.ts";
@@ -185,17 +185,16 @@ export function StoppedNotice({ task, stop, options, owner, you, pullRequest, on
             : actions.length > 0 ? <>Its workspace and conversation are no longer kept.</> : null}
         </p>
         {actions.length === 0 ? null : you ? (
-          <ul className="recoverWays" aria-label="Ways to pick it back up">
-            {actions.map((a, i) => (
-              <li key={a} className="recoverWay">
-                <Button size="sm" variant={i === 0 ? "primary" : "secondary"} leadingIcon={ACTION_ICON[a]}
-                  onClick={() => onChoose(a)} aria-describedby={`${lineId}-${a}`} data-testid={`recover-${a}`}>
-                  {ACTION_LABEL[a]}
-                </Button>
-                <span id={`${lineId}-${a}`} className="recoverWayLine">{wayLine(a, conducted, options?.attempt ?? 1, pullRequest)}</span>
-              </li>
-            ))}
-          </ul>
+          <CalloutActions id={lineId} label="Ways to pick it back up" items={actions.map((a, i) => ({
+            id: a,
+            action: (
+              <Button size="sm" variant={i === 0 ? "primary" : "secondary"} leadingIcon={ACTION_ICON[a]}
+                onClick={() => onChoose(a)} aria-describedby={calloutActionLineId(lineId, a)} data-testid={`recover-${a}`}>
+                {ACTION_LABEL[a]}
+              </Button>
+            ),
+            line: wayLine(a, conducted, options?.attempt ?? 1, pullRequest),
+          }))} />
         ) : (
           <p className="escalationWaiting" data-testid="recover-waiting">
             Only {owner ?? "its owner"}, its owner, can pick it back up. Take over the task to do it yourself.

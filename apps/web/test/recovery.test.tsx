@@ -1025,7 +1025,8 @@ describe("a task stopped under the conductor", () => {
     expect(notice.textContent).toContain("Ana Ribeiro stopped the task");
     expect(notice.textContent).toContain("while the conductor was deciding after review: “Wrong plan”");
     await until(() => notice.querySelector("[data-testid=recover-resume]"), "the ways back");
-    const lines = [...notice.querySelectorAll(".recoverWayLine")].map((l) => l.textContent);
+    const lines = [...notice.querySelectorAll<HTMLElement>("[data-testid^=recover-]")]
+      .map((b) => document.getElementById(b.getAttribute("aria-describedby")!)!.textContent);
     expect(lines).toEqual([
       "The same conductor goes on, with its whole conversation and its agents. PR #412 stays open.",
       "A new conductor on this attempt, briefed with what the stopped one did.",

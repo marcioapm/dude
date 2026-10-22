@@ -869,7 +869,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Then the **three ways back**, as buttons, the one that fits first and
   primary: **Resume…** (the same agent, while it is kept), **Try again…**
   (a new agent on the same branch, from what was pushed), **Start over…**
-  (a new attempt on a new branch). Each opens one `Dialog` whose
+  (a new attempt on a new branch). They sit in **`CalloutActions`**: a list
+  named "Ways to pick it back up", each button beside one muted sentence
+  saying what it does (its `aria-describedby`, `calloutActionLineId`); the
+  pairs stack, button over sentence, on the callout's own width (a
+  container query), so a narrow main pane stacks them too. Each opens one `Dialog` whose
   `ChoiceList` holds all three, so the choice is made with what each keeps
   and throws away in view: under it, one line per thing the task has —
   conversation, workspace, branch, agent session (labelled "Session") —

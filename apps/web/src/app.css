@@ -625,8 +625,6 @@ body {
 /* Session Abort's pointer to the task's Stop: one muted line, its link after it. */
 .abortStopHint {
   margin: var(--ds-space-12) 0 0;
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-sm);
 }
 .taskHead {
   display: flex;
@@ -1011,33 +1009,6 @@ body {
 }
 .runEndedKept {
   color: var(--ds-color-text-muted);
-}
-
-/* Each way back pairs its button with the sentence describing it. */
-.recoverWays {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-}
-.recoverWay {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: center;
-  gap: var(--ds-space-12);
-}
-.recoverWayLine {
-  color: var(--ds-color-text-muted);
-  font-size: var(--ds-text-sm);
-}
-@media (max-width: 560px) {
-  .recoverWay {
-    grid-template-columns: minmax(0, 1fr);
-    justify-items: start;
-    gap: var(--ds-space-4);
-  }
 }
 
 /* Picking a stopped task back up: the choice, then what it keeps and throws away. */
