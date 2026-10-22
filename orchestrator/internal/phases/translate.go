@@ -666,6 +666,14 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
+	if setup != nil && t.run.conductor() {
+		// The next conductor would run the same script on the same checkout:
+		// dude starts none by itself (delivery.SetupBlockedTx), and says so.
+		if err := delivery.ConductorSetupFailedTx(ctx, tx, t.run.ref(), delivery.SetupFailure{Repository: setup.Repository,
+			ExitCode: setup.ExitCode, Output: red.String(setup.Output)}, why); err != nil {
+			return err
+		}
+	}
 	if stage != "" {
 		if more == nil {
 			more = map[string]any{}

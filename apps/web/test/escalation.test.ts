@@ -28,6 +28,16 @@ describe("escalationWords", () => {
     });
   });
 
+  test("a failed setup script names its repository, exit code and last line, and says why dude did not retry", () => {
+    const output = "dude: running the setup script of abs\nln: failed to create symbolic link '/usr/local/share/dude/git-hooks/pre-commit': Permission denied";
+    expect(escalationWords({ reason: "setup_failed", detail: { runId: "run_s", error: "The setup script of abs failed…", repository: "abs", exitCode: 1, output }, at })).toEqual({
+      short: "Setup script failed",
+      sentence: "The setup script of abs failed with exit code 1: ln: failed to create symbolic link '/usr/local/share/dude/git-hooks/pre-commit': Permission denied. "
+        + "The same script fails the same way every time, so dude did not try again: fix it in the project's repository settings, then retry.",
+      runId: "run_s",
+    });
+  });
+
   test("a failed reviewer names its category, and says the round is not complete", () => {
     expect(escalationWords({ reason: "review_failed", detail: { runId: "run_r", category: "frontend", error: "timeout" }, at })).toEqual({
       short: "A frontend reviewer failed",
