@@ -570,6 +570,26 @@ def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client
 
 
 @pytest.mark.ui
+def test_the_open_profile_menu_survives_people_loading(page: Page, web_url: str, client: ApiClient, console_errors: list):
+    held = []
+    page.route("**/v1/people", lambda route: held.append(route))
+    _sign_in(page, web_url, client.api_key, board=False)
+    page.get_by_test_id("my-settings-button").click()
+    expect(page.get_by_test_id("rowmenu-org-settings")).to_be_visible()
+
+    # Release the actual API response only after the null-person menu is open.
+    assert held
+    for route in held:
+        route.continue_()
+    expect(page.get_by_test_id("switcher")).to_be_visible()
+    expect(page.get_by_test_id("rowmenu-org-settings")).to_be_visible()
+    page.get_by_test_id("rowmenu-org-settings").click()
+    expect(page.get_by_test_id("org-settings")).to_be_visible()
+    expect(page.get_by_test_id("switcher")).to_have_attribute("data-state", "closed")
+    assert console_errors == []
+
+
+@pytest.mark.ui
 def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
     _sign_in(page, web_url, client.api_key, board=False)
     open_org_settings(page)

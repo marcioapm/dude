@@ -139,6 +139,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const people = usePeople();
   // Your organisations and invitations, when the gatekeeper mounted this one (none in a one-screen test).
   const account = useAccount();
+  // People loading replaces the profile menu with the organisation switcher.
+  const [profileOpen, setProfileOpen] = useState(false);
   useEffect(installActivity, []);
   // Making a project is an admin's: it brings its own models, image and repositories.
   const isAdmin = people.me?.role === "admin";
@@ -685,7 +687,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const saved = () => void load();
   const you = people.me;
   const switcher = (variant: "band" | "rail") => account && you ? (
-    <OrgSwitcher variant={variant} you={you} current={orgOf(account.current)}
+    <OrgSwitcher variant={variant} you={you} current={orgOf(account.current)} open={profileOpen} onOpenChange={setProfileOpen}
       memberships={switcherMemberships(account.memberships)} invitations={switcherInvitations(account.invitations)}
       superAdmin={account.superAdmin} onSwitch={(o) => account.switchTo(o.id)} onJoin={(i) => account.join(i.code)}
       onSettings={() => go({ view: "mySettings" })} onOrgSettings={() => go({ view: "orgSettings" })} onHelp={() => go({ view: "help" })}
@@ -775,7 +777,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           <IconButton size="sm" icon="plus" label="New project" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project" />
         ) : undefined}
         footer={account && you ? switcher("band") : (
-          <ProfileMenu person={you} detail={you?.email ?? undefined} onSettings={() => go({ view: "mySettings" })}
+          <ProfileMenu person={you} detail={you?.email ?? undefined} open={profileOpen} onOpenChange={setProfileOpen} onSettings={() => go({ view: "mySettings" })}
             onOrgSettings={() => go({ view: "orgSettings" })} onHelp={() => go({ view: "help" })} onSignOut={onSignOut}
             signOutNote="Forget this browser's key" data-testid="my-settings-button" />
         )}
