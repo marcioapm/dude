@@ -315,6 +315,41 @@ func TestStopAndStartOverUnderSettingsThatDoNotDecodeStopsNothing(t *testing.T) 
 	}
 }
 
+// Try again while a loop writer works on an open pull request's candidate:
+// a new simplifier works on the candidate, its promotion moves the pull
+// request, and the delivery waits on it again with the candidate cleared.
+func TestTryingAgainALoopWriterOnACandidateGoesBackToTheSimplifier(t *testing.T) {
+	w := newWorld(t)
+	task, ana, branch, start := w.adoptedSimplifierOnCandidate()
+	simplifier := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'simplify'`, task)
+	w.stop(ana, task, map[string]any{"note": "hold on"})
+	w.until("the simplifier to be kept", func() bool { return w.keptRun(simplifier) })
+	if got, _ := w.options(task); strings.Join(got, " ") != "resume retry restart" {
+		t.Fatalf("a task stopped at its simplifier offers %v", got)
+	}
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		b.Hang = false
+		return b
+	}
+	w.pickUp(ana, task, map[string]any{"action": "retry", "note": "Again."})
+	w.until("the new simplifier promoted onto the pull request", func() bool {
+		w.sync()
+		return w.waitingOnPR(task) && w.gh.SHA(branch) != start
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify' AND id <> $2`, task, simplifier); n != 1 {
+		t.Errorf("%d new simplifiers after Try again, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND NOT keep`, simplifier); n != 1 {
+		t.Errorf("the stopped simplifier was not let go")
+	}
+	w.writersOnCandidate(task, []string{simplifier}, "simplify")
+	if c := w.str(`SELECT COALESCE(state->>'candidate', '') FROM workflow_runs WHERE task_id = $1`, task); c != "" {
+		t.Errorf("the delivery waits on the pull request with candidate %s", c)
+	}
+}
+
 // adoptedSimplifierOnCandidate is a taken-over pull request whose clean
 // review sends its first loop writer, the simplifier, to work on the
 // candidate, hanging there: the task, its owner, the pull request's head
