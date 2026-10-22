@@ -973,7 +973,7 @@ describe("a task started over, from its URL", () => {
 describe("a task stopped under the conductor", () => {
   const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
   /** The task decided by the conductor, its conductor (attempt `attempt`) aborted by Márcio, the recover answer as given. */
-  async function conductorStopped(opts: { attempt?: number; actions?: RecoverAction[]; stoppedEvent?: boolean; prs?: boolean } = {}) {
+  async function conductorStopped(opts: { attempt?: number; actions?: RecoverAction[]; stoppedEvent?: boolean; prs?: boolean | number[] } = {}) {
     const attempt = opts.attempt ?? 3;
     const client = new FixtureClient("a");
     const base = await client.getTask(TASK_ID);
@@ -984,7 +984,10 @@ describe("a task stopped under the conductor", () => {
     client.getTask = async () => task;
     client.getRun = (async () => ({ ...(await new FixtureClient("a").getRun(base.runs[0]!.id)), ...conductor })) as typeof client.getRun;
     client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: opts.actions ?? ["retry", "restart"], attempt, keptUntil: null });
-    if (opts.prs) client.listPullRequests = async () => ({ pullRequests: [{ ...PULL_REQUEST, state: "open", number: 412 }] });
+    if (opts.prs) {
+      const numbers = opts.prs === true ? [412] : opts.prs;
+      client.listPullRequests = async () => ({ pullRequests: numbers.map((number) => ({ ...PULL_REQUEST, id: `pr_${number}`, state: "open" as const, number })) });
+    }
     const events = await client.events({ taskId: TASK_ID });
     const extra: PersistedEvent[] = [
       { ...events.events[0]!, cursor: 30_000, eventId: "evt_awaited", eventType: "conductor.decision_awaited", runId: null,
@@ -1032,6 +1035,28 @@ describe("a task stopped under the conductor", () => {
       "A new conductor on this attempt, briefed with what the stopped one did.",
       "Attempt 4 on a new branch; PR #412 is closed.",
     ]);
+  });
+
+  test("two open pull requests: the notice and the dialog name both, as Start over closes both", async () => {
+    const page = await taskPage(await conductorStopped({ stoppedEvent: true, actions: ["resume", "retry", "restart"], prs: [412, 415] }));
+    const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
+    await until(() => notice.querySelector("[data-testid=recover-resume]"), "the ways back");
+    const lines = [...notice.querySelectorAll<HTMLElement>("[data-testid^=recover-]")]
+      .map((b) => document.getElementById(b.getAttribute("aria-describedby")!)!.textContent);
+    expect(lines).toEqual([
+      "The same conductor goes on, with its whole conversation and its agents. PR #412 and #415 stay open.",
+      "A new conductor on this attempt, briefed with what the stopped one did.",
+      "Attempt 4 on a new branch; PR #412 and #415 are closed.",
+    ]);
+    await act(async () => notice.querySelector<HTMLElement>("[data-testid=recover-restart]")!.click());
+    const dialog = await until(() => document.querySelector<HTMLElement>('[role="dialog"]'), "the pick-up dialog");
+    const shown = [...dialog.querySelectorAll('.pickUpWay[data-shown="true"] .pickUpEffects li')].map((li) => li.textContent ?? "");
+    expect(shown.filter((e) => e.startsWith("Pull request"))).toEqual(
+      ["Pull requestclosed#412 and #415, opened by dude on attempt 3's branch, are closed. Attempt 4 opens its own."]);
+    const resume = [...dialog.querySelectorAll<HTMLElement>('[role="radio"]')].find((r) => r.textContent?.startsWith("Resume the conductor"))!;
+    await act(async () => resume.click());
+    const resumed = [...dialog.querySelectorAll('.pickUpWay[data-shown="true"] .pickUpEffects li')].map((li) => li.textContent ?? "");
+    expect(resumed.filter((e) => e.startsWith("Pull request"))).toEqual(["Pull requestkept#412 and #415 stay open."]);
   });
 
   test("Start over carries who decides, the conductor by default, and sends it", async () => {

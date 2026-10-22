@@ -176,6 +176,29 @@ describe("the Stop dialog", () => {
     expect(dialog.querySelector('.pickUpWay[data-shown="true"] [data-testid="decider-field"]')!.getAttribute("data-value")).toBe("deliver");
   });
 
+  test("two open PRs: Stop here keeps both; Stop and start closes dude's both, naming each", async () => {
+    const dialog = await open({ decider: "conductor" }, [
+      { ...PULL_REQUEST, id: "pr_a", state: "open", number: 412 }, { ...PULL_REQUEST, id: "pr_b", state: "draft", number: 415 }]);
+    expect(shownEffects(dialog).filter((e) => e.startsWith("Pull request")))
+      .toEqual(["Pull requestkept#412 and #415 stay open; Resume carries on with them."]);
+    await pick(dialog, "Stop and start attempt 2");
+    expect(shownEffects(dialog).filter((e) => e.startsWith("Pull request")))
+      .toEqual(["Pull requestclosed#412 and #415, opened by dude on attempt 1's branch, are closed. Attempt 2 opens its own."]);
+  });
+
+  test("an adopted PR beside one dude opened: attempt 2 carries on the adopted one and closes dude's", async () => {
+    const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: PULL_REQUEST.repositoryId,
+      repository: "web-console", title: "Pause split", mode: "review" as const };
+    const dialog = await open({ decider: "policy", source } as Partial<TaskDetail>, [
+      { ...PULL_REQUEST, id: "pr_a", state: "open", number: 412 }, { ...PULL_REQUEST, id: "pr_b", state: "open", number: 415 }]);
+    await pick(dialog, "Stop and start attempt 2");
+    const prs = shownEffects(dialog).filter((e) => e.startsWith("Pull request"));
+    expect(prs).toEqual([
+      "Pull requestkept#412 stays open — attempt 2 continues on it. Its author opened it; dude never closes it.",
+      "Pull requestclosed#415, opened by dude on attempt 1's branch, is closed. Attempt 2 opens its own.",
+    ]);
+  });
+
   test("no PR: no Pull request row either way", async () => {
     const dialog = await open({ decider: "policy" });
     expect(shownEffects(dialog).some((e) => e.startsWith("Pull request"))).toBe(false);

@@ -13,7 +13,7 @@
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { shortId } from "@dude/design-system";
-import { DeciderField, Duration, ROLE_LABEL, type NextDecider } from "@dude/design-system/components";
+import { DeciderField, Duration, ROLE_LABEL, pullRequestNumbers, type NextDecider } from "@dude/design-system/components";
 import { Button, Callout, CalloutActions, ChoiceList, calloutActionLineId, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
 import { DECISION_POINT_LABEL, EventTypes, blockedRefusal, isConductor, runDoer, runLabel, type DecisionPoint, type PersistedEvent } from "@dude/domain";
 import { refusedBlockers, type ApiClient, type RecoverAction, type RecoveryOptions, type Run, type TaskDetail, type TaskSource } from "../api/client.ts";
@@ -21,7 +21,7 @@ import { actorName, humanActor } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import type { People } from "../people.tsx";
-import type { OpenPullRequest } from "./TaskStop.tsx";
+import { prsAnd, prsByOpener, type OpenPullRequest } from "./TaskStop.tsx";
 
 /** How the task stopped, as the record has it. */
 export interface Stop {
@@ -128,20 +128,23 @@ function stoppedWords(stop: Stop, role: string): string {
 const ACTION_LABEL: Record<RecoverAction, string> = { resume: "Resume…", retry: "Try again…", restart: "Start over…" };
 const ACTION_ICON = { resume: "play", retry: "retry", restart: "git-branch" } as const;
 
-/** Each way's line in the notice: what it does, under the conductor or Deliver, to the task's pull request. */
-function wayLine(a: RecoverAction, conducted: boolean, attempt: number, pr: OpenPullRequest | undefined): string {
+/** Each way's line in the notice: what it does, under the conductor or Deliver, to the task's pull requests. */
+function wayLine(a: RecoverAction, conducted: boolean, attempt: number, prs: readonly OpenPullRequest[]): string {
   const n = attempt + 1;
+  const stay = prs.length ? ` PR ${prsAnd(prs, "stays", "stay")} open.` : "";
+  const { adopted, ours } = prsByOpener(prs);
+  const closed = ours.length ? `PR ${prsAnd(ours, "is", "are")} closed` : "";
   switch (a) {
     case "resume":
       return conducted
-        ? `The same conductor goes on, with its whole conversation and its agents.${pr ? ` PR #${pr.number} stays open.` : ""}`
-        : `Deliver and its agents go on where they stopped.${pr ? ` PR #${pr.number} stays open.` : ""}`;
+        ? `The same conductor goes on, with its whole conversation and its agents.${stay}`
+        : `Deliver and its agents go on where they stopped.${stay}`;
     case "retry":
       return conducted ? "A new conductor on this attempt, briefed with what the stopped one did."
         : "The step that stopped runs again with new agents, on the same branch.";
     case "restart":
-      return pr?.openedBy === "someone" ? `Attempt ${n}, carrying on PR #${pr.number}.`
-        : pr ? `Attempt ${n} on a new branch; PR #${pr.number} is closed.` : `Attempt ${n} on a new branch.`;
+      return adopted ? `Attempt ${n}, carrying on PR #${adopted.number}${closed ? `; ${closed}` : ""}.`
+        : closed ? `Attempt ${n} on a new branch; ${closed}.` : `Attempt ${n} on a new branch.`;
   }
 }
 
@@ -150,7 +153,7 @@ function wayLine(a: RecoverAction, conducted: boolean, attempt: number, pr: Open
  * cannot be picked back up any way (none offered) shows only how it stopped.
  * The ways back are a list, each button with its line as its description.
  */
-export function StoppedNotice({ task, stop, options, owner, you, pullRequest, onOpenRun, onChoose }: {
+export function StoppedNotice({ task, stop, options, owner, you, pullRequests = [], onOpenRun, onChoose }: {
   task: TaskDetail;
   stop: Stop;
   options: RecoveryOptions | null;
@@ -158,8 +161,8 @@ export function StoppedNotice({ task, stop, options, owner, you, pullRequest, on
   owner: string | null;
   /** Whether the reader may pick it up: they own it (or nobody does). */
   you: boolean;
-  /** The task's open pull request, and who opened it. */
-  pullRequest?: OpenPullRequest | undefined;
+  /** Every open pull request of the task, and who opened each. */
+  pullRequests?: readonly OpenPullRequest[] | undefined;
   onOpenRun: (runId: string) => void;
   onChoose: (action: RecoverAction) => void;
 }) {
@@ -193,7 +196,7 @@ export function StoppedNotice({ task, stop, options, owner, you, pullRequest, on
                 {ACTION_LABEL[a]}
               </Button>
             ),
-            line: wayLine(a, conducted, options?.attempt ?? 1, pullRequest),
+            line: wayLine(a, conducted, options?.attempt ?? 1, pullRequests),
           }))} />
         ) : (
           <p className="escalationWaiting" data-testid="recover-waiting">
@@ -209,9 +212,9 @@ export function StoppedNotice({ task, stop, options, owner, you, pullRequest, on
 type Effect = { what: string; how: "kept" | "new" | "gone"; text: ReactNode };
 
 function effects(action: RecoverAction, role: string, branch: string, head: string | null, attempt: number, source: TaskSource | null,
-  conducted: boolean, next: NextDecider, pr: OpenPullRequest | undefined): Effect[] {
+  conducted: boolean, next: NextDecider, prs: readonly OpenPullRequest[]): Effect[] {
   const at = head ? <span className="ds-mono">{head}</span> : "what was pushed";
-  const prKept: Effect[] = pr ? [{ what: "Pull request", how: "kept", text: `#${pr.number} stays open.` }] : [];
+  const prKept: Effect[] = prs.length ? [{ what: "Pull request", how: "kept", text: `${prsAnd(prs, "stays", "stay")} open.` }] : [];
   switch (action) {
     case "resume":
       if (conducted) {
@@ -264,7 +267,7 @@ function effects(action: RecoverAction, role: string, branch: string, head: stri
         { what: "Conversation", how: "new", text: "Fresh agents, told the task as it is now — edit it first if what it asks for was the problem." },
         { what: "Workspace", how: "new", text: "A clean checkout of the default branch." },
         { what: "Branch", how: "new", text: <>A new branch for attempt {attempt + 1}. Attempt {attempt}'s is kept.</> },
-        ...(pr ? [{ what: "Pull request", how: "gone" as const, text: `#${pr.number}, opened by dude on attempt ${attempt}'s branch, is closed. Attempt ${attempt + 1} opens its own.` }] : []),
+        ...(prs.length ? [{ what: "Pull request", how: "gone" as const, text: `${pullRequestNumbers(prs)}, opened by dude on attempt ${attempt}'s branch, ${prs.length === 1 ? "is" : "are"} closed. Attempt ${attempt + 1} opens its own.` }] : []),
         { what: "Session", how: "new", text: `Attempt ${attempt + 1}, the whole pipeline again. Attempt ${attempt}'s sessions stay, marked as such.` },
         who,
       ];
@@ -279,14 +282,14 @@ const GO: Record<RecoverAction, (role: string, attempt: number) => string> = {
 };
 
 /** The one dialog every way back opens, on the way it was opened with. */
-export function PickUpDialog({ client, task, stop, options, initial, pullRequest, onEdit, onClose, onDone }: {
+export function PickUpDialog({ client, task, stop, options, initial, pullRequests = [], onEdit, onClose, onDone }: {
   client: ApiClient;
   task: TaskDetail;
   stop: Stop;
   options: RecoveryOptions;
   initial: RecoverAction;
-  /** The task's open pull request, and who opened it. */
-  pullRequest?: OpenPullRequest | undefined;
+  /** Every open pull request of the task, and who opened each. */
+  pullRequests?: readonly OpenPullRequest[] | undefined;
   /** Edit the task before starting over. */
   onEdit: () => void;
   onClose: () => void;
@@ -368,7 +371,7 @@ export function PickUpDialog({ client, task, stop, options, initial, pullRequest
             <div key={a} className="pickUpWay" data-shown={a === action}>
               {a === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={previous} /> : null}
               <ul className="pickUpEffects" aria-label="What it does">
-                {effects(a, role, branch, head, options.attempt, source, conducted, next, pullRequest).map((e) => (
+                {effects(a, role, branch, head, options.attempt, source, conducted, next, pullRequests).map((e) => (
                   <li key={e.what} data-how={e.how}>
                     <span className="pickUpWhat">{e.what}</span>
                     <span className="pickUpHow">{e.how === "gone" && e.what === "Pull request" ? "closed" : e.how}</span>

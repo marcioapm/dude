@@ -280,7 +280,8 @@ export function CloseDialog({ open, onOpenChange, task: t, waiting = [], andArch
 }
 
 /** "#12", "#12 and #14", "#12, #14 and #15". */
-const numbers = (prs: readonly ClosablePullRequest[]) => keyList(prs.map((p) => `#${p.number}`));
+export const pullRequestNumbers = (prs: ReadonlyArray<Pick<ClosablePullRequest, "number">>) => keyList(prs.map((p) => `#${p.number}`));
+const numbers = pullRequestNumbers;
 
 /**
  * Whether closing the task closes its open pull requests on GitHub too: one

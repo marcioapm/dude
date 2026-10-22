@@ -92,7 +92,7 @@ import { pullRequestActivity, resolvingConflicts } from "../pullRequests.ts";
 import { MonoWords } from "../monoWords.tsx";
 import { BlockedNotice, TaskRelationsSection, TaskStartGate, openBlockers, refusedWords, useRelations } from "./Relations.tsx";
 import { TaskMenu, notYours, useTaskLifecycle, waitingOn } from "./TaskLifecycle.tsx";
-import { StopButton, StopDialog, inProgress, liveItemsOf, openPullRequestOf, openPullRequestsOf, stopMenuItem } from "./TaskStop.tsx";
+import { StopButton, StopDialog, inProgress, liveItemsOf, openPullRequestsOf, stopMenuItem } from "./TaskStop.tsx";
 import { refusedBlockers } from "../api/client.ts";
 import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
@@ -665,7 +665,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           )) : null}
           {stop ? (
             <StoppedNotice task={item} stop={stop} options={recovery} owner={owner?.name ?? null} you={yours}
-              pullRequest={openPullRequestOf(item, pullRequests)} onOpenRun={onOpenRun} onChoose={setPickingUp} />
+              pullRequests={openPullRequestsOf(item, pullRequests)} onOpenRun={onOpenRun} onChoose={setPickingUp} />
           ) : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
           {commentingNotices}
@@ -677,7 +677,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       ) : null}
       {lifecycle.dialogs}
       {stopping ? (
-        <StopDialog client={client} task={item} attempt={current} live={liveItemsOf(item)} pullRequest={openPullRequestOf(item, pullRequests)}
+        <StopDialog client={client} task={item} attempt={current} live={liveItemsOf(item)} pullRequests={openPullRequestsOf(item, pullRequests)}
           onClose={() => setStopping(false)}
           onDone={() => {
             setStopping(false);
@@ -685,7 +685,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           }} />
       ) : null}
       {pickingUp && stop && recovery ? (
-        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp} pullRequest={openPullRequestOf(item, pullRequests)}
+        <PickUpDialog client={client} task={item} stop={stop} options={recovery} initial={pickingUp} pullRequests={openPullRequestsOf(item, pullRequests)}
           onEdit={() => {
             setPickingUp(null);
             setEditing(true);

@@ -8,7 +8,7 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { DeciderField, LiveWork, liveWords, type LiveItem, type NextDecider } from "@dude/design-system/components";
+import { DeciderField, LiveWork, liveWords, pullRequestNumbers, type LiveItem, type NextDecider } from "@dude/design-system/components";
 import { Button, ChoiceList, Dialog, RefusedButton, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
 import type { RowMenuItem } from "@dude/design-system/primitives";
 import { NOT_STARTED_STATUSES, PHASE_DOER, TERMINAL_RUN_STATUSES, isConductor, reviewerCategoryInSentence } from "@dude/domain";
@@ -61,14 +61,20 @@ export interface OpenPullRequest {
   readonly openedBy: "dude" | "someone";
 }
 
-export function openPullRequestOf(task: Pick<TaskDetail, "source">, prs: readonly PullRequest[]): OpenPullRequest | undefined {
-  return openPullRequestsOf(task, prs)[0];
-}
-
 /** Every open pull request of the task, as a Close closes them all when asked; the adopted one by its repository and number (isAdoptedPr). */
 export function openPullRequestsOf(task: Pick<TaskDetail, "source">, prs: readonly PullRequest[]): OpenPullRequest[] {
   return prs.filter((p) => p.state === "open" || p.state === "draft")
     .map((p) => ({ number: p.number, openedBy: isAdoptedPr(p, task.source) ? "someone" : "dude" }));
+}
+
+/** The pull requests named in a sentence, with the verb that agrees: "#12 stays", "#12 and #14 stay". */
+export function prsAnd(prs: readonly OpenPullRequest[], one: string, many: string): string {
+  return `${pullRequestNumbers(prs)} ${prs.length === 1 ? one : many}`;
+}
+
+/** The task's open pull requests split as a restart treats them: the adopted one carried on, dude's closed. */
+export function prsByOpener(prs: readonly OpenPullRequest[]): { adopted: OpenPullRequest | undefined; ours: OpenPullRequest[] } {
+  return { adopted: prs.find((p) => p.openedBy === "someone"), ours: prs.filter((p) => p.openedBy === "dude") };
 }
 
 /** The `…` menu's Stop…, first: danger, disabled for anyone who may not. */
@@ -88,7 +94,7 @@ export function StopButton({ onStop, notYours }: { readonly onStop: () => void; 
 type Way = "stop" | "restart";
 type Effect = { what: string; how: "kept" | "new" | "gone"; text: ReactNode };
 
-function effects(way: Way, decider: NextDecider, next: NextDecider, attempt: number, branch: string, pr: OpenPullRequest | undefined,
+function effects(way: Way, decider: NextDecider, next: NextDecider, attempt: number, branch: string, prs: readonly OpenPullRequest[],
   headBranch: string | null): Effect[] {
   const mono = (s: string) => <span className="ds-mono">{s}</span>;
   const n = attempt + 1;
@@ -99,14 +105,19 @@ function effects(way: Way, decider: NextDecider, next: NextDecider, attempt: num
         ? { what: "Conductor", how: "kept", text: "Stopped with the rest; on Resume the same conductor goes on with its whole conversation." }
         : { what: "Deliver", how: "kept", text: "Parked where it was; on Resume it goes on from there." },
       { what: "Branch", how: "kept", text: mono(branch) },
-      ...(pr ? [{ what: "Pull request", how: "kept" as const, text: `#${pr.number} stays open; Resume carries on with it.` }] : []),
+      ...(prs.length ? [{ what: "Pull request", how: "kept" as const,
+        text: `${prsAnd(prs, "stays", "stay")} open; Resume carries on with ${prs.length === 1 ? "it" : "them"}.` }] : []),
     ];
   }
-  const where: Effect[] = pr?.openedBy === "someone" && headBranch
-    ? [{ what: "Branch", how: "kept", text: <>{mono(headBranch)}, PR #{pr.number}'s: attempt {n} works on it from where attempt {attempt} left it.</> },
-      { what: "Pull request", how: "kept", text: `#${pr.number} stays open — attempt ${n} continues on it. Its author opened it; dude never closes it.` }]
-    : [{ what: "Branch", how: "new", text: <>A new branch for attempt {n}, from the default branch. Attempt {attempt}'s is kept.</> },
-      ...(pr ? [{ what: "Pull request", how: "gone" as const, text: `#${pr.number}, opened by dude on attempt ${attempt}'s branch, is closed. Attempt ${n} opens its own.` }] : [])];
+  const { adopted, ours } = prsByOpener(prs);
+  const closed: Effect[] = ours.length
+    ? [{ what: "Pull request", how: "gone", text: `${pullRequestNumbers(ours)}, opened by dude on attempt ${attempt}'s branch, ${ours.length === 1 ? "is" : "are"} closed. Attempt ${n} opens its own.` }]
+    : [];
+  const where: Effect[] = adopted && headBranch
+    ? [{ what: "Branch", how: "kept", text: <>{mono(headBranch)}, PR #{adopted.number}'s: attempt {n} works on it from where attempt {attempt} left it.</> },
+      { what: "Pull request", how: "kept", text: `#${adopted.number} stays open — attempt ${n} continues on it. Its author opened it; dude never closes it.` },
+      ...closed]
+    : [{ what: "Branch", how: "new", text: <>A new branch for attempt {n}, from the default branch. Attempt {attempt}'s is kept.</> }, ...closed];
   return [
     ...where,
     { what: "Sessions", how: "new", text: `The whole pipeline again. Attempt ${attempt}'s stay to read.` },
@@ -117,13 +128,14 @@ function effects(way: Way, decider: NextDecider, next: NextDecider, attempt: num
 }
 
 /** The Stop dialog: Stop here, or Stop and start the next attempt. */
-export function StopDialog({ client, task, attempt, live, pullRequest, onClose, onDone }: {
+export function StopDialog({ client, task, attempt, live, pullRequests = [], onClose, onDone }: {
   client: ApiClient;
   task: TaskDetail;
   /** The current attempt: Stop and start makes the next. */
   attempt: number;
   live: readonly LiveItem[];
-  pullRequest?: OpenPullRequest | undefined;
+  /** Every open pull request of the task (openPullRequestsOf). */
+  pullRequests?: readonly OpenPullRequest[] | undefined;
   onClose: () => void;
   onDone: (restarted: boolean) => void;
 }) {
@@ -136,12 +148,12 @@ export function StopDialog({ client, task, attempt, live, pullRequest, onClose, 
   const key = task.key ?? "this task";
   const n = attempt + 1;
   const branch = task.runs.find((r) => r.attempt === attempt && r.branch)?.branch ?? "its branch";
-  const adopted = pullRequest?.openedBy === "someone";
+  const { adopted } = prsByOpener(pullRequests);
   const ways: ChoiceOption<Way>[] = [
     { value: "stop", icon: "stop", label: "Stop here",
       description: `Everything stops: every agent at work, the conductor included. What they were doing is kept for a while so you can Resume.` },
     { value: "restart", icon: "git-branch", label: `Stop and start attempt ${n}`,
-      description: adopted ? `A fresh start on PR #${pullRequest.number}'s branch: new sessions, the whole thing again, pushing to the same PR.`
+      description: adopted ? `A fresh start on PR #${adopted.number}'s branch: new sessions, the whole thing again, pushing to the same PR.`
         : "A fresh start from the default branch: new branch, new sessions, the whole thing again." },
   ];
   const go = async () => {
@@ -173,8 +185,8 @@ export function StopDialog({ client, task, attempt, live, pullRequest, onClose, 
             <div key={w} className="pickUpWay" data-shown={w === way}>
               {w === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={decider} /> : null}
               <ul className="pickUpEffects" aria-label="What it does">
-                {effects(w, decider, next, attempt, branch, pullRequest, task.source?.headBranch ?? null).map((e) => (
-                  <li key={e.what} data-how={e.how}>
+                {effects(w, decider, next, attempt, branch, pullRequests, task.source?.headBranch ?? null).map((e) => (
+                  <li key={`${e.what}-${e.how}`} data-how={e.how}>
                     <span className="pickUpWhat">{e.what}</span>
                     <span className="pickUpHow">{e.how === "gone" ? "closed" : e.how}</span>
                     <span>{e.text}</span>
