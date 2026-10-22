@@ -385,7 +385,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   if (kind === "epic") {
     const e = row.node as NavEpic;
     return (
-      <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"], menu && styles["swapsForMenu"])}>
+      <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
         {chevron}
         <Icon name="layers" size={14} className={styles["epicGlyph"]} />
         <span className={styles["epicTitle"]}>{e.title}</span>
@@ -406,7 +406,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     const pr = currentPullRequest(wi);
     const driver = shownDriver(wi);
     return (
-      <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"], menu && styles["swapsForMenu"])}>
+      <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
         {chevron}
         <span className={styles["wiMain"]}>
           {wi.key ? <span className={styles["wiKey"]}>{wi.key}</span> : null}
@@ -431,7 +431,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   if (kind === "run") {
     const r = row.node as NavRun;
     return (
-      <div {...common} className={cx(styles["row"], styles["run"], selected && styles["selected"], menu && styles["swapsForMenu"])}>
+      <div {...common} className={cx(styles["row"], styles["run"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
         {chevron}
         <StatusBadge status={r.status} variant="dot" iconOnly className={styles["mark"]} />
         <span className={styles["runTitle"]}>Attempt {r.attempt}</span>
@@ -444,7 +444,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   const s = row.node as NavSession;
   const title = s.title ?? ROLE_LABEL[s.role];
   return (
-    <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], selected && styles["selected"], menu && styles["swapsForMenu"])}>
+    <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
       <AgentAvatar role={s.role} size="xs" live={s.status === "running"} className={styles["sessionAvatar"]} />
       <span className={styles["sessionMain"]} title={s.activity ? `${title} · ${s.activity}` : title}>
         <span className={styles["sessionTitle"]}>{title}</span>

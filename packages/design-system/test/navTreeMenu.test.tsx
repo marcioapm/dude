@@ -41,7 +41,7 @@ afterEach(async () => {
 
 const ANA = { id: "ana", name: "Ana Ribeiro" };
 const PROJECTS: NavProject[] = [{
-  id: "p", name: "web", people: [ANA],
+  id: "p", name: "web",
   epics: [{ id: "e", title: "Checkout", tasks: [{ id: "t1", key: "WC-1", title: "Cart summary", status: "running", people: [ANA] }] }],
   tasks: [{ id: "t2", key: "WC-2", title: "Free task", status: "queued", people: [ANA] }],
 }];
