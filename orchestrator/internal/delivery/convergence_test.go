@@ -219,11 +219,49 @@ func TestConvergenceRegressionNeedsABlockingFixedFinding(t *testing.T) {
 	}
 }
 
+// A reviewer may mark caused_by_fix on the loop's first review, which
+// belongs to no fix round; it is neither a round nor an error.
+func TestConvergenceIgnoresAFixCausedFindingOutsideAnyRound(t *testing.T) {
+	w := newConvergenceWorld(t)
+	w.finding(t, "origin-caused", "origin", "high", true)
+	w.phase(t, "fix1", "fix", "", []string{"f"}, nil, 1)
+	w.phase(t, "review1", "review", "fix1", []string{"f"}, map[string]string{"f": "still"}, 2)
+	if got := w.convergence(t, w.state()); got.StillRounds["f"] != 1 || got.RegressionRounds != 0 {
+		t.Fatalf("fix-caused finding of the first review: %+v", got)
+	}
+}
+
+// A regression round needs its fix-caused finding to block and its parent's
+// finding judged fixed; each fixture flips one and keeps the other.
+func TestConvergenceRegressionNeedsABlockingFixCausedFindingAndAFixedParent(t *testing.T) {
+	for _, tc := range []struct {
+		name, verdict, severity string
+		still                   int
+	}{
+		{"medium fix-caused findings", "fixed", "medium", 0},
+		{"still parent findings", "still", "high", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newConvergenceWorld(t)
+			for i := 1; i <= 2; i++ {
+				fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
+				w.phase(t, fix, "fix", "", []string{"f"}, nil, i*3)
+				w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": tc.verdict}, i*3+1)
+				w.finding(t, fmt.Sprintf("new%d", i), review, tc.severity, true)
+			}
+			if got := w.convergence(t, w.state()); got.RegressionRounds != 0 || got.StillRounds["f"] != tc.still {
+				t.Fatalf("regression=%d still=%d, want 0 and %d: %+v", got.RegressionRounds, got.StillRounds["f"], tc.still, got)
+			}
+		})
+	}
+}
+
 func TestConvergenceIgnoresFindingsOutsideTheReviewRange(t *testing.T) {
 	inRange := `{"of":"pull_request_fix","base":{"api":"base"}}`
 	for _, tc := range []struct{ name, origin string }{
 		{"other range", `{"of":"pull_request_fix","base":{"api":"earlier"}}`},
 		{"tester finding", inRange},
+		{"re-reviews of another range", inRange},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newConvergenceWorld(t)
@@ -248,6 +286,9 @@ func TestConvergenceIgnoresFindingsOutsideTheReviewRange(t *testing.T) {
 			w.exec(t, `UPDATE runs SET review_range = $1::jsonb WHERE id = 'origin'`, tc.origin)
 			if tc.name == "tester finding" {
 				w.exec(t, `UPDATE runs SET phase = 'test' WHERE id = 'origin'`)
+			}
+			if tc.name == "re-reviews of another range" {
+				w.exec(t, `UPDATE runs SET review_range = '{"of":"pull_request_fix","base":{"api":"earlier"}}' WHERE id IN ('review1', 'review2')`)
 			}
 			if got := w.convergence(t, st); got.RegressionRounds != 0 {
 				t.Fatalf("fixed finding outside the range counted: %+v", got)
