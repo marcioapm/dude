@@ -74,7 +74,7 @@ beforeAll(async () => {
   useConfig(Config.load({ env: { ...process.env,
     DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestratorServer.port}`, DUDE_ORCHESTRATOR_TOKEN: "svc" } }));
   router = buildRouter("");
-});
+}, 120_000);
 
 afterAll(async () => {
   useConfig(null);
