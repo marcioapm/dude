@@ -76,6 +76,9 @@ type Server struct {
 	SyncBase SyncBaseFunc
 	// How long sync_base waits for lux's reports; zero, syncBaseWait.
 	SyncBaseWait time.Duration
+	// PublicURL is dude's https origin (auth.public_url), the base of a
+	// guide section's link; "", links are the web app's hash path alone.
+	PublicURL string
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -107,6 +110,7 @@ type env struct {
 	syncBase        SyncBaseFunc
 	syncBaseWait    time.Duration
 	syncPR          func(ctx context.Context, org, prID string) error
+	publicURL       string
 	prepared        any
 }
 
@@ -621,7 +625,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
-		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest}
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}

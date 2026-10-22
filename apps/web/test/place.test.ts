@@ -76,4 +76,15 @@ describe("places", () => {
     expect(parsePlace("#/org/settings/images/img_1/history")).toEqual({ view: "orgSettings", page: "images", sub: "img_1/history" });
     expect(parsePlace("#/org/settings/images")).toEqual({ view: "orgSettings", page: "images" });
   });
+
+  test("help, a guide page and a section of it read back, in an organisation as the guide links them", () => {
+    for (const hash of ["#/help", "#/help/settings", "#/help/settings/delivery"]) {
+      expect(formatPlace(parsePlace(hash))).toBe(hash);
+    }
+    expect(parsePlace("#/help")).toEqual({ view: "help" });
+    expect(parsePlace("#/o/acme/help/settings/delivery")).toEqual({ view: "help", page: "settings", section: "delivery" });
+    expect(parsePlace("#/o/acme/help/memory")).toEqual({ view: "help", page: "memory" });
+    expect(formatPlace({ view: "help", page: "a b", section: "c/d" })).toBe("#/help/a%20b/c%2Fd");
+    expect(parsePlace("#/help/a%20b/c%2Fd")).toEqual({ view: "help", page: "a b", section: "c/d" });
+  });
 });

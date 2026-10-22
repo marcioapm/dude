@@ -59,6 +59,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/guide"
 	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -194,6 +195,13 @@ func run(log *slog.Logger) error {
 
 	embedder, notifier := memoryAndPush(set, database, log)
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
+	// The guide this build embeds, for search_memory: before the tools
+	// listen, so an agent's first search finds this build's text.
+	if res, err := guide.SyncBuiltIn(ctx, database, version.Version); err != nil {
+		return fmt.Errorf("guide sync: %w", err)
+	} else if res != (guide.SyncResult{}) {
+		log.Info("guide synced", "written", res.Written, "deleted", res.Deleted)
+	}
 
 	// Each loop sleeps when idle and runs again at once while there is work.
 	// A kick wakes them all: a person's action should take effect now, not
@@ -285,6 +293,7 @@ func run(log *slog.Logger) error {
 	if addr := set.ToolsListen; addr != "" {
 		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log, Embedder: embedder,
 			Kick: serverService.Kick, Forges: forges, Lux: luxClient, SyncPullRequest: pullRequests.Sync, SyncBase: syncer.SyncBase,
+			PublicURL: set.PublicURL,
 			ValidateMachine: func(ctx context.Context, runID string, recorded, target *delivery.Machine, before lux.Run) error {
 				return phases.ValidateResize(ctx, luxClient, runID, phases.PlanResize(ctx, luxClient, recorded, target, before))
 			}}).Handler(),
