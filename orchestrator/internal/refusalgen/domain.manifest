@@ -30,6 +30,7 @@ mTaskImagesAreAtMostMib               refusals/domain/attachments/task-images-ar
 mTaskNotFound                         refusals/domain/escalations/task-not-found
 mDeliveryTaskNotWaitingForDecision    refusals/domain/escalations/delivery-task-not-waiting-for-decision
 mNotWayGoOnAfterOne                   refusals/domain/escalations/not-way-go-on-after-one
+mNeedsDirectionNote                   refusals/domain/escalations/needs-direction-note
 mNeedsNoteSayWhyTaskMay               refusals/domain/escalations/needs-note-say-why-task-may
 mWhatStoppedNoLongerKeptResume        refusals/domain/escalations/what-stopped-no-longer-kept-resume
 mScopeOnlyForChecksWaiver             refusals/domain/escalations/scope-only-for-checks-waiver

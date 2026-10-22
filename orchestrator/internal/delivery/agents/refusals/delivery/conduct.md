@@ -22,6 +22,8 @@
 
 {{- define "refusals/delivery/conduct/review-loop-at-its-bound-rounds"}}the review loop is at its bound: %d of %d rounds spent. Ask the person how to go on (ask_person){{end}}
 
+{{- define "refusals/delivery/conduct/review-loop-not-converging"}}the review loop is not converging: blocking criteria remain unmet or fixes keep introducing new blockers. Re-review (start_phase review) or ask the person how to go on (ask_person) before another fix{{end}}
+
 {{- define "refusals/delivery/conduct/no-open-finding-or-feedback-item"}}no open finding or feedback item to fix{{end}}
 
 {{- define "refusals/delivery/conduct/still-open-after-fix-attempts-bound"}}%s is still open after %d fix attempts, the bound per finding: re-review (start_phase review) or ask the person how to go on (ask_person) before another fix{{end}}

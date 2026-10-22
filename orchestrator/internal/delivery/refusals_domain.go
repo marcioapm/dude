@@ -33,6 +33,7 @@ const (
 	mTaskNotFound                         = "task %s not found"
 	mDeliveryTaskNotWaitingForDecision    = "delivery of task %s is not waiting for a decision"
 	mNotWayGoOnAfterOne                   = "%q is not a way to go on after %s; one of %s"
+	mNeedsDirectionNote                   = "%s needs a note with the person's direction"
 	mNeedsNoteSayWhyTaskMay               = "%s needs a note: say why the task may ship with %s"
 	mWhatStoppedNoLongerKeptResume        = "what stopped is no longer kept to resume; try again or start over"
 	mScopeOnlyForChecksWaiver             = "scope %q is not one this decision takes: \"run\", or \"attempt\" only when waiving unverified checks"

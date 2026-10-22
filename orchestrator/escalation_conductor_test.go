@@ -18,9 +18,11 @@ import (
 )
 
 // escalationQuestion is the conductor's question about a stuck review, its
-// choices each naming the escalation action it stands for.
-const escalationQuestion = `{"question":"Stuck on the finding. I propose one more narrow fix round.",
-	"choices":["Retry as proposed","Accept as it is","Stop"],"actions":["retry","accept","stop"]}`
+// choices each naming the escalation action it stands for. A stuck retry
+// needs the owner's direction, so it is never a choice: the owner asks for
+// it in their own words.
+const escalationQuestion = `{"question":"Stuck on the finding. I propose one more narrow fix round; say how, or pick one.",
+	"choices":["Accept as it is","Stop"],"actions":["accept","stop"]}`
 
 // stuck is a conducted delivery whose review is stuck on its finding (one
 // fix attempt per finding): escalated, the conductor told. The conductor's
@@ -87,12 +89,14 @@ func (w *world) answerAs(person, task, text string) (int, map[string]any) {
 }
 
 // The owner picks one of the conductor's choices: the escalation is decided
-// exactly as from the banner — retry starts the next fix round, accept goes
-// on past the findings — and the decision says it came from that answer.
+// exactly as from the banner — accept goes on past the findings — and the
+// decision says it came from that answer. A stuck retry is no choice: the
+// owner asks for it in their own words, the conductor retries on them, and
+// the next fix round starts, the decision carrying those words.
 func TestTheOwnersChoiceDecidesTheEscalation(t *testing.T) {
-	for _, c := range []struct{ choice, action, phase string }{
-		{"Retry as proposed", "retry", "fix"},
-		{"Accept as it is", "accept", "simplify"},
+	for _, c := range []struct{ answer, action, phase, by string }{
+		{"Retry once more, only on the greeting's wording.", "retry", "fix", "conductor"},
+		{"Accept as it is", "accept", "simplify", ""},
 	} {
 		t.Run(c.action, func(t *testing.T) {
 			w, task := stuck(t)
@@ -101,15 +105,21 @@ func TestTheOwnersChoiceDecidesTheEscalation(t *testing.T) {
 			before := w.phaseRuns(task, c.phase)
 			w.must(task, "ask_person", escalationQuestion)
 			q := w.conductorQuestion(task)
-			if status, out := w.answerAs(ana, task, c.choice); status != 200 {
+			if status, out := w.answerAs(ana, task, c.answer); status != 200 {
 				t.Fatalf("the answer: %d %v", status, out)
+			}
+			if c.by == "conductor" {
+				if d := w.decided(task); d != nil {
+					t.Fatalf("a free answer decided the escalation: %v", d)
+				}
+				w.must(task, "decide_escalation", `{"action":"retry"}`)
 			}
 			w.until("the delivery to go on", func() bool { return w.phaseRuns(task, c.phase) == before+1 })
 			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
-				AND payload->>'action' = $2 AND payload->>'questionId' = $3 AND NOT payload ? 'by'
+				AND payload->>'action' = $2 AND payload->>'questionId' = $3 AND COALESCE(payload->>'by', '') = $6
 				AND payload->>'answeredBy' = (SELECT person_id FROM api_keys WHERE id = $4)
 				AND strpos(payload->>'note', 'The owner answered: '||$5) > 0
-				AND strpos(payload->>'note', 'one more narrow fix round') > 0`, task, c.action, q, ana, c.choice); n != 1 {
+				AND strpos(payload->>'note', 'one more narrow fix round') > 0`, task, c.action, q, ana, c.answer, c.by); n != 1 {
 				t.Errorf("%d task.decided events for the answer", n)
 			}
 			if w.taskStatus(task) == "awaiting_input" {
@@ -126,7 +136,7 @@ func TestANonOwnersChoiceDecidesNothing(t *testing.T) {
 	ana, bo := w.person("Ana"), w.person("Bo")
 	w.assignOwner(task, ana)
 	w.must(task, "ask_person", escalationQuestion)
-	if status, _ := w.answerAs(bo, task, "Retry as proposed"); status != 403 {
+	if status, _ := w.answerAs(bo, task, "Accept as it is"); status != 403 {
 		t.Fatalf("a non-owner's answer: %d", status)
 	}
 	if d := w.decided(task); d != nil {
@@ -168,7 +178,8 @@ func TestAYourCallAnswerHandsTheConductorTheDecision(t *testing.T) {
 	conductor, _, _ := w.conductor(task)
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
 		AND payload->>'by' = 'conductor' AND payload->>'questionId' = $2 AND actor_id = $3
-		AND payload->>'answeredBy' = (SELECT person_id FROM api_keys WHERE id = $4)`, task, q, conductor, ana); n != 1 {
+		AND payload->>'answeredBy' = (SELECT person_id FROM api_keys WHERE id = $4)
+		AND strpos(payload->>'note', 'The owner answered: Your call, use your judgement.') > 0`, task, q, conductor, ana); n != 1 {
 		t.Errorf("%d task.decided events by the conductor on the owner's answer", n)
 	}
 	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND run_id IS NULL
@@ -190,7 +201,7 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 			t.Fatalf("the answer: %d %v", status, out)
 		}
 		// The owner decides this one on the banner; the retry gets stuck again.
-		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "retry"}); status != 200 {
+		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "retry", "note": "Try the greeting's wording only."}); status != 200 {
 			t.Fatalf("the banner: %d %v", status, out)
 		}
 		w.until("after the retry's fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
@@ -264,11 +275,16 @@ func TestTheBannerSettlesTheConductorsEscalationQuestion(t *testing.T) {
 }
 
 // ask_person while an escalation waits is its question: each choice must
-// name one of the escalation's actions.
+// name one of the escalation's actions, and none may be a stuck retry,
+// which needs the owner's own direction.
 func TestTheEscalationsQuestionNamesItsActions(t *testing.T) {
 	w, task := stuck(t)
 	w.refused(task, "ask_person", `{"question":"Q","choices":["Retry","Stop"]}`, "actions")
-	w.refused(task, "ask_person", `{"question":"Q","choices":["Retry","Stop"],"actions":["retry","resume"]}`, "resume")
+	w.refused(task, "ask_person", `{"question":"Q","choices":["Accept","Stop"],"actions":["accept","resume"]}`, "resume")
+	w.refused(task, "ask_person", `{"question":"Q","choices":["Retry","Stop"],"actions":["retry","stop"]}`, `"retry" is not a choice`)
+	if q := w.conductorQuestion(task); q != "" {
+		t.Errorf("question %s recorded with a refused choice", q)
+	}
 	w.must(task, "ask_person", escalationQuestion)
 	var escalation string
 	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(escalation, '') FROM questions WHERE id = $1`,

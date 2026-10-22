@@ -1206,3 +1206,7 @@ a pull request is open on this branch, so changes reach it only after review on 
 
 give an answer, or withdraw: true with a reason; one of the two
 
+## refusals/delivery/conduct/review-loop-not-converging
+
+the review loop is not converging: blocking criteria remain unmet or fixes keep introducing new blockers. Re-review (start_phase review) or ask the person how to go on (ask_person) before another fix
+

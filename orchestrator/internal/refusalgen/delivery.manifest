@@ -12,6 +12,7 @@ rYourPublishMovingTaskBranchNow         refusals/delivery/conduct/your-publish-m
 rCategoriesAreForReviewFindingsFor      refusals/delivery/conduct/categories-are-for-review-findings-for
 rNoReviewerCategoriesAre                refusals/delivery/conduct/no-reviewer-categories-are
 rReviewLoopAtItsBoundRounds             refusals/delivery/conduct/review-loop-at-its-bound-rounds
+rReviewLoopNotConverging                refusals/delivery/conduct/review-loop-not-converging
 rNoOpenFindingOrFeedbackItem            refusals/delivery/conduct/no-open-finding-or-feedback-item
 rStillOpenAfterFixAttemptsBound         refusals/delivery/conduct/still-open-after-fix-attempts-bound
 rNotFindingThisTaskDeliveryFindings     refusals/delivery/conduct/not-finding-this-task-delivery-findings

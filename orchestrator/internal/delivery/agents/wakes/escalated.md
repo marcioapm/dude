@@ -1,2 +1,4 @@
-Escalated to a person: {{.Reason}}. Its actions: {{join .Actions ", "}}. Only the person decides: explain and propose, with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets you decide_escalation.
+Escalated to a person: {{.Reason}}. Its actions: {{join .Actions ", "}}. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation.
+{{- if .Stuck}} Retry needs the person's direction for the next fix, not a bare choice.{{end}}
+{{- if .NotConverging}} Findings: {{join .FindingIDs ", "}}. Their criteria remain unmet after consecutive fixes, or fixes keep causing new blockers. Another fixer is not started without direction: retry needs how to fix differently, accept needs the risk accepted, and amend needs the intended behaviour that replaces the named criteria, all in the person's own words.{{end}}
 {{- if .Verdict}} The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.{{end}}

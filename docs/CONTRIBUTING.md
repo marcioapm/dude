@@ -339,8 +339,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   seen by that publish; under `update` (the default) `syncBeforePR` waits
   for live writers, so the window does not exist there.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
-  `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
-  workflow and sets the task to `awaiting_input`.
+  `MaxAttemptsPerFinding`, `MaxStillRounds`, `MaxRegressionRounds`,
+  `MaxPRFixIterations`. Convergence asks for the owner's direction when a
+  blocking criterion stays unmet or fixes keep causing blockers; retry and
+  amend need direction, and accepting the named risks needs a note. A stuck
+  retry also needs direction. These note requirements do not grant admin
+  access. An escalation stops the workflow and sets the task to `awaiting_input`.
 - **Who decides** is the delivery's `State.Decider`: `policy` (Deliver: the
   rules above) or `conductor` (`delivery/decisions.go`, `conduct.go`). Under
   the conductor the workflow still does the mechanics, and where it would

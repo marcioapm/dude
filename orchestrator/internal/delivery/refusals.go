@@ -16,6 +16,7 @@ const (
 	rCategoriesAreForReviewFindingsFor      = "categories are for review, findings for fix"
 	rNoReviewerCategoriesAre                = "no reviewer %q: the categories are %s"
 	rReviewLoopAtItsBoundRounds             = "the review loop is at its bound: %d of %d rounds spent. Ask the person how to go on (ask_person)"
+	rReviewLoopNotConverging                = "the review loop is not converging: blocking criteria remain unmet or fixes keep introducing new blockers. Re-review (start_phase review) or ask the person how to go on (ask_person) before another fix"
 	rNoOpenFindingOrFeedbackItem            = "no open finding or feedback item to fix"
 	rStillOpenAfterFixAttemptsBound         = "%s is still open after %d fix attempts, the bound per finding: re-review (start_phase review) or ask the person how to go on (ask_person) before another fix"
 	rNotFindingThisTaskDeliveryFindings     = "%s is not a finding of this task's delivery (findings lists them)"

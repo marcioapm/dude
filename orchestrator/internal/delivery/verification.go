@@ -59,6 +59,10 @@ func NeedsReason(reason, action string) bool {
 	return reason == ReasonTestFailedCriteria && action == "accept" || (reason == ReasonTestBlocked || reason == ReasonChecksUnverified) && action == ActionWaive
 }
 
+func NeedsNote(reason, action string) bool {
+	return NeedsReason(reason, action) || reason == ReasonNotConverging && action != "stop" || reason == "stuck" && action == "retry"
+}
+
 // RunReplyTx is everything a Run's agent said, its messages joined.
 func RunReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT payload->>'text' FROM events

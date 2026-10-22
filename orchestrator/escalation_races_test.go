@@ -165,7 +165,7 @@ func TestAnAnswerAndTheBannerAtOnceDecideOnce(t *testing.T) {
 	}
 	answer, banner := make(chan result, 1), make(chan result, 1)
 	go func() {
-		status, out := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Retry as proposed"})
+		status, out := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Accept as it is"})
 		answer <- result{status, out}
 	}()
 	w.waiters(1)
@@ -346,7 +346,7 @@ func TestTheOwnerChangingDuringAnAnswerRefusesIt(t *testing.T) {
 	}
 	answered := make(chan int, 1)
 	go func() {
-		status, _ := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Retry as proposed"})
+		status, _ := w.callAs(ana, "/internal/questions/"+q+"/answer", map[string]any{"text": "Accept as it is"})
 		answered <- status
 	}()
 	w.waiters(1)

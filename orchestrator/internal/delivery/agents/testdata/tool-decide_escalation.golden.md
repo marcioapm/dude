@@ -1,6 +1,6 @@
 # decide_escalation
 
-Decide the escalation the delivery is stopped at (retry, accept, waive, resume, done, wait or stop, as it offers), with a note: only after the task's owner answered your question about this escalation in their own words, handing it to you; otherwise the person decides on the banner. A choice they pick decides it without you, except a waiver or an acceptance of a failed test, which is never a choice: it needs the person's own words. Allowed once per escalation.
+Decide the escalation the delivery is stopped at (retry, accept, amend, waive, resume, done, wait or stop, as it offers), only after the owner answered your question about this escalation in their own words. Otherwise the person decides on the banner. Actions requiring a note cannot be offered as choices: stuck retry; not_converging retry, accept or amend; accepting a failed test; waiving a check. Use the person's own direction or reason, not permission to choose for them. Allowed once per escalation.
 
 ```json
 {
@@ -8,11 +8,11 @@ Decide the escalation the delivery is stopped at (retry, accept, waive, resume, 
   "properties": {
     "action": {
       "type": "string",
-      "description": "one of the escalation's actions: retry, accept, resume, done, wait or stop"
+      "description": "one of the escalation's actions: retry, accept, amend, waive, resume, done, wait or stop; for not_converging, retry fixes differently, accept accepts only the named risks, and amend replaces the named findings' criteria with the person's words before fixing"
     },
     "note": {
       "type": "string",
-      "description": "what you decided and why, kept with the task for every agent from here on"
+      "description": "what you decided and why, kept with the task for later agents; required-note actions need the person's own direction or reason in their answer or this note; amend uses their words as the replacement criterion"
     }
   },
   "required": [

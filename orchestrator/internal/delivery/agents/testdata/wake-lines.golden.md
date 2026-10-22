@@ -32,15 +32,15 @@ Your review · security Run run_rev failed: lux: the host went away xxxxxxxxxxxx
 
 ## escalated-stuck
 
-Escalated to a person: stuck. Its actions: retry, accept, stop. Only the person decides: explain and propose, with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets you decide_escalation.
+Escalated to a person: stuck. Its actions: retry, accept, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. Retry needs the person's direction for the next fix, not a bare choice.
 
 ## escalated-test-failed
 
-Escalated to a person: test failed criteria. Its actions: retry, accept. Only the person decides: explain and propose, with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.
+Escalated to a person: test failed criteria. Its actions: retry, accept. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.
 
 ## escalated-test-blocked
 
-Escalated to a person: test blocked. Its actions: retry, waive. Only the person decides: explain and propose, with ask_person offering these actions as choices (the banner works too). A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.
+Escalated to a person: test blocked. Its actions: retry, waive. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.
 
 ## escalation-answered
 

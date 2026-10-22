@@ -147,3 +147,14 @@ func TestGoldenPublishAndUnblockWords(t *testing.T) {
 	add("picked-up-restart-nothing", render(pickedUpTmpl, pickedUp{Who: "Ana", Attempt: 3, Earlier: &earlierAttempt{N: 2}}))
 	goldenTexts(t, "publish-unblock-words", lines)
 }
+
+// The conductor's wake when a review loop escalates as not converging or
+// stuck, with the actions the escalation itself offers.
+func TestGoldenEscalatedConvergenceWakes(t *testing.T) {
+	notConverging := &Escalation{Reason: ReasonNotConverging, Step: "fix", Detail: LoopExit{FindingIDs: []string{"fnd_1", "fnd_2"}}}
+	stuck := &Escalation{Reason: "stuck", Step: "fix"}
+	goldenTexts(t, "wake-escalated-convergence", [][2]string{
+		{"not-converging", escalatedLine(notConverging.Reason, notConverging.Actions(), notConverging.findingIDs()...)},
+		{"stuck", escalatedLine(stuck.Reason, stuck.Actions(), stuck.findingIDs()...)},
+	})
+}
