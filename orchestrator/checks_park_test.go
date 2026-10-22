@@ -284,13 +284,23 @@ func TestAnAttemptWaiverOfAParkedHeldRunPushesAndIsCarried(t *testing.T) {
 	}
 }
 
-// Stop ends the parked Run: never resumed, its work unpushed.
+// Stop ends the parked Run as the API's stop of a paused one does, not
+// kept: never resumed, its work unpushed, a steer it never read failed.
 func TestStopEndsAParkedHeldRunWithoutAResume(t *testing.T) {
 	w := newWorld(t)
 	wi, runID := w.parkedHeld()
 	owner, _, _ := w.people(wi)
+	if status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "while you are parked"}); status != 201 {
+		t.Fatalf("steer: %d %v", status, body)
+	}
 	if code, body := w.decide(owner, wi, "stop", ""); code != 200 {
 		t.Fatalf("stop: %d %v", code, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.aborted'`, runID); n != 1 {
+		t.Errorf("%d run.aborted events, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND failed_at IS NOT NULL AND delivered_at IS NULL`, runID); n != 1 {
+		t.Errorf("%d unread steers failed, want 1", n)
 	}
 	w.until("the task to be aborted", func() bool { return w.taskStatus(wi) == "aborted" })
 	w.until("lux to end the Run", func() bool {

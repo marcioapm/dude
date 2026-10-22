@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -155,13 +156,33 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		_, err = ledger.Append(ctx, tx, ref.Event(EvRunChecksJudged, ledger.ActorHuman, judged))
 		return err
 	case "stop":
-		// A Run parked while it was held is ended here, not resumed: a
-		// paused Run is resumed once nothing holds it, before its control is
-		// read.
-		_, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = $2,
+		// A Run parked while it was held is aborted here, as the API's stop
+		// aborts a paused one, but not kept: a paused Run is resumed once
+		// nothing holds it, before its control is read.
+		const why = "a person stopped it at the checks gate"
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status::text FROM runs WHERE id = $1 FOR UPDATE`, id).Scan(&status); db.IsNotFound(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = $2,
 			status = CASE WHEN status = 'paused' THEN 'aborted' ELSE status END,
 			ended_at = CASE WHEN status = 'paused' THEN now() ELSE ended_at END
-			WHERE id = $1 AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, id, "a person stopped it at the checks gate")
+			WHERE id = $1 AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, id, why); err != nil {
+			return err
+		}
+		if status != "paused" {
+			return nil
+		}
+		if err := FailUnreadTx(ctx, tx, ref, time.Time{}, UnreadRunAborted); err != nil {
+			return err
+		}
+		ev := ref.Event("run.aborted", ledger.ActorHuman, map[string]any{"reason": why})
+		if person != "" {
+			ev.ActorID = person
+		}
+		_, err := ledger.Append(ctx, tx, ev)
 		return err
 	}
 	return nil
