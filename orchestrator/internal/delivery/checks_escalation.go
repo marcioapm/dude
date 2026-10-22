@@ -207,6 +207,7 @@ type attemptWaiver struct {
 // Run's task and attempt decided before cursor before (the end of the
 // judged turn), read once per judgement.
 func AttemptWaiversTx(ctx context.Context, tx pgx.Tx, runID string, before int64) (AttemptWaivers, error) {
+	// event_type is a literal so generic plans can prove events_run_checks_decided_idx's predicate.
 	rows, err := tx.Query(ctx, `SELECT e.run_id, src.phase::text, e.cursor, e.payload
 		FROM runs judged JOIN runs src ON src.task_id = judged.task_id AND src.attempt = judged.attempt
 		JOIN events e ON e.run_id = src.id
