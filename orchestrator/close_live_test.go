@@ -147,6 +147,49 @@ func (w *world) assertWakesEnded(task string) {
 	}
 }
 
+// Archive of a task that has ended (done) but still holds a Run kept for a
+// resume lets it go at once, and settles what waited to wake its conductor.
+func TestArchivingAnEndedTaskLetsWhatWasKeptGo(t *testing.T) {
+	w := conducting(t)
+	task, ana, conductor := w.stoppedAtDecision()
+	w.heldWake(task)
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'done' WHERE id = $1`, task)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/archive", map[string]any{}); status != 200 {
+		t.Fatalf("archive: %d %v", status, body)
+	}
+	if !w.released(conductor) {
+		t.Errorf("the kept conductor is still kept after the archive")
+	}
+	w.assertWakesEnded(task)
+	w.until("the kept lux Run to be cancelled", func() bool { return w.luxRunFor(conductor).Cancelled })
+}
+
+// A Close refused after it stopped what was live (a duplicate of itself)
+// rolls the stop back: the conductor still runs, nothing is aborted, and
+// no run.aborted is recorded.
+func TestARefusedCloseLeavesTheLiveTaskRunning(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "duplicate", "duplicateOf": w.keyOf(task)})
+	if status < 400 || status >= 500 {
+		t.Fatalf("closing a task as its own duplicate: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND NOT keep AND control = 'none'`, conductor); n != 1 {
+		t.Errorf("the conductor after a refused close: %s", w.str(`SELECT status || ' ' || keep || ' ' || control FROM runs WHERE id = $1`, conductor))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'aborted'`, task); n != 0 {
+		t.Errorf("%d Runs aborted by a refused close", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type IN ('run.aborted', 'task.closed')`, task); n != 0 {
+		t.Errorf("a refused close recorded %d run.aborted or task.closed", n)
+	}
+	if s := w.taskStatus(task); s == "aborted" {
+		t.Errorf("a refused close aborted the task")
+	}
+}
+
 // A pull request dude opened: closed on GitHub with a comment saying why
 // when asked; the task in review closes either way (Q8).
 func TestClosingInReviewClosesDudesPullRequestWhenAsked(t *testing.T) {

@@ -213,6 +213,36 @@ func TestAbortingTheConductorLetsItsChildGo(t *testing.T) {
 	}
 }
 
+// Stop while an escalation waits on a person decides it as stop does: the
+// conductor's question about it is closed with decision stop, the delivery
+// keeps it as where it stopped, and Try again is offered at its step.
+func TestStoppingAtAnEscalationClosesItsQuestion(t *testing.T) {
+	w, task := stuck(t)
+	ana := w.ownedBy(task, "Ana")
+	w.must(task, "ask_person", escalationQuestion)
+	q := w.conductorQuestion(task)
+	step := w.str(`SELECT state->'escalation'->>'step' FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, task)
+	if step == "" {
+		t.Fatal("no escalation step")
+	}
+	w.stop(ana, task, map[string]any{})
+	if n := w.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'cancelled'`, q); n != 1 {
+		t.Errorf("the escalation's question is still open")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.closed'
+		AND payload->>'questionId' = $2 AND payload->>'by' = 'decision' AND payload->>'action' = 'stop'`, task, q); n != 1 {
+		t.Errorf("%d question.closed events with decision stop: %s", n, w.str(`SELECT COALESCE(string_agg(event_type || ' ' || payload::text, E'\n' ORDER BY cursor), '')
+			FROM events WHERE task_id = $1 AND (event_type LIKE 'question.%' OR payload::text LIKE '%'||$2||'%')`, task, q))
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'stopped'->>'step' = $2
+		AND state->'escalation' IS NULL`, task, step); n != 1 {
+		t.Errorf("the delivery after the stop: %s", w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, task))
+	}
+	if got, _ := w.options(task); !slices.Contains(got, "retry") {
+		t.Fatalf("a task stopped at its escalation offers %v", got)
+	}
+}
+
 // taskChild inserts a live child the conductor started, as start_child
 // leaves one before lux has it.
 func (w *world) taskChild(task, conductor string) string {

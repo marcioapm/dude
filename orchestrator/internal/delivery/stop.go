@@ -136,7 +136,10 @@ func (s Stopped) All() []string {
 // Locks as the writers it races take them: the Chat and the conductor's
 // row (lockChild's prefix), the delivery and the task (LockEscalationTx),
 // then the phase Runs (RestartRunTx's order after the task) and each child.
-func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep bool) (Stopped, error) {
+// locked, when given, runs once the delivery and task are locked and before
+// anything stops: a refusal there stops nothing, and what it closes is
+// closed while the Runs are still live.
+func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep bool, locked func(Stopped) error) (Stopped, error) {
 	var out Stopped
 	if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&out.ProjectID); err != nil {
 		return out, err
@@ -150,6 +153,11 @@ func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep 
 	}
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, taskID).Scan(&out.TaskStatus); err != nil {
 		return out, err
+	}
+	if locked != nil {
+		if err := locked(out); err != nil {
+			return out, err
+		}
 	}
 	if out.PhaseRuns, err = StopPhaseRunsTx(ctx, tx, org, out.ProjectID, taskID, "", reason, keep); err != nil {
 		return out, err
@@ -168,21 +176,17 @@ func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep 
 
 // HaltDeliveryTx stops the task's live delivery for a person's Stop, so a
 // pick-up can carry it on (Recover): the conductor stopped with it named
-// (Halt), an escalation waiting on a person stopped as Stop decides one
-// (its questions closed, State.Stopped), and the workflow aborted. The
-// caller holds the delivery's row (LoadDelivery).
+// (Halt), an escalation waiting on a person stopped (StopEscalationTx, if
+// the caller has not already), and the workflow aborted. The caller holds
+// the delivery's row (LoadDelivery).
 func HaltDeliveryTx(ctx context.Context, tx pgx.Tx, org string, d *Delivery, conductor, why, actorType, actorID string) error {
+	if err := StopEscalationTx(ctx, tx, org, d, actorType, actorID); err != nil {
+		return err
+	}
 	st := d.State
 	st.Halt = &Halt{Conductor: conductor}
 	if len(st.PendingRunIDs) == 0 {
 		st.Halt.At = d.Step
-	}
-	if e := st.Escalation; e != nil && e.Decided == nil {
-		if err := closeEscalationQuestionsTx(ctx, tx, org, st.ProjectID, st.TaskID, EscalationKey(d.WorkflowID, st.Escalations),
-			EscalationDecision{Action: "stop", ActorType: actorType, ActorID: actorID}); err != nil {
-			return err
-		}
-		st.Stopped, st.Escalation = e, nil
 	}
 	raw, err := json.Marshal(st)
 	if err != nil {
@@ -193,4 +197,22 @@ func HaltDeliveryTx(ctx context.Context, tx pgx.Tx, org string, d *Delivery, con
 	}
 	d.State = st
 	return workflow.AbortTx(ctx, tx, d.WorkflowID, why)
+}
+
+// StopEscalationTx decides an escalation waiting on a person as Stop does:
+// the conductor's questions about it closed with decision stop, and it is
+// kept as where the delivery stopped (State.Stopped), in d.State for the
+// caller to write. Before the conductor stops: its end cancels its open
+// questions with no decision recorded.
+func StopEscalationTx(ctx context.Context, tx pgx.Tx, org string, d *Delivery, actorType, actorID string) error {
+	e := d.State.Escalation
+	if e == nil || e.Decided != nil {
+		return nil
+	}
+	if err := closeEscalationQuestionsTx(ctx, tx, org, d.State.ProjectID, d.State.TaskID, EscalationKey(d.WorkflowID, d.State.Escalations),
+		EscalationDecision{Action: "stop", ActorType: actorType, ActorID: actorID}); err != nil {
+		return err
+	}
+	d.State.Stopped, d.State.Escalation = e, nil
+	return nil
 }

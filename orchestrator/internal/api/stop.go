@@ -64,14 +64,16 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 		if err := mayDecide(r.Context(), tx, taskID, p); err != nil {
 			return err
 		}
-		stopped, err := delivery.StopAllTx(r.Context(), tx, org, taskID, note, true)
+		stopped, err := delivery.StopAllTx(r.Context(), tx, org, taskID, note, true, func(locked delivery.Stopped) error {
+			if !inProgress(locked.TaskStatus, locked.Delivery) {
+				return fail(http.StatusConflict, "not_in_progress", "task %s is %s: only a task in progress can be stopped", taskID, locked.TaskStatus)
+			}
+			return delivery.StopEscalationTx(r.Context(), tx, org, locked.Delivery, p.ActorType, p.Actor)
+		})
 		if err != nil {
 			return err
 		}
 		d := stopped.Delivery
-		if !inProgress(stopped.TaskStatus, d) {
-			return fail(http.StatusConflict, "not_in_progress", "task %s is %s: only a task in progress can be stopped", taskID, stopped.TaskStatus)
-		}
 		decider := d.State.Decider
 		if decider == "" {
 			decider = delivery.DeciderPolicy

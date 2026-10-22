@@ -79,7 +79,7 @@ func lockLifecycleTask(ctx context.Context, tx pgx.Tx, org, taskID, why string) 
 	if !exists {
 		return t, Stopped{}, lifecycleRefuse("not_found", "task %s not found", taskID)
 	}
-	stopped, err := StopAllTx(ctx, tx, org, taskID, why, false)
+	stopped, err := StopAllTx(ctx, tx, org, taskID, why, false, nil)
 	if err != nil {
 		return t, stopped, err
 	}
@@ -492,6 +492,9 @@ func ArchiveTaskTx(ctx context.Context, tx pgx.Tx, org string, in ArchiveInput) 
 		causation = closed.eventID
 	} else {
 		if err := ReleaseKeptTx(ctx, tx, t.ID); err != nil {
+			return out, err
+		}
+		if err := EndWakesTx(ctx, tx, t.ID); err != nil {
 			return out, err
 		}
 		if s := stopped.All(); len(s) > 0 {

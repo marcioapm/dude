@@ -413,6 +413,56 @@ func TestAMentionOnAStoppedTaskIsNotPassedOn(t *testing.T) {
 	}
 }
 
+// sweepTakes says whether the sweep would select the task's pending reasons
+// now (delivery.Wakeable, over a window of a minute).
+func (w *world) sweepTakes(task string) bool {
+	return w.count(`SELECT count(*) FROM conductor_wakes c WHERE c.task_id = $2 AND `+delivery.Wakeable, 60, task) > 0
+}
+
+// The sweep's selection leaves a halted task out, so its held reasons
+// cannot fill the batch, and takes it again once it is picked up.
+func TestTheSweepLeavesAStoppedTasksReasonsUntilItsPickUp(t *testing.T) {
+	w := conducting(t)
+	task, ana, _ := w.stoppedAtDecision()
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES('cwk_sweep', $1, $2, 'decision', 'decision:sweep', 'A decision waits.', now() - interval '1 hour')`, w.org, task)
+	if w.sweepTakes(task) {
+		t.Fatal("the sweep selects a stopped task's reasons")
+	}
+	w.pickUp(ana, task, map[string]any{"action": "resume"})
+	if !w.sweepTakes(task) {
+		t.Fatal("the sweep leaves a picked-up task's reasons")
+	}
+}
+
+// Woken directly while halted, the task's conductor is neither started nor
+// told: WakeConductorTx answers none and its reason stays pending.
+func TestWakingAStoppedTaskStartsNoConductor(t *testing.T) {
+	w := conducting(t)
+	task, _, _ := w.stoppedAtDecision()
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES('cwk_direct', $1, $2, 'decision', 'decision:direct', 'A decision waits.', now() - interval '1 hour')`, w.org, task)
+	var woken string
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		if err := delivery.LockChat(context.Background(), tx, task); err != nil {
+			return err
+		}
+		woken, err = delivery.WakeConductorTx(context.Background(), tx, w.org, task, 0)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if woken != "" {
+		t.Errorf("woke %s on a stopped task", woken)
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("waking a stopped task started a conductor: %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_direct' AND delivered_at IS NULL`); n != 1 {
+		t.Errorf("the reason was delivered while the task was stopped")
+	}
+}
+
 func slicesContainsSub(items []string, want string) bool {
 	for _, s := range items {
 		if strings.Contains(s, want) {
