@@ -941,7 +941,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <div className="taskSessions">
               {openRun ? (
                 <FeedbackProvider value={sessionFeedback}><SessionPickerState key={openRun}>
-                  <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
+                  <RunScreen client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
                     stopped={openStopped} titleSelector={sessionSelector} stopTask={stopFromSession} />
                 </SessionPickerState></FeedbackProvider>
               ) : null}
