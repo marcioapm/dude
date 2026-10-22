@@ -32,23 +32,27 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 	}
 	// Range containment matches rangeFindings: earlier anchors may be a subset
 	// of the current range after a fix starts changing another repository.
-	// CTE row estimates are 1, so a join between two CTEs plans as a nested
-	// loop that rescans one per row of the other. Each review's facts are
-	// therefore one UNION ALL grouped by review id, the parent fix is a
-	// primary-key lookup, and findings are joined once as a hash of the
-	// sent-and-judged ids of all reviews.
+	// Row estimates after filters on CTE columns are far below the real
+	// counts, so any findings join inside a per-review loop rescans findings
+	// once per review. shown therefore materializes every review's
+	// sent-and-judged ids first, and findings is hash-joined to it once.
+	// facts columns: id, fix, verdicts, fix_at, review_at, shown, fixed,
+	// raised, raised_open. The first branch gives exactly one row per review
+	// (r.id and x.id are primary keys), which max(fix) and verdicts[1] rely on;
+	// HAVING count(fix) > 0 keeps only those reviews, dropping fix-caused
+	// findings of reviews outside a fix round.
 	rows, err := tx.Query(ctx, `WITH attempt_runs AS MATERIALIZED (
 		SELECT id, attempt, phase, status, replaced_by, parent_run_id, finding_ids, verdicts, review_range, created_at
 		FROM runs WHERE task_id = $1
 		AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
 	), origins AS MATERIALIZED (
-		SELECT COALESCE(array_agg(origin.id), '{}') ids FROM attempt_runs origin
+		SELECT origin.id FROM attempt_runs origin
 		WHERE origin.phase = 'review' AND origin.status = 'completed' AND origin.replaced_by IS NULL
 		AND ($4::jsonb = 'null'::jsonb OR (origin.review_range->>'of' = $4::jsonb->>'of'
 			AND ($4::jsonb->'base') @> (origin.review_range->'base')))
 	), findings AS MATERIALIZED (
-		SELECT f.id, f.run_id, f.status, f.severity, f.caused_by_fix FROM review_findings f, origins o
-		WHERE f.task_id = $1 AND f.run_id = ANY(o.ids)
+		SELECT f.id, f.run_id, f.status, f.severity, f.caused_by_fix FROM review_findings f
+		JOIN origins o ON o.id = f.run_id WHERE f.task_id = $1
 	), reviews AS MATERIALIZED (
 		SELECT r.id, x.id fix, r.verdicts, x.finding_ids sent, r.finding_ids judged,
 			x.created_at fix_at, r.created_at review_at
@@ -59,6 +63,9 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 			AND ($6::text IS NULL OR x.branch = $6)
 			AND ($4::jsonb = 'null'::jsonb OR (r.review_range->>'of' = $4::jsonb->>'of'
 				AND ($4::jsonb->'base') @> (r.review_range->'base')))
+	), shown AS MATERIALIZED (
+		SELECT v.id, v.verdicts, s.id finding
+		FROM reviews v CROSS JOIN LATERAL (SELECT unnest(v.sent) INTERSECT SELECT unnest(v.judged)) s(id)
 	), facts AS (
 		SELECT v.id, v.fix, v.verdicts, v.fix_at, v.review_at,
 			NULL::text shown, false fixed, NULL::text raised, NULL::text raised_open
@@ -66,8 +73,7 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 		UNION ALL
 		SELECT v.id, NULL, NULL, NULL, NULL, CASE WHEN f.status = 'open' THEN f.id END,
 			v.verdicts->>f.id = 'fixed' AND f.severity::text = ANY($5::text[]), NULL, NULL
-		FROM reviews v CROSS JOIN LATERAL (SELECT unnest(v.sent) INTERSECT SELECT unnest(v.judged)) s(id)
-		JOIN findings f ON f.id = s.id
+		FROM shown v JOIN findings f ON f.id = v.finding
 		UNION ALL
 		SELECT f.run_id, NULL, NULL, NULL, NULL, NULL, false, f.id, CASE WHEN f.status = 'open' THEN f.id END
 		FROM findings f WHERE f.caused_by_fix AND f.severity::text = ANY($5::text[])
