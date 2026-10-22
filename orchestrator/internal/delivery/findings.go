@@ -39,26 +39,69 @@ file, and a parser that accepts exactly what we asked for is easier to reason
 about than one that accepts all of YAML and then has to reject most of it.
 */
 func ParseFindings(output string) []Finding {
-	cleaned := fenceLine.ReplaceAllString(output, "")
-
 	// Non-nil, so a review that found nothing encodes as `[]` rather than
 	// `null`. A nil slice would be rejected by the control plane, which is
 	// the common case — most reviews find nothing.
 	findings := []Finding{}
-	for _, doc := range strings.Split(cleaned, "\n---") {
-		if isVerdicts(doc) {
+	for _, fields := range replyDocuments(output) {
+		// A question goes to a person, never a fixer: one that also carries
+		// a title and a severity (formats mixed) is still no finding.
+		if isQuestion(fields) {
 			continue
 		}
-		if f, ok := parseFinding(doc); ok {
+		if f, ok := parseFinding(fields); ok {
 			findings = append(findings, f)
 		}
 	}
 	return findings
 }
 
-func parseFinding(doc string) (Finding, bool) {
-	fields := readFields(doc)
+// replyDocuments reads the fields of each document in a reviewer's reply
+// other than its verdicts.
+func replyDocuments(output string) []map[string]string {
+	var docs []map[string]string
+	for _, doc := range strings.Split(fenceLine.ReplaceAllString(output, ""), "\n---") {
+		if !isVerdicts(doc) {
+			docs = append(docs, readFields(doc))
+		}
+	}
+	return docs
+}
 
+func isQuestion(fields map[string]string) bool { return fields["question"] != "" }
+
+// ReviewQuestion is a fact a reviewer could not establish and a person can:
+// About is the n of `about: F<n>` (an earlier finding it was shown), 0 for none.
+type ReviewQuestion struct {
+	Question, Why, Evidence, NeededFrom string
+	About                               int
+}
+
+var aboutFinding = regexp.MustCompile(`(?i)^F(\d+)\b`)
+
+// ParseQuestions reads a reviewer's question documents, in reply order; one
+// with an empty question is dropped.
+func ParseQuestions(output string) []ReviewQuestion {
+	var questions []ReviewQuestion
+	for _, fields := range replyDocuments(output) {
+		if !isQuestion(fields) {
+			continue
+		}
+		about := 0
+		if m := aboutFinding.FindStringSubmatch(fields["about"]); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+				about = n
+			}
+		}
+		questions = append(questions, ReviewQuestion{
+			Question: fields["question"], Why: fields["why_it_matters"], Evidence: fields["evidence_checked"],
+			NeededFrom: fields["needed_from"], About: about,
+		})
+	}
+	return questions
+}
+
+func parseFinding(fields map[string]string) (Finding, bool) {
 	// A finding with no title says nothing actionable, whatever else it has.
 	title := fields["title"]
 	if title == "" {

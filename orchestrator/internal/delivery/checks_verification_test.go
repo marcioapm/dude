@@ -322,7 +322,7 @@ func TestATesterIsToldItsAttemptsWriterChecks(t *testing.T) {
 			return err
 		}
 		round, err = roundMessageTx(ctx, tx, PhaseRun{Phase: PhaseTest, TaskID: "wi_wc", Attempt: 2, BaseRefs: map[string]string{"api": b}},
-			predecessorRow{Predecessor: Predecessor{ID: "run_wct", BaseRefs: map[string]string{"api": a}}, Phase: PhaseTest})
+			predecessorRow{Predecessor: Predecessor{ID: "run_wct", BaseRefs: map[string]string{"api": a}}, Phase: PhaseTest}, "")
 		return err
 	}); err != nil {
 		t.Fatal(err)

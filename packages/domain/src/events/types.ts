@@ -446,6 +446,8 @@ export const EventTypes = {
   // Review
   ReviewCompleted: "review.completed",
   FindingResolved: "review.finding_resolved",
+  /** A reviewer's question stored, once per question. Payload: `{ questionId, n, category, findingId?, neededFrom }`. */
+  ReviewQuestionRaised: "review.question_raised",
   FeedbackSubmitted: "feedback.submitted",
   FeedbackDelivered: "feedback.delivered",
   FeedbackReplied: "feedback.replied",

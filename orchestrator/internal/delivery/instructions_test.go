@@ -106,7 +106,7 @@ func TestChildContractFollowsPublishes(t *testing.T) {
 func TestInstructionsAspectsUseSharedSeverity(t *testing.T) {
 	const definition = "Severity: `blocking` is wrong behaviour on a supported path, data loss, a security boundary crossed, or an acceptance criterion not met; `high` will cause a real defect or outage under realistic use; `medium` is a real but bounded problem worth fixing; `low` is minor; `note` is an observation, not a request."
 	const reference = "Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`."
-	for _, aspect := range []string{"api", "correctness", "database", "frontend", "performance", "security", "tests"} {
+	for _, aspect := range reviewerOrder {
 		for mode, text := range underEveryMode("reviewer", aspect, InstructionsInput{Tools: true}) {
 			t.Run(aspect+"/"+mode, func(t *testing.T) {
 				for _, want := range []string{definition, reference, "# Your aspect: " + aspect} {

@@ -86,6 +86,21 @@ func TestAwaitPRFixReplayChargesOnce(t *testing.T) {
 	}
 }
 
+// A refused loop that opened with its simplifier retries with a new review
+// budget, as one that opened with a fix does: the retry's first review round
+// is not the last the policy allows.
+func TestARefusedLoopsRetryGetsANewReviewBudget(t *testing.T) {
+	for _, step := range []string{"fix", "simplify"} {
+		st := &State{Policy: DefaultPolicy()}
+		st.Iteration = st.Policy.MaxReviewIterations - 1
+		retry(st, step, &Escalation{Reason: ReasonPullRequestMoved})
+		// review counts its round, then weighs the loop's exit.
+		if e := Exit(st.Policy, []FindingState{finding("blocking", "open", 0, "a")}, st.Iteration+1); e != nil {
+			t.Errorf("%s retry: its first review round exits %q at iteration %d", step, e.Reason, st.Iteration+1)
+		}
+	}
+}
+
 func TestLegacyMovedPRFixRefundsItsStartCharge(t *testing.T) {
 	st := &State{PRFixKey: 3, PRIteration: 1, PRFixes: map[string]int{"target": 5}, PRFeedback: []forge.ActionableFeedback{{Repo: "target"}}}
 	retry(st, "prFix", &Escalation{Reason: ReasonPullRequestMoved})

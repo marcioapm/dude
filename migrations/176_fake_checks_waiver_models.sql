@@ -1,10 +1,11 @@
--- 175_fake_checks_waiver_models.sql — the scripted agent's models for a
+-- 176_fake_checks_waiver_models.sql — the scripted agent's models for a
 -- person's waiver later Runs carry: fake/checks-preexisting (every writer
 -- reports one command failing the same way), fake/checks-new-failure (the
 -- same command failing with a further failure) and
 -- fake/checks-other-failure (another command failing) are test models a
--- tier may request. This check replaces 172's whole, keeping every model
--- it allowed.
+-- tier may request. This check replaces the one standing after
+-- 175_review_questions, which is 172's unchanged, keeping every model it
+-- allowed.
 
 ALTER TABLE model_tiers DROP CONSTRAINT model_tiers_model_check;
 ALTER TABLE model_tiers ADD CONSTRAINT model_tiers_model_check

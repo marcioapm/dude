@@ -164,7 +164,7 @@ export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low"
  * The reviewer flavours the factory has prompts for. A project names the
  * ones every delivery runs; others join when a change touches their paths.
  */
-export const REVIEWER_CATEGORIES = ["correctness", "tests", "security", "database", "api", "frontend", "performance"] as const;
+export const REVIEWER_CATEGORIES = ["correctness", "tests", "security", "database", "api", "frontend", "documentation", "performance"] as const;
 export type ReviewerCategory = (typeof REVIEWER_CATEGORIES)[number];
 
 /** A reviewer flavour as a person reads it. */
@@ -175,6 +175,7 @@ export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
   database: "Database",
   api: "API",
   frontend: "Frontend",
+  documentation: "Documentation",
   performance: "Performance",
 };
 
@@ -853,6 +854,32 @@ export const findingSchema = z.object({
   createdAt: z.string(),
 });
 export type Finding = z.infer<typeof findingSchema>;
+
+/**
+ * A reviewer's question (review_questions): a fact it could not establish
+ * from the code, for a person. Never a finding; never sent to a fixer.
+ */
+export const reviewQuestionStatusSchema = z.enum(["open", "answered", "withdrawn"]);
+export type ReviewQuestionStatus = z.infer<typeof reviewQuestionStatusSchema>;
+
+export const reviewQuestionSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  /** The review Run that asked; null once that Run is gone. */
+  runId: z.string().nullable(),
+  /** The asking reviewer's flavour. */
+  category: z.string(),
+  /** The earlier finding it is about, when it named one. */
+  findingId: z.string().nullable(),
+  question: z.string(),
+  whyItMatters: z.string(),
+  evidenceChecked: z.string(),
+  neededFrom: z.string(),
+  status: reviewQuestionStatusSchema,
+  answer: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type ReviewQuestion = z.infer<typeof reviewQuestionSchema>;
 
 /**
  * The tester's verdict on one acceptance criterion, as dude recorded it

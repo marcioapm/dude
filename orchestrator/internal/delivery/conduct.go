@@ -645,6 +645,10 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 // the conductor's dismissal.
 const EvFindingResolved = "review.finding_resolved"
 
+// EvReviewQuestionRaised is a reviewer's question stored (review_questions),
+// once per question.
+const EvReviewQuestionRaised = "review.question_raised"
+
 // DismissedByConductor begins the resolution note of a finding the
 // conductor dismissed: accepted, by the conductor and not a person.
 const DismissedByConductor = "Dismissed by the conductor: "
