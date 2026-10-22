@@ -198,6 +198,21 @@ def test_close_without_close_pull_request_leaves_an_adopted_pull_request_open(cl
     assert not [e for e in events if e["eventType"] == "pull_request.action" and e["payload"].get("action") == "close"]
 
 
+def test_close_without_close_pull_request_leaves_dudes_own_pull_request_open(client: ApiClient, forge_project: dict, fake_github):
+    task = _task(client, forge_project, "Greet in Galician")
+    pr = _in_review_with_a_pull_request(client, task)
+    resp = client.post(f"/v1/tasks/{task['id']}/close", {"resolution": "wont_do", "closePullRequest": False})
+    assert resp.status_code == 200, resp.text
+
+    assert _get(client, task["id"])["resolution"] == "wont_do"
+    assert fake_github.pulls[pr["number"]].state == "open" and fake_github.state_changes == []
+    assert fake_github.pulls[pr["number"]].comments == []
+    events = client.events(taskId=task["id"], limit=500)
+    [closed] = [e for e in events if e["eventType"] == "task.closed"]
+    assert closed["payload"]["pullRequestCloseRequested"] is False
+    assert not [e for e in events if e["eventType"] == "pull_request.action" and e["payload"].get("action") == "close"]
+
+
 def test_archived_tasks_leave_navigation_and_list_tasks(client: ApiClient, forge_project: dict, owner_dsn: str):
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
