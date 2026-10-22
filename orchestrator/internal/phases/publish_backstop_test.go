@@ -14,7 +14,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-const backstopRefusal = "an open pull request's branch moves only by promotion"
+const backstopRefusal = "an open pull request's branch moves only by promotion of a reviewed candidate: use start_phase fix with a note saying what to change"
 
 // backstop is a writer Run of w whose push of one commit to "target" has
 // landed, finished against a fake GitHub over a; the task branch exists

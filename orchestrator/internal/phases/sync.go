@@ -2491,7 +2491,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			continue // nothing committed there
 		}
 		if prOpen {
-			return nil, "", fmt.Errorf("not moving %s in %s: an open pull request's branch moves only by promotion", branch, repo.Name)
+			return nil, "", fmt.Errorf("not moving %s in %s: an open pull request's branch moves only by promotion of a reviewed candidate: use start_phase fix with a note saying what to change", branch, repo.Name)
 		}
 		if gh == nil {
 			var err error
