@@ -16,7 +16,7 @@ import { App } from "../src/App.tsx";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { setPlaceOrganization } from "../src/place.ts";
-import { HelpScreen, helpSectionId } from "../src/screens/HelpScreen.tsx";
+import { HelpScreen, docResult, helpSectionId } from "../src/screens/HelpScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -31,6 +31,12 @@ const PAGES: Record<string, HelpPage> = {
     { anchor: "searching", heading: "Searching", text: "Search finds by **words**." }] },
   settings: { slug: "settings", title: "Settings", sections: [{ anchor: "delivery", heading: "Delivery", text: "The delivery policy." }] },
 };
+
+test("a result id keeps everything after the first hash in the anchor", () => {
+  expect(docResult({ id: "memory#a#b", title: "Memory and search — Heading", snippet: "text" }, Object.values(PAGES))).toEqual({
+    page: "memory", anchor: "a#b", heading: "Heading", pageTitle: "Memory and search", snippet: "text",
+  });
+});
 
 class Helping extends FixtureClient {
   read: string[] = [];

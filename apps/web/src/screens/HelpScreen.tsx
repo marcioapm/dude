@@ -51,7 +51,9 @@ function scrollerOf(el: HTMLElement): HTMLElement {
 
 /** A guide section's id (`<page>#<anchor>`) and title (`<page> — <heading>`) as Help shows them. */
 export function docResult(r: { readonly id: string; readonly title: string; readonly snippet: string }, pages: ReadonlyArray<HelpPage>): DocSearchResult {
-  const [page = "", anchor = ""] = r.id.split("#");
+  const hash = r.id.indexOf("#");
+  const page = hash < 0 ? r.id : r.id.slice(0, hash);
+  const anchor = hash < 0 ? "" : r.id.slice(hash + 1);
   const pageTitle = pages.find((p) => p.slug === page)?.title ?? r.title.split(" — ")[0] ?? page;
   const heading = r.title.startsWith(`${pageTitle} — `) ? r.title.slice(pageTitle.length + 3) : anchor ? r.title : "";
   return { page, anchor, heading, pageTitle, snippet: r.snippet };
