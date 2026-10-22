@@ -1,6 +1,7 @@
 package guide
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,13 +32,7 @@ func Rows(ps []Page) []Row {
 		}
 	}
 	slices.SortFunc(out, func(a, b Row) int {
-		switch {
-		case a.ID < b.ID:
-			return -1
-		case a.ID > b.ID:
-			return 1
-		}
-		return 0
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return out
 }

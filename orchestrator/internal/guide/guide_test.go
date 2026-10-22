@@ -106,6 +106,20 @@ func TestCoversOf(t *testing.T) {
 	}
 }
 
+func TestGuideRowsAreOrderedByID(t *testing.T) {
+	rows := Rows([]Page{
+		{Slug: "z", Sections: []Section{{Anchor: "last"}, {Anchor: ""}}},
+		{Slug: "a", Sections: []Section{{Anchor: "second"}, {Anchor: "first"}}},
+	})
+	var ids []string
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	if want := []string{"a#first", "a#second", "z#", "z#last"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("row IDs %v, want %v", ids, want)
+	}
+}
+
 func TestBuiltInHelpTargetsExist(t *testing.T) {
 	count := 0
 	for _, p := range Pages() {
