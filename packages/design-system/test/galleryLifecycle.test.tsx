@@ -57,6 +57,13 @@ test("Chat's Who decides and Attempts blocks draw in every pane", async () => {
   expect(el.querySelectorAll('#ch-decider-field [data-testid="decider-field"]').length).toBe(4 * 4);
   expect(el.querySelector('#ch-attempts hr[aria-label]')!.getAttribute("aria-label")).toBe("Attempt 2, started by Ana");
   expect(el.querySelector('#ch-attempts [role="group"]')!.getAttribute("aria-label")).toBe("Attempt 1's conversation");
+  // The earlier Run line is read, not opened: no chevron in any pane's group.
+  const groups = [...el.querySelectorAll('#ch-attempts [role="group"]')];
+  expect(groups.length).toBeGreaterThan(0);
+  for (const g of groups) {
+    expect(g.querySelector('[data-role]')).not.toBeNull();
+    expect(g.querySelector('svg[data-icon="chevron-right"]')).toBeNull();
+  }
 });
 
 test("#nav-tree-epics: every epic row leads with one layers glyph; no task row has one", async () => {

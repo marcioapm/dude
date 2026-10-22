@@ -573,7 +573,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   conversation"), muted but whole: its text is reachable and selectable,
   never `inert`. Nothing in it can be answered or opened, by what renders:
   `EarlierTurns` provides `useEarlier()`, and a `ChatRunLine` inside is a
-  plain line (no button) while a `QuestionCard` shows no form or choices.
+  plain line (no button, no chevron) while a `QuestionCard` shows no form or choices.
 
 ### Peers (agents on an epic)
 

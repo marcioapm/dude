@@ -35,11 +35,12 @@ export interface ChatRunLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
  * sit under it.
  */
 export function ChatRunLine({ role, status, statusLabel, replacement, what, facts = [], onOpen, steers, className, ...rest }: ChatRunLineProps) {
-  // In an earlier attempt's turns the line is only read: it opens nothing.
+  // In an earlier attempt's turns the line is only read: it opens nothing,
+  // so it has no chevron.
   const earlier = useEarlier();
   const content = (
     <>
-      <Icon name="chevron-right" size={12} className={styles["chevron"]} />
+      {earlier ? null : <Icon name="chevron-right" size={12} className={styles["chevron"]} />}
       <AgentAvatar role={role} size="xs" live={status === "running"} />
       <span className={styles["role"]}>{ROLE_LABEL[role]}</span>
       {what ? <span className={styles["what"]}>· {what}</span> : null}
