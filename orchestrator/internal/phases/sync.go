@@ -2958,8 +2958,9 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			-- Still waiting on a person (a person resumed it anyway): the
 			-- grace period starts again.
 			waiting_since = CASE WHEN $3 THEN now() END,
-			turn_done_at = NULL, agent_busy_at = NULL, harness_state = harness_state - 'brokenTurn'
-			WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting)
+			turn_done_at = CASE WHEN $4 THEN turn_done_at END, agent_busy_at = CASE WHEN $4 THEN agent_busy_at END,
+			harness_state = harness_state - 'brokenTurn'
+			WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting, r.keepsTurn())
 		if err != nil {
 			return err
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -43,6 +44,11 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	}
 	st := d.State
 	if st.Escalation != nil {
+		// Held again after a person steered it during the hold: the steer's
+		// turn cleared the wait, so it is set again for the park.
+		if e := st.Escalation; e.Reason == ReasonChecksUnverified && e.Decided == nil && e.RunID() == runID {
+			return waitOnPersonTx(ctx, tx, runID)
+		}
 		return nil
 	}
 	detail := map[string]any{"runId": runID, "message": message, "rounds": rounds}
@@ -75,11 +81,22 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 		awaiting_signals = '["human.decision"]', wake_at = NULL WHERE id = $1`, d.WorkflowID, raw); err != nil {
 		return err
 	}
+	if err = waitOnPersonTx(ctx, tx, runID); err != nil {
+		return err
+	}
 	if _, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, taskID, "", "awaiting_input", ReasonChecksUnverified); err != nil {
 		return err
 	}
 	return emitTx(ctx, tx, org, &st, EvQuestionAsked, map[string]any{"kind": "escalation", "reason": ReasonChecksUnverified,
 		"detail": st.Escalation.Detail, "actions": st.Escalation.Actions()})
+}
+
+// waitOnPersonTx starts the held Run's wait on a person (checksHeld), kept
+// if one is already running: it is parked like one asking a question once
+// its project's grace is over.
+func waitOnPersonTx(ctx context.Context, tx pgx.Tx, runID string) error {
+	_, err := tx.Exec(ctx, `UPDATE runs SET waiting_since = COALESCE(waiting_since, now()) WHERE id = $1`, runID)
+	return err
 }
 
 // settleChecksTx carries a person's decision to the held Run, in the
@@ -129,6 +146,13 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksDecided, ledger.ActorHuman, decided)); err != nil {
 		return err
 	}
+	// Decided: the Run no longer waits on this person (checksHeld ends with
+	// this transaction). Another wait that holds it keeps its start: OpenAsk
+	// would still count checksHeld here.
+	if _, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = CASE WHEN `+HoldsTurn+` THEN r.waiting_since END
+		WHERE r.id = $1`, id); err != nil {
+		return err
+	}
 	switch action {
 	case ActionWaive:
 		judged := map[string]any{"turn": turn, "verified": true, "waived": true, "message": note, "checks": []any{}}
@@ -138,8 +162,33 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		_, err = ledger.Append(ctx, tx, ref.Event(EvRunChecksJudged, ledger.ActorHuman, judged))
 		return err
 	case "stop":
-		_, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = $2
-			WHERE id = $1 AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, id, "a person stopped it at the checks gate")
+		// A Run parked while it was held is aborted here, as the API's stop
+		// aborts a paused one, but not kept: a paused Run is resumed once
+		// nothing holds it, before its control is read.
+		const why = "a person stopped it at the checks gate"
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status::text FROM runs WHERE id = $1 FOR UPDATE`, id).Scan(&status); db.IsNotFound(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = $2,
+			status = CASE WHEN status = 'paused' THEN 'aborted' ELSE status END,
+			ended_at = CASE WHEN status = 'paused' THEN now() ELSE ended_at END
+			WHERE id = $1 AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, id, why); err != nil {
+			return err
+		}
+		if status != "paused" {
+			return nil
+		}
+		if err := FailUnreadTx(ctx, tx, ref, time.Time{}, UnreadRunAborted); err != nil {
+			return err
+		}
+		ev := ref.Event("run.aborted", ledger.ActorHuman, map[string]any{"reason": why})
+		if person != "" {
+			ev.ActorID = person
+		}
+		_, err := ledger.Append(ctx, tx, ev)
 		return err
 	}
 	return nil
