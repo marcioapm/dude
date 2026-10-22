@@ -173,7 +173,7 @@ test("anyone but the owner sees the form disabled, saying whose it is", async ()
 test("a task held by an open question says so where it waits on a person", async () => {
   const client = new FixtureClient("d");
   const task = await client.getTask(TASK_ID);
-  client.getTask = async () => ({ ...task, status: "awaiting_input", escalation: null });
+  client.getTask = async () => ({ ...task, status: "awaiting_input", escalation: null, heldByQuestions: true });
   const page = await findingsTab(client);
   const hold = await until(() => page.querySelector("[data-testid=questions-hold]"), "the hold notice");
   expect(text(hold)).toContain("A reviewer's question holds the pull request.");
@@ -181,5 +181,15 @@ test("a task held by an open question says so where it waits on a person", async
   await typeArea(page.querySelector("[data-testid=review-question-reason]")!, "Moot.");
   await click(page.querySelector("[data-testid=review-question-withdraw-confirm]")!);
   await settle();
+  expect(page.querySelectorAll("[data-testid=questions-hold]").length).toBe(0);
+});
+
+test("an agent's question asked while a reviewer's question is open shows no hold notice", async () => {
+  const client = new FixtureClient("d");
+  const task = await client.getTask(TASK_ID);
+  // Waiting on a person, with the reviewer's question open, but the delivery is not parked by it.
+  client.getTask = async () => ({ ...task, status: "awaiting_input", escalation: null, heldByQuestions: false });
+  const page = await findingsTab(client);
+  await until(() => page.querySelector('[data-testid=review-questions] [data-question="rvq_1"]'), "the open question");
   expect(page.querySelectorAll("[data-testid=questions-hold]").length).toBe(0);
 });

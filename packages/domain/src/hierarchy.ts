@@ -456,6 +456,8 @@ export const taskSchema = z.object({
   handedBack: z.boolean().default(false),
   /** The decision its delivery waits on for the conductor, or null. */
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
+  /** Its delivery is parked until its reviewers' open questions are answered or withdrawn. */
+  heldByQuestions: z.boolean().default(false),
   /** Why a person ended it (lifecycle.ts); null while it hasn't. */
   resolution: z.enum(["wont_do", "duplicate", "cant_reproduce", "nothing_to_merge"]).nullable().default(null),
   /** Closed as a duplicate of this key. */

@@ -593,9 +593,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
       : "reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft");
   const commentingNotices = !earlier && commentingNoticeShown(commenting) ? <CommentingNotices control={commenting} /> : null;
-  // Waiting on a person for the reviewers' open questions alone: the pull request is held until each is answered or withdrawn.
+  // The delivery parked by the reviewers' open questions: the pull request is held until each is answered or withdrawn.
   const openQuestions = parts.mine.questions.filter((q) => q.status === "open").length;
-  const heldByQuestions = !earlier && item.status === "awaiting_input" && !item.escalation && !openOrDraft && openQuestions > 0;
+  const heldByQuestions = !earlier && item.heldByQuestions && openQuestions > 0;
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
