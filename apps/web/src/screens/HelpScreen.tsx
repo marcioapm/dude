@@ -139,11 +139,13 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
   const listId = useId();
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<DocSearchResult[] | null>(null);
+  const [searchProblem, setSearchProblem] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const latest = useRef(0);
   const words = query.trim().slice(0, HELP_QUERY_MAX);
   useEffect(() => {
     const mine = ++latest.current;
+    setSearchProblem(null);
     if (!words) {
       setFound(null);
       return;
@@ -152,13 +154,14 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
       client.searchMemory({ q: words, types: "doc", limit: HELP_RESULTS_MAX }).then(
         (out) => {
           if (mine !== latest.current) return;
+          setSearchProblem(null);
           setFound(out.results.filter((r) => r.type === ("doc" as string)).map((r) => docResult(r, pages ?? [])));
           setActive(0);
         },
         (err: unknown) => {
           if (mine !== latest.current) return;
-          setFound([]);
-          setProblem(`Could not search the guide: ${errorText(err)}`);
+          setFound(null);
+          setSearchProblem(`Could not search the guide: ${errorText(err)}`);
         },
       );
     }, HELP_SEARCH_DELAY);
@@ -192,7 +195,9 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
           <SearchField value={query} onValueChange={setQuery} onKeyDown={onSearchKey} label="Search the guide" placeholder="Search the guide"
             maxLength={HELP_QUERY_MAX} role="combobox" aria-expanded={Boolean(results?.length)} aria-controls={listId} aria-autocomplete="list"
             aria-activedescendant={results?.length ? docResultId(listId, active) : undefined} data-testid="help-search" />
-          {searching ? (
+          {searching && searchProblem ? (
+            <Callout tone="danger" data-testid="help-search-error">{searchProblem}</Callout>
+          ) : searching ? (
             <DocSearchResults results={results} query={words} active={active} onActiveChange={setActive} listId={listId}
               onOpen={(r) => openSection(r.page, r.anchor)} />
           ) : pages === null ? <Spinner label="Loading…" /> : (

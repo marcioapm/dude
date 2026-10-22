@@ -282,4 +282,27 @@ describe("searching the guide", () => {
     expect(client.asked.map((a) => a.q)).toEqual(["zebra"]);
     expect(input.maxLength).toBe(200);
   });
+
+  test("a failed search says so in place of the results, and the next search clears it", async () => {
+    const client = new Searching("a");
+    let fail = true;
+    const answer = client.searchMemory.bind(client);
+    client.searchMemory = (params) => (fail ? Promise.reject(new Error("search is down")) : answer(params));
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "beta");
+    const error = await until(() => container.querySelector("[data-testid=help-search-error]"), "the search error");
+    expect(error.textContent).toBe("Could not search the guide: search is down");
+    expect(container.querySelector("[data-testid=help-search-count]")).toBeNull();
+    expect(container.querySelector("[data-testid=help-search-empty]")).toBeNull();
+    // Only the search's own error: nothing screen-wide.
+    expect(container.querySelectorAll("[role=alert]").length).toBe(1);
+    fail = false;
+    await type(input, "reviewer");
+    await until(() => (container.querySelectorAll("[data-testid=help-search-result]").length === 2 ? true : null), "the results");
+    expect(container.querySelector("[data-testid=help-search-error]")).toBeNull();
+    expect(container.querySelectorAll("[role=alert]").length).toBe(0);
+  });
 });
