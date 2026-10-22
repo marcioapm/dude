@@ -55,16 +55,42 @@ test("the open question shows above the findings with its fields and the finding
   expect(list.querySelectorAll("textarea, input").length).toBe(0);
 });
 
-test("about reveals its finding when a status facet hides it", async () => {
+test("about scrolls only its referenced finding", async () => {
   const page = await findingsTab(new FixtureClient("d"));
-  await click(facetCheckbox(page.querySelector('[aria-label="Finding status"]')!, "Open"));
+  const target = spyOn(page.querySelector<HTMLElement>('[data-finding="f1"]')!, "scrollIntoView");
+  const other = spyOn(page.querySelector<HTMLElement>('[data-finding="f4"]')!, "scrollIntoView");
+  try {
+    await click(page.querySelector('[data-testid="review-question-about"]')!);
+    expect(target).toHaveBeenCalledTimes(1);
+    expect(target).toHaveBeenCalledWith({ block: "center" });
+    expect(other).not.toHaveBeenCalled();
+  } finally {
+    target.mockRestore();
+    other.mockRestore();
+  }
+});
+
+for (const facet of [
+  { group: "Finding status", label: "Open" },
+  { group: "Finding severity", label: "Note" },
+]) test(`about reveals and scrolls only its finding hidden by ${facet.group}`, async () => {
+  const page = await findingsTab(new FixtureClient("d"));
+  await click(facetCheckbox(page.querySelector(`[aria-label="${facet.group}"]`)!, facet.label));
   expect(page.querySelectorAll('[data-finding="f1"]').length).toBe(0);
+  const otherRow = page.querySelector<HTMLElement>('[data-finding="f4"]')!;
+  Object.defineProperty(otherRow, "scrollIntoView", { configurable: true, writable: true, value: () => {} });
+  const other = spyOn(otherRow, "scrollIntoView");
   const scroll = spyOn(HTMLElement.prototype, "scrollIntoView");
   try {
     await click(page.querySelector('[data-testid="review-question-about"]')!);
+    const target = page.querySelector<HTMLElement>('[data-finding="f1"]');
     expect(page.querySelectorAll('[data-finding="f1"]').length).toBe(1);
+    expect(scroll).toHaveBeenCalledTimes(1);
     expect(scroll).toHaveBeenCalledWith({ block: "center" });
+    expect(scroll.mock.contexts).toEqual([target]);
+    expect(other).not.toHaveBeenCalled();
   } finally {
+    other.mockRestore();
     scroll.mockRestore();
   }
 });
