@@ -8,11 +8,11 @@ Decide the escalation the delivery is stopped at (retry, accept, amend, waive, r
   "properties": {
     "action": {
       "type": "string",
-      "description": "one of the escalation's actions: retry, accept, amend, waive, resume, done, wait or stop; for not_converging, retry fixes differently, accept accepts only the named risks, and amend replaces the named findings' criteria with the person's words before fixing"
+      "description": "one of the escalation's actions; for not_converging, retry fixes differently, accept accepts only the named risks, and amend replaces the named findings' criteria with the person's words before fixing"
     },
     "note": {
       "type": "string",
-      "description": "what you decided and why, kept with the task for later agents; required-note actions need the person's own direction or reason in their answer or this note; amend uses their words as the replacement criterion"
+      "description": "what you decided and why, kept with the task for later agents; amend uses the person's words as the replacement criterion"
     }
   },
   "required": [

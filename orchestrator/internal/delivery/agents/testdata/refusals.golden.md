@@ -1210,3 +1210,11 @@ give an answer, or withdraw: true with a reason; one of the two
 
 the review loop is not converging: blocking criteria remain unmet or fixes keep introducing new blockers. Re-review (start_phase review) or ask the person how to go on (ask_person) before another fix
 
+## refusals/delivery/escalations/not-choice-needs-person-direction
+
+%q is not a choice: on %s it needs the person's own direction. They %s from the banner, or answer your question in their own words
+
+## refusals/delivery/escalations/owner-answer-is-choice-not-direction
+
+the owner's answer to your question %s is one of its choices, not their direction: to %s, they say how in their own words, or decide on the banner
+

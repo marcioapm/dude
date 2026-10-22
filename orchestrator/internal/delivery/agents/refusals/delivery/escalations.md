@@ -10,6 +10,8 @@
 
 {{- define "refusals/delivery/escalations/not-choice-shipping-past-needs-person"}}%q is not a choice: shipping past %s needs the person's own reason. They %s from the banner, or answer your question in their own words{{end}}
 
+{{- define "refusals/delivery/escalations/not-choice-needs-person-direction"}}%q is not a choice: on %s it needs the person's own direction. They %s from the banner, or answer your question in their own words{{end}}
+
 {{- define "refusals/delivery/escalations/choices-and-read-as-same-answer"}}choices %q and %q read as the same answer (case and spaces aside): make each one distinct{{end}}
 
 {{- define "refusals/delivery/escalations/no-escalation-waits-on-decision-now"}}no escalation waits on a decision now: decide_escalation is only for one the owner handed you with a free answer; %s{{end}}
@@ -23,5 +25,7 @@
 {{- define "refusals/delivery/escalations/not-way-go-on-after-one"}}%q is not a way to go on after %s; one of %s{{end}}
 
 {{- define "refusals/delivery/escalations/owner-answer-your-question-one-its"}}the owner's answer to your question %s is one of its choices, not their reason: to %s, they say why in their own words, or decide on the banner{{end}}
+
+{{- define "refusals/delivery/escalations/owner-answer-is-choice-not-direction"}}the owner's answer to your question %s is one of its choices, not their direction: to %s, they say how in their own words, or decide on the banner{{end}}
 
 {{- define "refusals/delivery/escalations/only-task-owner-or-organisation-admin"}}only the task's owner or an organisation admin can %s this; %s{{end}}

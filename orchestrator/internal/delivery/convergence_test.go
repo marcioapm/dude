@@ -74,6 +74,10 @@ func TestConvergenceStillCountsOnlyExplicitJudgementsOfSentFindings(t *testing.T
 	if err != nil || len(findings) != 1 || !findings[0].HasCriterion || findings[0].StillRounds != 2 {
 		t.Fatalf("finding annotations: %+v, %v", findings, err)
 	}
+	// The fix step reads Findings, which weighs no convergence.
+	if plain, err := (&delivery.Store{DB: w.app}).Findings(context.Background(), w.org, st); err != nil || len(plain) != 1 || plain[0].StillRounds != 0 {
+		t.Fatalf("Findings computed convergence: %+v, %v", plain, err)
+	}
 	st.ConvergenceFrom = time.Date(2026, 1, 1, 0, 6, 0, 0, time.UTC)
 	if got := w.convergence(t, st).StillRounds["f"]; got != 1 {
 		t.Fatalf("reset: %d, want 1", got)

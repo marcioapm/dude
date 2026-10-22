@@ -61,6 +61,7 @@ rTaskEscalationWaitsOnPersonAsk         refusals/delivery/escalations/task-escal
 rTaskEscalationWaitsOnPersonThis        refusals/delivery/escalations/task-escalation-waits-on-person-this
 rNotOneThisEscalationActions            refusals/delivery/escalations/not-one-this-escalation-actions
 rNotChoiceShippingPastNeedsPerson       refusals/delivery/escalations/not-choice-shipping-past-needs-person
+rNotChoiceNeedsPersonDirection          refusals/delivery/escalations/not-choice-needs-person-direction
 rChoicesAndReadAsSameAnswer             refusals/delivery/escalations/choices-and-read-as-same-answer
 rNoEscalationWaitsOnDecisionNow         refusals/delivery/escalations/no-escalation-waits-on-decision-now
 rOwnerHasNotAnsweredYourQuestion        refusals/delivery/escalations/owner-has-not-answered-your-question
@@ -68,6 +69,7 @@ rOwnerAnswerQuestionWasEarlierConductor refusals/delivery/escalations/owner-answ
 rAnswerYourQuestionNotTaskOwner         refusals/delivery/escalations/answer-your-question-not-task-owner
 rNotWayGoOnAfterOne                     refusals/delivery/escalations/not-way-go-on-after-one
 rOwnerAnswerYourQuestionOneIts          refusals/delivery/escalations/owner-answer-your-question-one-its
+rOwnerAnswerIsChoiceNotDirection        refusals/delivery/escalations/owner-answer-is-choice-not-direction
 rOnlyTaskOwnerOrOrganisationAdmin       refusals/delivery/escalations/only-task-owner-or-organisation-admin
 rNotYoursDoTaskConductorActs            refusals/delivery/pr-actions/not-yours-do-task-conductor-acts
 rYouAreNoLongerThisTask4                refusals/delivery/pr-actions/you-are-no-longer-this-task-4

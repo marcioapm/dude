@@ -451,9 +451,13 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 		if !slices.Contains(offered, a) {
 			return "", refusef(rNotOneThisEscalationActions, a, listOr(offered))
 		}
-		// A pick carries no reason of the person's.
+		// A pick carries no reason or direction of the person's.
 		if NeedsNote(reason, a) {
-			return "", refusef(rNotChoiceShippingPastNeedsPerson, a, strings.ReplaceAll(reason, "_", " "), a)
+			format := rNotChoiceShippingPastNeedsPerson
+			if givesDirection(a) {
+				format = rNotChoiceNeedsPersonDirection
+			}
+			return "", refusef(format, a, strings.ReplaceAll(reason, "_", " "), a)
 		}
 	}
 	// An answer picks the choice it equals trimmed and case-folded
@@ -531,6 +535,9 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 			words = items[0].Text
 		}
 		if strings.TrimSpace(words) == "" || choiceOf(options, words) >= 0 {
+			if givesDirection(action) {
+				return nil, refusef(rOwnerAnswerIsChoiceNotDirection, qID, action)
+			}
 			return nil, refusef(rOwnerAnswerYourQuestionOneIts, qID, action)
 		}
 		if action == "amend" {
@@ -556,11 +563,16 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"decided": action, "questionId": qID, "next": escalationDecidedNext}, nil
+	return map[string]any{"decided": action, "questionId": qID, "next": escalationDecidedNext(action == "amend")}, nil
 }
 
-// escalationDecidedNext is what decide_escalation answers once it decided.
-var escalationDecidedNext = render(mustTemplate("results/escalation-decided"), nil)
+var escalationDecidedTmpl = mustTemplate("results/escalation-decided")
+
+// escalationDecidedNext is what decide_escalation answers once it decided;
+// only an amend is told what it changed.
+func escalationDecidedNext(amend bool) string {
+	return render(escalationDecidedTmpl, struct{ Amend bool }{amend})
+}
 
 // TaskOwner is the task's owner: its first active person, "" for none.
 func TaskOwner(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
