@@ -77,8 +77,7 @@ func TestStoppingAConductorAndItsReviewerStopsBoth(t *testing.T) {
 	}
 	child := w.taskChild(task, conductor)
 	out := w.stop(ana, task, map[string]any{})
-	ids, _ := out["status"].(string)
-	if ids != "aborted" {
+	if out["status"] != "aborted" {
 		t.Fatalf("stop: %v", out)
 	}
 	for _, id := range reviewers {
