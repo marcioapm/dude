@@ -130,9 +130,7 @@ func (j *scriptedJudge) waiverQuestions() int {
 	return n
 }
 
-// The owner accepts the implementer's failure for the attempt: the fixer
-// and simplifier report the same failure, the judge finds it the same, and
-// the work reaches the pull request with no further escalation.
+// An unchanged simplifier after an attempt waiver asks the judge nothing.
 func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
 	w := newWorld(t)
 	w.scriptedSimplifier(nil)
@@ -179,6 +177,9 @@ func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
 	}
 }
 
+// The owner accepts the implementer's failure for the attempt: the fixer
+// and simplifier report the same failure, the judge finds it the same, and
+// the work reaches the pull request with no further escalation.
 func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 	w := newWorld(t)
 	j := &scriptedJudge{}

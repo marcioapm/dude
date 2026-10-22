@@ -379,8 +379,6 @@ func TestAWriterRunWithUnreadableHeadsStillHasItsChecksAccounted(t *testing.T) {
 	}
 }
 
-// The account keeps the newest Runs that fit its bound, and with none, the
-// newest alone without its checks.
 func TestChecksStatusPrecedence(t *testing.T) {
 	for _, tc := range []struct {
 		j    gatedJudgement
@@ -415,6 +413,8 @@ func TestWriterChecksKeepCarriedAndRefusedWaiverDetails(t *testing.T) {
 	}
 }
 
+// The account keeps the newest Runs that fit its bound, and with none, the
+// newest alone without its checks.
 func TestTheWriterChecksAccountIsBounded(t *testing.T) {
 	type check = gatedCheck
 	var runs []gatedJudgement
