@@ -100,8 +100,9 @@ func TestStoppingATaskHeldByAReviewerQuestion(t *testing.T) {
 				t.Fatalf("%d pull requests opened by the Stop", n)
 			}
 			if conducted {
-				if status, body := w.as(task, "answer_review_question", `{"id":"`+id+`","answer":"In UTC."}`); status == 200 {
-					t.Fatalf("the stopped task's conductor answered the question: %v", body)
+				// The kept conductor's Run is aborted: the tools server refuses its token.
+				if status, body := w.as(task, "answer_review_question", `{"id":"`+id+`","answer":"In UTC."}`); status != 401 {
+					t.Fatalf("the stopped task's conductor answering the question: %d %v, want 401", status, body)
 				}
 				if n := w.events(task, delivery.EvReviewQuestionAnswered); n != 0 {
 					t.Fatalf("%d answers recorded for the stopped conductor", n)
