@@ -298,7 +298,7 @@ func discardLoopCandidateTx(ctx context.Context, tx pgx.Tx, taskID, workflowID s
 			UNION SELECT r.id, r.replaced_by FROM runs r JOIN round o ON r.id = o.replaced_by)
 		UPDATE review_findings f SET status = 'open', resolved_by_run_id = NULL,
 			resolution_note = 'its fix never reached the pull request', updated_at = now()
-		FROM round r WHERE r.id = f.resolved_by_run_id AND f.status = 'resolved'
+		FROM round r WHERE r.id = f.resolved_by_run_id AND f.task_id = $1 AND f.status = 'resolved'
 		  AND (f.repo IS NULL OR NOT f.repo = ANY($5))`, taskID, attempt, workflowID, round, db.NonNil(moved)); err != nil {
 		return "", err
 	}
