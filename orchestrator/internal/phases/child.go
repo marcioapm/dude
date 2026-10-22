@@ -117,7 +117,7 @@ func settleCollectedChildren(ctx context.Context, database *delivery.Store) (int
 				if err != nil {
 					return err
 				}
-				if err := recordFindingsTx(ctx, tx, c.Org, c.ID, delivery.ParseFindings(reply), nil); err != nil {
+				if err := recordFindingsTx(ctx, tx, c.Org, c.ID, delivery.ParseFindings(reply), nil, delivery.ParseQuestions(reply)); err != nil {
 					return err
 				}
 			}

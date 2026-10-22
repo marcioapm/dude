@@ -855,6 +855,32 @@ export const findingSchema = z.object({
 export type Finding = z.infer<typeof findingSchema>;
 
 /**
+ * A reviewer's question (review_questions): a fact it could not establish
+ * from the code, for a person. Never a finding; never sent to a fixer.
+ */
+export const reviewQuestionStatusSchema = z.enum(["open", "answered", "withdrawn"]);
+export type ReviewQuestionStatus = z.infer<typeof reviewQuestionStatusSchema>;
+
+export const reviewQuestionSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  /** The review Run that asked; null once that Run is gone. */
+  runId: z.string().nullable(),
+  /** The asking reviewer's flavour. */
+  category: z.string(),
+  /** The earlier finding it is about, when it named one. */
+  findingId: z.string().nullable(),
+  question: z.string(),
+  whyItMatters: z.string(),
+  evidenceChecked: z.string(),
+  neededFrom: z.string(),
+  status: reviewQuestionStatusSchema,
+  answer: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type ReviewQuestion = z.infer<typeof reviewQuestionSchema>;
+
+/**
  * The tester's verdict on one acceptance criterion, as dude recorded it
  * (acceptance_verdicts): `unverified` is a pass whose evidence is not a
  * file the test published, and counts as blocked. `decision` is a
