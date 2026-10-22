@@ -194,14 +194,18 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			if err != nil {
 				return err
 			}
+			candidates, err := delivery.AttemptWaiversTx(ctx, tx, r.ID, turn)
+			if err != nil {
+				return err
+			}
 			for _, c := range checks {
 				if c.Result == delivery.CheckPass {
 					continue
 				}
-				w, err := delivery.InheritableWaiverTx(ctx, tx, r.ID, turn, c)
-				if err != nil || w == nil {
+				w := candidates.For(c)
+				if w == nil {
 					waivers = nil
-					return err
+					return nil
 				}
 				waivers = append(waivers, w)
 			}

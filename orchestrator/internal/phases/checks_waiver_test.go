@@ -58,7 +58,12 @@ const failingTest = "checks:\n  - command: make test\n    result: fail\n    evid
 // covers, then ends the turn the next report is judged at.
 func waive(w *harnessWorld, r phaseRun, scope string, covers ...delivery.Check) {
 	w.t.Helper()
-	payload := map[string]any{"action": delivery.ActionWaive, "note": "Needs a hardware clock CI lacks."}
+	waiveNoted(w, r, "Needs a hardware clock CI lacks.", scope, covers...)
+}
+
+func waiveNoted(w *harnessWorld, r phaseRun, note, scope string, covers ...delivery.Check) {
+	w.t.Helper()
+	payload := map[string]any{"action": delivery.ActionWaive, "note": note}
 	if scope != "" {
 		payload["scope"], payload["person"], payload["turn"], payload["covers"] = scope, "per_ana", 1, covers
 	}
@@ -261,6 +266,27 @@ func TestACandidateFixOfTheAttemptCarriesTheWaiver(t *testing.T) {
 	got, err := w.s.judgeChecks(context.Background(), w.run)
 	if err != nil || !got.Verified || !got.Carried || got.Verdicts[0].Waiver.RunID != "run_impl_"+w.run.Org {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// Each reported failure is asked about once, against the newest waiver
+// covering its command, whichever waiver that is.
+func TestEachFailureIsAskedAboutTheNewestWaiverOfItsCommand(t *testing.T) {
+	w := newHarnessWorld(t)
+	lint := delivery.Check{Command: "make lint", Result: delivery.CheckFail, Evidence: "one issue"}
+	waiveNoted(w, w.run, "Old clock waiver.", delivery.ScopeAttempt, heldFailure)
+	waiveNoted(w, w.run, "Lint waiver.", delivery.ScopeAttempt, lint)
+	waiveNoted(w, w.run, "New clock waiver.", delivery.ScopeAttempt, heldFailure)
+	checksReply(w, failingTest+"  - command: make lint\n    result: fail\n    evidence: one issue\n")
+	endTurn(w)
+	fake := &waiverFake{waived: judge.Yes}
+	w.s.Judge = fake
+	got, err := w.s.judgeChecks(context.Background(), w.run)
+	if err != nil || !got.Verified || !got.Carried || fake.waiverQuestions() != 2 || len(got.Verdicts) != 3 {
+		t.Fatalf("%+v %v, %d waiver questions", got, err, fake.waiverQuestions())
+	}
+	if a, b := got.Verdicts[0].Waiver.Note, got.Verdicts[1].Waiver.Note; a != "New clock waiver." || b != "Lint waiver." {
+		t.Fatalf("carried %q and %q", a, b)
 	}
 }
 

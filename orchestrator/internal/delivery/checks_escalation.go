@@ -183,15 +183,19 @@ type CarriedWaiver struct {
 	Covered Check  `json:"-"`
 }
 
-// InheritableWaiverTx is the newest attempt-scoped checks waiver of the
-// judged Run's task and attempt, decided before the turn that ended at
-// cursor before, covering a reported failure of the same command
-// (trimmed). It is only a candidate for the judge, never a pass by
-// itself; nil for none.
-func InheritableWaiverTx(ctx context.Context, tx pgx.Tx, runID string, before int64, failed Check) (*CarriedWaiver, error) {
-	if failed.Result != CheckFail {
-		return nil, nil
-	}
+// AttemptWaivers are the attempt-scoped checks waivers a judged turn may
+// carry, newest first, each with what it covers.
+type AttemptWaivers []attemptWaiver
+
+type attemptWaiver struct {
+	CarriedWaiver
+	covers []Check
+}
+
+// AttemptWaiversTx are the attempt-scoped checks waivers of the judged
+// Run's task and attempt decided before cursor before (the end of the
+// judged turn), read once per judgement.
+func AttemptWaiversTx(ctx context.Context, tx pgx.Tx, runID string, before int64) (AttemptWaivers, error) {
 	rows, err := tx.Query(ctx, `SELECT e.run_id, src.phase::text, e.cursor, e.payload
 		FROM runs judged JOIN runs src ON src.task_id = judged.task_id AND src.attempt = judged.attempt
 		JOIN events e ON e.run_id = src.id
@@ -201,9 +205,8 @@ func InheritableWaiverTx(ctx context.Context, tx pgx.Tx, runID string, before in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var w CarriedWaiver
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (attemptWaiver, error) {
+		var w attemptWaiver
 		var phase string
 		var p struct {
 			Note   string  `json:"note"`
@@ -211,15 +214,29 @@ func InheritableWaiverTx(ctx context.Context, tx pgx.Tx, runID string, before in
 			Turn   int64   `json:"turn"`
 			Covers []Check `json:"covers"`
 		}
-		if err := rows.Scan(&w.RunID, &phase, &w.Cursor, &p); err != nil {
-			return nil, err
+		if err := row.Scan(&w.RunID, &phase, &w.Cursor, &p); err != nil {
+			return w, err
 		}
-		for _, c := range p.Covers {
+		w.Role, w.Turn, w.Person, w.Note, w.covers = RoleName(PromptRoleForPhase[phase]), p.Turn, p.Person, p.Note, p.Covers
+		return w, nil
+	})
+}
+
+// For is the newest waiver covering a reported failure of failed's
+// command (trimmed). It is only a candidate for the judge, never a pass
+// by itself; nil for none, and for anything but a reported fail.
+func (ws AttemptWaivers) For(failed Check) *CarriedWaiver {
+	if failed.Result != CheckFail {
+		return nil
+	}
+	for _, w := range ws {
+		for _, c := range w.covers {
 			if c.Result == failed.Result && strings.TrimSpace(c.Command) == strings.TrimSpace(failed.Command) {
-				w.Role, w.Turn, w.Person, w.Note, w.Covered = RoleName(PromptRoleForPhase[phase]), p.Turn, p.Person, p.Note, c
-				return &w, nil
+				carried := w.CarriedWaiver
+				carried.Covered = c
+				return &carried
 			}
 		}
 	}
-	return nil, rows.Err()
+	return nil
 }
