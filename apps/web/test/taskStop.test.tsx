@@ -176,6 +176,17 @@ describe("the Stop dialog", () => {
     expect(dialog.querySelector('.pickUpWay[data-shown="true"] [data-testid="decider-field"]')!.getAttribute("data-value")).toBe("deliver");
   });
 
+  test("Stop here names the attempt's branch from its delivery when nothing was pushed yet; with none named, its branch", async () => {
+    const unpushed = (await new FixtureClient("a").getTask(TASK_ID)).runs.map((r) => ({ ...r, branch: null }));
+    const named = await open({ runs: unpushed, deciders: [{ attempt: 1, decider: "conductor", branch: "dude/wi_1/attempt-1" }] });
+    expect(shownEffects(named).find((e) => e.startsWith("Branch"))).toBe("Branchkeptdude/wi_1/attempt-1");
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const unnamed = await open({ runs: unpushed, deciders: [{ attempt: 1, decider: "conductor", branch: null }] });
+    expect(shownEffects(unnamed).find((e) => e.startsWith("Branch"))).toBe("Branchkeptits branch");
+  });
+
   test("two open PRs: Stop here keeps both; Stop and start closes dude's both, naming each", async () => {
     const dialog = await open({ decider: "conductor" }, [
       { ...PULL_REQUEST, id: "pr_a", state: "open", number: 412 }, { ...PULL_REQUEST, id: "pr_b", state: "draft", number: 415 }]);

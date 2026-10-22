@@ -147,7 +147,9 @@ export function StopDialog({ client, task, attempt, live, pullRequests = [], onC
   const [problem, setProblem] = useState<string | null>(null);
   const key = task.key ?? "this task";
   const n = attempt + 1;
-  const branch = task.runs.find((r) => r.attempt === attempt && r.branch)?.branch ?? "its branch";
+  // A Run's pushed branch, else the one the attempt's delivery named, pushed to or not.
+  const branch = task.runs.find((r) => r.attempt === attempt && r.branch)?.branch
+    ?? task.deciders?.findLast((d) => d.attempt === attempt && d.branch)?.branch ?? "its branch";
   const { adopted } = prsByOpener(pullRequests);
   const ways: ChoiceOption<Way>[] = [
     { value: "stop", icon: "stop", label: "Stop here",

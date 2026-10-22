@@ -224,7 +224,7 @@ test("a task carries each attempt's own last decider, the first delivery's as at
     ('wfr_att2', ${ORG}, 'task.delivery', 'delivery:wi_att:attempt-2', 'waiting', 'awaitFix', '{"attempt":2}', 'wi_att', now())`;
   const t = (await (await call("GET", "/v1/tasks/wi_att")).json()) as { decider: string; deciders: unknown };
   expect(t.decider).toBe("policy");
-  expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor" }, { attempt: 2, decider: "policy" }]);
+  expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor", branch: null }, { attempt: 2, decider: "policy", branch: null }]);
   // The board reads the latest delivery's decider too, not the first's.
   expect(await navTask("wi_att")).toMatchObject({ decider: "policy", conductorLive: false });
   const none = (await (await call("GET", "/v1/tasks/wi_none")).json()) as { deciders: unknown };
@@ -236,7 +236,7 @@ test("a first delivery started on a later attempt's branch is that attempt's, as
   await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
     ('wfr_att3', ${ORG}, 'task.delivery', 'delivery:wi_att3', 'waiting', 'awaitFix', '{"decider":"conductor","branch":"dude/wi_att3/attempt-3"}', 'wi_att3')`;
   const t = (await (await call("GET", "/v1/tasks/wi_att3")).json()) as { deciders: unknown };
-  expect(t.deciders).toEqual([{ attempt: 3, decider: "conductor" }]);
+  expect(t.deciders).toEqual([{ attempt: 3, decider: "conductor", branch: "dude/wi_att3/attempt-3" }]);
 });
 
 for (const [n, id, branch] of [
@@ -248,6 +248,6 @@ for (const [n, id, branch] of [
     await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
       (${"wfr_" + id}, ${ORG}, 'task.delivery', ${"delivery:" + id}, 'waiting', 'awaitFix', jsonb_build_object('decider', 'conductor', 'branch', ${branch}::text), ${id})`;
     const t = (await (await call("GET", `/v1/tasks/${id}`)).json()) as { deciders: unknown };
-    expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor" }]);
+    expect(t.deciders).toEqual([{ attempt: 1, decider: "conductor", branch }]);
   });
 }

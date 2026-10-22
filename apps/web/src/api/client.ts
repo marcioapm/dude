@@ -301,7 +301,8 @@ export interface SourceRepository {
 /** A task with its attempts, newest first, and why it waits if delivery stopped for a person. `GET /v1/tasks/:id`. */
 export interface TaskDetail extends Task {
   runs: Run[];
-  deciders?: Array<{ attempt: number; decider: Decider }>;
+  /** Each delivery's attempt, who decided it, and the task branch it named (null before it named one). */
+  deciders?: Array<{ attempt: number; decider: Decider; branch?: string | null }>;
   escalation: Escalation | null;
   /** The machines its agents raised, by role, names resolved by the control plane; empty when none. */
   agentMachines: AgentMachine[];
