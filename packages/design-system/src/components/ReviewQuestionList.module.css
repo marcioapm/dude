@@ -32,7 +32,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--ds-space-2);
 }
 .item {
   list-style: none;
@@ -49,12 +49,14 @@
   color: var(--ds-color-text-primary);
 }
 .glyph {
+  width: var(--ds-size-icon-sm);
+  height: var(--ds-size-icon-sm);
   flex-shrink: 0;
   color: var(--ds-color-text-secondary);
 }
 .category {
   flex-shrink: 0;
-  max-width: 120px;
+  max-width: calc(var(--ds-measure-message) / 6);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -71,7 +73,7 @@
   flex-direction: column;
   gap: var(--ds-space-4);
   margin: 0;
-  padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-4) + 12px + var(--ds-space-8));
+  padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-4) + var(--ds-size-icon-sm) + var(--ds-space-8));
 }
 .field {
   display: flex;
@@ -80,9 +82,9 @@
 }
 .label {
   flex-shrink: 0;
-  width: 104px;
+  width: calc(var(--ds-space-64) + var(--ds-space-40));
   font-size: var(--ds-text-2xs);
-  padding-top: 2px;
+  padding-top: var(--ds-space-2);
 }
 .value {
   flex: 1 1 auto;
