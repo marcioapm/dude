@@ -670,6 +670,13 @@ func TestAPersonsPushDuringAnAdoptedPullRequestsFirstLoopRefusesItsPromotion(t *
 			// scripted agent still plays.
 			w.onModel("fixer", "llm-fix")
 			w.onModel("implementer", "llm-impl")
+			// The finding names its repository, as a multi-repository review's does.
+			scripted := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				b := scripted(spec)
+				b.Reply = strings.Replace(b.Reply, fakeagent.Finding, fakeagent.Finding+"repo: target\n", 1)
+				return b
+			}
 			// One pull request fix round: a retry the prFix path took would spend it.
 			mustExec(t, w.owner, `UPDATE forge_credentials SET settings = settings || '{"fixRoundsPerPr":1}' WHERE organization_id = $1`, w.org)
 			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
@@ -701,14 +708,17 @@ func TestAPersonsPushDuringAnAdoptedPullRequestsFirstLoopRefusesItsPromotion(t *
 			w.writersOnCandidate(wi, nil, tc.writer)
 			// The discarded candidate's fix resolved the review's finding there.
 			var findingIDs []string
-			var title, acceptance string
+			var title, acceptance, findingRepo string
 			_ = w.owner.QueryRow(context.Background(), `SELECT finding_ids FROM runs WHERE task_id = $1 AND phase = 'fix'
 				ORDER BY created_at LIMIT 1`, wi).Scan(&findingIDs)
 			if len(findingIDs) != 1 {
 				t.Fatalf("the candidate's fix was given %v, want the review's one finding\n%s", findingIDs, w.describeRuns())
 			}
-			_ = w.owner.QueryRow(context.Background(), `SELECT title, COALESCE(acceptance, '') FROM review_findings WHERE id = $1`,
-				findingIDs[0]).Scan(&title, &acceptance)
+			_ = w.owner.QueryRow(context.Background(), `SELECT title, COALESCE(acceptance, ''), COALESCE(repo, '') FROM review_findings WHERE id = $1`,
+				findingIDs[0]).Scan(&title, &acceptance, &findingRepo)
+			if findingRepo != "target" {
+				t.Fatalf("the finding names repository %q, want target", findingRepo)
+			}
 			earlier := w.runsSoFar(wi)
 
 			// Trying again: every move it makes is checked when asked.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
@@ -294,7 +295,7 @@ func discardLoopCandidateTx(ctx context.Context, tx pgx.Tx, taskID, workflowID s
 	if _, err := tx.Exec(ctx, `UPDATE review_findings f SET status = 'open', resolved_by_run_id = NULL,
 			resolution_note = 'its fix never reached the pull request', updated_at = now()
 		FROM runs r WHERE r.id = f.resolved_by_run_id AND f.status = 'resolved' AND `+inRound+`
-		  AND (f.repo IS NULL OR NOT f.repo = ANY($5))`, taskID, attempt, workflowID, round, moved); err != nil {
+		  AND (f.repo IS NULL OR NOT f.repo = ANY($5))`, taskID, attempt, workflowID, round, db.NonNil(moved)); err != nil {
 		return "", err
 	}
 	var phase string
