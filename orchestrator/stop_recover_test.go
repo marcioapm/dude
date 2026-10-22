@@ -7,6 +7,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -233,6 +234,53 @@ func TestStartingOverAnAdoptedPullRequestCarriesItOn(t *testing.T) {
 	})
 	if c := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND number = $2 AND state = 'open' AND adopted`, task, n); c != 1 {
 		t.Errorf("the adopted pull request is no longer the task's, open")
+	}
+}
+
+// Stop and start over while a fixer works for a comment on dude's own pull
+// request: attempt 1's pull request is closed with its branch unmoved, and
+// attempt 2's writer publishes to its own branch, which no open pull
+// request holds, so the publish backstop lets it through and attempt 2
+// opens its own pull request.
+func TestStopAndStartOverDudesPullRequestPublishesAttemptTwo(t *testing.T) {
+	w := newWorld(t)
+	var implements int
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "implement":
+			implements++
+			return fakelux.Behaviour{Commit: map[string]string{"A.md": fmt.Sprintf("attempt %d\n", implements)}, Message: "work"}
+		case "fix":
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Reply: "Looks good."}
+	}
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	w.deliver(task)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	before := w.head(task)
+	w.gh.Comment(1, "octo", "Please rename it")
+	w.until("a fixer for the comment", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, task) == 1
+	})
+	if out := w.stop(ana, task, map[string]any{"andRestart": true}); out["attempt"] != float64(2) {
+		t.Fatalf("stop and start over answered %v", out)
+	}
+	if p := w.gh.Pull(1); p.State != "closed" || p.MergedAt != nil {
+		t.Fatalf("attempt 1's pull request is %s", p.State)
+	}
+	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 2 })
+	if p := w.gh.Pull(2); p.Head != delivery.BranchFor(task, 2) {
+		t.Errorf("attempt 2's pull request is on %s, want %s", p.Head, delivery.BranchFor(task, 2))
+	}
+	if got := w.head(task); got != before {
+		t.Errorf("attempt 1's closed pull request's branch moved from %s to %s", before, got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND status = 'failed'`, task); n != 0 {
+		t.Errorf("%d attempt-2 Runs failed\n%s", n, w.describeRuns())
 	}
 }
 
