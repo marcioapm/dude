@@ -75,6 +75,11 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 		awaiting_signals = '["human.decision"]', wake_at = NULL WHERE id = $1`, d.WorkflowID, raw); err != nil {
 		return err
 	}
+	// The held Run waits on a person (ChecksHeld): parked like one asking
+	// a question once its project's grace is over.
+	if _, err = tx.Exec(ctx, `UPDATE runs SET waiting_since = COALESCE(waiting_since, now()) WHERE id = $1`, runID); err != nil {
+		return err
+	}
 	if _, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, taskID, "", "awaiting_input", ReasonChecksUnverified); err != nil {
 		return err
 	}

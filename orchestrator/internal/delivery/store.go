@@ -795,7 +795,16 @@ const openQuestion = `EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AN
 // PersonAsk is true (SQL, over a Run aliased r) while the Run is blocked on
 // a person: a question, or a repository it said it cannot go on without.
 const PersonAsk = `(` + openQuestion + `
-	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking))`
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking)
+	OR ` + ChecksHeld + `)`
+
+// ChecksHeld is true (SQL, over a Run aliased r) while the task's delivery
+// waits on a person's undecided checks escalation (ReasonChecksUnverified)
+// of this Run. The decision sets escalation.decided in its own
+// transaction, which ends it.
+const ChecksHeld = `EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = '` + WorkflowType + `'
+	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = '` + ReasonChecksUnverified + `'
+	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided'))`
 
 // OpenAsk is true (SQL, over a Run aliased r) while the Run is blocked on a
 // person (PersonAsk) or on a peer's reply (peer_waits). An agent that ends
