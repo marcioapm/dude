@@ -247,12 +247,14 @@ describe("the task page with a conductor", () => {
     expect(bar.textContent).toContain("It had stopped at Fix, aborted by Ana.");
   });
 
+  const ev = (id: string, eventType: string, min: number, payload: Record<string, unknown>, runId: string | null, actor: PersistedEvent["actor"]) =>
+    ({ eventId: id, cursor: 50_000 + 1000 - min, eventType, occurredAt: at(min), organizationId: "org", projectId: "prj", taskId: TASK_ID,
+      runId, sessionId: null, workflowRunId: null, actor, source: "orchestrator", correlationId: null, causationId: null, payload }) as PersistedEvent;
+  const ana = { type: "human", id: "per_ana" } as const;
+  const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
   test("Chat keeps attempt 1's decision line inside attempt 1's conductor, in time order, before its end", async () => {
     const client = stoppedAndStarted();
-    const ev = (id: string, eventType: string, min: number, payload: Record<string, unknown>, runId: string | null, actor: PersistedEvent["actor"]) =>
-      ({ eventId: id, cursor: 50_000 + 1000 - min, eventType, occurredAt: at(min), organizationId: "org", projectId: "prj", taskId: TASK_ID,
-        runId, sessionId: null, workflowRunId: null, actor, source: "orchestrator", correlationId: null, causationId: null, payload }) as PersistedEvent;
-    const ana = { type: "human", id: "per_ana" } as const;
     const old = [
       ev("evt_old_msg", "chat.message", 210, { text: "Plan the greeting." }, OLD, ana),
       ev("evt_old_reply", "agent.message", 150, { text: "Planned: one file." }, OLD, { type: "agent", id: OLD }),
@@ -270,9 +272,34 @@ describe("the task page with a conductor", () => {
     const decision = await until(() => earlier.querySelector<HTMLElement>("[data-testid=chat-decision]"), "attempt 1's decision line inside it");
     const ended = earlier.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")!;
     const said = (text: string) => [...earlier.querySelectorAll<HTMLElement>("*")].find((n) => n.children.length === 0 && n.textContent?.includes(text))!;
-    const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     expect([follows(said("Plan the greeting."), decision), follows(decision, said("Planned: one file.")), follows(decision, ended)])
       .toEqual([true, true, true]);
+  });
+
+  /** Attempt 1's conductor whose ledger read is `read`, with attempt 1's decision line in the task's ledger. */
+  function oldLedgerRead(read: () => Promise<never>) {
+    const client = stoppedAndStarted();
+    const waited = ev("evt_wait", "conductor.decision_awaited", 200, { point: "start" }, null, { type: "system", id: "dude" });
+    const events = client.events.bind(client);
+    client.events = async (params) => {
+      if (params.runId === OLD) return read();
+      const r = await events(params);
+      return params.runId ? r : { ...r, events: [...r.events, waited] };
+    };
+    return client;
+  }
+
+  test("Chat keeps attempt 1's decision line when its conductor's ledger cannot be read", async () => {
+    const page = await taskPage(oldLedgerRead(async () => { throw new Error("the ledger is unreachable"); }));
+    await until(() => page.querySelector("[data-testid=earlier-conductor-failed]"), "the failed read");
+    await settle();
+    expect(count(page, "[data-testid=chat-decision]")).toBe(1);
+  });
+
+  test("Chat shows attempt 1's decision line while its conductor's ledger is still being read", async () => {
+    const page = await taskPage(oldLedgerRead(() => new Promise<never>(() => {})));
+    await until(() => (count(page, "[data-testid=chat-decision]") === 1 ? true : null), "attempt 1's decision line, before the read answers");
+    expect(count(page, "[data-testid=earlier-conductor-ended]")).toBe(0);
   });
 
   test("an Activity line about attempt 1's conductor carries attempt 1", async () => {

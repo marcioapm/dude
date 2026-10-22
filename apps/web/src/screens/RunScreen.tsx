@@ -1168,10 +1168,12 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
             </Button>
           </span>
         </Callout>
+        {lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}
       </div>
     );
   }
-  if (!events) return null;
+  // Its lines do not depend on its ledger: they show while it is read.
+  if (!events) return lines.length ? <>{lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}</> : null;
   const dude = dudeName(events[0]?.taskId ?? "");
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude, undefined, undefined, undefined, shown);
