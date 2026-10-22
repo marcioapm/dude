@@ -267,18 +267,18 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		if err != nil && ctx.Err() != nil {
 			return d, err
 		}
-		v := checksVerdict{Command: rejected.Verdicts[i].Command, Decision: j.Decision, Reason: j.Reasoning, CallID: j.CallID, Waiver: w}
-		if err != nil {
-			v.Reason = err.Error()
-		}
+		held := rejected.Verdicts[i]
 		if err == nil && j.CallID != "" && j.Decision == judge.Yes {
-			v.Result = checksWaived
-			d.Verdicts = append(d.Verdicts, v)
+			d.Verdicts = append(d.Verdicts, checksVerdict{Command: held.Command, Result: checksWaived, Decision: j.Decision,
+				Reason: j.Reasoning, CallID: j.CallID, Waiver: w})
 			continue
 		}
-		held := rejected.Verdicts[i]
-		held.Decision, held.CallID = v.Decision, v.CallID
-		held.WaiverReason = checksNotCovered.Render(struct{ Role, Reason string }{w.Role, cmp.Or(v.Reason, checksUnestablished.Render(nil))})
+		reason := j.Reasoning
+		if err != nil {
+			reason = err.Error()
+		}
+		held.Decision, held.CallID = j.Decision, j.CallID
+		held.WaiverReason = checksNotCovered.Render(struct{ Role, Reason string }{w.Role, cmp.Or(reason, checksUnestablished.Render(nil))})
 		// The send-back names this and every failure not yet judged.
 		d.Verdicts = append(append(d.Verdicts, held), rejected.Verdicts[i+1:]...)
 		return d, nil
@@ -444,10 +444,10 @@ func (s *Syncer) waivedContext(ctx context.Context, r phaseRun, w *delivery.Carr
 const checksChangeMinRow = 7
 
 // newestCalls renders the Run's newest whole calls recorded before cursor
-// before (0: all) up to max bytes, in the order they were made, and counts
+// before (0: all) up to maxBytes, in the order they were made, and counts
 // every such call. One query groups the calls once and streams them newest
 // first; reading stops at the first call that would not fit.
-func newestCalls(ctx context.Context, tx pgx.Tx, runID string, before int64, max int) (shown []string, total int, err error) {
+func newestCalls(ctx context.Context, tx pgx.Tx, runID string, before int64, maxBytes int) (shown []string, total int, err error) {
 	rows, err := tx.Query(ctx, `WITH c AS (
 			SELECT `+checksCallKey+` AS id, min(cursor) AS first, count(*) OVER () AS total FROM events
 			WHERE run_id = $1 AND event_type IN ($2, $3) AND ($4::bigint = 0 OR cursor < $4::bigint) GROUP BY 1)
@@ -465,7 +465,7 @@ func newestCalls(ctx context.Context, tx pgx.Tx, runID string, before int64, max
 	// call is kept whatever its size.
 	fits := func(c *checksCall) bool {
 		text := checksCallText.Render(*c)
-		if size+len(text) > max && len(shown) > 0 {
+		if size+len(text) > maxBytes && len(shown) > 0 {
 			return false
 		}
 		shown = append(shown, text)
