@@ -72,7 +72,7 @@ func TestAnAttemptWaiverIsRefusedWhereThereIsNothingToCarry(t *testing.T) {
 func TestOnlyTheOwnerOrAnAdminWaivesForTheAttempt(t *testing.T) {
 	w := newWorld(t)
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
-	_, admin, member := w.people(wi)
+	owner, admin, member := w.people(wi)
 	// The escalation names the failures an attempt waiver would cover.
 	if got := w.ids(`SELECT payload->'detail'->>'failures' FROM events WHERE task_id = $1 AND event_type = 'question.asked'`, wi); len(got) != 1 ||
 		got[0] != `[{"result": "fail", "command": "make test", "evidence": "TestClock needs a hardware clock"}]` {
@@ -80,6 +80,17 @@ func TestOnlyTheOwnerOrAnAdminWaivesForTheAttempt(t *testing.T) {
 	}
 	if code, body := w.decideScoped(member, wi, delivery.ActionWaive, "Needs a hardware clock.", delivery.ScopeAttempt); code != 403 {
 		t.Fatalf("a member's attempt waiver: %d %v", code, body)
+	}
+	// The held report has a failure to carry, yet only a waiver takes the
+	// attempt's scope.
+	for _, action := range []string{"retry", "stop"} {
+		code, body := w.decideScoped(owner, wi, action, "", delivery.ScopeAttempt)
+		if e, _ := body["error"].(map[string]any); code != 400 || e["code"] != "bad_request" {
+			t.Errorf("%s scope attempt: %d %v, want 400 bad_request", action, code, body)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvRunChecksDecided); n != 0 {
+		t.Fatalf("%d decisions recorded by refused requests", n)
 	}
 	if code, body := w.decideScoped(admin, wi, delivery.ActionWaive, "Needs a hardware clock.", delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("an admin's attempt waiver: %d %v", code, body)
