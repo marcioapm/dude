@@ -125,6 +125,66 @@ func TestAChecksEscalationAsksAPersonOfTheHeldRunUntilDecided(t *testing.T) {
 	}
 }
 
+// A held Run judged unverified again while its escalation is open waits
+// on the person again; a decided escalation, or one raised by another
+// Run, sets no wait.
+func TestAChecksEscalationRearmsTheWaitOfItsOwnUndecidedRunOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		decided bool
+		again   string
+		waiting bool
+	}{
+		{"undecided, same Run", false, "run_held", true},
+		{"decided, same Run", true, "run_held", false},
+		{"undecided, another Run", false, "run_other", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, owner := dbtest.Open(t)
+			ctx := context.Background()
+			org := dbtest.Org(t, owner)
+			for _, q := range []string{
+				`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_h',$1,'H','h','H')`,
+				`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_h',$1,'prj_h',1,'H','H','running')`,
+				`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status) VALUES('run_held',$1,'prj_h','wi_h',1,'implement','running')`,
+				`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status) VALUES('run_other',$1,'prj_h','wi_h',1,'review','running')`,
+				`INSERT INTO workflow_runs(id,organization_id,workflow_type,idempotency_key,task_id,status,step,state)
+					VALUES('wf_h',$1,'` + WorkflowType + `','h','wi_h','waiting','awaitImplement','{"taskId":"wi_h","projectId":"prj_h","attempt":1}')`,
+			} {
+				if _, err := owner.Exec(ctx, q, org); err != nil {
+					t.Fatal(err)
+				}
+			}
+			escalate := func(runID string) {
+				t.Helper()
+				if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+					return EscalateChecksTx(ctx, tx, org, "wi_h", runID, "held", 0)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			escalate("run_held")
+			if tc.decided {
+				if _, err := owner.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{escalation,decided}', '{"action":"waive"}')
+					WHERE id = 'wf_h'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := owner.Exec(ctx, `UPDATE runs SET waiting_since = NULL WHERE id = 'run_held'`); err != nil {
+				t.Fatal(err)
+			}
+			escalate(tc.again)
+			var waiting bool
+			if err := owner.QueryRow(ctx, `SELECT waiting_since IS NOT NULL FROM runs WHERE id = $1`, tc.again).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+			if waiting != tc.waiting {
+				t.Errorf("%s waiting %v, want %v", tc.again, waiting, tc.waiting)
+			}
+		})
+	}
+}
+
 // An attempt waiver covers only the held report's reported failures: a
 // not-run beside them is not carried, and a report whose only non-pass is
 // not-run has nothing to carry and is refused, deciding nothing.
