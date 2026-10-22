@@ -2846,6 +2846,9 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 		if e != nil && e.Reason == "review_failed" {
 			st.RetryCategories = e.categories()
 		}
+	case "simplify":
+		// A refused loop that opened with its simplifier: the loop's budget anew.
+		st.Iteration = 0
 	case "fix":
 		// A new budget for the loop: its rounds, and each finding's fixes.
 		st.Iteration = 0
