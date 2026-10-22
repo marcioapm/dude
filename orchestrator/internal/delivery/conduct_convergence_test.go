@@ -109,6 +109,44 @@ func TestConductFixConvergenceRegressionIgnoresTesterBlocker(t *testing.T) {
 	}
 }
 
+// A regression whose fix-caused blockers are all closed names nothing to
+// direct: an unrelated open blocker goes to the next fix, and the loop does
+// not escalate with an empty list.
+func TestARegressionWithItsBlockersClosedDoesNotEscalate(t *testing.T) {
+	w := newConvergenceWorld(t)
+	wf, ref := conductConvergenceSetup(t, w)
+	for i := 1; i <= 2; i++ {
+		fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
+		w.phase(t, fix, "fix", "", []string{"f"}, nil, 2*i-1)
+		w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "fixed"}, 2*i)
+		w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
+	}
+	w.finding(t, "g", "origin", "high", false)
+	w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id IN ('f', 'new1')`)
+	w.exec(t, `UPDATE review_findings SET status = 'accepted' WHERE id = 'new2'`)
+	st := w.state()
+	findings, conv, err := (&delivery.Store{DB: w.app}).ConvergingFindings(context.Background(), w.org, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.RegressionRounds != 2 || len(conv.FindingIDs) != 0 {
+		t.Fatalf("fixture: %+v", conv)
+	}
+	if exit := delivery.Exit(st.Policy, findings, 1, conv); exit != nil {
+		t.Fatalf("exit = %+v, want another fix", exit)
+	}
+	if err := conductConvergenceStart(w, ref, delivery.PhaseFix, nil); err != nil {
+		t.Fatalf("fix of the unrelated blocker refused: %v", err)
+	}
+	var got []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(state->'decision'->'taken'->'findingIds')) FROM workflow_runs WHERE id = $1`, wf).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"g"}) {
+		t.Fatalf("selected findings %v, want [g]", got)
+	}
+}
+
 func TestConductFixConvergenceAllowsUnstalledFindings(t *testing.T) {
 	for _, scenario := range []string{"disabled", "blank criterion", "nonblocking", "tester", "reset", "previous attempt", "named subset"} {
 		t.Run(scenario, func(t *testing.T) {

@@ -237,7 +237,10 @@ type LoopExit struct {
 	RegressionRounds int      `json:"regressionRounds,omitempty"`
 }
 
-func Exit(p Policy, findings []FindingState, iteration int, convergence ...Convergence) *LoopExit {
+// Exit weighs the findings against the policy's bounds. conv is the review
+// loop's convergence (Store.ConvergingFindings); a zero one weighs neither
+// convergence bound.
+func Exit(p Policy, findings []FindingState, iteration int, conv Convergence) *LoopExit {
 	var blocking []FindingState
 	for _, f := range findings {
 		if IsBlocking(p, f) {
@@ -247,25 +250,28 @@ func Exit(p Policy, findings []FindingState, iteration int, convergence ...Conve
 	if len(blocking) == 0 {
 		return &LoopExit{Reason: "clear"}
 	}
-	var conv Convergence
-	if len(convergence) > 0 {
-		conv = convergence[0]
-	}
+	// A regression escalates only while one of the newest round's fix-caused
+	// blockers is open: with those resolved or accepted, what is left blocks
+	// as any finding does, and nothing names what to direct.
 	regressing := p.MaxRegressionRounds > 0 && conv.RegressionRounds >= p.MaxRegressionRounds
 	var nonConverging []string
-	var hasReviewBlocker bool
+	var regressed bool
 	for _, f := range blocking {
 		if f.Human {
 			continue
 		}
-		hasReviewBlocker = true
-		if (p.MaxStillRounds > 0 && f.HasCriterion && f.StillRounds >= p.MaxStillRounds) ||
-			(regressing && slices.Contains(conv.FindingIDs, f.ID)) {
+		caused := regressing && slices.Contains(conv.FindingIDs, f.ID)
+		if caused || p.MaxStillRounds > 0 && f.HasCriterion && f.StillRounds >= p.MaxStillRounds {
 			nonConverging = append(nonConverging, f.ID)
 		}
+		regressed = regressed || caused
 	}
-	if len(nonConverging) > 0 || (regressing && hasReviewBlocker) {
-		return &LoopExit{Reason: "not_converging", FindingIDs: nonConverging, RegressionRounds: conv.RegressionRounds}
+	if len(nonConverging) > 0 {
+		exit := &LoopExit{Reason: "not_converging", FindingIDs: nonConverging}
+		if regressed {
+			exit.RegressionRounds = conv.RegressionRounds
+		}
+		return exit
 	}
 	// A finding the fixer keeps failing is escalated on its own, before the
 	// loop's budget is spent on it.

@@ -896,8 +896,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 			return workflow.Result{}, err
 		}
 	}
-	var conv Convergence
-	findings, err := w.loopFindings(ctx, sc.OrganizationID, st, &conv)
+	findings, conv, err := w.loopFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -917,19 +916,29 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 
 // loopExit is the review loop's exit for the findings, with the fix
 // attempts a person granted beyond the policy's.
-func (w *steps) loopExit(st *State, findings []FindingState, convergence ...Convergence) *LoopExit {
+func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
-	return Exit(policy, findings, st.Iteration, convergence...)
+	return Exit(policy, findings, st.Iteration, conv)
 }
 
-// loopFindings is what the review loop weighs: the reviewers' findings and
-// the people's feedback still to be handled. Candidate and integration loops
-// weigh reviewers' findings alone; open feedback returns to the PR fix loop.
-func (w *steps) loopFindings(ctx context.Context, org string, st *State, convergence ...*Convergence) ([]FindingState, error) {
-	findings, err := w.s.Findings(ctx, org, st, convergence...)
-	if err != nil || st.checkingCandidate() || st.Integration != nil {
-		return findings, err
+// loopFindings is what the review loop weighs: the reviewers' findings, with
+// the loop's convergence, and the people's feedback still to be handled.
+func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
+	findings, conv, err := w.s.ConvergingFindings(ctx, org, st)
+	if err != nil {
+		return nil, conv, err
+	}
+	findings, err = w.withFeedback(ctx, org, st, findings)
+	return findings, conv, err
+}
+
+// withFeedback adds the people's open feedback to the findings. Candidate
+// and integration loops weigh reviewers' findings alone; open feedback
+// returns to the PR fix loop.
+func (w *steps) withFeedback(ctx context.Context, org string, st *State, findings []FindingState) ([]FindingState, error) {
+	if st.checkingCandidate() || st.Integration != nil {
+		return findings, nil
 	}
 	feedback, err := w.s.FeedbackStates(ctx, org, st)
 	return append(findings, feedback...), err
@@ -962,18 +971,22 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 
 // reviewExit is "what the policy would do" after a review round the
 // conductor triaged: the exit for the findings as they are now — some may
-// have been dismissed since.
+// have been dismissed since. Convergence is not weighed again: awaitReview
+// weighed this round's history, and triage or a not_converging accept (which
+// moves ConvergenceFrom past it) can only lower it.
 func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	var conv Convergence
-	findings, err := w.loopFindings(ctx, sc.OrganizationID, st, &conv)
+	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	if err == nil {
+		findings, err = w.withFeedback(ctx, sc.OrganizationID, st, findings)
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings, conv))
+	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings, Convergence{}))
 }
 
 // findingsLine is a review round's findings in a note: how many are open,

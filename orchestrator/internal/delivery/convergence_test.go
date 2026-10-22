@@ -70,7 +70,7 @@ func TestConvergenceStillCountsOnlyExplicitJudgementsOfSentFindings(t *testing.T
 	if got := w.convergence(t, st).StillRounds["f"]; got != 2 {
 		t.Fatalf("unrelated fix broke streak: %d", got)
 	}
-	findings, err := (&delivery.Store{DB: w.app}).Findings(context.Background(), w.org, st)
+	findings, _, err := (&delivery.Store{DB: w.app}).ConvergingFindings(context.Background(), w.org, st)
 	if err != nil || len(findings) != 1 || !findings[0].HasCriterion || findings[0].StillRounds != 2 {
 		t.Fatalf("finding annotations: %+v, %v", findings, err)
 	}
@@ -160,6 +160,92 @@ func TestConvergenceRegressionRequiresSameReviewerAndParentSentBlocker(t *testin
 	st.Policy.BlockingSeverities = []string{"medium"}
 	if got := w.convergence(t, st); got.RegressionRounds != 0 {
 		t.Fatalf("policy severities ignored: %+v", got)
+	}
+}
+
+func TestConvergenceCountsOneStillRoundPerFix(t *testing.T) {
+	w := newConvergenceWorld(t)
+	st := w.state()
+	w.phase(t, "fix1", "fix", "", []string{"f"}, nil, 1)
+	for i := 0; i < 3; i++ {
+		w.phase(t, fmt.Sprintf("review1-%d", i), "review", "fix1", []string{"f"}, map[string]string{"f": "still"}, 2+i)
+	}
+	if got := w.convergence(t, st).StillRounds["f"]; got != 1 {
+		t.Fatalf("one fix re-reviewed: still=%d, want 1", got)
+	}
+	f, conv, err := (&delivery.Store{DB: w.app}).ConvergingFindings(context.Background(), w.org, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit := delivery.Exit(st.Policy, f, 1, conv); exit != nil {
+		t.Fatalf("one fix escalated: %+v", exit)
+	}
+	// A fixed verdict from any review of the fix ends the streak.
+	w.phase(t, "fix2", "fix", "", []string{"f"}, nil, 6)
+	w.phase(t, "review2-still", "review", "fix2", []string{"f"}, map[string]string{"f": "still"}, 7)
+	w.phase(t, "review2-fixed", "review", "fix2", []string{"f"}, map[string]string{"f": "fixed"}, 8)
+	if got := w.convergence(t, st).StillRounds["f"]; got != 0 {
+		t.Fatalf("fixed beside still: still=%d, want 0", got)
+	}
+}
+
+func TestConvergenceRegressionNeedsABlockingFixedFinding(t *testing.T) {
+	w := newConvergenceWorld(t)
+	st := w.state()
+	w.exec(t, `UPDATE review_findings SET severity = 'low' WHERE id = 'f'`)
+	for i := 1; i <= 2; i++ {
+		fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
+		w.phase(t, fix, "fix", "", []string{"f"}, nil, i*3)
+		w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "fixed"}, i*3+1)
+		w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
+	}
+	if got := w.convergence(t, st); got.RegressionRounds != 0 {
+		t.Fatalf("non-blocking fixed finding counted: %+v", got)
+	}
+	w.exec(t, `UPDATE review_findings SET severity = 'high' WHERE id = 'f'`)
+	if got := w.convergence(t, st); got.RegressionRounds != 2 {
+		t.Fatalf("blocking fixed finding not counted: %+v", got)
+	}
+}
+
+func TestConvergenceIgnoresFindingsOutsideTheReviewRange(t *testing.T) {
+	inRange := `{"of":"pull_request_fix","base":{"api":"base"}}`
+	for _, tc := range []struct{ name, origin string }{
+		{"other range", `{"of":"pull_request_fix","base":{"api":"earlier"}}`},
+		{"tester finding", inRange},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newConvergenceWorld(t)
+			st := w.state()
+			st.Candidate = &delivery.Candidate{Branch: "candidate", Base: map[string]string{"api": "base"}}
+			for i := 1; i <= 2; i++ {
+				fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
+				w.phase(t, fix, "fix", "", []string{"f"}, nil, i*3)
+				w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "still"}, i*3+1)
+				w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
+				w.exec(t, `UPDATE runs SET branch = 'candidate' WHERE id = $1`, fix)
+				w.exec(t, `UPDATE runs SET review_range = $2::jsonb WHERE id = $1`, review, inRange)
+			}
+			w.exec(t, `UPDATE runs SET review_range = $1::jsonb WHERE id = 'origin'`, inRange)
+			if got := w.convergence(t, st); got.StillRounds["f"] != 2 {
+				t.Fatalf("in-range fixture: %+v", got)
+			}
+			w.exec(t, `UPDATE runs SET verdicts = '{"f":"fixed"}' WHERE id IN ('review1', 'review2')`)
+			if got := w.convergence(t, st); got.RegressionRounds != 2 {
+				t.Fatalf("in-range fixture: %+v", got)
+			}
+			w.exec(t, `UPDATE runs SET review_range = $1::jsonb WHERE id = 'origin'`, tc.origin)
+			if tc.name == "tester finding" {
+				w.exec(t, `UPDATE runs SET phase = 'test' WHERE id = 'origin'`)
+			}
+			if got := w.convergence(t, st); got.RegressionRounds != 0 {
+				t.Fatalf("fixed finding outside the range counted: %+v", got)
+			}
+			w.exec(t, `UPDATE runs SET verdicts = '{"f":"still"}' WHERE id IN ('review1', 'review2')`)
+			if got := w.convergence(t, st); got.StillRounds["f"] != 0 {
+				t.Fatalf("still finding outside the range counted: %+v", got)
+			}
+		})
 	}
 }
 

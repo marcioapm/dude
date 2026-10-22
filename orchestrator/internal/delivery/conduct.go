@@ -298,18 +298,13 @@ func reviewBound(st *State) error {
 // for none): open, of this attempt, and short of the attempts per finding.
 func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
-		COALESCE(btrim(acceptance), '') <> '', `+fromReview+` FROM review_findings
+		COALESCE(btrim(acceptance), '') <> '' FROM review_findings
 		WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
 	if err != nil {
 		return nil, err
 	}
-	var reviewFindings []FindingState
 	all, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (f FindingState, err error) {
-		var review bool
-		err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion, &review)
-		if err == nil && review {
-			reviewFindings = append(reviewFindings, f)
-		}
+		err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion)
 		return
 	})
 	if err != nil {
@@ -319,11 +314,15 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	for i := range reviewFindings {
-		reviewFindings[i].StillRounds = conv.StillRounds[reviewFindings[i].ID]
+	// A tester's finding has no still streak and is never fix-caused
+	// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
+	weighed := make([]FindingState, len(all))
+	for i, f := range all {
+		f.StillRounds = conv.StillRounds[f.ID]
+		weighed[i] = f
 	}
 	// A stalled review loop holds every fix, including a named subset.
-	if exit := Exit(st.Policy, reviewFindings, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
+	if exit := Exit(st.Policy, weighed, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
 		return nil, refuseText(rReviewLoopNotConverging)
 	}
 	byID := map[string]FindingState{}

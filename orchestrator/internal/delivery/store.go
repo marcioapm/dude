@@ -595,17 +595,25 @@ const thisAttempt = `($2 = 0 OR EXISTS (SELECT 1 FROM runs fr WHERE fr.id = revi
 const fromReview = `NOT EXISTS (SELECT 1 FROM runs tr WHERE tr.id = review_findings.run_id AND tr.phase = 'test')`
 
 // Findings is the review loop's findings: a reviewer's, of this attempt.
-func (s *Store) Findings(ctx context.Context, org string, st *State, convergence ...*Convergence) ([]FindingState, error) {
-	return s.findings(ctx, org, st, fromReview, convergence...)
+func (s *Store) Findings(ctx context.Context, org string, st *State) ([]FindingState, error) {
+	return s.findings(ctx, org, st, fromReview, nil)
+}
+
+// ConvergingFindings is Findings with the loop's convergence, read in one
+// snapshot, each finding carrying its still streak: what Exit weighs.
+func (s *Store) ConvergingFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
+	var conv Convergence
+	out, err := s.findings(ctx, org, st, fromReview, &conv)
+	return out, conv, err
 }
 
 // FixFindings is every finding of this attempt a fix may be sent: a
 // reviewer's and the tester's.
 func (s *Store) FixFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
-	return s.findings(ctx, org, st, "true")
+	return s.findings(ctx, org, st, "true", nil)
 }
 
-func (s *Store) findings(ctx context.Context, org string, st *State, which string, convergence ...*Convergence) ([]FindingState, error) {
+func (s *Store) findings(ctx context.Context, org string, st *State, which string, convergence *Convergence) ([]FindingState, error) {
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
@@ -618,16 +626,12 @@ func (s *Store) findings(ctx context.Context, org string, st *State, which strin
 			err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion)
 			return
 		})
-		if err != nil || which != fromReview {
+		if err != nil || convergence == nil {
 			return err
 		}
 		conv, err := ConvergenceTx(ctx, tx, st)
 		if err == nil {
-			for _, dst := range convergence {
-				if dst != nil {
-					*dst = conv
-				}
-			}
+			*convergence = conv
 			for i := range out {
 				out[i].StillRounds = conv.StillRounds[out[i].ID]
 			}

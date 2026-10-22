@@ -257,7 +257,7 @@ func TestARefusedLoopsRetryGetsANewReviewBudget(t *testing.T) {
 		st.Iteration = st.Policy.MaxReviewIterations - 1
 		retry(st, step, &Escalation{Reason: ReasonPullRequestMoved})
 		// review counts its round, then weighs the loop's exit.
-		if e := Exit(st.Policy, []FindingState{finding("blocking", "open", 0, "a")}, st.Iteration+1); e != nil {
+		if e := Exit(st.Policy, []FindingState{finding("blocking", "open", 0, "a")}, st.Iteration+1, Convergence{}); e != nil {
 			t.Errorf("%s retry: its first review round exits %q at iteration %d", step, e.Reason, st.Iteration+1)
 		}
 	}
