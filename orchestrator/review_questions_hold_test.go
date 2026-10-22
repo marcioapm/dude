@@ -312,14 +312,30 @@ func TestAQuestionOnAPullRequestFixHoldsItsPromotion(t *testing.T) {
 	w.until("the pull request in review", func() bool { w.sync(); return w.taskStatus(wi) == "review" })
 }
 
-// Under the conductor the question holds the pull request too, and the
-// conductor's own answer releases it: Open, answered, opens nothing while
-// the question is open.
-func TestTheConductorsAnswerReleasesTheHold(t *testing.T) {
-	w, task, id := questioned(t)
-	w.conductedHold(task)
-	w.must(task, "answer_review_question", `{"id":"`+id+`","answer":"In UTC: config/billing.yml sets zone: UTC."}`)
-	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+// Under the conductor the question holds the pull request too (Open
+// answered, open_pull_request decided), and any settlement releases it:
+// the conductor's answer, the owner's answer, the owner's withdrawal. The
+// pull request opens and the task is in review, with no further decision
+// asked of the conductor.
+func TestASettledQuestionReleasesAConductedHold(t *testing.T) {
+	for _, c := range []struct{ by, verb string }{{"conductor", "answer"}, {"owner", "answer"}, {"owner", "withdraw"}} {
+		t.Run(c.by+" "+c.verb, func(t *testing.T) {
+			w, task, id := questioned(t)
+			w.conductedHold(task)
+			awaited := w.events(task, delivery.EvDecisionAwaited)
+			if c.by == "conductor" {
+				w.must(task, "answer_review_question", `{"id":"`+id+`","answer":"In UTC: config/billing.yml sets zone: UTC."}`)
+			} else {
+				ana := w.person("Ana")
+				w.assignOwner(task, ana)
+				w.settle(ana, id, c.verb)
+			}
+			w.until("the pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+			if n := w.events(task, delivery.EvDecisionAwaited) - awaited; n != 0 {
+				t.Errorf("%d more decisions asked of the conductor after the settlement", n)
+			}
+		})
+	}
 }
 
 // conductedHold takes a conducted delivery whose reviewer asked a question
