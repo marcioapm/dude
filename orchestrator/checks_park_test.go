@@ -8,6 +8,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
@@ -17,17 +18,26 @@ func (w *world) implementerOf(wi string) string {
 	return w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi)
 }
 
-// luxResumes is how many times lux resumed the Run, and the state it has it in.
-func (w *world) luxResumes(runID string) (resumed int, state string) {
+// luxRun is lux's Run for runID, nil if lux has none.
+func (w *world) luxRun(runID string) *fakelux.Run {
 	w.t.Helper()
 	luxID := w.luxRunOf(runID)
 	for _, r := range w.lux.Runs() {
 		if r.ID == luxID {
-			return r.Resumed, w.lux.State(luxID)
+			return r
 		}
 	}
-	w.t.Fatalf("lux has no Run %s", luxID)
-	return 0, ""
+	return nil
+}
+
+// luxResumes is how many times lux resumed the Run, and the state it has it in.
+func (w *world) luxResumes(runID string) (resumed int, state string) {
+	w.t.Helper()
+	r := w.luxRun(runID)
+	if r == nil {
+		w.t.Fatalf("lux has no Run %s", w.luxRunOf(runID))
+	}
+	return r.Resumed, w.lux.State(r.ID)
 }
 
 // parkedHeld is a delivery whose implementer is held at the checks gate
@@ -38,10 +48,7 @@ func (w *world) parkedHeld() (wi, runID string) {
 	w.syncer.ParkAfter = 300 * time.Millisecond
 	wi = w.unbackedUntilEscalated(0)
 	runID = w.implementerOf(wi)
-	w.until("the held Run to be parked", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1
-	})
-	w.until("lux to stop it", func() bool { _, st := w.luxResumes(runID); return st == "stopped" })
+	w.untilParked(runID)
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'person'`, runID); n != 1 {
 		w.t.Fatalf("%d run.parked {reason: person} events", n)
 	}
@@ -49,6 +56,16 @@ func (w *world) parkedHeld() (wi, runID string) {
 		w.t.Fatalf("the parked Run lost its lux Run")
 	}
 	return wi, runID
+}
+
+// untilParked waits for the held Run to be paused for a person and lux's
+// Run to be stopped.
+func (w *world) untilParked(runID string) {
+	w.t.Helper()
+	w.until("the held Run to be parked", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1
+	})
+	w.until("lux to stop it", func() bool { _, st := w.luxResumes(runID); return st == "stopped" })
 }
 
 // Inside the project's grace the held Run stays running: it is not parked.
@@ -147,11 +164,8 @@ func TestADecisionKeepsTheWaitOfAnotherOpenAsk(t *testing.T) {
 // luxInputs are the inputs lux's Run for runID was given, the prompt aside.
 func (w *world) luxInputs(runID string) []string {
 	w.t.Helper()
-	luxID := w.luxRunOf(runID)
-	for _, r := range w.lux.Runs() {
-		if r.ID == luxID {
-			return r.Inputs
-		}
+	if r := w.luxRun(runID); r != nil {
+		return r.Inputs
 	}
 	return nil
 }
@@ -275,10 +289,7 @@ func TestAnAttemptWaiverOfAParkedHeldRunPushesAndIsCarried(t *testing.T) {
 	j := &scriptedJudge{}
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
 	runID := w.implementerOf(wi)
-	w.until("the held Run to be parked", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, runID) == 1
-	})
-	w.until("lux to stop it", func() bool { _, st := w.luxResumes(runID); return st == "stopped" })
+	w.untilParked(runID)
 	w.waivedFromPark(wi, runID, clockNote, delivery.ScopeAttempt)
 	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:unverified,implement:waived,fix:carried,simplify:carried" {
 		t.Errorf("judged %s", got)
