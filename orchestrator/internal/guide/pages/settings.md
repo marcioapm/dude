@@ -10,7 +10,7 @@ There are three places:
 
 - **Organisation settings** — Members, Invitations, General, GitHub, Agents (one page per role), Network, Models, Judgements, Machines, Images, Delivery and Memory.
 - **Project settings** — General, Repositories, Servers, Network, Agents, Delivery and Memory.
-- **My settings** — this browser's own: how dude looks, and whether it tells you when something waits on you.
+- **Your settings** — yours, not the organisation's: your profile and keys, your organisations, GitHub authorization, appearance and notifications.
 
 Every member can see the organisation's and projects' settings. Only an organisation admin can change them.
 
