@@ -86,6 +86,32 @@ func TestAHeldRunIsParkedAfterTheGrace(t *testing.T) {
 	}
 }
 
+// A person's steer inside the grace starts a turn that is held again: the
+// Run still waits on the person, and is parked once the grace is over.
+func TestAHeldRunSteeredInsideTheGraceIsParkedAfterIt(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.ParkAfter = time.Hour
+	wi := w.unbackedUntilEscalated(0)
+	runID := w.implementerOf(wi)
+	if status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "try the check once more"}); status != 201 {
+		t.Fatalf("steer: %d %v", status, body)
+	}
+	w.until("the steered turn to be held again", func() bool {
+		return strings.Join(w.judged(wi), ",") == "unverified,unverified" &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND waiting_since IS NOT NULL`, runID); n != 1 {
+		t.Fatalf("the steered held Run does not wait on a person")
+	}
+	w.syncer.ParkAfter = 50 * time.Millisecond
+	w.until("the steered held Run to be parked", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'person'`, runID) == 1
+	})
+	if n := w.implementerPushes(wi); n != 0 {
+		t.Errorf("%d pushes of a held Run", n)
+	}
+}
+
 // luxInputs are the inputs lux's Run for runID was given, the prompt aside.
 func (w *world) luxInputs(runID string) []string {
 	w.t.Helper()

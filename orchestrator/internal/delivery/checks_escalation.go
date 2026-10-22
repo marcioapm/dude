@@ -43,7 +43,12 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	}
 	st := d.State
 	if st.Escalation != nil {
-		return nil
+		// Held again after a person steered it during the hold: the steer's
+		// turn cleared the wait, so it is set again for the park.
+		if e := st.Escalation; e.Reason == ReasonChecksUnverified && e.Decided == nil && e.RunID() == runID {
+			_, err = tx.Exec(ctx, `UPDATE runs SET waiting_since = COALESCE(waiting_since, now()) WHERE id = $1`, runID)
+		}
+		return err
 	}
 	detail := map[string]any{"runId": runID, "message": message, "rounds": rounds}
 	// The reported failures an attempt waiver could carry (settleChecksTx),
