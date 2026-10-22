@@ -7,9 +7,9 @@
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { cssModuleAsWritten } from "./cssModule.ts";
 
-const asWritten = () => ({ default: new Proxy({}, { get: (_, key) => (typeof key === "string" ? key : undefined) }) });
-mock.module("../src/components/Settings.module.css", asWritten);
+mock.module(...cssModuleAsWritten(new URL("../src/components/Settings.module.css", import.meta.url)));
 
 const { SettingsLayout } = await import("../src/components/Settings.tsx");
 

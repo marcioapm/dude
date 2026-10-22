@@ -11,8 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { cssModuleAsWritten } from "./cssModule.ts";
 
 // Under bun test a CSS module maps to {}: keep each class the stylesheet declares, as written.
-const MARKDOWN_CSS = new URL("../src/components/Markdown.module.css", import.meta.url);
-mock.module(MARKDOWN_CSS.pathname, cssModuleAsWritten(MARKDOWN_CSS));
+mock.module(...cssModuleAsWritten(new URL("../src/components/Markdown.module.css", import.meta.url)));
 
 const { Markdown } = await import("../src/components/Markdown.tsx");
 

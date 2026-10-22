@@ -15,9 +15,9 @@ import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { NavProject } from "../src/util/navModel.ts";
+import { cssModuleAsWritten } from "./cssModule.ts";
 
-const asWritten = () => ({ default: new Proxy({}, { get: (_, key) => (typeof key === "string" ? key : undefined) }) });
-mock.module("../src/components/NavTree.module.css", asWritten);
+mock.module(...cssModuleAsWritten(new URL("../src/components/NavTree.module.css", import.meta.url)));
 
 const { NavTree } = await import("../src/components/NavTree.tsx");
 
