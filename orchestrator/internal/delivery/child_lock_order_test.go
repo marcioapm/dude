@@ -200,11 +200,12 @@ func TestAChildRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 	}
 }
 
-// A Run's restart (RestartRunTx: delivery → task → that Run, the syncer's
-// replaceRound with no Chat lock) and a person's Close or Archive of the
-// task at once: held between its task lock and its Run lock, the restart
-// takes the Run once the ending waits, and neither is refused for a
-// deadlock. The ending then stops the Run.
+// A Run's restart order without its Chat lock (delivery → task → that Run)
+// and a person's Close or Archive of the task at once: held between its
+// task lock and its Run lock, the restart takes the Run once the ending
+// waits, and neither is refused for a deadlock. The ending then stops the
+// Run. Pins StopAllTx's phase Runs after the delivery, which Chat alone
+// would mask.
 func TestARunRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 	for _, e := range enders[:2] {
 		t.Run(e.name, func(t *testing.T) {
@@ -232,6 +233,66 @@ func TestARunRestartAndATaskEndingSerialiseWithoutADeadlock(t *testing.T) {
 			}
 			if status != "aborted" {
 				t.Fatalf("the phase Run after the %s is %s", e.name, status)
+			}
+		})
+	}
+}
+
+// A person's Stop as the API's takes it (api.stopTask): every live Run
+// stopped and kept, the task aborted, the delivery halted.
+func stopTaskTx(ctx context.Context, tx pgx.Tx, org string) error {
+	stopped, err := StopAllTx(ctx, tx, org, "wi_life", "", true, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := SetTaskStatusTx(ctx, tx, org, stopped.ProjectID, "wi_life", "", "aborted", "a person stopped the task"); err != nil {
+		return err
+	}
+	return HaltDeliveryTx(ctx, tx, org, stopped.Delivery, stopped.Conductor, "a person stopped the task", "system", "test")
+}
+
+// The syncer's restart of a phase Run the conductor started (replaceRound,
+// retireForSecrets: RestartRunTx with no lock of the caller's) and a
+// person's Close, Archive or Stop at once. The replacement's insert takes
+// a key share on the conductor's row (conductor_run_id, parent_run_id),
+// which the ending locks before the delivery; held once it has the task's
+// locks, the restart goes on once the ending waits, and neither is refused
+// for a deadlock. The restart goes first; the ending then stops the
+// replacement and ends the task.
+func TestTheSyncersRestartOfAnAttributedRunAndATaskEndingSerialise(t *testing.T) {
+	endings := append(enders[:2:2], struct {
+		name string
+		end  func(ctx context.Context, tx pgx.Tx, org string) error
+	}{"stop", stopTaskTx})
+	for _, e := range endings {
+		t.Run(e.name, func(t *testing.T) {
+			w := newChildWorld(t)
+			w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, conductor_run_id)
+				VALUES ('run_impl', $1, 'prj_life', 'wi_life', 3, 'running', 'review', 'reviewer', 'run_parent')`, w.org)
+			w.exec(`UPDATE workflow_runs SET step = 'review', state = jsonb_set(state, '{pendingRunIds}', '["run_impl"]') WHERE id = 'wf_life'`)
+			var next string
+			restartErr, endErr := w.raceEnder(e.end, func(tx pgx.Tx, between func()) error {
+				var err error
+				next, err = restartRunTx(w.ctx, tx, w.org, "wi_life", Restart{RunID: "run_impl", ByDude: true,
+					Note: "a secret is no longer given", Actor: Writer{ActorType: "system", ActorID: "dude"}}, between)
+				return err
+			})
+			if isDeadlock(restartErr) || isDeadlock(endErr) {
+				t.Fatalf("deadlock: restart %v, %s %v", restartErr, e.name, endErr)
+			}
+			if restartErr != nil || endErr != nil || next == "" {
+				t.Fatalf("restart %q %v, %s %v", next, restartErr, e.name, endErr)
+			}
+			var old, replacedBy, fresh, conductor, task string
+			if err := w.owner.QueryRow(w.ctx, `SELECT o.status::text, COALESCE(o.replaced_by, ''), n.status::text,
+					COALESCE(n.conductor_run_id, ''), t.status::text
+				FROM runs o, runs n, tasks t WHERE o.id = 'run_impl' AND n.id = $1 AND t.id = 'wi_life'`, next).
+				Scan(&old, &replacedBy, &fresh, &conductor, &task); err != nil {
+				t.Fatal(err)
+			}
+			if old != "aborted" || replacedBy != next || fresh != "aborted" || conductor != "run_parent" || task != "aborted" {
+				t.Fatalf("after the %s: old %s replaced by %q (want %q), replacement %s of conductor %q, task %s",
+					e.name, old, replacedBy, next, fresh, conductor, task)
 			}
 		})
 	}

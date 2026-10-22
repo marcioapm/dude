@@ -136,6 +136,9 @@ func (s Stopped) All() []string {
 // Locks as the writers it races take them: the Chat and the conductor's
 // row (lockChild's prefix), the delivery and the task (LockEscalationTx),
 // then the phase Runs (RestartRunTx's order after the task) and each child.
+// A restart's replacement and a child, inserted referencing the conductor,
+// take Chat first: the conductor's FOR UPDATE here blocks that insert's key
+// share, and Chat keeps it from cycling with the delivery lock.
 // locked, when given, runs once the delivery and task are locked and before
 // anything stops: a refusal there stops nothing, and what it closes is
 // closed while the Runs are still live.

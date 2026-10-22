@@ -63,8 +63,10 @@ type EscalationDecision struct {
 // ending SetTaskStatusTx; markDone; recovery), the lifecycle writes
 // (lockLifecycleTask: Close, Reopen, Archive, Unarchive), a person's Stop
 // (StopAllTx: the Chat and the live conductor's row first, the phase Runs
-// and children after the task), a Run's restart (RestartRunTx: its Run after
-// the task), the starts (StartTx, AutoStarts.fire, a writer's
+// and children after the task), a Run's restart (RestartRunTx: Chat always,
+// its Run after the task; its replacement's insert takes a key share on the
+// conductor's row, so without Chat it cycles with Stop's conductor lock),
+// the starts (StartTx, AutoStarts.fire, a writer's
 // createPhaseRunTx) and a conductor's children (StartChildTx,
 // RestartChildTx: after Chat and the parent Run). The opposite order
 // deadlocks with a Close or an ending status change
