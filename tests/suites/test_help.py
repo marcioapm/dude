@@ -57,6 +57,8 @@ def test_help_search_sections_and_history(page: Page, web_url: str, client: ApiC
     previous = next(s for s in sections if s["anchor"] != last["anchor"])
     last_url = f'{help_base}/{quote(slug)}/{quote(last["anchor"])}'
     page.goto(last_url)
+    # A first load at the section, not the same document moving its hash.
+    page.reload()
     expect(article).to_have_attribute("data-page", slug)
     last_link = outline.locator(f'[data-anchor="{last["anchor"]}"]')
     expect(last_link).to_have_attribute("aria-current", "location")

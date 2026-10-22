@@ -571,14 +571,23 @@ def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client
 
 @pytest.mark.ui
 def test_the_open_profile_menu_survives_people_loading(page: Page, web_url: str, client: ApiClient, console_errors: list):
-    held = []
-    page.route("**/v1/people", lambda route: held.append(route))
+    held, released = [], []
+
+    def hold(route):
+        # Later reads (the minute's refresh, a newcomer) go straight through.
+        if released:
+            route.continue_()
+        else:
+            held.append(route)
+
+    page.route("**/v1/people", hold)
     _sign_in(page, web_url, client.api_key, board=False)
     page.get_by_test_id("my-settings-button").click()
     expect(page.get_by_test_id("rowmenu-org-settings")).to_be_visible()
 
     # Release the actual API response only after the null-person menu is open.
     assert held
+    released.append(True)
     for route in held:
         route.continue_()
     expect(page.get_by_test_id("switcher")).to_be_visible()

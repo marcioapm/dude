@@ -139,8 +139,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const people = usePeople();
   // Your organisations and invitations, when the gatekeeper mounted this one (none in a one-screen test).
   const account = useAccount();
-  // People loading replaces the profile menu with the organisation switcher.
-  const [profileOpen, setProfileOpen] = useState(false);
   useEffect(installActivity, []);
   // Making a project is an admin's: it brings its own models, image and repositories.
   const isAdmin = people.me?.role === "admin";
@@ -150,8 +148,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [navOpen, setNavOpen] = useState(false);
   // Folded to its rail on a wide screen: the person's choice, kept as the density is.
   const [railed, setRailed] = useState(() => localStorage.getItem(SIDEBAR) === "rail");
+  // The profile menu stays open while people load, which swaps its trigger
+  // for the organisation switcher; folding or unfolding, which moves it, closes it.
+  const [profileOpen, setProfileOpen] = useState(false);
   const setCollapsed = useCallback((rail: boolean) => {
     localStorage.setItem(SIDEBAR, rail ? "rail" : "full");
+    setProfileOpen(false);
     setRailed(rail);
   }, []);
   // `[` outside a field folds or unfolds it (the rail's own `/` is the Sidebar's).
@@ -161,6 +163,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       // Under the drawer breakpoint there is no rail to fold to.
       if (typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches) return;
       e.preventDefault();
+      setProfileOpen(false);
       setRailed((rail) => {
         localStorage.setItem(SIDEBAR, rail ? "full" : "rail");
         return !rail;
