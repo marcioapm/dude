@@ -244,6 +244,19 @@ describe("settings pages", () => {
     await app("#/org/settings", new FixtureClient("a"));
     await until(() => (document.title === "Organisation settings — dude" ? true : null), "the tab title");
   });
+
+  test("a role's page has the wide column; another page does not", async () => {
+    const column = async (hash: string) => {
+      const page = await app(hash, new FixtureClient("a"));
+      const main = await until(() => page.querySelector<HTMLElement>("[data-testid=org-settings] [data-settings-main]"), `the column at ${hash}`);
+      const wide = main.getAttribute("data-wide");
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+      return wide;
+    };
+    expect(await column("#/org/settings/implementer")).toBe("true");
+    expect(await column("#/org/settings/delivery")).toBeNull();
+  });
 });
 
 describe("the sidebar's profile band", () => {

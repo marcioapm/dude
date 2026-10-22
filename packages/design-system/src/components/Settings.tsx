@@ -71,7 +71,7 @@ export function SettingsLayout({ scope, items, current, onSelect, footer, wide, 
         ))}
         {footer ? <div className={styles["navFooter"]}>{footer}</div> : null}
       </nav>
-      <div className={cx(styles["main"], wide && styles["wide"])}>{children}</div>
+      <div className={cx(styles["main"], wide && styles["wide"])} data-settings-main="" data-wide={wide ? "true" : undefined}>{children}</div>
     </div>
   );
 }
