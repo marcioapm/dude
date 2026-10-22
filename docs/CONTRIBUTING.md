@@ -184,7 +184,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   Then the Run is **waiting** (`runs.waiting_since`), and the answer starts
   its next turn.
 - **Reviewers report findings** as YAML in their reply; `delivery/findings.go`
-  parses it. Only review and test Runs may report.
+  parses it. Only review and test Runs may report. A reviewer (not the
+  tester) may instead ask a narrow factual question, a `question:`
+  document (`ParseQuestions`): kept in `review_questions` across retried
+  reports, shown to the next reviewer of its category in the same attempt
+  and read-only on the task's Findings tab. It is never a finding, never
+  reaches a fixer, and nothing waits on it yet.
 - **The tester is on by default and gates the pull request**
   (`delivery/verification.go`). It ends its reply with one YAML document
   per acceptance criterion (`ParseAcceptance`); dude records each in

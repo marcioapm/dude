@@ -38,6 +38,7 @@ import type {
   Escalation,
   EscalationAction,
   Finding,
+  ReviewQuestion,
   Verification,
   RecoverAction,
   RecoveryOptions,
@@ -126,6 +127,7 @@ export type {
   Escalation,
   EscalationAction,
   Finding,
+  ReviewQuestion,
   Verification,
   VerdictStatus,
   RecoverAction,
@@ -770,6 +772,11 @@ export class ApiClient {
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
     return this.#request("GET", `/v1/findings${qs({ taskId })}`);
+  }
+
+  /** Questions the task's reviewers asked a person, every status, oldest first. */
+  reviewQuestions(taskId: string): Promise<{ questions: ReviewQuestion[] }> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/review-questions`);
   }
 
   /** The attempt's submitted feedback and your own drafts on it; the current attempt unless named. */

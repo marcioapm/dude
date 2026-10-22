@@ -1,4 +1,4 @@
--- 175_guide_sections.sql — dude's own guide (orchestrator/internal/guide),
+-- 176_guide_sections.sql — dude's own guide (orchestrator/internal/guide),
 -- indexed for search_memory's type doc.
 --
 -- One row per section of a built-in guide page, shared by every

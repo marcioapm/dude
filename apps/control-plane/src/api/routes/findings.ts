@@ -99,7 +99,30 @@ async function resolveFinding(ctx: RequestContext): Promise<Response> {
 }
 
 
+/**
+ * A task's reviewer questions (review_questions), oldest first. Read-only:
+ * the orchestrator records them from a reviewer's reply. A task another
+ * organization owns is not found, as RLS hides it.
+ */
+async function listReviewQuestions(ctx: RequestContext): Promise<Response> {
+  const taskId = ctx.params.id!;
+  const questions = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const [task] = await scope.sql`SELECT id FROM tasks WHERE id = ${taskId}`;
+    if (!task) return null;
+    return (await scope.sql`
+      SELECT id, task_id AS "taskId", run_id AS "runId", category, finding_id AS "findingId", question,
+        why_it_matters AS "whyItMatters", evidence_checked AS "evidenceChecked", needed_from AS "neededFrom",
+        status, answer, created_at AS "createdAt"
+      FROM review_questions WHERE task_id = ${taskId}
+      ORDER BY created_at, run_id, n
+      LIMIT 500`) as Array<Record<string, unknown>>;
+  });
+  if (!questions) throw notFound(`task ${taskId} not found`);
+  return json({ questions });
+}
+
 export function registerFindingRoutes(router: Router): void {
   router.get("/v1/findings", listFindings);
   router.post("/v1/findings/:id/resolve", resolveFinding);
+  router.get("/v1/tasks/:id/review-questions", listReviewQuestions);
 }

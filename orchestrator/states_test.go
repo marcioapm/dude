@@ -698,7 +698,7 @@ func (w *world) finished(runID string) {
 				verdicts[findingIDs[i]] = fixed
 			}
 		}
-		if err := phases.RecordFindings(ctx, w.app, w.org, runID, delivery.ParseFindings(step.Reply), verdicts); err != nil {
+		if err := phases.RecordFindings(ctx, w.app, w.org, runID, delivery.ParseFindings(step.Reply), verdicts, delivery.ParseQuestions(step.Reply)); err != nil {
 			w.t.Fatal(err)
 		}
 	}
