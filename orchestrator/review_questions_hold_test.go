@@ -380,3 +380,24 @@ func TestReleasingTheHoldLeavesAnotherQuestionWaiting(t *testing.T) {
 	}
 	w.until("the pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
 }
+
+// A question left open by attempt 1 does not hold attempt 2: the task,
+// held and then stopped, is started over; the new attempt's review asks
+// nothing and its pull request opens, with attempt 1's question still open.
+func TestAnEarlierAttemptsQuestionHoldsNothingAfterStartOver(t *testing.T) {
+	w := newWorld(t)
+	w.asksOnce(false)
+	wi := w.task()
+	w.deliver(wi)
+	w.heldAtThePullRequest(wi)
+	// Stopped as a person's abort leaves it; Start over takes an aborted task.
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'aborted' WHERE id = $1`, wi)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
+		t.Fatalf("start over: %d %v", status, body)
+	}
+	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	if n := w.count(`SELECT count(*) FROM review_questions q JOIN runs r ON r.id = q.run_id
+		WHERE q.task_id = $1 AND q.status = 'open' AND r.attempt = 1`, wi); n != 1 {
+		t.Errorf("%d attempt-1 questions open, want the one", n)
+	}
+}
