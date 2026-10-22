@@ -22,7 +22,7 @@ func EarlierQuestionsTx(ctx context.Context, tx pgx.Tx, runID string) ([]Earlier
 	rows, err := tx.Query(ctx, `SELECT q.question, COALESCE(f.title, ''), q.status, COALESCE(q.answer, ''), q.answered_by_person IS NOT NULL
 		FROM runs r
 		JOIN runs asker ON asker.task_id = r.task_id AND asker.attempt = r.attempt AND asker.phase = 'review'
-		  AND COALESCE(NULLIF(asker.category, ''), 'correctness') = COALESCE(NULLIF(r.category, ''), 'correctness')
+		-- q.category is the asker's, "" read as correctness (recordFindingsTx).
 		JOIN review_questions q ON q.run_id = asker.id AND q.category = COALESCE(NULLIF(r.category, ''), 'correctness')
 		LEFT JOIN review_findings f ON f.id = q.finding_id
 		WHERE r.id = $1 AND r.phase = 'review' AND q.status <> 'withdrawn'
