@@ -381,6 +381,40 @@ func TestAWriterRunWithUnreadableHeadsStillHasItsChecksAccounted(t *testing.T) {
 
 // The account keeps the newest Runs that fit its bound, and with none, the
 // newest alone without its checks.
+func TestChecksStatusPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		j    gatedJudgement
+		want string
+	}{
+		{gatedJudgement{Verified: true, Skipped: true, Waived: true, Unchanged: true, Carried: true}, "not model-checked"},
+		{gatedJudgement{Verified: true, Waived: true, Unchanged: true, Carried: true}, "waived"},
+		{gatedJudgement{Verified: true, Unchanged: true, Carried: true}, "no changes; checks not needed"},
+		{gatedJudgement{Verified: true, Carried: true}, "waiver carried"},
+		{gatedJudgement{Carried: true}, "not backed"},
+	} {
+		if got := tc.j.status(); got != tc.want {
+			t.Errorf("%+v: %s, want %s", tc.j, got, tc.want)
+		}
+	}
+}
+
+func TestWriterChecksKeepCarriedAndRefusedWaiverDetails(t *testing.T) {
+	w := &CarriedWaiver{RunID: "run_source", Role: "Implementer", PersonName: "Ana", Turn: 42, Note: "Hardware unavailable."}
+	runs := []gatedJudgement{
+		{Role: "Fixer", Verified: true, Carried: true, Checks: []gatedCheck{{Command: "make test", Result: "waived", Reason: "same failure", Waiver: w}}},
+		{Role: "Fixer", Checks: []gatedCheck{{Command: "make test", Result: "fail", Reason: "new failure", WaiverReason: "waiver does not cover it"}}},
+		{Role: "Simplifier", Verified: true, Unchanged: true},
+	}
+	text := writerChecksText(runs, writerChecksMax)
+	for _, want := range []string{"Fixer: waiver carried", "make test: waived (same failure)",
+		"carried from Ana's waiver of the Implementer's report (run_source, turn 42): Hardware unavailable.",
+		"make test: fail (new failure) — waiver does not cover it", "Simplifier: no changes; checks not needed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("account lacks %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestTheWriterChecksAccountIsBounded(t *testing.T) {
 	type check = gatedCheck
 	var runs []gatedJudgement
