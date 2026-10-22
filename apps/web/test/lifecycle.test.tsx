@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { EventTypes, type PersistedEvent } from "@dude/domain";
+import { EventTypes, type PersistedEvent, type Run } from "@dude/domain";
 import { activityLines } from "../src/screens/TaskScreen.tsx";
 import { afterEach, beforeEach } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
@@ -313,5 +313,47 @@ describe("lifecycle in Activity", () => {
       ev(EventTypes.TaskAutoStartCancelled, { how: "deliver", why: "closed" }),
     ], people, [], [], 1, "CP-46");
     expect(said(lines)).toEqual(["Ana Ribeiro archived CP-46 with its epic", "Ana Ribeiro closed it, which ends start when unblocked"]);
+  });
+});
+
+describe("Stop in Activity", () => {
+  const run = (id: string, attempt: number, p: Partial<Run>): Run => ({ id, organizationId: "org", projectId: "prj", taskId: "wi_63", attempt,
+    status: "aborted", workerId: null, workspacePath: null, error: null, kind: "agent", phase: null, role: null, category: null, parentRunId: null,
+    baseRefs: {}, heads: {}, branch: null, harness: null, model: null, dudePause: null, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 },
+    machine: null, createdAt: new Date(Date.UTC(2026, 9, 17, 9)).toISOString(), startedAt: null, endedAt: null, ...p }) as Run;
+  const runs = [run("run_c1", 1, { role: "conductor" }), run("run_i1", 1, { phase: "implement", role: "implementer" }),
+    run("run_c2", 2, { role: "conductor", status: "running", createdAt: new Date(Date.UTC(2026, 9, 17, 11)).toISOString() })];
+  const aborted = (runId: string, note: string) => ev(EventTypes.RunAborted, { reason: note, by: "stop" }, { runId });
+
+  test("Stop here is one line naming what it stopped, the note under it; its Runs' aborts are not said again", () => {
+    const note = "Wrong greeting: hold on.";
+    const lines = activityLines([
+      aborted("run_c1", note), aborted("run_i1", note),
+      ev("task.stopped", { by: ANA, note, runIds: ["run_c1", "run_i1"], decider: "conductor" }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro stopped the task · stopped the conductor and the implementer"]);
+    expect(lines[0]!.quote).toBe(note);
+    expect(lines[0]!.attempt).toBe(1);
+  });
+
+  test("Stop and start over is one line: the attempt stopped, the one started and who decides it, never a pick-up", () => {
+    const note = "Start fresh.";
+    const lines = activityLines([
+      aborted("run_c1", note), aborted("run_i1", note),
+      ev("task.stopped", { by: ANA, note, runIds: ["run_c1", "run_i1"], decider: "conductor", andRestart: true, nextDecider: "conductor" }),
+      ev(EventTypes.TaskDeciderChanged, { from: "conductor", to: "conductor", why: "start over" }),
+      ev("task.recovered", { action: "restart", note, attempt: 2, runIds: [], decider: "conductor", via: "stop" }),
+    ], people, runs, [], 2, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro stopped attempt 1 and started attempt 2 · the conductor decides · stopped the conductor and the implementer"]);
+    expect(lines[0]!.quote).toBe(note);
+    expect(lines[0]!.attempt).toBe(1);
+  });
+
+  test("a session's own Abort keeps its line, and a pick-up from the stopped notice is still a pick-up", () => {
+    const lines = activityLines([
+      ev(EventTypes.RunAborted, { reason: "Not this way." }, { runId: "run_i1" }),
+      ev("task.recovered", { action: "resume", note: "Go on.", runIds: ["run_i1"] }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro aborted the implementer", "Ana Ribeiro picked the task back up: resumed where it stopped"]);
   });
 });

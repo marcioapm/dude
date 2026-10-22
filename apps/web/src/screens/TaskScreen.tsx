@@ -1386,6 +1386,20 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
   // Who a Run is ("implementer", "correctness reviewer"), not its stage.
   const doer = (runId: string | null) => (runId && labels.get(runId)) || "agent";
   const session = (runId: string | null) => (runId && labels.has(runId) ? { label: "Open session", runId, tab: "sessions" } : undefined);
+  // The Runs each Stop aborted, and the attempt each Stop and start over began.
+  const stops = events.filter((e) => e.eventType === "task.stopped");
+  const stopNamed = (e: PersistedEvent) => stops.some((s) => Array.isArray(s.payload.runIds) && s.payload.runIds.includes(e.runId));
+  const restartOf = (stop: PersistedEvent) => {
+    const r = events.find((e) => e.eventType === "task.recovered" && e.payload.via === "stop" && e.cursor > stop.cursor);
+    return typeof r?.payload.attempt === "number" ? r.payload.attempt : null;
+  };
+  // Written between a Stop and start over's stop and its start: that stop's line says it.
+  const withinStopRestart = (e: PersistedEvent) => {
+    const stop = stops.findLast((s) => s.cursor < e.cursor);
+    if (stop?.payload.andRestart !== true) return false;
+    const started = events.find((r) => r.eventType === "task.recovered" && r.payload.via === "stop" && r.cursor > stop.cursor);
+    return started !== undefined && started.cursor > e.cursor;
+  };
   for (const e of events) {
     const by = humanActor(e);
     const name = actorName(by, people.names);
@@ -1426,10 +1440,28 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         if (by) out.push({ ...base, who: face, text: <>{person} resumed the {doer(e.runId)}</> });
         break;
       case "run.aborted":
+        // A Stop's abort of each Run is said once, by the task.stopped line that names them.
+        if (p.by === "stop" && stopNamed(e)) break;
         out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} aborted the {doer(e.runId)}</>,
           quote: p.reason ? String(p.reason) : undefined, open: session(e.runId) });
         break;
+      case "task.stopped": {
+        const runIds = Array.isArray(p.runIds) ? p.runIds.filter((id): id is string => typeof id === "string") : [];
+        const stoppedWhat = runIds.length ? <span className="muted"> · stopped {stoppedList(runIds.map((id) => doer(id)))}</span> : null;
+        const next = p.andRestart === true ? restartOf(e) : null;
+        // The attempt it stopped is its Runs'; Stop and start over's next attempt began in the same write.
+        const attempt = (runIds.length ? attemptOf({ ...e, runId: runIds[0]! }) : null) ?? (next !== null ? next - 1 : attemptOf(e) ?? current);
+        const decides = p.nextDecider === "conductor" ? "the conductor decides" : p.nextDecider === "policy" ? "Deliver decides" : null;
+        out.push({ ...base, kind: "decisions", who: face, quote: p.note ? String(p.note) : undefined,
+          text: p.andRestart === true
+            ? <>{person} stopped attempt {attempt} and started attempt {next ?? attempt + 1}{decides ? <span className="muted"> · {decides}</span> : null}{stoppedWhat}</>
+            : <>{person} stopped the task{stoppedWhat}</> });
+        out[lines]!.attempt = attempt;
+        continue;
+      }
       case "task.recovered":
+        // Stop and start over: the stop's line says it.
+        if (p.via === "stop") break;
         out.push({ ...base, who: face, quote: p.note ? String(p.note) : undefined,
           text: <>{person} picked the task back up: {p.action === "resume" ? "resumed where it stopped"
             : p.action === "retry" ? "tried again with a new agent" : <>started over as attempt {String(p.attempt ?? "")}</>}</> });
@@ -1440,8 +1472,8 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       }
       case "task.decider_changed":
-        // Talk it through's own start line says it; the change is not said twice.
-        if (p.why === "talk it through") break;
+        // Talk it through's own start line says it; the change is not said twice. Nor Stop and start over's.
+        if (p.why === "talk it through" || withinStopRestart(e)) break;
         out.push({ ...base, kind: "decisions", who: face ?? <DudeMark size={32} />,
           text: <>{by ? person : <b>{dude}</b>} {p.to === "policy" ? "let Deliver finish it"
             : p.why === "a person wrote in Chat" ? "wrote in Chat, which gave the decisions to the conductor"
@@ -1575,6 +1607,13 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
 }
 
 const HOW: Record<string, string> = { deliver: "Deliver", talk: "Talk it through" };
+
+/** The Runs a Stop aborted, by who they are: "the conductor and 2 correctness reviewers". */
+function stoppedList(doers: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const d of doers) counts.set(d, (counts.get(d) ?? 0) + 1);
+  return keyList([...counts].map(([d, n]) => (n === 1 ? `the ${d}` : `${n} ${d}s`)));
+}
 
 /**
  * A lifecycle event in Activity's words, after who did it
