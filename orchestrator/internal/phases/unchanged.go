@@ -26,6 +26,7 @@ while [ $# -ge 3 ]; do
   name=$1 dir=$2 base=$3; shift 3
   if [ ! -d "$dir" ]; then echo "fail $name"; status=4; continue; fi
   if ! head=$(git -C "$dir" rev-parse -q --verify 'HEAD^{commit}'); then echo "fail $name"; status=4; continue; fi
+  if [ "$head" != "$base" ]; then echo "changed $name $head"; continue; fi
   if ! st=$(git -C "$dir" status --porcelain=v1 --untracked-files=all --ignore-submodules=none); then echo "fail $name"; status=4; continue; fi
   op=
   for ref in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD; do
