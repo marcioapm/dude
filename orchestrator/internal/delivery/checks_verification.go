@@ -42,13 +42,16 @@ func (j gatedJudgement) status() string {
 }
 
 // gatedRuns is each gated Run of the current attempt with its latest
-// judgement, oldest Run first.
+// judgement, oldest Run first. A later unchanged turn pushed nothing new, so
+// it never displaces the Run's earlier judged, waived or skipped turn; a Run
+// with only unchanged turns reads as unchanged.
 func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, error) {
 	rows, err := tx.Query(ctx, `SELECT phase, heads, payload FROM (
 		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, r.heads, e.payload
 		FROM events e JOIN runs r ON r.id=e.run_id
 		WHERE r.task_id=$1 AND r.phase IN ('implement','fix','simplify') AND e.event_type=$3
-		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)) ORDER BY r.id, e.cursor DESC) latest
+		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
+		ORDER BY r.id, (e.payload->>'unchanged')::boolean IS TRUE, e.cursor DESC) latest
 		ORDER BY created_at, id`, st.TaskID, st.Attempt, EvRunChecksJudged)
 	if err != nil {
 		return nil, err

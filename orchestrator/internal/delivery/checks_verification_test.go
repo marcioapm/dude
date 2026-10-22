@@ -352,6 +352,57 @@ func TestAWriterRunWithUnreadableHeadsStillHasItsChecksAccounted(t *testing.T) {
 	}
 }
 
+// A resumed Run's later unchanged turn keeps that Run's earlier waived
+// judgement in the account and the tester's writer checks, so the headline
+// stays waived; a Run whose only judgement is unchanged still reads unchanged.
+func TestALaterUnchangedTurnKeepsTheRunsEarlierWaiver(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	for _, q := range []string{
+		`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_wu',$1,'WU','wu','WU')`,
+		`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_wu',$1,'prj_wu',1,'WU','WU','running')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,created_at)
+			VALUES('run_wu1',$1,'prj_wu','wi_wu',1,'fix','completed',now()-interval '1 hour')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status) VALUES('run_wu2',$1,'prj_wu','wi_wu',1,'simplify','completed')`,
+		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+			('ev_wu1a',$1,'run.checks.judged','run_wu1','wi_wu','human','usr','test','{"turn":1,"verified":true,"waived":true,"message":"Fails on main too.","checks":[]}')`,
+		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+			('ev_wu1b',$1,'run.checks.judged','run_wu1','wi_wu','system','dude','test','{"turn":2,"verified":true,"unchanged":true,"message":"No changes.","checks":[]}')`,
+		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+			('ev_wu2',$1,'run.checks.judged','run_wu2','wi_wu','system','dude','test','{"turn":1,"verified":true,"unchanged":true,"message":"No changes.","checks":[]}')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var account, text string
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		runs, err := gatedRuns(ctx, tx, &State{TaskID: "wi_wu", ProjectID: "prj_wu", Attempt: 1})
+		if err != nil {
+			return err
+		}
+		account = checksAccountText(runs, prBodyMax)
+		text, err = WriterChecksTx(ctx, tx, "wi_wu", 1)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const want = "### Checks\nChecks were waived by a person:\n- Fixer: Fails on main too.\n\n" +
+		"- **Fixer** — waived\n- **Simplifier** — no changes; checks not needed"
+	if account != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", account, want)
+	}
+	for _, want := range []string{"- Fixer: waived: Fails on main too.", "- Simplifier: no changes; checks not needed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the writer checks lack %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "- Fixer: no changes") {
+		t.Errorf("the fixer's unchanged turn displaced its waiver in the writer checks:\n%s", text)
+	}
+}
+
 // The account keeps the newest Runs that fit its bound, and with none, the
 // newest alone without its checks.
 func TestTheWriterChecksAccountIsBounded(t *testing.T) {
