@@ -19,12 +19,14 @@ func TestMain(m *testing.M) { os.Exit(dbtest.Main(m)) }
 func TestABrainstormLosesNameSessionOnceAMemberNamedItsSession(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
+	other := dbtest.Org(t, owner)
 	ctx := context.Background()
-	for _, s := range []struct{ id, title, by string }{
-		{"ssn_untitled", "", ""}, {"ssn_agent", "Metering", "agent"}, {"ssn_person", "Dry run", "person"},
+	for _, s := range []struct{ id, org, title, by string }{
+		{"ssn_untitled", org, "", ""}, {"ssn_agent", org, "Metering", "agent"}, {"ssn_person", org, "Dry run", "person"},
+		{"ssn_other_org", other, "Theirs", "person"},
 	} {
 		if _, err := owner.Exec(ctx, `INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''))`,
-			s.id, org, s.title, s.by); err != nil {
+			s.id, s.org, s.title, s.by); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -38,7 +40,9 @@ func TestABrainstormLosesNameSessionOnceAMemberNamedItsSession(t *testing.T) {
 		}
 		return g
 	}
-	for session, want := range map[string]bool{"ssn_untitled": true, "ssn_agent": true, "ssn_person": false} {
+	// A missing or other-organisation session has no visible row, so defaults stay.
+	for session, want := range map[string]bool{"ssn_untitled": true, "ssn_agent": true, "ssn_person": false,
+		"ssn_missing": true, "ssn_other_org": true} {
 		g := resolve(capabilities.Agent{Role: "brainstorm", Org: org, Run: "run_" + session, Session: session})
 		if g.Tool("name_session") != want {
 			t.Errorf("%s: name_session granted %v, want %v", session, g.Tool("name_session"), want)
