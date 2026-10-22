@@ -381,7 +381,7 @@ export function Sidebar({
           <span className={styles["title"]}>{title}</span>
           {othersOnline.length > 0 ? (
             <Tooltip content={onlineNames}>
-              <div className={styles["online"]} role="group" aria-label={onlineNames} data-testid="online">
+              <div className={styles["online"]} role="group" tabIndex={0} aria-label={onlineNames} data-testid="online">
                 <PersonAvatarStack people={othersOnline.slice(0, ONLINE_FACES)} size={20} max={ONLINE_FACES} aria-hidden />
                 {othersOnline.length > ONLINE_FACES ? <span className={styles["onlineMore"]} aria-hidden>+{othersOnline.length - ONLINE_FACES}</span> : null}
               </div>

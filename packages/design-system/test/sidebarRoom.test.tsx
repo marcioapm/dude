@@ -40,6 +40,10 @@ describe("the brand row's online faces", () => {
     const online = header.querySelector("[data-testid=online]")!;
     expect(online).not.toBeNull();
     expect(online.getAttribute("aria-label")).toBe("Online: Ana Ribeiro, Tomás Ortega, Lin Zhao, Kenji Nakamura");
+    expect(online.getAttribute("role")).toBe("group");
+    expect((online as HTMLElement).tabIndex).toBe(0);
+    await act(async () => (online as HTMLElement).focus());
+    expect(document.activeElement).toBe(online);
     expect(online.textContent).toContain("+1");
     expect(online.textContent).not.toContain("MM");
   });
