@@ -182,6 +182,19 @@ func (w *unchangedWorld) gate() (pass bool, judged int) {
 	return pass, fake.calls
 }
 
+func (w *unchangedWorld) passUnchanged() {
+	w.t.Helper()
+	if pass, _ := w.gate(); !pass {
+		w.t.Fatal("the unchanged turn did not pass")
+	}
+}
+
+// movePlacement moves the agent's session to another placement.
+func (w *unchangedWorld) movePlacement() {
+	w.t.Helper()
+	w.exec(`UPDATE runs SET agent_session_epoch = agent_session_epoch + 1 WHERE id = $1`, w.run.ID)
+}
+
 // A turn that left every pushable checkout where it started passes the gate
 // with no report and no judge, recorded as no change: verified, not skipped,
 // with the heads it read.
@@ -311,9 +324,7 @@ func TestAnInspectionThatCannotEstablishNoChangeKeepsTheRunGated(t *testing.T) {
 func TestANoChangeDecisionHoldsOnlyForItsTurnAndPlacement(t *testing.T) {
 	t.Run("restart", func(t *testing.T) {
 		w := newUnchangedWorld(t, "api")
-		if pass, _ := w.gate(); !pass {
-			t.Fatal("the unchanged turn did not pass")
-		}
+		w.passUnchanged()
 		execs := w.lux.execCount()
 		w.write("api", "late.txt", "after the decision\n")
 		restarted := &Syncer{DB: w.s.DB, Lux: w.lux, Log: w.s.Log, Judge: &checksFake{err: errors.New("must not be called")}}
@@ -326,9 +337,7 @@ func TestANoChangeDecisionHoldsOnlyForItsTurnAndPlacement(t *testing.T) {
 	})
 	t.Run("a later turn", func(t *testing.T) {
 		w := newUnchangedWorld(t, "api")
-		if pass, _ := w.gate(); !pass {
-			t.Fatal("the unchanged turn did not pass")
-		}
+		w.passUnchanged()
 		w.write("api", "src/main.go", "package main\n")
 		w.endTurn()
 		if pass, _ := w.gate(); pass {
@@ -340,10 +349,8 @@ func TestANoChangeDecisionHoldsOnlyForItsTurnAndPlacement(t *testing.T) {
 	})
 	t.Run("a resumed placement", func(t *testing.T) {
 		w := newUnchangedWorld(t, "api")
-		if pass, _ := w.gate(); !pass {
-			t.Fatal("the unchanged turn did not pass")
-		}
-		w.exec(`UPDATE runs SET agent_session_epoch = agent_session_epoch + 1 WHERE id = $1`, w.run.ID)
+		w.passUnchanged()
+		w.movePlacement()
 		w.write("api", "src/main.go", "package main\n")
 		if pass, _ := w.gate(); pass {
 			t.Fatal("a decision from another placement was reused over a changed checkout")
@@ -351,10 +358,8 @@ func TestANoChangeDecisionHoldsOnlyForItsTurnAndPlacement(t *testing.T) {
 	})
 	t.Run("a resumed placement still unchanged", func(t *testing.T) {
 		w := newUnchangedWorld(t, "api")
-		if pass, _ := w.gate(); !pass {
-			t.Fatal("the unchanged turn did not pass")
-		}
-		w.exec(`UPDATE runs SET agent_session_epoch = agent_session_epoch + 1 WHERE id = $1`, w.run.ID)
+		w.passUnchanged()
+		w.movePlacement()
 		execs := w.lux.execCount()
 		if pass, _ := w.gate(); !pass || w.lux.execCount() == execs {
 			t.Fatalf("pass %v; inspected again: %v", pass, w.lux.execCount() != execs)
@@ -362,12 +367,12 @@ func TestANoChangeDecisionHoldsOnlyForItsTurnAndPlacement(t *testing.T) {
 	})
 	t.Run("a placement that moves during the inspection", func(t *testing.T) {
 		w := newUnchangedWorld(t, "api")
-		moves := 0
+		moved := false
 		w.lux.during = func() {
-			if moves == 0 {
-				w.exec(`UPDATE runs SET agent_session_epoch = agent_session_epoch + 1 WHERE id = $1`, w.run.ID)
+			if !moved {
+				w.movePlacement()
+				moved = true
 			}
-			moves++
 		}
 		if pass, _ := w.gate(); pass {
 			t.Fatal("an inspection read across a placement move passed")
@@ -398,7 +403,7 @@ func TestAJudgedTurnIsReusedAcrossPlacements(t *testing.T) {
 	if pass, _, err := w.s.checksBeforePush(context.Background(), w.run); err != nil || !pass {
 		t.Fatalf("pass %v, %v", pass, err)
 	}
-	w.exec(`UPDATE runs SET agent_session_epoch = agent_session_epoch + 1 WHERE id = $1`, w.run.ID)
+	w.movePlacement()
 	w.s.Judge = &checksFake{err: errors.New("must not be called")}
 	if pass, _, err := w.s.checksBeforePush(context.Background(), w.run); err != nil || !pass {
 		t.Fatalf("after a move: pass %v, %v", pass, err)
@@ -429,9 +434,7 @@ func TestAnUnchangedTurnPublishesOnlyWhatInspectionRead(t *testing.T) {
 	}
 	t.Run("the heads read", func(t *testing.T) {
 		w := newUnchangedWorld(t, "api")
-		if pass, _ := w.gate(); !pass {
-			t.Fatal("the unchanged turn did not pass")
-		}
+		w.passUnchanged()
 		push(w, w.bases["api"])
 		if _, err := w.s.finish(context.Background(), w.run); err != nil {
 			t.Fatal(err)
@@ -442,9 +445,7 @@ func TestAnUnchangedTurnPublishesOnlyWhatInspectionRead(t *testing.T) {
 	})
 	t.Run("a moved head", func(t *testing.T) {
 		w := newUnchangedWorld(t, "api")
-		if pass, _ := w.gate(); !pass {
-			t.Fatal("the unchanged turn did not pass")
-		}
+		w.passUnchanged()
 		push(w, strings.Repeat("c", 40))
 		if _, err := w.s.finish(context.Background(), w.run); err != nil {
 			t.Fatal(err)
