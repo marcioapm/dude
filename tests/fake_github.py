@@ -171,6 +171,8 @@ class FakeGitHub:
         # Each edit of a pull request's title or body, in order: its number
         # and the fields the PATCH set.
         self.body_edits: list[tuple[int, dict]] = []
+        # Each state a PATCH changed a pull request to: its number and "closed" or "open".
+        self.state_changes: list[tuple[int, str]] = []
         # Issues by number (open_issue), apart from pull requests.
         self.issues: dict[int, Issue] = {}
 
@@ -784,22 +786,39 @@ class FakeGitHub:
                     # A pull request's title or body, edited through either
                     # endpoint, as GitHub takes it, then told by an `edited`
                     # webhook; dude sends {"body"} to /issues/{n}. A state
-                    # change is not served here.
+                    # change ({"state": "closed"} is dude's close) is told
+                    # by `closed` or `reopened`; a merged one's state is
+                    # refused 422, as GitHub refuses it.
                     gh, body = self.github, self._body()
                     pr = gh.pulls.get(int(m[2]))
-                    if pr is None or "state" in body:
+                    if pr is None:
                         return self._send(404, {"message": "Not Found"})
                     if not (self._profile() or TokenProfile()).pulls_write:
                         return self._refuse("pull_requests=write")
+                    state = body.get("state")
+                    if state not in (None, "open", "closed"):
+                        return self._send(422, {"message": "Validation Failed"})
+                    if state is not None and pr.merged_at is not None:
+                        return self._send(422, {"message": "Validation Failed", "errors": [
+                            {"message": "state cannot be changed. The pull request has been merged."}]})
                     edit = {k: body[k] for k in ("title", "body") if k in body}
                     with gh._lock:
                         if "title" in edit:
                             pr.title = edit["title"]
                         if "body" in edit:
                             pr.body = edit["body"] or ""
-                        gh.body_edits.append((pr.number, edit))
+                        if edit:
+                            gh.body_edits.append((pr.number, edit))
+                        changed = state is not None and state != pr.state
+                        if state is not None and changed:
+                            pr.state = state
+                            gh.state_changes.append((pr.number, state))
                     self._send(200, self._pull_json(pr))
-                    gh.send_webhook("pull_request", {"action": "edited", "pull_request": {"number": pr.number}})
+                    if edit:
+                        gh.send_webhook("pull_request", {"action": "edited", "pull_request": {"number": pr.number}})
+                    if changed:
+                        gh.send_webhook("pull_request", {"action": "closed" if state == "closed" else "reopened",
+                                                         "pull_request": {"number": pr.number}})
                     return None
                 if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/issues/comments/(\d+)", self.path):
                     # An edit of a conversation comment by its id: 404 when
@@ -814,17 +833,6 @@ class FakeGitHub:
                                     c["body"], c["updated_at"] = body.get("body", ""), _now()
                                     return self._send(200, c)
                     return self._send(404, {"message": "Not Found"})
-                if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/(?:pulls|issues)/(\d+)", self.path):
-                    # An edit of the pull request: its description, as both endpoints take it, or closing it.
-                    body, pr = self._body(), self.github.pulls.get(int(m[1]))
-                    if pr is None:
-                        return self._send(404, {"message": "Not Found"})
-                    with self.github._lock:
-                        if "body" in body:
-                            pr.body = body["body"]
-                        if body.get("state") == "closed" and pr.merged_at is None:
-                            pr.state = "closed"
-                    return self._send(200, self._pull_json(pr))
                 if m := re.fullmatch(rf"/repos/{self.github.owner}/{self.github.repo}/hooks/(\d+)", self.path):
                     body = self._body()
                     with self.github._lock:
