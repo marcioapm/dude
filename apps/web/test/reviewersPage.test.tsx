@@ -1,16 +1,18 @@
 /**
- * A project's Delivery page lists every reviewer as a checkbox, the
- * documentation reviewer among them, unticked unless required; ticking it
- * saves it as a required reviewer. Mounted in happy-dom against the fixture
- * client.
+ * The Delivery page, on a project and on the organisation, lists every
+ * reviewer as a checkbox, the documentation reviewer among them, unticked
+ * unless required; ticking it saves it as a required reviewer at that level.
+ * Mounted in happy-dom against the fixture client.
  */
 
 import { afterEach, expect, test } from "bun:test";
+import type { ReactNode } from "react";
 import type { SettingsPatch, SettingsResponse } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { click, facetCheckbox, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT } from "../src/fixtures/data.ts";
+import { OrganizationSettingsScreen } from "../src/screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "../src/screens/ProjectSettingsScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -20,21 +22,22 @@ afterEach(async () => {
 });
 
 class Recording extends FixtureClient {
-  patches: SettingsPatch[] = [];
+  projectPatches: SettingsPatch[] = [];
+  organizationPatches: SettingsPatch[] = [];
   override async updateProjectSettings(projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
-    this.patches.push(patch);
+    this.projectPatches.push(patch);
     return this.projectSettings(projectId);
+  }
+  override async updateOrganizationSettings(patch: SettingsPatch): Promise<SettingsResponse> {
+    this.organizationPatches.push(patch);
+    return this.organizationSettings();
   }
 }
 
-test("the Delivery page offers the documentation reviewer, off until ticked", async () => {
-  const client = new Recording("a");
+async function tickDocumentationAndSave(screen: ReactNode, saved: () => SettingsPatch[]) {
   const { container, unmount } = await mount(
     <TooltipProvider>
-      <ToastProvider>
-        <ProjectSettingsScreen client={client} projectId={PROJECT.id} projects={[]} admin page="delivery"
-          onPage={() => {}} onChanged={() => {}} onBack={() => {}} onOrganization={() => {}} />
-      </ToastProvider>
+      <ToastProvider>{screen}</ToastProvider>
     </TooltipProvider>,
   );
   mounted.push(unmount);
@@ -44,6 +47,27 @@ test("the Delivery page offers the documentation reviewer, off until ticked", as
 
   await click(documentation);
   await click(container.querySelector("[data-testid=delivery-save]")!);
-  await until(() => client.patches.length > 0 || null, "the save");
-  expect(client.patches).toEqual([{ delivery: { requiredReviewers: ["correctness", "documentation"] } }]);
+  await until(() => saved().length > 0 || null, "the save");
+}
+
+test("the project's Delivery page offers the documentation reviewer, off until ticked", async () => {
+  const client = new Recording("a");
+  await tickDocumentationAndSave(
+    <ProjectSettingsScreen client={client} projectId={PROJECT.id} projects={[]} admin page="delivery"
+      onPage={() => {}} onChanged={() => {}} onBack={() => {}} onOrganization={() => {}} />,
+    () => client.projectPatches,
+  );
+  expect(client.projectPatches).toEqual([{ delivery: { requiredReviewers: ["correctness", "documentation"] } }]);
+  expect(client.organizationPatches).toEqual([]);
+});
+
+test("the organisation's Delivery page offers the documentation reviewer, off until ticked", async () => {
+  const client = new Recording("a");
+  await tickDocumentationAndSave(
+    <OrganizationSettingsScreen client={client} me={null} people={[]} onPeopleChanged={() => {}} projects={[]}
+      page="delivery" onPage={() => {}} />,
+    () => client.organizationPatches,
+  );
+  expect(client.organizationPatches).toEqual([{ delivery: { requiredReviewers: ["correctness", "documentation"] } }]);
+  expect(client.projectPatches).toEqual([]);
 });
