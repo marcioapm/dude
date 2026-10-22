@@ -8,6 +8,7 @@ package orchestrator_test
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -231,6 +232,42 @@ func TestStartingOverAnAdoptedPullRequestCarriesItOn(t *testing.T) {
 	})
 	if c := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND number = $2 AND state = 'open' AND adopted`, task, n); c != 1 {
 		t.Errorf("the adopted pull request is no longer the task's, open")
+	}
+}
+
+// Stop and start over takes the settings as they are now, as a Start over
+// from the stopped task does: attempt 2 runs the reviewer the settings
+// added and resumes its reviewer for the scripted finding's second round.
+func TestStopAndStartOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	var hang atomic.Bool
+	hang.Store(true)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" && hang.Load() {
+			b.Hang = true
+		}
+		return b
+	}
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	w.deliver(task)
+	w.until("attempt 1's implementer to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task) == 1
+	})
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy
+		|| '{"requiredReviewers":["correctness","performance"],"resumeRounds":true}' WHERE id = $1`, w.project)
+	hang.Store(false)
+	if out := w.stop(ana, task, map[string]any{"andRestart": true}); out["attempt"] != float64(2) {
+		t.Fatalf("stop and start over answered %v", out)
+	}
+	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND category = 'performance'`, task); n == 0 {
+		t.Error("attempt 2 ran no performance reviewer: it kept attempt 1's reviewers")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND continues_how = 'resume'`, task); n == 0 {
+		t.Error("attempt 2 resumed no reviewer for its next round: it kept attempt 1's policy")
 	}
 }
 
