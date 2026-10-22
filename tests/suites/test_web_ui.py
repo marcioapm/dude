@@ -193,7 +193,7 @@ def test_a_task_is_edited_and_moved_from_its_screen(
     epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Greetings"}).json()
     item = client.create_task(forge_project["id"], "Draft title")
     sign_in(page, web_url, org["api_key"])
-    page.locator("[data-board-key]", has_text="Draft title").click()
+    page.locator(f"[data-board-key='task:{item['id']}']").click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
 
     page.get_by_test_id("edit-task").click()
@@ -854,7 +854,7 @@ def test_criteria_that_open_over_the_editors_limit_block_saving_until_they_fit(
     """Saved criteria within 16K open as a list whose markers take it past the editor's limit."""
     item = client.create_task(forge_project["id"], "Near the limit", acceptanceCriteria=["y" * 2048] * 8)
     sign_in(page, web_url, org["api_key"])
-    page.locator("[data-board-key]", has_text="Near the limit").click()
+    page.locator(f"[data-board-key='task:{item['id']}']").click()
     page.get_by_test_id("edit-task").click()
     criteria = page.get_by_test_id("task-criteria")
     # Eight "- [ ] " and seven newlines: 16,384 + 55.
@@ -948,9 +948,9 @@ def test_closing_an_edited_task_says_its_changes_are_unsaved_without_a_count(
 ):
     # Most of the goal was there already: a count of every word in it would be false.
     long_goal = " ".join(f"word{i}" for i in range(60))
-    client.create_task(forge_project["id"], "Edited goal", goal=long_goal)
+    item = client.create_task(forge_project["id"], "Edited goal", goal=long_goal)
     sign_in(page, web_url, org["api_key"])
-    page.locator("[data-board-key]", has_text="Edited goal").click()
+    page.locator(f"[data-board-key='task:{item['id']}']").click()
     page.get_by_test_id("edit-task").click()
     page.get_by_test_id("task-goal").fill(long_goal + " more")
     page.keyboard.press("Escape")
@@ -1958,18 +1958,18 @@ def test_a_dropped_stream_says_so_and_catches_up(
 ):
     """The live stream drops: the page says it is reconnecting, and when it
     is back it re-reads what it missed."""
-    client.create_task(forge_project["id"], "Before")
+    before = client.create_task(forge_project["id"], "Before")
     sign_in(page, web_url, org["api_key"])
-    expect(page.locator("[data-board-key]", has_text="Before")).to_be_visible()
+    expect(page.locator(f"[data-board-key='task:{before['id']}']")).to_be_visible()
     page.context.set_offline(True)
     expect(page.get_by_test_id("reconnecting")).to_be_visible(timeout=20_000)
     # One banner, from the shell, with a way out if it never comes back.
     expect(page.get_by_test_id("reconnecting")).to_have_count(1)
     expect(page.get_by_test_id("reconnecting-reload")).to_be_visible()
-    client.create_task(forge_project["id"], "While away")
+    away = client.create_task(forge_project["id"], "While away")
     page.context.set_offline(False)
     expect(page.get_by_test_id("reconnecting")).to_have_count(0, timeout=30_000)
-    expect(page.locator("[data-board-key]", has_text="While away")).to_be_visible(timeout=15_000)
+    expect(page.locator(f"[data-board-key='task:{away['id']}']")).to_be_visible(timeout=15_000)
     assert all("ERR_INTERNET_DISCONNECTED" in e for e in console_errors), console_errors
 
 

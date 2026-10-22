@@ -1661,7 +1661,7 @@ shrinking something already small makes it cramped, not dense:
 | composer padding / gap / field padding | 8 / 6 / 10 | 4 / 4 / 6 | |
 | board card padding and gap (`space-card-pad`) | 12 | 6 | |
 | rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | board lanes, tables, menus |
-| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | tasks, epics, projects, tool calls / thoughts, needs-you header |
+| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | tasks, projects, tool calls / epics, thoughts, peer and start-progress steps |
 | needs-you row padding (`space-attention-row-pad-y`) | 6 | 3 | |
 | sidebar row gap / project gap (`space-nav-row-gap`, `-nav-section-gap`) | 2 / 12 | 1 / 6 | |
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
