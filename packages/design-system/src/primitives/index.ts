@@ -1,5 +1,7 @@
 export { Button, IconButton, LinkButton } from "./Button.tsx";
 export type { ButtonProps, ButtonVariant, ButtonSize, IconButtonProps, LinkButtonProps } from "./Button.tsx";
+export { RefusedButton } from "./RefusedButton.tsx";
+export type { RefusedButtonProps } from "./RefusedButton.tsx";
 export { Input } from "./Input.tsx";
 export type { InputProps } from "./Input.tsx";
 export { NumberInput } from "./NumberInput.tsx";

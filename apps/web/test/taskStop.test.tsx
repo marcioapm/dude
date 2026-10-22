@@ -65,6 +65,8 @@ describe("Stop on the task's header and menu", () => {
       const page = await taskPage(await clientWith({ status: "running", decider }));
       const stop = page.querySelector<HTMLButtonElement>('[data-testid="task-stop"]')!;
       expect(stop.textContent).toBe("Stop");
+      // Quiet with danger ink, as the header's other actions are quiet.
+      expect([stop.getAttribute("data-variant"), stop.getAttribute("data-weight")]).toEqual(["danger", "quiet"]);
       expect(stop.querySelector('svg[data-icon="stop"]')).not.toBeNull();
       // Before Edit, in the header's actions.
       expect(stop.compareDocumentPosition(page.querySelector('[data-testid="edit-task"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

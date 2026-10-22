@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import styles from "../gallery.module.css";
 import { Button, IconButton } from "../../primitives/Button.tsx";
+import { RefusedButton } from "../../primitives/RefusedButton.tsx";
 import { Input } from "../../primitives/Input.tsx";
 import { Textarea } from "../../primitives/Textarea.tsx";
 import { SecretField } from "../../primitives/SecretField.tsx";
@@ -104,6 +105,17 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
                 </>,
               ])}
             />
+            <Label>Danger, quiet: a header's Stop beside quiet actions</Label>
+            <Row>
+              <Button variant="danger" quiet leadingIcon="stop">Stop</Button>
+              <Button variant="quiet" leadingIcon="edit">Edit</Button>
+              <IconButton icon="more" label="More actions" />
+            </Row>
+            <Label>RefusedButton: disabled, still focusable for why (tab to it)</Label>
+            <Row>
+              <RefusedButton reason="Only Ana, the owner, or an admin can do this" label="Stop" variant="danger" quiet leadingIcon="stop" />
+              <RefusedButton reason="Blocked by CP-12, still in progress" label="Deliver" variant="secondary" leadingIcon="zap" />
+            </Row>
             <Label>IconButton</Label>
             <Row>
               <IconButton icon="more" label="More actions" />

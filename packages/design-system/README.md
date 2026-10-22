@@ -91,7 +91,9 @@ behind all of these, reached when something looks off.
    `role="button"`), and nothing takes it away. Links navigate; buttons
    act. Buttons come in four kinds: `primary` (one per view or panel),
    `secondary` (any other action), `quiet` (row and toolbar actions) and
-   `danger` (red text; `solid` only inside its own confirmation).
+   `danger` (red text; `solid` only inside its own confirmation; `quiet`,
+   transparent until hovered, where it sits among quiet actions, as a task
+   header's Stop beside Edit).
 12. **A cost is a total.** Every cost shown is model tokens plus machine
    time; the number is the sum and its tooltip gives the parts. Given
    where each part came from (`tokensFrom`, `machineFrom`, `settled`), the
@@ -2027,7 +2029,12 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 ## Components
 
-`src/primitives/` — Button, IconButton, Input (`size="title"` for a
+`src/primitives/` — Button (`danger` with `solid` or `quiet`), IconButton,
+RefusedButton (a control that can't be used now and still says why: the
+Button drawn disabled inside a focusable wrapper with the control's focus
+ring and radius, its `reason` the tooltip and the accessible description,
+its `label` the name; StartGate's gated starts and a task header's refused
+Stop), Input (`size="title"` for a
 document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
 `footer`, `onOpenChange`), Checkbox (named by its `label`; its

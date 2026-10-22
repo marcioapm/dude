@@ -7,9 +7,9 @@
  * it disabled with whose decision it is.
  */
 
-import { useId, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { DeciderField, LiveWork, liveWords, type LiveItem, type NextDecider } from "@dude/design-system/components";
-import { Button, ChoiceList, Dialog, Textarea, Tooltip, type ChoiceOption } from "@dude/design-system/primitives";
+import { Button, ChoiceList, Dialog, RefusedButton, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
 import type { RowMenuItem } from "@dude/design-system/primitives";
 import { NOT_STARTED_STATUSES, PHASE_DOER, TERMINAL_RUN_STATUSES, isConductor, reviewerCategoryInSentence } from "@dude/domain";
 import type { ApiClient, PullRequest, Run, TaskDetail } from "../api/client.ts";
@@ -79,20 +79,10 @@ export function stopMenuItem(onStop: () => void, notYours: string | undefined): 
 
 /** The header's Stop: quiet, danger ink, its glyph; it opens the dialog. Refused, it stays reachable for its reason. */
 export function StopButton({ onStop, notYours }: { readonly onStop: () => void; readonly notYours: string | undefined }) {
-  const reasonId = useId();
   if (!notYours) {
-    return <Button variant="danger" leadingIcon="stop" onClick={onStop} data-testid="task-stop">Stop</Button>;
+    return <Button variant="danger" quiet leadingIcon="stop" onClick={onStop} data-testid="task-stop">Stop</Button>;
   }
-  return (
-    <Tooltip content={notYours} side="bottom">
-      {/* A disabled button takes no focus or pointer: the wrapper is what a reader meets, and its reason is the description. */}
-      <span className="taskStopRefused" tabIndex={0} role="button" aria-disabled="true" aria-label="Stop" aria-describedby={reasonId}
-        data-testid="task-stop" data-refused="">
-        <span id={reasonId} className="ds-sr-only">{notYours}</span>
-        <Button variant="danger" leadingIcon="stop" disabled tabIndex={-1}>Stop</Button>
-      </span>
-    </Tooltip>
-  );
+  return <RefusedButton reason={notYours} label="Stop" variant="danger" quiet leadingIcon="stop" data-testid="task-stop" />;
 }
 
 type Way = "stop" | "restart";

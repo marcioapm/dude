@@ -622,9 +622,6 @@ body {
   gap: var(--ds-space-8);
 }
 /* A refused Stop: the focusable wrapper round its disabled button, the size of the button. */
-.taskStopRefused {
-  display: inline-flex;
-}
 /* Session Abort's pointer to the task's Stop: one muted line, its link after it. */
 .abortStopHint {
   margin: var(--ds-space-12) 0 0;

@@ -93,6 +93,10 @@
   --btn-bg-hover: color-mix(in srgb, var(--ds-tone-danger-solid) 88%, black);
   --btn-bg-active: color-mix(in srgb, var(--ds-tone-danger-solid) 78%, black);
 }
+/* Quiet danger: danger ink with no wash until hovered, beside quiet header actions. */
+.danger.quietDanger {
+  --btn-bg: transparent;
+}
 
 .iconOnly {
   padding: 0;
