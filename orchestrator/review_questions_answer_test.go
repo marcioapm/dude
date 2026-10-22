@@ -29,27 +29,25 @@ func (w *world) askedQuestions(task string, questions ...string) []string {
 	if err := phases.RecordFindings(context.Background(), w.app, w.org, run, nil, nil, delivery.ParseQuestions(doc.String())); err != nil {
 		w.t.Fatal(err)
 	}
-	rows, err := w.owner.Query(context.Background(), `SELECT id FROM review_questions WHERE run_id = $1 ORDER BY n`, run)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	return ids
+	return column[string](w, `SELECT id FROM review_questions WHERE run_id = $1 ORDER BY n`, run)
 }
 
 // taskDecisions is what the task's later phases are told people decided:
 // question, then answer.
 func (w *world) taskDecisions(task string) []string {
 	w.t.Helper()
-	rows, err := w.owner.Query(context.Background(), `SELECT prompt || ' => ' || answer FROM questions
+	return column[string](w, `SELECT prompt || ' => ' || answer FROM questions
 		WHERE task_id = $1 AND status = 'answered' ORDER BY answered_at`, task)
+}
+
+// column is the one column sql selects, row by row.
+func column[T any](w *world, sql string, args ...any) []T {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), sql, args...)
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	out, err := pgx.CollectRows(rows, pgx.RowTo[T])
 	if err != nil {
 		w.t.Fatal(err)
 	}

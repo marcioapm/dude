@@ -1,12 +1,9 @@
 package orchestrator_test
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
@@ -53,7 +50,7 @@ func (w *world) asksFirst(finding bool, doc string) {
 
 // heldAtThePullRequest waits for the delivery to be held at the pull
 // request step by an open question: the task waiting on a person, no pull
-// request opened, and stays so across more passes.
+// request opened, no escalation, and stays so across more passes.
 func (w *world) heldAtThePullRequest(wi string) {
 	w.t.Helper()
 	w.until("the delivery held at the pull request, or a pull request", func() bool {
@@ -90,15 +87,7 @@ func (w *world) reviewQuestionOf(wi string) string {
 // reviewQuestionIDs are the task's reviewer questions' ids, as asked.
 func (w *world) reviewQuestionIDs(wi string) []string {
 	w.t.Helper()
-	rows, err := w.owner.Query(context.Background(), `SELECT id FROM review_questions WHERE task_id = $1 ORDER BY created_at, n`, wi)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	return ids
+	return column[string](w, `SELECT id FROM review_questions WHERE task_id = $1 ORDER BY created_at, n`, wi)
 }
 
 // settle answers (verb answer) or withdraws a reviewer question as person.
@@ -174,13 +163,7 @@ func TestAnOpenQuestionHoldsThePullRequest(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi); n != 0 {
 				t.Errorf("%d fix Runs for a question alone", n)
 			}
-			body := map[string]any{"answer": "Exactly one retry."}
-			if verb == "withdraw" {
-				body = map[string]any{"reason": "The retry was removed."}
-			}
-			if status, out := w.callAs(ana, "/internal/review-questions/"+w.reviewQuestionOf(wi)+"/"+verb, body); status != 200 {
-				t.Fatalf("%s: %d %v", verb, status, out)
-			}
+			w.settle(ana, w.reviewQuestionOf(wi), verb)
 			w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
 		})
 	}
@@ -198,14 +181,7 @@ func TestTheFixLoopRunsAndThenTheQuestionHoldsThePullRequest(t *testing.T) {
 	w.assignOwner(wi, ana)
 	w.deliver(wi)
 	w.heldAtThePullRequest(wi)
-	rows, err := w.owner.Query(context.Background(), `SELECT cardinality(finding_ids) FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sent, err := pgx.CollectRows(rows, pgx.RowTo[int])
-	if err != nil {
-		t.Fatal(err)
-	}
+	sent := column[int](w, `SELECT cardinality(finding_ids) FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi)
 	if fmt.Sprint(sent) != "[1]" {
 		t.Fatalf("fix Runs were sent %v findings, want one fix sent the finding", sent)
 	}
@@ -356,18 +332,7 @@ func (w *world) conductedHoldAfter(task string, beforeOpen func()) {
 	}
 	beforeOpen()
 	w.must(task, "decide", `{"action":"open_pull_request"}`)
-	w.until("held at the pull request, or a pull request", func() bool {
-		return len(w.gh.Pulls()) > 0 || w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'openPullRequest' AND status = 'waiting'`, task) == 1
-	})
-	for range 5 {
-		w.pump()
-	}
-	if n := len(w.gh.Pulls()); n != 0 {
-		w.t.Fatalf("%d pull requests opened with a question open", n)
-	}
-	if s := w.taskStatus(task); s != "awaiting_input" {
-		w.t.Fatalf("task %s while held, want awaiting_input", s)
-	}
+	w.heldAtThePullRequest(task)
 }
 
 // Two waits on a person, the reviewer's question holding the pull request
