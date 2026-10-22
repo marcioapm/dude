@@ -974,6 +974,36 @@ body {
   font-size: var(--ds-text-xs);
 }
 
+/* Help: a list of the guide's pages beside the page; layout only. */
+.helpScreen {
+  padding: var(--ds-space-16) var(--ds-space-24);
+}
+.helpLayout {
+  display: flex;
+  gap: var(--ds-space-24);
+  align-items: flex-start;
+}
+.helpPages {
+  flex: 0 0 200px;
+}
+.helpPages ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--ds-space-4);
+}
+.helpPages a[aria-current="page"] {
+  font-weight: 600;
+}
+.helpPage {
+  flex: 1 1 auto;
+  max-width: 72ch;
+}
+.helpPage section {
+  scroll-margin-top: var(--ds-space-16);
+}
+
 /* Memory's settings pages: layout only. The rows, lines, leads, lists and
    picker are the design system's. */
 .memoryToolbar {

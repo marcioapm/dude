@@ -92,6 +92,7 @@ rThisRunNoLongerAvailableFor           refusals/tools/machines/this-run-no-longe
 rQueryRequired                         refusals/tools/memory/query-required
 rNoTaskOrEpicInThisProject             refusals/tools/memory/no-task-or-epic-in-this-project
 rTypesAreMemoryTaskEpicAnd             refusals/tools/memory/types-are-memory-task-epic-and
+rNoGuideSection                        refusals/tools/memory/no-guide-section
 rMemoryWasArchivedNoLongerHeld         refusals/tools/memory/memory-was-archived-no-longer-held
 rScopeProjectOrOrganization            refusals/tools/memory/scope-project-or-organization
 rArguments                             refusals/tools/server/arguments

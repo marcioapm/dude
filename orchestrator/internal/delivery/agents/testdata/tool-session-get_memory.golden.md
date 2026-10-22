@@ -1,6 +1,6 @@
 # get_memory
 
-Read one memory in full, by the id search_memory gave.
+Read one memory in full, by the id search_memory gave; or a section of dude's guide (doc:…), with its link.
 
 ```json
 {
@@ -8,7 +8,7 @@ Read one memory in full, by the id search_memory gave.
   "properties": {
     "id": {
       "type": "string",
-      "description": "a memory's id, as search_memory gives it (mem_…)"
+      "description": "a memory's id (mem_…) or a guide section's (doc:…), as search_memory gives it"
     }
   },
   "required": [
