@@ -54,13 +54,20 @@ func (b *backstop) pullRequest(head, state string) {
 		b.w.run.Org, b.w.run.ProjectID, b.w.run.TaskID, head, b.a.start, state)
 }
 
-// finish is the Run's push result landing: finish publishes it.
+// finish is the Run's push of its one commit landing: finish publishes it.
 func (b *backstop) finish(r phaseRun) {
+	b.w.t.Helper()
+	b.finishWith(r, b.a.head(), "pushed")
+}
+
+// finishWith is the Run's push result for "target" landing as commit with
+// status.
+func (b *backstop) finishWith(r phaseRun, commit, status string) {
 	b.w.t.Helper()
 	r.Attempt, r.Status = 1, statusRunning
 	r.PushBranch, r.HoldsPushable = "dude/run", true
 	r.BaseSHAs = map[string]string{"target": b.a.start}
-	r.PushResult, _ = json.Marshal(map[string]any{"results": []map[string]string{{"repo": "target", "branch": "dude/run", "commit": b.a.head(), "status": "pushed"}}})
+	r.PushResult, _ = json.Marshal(map[string]any{"results": []map[string]string{{"repo": "target", "branch": "dude/run", "commit": commit, "status": status}}})
 	if _, err := b.w.s.finish(b.w.ctx, r); err != nil {
 		b.w.t.Fatal(err)
 	}
@@ -149,6 +156,37 @@ func TestAPublishBesideAnOpenPullRequestMovesItsBranch(t *testing.T) {
 			}
 			if c.own != "" && len(b.gh.BranchLog(b.branch)) != 0 {
 				t.Errorf("the pull request's branch moved: %v", b.gh.BranchLog(b.branch))
+			}
+		})
+	}
+}
+
+// A writer Run on a branch whose pull request is open, whose push has
+// nothing to move (its commit is where it started, or the repo was
+// skipped), completes: the backstop fails only a publish that would move
+// the branch.
+func TestAPublishWithNothingCommittedBesideAnOpenPullRequestCompletes(t *testing.T) {
+	cases := []struct{ name, status string }{
+		{"nothing-committed", "up-to-date"},
+		{"skipped", "skipped"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newResumeWorld(t)
+			b := newBackstop(t, w)
+			w.exec(`UPDATE runs SET phase = 'fix', role = 'implementer', status = 'running', branch = NULL, lux_run_id = NULL WHERE id = $1`, w.run.ID)
+			b.pullRequest(b.branch, "open")
+			r := w.run
+			r.Phase, r.Role, r.LuxRunID, r.LuxState = delivery.PhaseFix, "implementer", "", ""
+			b.finishWith(r, b.a.start, c.status)
+			if status, reason := b.outcome(); status != "completed" {
+				t.Errorf("the Run: %s %q, want completed", status, reason)
+			}
+			if got := b.gh.BranchLog(b.branch); len(got) != 0 {
+				t.Errorf("GitHub moved %s to %v", b.branch, got)
+			}
+			if got := b.gh.SHA(b.branch); got != b.a.start {
+				t.Errorf("%s is at %s, want %s where it was", b.branch, got, b.a.start)
 			}
 		})
 	}
