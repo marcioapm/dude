@@ -1084,6 +1084,33 @@ describe("a task stopped under the conductor", () => {
     expect(divider.textContent).toContain("Start from the API.");
     expect(group.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  // Mockup 08b: Start over handed attempt 2 to Deliver, so it has an implementer and no conductor of its own.
+  test("Chat after a Start over to Deliver: the conductor's attempt muted above the divider naming who started the next", async () => {
+    const client = await conductorStopped();
+    const task = await client.getTask(TASK_ID);
+    const implementer: Run = { ...task.runs.find((r) => r.id === "run_impl_done")!, id: "run_impl_4", attempt: 4, status: "running",
+      createdAt: minutesAgo(1), endedAt: null };
+    const events = (await client.events({ taskId: TASK_ID })).events;
+    const recovered: PersistedEvent = { ...events[0]!, cursor: 40_000, eventId: "evt_restart", eventType: "task.recovered", runId: null, occurredAt: minutesAgo(1),
+      actor: { type: "human", id: "u_ana", name: "Ana Ribeiro" }, payload: { action: "restart", attempt: 4, note: "Keep the protocol.", decider: "policy" } };
+    const { container, unmount } = await mount(
+      <TooltipProvider><PeopleProvider client={client}><ToastProvider>
+        <ChatSection client={client} task={{ ...task, status: "running", decider: "policy", runs: [...task.runs, implementer] }} conductorId="run_conductor"
+          earlier={[]} ledgers={new EndedLedgers(client)} findings={[]} pullRequests={[]}
+          events={[...events, recovered]} owner={{ owner: null }} version={0} onSent={() => {}} onOpenRun={() => {}} onBack={() => {}}
+          driverControl={{ busy: false, problem: null, confirmOpen: false, change: async () => {}, cancel: () => {} }} canSwitchDriver />
+      </ToastProvider></PeopleProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    const group = await until(() => container.querySelector<HTMLElement>('[role=group][aria-label="Attempt 3\'s conversation"]'), "attempt 3's turns");
+    await until(() => group.querySelector(`[data-testid=earlier-conductor][data-run=run_conductor]`), "attempt 3's conductor in its group");
+    const divider = container.querySelector<HTMLElement>("[data-testid=attempt-divider]")!;
+    expect(divider.textContent).toContain("Attempt 4");
+    expect(divider.textContent).toContain("started by Ana");
+    expect(divider.textContent).toContain("Keep the protocol.");
+    expect(group.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
 
 describe("what stopped the task", () => {

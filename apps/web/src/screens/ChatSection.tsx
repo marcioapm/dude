@@ -22,7 +22,7 @@ import { clearDraftIfSent, draftKey, useDraft } from "../hooks/useDraft.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
-import { eventAttempts } from "../attempts.ts";
+import { attemptOfRun, attemptsOf, eventAttempts } from "../attempts.ts";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { DriverControl } from "./DriverSwitch.tsx";
@@ -104,8 +104,16 @@ function runFacts(run: Run, cost: RunCost | undefined): string[] {
   return facts;
 }
 
-export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId: latestConductor, earlier: earlierConductors = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
   const people = usePeople();
+  // The task's current attempt, as its page has it (attemptsOf): under Deliver, attempt N+1 may have no conductor of its own.
+  const current = useMemo(() => attemptsOf(task.runs)[0] ?? null, [task.runs]);
+  // A latest conductor that ended on an earlier attempt is that attempt's: muted with it, and the next message starts another.
+  const latestRun = latestConductor ? task.runs.find((r) => r.id === latestConductor) : undefined;
+  const setAside = latestRun !== undefined && current !== null && attemptOfRun(latestRun, current) < current;
+  const conductorId = setAside ? null : latestConductor;
+  const earlier = useMemo(() => (setAside && latestRun ? [...earlierConductors, { id: latestRun.id, status: latestRun.status, attempt: latestRun.attempt }] : earlierConductors),
+    [setAside, latestRun, earlierConductors]);
   const [costUsd, setCostUsd] = useState<number | null>(null);
   // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
   const [runCosts, setRunCosts] = useState<ReadonlyMap<string, RunCost>>(new Map());
@@ -158,7 +166,6 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   const retried = new Set(events.flatMap((e) => e.eventType === EventTypes.RunCreated && typeof e.payload.retries === "string" ? [e.payload.retries] : []));
   const earlierKey = earlier.map((r) => `${r.id}:${r.attempt ?? 0}:${retried.has(r.id)}`).join(",");
   // After a Start over, the earlier attempts' conversations sit muted above a divider naming who started the next.
-  const current = conductorId ? task.runs.find((r) => r.id === conductorId)?.attempt ?? null : null;
   const starts = useMemo(() => startOversByAttempt(events, people.names), [events, people.names]);
   // The failed conductor this one retries: its briefing, which Try again repeats, is in its own ledger.
   const retries = events.find((e) => e.eventType === EventTypes.RunCreated && e.runId === conductorId)?.payload.retries;
@@ -224,6 +231,7 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   }, [conducted, events, task.runs, task.source, pullRequests, current]);
   const isEarlierLine = (id: string) => current !== null && (lineAttempts.get(id) ?? current) < current;
   const currentLines = useMemo(() => stopLines.filter((l) => !isEarlierLine(l.id)), [stopLines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- isEarlierLine reads lineAttempts and current
+  const plainLines = useMemo(() => lines.filter((l) => !isEarlierLine(l.id)), [lines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- as currentLines
   const before = useMemo(() => {
     const node = (r: { id: string; status: RunStatus }) =>
       <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />;
@@ -311,8 +319,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
             />
           </>}
         >
-          {/* With no conductor yet, dude's lines (a person's machine Reset, a task relation) are the Chat's only turns. */}
-          {lines.length > 0 ? lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
+          {/* With no conductor of this attempt, earlier attempts' turns above their divider, then dude's lines (a person's machine Reset, a task relation). */}
+          {before || plainLines.length > 0 ? <>{before}{plainLines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}</> : null}
         </ChatTranscript>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>
