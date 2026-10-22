@@ -183,10 +183,10 @@ func heldFailuresTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) ([
 // failure of Covered may be the same as: who waived it, why, and the Run
 // and turn it was held at.
 type CarriedWaiver struct {
-	RunID   string `json:"runId"`
-	Role    string `json:"role"`
-	Turn    int64  `json:"turn"`
-	Person  string `json:"person,omitempty"`
+	RunID  string `json:"runId"`
+	Role   string `json:"role"`
+	Turn   int64  `json:"turn"`
+	Person string `json:"person,omitempty"`
 	// The person's name when they waived, for the pull request's account.
 	PersonName string `json:"personName,omitempty"`
 	Note       string `json:"note"`
