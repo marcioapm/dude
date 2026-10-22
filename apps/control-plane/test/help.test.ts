@@ -40,6 +40,7 @@ let router: Router;
 let memberKey: string;
 let orchestratorServer: ReturnType<typeof Bun.serve>;
 const asked: { path: string; org: string | null }[] = [];
+type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 function call(key: string | null, path: string) {
   return router.handle(new Request(`http://dude.test${path}`, {
@@ -66,7 +67,7 @@ beforeAll(async () => {
       const path = new URL(req.url).pathname;
       asked.push({ path, org: req.headers.get("x-dude-organization") });
       if (path === "/internal/help") return Response.json({ pages: [{ slug: "settings", title: "Settings", sections: [{ anchor: "delivery", heading: "Delivery" }] }] });
-      if (path === "/internal/help/settings") return Response.json({ slug: "settings", title: "Settings", sections: [], markdown: "Intro.\n\n## Delivery\nText." });
+      if (path === "/internal/help/settings") return Response.json({ slug: "settings", title: "Settings", sections: [{ anchor: "delivery", heading: "Delivery", text: "Text." }] });
       return Response.json({ error: { code: "not_found", message: "no help page" } }, { status: 404 });
     },
   });
@@ -87,10 +88,10 @@ afterAll(async () => {
 test("a member reads the guide's pages and one page, from the orchestrator", async () => {
   const list = await call(memberKey, "/v1/help");
   expect(list.status).toBe(200);
-  expect((await list.json()).pages[0].sections[0].anchor).toBe("delivery");
+  expect(((await list.json()) as Json).pages[0].sections[0].anchor).toBe("delivery");
   const page = await call(memberKey, "/v1/help/settings");
   expect(page.status).toBe(200);
-  expect((await page.json()).markdown).toContain("## Delivery");
+  expect(((await page.json()) as Json).sections[0].text).toBe("Text.");
   expect(asked.slice(-2)).toEqual([{ path: "/internal/help", org: ORG }, { path: "/internal/help/settings", org: ORG }]);
 });
 

@@ -29,8 +29,15 @@ func TestHelpServesTheEmbeddedGuide(t *testing.T) {
 
 	status, out = m.do(t, "GET", "/internal/help/memory", "")
 	p, _ := guide.PageBy("memory")
-	if status != 200 || out["slug"] != "memory" || out["title"] != p.Title || out["markdown"] != p.Markdown {
-		t.Errorf("page: %d %v", status, out)
+	got, _ := out["sections"].([]any)
+	if status != 200 || out["slug"] != "memory" || out["title"] != p.Title || len(got) != len(p.Sections) {
+		t.Fatalf("page: %d %v", status, out)
+	}
+	for i, s := range p.Sections {
+		g := got[i].(map[string]any)
+		if g["anchor"] != s.Anchor || g["text"] != s.Text {
+			t.Errorf("section %d: %v, want %+v", i, g, s)
+		}
 	}
 	if status, out = m.do(t, "GET", "/internal/help/nope", ""); status != 404 {
 		t.Errorf("unknown page: %d %v", status, out)

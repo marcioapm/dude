@@ -49,8 +49,6 @@ type Page struct {
 	Title    string    `json:"title"`
 	Covers   []string  `json:"-"`
 	Sections []Section `json:"sections"`
-	// Markdown is the page without its front matter, as people read it.
-	Markdown string `json:"-"`
 }
 
 // Section is the page's section at anchor.
@@ -132,7 +130,6 @@ func Parse(slug string, src []byte) (Page, error) {
 		}
 	}
 	p.Covers = fm.Covers
-	p.Markdown = strings.TrimSpace(body)
 
 	cur := Section{}
 	var lines []string
@@ -144,7 +141,7 @@ func Parse(slug string, src []byte) (Page, error) {
 		lines = nil
 	}
 	fenced := false
-	for _, line := range strings.Split(p.Markdown, "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fenced = !fenced
 		}
