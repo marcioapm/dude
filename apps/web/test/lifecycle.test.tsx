@@ -340,13 +340,17 @@ describe("Stop in Activity", () => {
     const note = "Start fresh.";
     const lines = activityLines([
       aborted("run_c1", note), aborted("run_i1", note),
-      ev("task.stopped", { by: ANA, note, runIds: ["run_c1", "run_i1"], decider: "conductor", andRestart: true, nextDecider: "conductor" }),
-      ev(EventTypes.TaskDeciderChanged, { from: "conductor", to: "conductor", why: "start over" }),
-      ev("task.recovered", { action: "restart", note, attempt: 2, runIds: [], decider: "conductor", via: "stop" }),
+      ev("task.stopped", { by: ANA, note, runIds: ["run_c1", "run_i1"], decider: "conductor", andRestart: true, nextDecider: "policy" }),
+      ev(EventTypes.TaskDeciderChanged, { from: "conductor", to: "policy", why: "start over" }),
+      ev("task.recovered", { action: "restart", note, attempt: 2, runIds: [], decider: "policy", via: "stop" }),
+      // Attempt 2's own decider change, after the start: its line stays.
+      ev(EventTypes.TaskDeciderChanged, { from: "policy", to: "conductor", why: "a person wrote in Chat" }),
     ], people, runs, [], 2, "GREE-2");
-    expect(said(lines)).toEqual(["Ana Ribeiro stopped attempt 1 and started attempt 2 · the conductor decides · stopped the conductor and the implementer"]);
-    expect(lines[0]!.quote).toBe(note);
-    expect(lines[0]!.attempt).toBe(1);
+    expect(said(lines)).toEqual(["Ana Ribeiro stopped attempt 1 and started attempt 2 · Deliver decides · stopped the conductor and the implementer",
+      "Ana Ribeiro wrote in Chat, which gave the decisions to the conductor"]);
+    const stopLine = lines.at(-1)!;
+    expect(stopLine.quote).toBe(note);
+    expect(stopLine.attempt).toBe(1);
   });
 
   test("a session's own Abort keeps its line, and a pick-up from the stopped notice is still a pick-up", () => {
