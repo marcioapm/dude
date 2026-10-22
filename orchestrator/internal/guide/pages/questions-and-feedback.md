@@ -1,8 +1,8 @@
 ---
 title: Questions and feedback
-covers: [tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding]
+covers: [tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding, tool:answer_review_question]
 ---
-Agents ask you things, and you tell agents things. This page covers answering an agent's question, deciding a repository request, leaving feedback on a task, and accepting review findings.
+Agents ask you things, and you tell agents things. This page covers answering an agent's question, deciding a repository request, leaving feedback on a task, accepting review findings, and answering a reviewer's question.
 
 ## When an agent asks you a question
 
@@ -54,6 +54,16 @@ Reviewers report **findings**: a severity, a category, a file and line, and a su
 On the task, you can **accept** a finding, with a note. An accepted finding no longer blocks: it records a person's decision to ship it as it is, so the next reader can see it was considered. You can also reopen it.
 
 Under the conductor, the conductor can leave a finding as it is with `dismiss_finding`, giving its reason. The reason shows with the finding.
+
+## A reviewer's question
+
+A reviewer that cannot establish a fact it needs (what the product should do, how something is configured where it runs) asks instead of guessing. Its question shows on the task's Findings tab, above the findings, with why it matters and who can answer it. It is never sent to the fixer.
+
+The task's owner answers it there, or withdraws it with a reason when it no longer matters. An answer is recorded as a decision, so every later reviewer and fixer reads it. The next reviewer of the same kind sees the question and its answer.
+
+**While a reviewer's question is open, dude does not open the pull request**, and does not move a fix onto an open pull request. Review and fixing of the other findings go on. The task waits on you until every question of the attempt is answered or withdrawn.
+
+Under the conductor, the conductor is told of each question. It answers with `answer_review_question` only when it has established the fact itself; otherwise it asks you. Its answer is recorded as the conductor's, not as your decision.
 
 ## Escalations
 

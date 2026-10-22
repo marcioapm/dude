@@ -42,6 +42,7 @@ Other reasons a comment did not wake a fixer:
 - **GitHub is not connected**, or the project has no repository. See [GitHub](help:github#connecting-github).
 - **The conductor decides**, and is waiting for your answer: Open, Draft, Show me the diff, or Another round.
 - **Open feedback** from people blocks opening the pull request until it is handled.
+- **A reviewer's question is open.** It holds the pull request until it is answered or withdrawn. See [Questions and feedback](help:questions-and-feedback#a-reviewer-s-question).
 - **A test is blocked or failing**, or a reviewer's finding still blocks.
 - **The delivery escalated** and waits on the owner.
 
