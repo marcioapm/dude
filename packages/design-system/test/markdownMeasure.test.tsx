@@ -8,9 +8,11 @@ import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-// Under bun test a CSS module maps to {}: keep each class name as written.
-const asWritten = () => ({ default: new Proxy({}, { get: (_, key) => (typeof key === "string" ? key : undefined) }) });
-mock.module("../src/components/Markdown.module.css", asWritten);
+import { cssModuleAsWritten } from "./cssModule.ts";
+
+// Under bun test a CSS module maps to {}: keep each class the stylesheet declares, as written.
+const MARKDOWN_CSS = new URL("../src/components/Markdown.module.css", import.meta.url);
+mock.module(MARKDOWN_CSS.pathname, cssModuleAsWritten(MARKDOWN_CSS));
 
 const { Markdown } = await import("../src/components/Markdown.tsx");
 

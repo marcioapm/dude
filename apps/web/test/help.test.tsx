@@ -7,8 +7,10 @@
 import { useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
-// Under bun test a CSS module maps to {}: keep each class name as written.
-mock.module("../../../packages/design-system/src/components/Markdown.module.css", () => ({ default: new Proxy({}, { get: (_, key) => (typeof key === "string" ? key : undefined) }) }));
+// Under bun test a CSS module maps to {}: keep each class the stylesheet declares, as written.
+import { cssModuleAsWritten } from "../../../packages/design-system/test/cssModule.ts";
+const MARKDOWN_CSS = new URL("../../../packages/design-system/src/components/Markdown.module.css", import.meta.url);
+mock.module(MARKDOWN_CSS.pathname, cssModuleAsWritten(MARKDOWN_CSS));
 import { ThemeProvider } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, type, until } from "./dom.ts";
