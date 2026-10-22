@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { click, facetCheckbox, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { TASK_ID } from "../src/fixtures/data.ts";
+import { REVIEW_QUESTIONS, TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 
@@ -20,15 +20,14 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-async function findingsTab(client: FixtureClient) {
+async function findingsTab(client: FixtureClient, attempt?: number) {
   const { container, unmount } = await mount(
     <TooltipProvider><ToastProvider><PeopleProvider client={client}>
-      <TaskScreen client={client} taskId={TASK_ID} tab="findings" onOpenRun={() => {}} onBack={() => {}} />
+      <TaskScreen client={client} taskId={TASK_ID} tab="findings" attempt={attempt} onOpenRun={() => {}} onBack={() => {}} />
     </PeopleProvider></ToastProvider></TooltipProvider>,
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");
-  await until(() => container.querySelector("[data-testid=findings]"), "the findings");
   await settle();
   return container;
 }
@@ -93,6 +92,24 @@ for (const facet of [
     other.mockRestore();
     scroll.mockRestore();
   }
+});
+
+for (const attempt of [1, 2]) test(`attempt ${attempt} shows only its own open reviewer question`, async () => {
+  const client = new FixtureClient("d");
+  const task = await client.getTask(TASK_ID);
+  const review = task.runs.find((run) => run.id === "run_d2")!;
+  client.getTask = async () => ({ ...task, runs: [
+    ...task.runs.map((run) => ({ ...run, attempt: 1 })),
+    { ...review, id: "run_second_review", attempt: 2 },
+  ] });
+  client.reviewQuestions = async () => ({ questions: [
+    { ...REVIEW_QUESTIONS[0]!, id: "question_first", runId: review.id, question: "First attempt question?" },
+    { ...REVIEW_QUESTIONS[0]!, id: "question_second", runId: "run_second_review", question: "Second attempt question?" },
+  ] });
+  const page = await findingsTab(client, attempt);
+  const questions = [...page.querySelectorAll('[data-testid="review-questions"] [data-question]')];
+  expect(questions.map((q) => q.getAttribute("data-question"))).toEqual([attempt === 1 ? "question_first" : "question_second"]);
+  expect(text(questions[0])).toContain(attempt === 1 ? "First attempt question?" : "Second attempt question?");
 });
 
 test("with no open question, nothing is shown", async () => {
