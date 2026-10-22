@@ -300,8 +300,11 @@ describe("searching the guide", () => {
   test("a failed search says so in place of the results, and the next search clears it", async () => {
     const client = new Searching("a");
     let fail = true;
+    let release!: () => void;
     const answer = client.searchMemory.bind(client);
-    client.searchMemory = (params) => (fail ? Promise.reject(new Error("search is down")) : answer(params));
+    client.searchMemory = (params) => fail ? Promise.reject(new Error("search is down")) : new Promise((resolve) => {
+      release = () => resolve(answer(params));
+    });
     const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
     mounted.push(unmount);
     await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
@@ -309,14 +312,19 @@ describe("searching the guide", () => {
     await type(input, "beta");
     const error = await until(() => container.querySelector("[data-testid=help-search-error]"), "the search error");
     expect(error.textContent).toBe("Could not search the guide: search is down");
-    expect(container.querySelector("[data-testid=help-search-count]")).toBeNull();
-    expect(container.querySelector("[data-testid=help-search-empty]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=help-search-count]").length).toBe(0);
+    expect(container.querySelectorAll("[data-testid=help-search-empty]").length).toBe(0);
     // Only the search's own error: nothing screen-wide.
     expect(container.querySelectorAll("[role=alert]").length).toBe(1);
     fail = false;
     await type(input, "reviewer");
+    expect(container.querySelectorAll("[data-testid=help-search-error]").length).toBe(0);
+    expect(container.querySelector("[data-testid=help-search-count]")?.textContent).toBe("Searching…");
+    expect(container.querySelectorAll("[role=alert]").length).toBe(0);
+    await until(() => release, "the held next search");
+    await act(async () => release());
     await until(() => (container.querySelectorAll("[data-testid=help-search-result]").length === 2 ? true : null), "the results");
-    expect(container.querySelector("[data-testid=help-search-error]")).toBeNull();
+    expect(container.querySelectorAll("[data-testid=help-search-error]").length).toBe(0);
     expect(container.querySelectorAll("[role=alert]").length).toBe(0);
   });
 
@@ -358,6 +366,33 @@ describe("searching the guide", () => {
     expect(opened).toEqual([]);
     expect(container.querySelector("[data-testid=help-search-count]")?.textContent).toBe("Searching…");
     expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
+  });
+
+  test("a slower rejection of an earlier query does not replace the later query's answer with an error", async () => {
+    const client = new Searching("a");
+    const held: Array<{ q: string; resolve: () => void; reject: () => void }> = [];
+    const answer = client.searchMemory.bind(client);
+    client.searchMemory = (params) => new Promise((resolve, reject) => {
+      held.push({ q: params.q, resolve: () => resolve(answer(params)), reject: () => reject(new Error("earlier search is down")) });
+    });
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "reviewer");
+    await until(() => (held.length === 1 ? true : null), "the first search");
+    await type(input, "zebra");
+    await until(() => (held.length === 2 ? true : null), "the second search");
+    expect(held.map((h) => h.q)).toEqual(["reviewer", "zebra"]);
+    await act(async () => held[1]!.resolve());
+    await until(() => container.querySelector("[data-testid=help-search-empty]"), "the second query's answer");
+    await act(async () => held[0]!.reject());
+    await settle();
+    expect(container.querySelector("[data-testid=help-search-empty]")?.textContent).toBe("Nothing in the guide matches “zebra”.");
+    expect(container.querySelector("[data-testid=help-search-count]")?.textContent).toBe("0 sections");
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
+    expect(container.querySelectorAll("[data-testid=help-search-error]").length).toBe(0);
+    expect(container.querySelectorAll("[role=alert]").length).toBe(0);
   });
 
   test("a slower answer to an earlier query does not replace the later query's results", async () => {
