@@ -962,24 +962,33 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   of its current run (`taskTriage`). A `running` task whose reviewer
   is `awaiting_input` needs you, whatever the macro state says.
 - **Amber once per region.** In the sidebar the pinned needs-you block (tint
-  and bar) is the one amber area; the filter chip, the tree row's pill, the
-  asking agent session's activity and the roll-up counts are neutral ink, and the
+  and bar) is the one amber area; the filter chip, the tree row's pill and
+  the roll-up counts are neutral ink, and the
   diamond marks carry the hue. In the transcript it is the header's
   Needs-you badge and the waiting question's highlight.
-- The tree shows four levels — Project → Epic → Task → agent session — and
-  folds Runs into their task: the current run's agent sessions sit directly
-  under it; earlier attempts fold into one "Attempt n" row each. Retrying is
-  rare and must not cost every task a level.
+- The tree shows three levels — Project → Epic → Task. A task is a leaf: its
+  runs and agent sessions are on its page, the agent working now rides on
+  its owner's face, and they still roll up into its triage. Selecting a
+  session (a link, the inbox, a board card) selects its task's row.
+- **Only work in progress is listed.** Unsearched — and under Mine, which
+  is not a search — the tree lists the tasks in the board's middle columns:
+  running (and awaiting input), in review, ready to merge. Backlog
+  (received, intake, awaiting confirmation, queued) and Done (done, failed,
+  aborted) are the board's. A search query or a triage filter lists every
+  status, as before. The selected task is listed whatever its status, so
+  opening a done task from the board still highlights it. An epic with
+  nothing listed is left out. Unfiltered, a project keeps its header (it is
+  where its board opens) with no chevron; under Mine a project with nothing
+  of yours listed is left out too. The roll-up counts still count every task.
 - Levels differ in row grammar, not just indent (16px): projects are sticky
   small-caps headers, epics carry the layers glyph and a total, tasks
-  lead with a status dot and a mono key, agent sessions sit on a guide line behind
-  a role avatar. A tree four deep still reads in grayscale.
+  lead with a mono key and trail with their one state. A tree three deep
+  still reads in grayscale.
   The epic's glyph leads its row, after the chevron, as in `Breadcrumb` and
   the board's lane header; a task row never draws it.
-- Default open state is derived from triage and never needs three clicks: a
+- Default open state is derived from triage and never needs two clicks: a
   project opens if anything inside is counted; an epic if anything needs you
-  or is active; a task only if it needs you, down to the asking
-  agent session. The user's toggles override these per row and survive refreshes,
+  or is active. The user's toggles override these per row and survive refreshes,
   so a newly blocked item still opens its ancestors unless the operator
   explicitly folded them.
 - "What needs me" must be answerable without expanding anything. The
@@ -1318,8 +1327,8 @@ here.
   `menu` render prop for full control); a row that returns nothing draws no
   trigger. The trigger is out of the tab order and visible on hover, focus,
    or while open, so the tree's ↑↓ → ← Home End `/` are untouched. No row
-   reserves space for the menu: it replaces trailing people, an epic's count
-   or a session's plan on hover/focus or while open. Each ancestor level has
+   reserves space for the menu: it replaces trailing people or an epic's
+   count on hover/focus or while open. Each ancestor level has
    a 1px border-colour guide through its chevron's centre, continuous across
    the row gap, driven by `--depth` and `--indent`.
 - **Input** renders its own label, hint and error, tied to the field by
@@ -1652,7 +1661,7 @@ shrinking something already small makes it cramped, not dense:
 | composer padding / gap / field padding | 8 / 6 / 10 | 4 / 4 / 6 | |
 | board card padding and gap (`space-card-pad`) | 12 | 6 | |
 | rows (`size-row-default` / `-comfortable`) | 32 / 40 | 28 / 36 | board lanes, tables, menus |
-| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | tasks, epics, projects, tool calls / agent sessions, thoughts, needs-you header |
+| sidebar and transcript rows (`size-row-item` / `-item-sm`) | 32 / 28 | 26 / 24 | tasks, projects, tool calls / epics, thoughts, peer and start-progress steps |
 | needs-you row padding (`space-attention-row-pad-y`) | 6 | 3 | |
 | sidebar row gap / project gap (`space-nav-row-gap`, `-nav-section-gap`) | 2 / 12 | 1 / 6 | |
 | controls (`size-control-md` / `-lg`) | 32 / 36 | 30 / 34 | a couple of px |
@@ -2245,14 +2254,17 @@ MarkdownCheatsheet.
   the whole row opening your settings, said in a `Tooltip` on hover and
   focus; `actions` after it (an icon-only sign-out, given its own `Tooltip`
   by the app, as every icon-only action in a band is).
-- **NavTree** — Project → Epic → Task → agent session, flat with `aria-level`,
+- **NavTree** — Project → Epic → Task, flat with `aria-level`,
   full keyboard navigation, per-row open/closed overrides (controlled via
   `expanded` / `onExpandedChange` so the app can persist them), triage-derived
   defaults, and a search that forces ancestors open ("Mine" only opens
-  them by default; its chevrons still fold). Earlier runs fold into
-  "Attempt n" rows.
+  them by default; its chevrons still fold). Unsearched it lists only
+  running, in-review and ready-to-merge tasks plus the `selected` one; a
+  query or triage filter lists Backlog and Done too. A task row is a leaf
+  (→ does nothing on it); a selected session highlights its task.
 - The view model is pure and exported from `src/util/navModel.ts`:
-  `flattenNav`, `attentionItems`, `globalCounts`, `projectCounts`,
+  `flattenNav` (its filter takes `selected`, which keeps that task listed),
+  `attentionItems`, `globalCounts`, `projectCounts`,
   `taskTriage`, `workingRoles`, `ancestorKeys`. The app maps domain
   records to `NavProject[]` (joining people, activity and titles) and hands
   it over; nothing here fetches.

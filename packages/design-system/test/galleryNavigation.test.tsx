@@ -43,6 +43,20 @@ test("the sidebar's and the guide's blocks render in every pane with their state
     expect(pane.querySelectorAll("[data-testid=help-section-link]").length).toBe(4);
     expect([...pane.querySelectorAll("[data-testid=help-search-count]")].map((c) => c.textContent)).toEqual(["2 sections", "0 sections"]);
   }
+  // The settled project's three states: header only; the selected done task and its epic; Mine's empty line.
+  for (const pane of panes("nav-sidebar-states")) {
+    const trees = [...pane.querySelectorAll<HTMLElement>("aside")].filter((s) => s.querySelector("[data-nav-key='project:p_site']") || s.textContent?.includes("Nothing of yours in progress."));
+    const keys = (el: Element) => [...el.querySelectorAll("[role=treeitem]")].map((r) => r.getAttribute("data-nav-key"));
+    expect(trees.length, "settled sidebars").toBe(3);
+    const [idle, pinned, mine] = trees;
+    expect(keys(idle!)).toEqual(["project:p_site"]);
+    expect(idle!.querySelector("[data-nav-key='project:p_site']")!.hasAttribute("aria-expanded")).toBe(false);
+    expect(keys(pinned!).slice(0, 2)).toEqual(["project:p_site", "epic:e_launch"]);
+    expect(keys(pinned!).length).toBe(3);
+    expect(pinned!.querySelector("[role=treeitem][aria-selected=true]")!.textContent).toContain("Landing page copy");
+    expect(keys(mine!)).toEqual([]);
+    expect(mine!.textContent).toContain("Nothing of yours in progress.");
+  }
 });
 
 for (const open of ["Enter", "click"]) {

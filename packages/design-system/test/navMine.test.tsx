@@ -25,10 +25,10 @@ async function mount(el: React.ReactElement): Promise<HTMLElement> {
 const ME = { id: "me", name: "Me" };
 const THEM = { id: "them", name: "Them" };
 
-// Nothing here is counted (all done), so without a filter both rows start closed.
+// In review: listed unsearched, but not counted, so without a filter both rows start closed.
 const LOGIN: NavEpic = { id: "e", title: "Login", tasks: [
-  { id: "t1", title: "Mine one", status: "done", people: [ME] },
-  { id: "t2", title: "Theirs", status: "done", people: [THEM] },
+  { id: "t1", title: "Mine one", status: "review", people: [ME] },
+  { id: "t2", title: "Theirs", status: "review", people: [THEM] },
 ] };
 const PROJECT: NavProject = { id: "p", name: "Web", epics: [LOGIN] };
 

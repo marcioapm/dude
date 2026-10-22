@@ -193,7 +193,7 @@ def test_a_task_is_edited_and_moved_from_its_screen(
     epic = client.post(f"/v1/projects/{forge_project['id']}/epics", {"title": "Greetings"}).json()
     item = client.create_task(forge_project["id"], "Draft title")
     sign_in(page, web_url, org["api_key"])
-    page.get_by_text("Draft title").first.click()
+    page.locator(f"[data-board-key='task:{item['id']}']").click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
 
     page.get_by_test_id("edit-task").click()
@@ -854,7 +854,7 @@ def test_criteria_that_open_over_the_editors_limit_block_saving_until_they_fit(
     """Saved criteria within 16K open as a list whose markers take it past the editor's limit."""
     item = client.create_task(forge_project["id"], "Near the limit", acceptanceCriteria=["y" * 2048] * 8)
     sign_in(page, web_url, org["api_key"])
-    page.get_by_text("Near the limit").first.click()
+    page.locator(f"[data-board-key='task:{item['id']}']").click()
     page.get_by_test_id("edit-task").click()
     criteria = page.get_by_test_id("task-criteria")
     # Eight "- [ ] " and seven newlines: 16,384 + 55.
@@ -948,9 +948,9 @@ def test_closing_an_edited_task_says_its_changes_are_unsaved_without_a_count(
 ):
     # Most of the goal was there already: a count of every word in it would be false.
     long_goal = " ".join(f"word{i}" for i in range(60))
-    client.create_task(forge_project["id"], "Edited goal", goal=long_goal)
+    item = client.create_task(forge_project["id"], "Edited goal", goal=long_goal)
     sign_in(page, web_url, org["api_key"])
-    page.get_by_text("Edited goal").first.click()
+    page.locator(f"[data-board-key='task:{item['id']}']").click()
     page.get_by_test_id("edit-task").click()
     page.get_by_test_id("task-goal").fill(long_goal + " more")
     page.keyboard.press("Escape")
@@ -1108,7 +1108,10 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
         page.get_by_test_id("epic-save").click()
         expect(page.get_by_role("treeitem", name=title)).to_be_visible()
 
-    # Move the loose task into Billing from its row's menu.
+    # Move the loose task into Billing from its row's menu. Not started, it
+    # is the board's until a search lists it.
+    search = page.get_by_role("searchbox", name="Find tasks, people, epics")
+    search.fill("Loose work")
     row = page.get_by_role("treeitem", name="Loose work", exact=False)
     row.focus()
     page.keyboard.press("Shift+F10")
@@ -1120,22 +1123,36 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
     billing = next(e for e in epics if e["title"] == "Billing")
     assert client.get(f"/v1/tasks/{item['id']}").json()["epicId"] == billing["id"]
 
-    # Billing moves above Onboarding.
+    # Unsearched, Billing is listed only because it is selected (its board
+    # opened when it was made): its one task is in the backlog, and
+    # Onboarding, empty and not selected, is left out.
+    search.fill("")
+    expect(page).to_have_url(re.compile(r"#/epic/" + re.escape(billing["id"])))
     billing_row = page.get_by_role("treeitem", name="Billing")
+    expect(billing_row).to_be_visible()
+    expect(billing_row).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_role("treeitem", name="Onboarding")).to_have_count(0)
+    expect(page.get_by_role("treeitem", name="Loose work", exact=False)).to_have_count(0)
+
+    # Billing moves above Onboarding.
     billing_row.hover()
     page.get_by_role("button", name="Actions for Billing").click()
     page.get_by_role("menuitem", name="Move up").click()
     page.wait_for_timeout(500)
     assert [e["title"] for e in client.get(f"/v1/projects/{forge_project['id']}/epics").json()["epics"]] == ["Billing", "Onboarding"]
 
-    # The project's board, grouped by epic, shows them in that order.
+    # The project's board, grouped by epic, shows them in that order. Billing
+    # is no longer selected, and the tree leaves it out.
     page.get_by_role("treeitem", name="Greeter").click()
     page.get_by_test_id("group-by-epic").click()
     expect(page.locator("[data-lane]").first).to_contain_text("Billing")
+    expect(page.get_by_role("treeitem", name="Billing")).to_have_count(0)
 
     # Editing the title keeps the description the tree never showed; the
-    # dialog hands focus back to the row it was opened from.
+    # dialog hands focus back to the row it was opened from. A search for
+    # its title lists the epic again.
     client.patch(f"/v1/epics/{billing['id']}", {"description": "Invoices and refunds"})
+    search.fill("Billing")
     billing_row.focus()
     page.keyboard.press("Shift+F10")
     page.get_by_role("menuitem", name="Edit epic").click()
@@ -1941,18 +1958,18 @@ def test_a_dropped_stream_says_so_and_catches_up(
 ):
     """The live stream drops: the page says it is reconnecting, and when it
     is back it re-reads what it missed."""
-    client.create_task(forge_project["id"], "Before")
+    before = client.create_task(forge_project["id"], "Before")
     sign_in(page, web_url, org["api_key"])
-    expect(page.get_by_text("Before").first).to_be_visible()
+    expect(page.locator(f"[data-board-key='task:{before['id']}']")).to_be_visible()
     page.context.set_offline(True)
     expect(page.get_by_test_id("reconnecting")).to_be_visible(timeout=20_000)
     # One banner, from the shell, with a way out if it never comes back.
     expect(page.get_by_test_id("reconnecting")).to_have_count(1)
     expect(page.get_by_test_id("reconnecting-reload")).to_be_visible()
-    client.create_task(forge_project["id"], "While away")
+    away = client.create_task(forge_project["id"], "While away")
     page.context.set_offline(False)
     expect(page.get_by_test_id("reconnecting")).to_have_count(0, timeout=30_000)
-    expect(page.get_by_text("While away").first).to_be_visible(timeout=15_000)
+    expect(page.locator(f"[data-board-key='task:{away['id']}']")).to_be_visible(timeout=15_000)
     assert all("ERR_INTERNET_DISCONNECTED" in e for e in console_errors), console_errors
 
 

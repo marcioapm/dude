@@ -2,10 +2,10 @@
  * View model for the navigation tree — pure functions, no React.
  *
  * The domain hierarchy is Organization → Project → Epic → Task → Run →
- * Session. The tree shows four of those levels and folds Runs into their
- * task: the sessions of the *current* run sit directly under the work
- * item, and earlier attempts fold into one "Attempt n" row each. Retrying
- * is rare enough that it must not cost every task a level.
+ * Session. The tree shows three of those levels: a task's runs and sessions
+ * live on its page, and roll up into the task's triage here. Session refs
+ * still exist (routing opens one); in the tree a session's task stands for
+ * it.
  *
  * Everything here is keyed on the domain status unions via `triage.ts`, so
  * a new status is a compile error before it can be a blank row.
@@ -133,10 +133,14 @@ export function waitingWords(task: NavTask): string {
   return task.waitingFor ?? (task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you");
 }
 
+/** Started and not ended: the board's In progress, In review and Ready to merge columns. */
+function inProgress(status: TaskStatus): boolean {
+  return !notStarted(status) && !TERMINAL_TASK_STATUSES.includes(status);
+}
+
 /** The driver a card or row shows: only while the task is in progress. */
 export function shownDriver(task: NavTask): NavTask["driver"] {
-  if (notStarted(task.status) || TERMINAL_TASK_STATUSES.includes(task.status)) return undefined;
-  return task.driver;
+  return inProgress(task.status) ? task.driver : undefined;
 }
 
 export interface NavEpic {
@@ -258,9 +262,7 @@ export function totalCount(c: TriageCounts): number {
 /**
  * The agents of a task's current run that are working now or asking a
  * person — the deepest such in each branch, since an orchestrator
- * "waiting for the implementer" says less than the implementer does. The
- * tree shows only these under a task: the phases that ran live on the
- * task's page.
+ * "waiting for the implementer" says less than the implementer does.
  */
 export function liveSessions(wi: NavTask): NavSession[] {
   const out: NavSession[] = [];
@@ -301,6 +303,12 @@ export interface NavFilter {
   readonly you?: string | null | undefined;
   /** Only tasks this person is on ("Mine"). */
   readonly person?: string | null | undefined;
+  /**
+   * What is open: its task (a session's or run's, for those) and epic stay
+   * listed when the unsearched view would leave them out, so the selection
+   * always has a row.
+   */
+  readonly selected?: NavRef | null | undefined;
 }
 
 /** User overrides of the default open state, by row key. */
@@ -308,7 +316,8 @@ export type NavOverrides = ReadonlyMap<string, boolean>;
 
 export interface NavRow {
   readonly key: string;
-  readonly ref: NavRef;
+  /** Sessions have no row: their task's stands for them. */
+  readonly ref: NavRef & { readonly kind: Exclude<NavKind, "session"> };
   /** Indent level for aria-level and the guide. */
   readonly depth: number;
   readonly parentKey: string | null;
@@ -316,10 +325,10 @@ export interface NavRow {
   readonly expanded: boolean;
   /** Set when the filter forced this row open; the chevron is inert. */
   readonly forced: boolean;
-  readonly node: NavProject | NavEpic | NavTask | NavRun | NavSession;
+  readonly node: NavProject | NavEpic | NavTask | NavRun;
   /** Project / epic / task: bucket counts of the tasks inside. */
   readonly counts: TriageCounts | null;
-  /** Task / session: its own bucket. */
+  /** Task: its own bucket. */
   readonly triage: TriageKind | null;
   readonly projectId: string;
 }
@@ -328,6 +337,11 @@ interface Ctx {
   readonly overrides: NavOverrides;
   readonly filter: NavFilter;
   readonly rows: NavRow[];
+  /** No query and no triage filter: only work in progress is listed. */
+  readonly trimmed: boolean;
+  /** The selection's task and epic ids, listed even when the trim would drop them; null while searching. */
+  readonly pinnedTask: string | null;
+  readonly pinnedEpic: string | null;
 }
 
 function matches(q: string, ...texts: ReadonlyArray<string | undefined>): boolean {
@@ -345,16 +359,14 @@ function isOpen(ctx: Ctx, key: string, byDefault: boolean, forced: boolean): boo
 }
 
 /**
- * Default open state — the operator should never have to expand three
+ * Default open state — the operator should never have to expand two
  * levels to reach the thing that needs them:
  *   project    open if anything inside is counted (needs you / active / ready / failed)
  *   epic       open if anything inside needs you or is active
- *   task  open only if it needs you, so the asking session is visible
- *   session    open only if a descendant needs you
- *   run        (earlier attempt) closed
  * Anything the user toggles overrides these; the override is per row and
  * survives data refreshes, so a newly arriving urgent item still opens its
- * ancestors unless the user explicitly folded them.
+ * ancestors unless the user explicitly folded them. A row with nothing
+ * listed under it is never open and draws no chevron.
  */
 function projectDefaultOpen(c: TriageCounts): boolean {
   return c.needs_you > 0 || c.active > 0 || c.ready > 0 || c.failed > 0;
@@ -363,25 +375,15 @@ function epicDefaultOpen(c: TriageCounts): boolean {
   return c.needs_you > 0 || c.active > 0;
 }
 
+// A task is a leaf: the agent working on it rides on its owner's face, and
+// its sessions are on its page. Its triage still rolls its sessions up.
 function pushTask(ctx: Ctx, wi: NavTask, depth: number, parentKey: string, projectId: string): void {
-  const ref: NavRef = { kind: "task", id: wi.id };
-  const key = navKey(ref);
-  const triage = taskTriage(wi, ctx.filter.you);
-  const live = liveSessions(wi);
-  const expandable = live.length > 0;
-  const filterOpen = ctx.filter.triage === "needs_you" || ctx.filter.triage === "active";
-  const forced = expandable && filterOpen && ctx.filter.triage === triage;
-  // What is working now is the point of the row: open unless folded by hand.
-  const expanded = expandable && isOpen(ctx, key, true, forced);
-  ctx.rows.push({ key, ref, depth, parentKey, expandable, expanded, forced, node: wi, counts: null, triage, projectId });
-  if (!expanded) return;
-  for (const s of live) {
-    const sref: NavRef = { kind: "session", id: s.id };
-    ctx.rows.push({ key: navKey(sref), ref: sref, depth: depth + 1, parentKey: key, expandable: false, expanded: false, forced: false, node: s, counts: null, triage: sessionTriage(s), projectId });
-  }
+  const ref = { kind: "task", id: wi.id } as const;
+  ctx.rows.push({ key: navKey(ref), ref, depth, parentKey, expandable: false, expanded: false, forced: false, node: wi, counts: null, triage: taskTriage(wi, ctx.filter.you), projectId });
 }
 
-function visibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTask[] {
+/** The tasks the filter lets through, before the trim to work in progress. */
+function eligibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTask[] {
   const t = ctx.filter.triage ?? null;
   const person = ctx.filter.person ?? null;
   return items.filter(
@@ -389,44 +391,79 @@ function visibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTa
   );
 }
 
+function listed(ctx: Ctx, eligible: ReadonlyArray<NavTask>): NavTask[] {
+  if (!ctx.trimmed) return [...eligible];
+  return eligible.filter((wi) => inProgress(wi.status) || wi.id === ctx.pinnedTask);
+}
+
+/** The id of the task a ref is or belongs to (a session's or run's task); null for projects, epics and unknown refs. */
+export function taskOf(projects: ReadonlyArray<NavProject>, ref: NavRef): string | null {
+  if (ref.kind === "task") return ref.id;
+  if (ref.kind !== "session" && ref.kind !== "run") return null;
+  const key = ancestorKeys(projects, ref).findLast((k) => k.startsWith("task:"));
+  return key ? key.slice("task:".length) : null;
+}
+
 /**
  * Flatten the projects into the rows currently visible, applying defaults,
  * user overrides and the filter. Rendering from a flat list keeps keyboard
  * navigation trivial (index arithmetic) and leaves the door open to
  * virtualisation.
+ *
+ * Unsearched (no query, no triage filter; Mine included), only work in
+ * progress is listed — the board's middle columns — plus the selection; an
+ * epic with none of that is left out. Backlog and Done are the board's.
+ * Searching lists every status.
  */
 export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOverrides, filter: NavFilter = {}): NavRow[] {
-  const ctx: Ctx = { overrides, filter, rows: [] };
   const q = (filter.query ?? "").trim().toLowerCase();
   // Search forces matching ancestors open; Mine only changes their default.
   const searching = q.length > 0 || (filter.triage ?? null) !== null;
   const filtering = searching || (filter.person ?? null) !== null;
+  // A project needs no pin: unfiltered its header is always listed, and Mine keeps its own rule.
+  const pin = searching ? null : (filter.selected ?? null);
+  const ctx: Ctx = {
+    overrides,
+    filter,
+    rows: [],
+    trimmed: !searching,
+    pinnedTask: pin ? taskOf(projects, pin) : null,
+    pinnedEpic: pin?.kind === "epic" ? pin.id : null,
+  };
 
   for (const p of projects) {
-    const pref: NavRef = { kind: "project", id: p.id };
+    const pref = { kind: "project", id: p.id } as const;
     const pkey = navKey(pref);
     const projectHit = matches(q, p.name);
     // A query that hits a project or epic name keeps everything inside it;
     // otherwise it has to hit the task itself. The triage filter always
     // applies to tasks.
     const epics = (p.epics ?? [])
-      .map((e) => ({ epic: e, items: visibleTasks(ctx, e.tasks, projectHit || matches(q, e.title) ? "" : q) }))
-      .filter((x) => !filtering || x.items.length > 0);
-    const loose = visibleTasks(ctx, p.tasks ?? [], projectHit ? "" : q);
+      .map((e) => {
+        const eligible = eligibleTasks(ctx, e.tasks, projectHit || matches(q, e.title) ? "" : q);
+        // The selected epic keeps its row through the trim, as long as Mine would show it.
+        const pinned = e.id === ctx.pinnedEpic && ((filter.person ?? null) === null || eligible.length > 0);
+        return { epic: e, items: listed(ctx, eligible), pinned };
+      })
+      .filter((x) => x.items.length > 0 || x.pinned);
+    const loose = listed(ctx, eligibleTasks(ctx, p.tasks ?? [], projectHit ? "" : q));
+    // Projects are places to go: unfiltered, every one keeps its header.
     if (filtering && epics.length === 0 && loose.length === 0) continue;
 
     const counts = projectCounts(p, filter.you);
     const forced = searching;
-    const expanded = isOpen(ctx, pkey, filtering || projectDefaultOpen(counts), forced);
-    ctx.rows.push({ key: pkey, ref: pref, depth: 0, parentKey: null, expandable: true, expanded, forced, node: p, counts, triage: null, projectId: p.id });
+    const expandable = epics.length > 0 || loose.length > 0;
+    const expanded = expandable && isOpen(ctx, pkey, filtering || projectDefaultOpen(counts), forced);
+    ctx.rows.push({ key: pkey, ref: pref, depth: 0, parentKey: null, expandable, expanded, forced: forced && expandable, node: p, counts, triage: null, projectId: p.id });
     if (!expanded) continue;
 
     for (const { epic, items } of epics) {
-      const eref: NavRef = { kind: "epic", id: epic.id };
+      const eref = { kind: "epic", id: epic.id } as const;
       const ekey = navKey(eref);
       const ec = epicCounts(epic, filter.you);
-      const eexp = isOpen(ctx, ekey, filtering || epicDefaultOpen(ec), forced);
-      ctx.rows.push({ key: ekey, ref: eref, depth: 1, parentKey: pkey, expandable: epic.tasks.length > 0, expanded: eexp, forced, node: epic, counts: ec, triage: null, projectId: p.id });
+      const eexpandable = items.length > 0;
+      const eexp = eexpandable && isOpen(ctx, ekey, filtering || epicDefaultOpen(ec), forced);
+      ctx.rows.push({ key: ekey, ref: eref, depth: 1, parentKey: pkey, expandable: eexpandable, expanded: eexp, forced: forced && eexpandable, node: epic, counts: ec, triage: null, projectId: p.id });
       if (eexp) for (const wi of items) pushTask(ctx, wi, 2, ekey, p.id);
     }
     for (const wi of loose) pushTask(ctx, wi, 1, pkey, p.id);

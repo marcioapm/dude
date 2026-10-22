@@ -12,6 +12,7 @@ import {
   projectPeople,
   ownerAgents,
   shownDriver,
+  taskOf,
   type NavEpic,
   type NavFilter,
   type NavOverrides,
@@ -19,10 +20,8 @@ import {
   type NavRef,
   type NavRow,
   type NavRun,
-  type NavSession,
   type NavTask,
 } from "../util/navModel.ts";
-import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { DriverGlyph, driverLabel } from "./DriverMark.tsx";
 import { PersonAvatarStack } from "./PersonAvatar.tsx";
 import { PrChip } from "./PrChip.tsx";
@@ -67,15 +66,17 @@ export interface NavRowMenuControls {
 }
 
 /**
- * The navigation tree: Project → Epic → Task → Session, with earlier
- * Runs folded into one "Attempt n" row each. Rendered flat (every row is a
+ * The navigation tree: Project → Epic → Task. Rendered flat (every row is a
  * sibling with `aria-level`) so keyboard movement is index arithmetic and
  * project headers can stick to the top of the scroll.
  *
+ * Unsearched it lists only work in progress (running, in review, ready to
+ * merge) and the selection; a search or triage filter lists every status.
+ * A task is a leaf: the agent working on it sits on its owner's face.
+ *
  * Each level has its own row grammar, so depth never rests on indentation
  * alone: projects are small-caps headers, epics carry the layers glyph,
- * tasks lead with a status mark and a mono key, sessions lead with a
- * role avatar on a guide line.
+ * tasks lead with a mono key and trail with their one state.
  *
  * Keyboard: ↑↓ move, → opens or steps in, ← closes or steps out, Home/End,
  * Enter/Space selects, `/` jumps to the search. Focus and selection are
@@ -97,14 +98,14 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
     [overrides, onExpandedChange, expanded],
   );
 
-  const rows = useMemo(() => flattenNav(projects, overrides, filter), [projects, overrides, filter]);
+  const rows = useMemo(() => flattenNav(projects, overrides, { ...filter, selected }), [projects, overrides, filter, selected]);
   const chosenKey = selected ? navKey(selected) : null;
-  // A finished agent has no row of its own (only what works now does):
-  // its task's row stands for it.
+  // A session or run has no row of its own: its task's row stands for it.
   const selectedKey = useMemo(() => {
-    if (!selected || rows.some((r) => r.key === chosenKey)) return chosenKey;
-    return [...ancestorKeys(projects, selected)].reverse().find((k) => k.startsWith("task:") && rows.some((r) => r.key === k)) ?? chosenKey;
-  }, [selected, chosenKey, rows, projects]);
+    if (!selected) return null;
+    const task = taskOf(projects, selected);
+    return task ? navKey({ kind: "task", id: task }) : chosenKey;
+  }, [selected, chosenKey, projects]);
 
   // Selection is always visible: opening a deep node from elsewhere (a
   // notification, a link) unfolds its ancestors even if the user closed them.
@@ -118,8 +119,8 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
     lastRevealed.current = chosenKey;
     // Pinned open, not just opened: an ancestor open only by default (a
     // project with something active) would fold under the selection once
-    // that settles.
-    const closed = path.filter((k) => overrides.get(k) !== true);
+    // that settles. Only projects and epics fold; tasks are leaves.
+    const closed = path.filter((k) => (k.startsWith("project:") || k.startsWith("epic:")) && overrides.get(k) !== true);
     if (closed.length === 0) return;
     setOverrides((prev) => {
       const next = new Map(prev);
@@ -298,10 +299,6 @@ export function rowLabel(row: NavRow): string {
     }
     case "run":
       return `Attempt ${(row.node as NavRun).attempt}`;
-    case "session": {
-      const s = row.node as NavSession;
-      return s.title ?? ROLE_LABEL[s.role];
-    }
   }
 }
 
@@ -440,24 +437,6 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     );
   }
 
-  // An agent working now: its tile, what it is and what it is doing, its plan.
-  const s = row.node as NavSession;
-  const title = s.title ?? ROLE_LABEL[s.role];
-  return (
-    <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
-      <AgentAvatar role={s.role} size="xs" live={s.status === "running"} className={styles["sessionAvatar"]} />
-      <span className={styles["sessionMain"]} title={s.activity ? `${title} · ${s.activity}` : title}>
-        <span className={styles["sessionTitle"]}>{title}</span>
-        {s.activity ? <span className={styles["sessionActivity"]}> · {s.activity}</span> : null}
-      </span>
-      {s.plan && s.plan.total > 0 ? (
-        <span className={cx(styles["sessionPlan"], styles["rest"])} title={`Plan: ${s.plan.done} of ${s.plan.total}${s.plan.current ? `\nNow: ${s.plan.current}` : ""}`}>
-          {s.plan.done}/{s.plan.total}
-        </span>
-      ) : needsYou ? (
-        <StatusBadge status={s.status} variant="dot" iconOnly className={styles["mark"]} />
-      ) : null}
-      {menuSlot}
-    </div>
-  );
+  const unknown: never = kind;
+  return unknown;
 }

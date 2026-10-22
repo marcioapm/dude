@@ -156,9 +156,9 @@ export const size = {
   rowDefault: 32,
   /** Two-line rows. */
   rowComfortable: 40,
-  /** Sidebar tasks, epics, projects; tool call rows. */
+  /** Sidebar tasks and projects; tool call rows. */
   rowItem: 32,
-  /** Sidebar session rows, thought rows. */
+  /** Sidebar epic rows, thought rows, peer and start-progress steps. */
   rowItemSm: 28,
   /** Nav, headers, stacks — not the transcript avatar. */
   avatarXs: 16,

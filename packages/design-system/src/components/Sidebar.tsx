@@ -157,8 +157,7 @@ export function projectCountWords(c: TriageCounts): string {
  *               others is the inbox's Others tab, not a row here)
  *   sessions    the `sessions` slot (`SidebarSessions`)
  *   projects    Everyone / Mine, then the tree: projects with their faces,
- *               epics, tasks with their people, and under a task only the
- *               agents working now
+ *               epics, tasks with their people
  *   band        on its own shade: you, and your menu
  *
  * Calm at fifty tasks: colour is on faces and marks, and the one amber
@@ -226,7 +225,7 @@ export function Sidebar({
   const filter = useMemo<NavFilter>(() => ({ query: q, triage: null, person: isMine ? (you ?? null) : null, you }), [q, isMine, you]);
   const waiting = useMemo(() => waitingSplit(attentionItems(projects), you), [projects, you]);
   const filtering = q.trim().length > 0 || isMine;
-  const visible = useMemo(() => (filtering ? flattenNav(projects, expanded ?? new Map(), filter).length : -1), [filtering, projects, expanded, filter]);
+  const visible = useMemo(() => (filtering ? flattenNav(projects, expanded ?? new Map(), { ...filter, selected }).length : -1), [filtering, projects, expanded, filter, selected]);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -445,7 +444,7 @@ export function Sidebar({
             compact
             icon="search"
             title="No matches"
-            description={isMine && !q ? "Nothing of yours here." : q ? `Nothing matches “${q}”.` : "Nothing here."}
+            description={isMine && !q ? "Nothing of yours in progress." : q ? `Nothing matches “${q}”.` : "Nothing here."}
             action={
               <button type="button" className={styles["link"]} onClick={clear}>
                 Clear
