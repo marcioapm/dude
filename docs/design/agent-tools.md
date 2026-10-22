@@ -88,7 +88,8 @@ definition answers it where there is one.
 | `github.read` | `github_search`, `github_issue`, `github_pull_request`, `github_check_log` |
 | `delivery.read` | `findings`, `pull_requests` |
 | `conduct` | `start_phase`, `start_agent`, `steer`, `restart_run`, `decide`, `dismiss_finding`, `decide_escalation`, `update_task`, `publish`, `request_review`, `mark_ready`, `rerun_failed_checks` |
-| `session` | `propose`, `relate`, `name_session` |
+| `session` | `propose`, `relate` |
+| `session.name` | `name_session`; `Resolve` withholds it once a member has named the session (`sessions.titled_by = 'person'`), read at each tool request and at the Run's submit |
 | `session.agents` | `start_agent` (a brainstorm's: read-only investigator children of its session) |
 | `session.checkout` | `refresh_checkout` |
 | `runs.read` | `run_chat` |
@@ -120,7 +121,7 @@ role none of these is):
 | role | capabilities |
 |---|---|
 | conductor | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `pr.act`, `base.sync`, `github.read`, `delivery.read`, `conduct`, `runs.read`, `pr.refresh`, `limits.read`, `limits.request`, `verify`, `web_search`, `web_fetch` |
-| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.agents`, `session.checkout`, `runs.read`, `pr.refresh`, `web_search`, `web_fetch` |
+| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.name`, `session.agents`, `session.checkout`, `runs.read`, `pr.refresh`, `web_search`, `web_fetch` |
 | implementer | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `feedback.resolve`, `pr.act`, `base.sync`, `web_search`, `web_fetch` |
 | reviewer, fixer, qa_browser | `tasks.read`, `memory`, `run.basics`, `machines`, `web_search`, `web_fetch` |
 | simplifier | `tasks.read`, `memory`, `run.basics`, `machines`, `base.sync`, `web_search`, `web_fetch` |

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -69,11 +71,18 @@ func TestASessionsAgentNamesItsSession(t *testing.T) {
 	}
 }
 
-// Once a person has named the session, the agent's name_session refuses,
-// saying why, and the person's title stays.
+// A member naming the session while the agent's name_session is on its way
+// (granted when the caller was resolved, renamed before the tool's
+// transaction) is refused, saying why, and the person's title stays.
 func TestNameSessionIsRefusedOnceAPersonNamedIt(t *testing.T) {
-	f := setup(t)
-	token := f.session(t, "ssn_mine", "Ana's title", "person")
+	var f *fixture
+	srv := &agenttools.Server{BeforeCall: func(tool string) {
+		if tool == "name_session" {
+			mustExec(t, f.owner, `UPDATE sessions SET title = 'Ana''s title', titled_by = 'person' WHERE id = 'ssn_mine'`)
+		}
+	}}
+	f = setupWith(t, srv)
+	token := f.session(t, "ssn_mine", "", "")
 	status, out := f.post(t, token, "name_session", `{"title":"Something else"}`)
 	if status != 422 || !strings.Contains(out["error"].(string), "a member named this session") {
 		t.Fatalf("name_session after a person: %d %v", status, out)
@@ -159,6 +168,51 @@ func TestBrainstormStartsOnlyInvestigatorChildren(t *testing.T) {
 	}
 	if status, out := f.post(t, childToken, "start_agent", `{"profile":"investigator"}`); status != 404 && status != 422 {
 		t.Fatalf("child recursion: %d %v", status, out)
+	}
+}
+
+// A brainstorm whose session a member named is not given name_session on
+// any surface (GET /tools, MCP tools/list, a call): a call is answered as
+// one to a tool the Run does not have. Untitled, or named by the agent, it
+// is given it.
+func TestABrainstormIsNotGivenNameSessionOnceAMemberNamedTheSession(t *testing.T) {
+	f := setup(t)
+	for session, want := range map[string]bool{"ssn_untitled": true, "ssn_agents": true, "ssn_members": false} {
+		title, by := "", ""
+		switch session {
+		case "ssn_agents":
+			title, by = "Metering", "agent"
+		case "ssn_members":
+			title, by = "Dry run", "person"
+		}
+		token := f.session(t, session, title, by)
+		if _, ok := f.getTools(t, token)["name_session"]; ok != want {
+			t.Errorf("%s: GET /tools lists name_session %v, want %v", session, ok, want)
+		}
+		cs, err := f.connect(t, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed, err := cs.ListTools(context.Background(), nil)
+		cs.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := slices.ContainsFunc(listed.Tools, func(tl *mcp.Tool) bool { return tl.Name == "name_session" }); got != want {
+			t.Errorf("%s: MCP lists name_session %v, want %v", session, got, want)
+		}
+		if !want {
+			status, out := f.post(t, token, "name_session", `{"title":"Something else"}`)
+			if status != 404 || out["error"] != "no tool name_session for this Run" {
+				t.Errorf("%s: name_session called: %d %v", session, status, out)
+			}
+			if got, by := f.title(t, session); got != "Dry run" || by != "person" {
+				t.Errorf("%s: title %q by %q", session, got, by)
+			}
+			if _, ok := f.getTools(t, token)["propose"]; !ok {
+				t.Errorf("%s: propose went with name_session", session)
+			}
+		}
 	}
 }
 

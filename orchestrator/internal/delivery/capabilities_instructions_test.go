@@ -154,6 +154,18 @@ func TestGoldenInstructionsWithoutSettingsRead(t *testing.T) {
 	}
 }
 
+// A brainstorm whose session a member named, as a golden: Resolve gives it
+// no session.name, so its file has no naming paragraph.
+func TestGoldenInstructionsBrainstormMemberNamed(t *testing.T) {
+	less := capabilities.Default(RoleBrainstorm).Without(capabilities.SessionName)
+	in := goldenTask()
+	in.Tools, in.CLI = true, true
+	in.Repositories, in.Anywhere = readOnlyRepos(), true
+	ii := in.InstructionsInput()
+	ii.Grants = &less
+	golden(t, "instructions-brainstorm-member-named", Instructions(RoleBrainstorm, "", ii))
+}
+
 // The shell form of each dude tool the instruction files show, as
 // cmd/dude parses it.
 var toolCommands = map[string][]string{
