@@ -562,11 +562,16 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   waiting line, as in an agent session; the answer is given in its
   question's turn.
 - **Attempts.** **`AttemptDivider`** marks where one attempt ends and the
-  next begins in a task's Chat: a rule, "Attempt 2 · started by Ana · 1m
-  ago", and the note quoted under it. A `separator` named "Attempt 2,
-  started by Ana". The earlier attempt's turns sit above it inside
-  **`EarlierTurns`** (a `group` named "Attempt 1's conversation"), muted but
-  whole; nothing in them can be answered.
+  next begins in a task's Chat: ChatNotice's hairline (`border-subtle`)
+  either side of "Attempt 2 · started by Ana · 1m ago" (the age a
+  `Duration`), and the note quoted under it. Only the first rule is a
+  separator, named "Attempt 2, started by Ana"; the words and the note are
+  plain text, so nothing flattens them away. The earlier attempt's turns sit
+  above it inside **`EarlierTurns`** (a `group` named "Attempt 1's
+  conversation"), muted but whole: its text is reachable and selectable,
+  never `inert`. Nothing in it can be answered or opened, by what renders:
+  `EarlierTurns` provides `useEarlier()`, and a `ChatRunLine` inside is a
+  plain line (no button) while a `QuestionCard` shows no form or choices.
 
 ### Peers (agents on an epic)
 

@@ -17,11 +17,11 @@
   color: var(--ds-color-text-muted);
 }
 
+/* ChatNotice's hairline: the same rule either side of the words. */
 .rule {
-  flex: 1 1 var(--ds-space-24);
-  min-width: var(--ds-space-12);
-  height: 1px;
-  background: var(--ds-color-border);
+  composes: rule from "./ChatNotice.module.css";
+  margin: 0;
+  border: 0;
 }
 
 .words {

@@ -476,7 +476,9 @@ describe("a conducted task with two attempts", () => {
       const group = p.querySelector<HTMLElement>("[data-testid=earlier-turns]")!;
       expect(group.getAttribute("aria-label")).toBe("Attempt 1's conversation");
       expect([...group.querySelectorAll("[data-testid=chat-run]")].map((l) => l.getAttribute("data-run"))).toEqual(["run_a1_impl"]);
-      // The earlier group is inert: only the current attempt's lines open their sessions.
+      // Attempt 1's line is only read there: it is no button, and only the current attempt's lines open their sessions.
+      expect(lines[0]!.querySelector("button")).toBeNull();
+      expect(group.textContent).toContain("Implementer");
       await click(lines[2]!.querySelector("button")!);
       expect(opened).toEqual(["run_a2_fix"]);
       for (const unmount of mounted) await unmount();

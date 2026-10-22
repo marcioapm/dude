@@ -1080,7 +1080,7 @@ describe("a task stopped under the conductor", () => {
     );
     mounted.push(unmount);
     const group = await until(() => container.querySelector<HTMLElement>('[role=group][aria-label="Attempt 3\'s conversation"]'), "attempt 3's turns");
-    const divider = container.querySelector<HTMLElement>('[role=separator][aria-label="Attempt 4, started by Ana"]')!;
+    const divider = container.querySelector<HTMLElement>('[data-testid=attempt-divider]:has(hr[aria-label="Attempt 4, started by Ana"])')!;
     expect(divider.textContent).toContain("Start from the API.");
     expect(group.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

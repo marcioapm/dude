@@ -7,6 +7,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AttemptDivider, EarlierTurns } from "../src/components/AttemptDivider.tsx";
+import { ChatRunLine } from "../src/components/ChatRunLine.tsx";
+import { QuestionCard } from "../src/components/QuestionCard.tsx";
 import { DeciderField, type NextDecider } from "../src/components/DeciderField.tsx";
 import { LiveWork, liveWords, type LiveItem } from "../src/components/LiveWork.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
@@ -84,20 +86,45 @@ describe("DeciderField", () => {
 });
 
 describe("AttemptDivider and EarlierTurns", () => {
-  test("a separator named for the attempt and who started it, the note quoted; the earlier turns a muted group", async () => {
+  test("separators on the rules named for the attempt and who started it; the words and note plain text", async () => {
     const at = Date.now() - 60_000;
     const el = await mount(<>
-      <EarlierTurns attempt={1}><p>Earlier turn</p></EarlierTurns>
       <AttemptDivider attempt={2} by="Ana" note="Start from the API." at={at} />
       <AttemptDivider attempt={3} by="Bo" at={at} />
     </>);
-    const group = el.querySelector('[role="group"]')!;
-    expect(group.getAttribute("aria-label")).toBe("Attempt 1's conversation");
-    expect(group.hasAttribute("inert")).toBe(true);
-    const [two, three] = [...el.querySelectorAll('[role="separator"]')];
-    expect(two!.getAttribute("aria-label")).toBe("Attempt 2, started by Ana");
+    const [two, three] = [...el.querySelectorAll<HTMLElement>("[data-testid=attempt-divider]")];
+    const rules = [...two!.querySelectorAll("hr")];
+    expect(rules.map((r) => r.getAttribute("aria-label"))).toEqual(["Attempt 2, started by Ana", null]);
+    expect(rules[1]!.getAttribute("aria-hidden")).toBe("true");
+    // The words and the note are not inside any separator, so nothing flattens them away.
+    expect(two!.querySelector("[role=separator]")).toBeNull();
     expect(two!.textContent).toContain("Attempt 2 · started by Ana · 1m ago");
     expect(two!.querySelector("q")!.textContent).toBe("Start from the API.");
     expect(three!.querySelector("q")).toBeNull();
+  });
+
+  test("earlier turns: a named group whose text is reachable, and nothing in it acts", async () => {
+    let opened = 0;
+    let chosen = 0;
+    const line = (key: string) => <ChatRunLine key={key} role="implementer" status="completed" what="implement" onOpen={() => opened++} />;
+    const el = await mount(<>
+      <EarlierTurns attempt={1}>
+        <p>Earlier turn</p>
+        {line("a")}
+        <QuestionCard role="conductor" text="Split it?" options={["Yes", "No"]} askedAt={0} onChoose={() => chosen++} onSubmit={() => undefined} />
+      </EarlierTurns>
+      {line("b")}
+    </>);
+    const group = el.querySelector<HTMLElement>('[role="group"][aria-label="Attempt 1\'s conversation"]')!;
+    // Nothing hides it from assistive tech or selection.
+    expect(group.hasAttribute("inert")).toBe(false);
+    expect(group.closest("[aria-hidden=true], [inert]")).toBeNull();
+    expect(group.textContent).toContain("Earlier turn");
+    expect(group.querySelectorAll("button, [role=radio], textarea, input")).toHaveLength(0);
+    // The same line outside the group still opens its session.
+    const live = [...el.querySelectorAll<HTMLButtonElement>("button")].filter((b) => !group.contains(b));
+    expect(live).toHaveLength(1);
+    await act(async () => live[0]!.click());
+    expect([opened, chosen]).toEqual([1, 0]);
   });
 });

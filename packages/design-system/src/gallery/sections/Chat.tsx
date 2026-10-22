@@ -569,13 +569,14 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="ch-attempts"
         title="Attempts"
-        note="After a Start over, the earlier attempt's turns stay in the Chat above an AttemptDivider, inside EarlierTurns: muted but whole, nothing in them answerable. The divider is a rule with “Attempt 2 · started by Ana · 1m ago” and the note quoted under it."
+        note="After a Start over, the earlier attempt's turns stay in the Chat above an AttemptDivider, inside EarlierTurns: muted but whole and readable, nothing in them answerable or opened (a Run line inside is plain text). The divider is ChatNotice's hairline either side of “Attempt 2 · started by Ana · 1m ago” and the note quoted under it; only the rule is a separator."
       >
         <Panes mode={mode} surface>
           <Col>
             <EarlierTurns attempt={1}>
               <ChatMessage role="human" intent="message" name="Ana" content="Let's split the pause into its own module." startedAt={at(0)} />
               <ChatMessage role="conductor" content="I'll start the implementer on the split, then ask the reviewers." startedAt={at(10_000)} />
+              <ChatRunLine role="implementer" status="aborted" what="implement" facts={["7m 00s"]} onOpen={() => undefined} />
             </EarlierTurns>
             <AttemptDivider attempt={2} by="Ana" note="Start from the API, not the UI." at={Date.now() - 60_000} />
             <ChatMessage role="conductor" content="Attempt 2: I read what attempt 1 did. Shall I start with the API?" startedAt={at(90_000)} />

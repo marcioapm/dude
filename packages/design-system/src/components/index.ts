@@ -79,6 +79,7 @@ export type { LiveItem, LiveState, LiveWorkProps } from "./LiveWork.tsx";
 export { DeciderField } from "./DeciderField.tsx";
 export type { DeciderFieldProps, NextDecider } from "./DeciderField.tsx";
 export { AttemptDivider, EarlierTurns } from "./AttemptDivider.tsx";
+export { useEarlier } from "./earlier.ts";
 export type { AttemptDividerProps, EarlierTurnsProps } from "./AttemptDivider.tsx";
 export type {
   ArchiveDialogProps, ArchiveEpicDialogProps, ClosablePullRequest, CloseDecision, CloseDialogProps, LifecycleMenuOptions, LifecycleTask, LifecycleTaskRef,

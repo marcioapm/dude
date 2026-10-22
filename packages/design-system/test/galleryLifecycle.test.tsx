@@ -55,7 +55,7 @@ test("Chat's Who decides and Attempts blocks draw in every pane", async () => {
     expect(new Set(panes)).toEqual(new Set(["dark comfortable", "light comfortable", "dark compact", "light compact"]));
   }
   expect(el.querySelectorAll('#ch-decider-field [data-testid="decider-field"]').length).toBe(4 * 4);
-  expect(el.querySelector('#ch-attempts [role="separator"]')!.getAttribute("aria-label")).toBe("Attempt 2, started by Ana");
+  expect(el.querySelector('#ch-attempts hr[aria-label]')!.getAttribute("aria-label")).toBe("Attempt 2, started by Ana");
   expect(el.querySelector('#ch-attempts [role="group"]')!.getAttribute("aria-label")).toBe("Attempt 1's conversation");
 });
 

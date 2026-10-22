@@ -4,6 +4,7 @@ import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_LABEL } from "./AgentAvatar.tsx";
 import { StatusMark } from "./StatusMark.tsx";
+import { useEarlier } from "./earlier.ts";
 import styles from "./ChatRunLine.module.css";
 
 export interface ChatRunLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "title"> {
@@ -34,18 +35,25 @@ export interface ChatRunLineProps extends Omit<HTMLAttributes<HTMLDivElement>, "
  * sit under it.
  */
 export function ChatRunLine({ role, status, statusLabel, replacement, what, facts = [], onOpen, steers, className, ...rest }: ChatRunLineProps) {
+  // In an earlier attempt's turns the line is only read: it opens nothing.
+  const earlier = useEarlier();
+  const content = (
+    <>
+      <Icon name="chevron-right" size={12} className={styles["chevron"]} />
+      <AgentAvatar role={role} size="xs" live={status === "running"} />
+      <span className={styles["role"]}>{ROLE_LABEL[role]}</span>
+      {what ? <span className={styles["what"]}>· {what}</span> : null}
+      <span className={styles["end"]}>
+        <StatusMark status={status} label={statusLabel} size="sm" />
+        {facts.map((fact, i) => <span key={i}>{fact}</span>)}
+      </span>
+    </>
+  );
   return (
     <div className={cx(styles["root"], styles[role], className)} data-role={role} data-status={status} {...rest}>
-      <button type="button" className={styles["line"]} onClick={onOpen} aria-label={`Open the ${ROLE_LABEL[role]}'s session`}>
-        <Icon name="chevron-right" size={12} className={styles["chevron"]} />
-        <AgentAvatar role={role} size="xs" live={status === "running"} />
-        <span className={styles["role"]}>{ROLE_LABEL[role]}</span>
-        {what ? <span className={styles["what"]}>· {what}</span> : null}
-        <span className={styles["end"]}>
-          <StatusMark status={status} label={statusLabel} size="sm" />
-          {facts.map((fact, i) => <span key={i}>{fact}</span>)}
-        </span>
-      </button>
+      {earlier
+        ? <div className={cx(styles["line"], styles["readOnly"])}>{content}</div>
+        : <button type="button" className={styles["line"]} onClick={onOpen} aria-label={`Open the ${ROLE_LABEL[role]}'s session`}>{content}</button>}
       {replacement}
       {steers ? <div className={styles["steers"]} data-testid="run-line-steers">{steers}</div> : null}
     </div>

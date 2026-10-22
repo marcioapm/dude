@@ -5,6 +5,7 @@ import { toMs } from "../util/useNow.ts";
 import { Icon } from "../icons/index.tsx";
 import { AgentAvatar, ROLE_LABEL, type AvatarKind } from "./AgentAvatar.tsx";
 import { Duration } from "./Numbers.tsx";
+import { useEarlier } from "./earlier.ts";
 import { Markdown } from "./Markdown.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
@@ -219,7 +220,9 @@ export function QuestionCard({
   const items: ReadonlyArray<QuestionItem> = itemsProp && itemsProp.length > 0 ? itemsProp
     : [{ question: text, choices: (options ?? []).map((label) => ({ label })) }];
   const n = items.length;
-  const form = waiting && !someoneElse && kind === "question" && onSubmit !== undefined;
+  // An earlier attempt's question is only read: no form, no choice to pick.
+  const earlier = useEarlier();
+  const form = waiting && !someoneElse && kind === "question" && onSubmit !== undefined && !earlier;
   const record = state === "answered" && answers != null && answers.length === n && kind === "question";
   const verb = n > 1 ? `${waiting ? "asks" : "asked"} ${n} questions` : waiting ? "asks" : "asked";
 
@@ -289,7 +292,7 @@ export function QuestionCard({
         ) : record ? (
           <Record items={items} answers={answers} answeredBy={answeredBy} />
         ) : (
-          <Offered items={items} kind={kind} someoneElse={someoneElse} onChoose={state === "waiting" && !someoneElse ? onChoose : undefined}
+          <Offered items={items} kind={kind} someoneElse={someoneElse} onChoose={state === "waiting" && !someoneElse && !earlier ? onChoose : undefined}
             waitingOn={waitingOn} takeOver={takeOver} verb={words.verb} />
         )}
       </div>
