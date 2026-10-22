@@ -313,6 +313,45 @@ func TestATesterIsToldItsAttemptsWriterChecks(t *testing.T) {
 	}
 }
 
+// A Run whose runs.heads are not in the published shape loses only its
+// heads: the pull request's account and the tester's writer checks still
+// carry its outcome and its waiver.
+func TestAWriterRunWithUnreadableHeadsStillHasItsChecksAccounted(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	for _, q := range []string{
+		`INSERT INTO projects(id,organization_id,name,slug,key_prefix) VALUES('prj_wh',$1,'WH','wh','WH')`,
+		`INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status) VALUES('wi_wh',$1,'prj_wh',1,'WH','WH','running')`,
+		`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,phase,status,heads)
+			VALUES('run_wh1',$1,'prj_wh','wi_wh',1,'implement','completed','{"api":"` + strings.Repeat("a", 40) + `"}')`,
+		`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload) VALUES
+			('ev_wh1',$1,'run.checks.judged','run_wh1','wi_wh','human','usr','test','{"turn":1,"verified":true,"waived":true,"message":"Fails on main too.","checks":[]}')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var account, text string
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		runs, err := gatedRuns(ctx, tx, &State{TaskID: "wi_wh", ProjectID: "prj_wh", Attempt: 1})
+		if err != nil {
+			return err
+		}
+		account = checksAccountText(runs, prBodyMax)
+		text, err = WriterChecksTx(ctx, tx, "wi_wh", 1)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "### Checks\nChecks were waived by a person:\n- Implementer: Fails on main too.\n\n- **Implementer** — waived"; account != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", account, want)
+	}
+	if !strings.Contains(text, "- Implementer: waived: Fails on main too.") {
+		t.Errorf("the writer checks lack the waived implementer:\n%s", text)
+	}
+}
+
 // The account keeps the newest Runs that fit its bound, and with none, the
 // newest alone without its checks.
 func TestTheWriterChecksAccountIsBounded(t *testing.T) {

@@ -65,9 +65,13 @@ func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, err
 			return j, err
 		}
 		j.RunID = id
-		err := json.Unmarshal(heads, &j.Heads)
+		// Heads in another shape only lose the Run its heads, never the
+		// account or the tester's prompt.
+		if json.Unmarshal(heads, &j.Heads) != nil {
+			j.Heads = nil
+		}
 		j.Role = RoleName(PromptRoleForPhase[phase])
-		return j, err
+		return j, nil
 	})
 }
 
