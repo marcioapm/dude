@@ -695,7 +695,7 @@ function IndexPage({ client, scope, admin, index, onMemories }: {
   return (
     <>
       <SettingsHeader title="Index"
-        description="Everything search_memory can find, and the embeddings that let it search by meaning. What is not embedded yet is still found by its words." />
+        description="The organisation's indexed memories and work, and the embeddings that let search find them by meaning. What is not embedded yet is still found by its words. dude's built-in guide, which agents also search, is not listed here." />
       {problem || act.problem ? <Callout tone="danger">{problem ?? act.problem}</Callout> : null}
       <Card data-testid="memory-embedder">
         <CardHeader title="Embeddings" actions={!status.model ? <Badge>Words only</Badge>
