@@ -51,6 +51,8 @@ var settingsRouteFamilies = map[string]string{
 	"/v1/forge/webhook-secret":         "admin-only secret",
 	"/v1/forge/credential":             "the GitHub connection and its credential, not a setting",
 	"/v1/projects/:id/secrets":         "values are never shown; names and recipients come from project_secrets with roles (TestSettingsShowNoSecretAndNoPromptText)",
+	"/v1/help":                         "product documentation, not configuration",
+	"/v1/help/:page":                   "product documentation, not configuration",
 }
 
 // routesFetched and routesClassified record, by family, what settingsRoute

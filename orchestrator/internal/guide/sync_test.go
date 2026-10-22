@@ -22,7 +22,7 @@ func page(t *testing.T, slug, src string) guide.Page {
 
 type stored struct {
 	Title, Body, Version string
-	Embedded            bool
+	Embedded             bool
 }
 
 func sections(t *testing.T, owner *pgx.Conn) map[string]stored {
