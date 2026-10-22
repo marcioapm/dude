@@ -1268,7 +1268,11 @@ here.
 - `NavTree` / `Sidebar` take `menuItems={(row) => items | null}` (or a
   `menu` render prop for full control); a row that returns nothing draws no
   trigger. The trigger is out of the tab order and visible on hover, focus,
-  or while open, so the tree's ↑↓ → ← Home End `/` are untouched.
+   or while open, so the tree's ↑↓ → ← Home End `/` are untouched. No row
+   reserves space for the menu: it replaces trailing people, an epic's count
+   or a session's plan on hover/focus or while open. Each ancestor level has
+   a 1px border-colour guide through its chevron's centre, continuous across
+   the row gap, driven by `--depth` and `--indent`.
 - **Input** renders its own label, hint and error, tied to the field by
   `aria-describedby`. A refusal with a known fix ("BILL is already the key
   of Billing API; pick another") puts the fix beside the error as
