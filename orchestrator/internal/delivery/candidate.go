@@ -287,14 +287,18 @@ func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, mov
 // discardLoopCandidateTx reopens the findings a refused loop candidate's Runs
 // resolved outside the moved repositories and returns the round's first
 // writer phase. A round's Runs are those whose creation key carries
-// ":candidate:<round>" (key), optionally followed by its retry suffix.
+// ":candidate:<round>" (key), optionally followed by its retry suffix, and
+// the Runs that replaced them (restart_run, replaceRound), which have no key.
 func discardLoopCandidateTx(ctx context.Context, tx pgx.Tx, taskID, workflowID string, attempt, round int, moved []string) (string, error) {
 	inRound := `r.task_id = $1 AND r.attempt = ` + attemptOr + ` AND starts_with(r.creation_key, $3)
 		AND (r.creation_key LIKE '%:candidate:' || $4::int OR r.creation_key LIKE '%:candidate:' || $4::int || ':retry:%')`
 	// A finding naming no repository may concern any of them: reopened.
-	if _, err := tx.Exec(ctx, `UPDATE review_findings f SET status = 'open', resolved_by_run_id = NULL,
+	if _, err := tx.Exec(ctx, `WITH RECURSIVE round AS (
+			SELECT r.id, r.replaced_by FROM runs r WHERE `+inRound+`
+			UNION SELECT r.id, r.replaced_by FROM runs r JOIN round o ON r.id = o.replaced_by)
+		UPDATE review_findings f SET status = 'open', resolved_by_run_id = NULL,
 			resolution_note = 'its fix never reached the pull request', updated_at = now()
-		FROM runs r WHERE r.id = f.resolved_by_run_id AND f.status = 'resolved' AND `+inRound+`
+		FROM round r WHERE r.id = f.resolved_by_run_id AND f.status = 'resolved'
 		  AND (f.repo IS NULL OR NOT f.repo = ANY($5))`, taskID, attempt, workflowID, round, db.NonNil(moved)); err != nil {
 		return "", err
 	}

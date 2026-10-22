@@ -84,25 +84,32 @@ func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
 
 // A refused loop candidate's round (round 2 here) reopens the findings its
 // Runs resolved, except one naming a repository the candidate did move to;
-// another round's resolutions stay. The round opened with a fix.
+// a Run that replaced one of the round's (restart_run, replaceRound) has no
+// creation key and is the round's too. Another round's resolutions, and a
+// keyless Run's outside the round, stay. The round opened with a fix.
 func TestDiscardingALoopCandidateReopensWhatItsRoundResolved(t *testing.T) {
 	const roundReview = "wf_d:review:1:correctness:candidate:2"
+	const otherRound = "wf_d:review:1:correctness:candidate:12"
 	for _, tc := range []struct {
 		name string
 		// repo is the finding's; "" is NULL.
 		repo  string
 		moved []string
-		// resolver is the creation key of the Run that resolved the finding.
-		resolver string
-		want     string
+		// resolver is the creation key of the Run that resolved the finding,
+		// "" for none; replaced, when set, is the key of the Run it replaced.
+		resolver, replaced string
+		want               string
 	}{
-		{"a repository's, nothing moved (nil)", "target", nil, roundReview, "open"},
-		{"a repository's, nothing moved (empty)", "target", []string{}, roundReview, "open"},
-		{"a repository's, nothing moved (sorted empty map)", "target", slices.Sorted(maps.Keys(map[string]string{})), roundReview, "open"},
-		{"naming no repository, one moved", "", []string{"target"}, roundReview, "open"},
-		{"a repository's, another moved", "target", []string{"web"}, roundReview, "open"},
-		{"a repository's, that one moved", "target", []string{"target"}, roundReview, "resolved"},
-		{"resolved by another round's Run", "target", nil, "wf_d:review:1:correctness:candidate:12", "resolved"},
+		{"a repository's, nothing moved (nil)", "target", nil, roundReview, "", "open"},
+		{"a repository's, nothing moved (empty)", "target", []string{}, roundReview, "", "open"},
+		{"a repository's, nothing moved (sorted empty map)", "target", slices.Sorted(maps.Keys(map[string]string{})), roundReview, "", "open"},
+		{"naming no repository, one moved", "", []string{"target"}, roundReview, "", "open"},
+		{"a repository's, another moved", "target", []string{"web"}, roundReview, "", "open"},
+		{"a repository's, that one moved", "target", []string{"target"}, roundReview, "", "resolved"},
+		{"resolved by another round's Run", "target", nil, otherRound, "", "resolved"},
+		{"resolved by the replacement of a round Run", "target", nil, "", roundReview, "open"},
+		{"resolved by the replacement of another round's Run", "target", nil, "", otherRound, "resolved"},
+		{"resolved by a keyless Run outside the round", "target", nil, "", "", "resolved"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app, owner := dbtest.Open(t)
@@ -115,8 +122,11 @@ func TestDiscardingALoopCandidateReopensWhatItsRoundResolved(t *testing.T) {
 				{`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_d', $1, 'P', 'p', 'P')`, nil},
 				{`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_d', $1, 'prj_d', 1, 'Greet', 'greet', 'running')`, nil},
 				{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, creation_key, created_at, ended_at)
-				 VALUES ('run_fix', $1, 'prj_d', 'wi_d', 1, 'fix', 'implementer', 'agent', 'completed', 'wf_d:fix:0:candidate:2', now() - interval '2 minutes', now()),
-				        ('run_review', $1, 'prj_d', 'wi_d', 1, 'review', 'reviewer', 'agent', 'completed', $2, now() - interval '1 minute', now())`, []any{tc.resolver}},
+				 VALUES ('run_fix', $1, 'prj_d', 'wi_d', 1, 'fix', 'implementer', 'agent', 'completed', 'wf_d:fix:0:candidate:2', now() - interval '3 minutes', now()),
+				        ('run_review', $1, 'prj_d', 'wi_d', 1, 'review', 'reviewer', 'agent', 'completed', NULLIF($2, ''), now() - interval '1 minute', now())`, []any{tc.resolver}},
+				{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, creation_key, replaced_by, created_at, ended_at)
+				 SELECT 'run_replaced', $1, 'prj_d', 'wi_d', 1, 'review', 'reviewer', 'agent', 'failed', $2, 'run_review', now() - interval '2 minutes', now()
+				 WHERE $2 <> ''`, []any{tc.replaced}},
 				{`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, status, repo, title, resolved_by_run_id)
 				 VALUES ('fnd_d', $1, 'wi_d', 'run_review', 'correctness', 'blocking', 'resolved', NULLIF($2, ''), 'Greets nobody', 'run_review')`, []any{tc.repo}},
 			} {
