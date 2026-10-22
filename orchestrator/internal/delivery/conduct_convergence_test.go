@@ -271,9 +271,9 @@ func TestConductFixOfFeedbackAloneReadsNoConvergence(t *testing.T) {
 			if named == nil && err != nil {
 				t.Fatalf("feedback-only fix: %v", err)
 			}
-			if named != nil && (err == nil || !strings.Contains(err.Error(), "cannot unmarshal number")) {
+			// The unreadable history fails the read itself, not as a refusal.
+			if named != nil && (err == nil || delivery.IsRefusal(err)) {
 				t.Fatalf("a fix of a review finding did not read the convergence: %v", err)
-
 			}
 		})
 	}
