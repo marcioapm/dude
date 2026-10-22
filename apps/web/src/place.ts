@@ -26,7 +26,9 @@ export type Place =
   // Brainstorm sessions: the list, and one (`#/sessions/<id>`; `#/session/<id>`
   // is an agent's session inside a task's Run).
   | { view: "sessions" }
-  | { view: "brainstorm"; id: string };
+  | { view: "brainstorm"; id: string }
+  // dude's guide (`#/help/<page>/<section>`): the list, a page, a section of it.
+  | { view: "help"; page?: string; section?: string };
 
 /** The task tabs a URL can name; Overview is the task's own URL. */
 export type TaskTab = "chat" | "findings" | "sessions" | "feedback" | "files" | "servers" | "activity";
@@ -84,6 +86,10 @@ export function parsePlace(full: string): Place | null {
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return id === "others" ? { view: "inbox", tab: "others" } : { view: "inbox" };
   if (kind === "sessions") return id ? { view: "brainstorm", id: decodeURIComponent(id) } : { view: "sessions" };
+  if (kind === "help") {
+    if (!id) return { view: "help" };
+    return view ? { view: "help", page: decodeURIComponent(id), section: decodeURIComponent(view) } : { view: "help", page: decodeURIComponent(id) };
+  }
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
   if (kind === "project" && view === "settings") {
@@ -122,6 +128,9 @@ function bareHash(place: Place | null): string {
       return "#/sessions";
     case "brainstorm":
       return `#/sessions/${encodeURIComponent(place.id)}`;
+    case "help":
+      if (!place.page) return "#/help";
+      return `#/help/${encodeURIComponent(place.page)}${place.section ? `/${encodeURIComponent(place.section)}` : ""}`;
     case "projectSettings":
       return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}`;
     case "tree":

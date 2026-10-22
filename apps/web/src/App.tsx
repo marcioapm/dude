@@ -33,6 +33,7 @@ import { InboxScreen } from "./screens/InboxScreen.tsx";
 import { NotFound } from "./screens/NotFound.tsx";
 import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
+import { HelpScreen } from "./screens/HelpScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
 import { ProjectEpics } from "./screens/ProjectEpics.tsx";
@@ -457,6 +458,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       onPage={(page, sub) => go(sub ? { view: "orgSettings", page, sub } : { view: "orgSettings", page }, !sub)} />;
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
+  } else if (place?.view === "help") {
+    main = <HelpScreen client={client} page={place.page} section={place.section} onPage={(page) => go({ view: "help", page })} />;
   } else if (place?.view === "sessions") {
     main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
   } else if (place?.view === "brainstorm") {
@@ -714,6 +717,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         }}
         railFooter={
           <>
+            <SidebarRailItem label="Help" current={place?.view === "help"} onClick={() => go({ view: "help" })} data-testid="rail-help">
+              <Icon name="book-open" size={16} />
+            </SidebarRailItem>
             <SidebarRailItem label="Organisation settings" current={place?.view === "orgSettings"} onClick={() => go({ view: "orgSettings" })}
               data-testid="rail-org-settings">
               <Icon name="building" size={16} />
@@ -760,6 +766,9 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         ) : undefined}
         footer={
           <>
+            <SidebarLink icon="book-open" current={place?.view === "help"} onClick={() => go({ view: "help" })} data-testid="help-button">
+              Help
+            </SidebarLink>
             <SidebarLink icon="building" current={place?.view === "orgSettings"} onClick={() => go({ view: "orgSettings" })}
               data-testid="org-settings-button">
               Organisation settings
@@ -866,6 +875,8 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
       return "Organisation settings";
     case "mySettings":
       return "Your settings";
+    case "help":
+      return "Help";
     case "inbox":
       return "Waiting";
     // Never a session's title: the tab's words reach teammates as presence.

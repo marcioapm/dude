@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -173,13 +174,22 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 
 	// $4 excludes: a document with any -word is out of both lists.
 	const excluded = `($4 = '' OR NOT tsv @@ websearch_to_tsquery('english', $4))`
+	// The guide's sections (type doc) are every organisation's: no scope
+	// but the type, ranked in the same lists as the tenant's documents.
+	const docs = `'doc' = ANY($2)`
 	// Ranked by rank alone: what is shown (snippet, key) is read for the
 	// few results that survive fusion, not for every candidate.
 	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $1) AS q)
-		SELECT source_type, source_id, ts_rank_cd(tsv, q.q)
+		(SELECT source_type, source_id, ts_rank_cd(tsv, q.q), updated_at
 		FROM search_documents d, q
 		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+` AND `+scope+`
-		ORDER BY 3 DESC, updated_at DESC LIMIT $5`, any, types, q.Project, none, candidates, q.OrgOnly, q.Viewer.Session, q.Viewer.Person)
+		ORDER BY 3 DESC, updated_at DESC LIMIT $5)
+		UNION ALL
+		(SELECT 'doc', id, ts_rank_cd(tsv, q.q), updated_at
+		FROM guide_sections g, q
+		WHERE `+docs+` AND numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+`
+		ORDER BY 3 DESC, updated_at DESC LIMIT $5)
+		ORDER BY 3 DESC, 4 DESC LIMIT $5`, any, types, q.Project, none, candidates, q.OrgOnly, q.Viewer.Session, q.Viewer.Person)
 	if err != nil {
 		return out, err
 	}
@@ -187,7 +197,8 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 	for rows.Next() {
 		var typ, id string
 		var score float64
-		if err := rows.Scan(&typ, &id, &score); err != nil {
+		var updated time.Time
+		if err := rows.Scan(&typ, &id, &score, &updated); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -210,10 +221,16 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 				return out, err
 			}
 		}
-		rows, err := tx.Query(ctx, `SELECT source_type, source_id, embedding <=> $1::halfvec
+		rows, err := tx.Query(ctx, `(SELECT source_type, source_id, embedding <=> $1::halfvec
 			FROM search_documents d
 			WHERE embedding IS NOT NULL AND embedding_model = $9 AND `+excluded+` AND `+scope+`
-			ORDER BY embedding <=> $1::halfvec LIMIT $5`, Vector(emb.Vector), types, q.Project, none, candidates, q.OrgOnly,
+			ORDER BY embedding <=> $1::halfvec LIMIT $5)
+			UNION ALL
+			(SELECT 'doc', id, embedding <=> $1::halfvec
+			FROM guide_sections g
+			WHERE `+docs+` AND embedding IS NOT NULL AND embedding_model = $9 AND `+excluded+`
+			ORDER BY embedding <=> $1::halfvec LIMIT $5)
+			ORDER BY 3 LIMIT $5`, Vector(emb.Vector), types, q.Project, none, candidates, q.OrgOnly,
 			q.Viewer.Session, q.Viewer.Person, emb.Model)
 		if err != nil {
 			return out, err
@@ -308,6 +325,43 @@ func show(ctx context.Context, tx pgx.Tx, words string, results []Result) error 
 		// The index titles a task "KEY title"; the key has its own field.
 		r.Title = strings.TrimPrefix(title, key+" ")
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	return showDocs(ctx, tx, words, results, at)
+}
+
+// showDocs is show for the guide's sections among results.
+func showDocs(ctx context.Context, tx pgx.Tx, words string, results []Result, at map[string]int) error {
+	var ids []string
+	for _, r := range results {
+		if r.Type == DocType {
+			ids = append(ids, r.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $2) AS q)
+		SELECT g.id, g.title, g.embedding IS NOT NULL,
+			CASE WHEN numnode(q.q) > 0 AND g.tsv @@ q.q
+				THEN ts_headline('english', g.body, q.q, 'MaxFragments=1,MaxWords=24,MinWords=8,StartSel="",StopSel=""')
+				ELSE left(g.body, 200) END
+		FROM guide_sections g, q WHERE g.id = ANY($1)`, ids, words)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, title, snippet string
+		var embedded bool
+		if err := rows.Scan(&id, &title, &embedded, &snippet); err != nil {
+			return err
+		}
+		r := &results[at[DocType+"/"+id]]
+		r.Title, r.Snippet, r.Embedded = title, markdownless.Replace(snippet), embedded
+	}
 	return rows.Err()
 }
 
@@ -315,8 +369,17 @@ func show(ctx context.Context, tx pgx.Tx, words string, results []Result) error 
 // memory is Markdown, and a snippet is read as a line of text.
 var markdownless = strings.NewReplacer("**", "", "__", "", "`", "")
 
-// Types are what the index holds, in the order pages list them.
+// Types are what the organisation's index holds, in the order pages list
+// them. The web app's Memory search offers these.
 var Types = []string{"memory", "task", "epic", "project"}
+
+// DocType is a section of dude's own guide (guide_sections): the same
+// for every organisation, found by search_memory alongside Types.
+const DocType = "doc"
+
+// AgentTypes are what search_memory searches: the organisation's index and
+// the guide.
+var AgentTypes = append(slices.Clone(Types), DocType)
 
 var (
 	scanOnce sync.Once

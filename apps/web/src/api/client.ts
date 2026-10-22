@@ -106,6 +106,13 @@ import type {
 } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 
+/** A page of dude's guide; its sections' text only when one page is read (the intro's anchor and heading are ""). */
+export interface HelpPage {
+  slug: string;
+  title: string;
+  sections: { anchor: string; heading: string; text?: string }[];
+}
+
 // ---------------------------------------------------------------------------
 // Wire types
 //
@@ -1135,6 +1142,16 @@ export class ApiClient {
 
   updateEpic(id: string, changes: Partial<{ title: string; description: string; position: number; state: EpicState | null }>): Promise<Epic> {
     return this.#request("PATCH", `/v1/epics/${id}`, changes);
+  }
+
+  // -- help: dude's own guide, as the orchestrator embeds it --
+
+  helpPages(): Promise<{ pages: HelpPage[] }> {
+    return this.#request("GET", "/v1/help");
+  }
+
+  helpPage(slug: string): Promise<HelpPage> {
+    return this.#request("GET", `/v1/help/${encodeURIComponent(slug)}`);
   }
 
   // -- memory: what dude and its agents remember, and the index they search --
