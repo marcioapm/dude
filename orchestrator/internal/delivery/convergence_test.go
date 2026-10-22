@@ -191,6 +191,13 @@ func TestConvergenceCountsOneStillRoundPerFix(t *testing.T) {
 	if got := w.convergence(t, st).StillRounds["f"]; got != 0 {
 		t.Fatalf("fixed beside still: still=%d, want 0", got)
 	}
+	// Also when the fixed verdict is the fix's earlier review.
+	w.phase(t, "fix3", "fix", "", []string{"f"}, nil, 9)
+	w.phase(t, "review3-fixed", "review", "fix3", []string{"f"}, map[string]string{"f": "fixed"}, 10)
+	w.phase(t, "review3-still", "review", "fix3", []string{"f"}, map[string]string{"f": "still"}, 11)
+	if got := w.convergence(t, st).StillRounds["f"]; got != 0 {
+		t.Fatalf("still after fixed: still=%d, want 0", got)
+	}
 }
 
 func TestConvergenceRegressionNeedsABlockingFixedFinding(t *testing.T) {
