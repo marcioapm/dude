@@ -743,8 +743,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         you={people.you}
         // You first, then the others as the organization lists them.
         online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
-        onWaitingSelect={(tab) => go(tab === "others" ? { view: "inbox", tab } : { view: "inbox" })}
-        waitingSelected={place?.view === "inbox" ? place.tab ?? "you" : false}
+        onWaitingSelect={() => go({ view: "inbox" })}
+        waitingSelected={place?.view === "inbox"}
         waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0)}
         sessions={
           <SidebarSessions

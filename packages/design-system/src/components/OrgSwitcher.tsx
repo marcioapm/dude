@@ -37,9 +37,9 @@ export interface OrgSwitcherProps {
   readonly superAdmin?: boolean | undefined;
   readonly onSwitch: (org: Organisation) => void;
   readonly onJoin?: ((invitation: OrgInvitation) => void) | undefined;
-   readonly onSettings: () => void;
-   readonly onOrgSettings?: (() => void) | undefined;
-   readonly onHelp?: (() => void) | undefined;
+  readonly onSettings: () => void;
+  readonly onOrgSettings?: (() => void) | undefined;
+  readonly onHelp?: (() => void) | undefined;
   readonly onAdmin?: (() => void) | undefined;
   readonly onSignOut: () => void;
   /** What signing out does here: "Of Cloudflare Access, on this browser". */

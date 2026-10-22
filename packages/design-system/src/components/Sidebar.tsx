@@ -57,9 +57,9 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
   /** Who is online, when the app knows: the others' faces in the brand row. */
   readonly online?: ReadonlyArray<Person> | undefined;
   /** Open "Waiting on you": a full inbox. Without it the row is not drawn. */
-  readonly onWaitingSelect?: ((whose: "you" | "others") => void) | undefined;
+  readonly onWaitingSelect?: ((whose: "you") => void) | undefined;
   /** The inbox is what is open: its row is current. */
-  readonly waitingSelected?: boolean | "you" | "others" | undefined;
+  readonly waitingSelected?: boolean | undefined;
   /** Waiting on you beyond the tree's tasks: session invitations and questions put to you. */
   readonly waitingExtra?: number | undefined;
   /** Controlled "Mine" (the tree shows only your tasks). Uncontrolled when omitted. */
@@ -274,7 +274,7 @@ export function Sidebar({
     },
     [onSelect, drawerOpen, onOpenChange],
   );
-  const openWaiting = (whose: "you" | "others") => {
+  const openWaiting = (whose: "you") => {
     onWaitingSelect?.(whose);
     if (drawerOpen) onOpenChange?.(false);
   };
