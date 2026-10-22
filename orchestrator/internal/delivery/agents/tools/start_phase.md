@@ -5,7 +5,7 @@ implement, review, fix, simplify or test
 {{- end}}
 
 {{- define "tools/start_phase/categories" -}}
-review: the reviewers to run (correctness, tests, security, database, api, frontend, performance); none runs those the change warrants
+review: the reviewers to run (correctness, tests, security, database, api, frontend, documentation, performance); none runs those the change warrants
 {{- end}}
 
 {{- define "tools/start_phase/findings" -}}

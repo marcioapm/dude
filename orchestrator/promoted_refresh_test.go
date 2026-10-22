@@ -376,6 +376,7 @@ func TestAnAdoptedVerdictCommentAPromotionFailedToEditIsEditedAgainInPlace(t *te
 		t.Fatalf("verdict comments %+v, want one", first)
 	}
 	seen := len(w.verdictEvents(wi))
+	moved := w.moves(wi)
 	var edits atomic.Int32
 	w.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
@@ -402,5 +403,5 @@ func TestAnAdoptedVerdictCommentAPromotionFailedToEditIsEditedAgainInPlace(t *te
 	if len(events) != 1 || events[0]["error"] != nil || events[0]["edited"] != true {
 		t.Errorf("verdict events after the move %v, want the one edit", events)
 	}
-	w.verdictOnlyAfterTheMove(wi, seen)
+	w.verdictOnlyAfterTheMove(wi, seen, moved)
 }

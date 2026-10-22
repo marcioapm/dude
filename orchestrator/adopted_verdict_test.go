@@ -63,9 +63,10 @@ func (w *world) verdictEvents(wi string) []map[string]any {
 // A person's pull request dude took over gets the test's verdict as one
 // comment of dude's, never an edit of the person's description: the
 // section a pull request dude opens carries, under a header, ending in the
-// marker. A re-test after its fix edits that comment, and so does a fix of
-// feedback, tested on its candidate: once the pull request holds it, never
-// before.
+// marker. The first loop's failed test and its re-test are on the
+// candidate: the comment is posted once the pull request holds what passed,
+// never the failure before it. A fix of feedback, tested on its candidate,
+// edits that comment, once the pull request holds it, never before.
 func TestAnAdoptedPullRequestGetsTheVerdictAsOneCommentKeptUpToDate(t *testing.T) {
 	w := newWorld(t)
 	wi, n := w.testingAdopted("fake/test-fail-once")
@@ -87,14 +88,15 @@ func TestAnAdoptedPullRequestGetsTheVerdictAsOneCommentKeptUpToDate(t *testing.T
 			t.Errorf("the verdict comment has no %q:\n%s", want, c.Body)
 		}
 	}
-	if c.Author != fakegithub.Login || c.UpdatedAt == "" || strings.Contains(c.Body, "fail") || strings.Contains(c.Body, "Stale") {
-		t.Errorf("want dude's comment, edited from the failed test to the passing one:\n%+v", c)
+	if c.Author != fakegithub.Login || strings.Contains(c.Body, "fail") || strings.Contains(c.Body, "Stale") {
+		t.Errorf("want dude's comment on the passing test:\n%+v", c)
 	}
 	events := w.verdictEvents(wi)
-	if len(events) != 2 || events[0]["edited"] != false || events[1]["edited"] != true ||
-		events[0]["commentId"] != float64(c.ID) || events[1]["commentId"] != float64(c.ID) || events[1]["head"] != head {
-		t.Fatalf("verdict events %v, want posted then edited, comment %d at %s", events, c.ID, head)
+	if len(events) != 1 || events[0]["edited"] != false || events[0]["commentId"] != float64(c.ID) || events[0]["head"] != head {
+		t.Fatalf("verdict events %v, want one posted, comment %d at %s", events, c.ID, head)
 	}
+	w.verdictOnlyAfterTheMove(wi, 0, 0)
+	moved := w.moves(wi)
 
 	// A fix of feedback is tested before the pull request takes it: the
 	// same comment says what the pull request now holds was tested.
@@ -106,21 +108,23 @@ func TestAnAdoptedPullRequestGetsTheVerdictAsOneCommentKeptUpToDate(t *testing.T
 	if got := w.verdictComments(wi, n); got[0].ID != c.ID || strings.Contains(got[0].Body, "Stale") {
 		t.Errorf("after the fix to %s: %+v, want comment %d, current", fixed[:7], got[0], c.ID)
 	}
-	w.verdictOnlyAfterTheMove(wi, len(events))
+	w.verdictOnlyAfterTheMove(wi, len(events), moved)
 }
 
 // verdictOnlyAfterTheMove: every verdict comment the task recorded past its
-// first seen ones came after the pull request took the fix, so no
-// candidate's verdict reached the pull request before the commits it is about.
-func (w *world) verdictOnlyAfterTheMove(wi string, seen int) {
+// first seen ones came after the pull request took the fix (the move past
+// the moved ones recorded before it), so no candidate's verdict reached the
+// pull request before the commits it is about.
+func (w *world) verdictOnlyAfterTheMove(wi string, seen, moved int) {
 	w.t.Helper()
 	if n := w.count(`SELECT count(*) FROM (SELECT cursor FROM events WHERE task_id = $1
 		AND event_type = 'pull_request.verdict_commented' ORDER BY cursor OFFSET $2) v
-		WHERE v.cursor < (SELECT min(cursor) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved')`,
-		wi, seen); n != 0 {
+		WHERE v.cursor < (SELECT cursor FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'
+		  ORDER BY cursor OFFSET $3 LIMIT 1)`,
+		wi, seen, moved); n != 0 {
 		w.t.Errorf("%d verdict comments recorded before the pull request took the fix", n)
 	}
-	if n := w.moves(wi); n != 1 {
+	if n := w.moves(wi) - moved; n != 1 {
 		w.t.Errorf("%d moves of the fix recorded, want 1", n)
 	}
 }
@@ -135,6 +139,7 @@ func TestADeletedVerdictCommentIsPostedAgain(t *testing.T) {
 		t.Fatalf("verdict comments %+v, want one", first)
 	}
 	seen := len(w.verdictEvents(wi))
+	moved := w.moves(wi)
 	w.gh.DeleteComment(n, first[0].ID)
 	fixed := w.prFixPushed(wi)
 	w.until("a new verdict comment", func() bool { return len(w.verdictComments(wi, n)) == 1 })
@@ -142,7 +147,7 @@ func TestADeletedVerdictCommentIsPostedAgain(t *testing.T) {
 	if again.ID == first[0].ID || !strings.Contains(again.Body, "Tested at `"+fixed[:7]+"`.") || strings.Contains(again.Body, "Stale") {
 		t.Fatalf("after deleting %d: %+v, want a new comment, current at %s", first[0].ID, again, fixed[:7])
 	}
-	w.verdictOnlyAfterTheMove(wi, seen)
+	w.verdictOnlyAfterTheMove(wi, seen, moved)
 	events := w.verdictEvents(wi)
 	if last := events[len(events)-1]; last["commentId"] != float64(again.ID) || last["edited"] != false {
 		t.Fatalf("last verdict event %v, want the new comment %d posted", last, again.ID)
