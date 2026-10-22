@@ -100,13 +100,12 @@ export const NavTree = forwardRef<HTMLDivElement, NavTreeProps>(function NavTree
 
   const rows = useMemo(() => flattenNav(projects, overrides, { ...filter, selected }), [projects, overrides, filter, selected]);
   const chosenKey = selected ? navKey(selected) : null;
-  // A session has no row of its own: its task's row stands for it.
+  // A session or run has no row of its own: its task's row stands for it.
   const selectedKey = useMemo(() => {
-    if (!selected || rows.some((r) => r.key === chosenKey)) return chosenKey;
+    if (!selected) return null;
     const task = taskOf(projects, selected);
-    const taskKey = task ? navKey({ kind: "task", id: task }) : null;
-    return taskKey && rows.some((r) => r.key === taskKey) ? taskKey : chosenKey;
-  }, [selected, chosenKey, rows, projects]);
+    return task ? navKey({ kind: "task", id: task }) : chosenKey;
+  }, [selected, chosenKey, projects]);
 
   // Selection is always visible: opening a deep node from elsewhere (a
   // notification, a link) unfolds its ancestors even if the user closed them.
