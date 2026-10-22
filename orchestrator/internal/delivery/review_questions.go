@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -25,7 +26,7 @@ type EarlierQuestion struct {
 // review Run of its category, oldest first; none for any other phase, so no
 // fixer, implementer, simplifier or tester is ever given one.
 func EarlierQuestionsTx(ctx context.Context, tx pgx.Tx, runID string) ([]EarlierQuestion, error) {
-	rows, err := tx.Query(ctx, `SELECT q.question, COALESCE(f.title, ''), q.status, COALESCE(q.answer, ''), q.answered_by_run IS NULL
+	rows, err := tx.Query(ctx, `SELECT q.question, COALESCE(f.title, ''), q.status, COALESCE(q.answer, ''), q.status = 'answered' AND q.answered_by_run IS NULL
 		FROM runs r
 		JOIN runs asker ON asker.task_id = r.task_id AND asker.attempt = r.attempt AND asker.phase = 'review'
 		-- q.category is the asker's, "" read as correctness (recordFindingsTx).
@@ -45,6 +46,43 @@ func earlierQuestions(questions []EarlierQuestion) string {
 		return ""
 	}
 	return render(earlierQuestionsTmpl, questions)
+}
+
+// ConductAnswerReviewQuestion is answer_review_question: the task's live
+// conductor, while it takes the decisions, answers one of its task's open
+// reviewer questions from a fact it established, or withdraws it with a
+// reason; never recorded as a person's decision.
+func ConductAnswerReviewQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id, answer string, withdraw bool, reason string) (SettledReviewQuestion, error) {
+	if err := liveConductor(ctx, tx, ref); err != nil {
+		return SettledReviewQuestion{}, err
+	}
+	d, err := ReadDelivery(ctx, tx, ref.TaskID)
+	if err != nil {
+		return SettledReviewQuestion{}, err
+	}
+	switch {
+	case d != nil && Ended(d.TaskStatus):
+		return SettledReviewQuestion{}, refusef(rThisTaskYouAreReadOnly, d.TaskStatus)
+	case d == nil || !d.Live():
+		return SettledReviewQuestion{}, refuseText(rThisTaskHasNoDeliveryIn)
+	case !d.State.conducted():
+		return SettledReviewQuestion{}, refuseText(rDeliverTakesThisTaskDecisionsNot)
+	}
+	if withdraw == (strings.TrimSpace(answer) != "") {
+		return SettledReviewQuestion{}, refuseText(rAnswerOrWithdrawReviewQuestion)
+	}
+	by := ReviewQuestionBy{Run: ref.RunID, TaskID: ref.TaskID}
+	var out SettledReviewQuestion
+	if withdraw {
+		out, err = WithdrawReviewQuestionTx(ctx, tx, ref.Org, id, reason, by)
+	} else {
+		out, err = AnswerReviewQuestionTx(ctx, tx, ref.Org, id, answer, by)
+	}
+	var e ReviewQuestionError
+	if errors.As(err, &e) {
+		return out, refuseText(e.Msg)
+	}
+	return out, err
 }
 
 // ReviewQuestionError is an answer or withdrawal refused: Kind not_found,

@@ -94,7 +94,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	if got := strings.Join(names, ","); got != "ask_person,create_task,decide,decide_escalation,dismiss_finding,emit_event,feedback,feedback_reply,findings,get_memory,"+
+	if got := strings.Join(names, ","); got != "answer_review_question,ask_person,create_task,decide,decide_escalation,dismiss_finding,emit_event,feedback,feedback_reply,findings,get_memory,"+
 		"github_check_log,github_issue,github_pull_request,github_search,"+
 		"limits,list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,refresh_pull_requests,remember,reply_on_pull_request,"+
 		"request_limit,request_machine,request_repository,request_review,rerun_failed_checks,resolve_thread,"+
@@ -104,7 +104,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	// Nobody else has them.
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
-	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "decide_escalation", "dismiss_finding", "update_task", "steer",
+	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "decide_escalation", "dismiss_finding", "answer_review_question", "update_task", "steer",
 		"restart_run", "publish", "request_review", "mark_ready", "rerun_failed_checks", "limits", "run_chat", "refresh_pull_requests",
 		"request_limit", "verify", "settings",
 		"github_search", "github_issue", "github_pull_request", "github_check_log"} {
