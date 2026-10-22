@@ -186,6 +186,7 @@ func TestARetryResumesAParkedHeldRunWithTheSendBack(t *testing.T) {
 	}
 	// The held turn is not kept: once resumed, the Run waits on the
 	// send-back's new turn, never on the held one's done mark.
+	// The kept sample pins keepsTurn's !HasDirectives; the later-turn check below guards against the held turn being judged twice.
 	kept := false
 	w.until("the send-back to be delivered", func() bool {
 		if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND turn_done_at::text = $2`, runID, heldDone) == 1 {
