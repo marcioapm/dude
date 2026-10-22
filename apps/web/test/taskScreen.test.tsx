@@ -20,7 +20,7 @@ import type { Artifact, EscalationAction, Finding } from "../src/api/client.ts";
 import { RunScreen, type RunScreenProps } from "../src/screens/RunScreen.tsx";
 import { emit } from "../src/fixtures/client.ts";
 import { ORG, PEOPLE, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { unzipSync } from "fflate";
 import { ToastProvider } from "@dude/design-system/primitives";
@@ -234,6 +234,39 @@ describe("task rail filtering", () => {
       memo.type = screen;
     }
   });
+
+  // The URL of another tab names no session: a runId would keep Sessions shown.
+  for (const [left, to] of [["another session", { tab: "sessions", runId: "run_d4" }], ["another tab", { tab: "overview", runId: undefined }]] as const) {
+    test(`the session picker is closed after ${left} and back`, async () => {
+      const client = new FixtureClient("d");
+      const getRun = client.getRun.bind(client);
+      const read: string[] = [];
+      client.getRun = async (id) => { const run = await getRun(id); read.push(id); return run; };
+      type Place = { tab: "overview" | "sessions"; runId: string | undefined };
+      let go: (place: Place) => void = () => {};
+      function Host() {
+        const [place, setPlace] = useState<Place>({ tab: "sessions", runId: "run_d2" });
+        go = setPlace;
+        return <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab={place.tab} runId={place.runId} />;
+      }
+      const { container: page, unmount } = await mount(<ToastProvider><PeopleProvider client={client}><Host /></PeopleProvider></ToastProvider>);
+      mounted.push(unmount);
+      const trigger = () => page.querySelector<HTMLElement>('[data-testid="run-screen"] [data-testid="search-selector-trigger"]');
+      // The RunScreen is keyed by its run and reads it again on each visit.
+      const loaded = (reads: number) =>
+        until(() => read.filter((id) => id === "run_d2").length >= reads ? trigger() : null, `run_d2 read ${reads}×`);
+      await loaded(1);
+      await sessionOptions(page);
+      expect(trigger()!.getAttribute("data-state")).toBe("open");
+      await act(async () => go(to));
+      await settle();
+      await act(async () => go({ tab: "sessions", runId: "run_d2" }));
+      await loaded(2);
+      await settle();
+      expect(trigger()!.getAttribute("data-state")).toBe("closed");
+      expect(document.querySelector('[data-testid="sessions"]')).toBeNull();
+    });
+  }
 
   test("Files kind counts stay put and Download all reads only displayed latest versions", async () => {
     const client = new FixtureClient("a");
