@@ -134,6 +134,11 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksDecided, ledger.ActorHuman, decided)); err != nil {
 		return err
 	}
+	// Decided: the Run no longer waits on a person (ChecksHeld ends with
+	// this transaction).
+	if _, err := tx.Exec(ctx, `UPDATE runs SET waiting_since = NULL WHERE id = $1`, id); err != nil {
+		return err
+	}
 	switch action {
 	case ActionWaive:
 		judged := map[string]any{"turn": turn, "verified": true, "waived": true, "message": note, "checks": []any{}}
@@ -143,7 +148,12 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		_, err = ledger.Append(ctx, tx, ref.Event(EvRunChecksJudged, ledger.ActorHuman, judged))
 		return err
 	case "stop":
-		_, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = $2
+		// A Run parked while it was held is ended here, not resumed: a
+		// paused Run is resumed once nothing holds it, before its control is
+		// read.
+		_, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = $2,
+			status = CASE WHEN status = 'paused' THEN 'aborted' ELSE status END,
+			ended_at = CASE WHEN status = 'paused' THEN now() ELSE ended_at END
 			WHERE id = $1 AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, id, "a person stopped it at the checks gate")
 		return err
 	}

@@ -518,9 +518,10 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 				control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 				idle_nudged_at = NULL, agent_active_at = NULL, files_changed_at = now(),
 				left_running_at = CASE WHEN $2 = 'running' THEN NULL ELSE now() END,
-				waiting_since = CASE WHEN $3 THEN now() END, turn_done_at = NULL, agent_busy_at = NULL,
+				waiting_since = CASE WHEN $3 THEN now() END,
+				turn_done_at = CASE WHEN $4 THEN turn_done_at END, agent_busy_at = CASE WHEN $4 THEN agent_busy_at END,
 				harness_state = harness_state - 'brokenTurn'
-			WHERE id = $1`, r.ID, state, r.Waiting); err != nil {
+			WHERE id = $1`, r.ID, state, r.Waiting, r.keepsTurn()); err != nil {
 			return err
 		}
 		taken = true
@@ -538,11 +539,20 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 }
 
 // resumeInput leaves queued instructions and a person's answer as the input.
+// A Run that keeps its finished turn (keepsTurn) is given none.
 func (r phaseRun) resumeInput() string {
-	if r.HasDirectives || r.Waiting {
+	if r.HasDirectives || r.Waiting || r.keepsTurn() {
 		return ""
 	}
 	return resumeNudge
+}
+
+// keepsTurn: a Run parked for a person after its turn ended, which only
+// the checks gate's hold does (delivery.ChecksHeld), and resumed with
+// nothing queued, as a waiver resumes it. Its ended turn is the one the
+// decision judged: kept done, with no new turn, so finish pushes it.
+func (r phaseRun) keepsTurn() bool {
+	return r.TurnDone && r.DudePause == "person" && !r.HasDirectives && !r.Waiting
 }
 
 // dropMovedNudge withdraws lux's carry-on before the machine move's resume
