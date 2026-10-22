@@ -88,12 +88,28 @@ func (b *backstop) refused(branch string) {
 	if status, reason := b.outcome(); status != "failed" || !strings.Contains(reason, backstopRefusal) {
 		b.w.t.Errorf("the Run: %s %q, want failed saying %q", status, reason, backstopRefusal)
 	}
+	b.unmoved(branch)
+}
+
+// unmoved asserts GitHub never moved branch from the commit the Run
+// started from.
+func (b *backstop) unmoved(branch string) {
+	b.w.t.Helper()
 	if got := b.gh.BranchLog(branch); len(got) != 0 {
 		b.w.t.Errorf("GitHub moved %s to %v", branch, got)
 	}
 	if got := b.gh.SHA(branch); got != b.a.start {
 		b.w.t.Errorf("%s is at %s, want %s where it was", branch, got, b.a.start)
 	}
+}
+
+// writer makes w's Run a running implementer in phase whose runs.branch is
+// branch (nil for NULL), and returns it as finish would see it.
+func (b *backstop) writer(phase string, branch any) phaseRun {
+	b.w.exec(`UPDATE runs SET phase = $2, role = 'implementer', status = 'running', branch = $3, lux_run_id = NULL WHERE id = $1`, b.w.run.ID, phase, branch)
+	r := b.w.run
+	r.Phase, r.Role, r.LuxRunID, r.LuxState = phase, "implementer", "", ""
+	return r
 }
 
 // A writer Run still targeting a task branch whose pull request is open
@@ -103,22 +119,16 @@ func (b *backstop) refused(branch string) {
 func TestAPublishToAnOpenPullRequestsBranchFailsTheRun(t *testing.T) {
 	for _, state := range []string{"open", "draft"} {
 		t.Run("fix/"+state, func(t *testing.T) {
-			w := newResumeWorld(t)
-			b := newBackstop(t, w)
-			w.exec(`UPDATE runs SET phase = 'fix', role = 'implementer', status = 'running', branch = NULL, lux_run_id = NULL WHERE id = $1`, w.run.ID)
+			b := newBackstop(t, newResumeWorld(t))
+			r := b.writer(delivery.PhaseFix, nil)
 			b.pullRequest(b.branch, state)
-			r := w.run
-			r.Phase, r.Role, r.LuxRunID, r.LuxState = delivery.PhaseFix, "implementer", "", ""
 			b.finish(r)
 			b.refused(b.branch)
 		})
 		t.Run("own-branch/"+state, func(t *testing.T) {
-			w := newResumeWorld(t)
-			b := newBackstop(t, w)
-			w.exec(`UPDATE runs SET phase = 'implement', role = 'implementer', status = 'running', branch = $2, lux_run_id = NULL WHERE id = $1`, w.run.ID, b.branch)
+			b := newBackstop(t, newResumeWorld(t))
+			r := b.writer(delivery.PhaseImplement, b.branch)
 			b.pullRequest(b.branch, state)
-			r := w.run
-			r.Phase, r.Role, r.LuxRunID, r.LuxState = delivery.PhaseImplement, "implementer", "", ""
 			b.finish(r)
 			b.refused(b.branch)
 		})
@@ -136,17 +146,14 @@ func TestAPublishBesideAnOpenPullRequestMovesItsBranch(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			w := newResumeWorld(t)
-			b := newBackstop(t, w)
+			b := newBackstop(t, newResumeWorld(t))
 			target := b.branch + c.own
 			own := any(nil)
 			if c.own != "" {
 				own = target
 			}
-			w.exec(`UPDATE runs SET phase = 'fix', role = 'implementer', status = 'running', branch = $2, lux_run_id = NULL WHERE id = $1`, w.run.ID, own)
+			r := b.writer(delivery.PhaseFix, own)
 			b.pullRequest(b.branch, c.state)
-			r := w.run
-			r.Phase, r.Role, r.LuxRunID, r.LuxState = delivery.PhaseFix, "implementer", "", ""
 			b.finish(r)
 			if status, reason := b.outcome(); status != "completed" {
 				t.Fatalf("the Run: %s %q, want completed", status, reason)
@@ -172,22 +179,14 @@ func TestAPublishWithNothingCommittedBesideAnOpenPullRequestCompletes(t *testing
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			w := newResumeWorld(t)
-			b := newBackstop(t, w)
-			w.exec(`UPDATE runs SET phase = 'fix', role = 'implementer', status = 'running', branch = NULL, lux_run_id = NULL WHERE id = $1`, w.run.ID)
+			b := newBackstop(t, newResumeWorld(t))
+			r := b.writer(delivery.PhaseFix, nil)
 			b.pullRequest(b.branch, "open")
-			r := w.run
-			r.Phase, r.Role, r.LuxRunID, r.LuxState = delivery.PhaseFix, "implementer", "", ""
 			b.finishWith(r, b.a.start, c.status)
 			if status, reason := b.outcome(); status != "completed" {
 				t.Errorf("the Run: %s %q, want completed", status, reason)
 			}
-			if got := b.gh.BranchLog(b.branch); len(got) != 0 {
-				t.Errorf("GitHub moved %s to %v", b.branch, got)
-			}
-			if got := b.gh.SHA(b.branch); got != b.a.start {
-				t.Errorf("%s is at %s, want %s where it was", b.branch, got, b.a.start)
-			}
+			b.unmoved(b.branch)
 		})
 	}
 }
