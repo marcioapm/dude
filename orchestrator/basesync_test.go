@@ -19,6 +19,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -347,6 +348,104 @@ func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 	}
 	if got := gitOut(t, w.gh.Repo, "show", branch+":INTEGRATION.md"); got != "touched by the integration" {
 		t.Errorf("target's pull request does not show the integration's change: %q", got)
+	}
+}
+
+// web's base moves before its pull request opens, cleanly: GitHub merges
+// it in (a clean merge counts as reviewed) and the test of that merge
+// fails once. Its fix changes target too, whose pull request is open and
+// approved: target's pull request moves only by promotion, to a head
+// reviewed and tested, and web's opens at such a head.
+func TestAFixAfterACleanBeforePRMergesFailedTestReachesAnOpenPullRequestOnlyByPromotion(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", "fake/scripted")
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+		SyncPullRequest: w.prs.Sync, SyncBase: w.syncer.SyncBase}).Handler())
+	t.Cleanup(tools.Close)
+	w.syncer.Agent.ToolsURL = tools.URL
+	arm := w.firstReviewAfter()
+	inLoop := w.lux.Decide
+	var afterMerge atomic.Bool
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := inLoop(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "fix" {
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+			if afterMerge.Load() {
+				// The test's fix: in the tree the once-failing tester
+				// counts (fakeagent.FixedFile), which then passes.
+				b.Commit["target:"+fakeagent.FixedFile] = fmt.Sprint(labels["dude.run"]) + "\n"
+			}
+		}
+		return b
+	}
+	task := w.prOpen(w.task(), prAt{test: true})
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main') ON CONFLICT DO NOTHING`, "repo_web_"+w.org, w.org, w.project)
+	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+		VALUES ($1, $2, $3, 'write')`, w.org, task, "repo_web_"+w.org)
+	setPolicy(w, task, `{"maxReviewIterations":9}`)
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	arm()
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the decision before the pull request", func() bool {
+		switch w.decisionAt(task) {
+		case delivery.PointReviewed, delivery.PointFixed:
+			w.must(task, "decide", `{"action":"next"}`)
+		case delivery.PointBeforePR:
+			return true
+		}
+		return false
+	})
+	branch := w.gh.Pull(1).Head
+	w.gh.Review(1, "ana", "APPROVED")
+	w.commitFileIn(w.web.Repo, "main", "OTHER.md", "other\n", "Another task's change")
+	w.onModel("qa_browser", fakeagent.TestFailOnceModel)
+	afterMerge.Store(true)
+	merges := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task)
+	earlier := w.runsSoFar(task)
+	targetMoves := len(w.gh.BranchLog(branch))
+	checkTarget := w.prShowsOnlyChecked(t, task, "target", branch, true)
+	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed and tested; web is new."}`)
+	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
+		t.Fatalf("answer: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("web's pull request open, and waiting on both", func() bool {
+		w.sync()
+		if r := w.escalationReason(task); r != "" {
+			t.Fatalf("escalated %s\n%s", r, w.describeRuns())
+		}
+		switch w.decisionAt(task) {
+		case delivery.PointReviewed, delivery.PointFixed:
+			w.must(task, "decide", `{"action":"next"}`)
+		case delivery.PointBeforePR:
+			// The fix moved web past the Open the person gave.
+			w.must(task, "decide", `{"action":"open_pull_request"}`)
+		}
+		return len(w.web.Pulls()) == 1 && w.waitingOnPR(task)
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task); n != merges+1 {
+		t.Fatalf("%d merges of web's base, want GitHub's one\n%s", n-merges, w.describeRuns())
+	}
+	if w.verdictsOfTestAfter(task, w.phaseRuns(task, "test")-2)[0] != "fail" {
+		t.Fatalf("the merge's test did not fail first\n%s", w.describeRuns())
+	}
+	checkTarget()
+	if got := w.gh.BranchLog(branch)[targetMoves:]; len(got) != 1 {
+		t.Errorf("target's pull request moved to %v, want the fix's one promotion", got)
+	}
+	w.writersOnCandidate(task, earlier, "fix")
+	head := w.web.SHA(w.web.Pull(1).Head)
+	if missing := w.checkedAt(task, "web", head, true); missing != "" {
+		t.Errorf("web's pull request opened at %s with no %s there", head, missing)
 	}
 }
 

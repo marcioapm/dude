@@ -2,9 +2,11 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -551,6 +553,44 @@ func TestChildResultBounds(t *testing.T) {
 	}
 	if len(refs) != 0 || len(artifacts) != 100 {
 		t.Fatalf("unbounded/unsafe result %v %d", refs, len(artifacts))
+	}
+}
+
+// A failed child's result tells its parent the child's error, clipped to
+// childErrorChars; a completed child's carries no error, even with one on
+// its Run.
+func TestAChildResultCarriesOnlyAFailedChildsErrorClipped(t *testing.T) {
+	w := newChildWorld(t)
+	failed, completed := w.child("failed"), w.child("completed")
+	long := strings.Repeat("a", childErrorChars) + strings.Repeat("b", 100)
+	w.exec(`UPDATE runs SET error = $2 WHERE id = ANY($1)`, []string{failed, completed}, long)
+	for id, status := range map[string]string{failed: "failed", completed: "completed"} {
+		if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: status}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := w.s.EnqueueChildResults(w.ctx); err != nil || n != 2 {
+		t.Fatalf("delivered %d %v", n, err)
+	}
+	summary := func(id string) map[string]any {
+		t.Helper()
+		var text string
+		if err := w.owner.QueryRow(w.ctx, `SELECT d.text FROM child_result_outbox o JOIN directives d ON d.id = o.directive_id
+			WHERE o.child_run_id = $1`, id).Scan(&text); err != nil {
+			t.Fatal(err)
+		}
+		start, end := strings.Index(text, `{"`), strings.LastIndex(text, "}")
+		var out map[string]any
+		if start < 0 || end < start || json.Unmarshal([]byte(text[start:end+1]), &out) != nil {
+			t.Fatalf("no summary in the result:\n%s", text)
+		}
+		return out
+	}
+	if got := summary(failed)["error"]; got != strings.Repeat("a", childErrorChars) {
+		t.Errorf("the failed child's error = %q, want its first %d characters", got, childErrorChars)
+	}
+	if got, ok := summary(completed)["error"]; ok {
+		t.Errorf("the completed child's result carries an error: %q", got)
 	}
 }
 

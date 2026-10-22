@@ -144,6 +144,39 @@ func (w *world) fixFailedTestAtPRWait(task string) {
 	}
 }
 
+// runsSoFar are the ids of the task's Runs now: what writersOnCandidate
+// leaves out.
+func (w *world) runsSoFar(task string) []string {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT id FROM runs WHERE task_id = $1`, task)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return ids
+}
+
+// writersOnCandidate fails the test unless the task has a Run of each of
+// phases besides those in before, and every such Run published to a
+// candidate branch.
+func (w *world) writersOnCandidate(task string, before []string, phases ...string) {
+	w.t.Helper()
+	if before == nil {
+		before = []string{}
+	}
+	for _, phase := range phases {
+		all := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)`, task, phase, before)
+		off := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)
+			AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task, phase, before)
+		if all == 0 || off != 0 {
+			w.t.Errorf("%d %s Runs, %d of them off the candidate\n%s", all, phase, off, w.describeRuns())
+		}
+	}
+}
+
 // A test the conductor starts while the pull request waits, failing, sends
 // its fix round through review and then tests again, as any failed test
 // does; the re-test passing, the delivery waits on that pull request again.
@@ -156,6 +189,10 @@ func TestAFailedTestAtThePullRequestWaitIsTestedAgainAfterItsFix(t *testing.T) {
 	}
 	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
 	phases := len(w.phasesRun(task))
+	w.gh.Review(1, "ana", "APPROVED")
+	branch := w.gh.Pull(1).Head
+	moves, earlier := len(w.gh.BranchLog(branch)), w.runsSoFar(task)
+	check := w.prShowsOnlyChecked(t, task, "target", branch, true)
 
 	w.must(task, "start_phase", `{"phase":"test"}`)
 	w.fixFailedTestAtPRWait(task)
@@ -163,6 +200,13 @@ func TestAFailedTestAtThePullRequestWaitIsTestedAgainAfterItsFix(t *testing.T) {
 	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"test", "fix", "review", "test"}) {
 		t.Errorf("phases after start_phase test: %v", got)
 	}
+	// The fix reached the pull request once, by promotion, reviewed and
+	// tested at the head it moved to.
+	check()
+	if got := w.gh.BranchLog(branch)[moves:]; len(got) != 1 || got[0] != w.gh.SHA(branch) {
+		t.Errorf("the pull request's branch moved to %v, want one promotion", got)
+	}
+	w.writersOnCandidate(task, earlier, "fix")
 	if got := w.verdicts(task); !slices.Equal(got, []string{"pass"}) {
 		t.Errorf("the re-test's verdicts = %v, want passed", got)
 	}
@@ -259,9 +303,13 @@ func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestWithoutAskingOpenOrDraf
 	}
 	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
 	w.gh.Review(1, "jerv", "COMMENTED")
+	// A standing approval: whatever head the branch shows can be merged.
+	w.gh.Review(1, "ana", "APPROVED")
 	branch := w.gh.Pull(1).Head
 	before := w.gh.SHA(branch)
-	phases, tests := len(w.phasesRun(task)), w.phaseRuns(task, "test")
+	moves := len(w.gh.BranchLog(branch))
+	check := w.prShowsOnlyChecked(t, task, "target", branch, true)
+	phases, tests, earlier := len(w.phasesRun(task)), w.phaseRuns(task, "test"), w.runsSoFar(task)
 	arm()
 
 	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
@@ -304,8 +352,14 @@ func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestWithoutAskingOpenOrDraf
 	if head == before {
 		t.Fatal("the pull request's head did not move")
 	}
-	if e := w.rerequests(task); len(e) != 1 || e[0]["head"] != head || !slices.Equal(strs(e[0]["reviewersRequested"]), []string{"jerv"}) {
-		t.Errorf("re-requests %v, want jerv asked for head %s", e, head)
+	check()
+	if got := w.gh.BranchLog(branch)[moves:]; len(got) != 1 || got[0] != head {
+		t.Errorf("the pull request's branch moved to %v, want one promotion to %s", got, head)
+	}
+	w.writersOnCandidate(task, earlier, "fix", "simplify")
+	// ana's approval was of the older head too: both are asked again.
+	if e := w.rerequests(task); len(e) != 1 || e[0]["head"] != head || !slices.Equal(strs(e[0]["reviewersRequested"]), []string{"jerv", "ana"}) {
+		t.Errorf("re-requests %v, want jerv and ana asked for head %s", e, head)
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'actingOnPr'`, task); n != 0 {
 		t.Error("waiting again still acting on the pull request")
