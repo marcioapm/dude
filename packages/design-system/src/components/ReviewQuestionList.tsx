@@ -52,7 +52,7 @@ export function ReviewQuestionList({ questions, title = "Questions from reviewer
   const headingId = useId();
   const shown = questions.filter((q) => q.status !== "withdrawn");
   if (shown.length === 0) return null;
-  const open = shown.filter((q) => (q.status ?? "open") === "open").length;
+  const open = shown.filter(isOpen).length;
   return (
     <section className={cx(styles["group"], className)} aria-labelledby={headingId} {...rest}>
       <header className={styles["groupHead"]}>
@@ -60,7 +60,7 @@ export function ReviewQuestionList({ questions, title = "Questions from reviewer
         <span className={styles["count"]}>{open} open</span>
       </header>
       <ul className={styles["list"]}>
-        {shown.map((q) => (q.status ?? "open") === "open" ? (
+        {shown.map((q) => isOpen(q) ? (
           <li key={q.id} className={styles["item"]} data-question={q.id} data-status="open">
             <div className={styles["row"]}>
               <Icon name="message" size={12} className={styles["glyph"]} />
@@ -91,6 +91,10 @@ export function ReviewQuestionList({ questions, title = "Questions from reviewer
       </ul>
     </section>
   );
+}
+
+function isOpen(q: ReviewQuestionItem): boolean {
+  return (q.status ?? "open") === "open";
 }
 
 function answeredBy(by: ReviewQuestionAnswerer | undefined): string {
