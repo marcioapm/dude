@@ -39,17 +39,11 @@ file, and a parser that accepts exactly what we asked for is easier to reason
 about than one that accepts all of YAML and then has to reject most of it.
 */
 func ParseFindings(output string) []Finding {
-	cleaned := fenceLine.ReplaceAllString(output, "")
-
 	// Non-nil, so a review that found nothing encodes as `[]` rather than
 	// `null`. A nil slice would be rejected by the control plane, which is
 	// the common case — most reviews find nothing.
 	findings := []Finding{}
-	for _, doc := range strings.Split(cleaned, "\n---") {
-		if isVerdicts(doc) {
-			continue
-		}
-		fields := readFields(doc)
+	for _, fields := range replyDocuments(output) {
 		// A question goes to a person, never a fixer: one that also carries
 		// a title and a severity (formats mixed) is still no finding.
 		if isQuestion(fields) {
@@ -60,6 +54,18 @@ func ParseFindings(output string) []Finding {
 		}
 	}
 	return findings
+}
+
+// replyDocuments reads the fields of each document in a reviewer's reply
+// other than its verdicts.
+func replyDocuments(output string) []map[string]string {
+	var docs []map[string]string
+	for _, doc := range strings.Split(fenceLine.ReplaceAllString(output, ""), "\n---") {
+		if !isVerdicts(doc) {
+			docs = append(docs, readFields(doc))
+		}
+	}
+	return docs
 }
 
 func isQuestion(fields map[string]string) bool { return fields["question"] != "" }
@@ -77,11 +83,7 @@ var aboutFinding = regexp.MustCompile(`(?i)^F(\d+)\b`)
 // with an empty question is dropped.
 func ParseQuestions(output string) []ReviewQuestion {
 	var questions []ReviewQuestion
-	for _, doc := range strings.Split(fenceLine.ReplaceAllString(output, ""), "\n---") {
-		if isVerdicts(doc) {
-			continue
-		}
-		fields := readFields(doc)
+	for _, fields := range replyDocuments(output) {
 		if !isQuestion(fields) {
 			continue
 		}
