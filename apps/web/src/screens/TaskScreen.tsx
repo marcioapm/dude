@@ -202,9 +202,6 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const latest = useRef({ pickTab: (_tab: string) => {}, toCurrent: () => {}, selector: (_title: ReactNode): ReactNode => null });
   const openServers = useCallback(() => latest.current.pickTab("servers"), []);
   const toCurrent = useCallback(() => latest.current.toCurrent(), []);
-  // The session whose picker is open. Held here, not in the selector: RunScreen draws
-  // the selector in another place once its run has loaded, which remounts it.
-  const [sessionPickerOn, setSessionPickerOn] = useState<string | null>(null);
   // The session shown when none is asked for: the last one open, else one
   // picked the first time Sessions shows (what is running, else the newest)
   // and kept — a phase ending must not swap it under someone reading.
@@ -589,9 +586,6 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? (sessions.find((r) => r.status === "running") ?? sessions[0])?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
-  // Closed on leaving Sessions or the session, as the unmounted selector was.
-  if (sessionPickerOn !== null && (tab !== "sessions" || sessionPickerOn !== openRun)) setSessionPickerOn(null);
-  const picker = { open: sessionPickerOn !== null && sessionPickerOn === openRun, onOpenChange: (next: boolean) => setSessionPickerOn(next ? (openRun ?? null) : null) };
   latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
@@ -946,10 +940,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           {sessions.length > 0 ? (
             <div className="taskSessions">
               {openRun ? (
-                <FeedbackProvider value={sessionFeedback}><SessionPickerContext.Provider value={picker}>
+                <FeedbackProvider value={sessionFeedback}><SessionPickerState key={openRun}>
                   <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
                     stopped={openStopped} titleSelector={sessionSelector} stopTask={stopFromSession} />
-                </SessionPickerContext.Provider></FeedbackProvider>
+                </SessionPickerState></FeedbackProvider>
               ) : null}
             </div>
           ) : (
@@ -1111,10 +1105,18 @@ function Elsewhere({ icon, title, description, others, what, onAttempt }: {
   );
 }
 
-interface SessionPickerState { readonly open: boolean; readonly onOpenChange: (open: boolean) => void }
-// Delivered by context rather than through titleSelector, so opening the picker
-// re-renders only SessionPicker and not the memoised RunScreen and its transcript.
-const SessionPickerContext = createContext<SessionPickerState>({ open: false, onOpenChange: () => {} });
+interface SessionPickerOpen { readonly open: boolean; readonly onOpenChange: (open: boolean) => void }
+const SessionPickerContext = createContext<SessionPickerOpen>({ open: false, onOpenChange: () => {} });
+
+// Holds the picker's open state above RunScreen, which remounts the selector once its run loads.
+// A toggle re-renders this and SessionPicker only: `children` keeps its identity, so the memoised
+// RunScreen and its transcript are skipped. Keyed by the session and unmounted with the Sessions
+// tab, so another session or tab closes it.
+function SessionPickerState({ children }: { children: ReactNode }) {
+  const [open, onOpenChange] = useState(false);
+  const value = useMemo(() => ({ open, onOpenChange }), [open]);
+  return <SessionPickerContext.Provider value={value}>{children}</SessionPickerContext.Provider>;
+}
 
 function SessionPicker(props: Omit<SearchSelectorProps<Run>, "open" | "onOpenChange">) {
   const { open, onOpenChange } = useContext(SessionPickerContext);
