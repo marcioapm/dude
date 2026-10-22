@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useCallback, useContext, useLayoutEffect, useState, type ReactNode, type RefObject } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Icon } from "../icons/index.tsx";
 import { SearchPicker } from "./SearchPicker.tsx";
@@ -25,12 +25,16 @@ export interface SearchSelectorProps<T> {
   readonly listTestId?: string | undefined;
   readonly placeholder?: string | undefined;
   readonly empty?: ReactNode;
+  // Controlled when given: the owner's state outlives a remount of the selector.
+  readonly open?: boolean | undefined;
+  readonly onOpenChange?: ((open: boolean) => void) | undefined;
 }
 
 const TITLE_GAP = 16;
 
-export function SearchSelector<T>({ title, label, options, optionKey, searchText, renderOption, onPick, current, group, placeholder, optionAttributes, listTestId, empty = "Nothing to select yet" }: SearchSelectorProps<T>) {
-  const [open, setOpen] = useState(false);
+export function SearchSelector<T>({ title, label, options, optionKey, searchText, renderOption, onPick, current, group, placeholder, optionAttributes, listTestId, empty = "Nothing to select yet", open: controlled, onOpenChange }: SearchSelectorProps<T>) {
+  const [own, setOwn] = useState(false);
+  const open = controlled ?? own;
   // Radix positions against the trigger; these offsets move the popup to the anchor's bottom-left edge.
   const [offsets, setOffsets] = useState({ side: TITLE_GAP, align: 0 });
   const anchor = useContext(SearchSelectorAnchor);
@@ -39,14 +43,18 @@ export function SearchSelector<T>({ title, label, options, optionKey, searchText
     const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
     return options.filter((option) => words.every((word) => searchText(option).toLocaleLowerCase().includes(word)));
   }, [options, searchText]);
-  const openChange = (next: boolean) => {
+  // Measured whenever it is open, so a selector mounted already open is placed like one opened by a press.
+  useLayoutEffect(() => {
     const box = anchor?.current?.getBoundingClientRect();
-    const own = trigger?.getBoundingClientRect();
-    if (next && box && own) setOffsets({ side: Math.max(0, box.bottom - own.bottom), align: box.left - own.left });
-    setOpen(next);
+    const mine = trigger?.getBoundingClientRect();
+    if (open && box && mine) setOffsets({ side: Math.max(0, box.bottom - mine.bottom), align: box.left - mine.left });
+  }, [open, anchor, trigger]);
+  const setOpen = (next: boolean) => {
+    if (controlled === undefined) setOwn(next);
+    onOpenChange?.(next);
   };
   return (
-    <Popover.Root open={open} onOpenChange={openChange}>
+    <Popover.Root open={open} onOpenChange={setOpen}>
       {/* The title is the trigger's name: what is open, not what the button does. Radix says it opens a dialog, which the popup is. */}
       <Popover.Trigger ref={setTrigger} className={styles["trigger"]} data-testid="search-selector-trigger">
         {title}<Icon name="chevron-down" size={14} />

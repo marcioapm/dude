@@ -192,6 +192,38 @@ test("the trigger is named by the open session and says it opens the dialog it c
   expect(trigger.getAttribute("aria-haspopup")).toBe(popups[0]!.getAttribute("role"));
 });
 
+test("controlled, it follows open and reports the trigger and Escape through onOpenChange", async () => {
+  const reported: boolean[] = [];
+  const render = (open: boolean) => root!.render(<SearchSelector title="Conductor" label="Select session" options={OPTIONS} open={open}
+    onOpenChange={(next) => reported.push(next)} optionKey={(o) => o.id} searchText={(o) => o.label} current={(o) => o.id === "c"}
+    onPick={() => {}} renderOption={(o) => o.label} />);
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const popup = () => document.querySelector("[data-testid=search-selector]");
+  await act(async () => render(true));
+  await tick();
+  expect(popup()).not.toBeNull();
+  // A remount keeps it open: the state is the owner's.
+  await act(async () => root!.unmount());
+  root = createRoot(host);
+  await act(async () => render(true));
+  await tick();
+  expect(document.querySelector("[role=option][aria-current=true]")?.textContent).toBe("Conductor");
+  await press(document.querySelector("input[role=combobox]")!, "Escape");
+  await tick();
+  expect(reported).toContain(false);
+  expect(popup()).not.toBeNull();
+  await act(async () => render(false));
+  await tick();
+  expect(popup()).toBeNull();
+  reported.length = 0;
+  await act(async () => host!.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!.click());
+  await tick();
+  expect(reported).toEqual([true]);
+  expect(popup()).toBeNull();
+});
+
 test("no options says so", async () => {
   const el = await mount(true);
   await act(async () => el.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!.click());
