@@ -132,15 +132,15 @@ func WriterChildRefusedTx(ctx context.Context, tx pgx.Tx, taskID string) (string
 // a candidate reviewed (and tested) reaches it. Open (or draft) is as the
 // pull request syncer last recorded it.
 func pullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (string, error) {
-	if open, err := pullRequestOpenOnTx(ctx, tx, taskID, d.Branch(taskID)); err != nil || !open {
+	if open, err := PullRequestOpenOnTx(ctx, tx, taskID, d.Branch(taskID)); err != nil || !open {
 		return "", err
 	}
 	return rPullRequestOpenOnBranch, nil
 }
 
-// pullRequestOpenOnTx says whether one of the task's pull requests is open
+// PullRequestOpenOnTx says whether one of the task's pull requests is open
 // (or a draft) on branch, as the pull request syncer last recorded it.
-func pullRequestOpenOnTx(ctx context.Context, tx pgx.Tx, taskID, branch string) (bool, error) {
+func PullRequestOpenOnTx(ctx context.Context, tx pgx.Tx, taskID, branch string) (bool, error) {
 	var open bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft'))`, taskID, branch).Scan(&open)
