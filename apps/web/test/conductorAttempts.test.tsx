@@ -29,7 +29,9 @@ afterEach(async () => {
   window.history.replaceState(null, "", " ");
 });
 
-const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+// One instant for the whole file: two `at(n)` taken apart compare equal.
+const NOW = Date.now();
+const at = (min: number) => new Date(NOW - min * 60_000).toISOString();
 const COND = "run_cond";
 /** The task's conductor, recorded on `attempt`, created and ended so many minutes ago. */
 const conductor = (attempt: number, more: Partial<Run> = {}): Run => ({
@@ -100,8 +102,9 @@ describe("a conductor's Run and the attempts", () => {
   });
 
   test("an attempt begins with its conductor when that is its first Run", () => {
-    const starts = attemptStarts([...RESTARTED_RUNS, conductor(3, { createdAt: at(5) })]);
-    expect(starts.get(3)).toBe(at(5));
+    const start = at(5);
+    const starts = attemptStarts([...RESTARTED_RUNS, conductor(3, { createdAt: start })]);
+    expect(starts.get(3)).toBe(start);
   });
 
   test("what happened on a conductor is its attempt's", () => {
