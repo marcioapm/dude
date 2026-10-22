@@ -2,7 +2,6 @@ package orchestrator_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -10,7 +9,8 @@ import (
 // lux preempts an implementer that is idle, waiting on a person, and
 // resumes it elsewhere itself: the agent writes nothing on its new host, so
 // dude's servers.changed {luxState: running} is the one event that ends
-// the chat's move (#262). Written once for the move, not on later frames.
+// the chat's move (#262). Written once for the move (repeated running
+// frames are pinned in internal/phases, back_to_running_test.go).
 func TestAnIdleRunLuxMovesIsAnnouncedBackToRunningOnce(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()
@@ -55,8 +55,6 @@ func TestAnIdleRunLuxMovesIsAnnouncedBackToRunningOnce(t *testing.T) {
 		AND payload->>'luxState' = 'scheduled'`, runID); n != 1 {
 		t.Fatalf("%d servers.changed scheduled: the move did not go through scheduled", n)
 	}
-	// Later frames of the running placement, if any, have time to be read.
-	time.Sleep(300 * time.Millisecond)
 	if n := w.count(backToRunning+` AND cursor > (SELECT max(cursor) FROM events WHERE run_id = $1
 		AND event_type = 'run.stage' AND payload->>'stage' = 'park')`, runID); n != 1 {
 		t.Fatalf("back to running after the move announced %d times, want 1", n)
@@ -65,6 +63,8 @@ func TestAnIdleRunLuxMovesIsAnnouncedBackToRunningOnce(t *testing.T) {
 		t.Fatalf("%d servers.changed running since the Run first ran, want only the move's", n-before)
 	}
 	// The case under test: nothing of the agent's ends the move instead.
+	// These mirror the web projection's AGENT_UP set (apps/web/src/api/
+	// conversation.ts), the events that end a start: keep the two in step.
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND cursor > (SELECT max(cursor) FROM events
 		WHERE run_id = $1 AND event_type = 'run.stage' AND payload->>'stage' = 'park')
 		AND event_type IN ('agent.message', 'agent.thought', 'agent.tool.called', 'agent.session.started',

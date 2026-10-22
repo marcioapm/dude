@@ -434,10 +434,9 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 		}
 		// Waiting for a host, or no longer: the Run page reads why again
 		// (its waitingReason), as a preview's state change has it do. Back
-		// to running from away (left_running_at was set: a move or a
-		// resume, whose last step is often scheduled or starting, not a
-		// wait) says so too, once: the chat's move or resume start ends on
-		// it even if the agent stays idle. A fresh start was never away.
+		// from away (left_running_at set: a move or a resume, often through
+		// scheduled or starting rather than a wait) is announced once, so
+		// the chat's start ends even if the agent stays idle.
 		if lux.Waiting(state) || lux.Waiting(was) || state == "running" && away {
 			if err := s.event(ctx, tx, t.run, EvServersChanged, ledger.ActorSystem,
 				map[string]any{"taskId": t.run.TaskID, "runId": t.run.ID, "change": "state", "luxState": state}); err != nil {

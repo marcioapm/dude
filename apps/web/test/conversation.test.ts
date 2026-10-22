@@ -116,7 +116,9 @@ describe("machine moves", () => {
     const events = acceptedMove("implementer", XL, TO_HIGHMEM);
     const running = () => ev(EventTypes.ServersChanged, { change: "state", luxState: "running" });
     // Before dude's stop (run.paused confirmed): the Run is still on its old machine.
-    expect(project([...events.slice(0, 5), running()], "running").start?.machine?.to).toBe("XL");
+    const stopped = events.findIndex((e) => e.eventType === EventTypes.RunPaused);
+    expect(stopped).toBeGreaterThan(0);
+    expect(project([...events.slice(0, stopped), running()], "running").start?.machine?.to).toBe("XL");
     // Stopped, and lux has it running on XL: the move is over, the agent idle.
     const back = project([...events, ev(EventTypes.RunResized, { machine: { ...XL, from: "task" } }), running()], "running");
     expect(back.start).toBeNull();

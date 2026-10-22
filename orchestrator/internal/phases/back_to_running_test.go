@@ -2,6 +2,9 @@ package phases
 
 import (
 	"testing"
+	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // Back to running from away is announced once as servers.changed
@@ -36,14 +39,45 @@ func TestAMovedRunBackToRunningFromScheduledIsAnnouncedOnce(t *testing.T) {
 	}
 }
 
-// A Run never away from running (a fresh start: scheduled, starting, then
-// running) announces nothing on running: run.started is its end.
-func TestAFreshStartsRunningIsNotAnnouncedAsBackToRunning(t *testing.T) {
+// A fresh start (scheduled, starting, then running) was never away: its
+// running is announced by run.started alone, once, and not as back to
+// running.
+func TestAFreshStartToRunningIsNotAnnouncedAsBackToRunning(t *testing.T) {
 	w := newResumeWorld(t)
-	w.exec(`UPDATE runs SET status = 'running', lux_state = 'scheduled', dude_pause = NULL, lux_stop_reason = NULL,
+	w.exec(`UPDATE runs SET status = 'scheduled', lux_state = 'scheduled', dude_pause = NULL, lux_stop_reason = NULL,
 		left_running_at = NULL WHERE id = $1`, w.run.ID)
-	w.follow(luxState(1, "starting"), running(1), running(1))
+	w.followFrom(statusScheduled, "scheduled", luxState(1, "starting"), running(1), running(1))
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.started'`); n != 1 {
+		t.Fatalf("a fresh start wrote run.started %d times, want 1", n)
+	}
 	if n := w.backToRunning(); n != 0 {
 		t.Fatalf("a Run never away announced running %d times, want 0", n)
+	}
+}
+
+// A person's resume (the real whilePaused, which records lux's
+// "resuming" answer and stamps left_running_at) that lux then places
+// through scheduled and starting: back to running is announced once, so an
+// idle agent's "resuming" start ends too.
+func TestAResumedRunBackToRunningFromScheduledIsAnnouncedOnce(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resumable()
+	w.lux.set(stoppedOnHost1(base), nil)
+	st := w.followingAs(func(st *streamLux) lux.Client { return &stoppedEpochLux{streamLux: st, base: base} })
+	w.whilePaused()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND left_running_at IS NOT NULL`); n != 1 {
+		t.Fatalf("whilePaused did not leave the Run resuming and away from running")
+	}
+	st.frames <- luxState(2, "scheduled")
+	st.frames <- luxState(2, "starting")
+	st.frames <- running(2)
+	st.frames <- running(2)
+	// A record after them, carrying a cursor: once it is saved, every
+	// frame before it has been applied.
+	st.frames <- cursorFrame(busy(2), "after-running")
+	w.committed("after-running", 10*time.Second)
+	if n := w.backToRunning(); n != 1 {
+		t.Fatalf("a person's resume back to running announced %d times, want 1", n)
 	}
 }
