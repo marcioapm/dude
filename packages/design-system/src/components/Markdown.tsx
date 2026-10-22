@@ -24,7 +24,8 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
    * outline. `document`: a published artifact read in full. Wider measure,
    * more air between sections, an optional heading outline. `prompt`: an
    * agent's instructions, read and edited in settings — UI body size, a
-   * compact rhythm, and `{{variables}}` drawn as chips.
+   * compact rhythm, `{{variables}}` drawn as chips, and no measure: a
+   * working document fills its container.
    */
   readonly variant?: MarkdownVariant | undefined;
   /**

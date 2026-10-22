@@ -1527,7 +1527,12 @@ here.
   between blocks, headings 1.25em above and one step smaller than in a
   document. `variant="document"` is for published artifacts: 1em between
   blocks, 2.5em above headings, h1/h2/h3 at 1.618/1.462/1.318em, a 700px
-  measure and an optional outline.
+  measure and an optional outline. `variant="prompt"` is an agent's
+  instructions in settings (a role's prompt, read or edited in
+  `MarkdownDocument`, and an organisation's read-only copy): UI body size,
+  a compact rhythm, `{{variables}}` as chips, and no measure
+  (`--md-measure: none`) — a working document fills its container, as the
+  role's fields above it do.
 - Inline code: 0.85em mono on the sunken fill, `mark` radius, a subtle inset
   ring. Code blocks: a square sunken well, 12×16 padding, no frame; the
   language and copy control appear on hover; long lines scroll sideways

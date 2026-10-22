@@ -6,6 +6,7 @@
  *             note rather than a wall of chat lines.
  *   .document a published artifact: 1.5 leading, 1em between blocks,
  *             headings 2.5em above, Obsidian's heading ratios, 700px measure.
+ *   .prompt   an agent's instructions: UI body size, no measure.
  * Headings inside a message step down one level so a reply's `###` does not
  * outshout the transcript.
  */
@@ -91,8 +92,10 @@
 }
 
 /* An agent's instructions: read and edited in settings, at UI body size
-   with a compact rhythm — a prompt is a working document, not an article. */
+   with a compact rhythm — a prompt is a working document, not an article,
+   so it has no reading measure and fills its container. */
 .prompt {
+  --md-measure: none;
   --md-gap: 0.75em;
   --md-h-gap: 1.6em;
   font-size: var(--ds-text-md);
