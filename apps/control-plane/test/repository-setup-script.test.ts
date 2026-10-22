@@ -61,7 +61,7 @@ const stored = async (id: string) =>
   ((await owner`SELECT setup_script FROM repositories WHERE id = ${id}`)[0] as { setup_script: string | null }).setup_script;
 const unique = (name: string) => `${name}-${Bun.randomUUIDv7("hex").slice(-8)}`;
 
-const HOOKS = 'ln -sf ../../scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"\n';
+const HOOKS = 'ln -sf ../../scripts/pre-commit "$DUDE_REPO_HOOKS_DIR/pre-commit"\n';
 
 test("a setup script is kept as written when a repository is added, and read back with it and its project", async () => {
   const res = await call(asAdmin, "POST", `/v1/projects/${project}/repositories`,

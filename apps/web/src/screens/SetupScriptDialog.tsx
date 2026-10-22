@@ -16,8 +16,8 @@ import { checkSetupScript, lintSetupScript, SETUP_SCRIPT_MAX_BYTES, setupScriptB
 const TIME_LIMIT = "15 minutes";
 
 export const SETUP_SCRIPT_PLACEHOLDER = `# Runs once in each new checkout, before the agent starts. For example:
-# install the repository's own pre-commit hook beside dude's
-ln -sf ../../scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"
+# install the repository's own pre-commit hook; dude's commit hook runs it
+ln -sf ../../scripts/pre-commit "$DUDE_REPO_HOOKS_DIR/pre-commit"
 npm ci --prefer-offline`;
 
 export interface SetupScriptDialogProps {
@@ -102,6 +102,10 @@ export function SetupScriptDialog({ client, repository, canEdit, orgName, onClos
       <p className="setupScriptHelp">
         Runs in <span className="ds-mono">{repository.name}/</span> as the agent, with the Run’s environment, before the agent starts.
         A resumed Run that keeps its checkout does not run it again. Time limit: {TIME_LIMIT}. Saved changes reach Runs started after.
+      </p>
+      <p className="setupScriptHelp" data-testid="setup-script-hooks-help">
+        Install git hooks into <span className="ds-mono">$DUDE_REPO_HOOKS_DIR</span>, the checkout’s own hooks directory: dude’s commit hook runs them.
+        <span className="ds-mono"> git rev-parse --git-path hooks</span> names dude’s directory, which the script cannot write.
       </p>
       <p className="setupScriptHelp setupScriptFails">
         <Icon name="clock" size={12} />
