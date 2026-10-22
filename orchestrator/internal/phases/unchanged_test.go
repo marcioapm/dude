@@ -21,22 +21,26 @@ import (
 // workspaceLux runs exec commands with sh on this machine, /workspace in
 // their arguments read as root: the Run's container, its checkouts real git
 // repositories. fail, set, refuses every exec as lux would; exit replaces
-// the script's own exit code.
+// the script's own exit code; during, set, runs before each exec.
 type workspaceLux struct {
 	lux.Client
-	root  string
-	mu    sync.Mutex
-	execs int
-	fail  error
-	exit  *int
-	stops int
+	root   string
+	mu     sync.Mutex
+	execs  int
+	fail   error
+	exit   *int
+	during func()
+	stops  int
 }
 
 func (l *workspaceLux) Exec(ctx context.Context, _ string, command []string) (lux.ExecResult, error) {
 	l.mu.Lock()
 	l.execs++
-	fail, exit := l.fail, l.exit
+	fail, exit, during := l.fail, l.exit, l.during
 	l.mu.Unlock()
+	if during != nil {
+		during()
+	}
 	if fail != nil {
 		return lux.ExecResult{}, fail
 	}
@@ -354,6 +358,33 @@ func TestANoChangeDecisionHoldsOnlyForItsTurnAndPlacement(t *testing.T) {
 		execs := w.lux.execCount()
 		if pass, _ := w.gate(); !pass || w.lux.execCount() == execs {
 			t.Fatalf("pass %v; inspected again: %v", pass, w.lux.execCount() != execs)
+		}
+	})
+	t.Run("a placement that moves during the inspection", func(t *testing.T) {
+		w := newUnchangedWorld(t, "api")
+		moves := 0
+		w.lux.during = func() {
+			if moves == 0 {
+				w.exec(`UPDATE runs SET agent_session_epoch = agent_session_epoch + 1 WHERE id = $1`, w.run.ID)
+			}
+			moves++
+		}
+		if pass, _ := w.gate(); pass {
+			t.Fatal("an inspection read across a placement move passed")
+		}
+		if got := w.decisions(); len(got) != 0 {
+			t.Fatalf("recorded %+v across a placement move, want nothing", got)
+		}
+		execs := w.lux.execCount()
+		if pass, _ := w.gate(); !pass || w.lux.execCount() == execs {
+			t.Fatalf("pass %v; inspected again: %v", pass, w.lux.execCount() != execs)
+		}
+		var epoch int
+		if err := w.owner.QueryRow(context.Background(), `SELECT agent_session_epoch FROM runs WHERE id = $1`, w.run.ID).Scan(&epoch); err != nil {
+			t.Fatal(err)
+		}
+		if got := w.decisions(); len(got) != 1 || !got[0].Unchanged || got[0].Epoch != epoch {
+			t.Fatalf("recorded %+v, want one unchanged decision at epoch %d", got, epoch)
 		}
 	})
 }
