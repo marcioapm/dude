@@ -129,6 +129,11 @@ func TestStartingOverUnderTheConductorKeepsTheConductorDeciding(t *testing.T) {
 	if d := w.decider(task); d != "conductor" {
 		t.Errorf("attempt 2 is decided by %s", d)
 	}
+	// Chat shows the pick-up's message as dude's own (system/dude), not a person's.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message'
+		AND actor_type = 'system' AND actor_id = 'dude' AND payload->>'text' LIKE 'This task was stopped, and Ana picked it back up%'`, runs[1]); n != 1 {
+		t.Errorf("attempt 2's pick-up message is not dude's")
+	}
 	w.until("attempt 2's first decision", func() bool { return w.decisionAt(task) == delivery.PointStart })
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->>'attempt')::int = 2`, task); n != 1 {
 		t.Errorf("no delivery for attempt 2")

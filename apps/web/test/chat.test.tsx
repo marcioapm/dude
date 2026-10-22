@@ -140,6 +140,34 @@ describe("the conductor's transcript", () => {
   });
 });
 
+/** A conductor dude started for a task picked back up: dude's chat.message carrying the person's note, then its briefing. */
+function pickedUpEvents(): PersistedEvent[] {
+  cursor = 300;
+  const note = "This task was stopped, and Márcio picked it back up, saying: \"Start fresh.\" They started it over as attempt 2.";
+  return [
+    ev("run.created", { role: "conductor" }),
+    ev("chat.message", { text: note }),
+    ev("conductor.briefed", { text: `Conductor, dude wrote in the Chat of WC-214.\n\n## The task\n\nWC-214\n\n## dude's message\n\n${note}` }),
+  ];
+}
+
+describe("a conductor started for a pick-up", () => {
+  test("dude's note starting it is dude's told turn, not a person's message", () => {
+    const turns = project(pickedUpEvents(), "running").turns;
+    expect(turns.map((t) => t.kind === "prompt" ? `prompt:${t.briefing ? "briefing" : "task"}` : t.kind)).toEqual(["told", "prompt:briefing"]);
+    expect(turns[0]?.kind === "told" && turns[0].text).toStartWith("This task was stopped, and Márcio picked it back up");
+  });
+
+  test("it renders as dude's, never as Someone", async () => {
+    const page = await chatPage(new ChatClient({ status: "running" }, pickedUpEvents()));
+    const told = await until(() => page.querySelector<HTMLElement>("[data-testid=chat-told]"), "dude's note");
+    expect(told.textContent).toStartWith(dudeName(TASK_ID));
+    expect(told.textContent).toContain("Márcio picked it back up");
+    expect(page.querySelector("[data-testid=human-turn]")).toBeNull();
+    expect(page.querySelector("[data-testid=task-chat]")?.textContent).not.toContain("Someone");
+  });
+});
+
 /** A conductor asked on a pull request, which replied there. */
 function githubEvents(): PersistedEvent[] {
   cursor = 200;
