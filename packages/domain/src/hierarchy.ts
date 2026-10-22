@@ -509,6 +509,8 @@ export const recoveryOptionsSchema = z.object({
   keptUntil: z.string().nullable(),
   /** Set when a person closed or archived it: no way is open, the page offers Reopen or Unarchive. */
   refused: z.enum(["closed", "archived"]).nullable().optional(),
+  /** Try again needs the person's direction as its note: delivery stopped at a review loop not converging or stuck. */
+  retryNeedsNote: z.boolean().optional(),
 });
 export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
 

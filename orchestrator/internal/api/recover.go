@@ -225,7 +225,8 @@ func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org str
 		refused = nil
 	}
 	write(w, http.StatusOK, map[string]any{"taskId": taskID, "actions": db.NonNil(actions),
-		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "refused": refused})
+		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "refused": refused,
+		"retryNeedsNote": t.State.Stopped != nil && delivery.NeedsNote(t.State.Stopped.Reason, "retry")})
 	return nil
 }
 
@@ -301,6 +302,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			}
 			wfID, attempt, closePRs, decider = res.WorkflowID, res.Attempt, res.ClosePRs, res.Decider
 		} else {
+			if body.Action == "retry" {
+				if err := escalationFailure(delivery.PickUpRetryTx(r.Context(), tx, &t.State, note)); err != nil {
+					return err
+				}
+			}
 			if err := delivery.RefuseLifecycleTx(r.Context(), tx, taskID); err != nil {
 				return pickUpRefusal(err)
 			}

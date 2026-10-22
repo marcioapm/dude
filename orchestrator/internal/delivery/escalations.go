@@ -389,6 +389,24 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 		ActorType: actorType, ActorID: actorID, QuestionID: questionID, AnsweredBy: person})
 }
 
+// PickUpRetryTx is a Try again's part in an escalation it stopped at: a
+// retry that needs the person's direction (NeedsNote) is refused without a
+// note, and a not_converging loop's history restarts at the pick-up, as a
+// retry from the banner restarts it at the decision.
+func PickUpRetryTx(ctx context.Context, tx pgx.Tx, st *State, note string) error {
+	e := st.Stopped
+	if e == nil {
+		return nil
+	}
+	if NeedsNote(e.Reason, "retry") && strings.TrimSpace(note) == "" {
+		return escalationErr("bad_request", mNeedsDirectionNote, "retry")
+	}
+	if e.Reason != ReasonNotConverging {
+		return nil
+	}
+	return tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&st.ConvergenceFrom)
+}
+
 // choiceOf is the index of the choice an answer picks: equal to it once
 // both are trimmed, whatever the case; -1 for none. EscalationQuestion
 // refuses choices that collide so, so at most one matches.

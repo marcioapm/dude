@@ -172,6 +172,39 @@ describe("a stopped task", () => {
     expect(sent).toEqual([["resume", "Keep the routing as it is."]]);
   });
 
+  test("Try again after a review loop stopped not converging or stuck needs the person's direction", async () => {
+    const client = stoppedAs("aborted");
+    client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: ["retry", "restart"], attempt: 1, keptUntil: null, retryNeedsNote: true });
+    const sent: Array<[RecoverAction, string]> = [];
+    client.recover = async (_id, action, note) => {
+      sent.push([action, note as string]);
+      return { action };
+    };
+    const page = await taskPage(client);
+    await click(await until(() => page.querySelector("[data-testid=recover-retry]"), "Try again…"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+    const confirm = () => dialog.querySelector<HTMLButtonElement>("[data-testid=recover-confirm]")!;
+    expect(dialog.textContent).toContain("Your direction for the next fix (required)");
+    expect(confirm().disabled).toBe(true);
+    const note = dialog.querySelector<HTMLTextAreaElement>("textarea")!;
+    const type = (text: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(note, text);
+      note.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await type("  \n ");
+    expect(confirm().disabled).toBe(true);
+    // Start over takes no direction: its note stays optional.
+    await click(dialog.querySelectorAll<HTMLElement>("[role=radio]")[2]!);
+    expect(dialog.textContent).toContain("A note for the agents (optional)");
+    expect(confirm().disabled).toBe(false);
+    await click(dialog.querySelectorAll<HTMLElement>("[role=radio]")[1]!);
+    await type("Name the finding on the first line.");
+    expect(confirm().disabled).toBe(false);
+    await click(confirm());
+    await until(() => !document.querySelector("[role=dialog]"), "the dialog to close");
+    expect(sent).toEqual([["retry", "Name the finding on the first line."]]);
+  });
+
   test("anyone but its owner is told whom it waits on, and offered nothing", async () => {
     const client = stoppedAs("aborted");
     const listPeople = client.listPeople.bind(client);
