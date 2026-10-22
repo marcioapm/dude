@@ -31,6 +31,21 @@ func convergenceScript(w *world, review func(int) string) {
 	}
 }
 
+// stillScript is a first review raising F1, with its acceptance criterion
+// or without, and every later review judging it still.
+func stillScript(w *world, criterion bool) {
+	finding := fakeagent.Finding
+	if !criterion {
+		finding = strings.Replace(finding, "acceptance: "+fakeagent.FindingAcceptance+"\n", "", 1)
+	}
+	convergenceScript(w, func(round int) string {
+		if round == 1 {
+			return "```yaml\n" + finding + "```\n"
+		}
+		return "```yaml\nverdicts:\n  F1: still\n```\n"
+	})
+}
+
 func startConvergence(w *world, p delivery.Policy) string {
 	w.t.Helper()
 	// Keep the project's resolved policy and the workflow's frozen policy
@@ -81,12 +96,7 @@ func TestConvergenceCriterionStillRounds(t *testing.T) {
 	for _, resume := range []bool{false, true} {
 		t.Run(fmt.Sprintf("resume=%v", resume), func(t *testing.T) {
 			w := newWorld(t)
-			convergenceScript(w, func(round int) string {
-				if round == 1 {
-					return "```yaml\n" + fakeagent.Finding + "```\n"
-				}
-				return "```yaml\nverdicts:\n  F1: still\n```\n"
-			})
+			stillScript(w, true)
 			p := scriptedPolicy()
 			p.ResumeRounds = resume
 			p.MaxAttemptsPerFinding = 4
@@ -177,12 +187,7 @@ func TestConvergenceDecisionsReachNextRound(t *testing.T) {
 		for _, action := range []string{"retry", "amend", "accept"} {
 			t.Run(fmt.Sprintf("resume=%v/%s", resume, action), func(t *testing.T) {
 				w := newWorld(t)
-				convergenceScript(w, func(round int) string {
-					if round == 1 {
-						return "```yaml\n" + fakeagent.Finding + "```\n"
-					}
-					return "```yaml\nverdicts:\n  F1: still\n```\n"
-				})
+				stillScript(w, true)
 				p := scriptedPolicy()
 				p.ResumeRounds, p.MaxAttemptsPerFinding = resume, 4
 				wi := startConvergence(w, p)
@@ -350,12 +355,7 @@ func TestStuckRetryNeedsDirectionThatReachesTheNextFixer(t *testing.T) {
 	for _, resume := range []bool{false, true} {
 		t.Run(fmt.Sprintf("resume=%v", resume), func(t *testing.T) {
 			w := newWorld(t)
-			convergenceScript(w, func(round int) string {
-				if round == 1 {
-					return "```yaml\n" + strings.Replace(fakeagent.Finding, "acceptance: "+fakeagent.FindingAcceptance+"\n", "", 1) + "```\n"
-				}
-				return "```yaml\nverdicts:\n  F1: still\n```\n"
-			})
+			stillScript(w, false)
 			p := scriptedPolicy()
 			p.ResumeRounds, p.MaxAttemptsPerFinding = resume, 1
 			wi := startConvergence(w, p)
@@ -392,16 +392,7 @@ func TestTryAgainAfterStoppingAStalledLoopNeedsDirection(t *testing.T) {
 	for _, reason := range []string{delivery.ReasonNotConverging, "stuck"} {
 		t.Run(reason, func(t *testing.T) {
 			w := newWorld(t)
-			convergenceScript(w, func(round int) string {
-				if round == 1 {
-					finding := fakeagent.Finding
-					if reason == "stuck" {
-						finding = strings.Replace(finding, "acceptance: "+fakeagent.FindingAcceptance+"\n", "", 1)
-					}
-					return "```yaml\n" + finding + "```\n"
-				}
-				return "```yaml\nverdicts:\n  F1: still\n```\n"
-			})
+			stillScript(w, reason != "stuck")
 			p := scriptedPolicy()
 			fixes := 2
 			p.MaxAttemptsPerFinding = 4
@@ -452,12 +443,7 @@ func TestConvergenceDirectionIsTheNextFixersInput(t *testing.T) {
 		for _, action := range []string{"retry", "amend"} {
 			t.Run(fmt.Sprintf("resume=%v/%s", resume, action), func(t *testing.T) {
 				w := newWorld(t)
-				convergenceScript(w, func(round int) string {
-					if round == 1 {
-						return "```yaml\n" + fakeagent.Finding + "```\n"
-					}
-					return "```yaml\nverdicts:\n  F1: still\n```\n"
-				})
+				stillScript(w, true)
 				p := scriptedPolicy()
 				p.ResumeRounds, p.MaxAttemptsPerFinding = resume, 4
 				wi := startConvergence(w, p)

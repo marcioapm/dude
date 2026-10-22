@@ -30,6 +30,37 @@ func conductConvergenceStart(w *convergenceWorld, ref delivery.RunRef, phase str
 	})
 }
 
+// conductRegressionRounds is two fix rounds, each judging f fixed and
+// raising a fix-caused blocker (new1, new2).
+func conductRegressionRounds(t *testing.T, w *convergenceWorld) {
+	t.Helper()
+	for i := 1; i <= 2; i++ {
+		fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
+		w.phase(t, fix, "fix", "", []string{"f"}, nil, 2*i-1)
+		w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "fixed"}, 2*i)
+		w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
+	}
+}
+
+// conductOpenFeedback submits one open feedback item of the people's.
+func conductOpenFeedback(t *testing.T, w *convergenceWorld) {
+	t.Helper()
+	w.draft(t, "feedback", w.ana, "Please rename the flag")
+	w.exec(t, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+		VALUES ('batch', $1, $2, 1, $3, 'k')`, w.org, w.task, w.ana)
+	w.exec(t, `UPDATE feedback_items SET status = 'open', submitted_at = now(), batch_id = 'batch' WHERE id = 'feedback'`)
+}
+
+// conductTaken is the findings the conductor's taken decision sends a fix.
+func conductTaken(t *testing.T, w *convergenceWorld, wf string) []string {
+	t.Helper()
+	var got []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(state->'decision'->'taken'->'findingIds')) FROM workflow_runs WHERE id = $1`, wf).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func conductStillRounds(t *testing.T, w *convergenceWorld) {
 	t.Helper()
 	for i := 1; i <= 2; i++ {
@@ -66,12 +97,7 @@ func TestConductFixConvergenceStillGuard(t *testing.T) {
 func TestConductFixConvergenceRegressionGuard(t *testing.T) {
 	w := newConvergenceWorld(t)
 	_, ref := conductConvergenceSetup(t, w)
-	for i := 1; i <= 2; i++ {
-		fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
-		w.phase(t, fix, "fix", "", []string{"f"}, nil, 2*i-1)
-		w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "fixed"}, 2*i)
-		w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
-	}
+	conductRegressionRounds(t, w)
 	w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id IN ('f', 'new1')`)
 	err := conductConvergenceStart(w, ref, delivery.PhaseFix, []string{"new2"})
 	if !delivery.IsRefusal(err) || !strings.Contains(err.Error(), "not converging") {
@@ -85,12 +111,7 @@ func TestConductFixConvergenceRegressionGuard(t *testing.T) {
 func TestConductFixConvergenceRegressionIgnoresTesterBlocker(t *testing.T) {
 	w := newConvergenceWorld(t)
 	wf, ref := conductConvergenceSetup(t, w)
-	for i := 1; i <= 2; i++ {
-		fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
-		w.phase(t, fix, "fix", "", []string{"f"}, nil, 2*i-1)
-		w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "fixed"}, 2*i)
-		w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
-	}
+	conductRegressionRounds(t, w)
 	w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id IN ('f', 'new1', 'new2')`)
 	w.phase(t, "tested", "test", "", nil, nil, 5)
 	w.finding(t, "tester", "tested", "blocking", false)
@@ -100,10 +121,7 @@ func TestConductFixConvergenceRegressionIgnoresTesterBlocker(t *testing.T) {
 	if err := conductConvergenceStart(w, ref, delivery.PhaseFix, nil); err != nil {
 		t.Fatalf("tester-only fix refused: %v", err)
 	}
-	var got []string
-	if err := w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(state->'decision'->'taken'->'findingIds')) FROM workflow_runs WHERE id = $1`, wf).Scan(&got); err != nil {
-		t.Fatal(err)
-	}
+	got := conductTaken(t, w, wf)
 	if !slices.Equal(got, []string{"tester"}) {
 		t.Fatalf("selected findings %v, want the tester's", got)
 	}
@@ -115,12 +133,7 @@ func TestConductFixConvergenceRegressionIgnoresTesterBlocker(t *testing.T) {
 func TestARegressionWithItsBlockersClosedDoesNotEscalate(t *testing.T) {
 	w := newConvergenceWorld(t)
 	wf, ref := conductConvergenceSetup(t, w)
-	for i := 1; i <= 2; i++ {
-		fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
-		w.phase(t, fix, "fix", "", []string{"f"}, nil, 2*i-1)
-		w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "fixed"}, 2*i)
-		w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
-	}
+	conductRegressionRounds(t, w)
 	w.finding(t, "g", "origin", "high", false)
 	w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id IN ('f', 'new1')`)
 	w.exec(t, `UPDATE review_findings SET status = 'accepted' WHERE id = 'new2'`)
@@ -138,10 +151,7 @@ func TestARegressionWithItsBlockersClosedDoesNotEscalate(t *testing.T) {
 	if err := conductConvergenceStart(w, ref, delivery.PhaseFix, nil); err != nil {
 		t.Fatalf("fix of the unrelated blocker refused: %v", err)
 	}
-	var got []string
-	if err := w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(state->'decision'->'taken'->'findingIds')) FROM workflow_runs WHERE id = $1`, wf).Scan(&got); err != nil {
-		t.Fatal(err)
-	}
+	got := conductTaken(t, w, wf)
 	if !slices.Equal(got, []string{"g"}) {
 		t.Fatalf("selected findings %v, want [g]", got)
 	}
@@ -176,10 +186,7 @@ func TestConductFixConvergenceAllowsUnstalledFindings(t *testing.T) {
 			if err := conductConvergenceStart(w, ref, delivery.PhaseFix, named); err != nil {
 				t.Fatal(err)
 			}
-			var got []string
-			if err := w.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(state->'decision'->'taken'->'findingIds')) FROM workflow_runs WHERE id = $1`, wf).Scan(&got); err != nil {
-				t.Fatal(err)
-			}
+			got := conductTaken(t, w, wf)
 			if !slices.Equal(got, want) {
 				t.Fatalf("selected findings %v, want %v", got, want)
 			}
@@ -192,10 +199,7 @@ func TestConductFixConvergencePreservesFeedbackOnly(t *testing.T) {
 	_, ref := conductConvergenceSetup(t, w)
 	conductStillRounds(t, w)
 	w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
-	w.draft(t, "feedback", w.ana, "Please rename the flag")
-	w.exec(t, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
-		VALUES ('batch', $1, $2, 1, $3, 'k')`, w.org, w.task, w.ana)
-	w.exec(t, `UPDATE feedback_items SET status = 'open', submitted_at = now(), batch_id = 'batch' WHERE id = 'feedback'`)
+	conductOpenFeedback(t, w)
 	if err := conductConvergenceStart(w, ref, delivery.PhaseFix, nil); err != nil {
 		t.Fatalf("feedback-only fix: %v", err)
 	}
@@ -263,10 +267,7 @@ func TestConductFixOfFeedbackAloneReadsNoConvergence(t *testing.T) {
 			if named == nil {
 				w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
 			}
-			w.draft(t, "feedback", w.ana, "Please rename the flag")
-			w.exec(t, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
-				VALUES ('batch', $1, $2, 1, $3, 'k')`, w.org, w.task, w.ana)
-			w.exec(t, `UPDATE feedback_items SET status = 'open', submitted_at = now(), batch_id = 'batch' WHERE id = 'feedback'`)
+			conductOpenFeedback(t, w)
 			err := conductConvergenceStart(w, ref, delivery.PhaseFix, named)
 			if named == nil && err != nil {
 				t.Fatalf("feedback-only fix: %v", err)
