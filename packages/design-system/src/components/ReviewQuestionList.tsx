@@ -30,6 +30,7 @@ export interface ReviewQuestionListProps extends Omit<HTMLAttributes<HTMLElement
   readonly questions: ReadonlyArray<ReviewQuestionItem>;
   /** Section title. Default "Questions from reviewers". */
   readonly title?: ReactNode;
+  readonly openLabel?: string | undefined;
   /**
    * Answer an open question; with onWithdraw, each open one gets the form.
    * A rejection's message is shown under the form, which keeps its text.
@@ -48,7 +49,7 @@ export interface ReviewQuestionListProps extends Omit<HTMLAttributes<HTMLElement
  * An answered one folds to one line with its answer and who gave it; a
  * withdrawn one is left out. Nothing at all when there are none to show.
  */
-export function ReviewQuestionList({ questions, title = "Questions from reviewers", onAnswer, onWithdraw, notAllowed, className, ...rest }: ReviewQuestionListProps) {
+export function ReviewQuestionList({ questions, title = "Questions from reviewers", openLabel = "open", onAnswer, onWithdraw, notAllowed, className, ...rest }: ReviewQuestionListProps) {
   const headingId = useId();
   const shown = questions.filter((q) => q.status !== "withdrawn");
   if (shown.length === 0) return null;
@@ -57,7 +58,7 @@ export function ReviewQuestionList({ questions, title = "Questions from reviewer
     <section className={cx(styles["group"], className)} aria-labelledby={headingId} {...rest}>
       <header className={styles["groupHead"]}>
         <span id={headingId} className={cx("ds-label", styles["groupTitle"])}>{title}</span>
-        <span className={styles["count"]}>{open} open</span>
+        <span className={styles["count"]}>{open} {openLabel}</span>
       </header>
       <ul className={styles["list"]}>
         {shown.map((q) => isOpen(q) ? (

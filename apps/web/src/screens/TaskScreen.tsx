@@ -542,6 +542,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // The pick-up is the current attempt's: an earlier one is only to read. A
   // closed task is picked back up by none of the ways: its notice offers Reopen.
   const stop = stoppedForPickUp(item) && !earlier ? stopOfTask : null;
+  const closed = item.status === "aborted" && !!item.resolution;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   const { prs, mine, others, sessions } = parts;
@@ -907,8 +908,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     onClick={() => showFinding(about.id)}>{about.title}</Button>
                 ) : undefined };
             })}
-              // An earlier attempt's are only to read; the API refuses anyone but the owner, and the form says so first.
-              {...(!earlier ? {
+              openLabel={closed ? "unanswered when it closed" : undefined}
+              // Earlier attempts and closed tasks are only to read; the API refuses anyone but the owner.
+              {...(!earlier && !closed ? {
                 onAnswer: async (id: string, answer: string) => { await client.answerReviewQuestion(id, answer); reload(); },
                 onWithdraw: async (id: string, reason: string) => { await client.withdrawReviewQuestion(id, reason); reload(); },
                 notAllowed: yours || people.you === null ? undefined : `Only ${owner ? firstName(owner.name) : "the task's owner"}, its owner, answers its reviewers' questions.`,
