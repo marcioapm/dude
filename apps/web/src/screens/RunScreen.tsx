@@ -1114,6 +1114,8 @@ export function pendingReason(wait: SteerWait) {
   }
 }
 
+const NO_LINES: ReadonlyArray<{ id: string; at: string; node: ReactNode }> = [];
+
 /**
  * A task's conductor that ended, in its Chat above the next: its whole
  * conversation, read once for the task's page (EndedLedgers), with nothing
@@ -1122,11 +1124,13 @@ export function pendingReason(wait: SteerWait) {
  * where it ended; the latest conductor takes what is written next. One a
  * later conductor retries (Try again) says its unstarted message went there.
  */
-export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status, retried = false }: {
+export const EndedConductor = memo(function EndedConductor({ ledgers, runId, status, retried = false, lines = NO_LINES }: {
   ledgers: EndedLedgers;
   runId: string;
   status: RunDetail["status"];
   retried?: boolean;
+  /** The Chat's other lines of its time (Runs it started, decisions it was waited on for), placed among its turns by time. */
+  lines?: ReadonlyArray<{ id: string; at: string; node: ReactNode }>;
 }) {
   const people = usePeople();
   const images = useSentImages(ledgers.client);
@@ -1171,13 +1175,18 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   const dude = dudeName(events[0]?.taskId ?? "");
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude, undefined, undefined, undefined, shown);
+  const endedAt = events.at(-1)?.occurredAt ?? new Date().toISOString();
+  // A line after its end goes after the line that says it ended.
+  const during = lines.filter((l) => instant(l.at) <= instant(endedAt));
+  const after = lines.filter((l) => instant(l.at) > instant(endedAt));
   return (
     <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
-      {turns.map((group) => Array.isArray(group)
-        ? <ChatAside key={group[0]!.id}>{group.map(render)}</ChatAside>
-        : render(group))}
-      <ChatNotice kind="parked" by={dude} at={events.at(-1)?.occurredAt ?? Date.now()} data-testid="earlier-conductor-ended"
+      {interleaved(turns, during).map((item) => "node" in item
+        ? <Fragment key={item.id}>{item.node}</Fragment>
+        : Array.isArray(item.group) ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside> : render(item.group))}
+      <ChatNotice kind="parked" by={dude} at={endedAt} data-testid="earlier-conductor-ended"
         text="This conductor has ended. The next one takes what you write, briefed afresh." />
+      {after.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}
       {viewing ? (
         <ImageViewer
           images={viewing.turn.attachments.map(images.sent)}

@@ -23,6 +23,7 @@ import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
 import { attemptOfRun, attemptsOf, eventAttempts } from "../attempts.ts";
+import { instant } from "../instant.ts";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { DriverControl } from "./DriverSwitch.tsx";
@@ -233,22 +234,28 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   const currentLines = useMemo(() => stopLines.filter((l) => !isEarlierLine(l.id)), [stopLines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- isEarlierLine reads lineAttempts and current
   const plainLines = useMemo(() => lines.filter((l) => !isEarlierLine(l.id)), [lines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- as currentLines
   const before = useMemo(() => {
-    const node = (r: { id: string; status: RunStatus }) =>
-      <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />;
-    if (current === null) return earlier.length === 0 ? null : earlier.map(node);
+    const node = (r: { id: string; status: RunStatus }, lines?: typeof stopLines) =>
+      <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} {...(lines ? { lines } : {})} />;
+    if (current === null) return earlier.length === 0 ? null : earlier.map((r) => node(r));
     const attempts = [...new Set([...earlier.map((r) => r.attempt ?? current), ...lineAttempts.values()])].sort((a, b) => a - b);
     const groups = attempts.map((n) => {
       const mine = earlier.filter((r) => (r.attempt ?? current) === n);
-      if (n >= current) return mine.length === 0 ? null : <Fragment key={n}>{mine.map(node)}</Fragment>;
+      if (n >= current) return mine.length === 0 ? null : <Fragment key={n}>{mine.map((r) => node(r))}</Fragment>;
       const theirs = stopLines.filter((l) => lineAttempts.get(l.id) === n);
+      // Each line in the conductor of its time: the last one started by then, else the first.
+      const startedAt = (id: string) => task.runs.find((r) => r.id === id)?.createdAt ?? "";
+      const owner = (l: { at: string }) => mine.findLast((r) => instant(startedAt(r.id)) <= instant(l.at)) ?? mine[0];
       const start = starts.get(n + 1);
       return <Fragment key={n}>
-        <EarlierTurns attempt={n}>{mine.map(node)}{theirs.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}</EarlierTurns>
+        <EarlierTurns attempt={n}>
+          {mine.map((r) => node(r, theirs.filter((l) => owner(l) === r)))}
+          {mine.length === 0 ? theirs.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
+        </EarlierTurns>
         {start ? <AttemptDivider attempt={n + 1} by={start.by} note={start.note} at={start.at} /> : null}
       </Fragment>;
     }).filter((g) => g !== null);
     return groups.length === 0 ? null : groups;
-  }, [ledgers, earlierKey, current, starts, lineAttempts, stopLines]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids, attempts and whether each was retried
+  }, [ledgers, earlierKey, current, starts, lineAttempts, stopLines, task.runs]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids, attempts and whether each was retried
 
   const inProgress = !["done", "aborted", "failed"].includes(task.status) && task.runs.some((r) => r.phase || isConductor(r));
   const waiting = task.awaitingDecision ? DECISION_POINT_LABEL[task.awaitingDecision.point] : undefined;
