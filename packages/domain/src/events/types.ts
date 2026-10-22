@@ -448,6 +448,10 @@ export const EventTypes = {
   FindingResolved: "review.finding_resolved",
   /** A reviewer's question stored, once per question. Payload: `{ questionId, n, category, findingId?, neededFrom }`. */
   ReviewQuestionRaised: "review.question_raised",
+  /** A reviewer's open question answered. Payload: `{ questionId, by: "person" | "conductor", answer }`. */
+  ReviewQuestionAnswered: "review.question_answered",
+  /** A reviewer's open question withdrawn as moot. Payload: `{ questionId, by: "person" | "conductor", reason }`. */
+  ReviewQuestionWithdrawn: "review.question_withdrawn",
   FeedbackSubmitted: "feedback.submitted",
   FeedbackDelivered: "feedback.delivered",
   FeedbackReplied: "feedback.replied",

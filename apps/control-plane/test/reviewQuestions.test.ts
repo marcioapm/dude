@@ -37,9 +37,17 @@ let app: SQL;
 let router: Router;
 let ana: { key: string };
 let cy: { key: string };
+let orchestrator: ReturnType<typeof Bun.serve>;
+const forwarded: Array<{ path: string; body: unknown; person: string | null }> = [];
 
 function get(key: string, path: string): Promise<Response> {
   return router.handle(new Request(`http://dude.test${path}`, { headers: { authorization: `Bearer ${key}` } }));
+}
+
+function post(key: string, path: string, body: unknown): Promise<Response> {
+  return router.handle(new Request(`http://dude.test${path}`, {
+    method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(body),
+  }));
 }
 
 beforeAll(async () => {
@@ -74,11 +82,25 @@ beforeAll(async () => {
   setPool(app);
   ana = await createApiKey({ organizationId: ORG, name: "Ana" });
   cy = await createApiKey({ organizationId: OTHER, name: "Cy" });
-  useConfig(Config.load({ env: { ...process.env } }));
+  // The orchestrator's refusals as it words them: rvq_2 is not the
+  // caller's to answer, rvq_1 already answered.
+  orchestrator = Bun.serve({ port: 0, async fetch(request) {
+    const path = new URL(request.url).pathname;
+    forwarded.push({ path, body: await request.json().catch(() => null), person: request.headers.get("x-dude-person") });
+    if (path.startsWith("/internal/review-questions/rvq_2/")) {
+      return Response.json({ error: { code: "not_owner", message: "only Bo can answer this" } }, { status: 403 });
+    }
+    if (path === "/internal/review-questions/rvq_1/answer") {
+      return Response.json({ error: { code: "conflict", message: "reviewer question rvq_1 is answered already" } }, { status: 409 });
+    }
+    return Response.json({ id: "rvq_1", status: "withdrawn" }, { status: 200 });
+  } });
+  useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestrator.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
   router = buildRouter("");
 });
 
 afterAll(async () => {
+  orchestrator?.stop(true);
   useConfig(null);
   await closePool(app);
   await owner?.end();
@@ -109,4 +131,40 @@ test("the app's role reads only its own organization's questions, whatever it as
     .map((r) => r.id);
   expect(await ids(ORG)).toEqual(["rvq_1", "rvq_2", "rvq_3"]);
   expect(await ids(OTHER)).toEqual(["rvq_o"]);
+});
+
+test("answer and withdraw forward to the orchestrator with who asks, and answer as it answered", async () => {
+  forwarded.length = 0;
+  const withdrawn = await post(ana.key, "/v1/review-questions/rvq_1/withdraw", { reason: "The code is gone." });
+  expect(withdrawn.status).toBe(200);
+  expect(await withdrawn.json()).toEqual({ id: "rvq_1", status: "withdrawn" });
+  const twice = await post(ana.key, "/v1/review-questions/rvq_1/answer", { answer: "UTC" });
+  expect(twice.status).toBe(409);
+  expect(((await twice.json()) as { error: { code: string } }).error.code).toBe("conflict");
+  const notYours = await post(ana.key, "/v1/review-questions/rvq_2/answer", { answer: "Yes" });
+  expect(notYours.status).toBe(403);
+  expect(((await notYours.json()) as { error: { code: string } }).error.code).toBe("not_owner");
+  expect(forwarded.map((f) => [f.path, f.body])).toEqual([
+    ["/internal/review-questions/rvq_1/withdraw", { reason: "The code is gone." }],
+    ["/internal/review-questions/rvq_1/answer", { answer: "UTC" }],
+    ["/internal/review-questions/rvq_2/answer", { answer: "Yes" }],
+  ]);
+  expect(forwarded.every((f) => f.person !== null && f.person !== "")).toBe(true);
+});
+
+test("another organization's question is not found, and nothing is forwarded", async () => {
+  forwarded.length = 0;
+  expect((await post(ana.key, "/v1/review-questions/rvq_o/answer", { answer: "x" })).status).toBe(404);
+  expect((await post(cy.key, "/v1/review-questions/rvq_1/withdraw", { reason: "x" })).status).toBe(404);
+  expect((await post(ana.key, "/v1/review-questions/rvq_missing/answer", { answer: "x" })).status).toBe(404);
+  expect(forwarded).toEqual([]);
+});
+
+test("a settled question lists who settled it", async () => {
+  await owner`UPDATE review_questions SET status = 'answered', answer = 'UTC', answered_by_run = 'run_rq', answered_at = now() WHERE id = 'rvq_2'`;
+  const { questions } = await (await get(ana.key, "/v1/tasks/wi_rq/review-questions")).json() as { questions: Array<Record<string, unknown>> };
+  expect(questions.map((q) => [q.id, q.status, q.answeredBy])).toEqual([["rvq_1", "open", null], ["rvq_2", "answered", "conductor"]]);
+  await owner`UPDATE review_questions SET answered_by_run = NULL WHERE id = 'rvq_2'`;
+  const again = await (await get(ana.key, "/v1/tasks/wi_rq/review-questions")).json() as { questions: Array<Record<string, unknown>> };
+  expect(again.questions[1]!.answeredBy).toBe("person");
 });

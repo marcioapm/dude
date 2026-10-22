@@ -17,6 +17,7 @@ import { withOrg } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { json, notFound, parseBody } from "../http.ts";
 import { auditActor } from "../auth.ts";
+import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 const FINDING_SELECT = `
@@ -100,9 +101,9 @@ async function resolveFinding(ctx: RequestContext): Promise<Response> {
 
 
 /**
- * A task's reviewer questions (review_questions), oldest first. Read-only:
- * the orchestrator records them from a reviewer's reply. A task another
- * organization owns is not found, as RLS hides it.
+ * A task's reviewer questions (review_questions), oldest first. The
+ * orchestrator records them from a reviewer's reply, and an answer or a
+ * withdrawal. A task another organization owns is not found, as RLS hides it.
  */
 async function listReviewQuestions(ctx: RequestContext): Promise<Response> {
   const taskId = ctx.params.id!;
@@ -112,7 +113,9 @@ async function listReviewQuestions(ctx: RequestContext): Promise<Response> {
     return (await scope.sql`
       SELECT id, task_id AS "taskId", run_id AS "runId", category, finding_id AS "findingId", question,
         why_it_matters AS "whyItMatters", evidence_checked AS "evidenceChecked", needed_from AS "neededFrom",
-        status, answer, created_at AS "createdAt"
+        status, answer,
+        CASE WHEN status = 'open' THEN NULL WHEN answered_by_run IS NOT NULL THEN 'conductor' ELSE 'person' END AS "answeredBy",
+        answered_at AS "answeredAt", created_at AS "createdAt"
       FROM review_questions WHERE task_id = ${taskId}
       ORDER BY created_at, run_id, n
       LIMIT 500`) as Array<Record<string, unknown>>;
@@ -121,8 +124,25 @@ async function listReviewQuestions(ctx: RequestContext): Promise<Response> {
   return json({ questions });
 }
 
+/**
+ * Answer (`{answer}`) or withdraw (`{reason}`) a reviewer's question: the
+ * orchestrator settles it, the task's owner only, and its answer is what
+ * the API returns. A question this organization cannot see is not found here.
+ */
+function settleReviewQuestion(verb: "answer" | "withdraw") {
+  return async (ctx: RequestContext): Promise<Response> => {
+    const id = ctx.params.id!;
+    const seen = await withOrg(ctx.principal.organizationId, (scope) => scope.sql`SELECT id FROM review_questions WHERE id = ${id}`);
+    if (seen.length === 0) throw notFound(`reviewer question ${id} not found`);
+    return orchestrator(ctx.principal.organizationId, "POST", `/internal/review-questions/${encodeURIComponent(id)}/${verb}`,
+      await ctx.request.text(), ctx.principal);
+  };
+}
+
 export function registerFindingRoutes(router: Router): void {
   router.get("/v1/findings", listFindings);
   router.post("/v1/findings/:id/resolve", resolveFinding);
   router.get("/v1/tasks/:id/review-questions", listReviewQuestions);
+  router.post("/v1/review-questions/:id/answer", settleReviewQuestion("answer"));
+  router.post("/v1/review-questions/:id/withdraw", settleReviewQuestion("withdraw"));
 }

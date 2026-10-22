@@ -2,13 +2,19 @@ package delivery
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // EarlierQuestion is a reviewer's question (review_questions) as the next
 // reviewer of its category is shown it. Status is open or answered; a
-// withdrawn one is not shown. ByPerson: a person answered, not the conductor.
+// withdrawn one is not shown. ByPerson: answered, and not by the conductor's
+// Run (a person whose row is gone still answered as a person).
 type EarlierQuestion struct {
 	Question, FindingTitle, Status, Answer string
 	ByPerson                               bool
@@ -19,7 +25,7 @@ type EarlierQuestion struct {
 // review Run of its category, oldest first; none for any other phase, so no
 // fixer, implementer, simplifier or tester is ever given one.
 func EarlierQuestionsTx(ctx context.Context, tx pgx.Tx, runID string) ([]EarlierQuestion, error) {
-	rows, err := tx.Query(ctx, `SELECT q.question, COALESCE(f.title, ''), q.status, COALESCE(q.answer, ''), q.answered_by_person IS NOT NULL
+	rows, err := tx.Query(ctx, `SELECT q.question, COALESCE(f.title, ''), q.status, COALESCE(q.answer, ''), q.answered_by_run IS NULL
 		FROM runs r
 		JOIN runs asker ON asker.task_id = r.task_id AND asker.attempt = r.attempt AND asker.phase = 'review'
 		-- q.category is the asker's, "" read as correctness (recordFindingsTx).
@@ -39,4 +45,99 @@ func earlierQuestions(questions []EarlierQuestion) string {
 		return ""
 	}
 	return render(earlierQuestionsTmpl, questions)
+}
+
+// ReviewQuestionError is an answer or withdrawal refused: Kind not_found,
+// conflict (the question is not open) or bad_request, as the API answers it.
+type ReviewQuestionError struct{ Kind, Msg string }
+
+func (e ReviewQuestionError) Error() string { return e.Msg }
+
+// ReviewQuestionBy is who settles a reviewer's question: a person (Person
+// may be "" for a principal that is none), or the task's conductor (Run).
+type ReviewQuestionBy struct {
+	Person, ActorType, ActorID string
+	// The conductor's Run; the question must then be TaskID's.
+	Run, TaskID string
+}
+
+func (b ReviewQuestionBy) conductor() bool { return b.Run != "" }
+
+// SettledReviewQuestion is a question as an answer or withdrawal left it.
+type SettledReviewQuestion struct {
+	ID, TaskID, ProjectID, Status string
+}
+
+// AnswerReviewQuestionTx answers an open reviewer question. A person's
+// answer is also one of the task's decisions (RecordDecisionTx), which every
+// later phase, the fixer included, is told; the conductor's is not.
+func AnswerReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, answer string, by ReviewQuestionBy) (SettledReviewQuestion, error) {
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return SettledReviewQuestion{}, ReviewQuestionError{"bad_request", mReviewQuestionAnswerRequired}
+	}
+	return settleReviewQuestionTx(ctx, tx, org, id, "answered", answer, by)
+}
+
+// WithdrawReviewQuestionTx withdraws an open reviewer question as moot, with
+// the reason, which the event keeps. No decision is recorded.
+func WithdrawReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, reason string, by ReviewQuestionBy) (SettledReviewQuestion, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return SettledReviewQuestion{}, ReviewQuestionError{"bad_request", mReviewQuestionReasonRequired}
+	}
+	return settleReviewQuestionTx(ctx, tx, org, id, "withdrawn", reason, by)
+}
+
+// settleReviewQuestionTx moves an open question to status; only an open row
+// changes, so a second answer, or an answer to a withdrawn one, is a
+// conflict that writes nothing. text is the answer, or the withdrawal's
+// reason.
+func settleReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, status, text string, by ReviewQuestionBy) (SettledReviewQuestion, error) {
+	out := SettledReviewQuestion{ID: id, Status: status}
+	var question string
+	err := tx.QueryRow(ctx, `UPDATE review_questions q SET status = $2,
+			answer = CASE WHEN $2 = 'answered' THEN $3 END,
+			answered_by_person = CASE WHEN $5 = '' THEN NULLIF($4, '') END,
+			answered_by_run = NULLIF($5, ''), answered_at = now()
+		FROM tasks t WHERE q.id = $1 AND q.status = 'open' AND t.id = q.task_id AND ($6 = '' OR q.task_id = $6)
+		RETURNING q.task_id, t.project_id, q.question`, id, status, text, by.Person, by.Run, by.TaskID).
+		Scan(&out.TaskID, &out.ProjectID, &question)
+	if db.IsNotFound(err) {
+		var current string
+		err := tx.QueryRow(ctx, `SELECT status FROM review_questions WHERE id = $1 AND ($2 = '' OR task_id = $2)`, id, by.TaskID).
+			Scan(&current)
+		if db.IsNotFound(err) {
+			return out, ReviewQuestionError{"not_found", fmt.Sprintf(mReviewQuestionNotFound, id)}
+		}
+		if err != nil {
+			return out, err
+		}
+		return out, ReviewQuestionError{"conflict", fmt.Sprintf(mReviewQuestionNotOpen, id, current)}
+	}
+	if err != nil {
+		return out, err
+	}
+	payload := map[string]any{"questionId": id, "by": "person"}
+	if by.conductor() {
+		payload["by"] = "conductor"
+	}
+	typ := EvReviewQuestionAnswered
+	if status == "answered" {
+		payload["answer"] = text
+		if !by.conductor() {
+			if err := RecordDecisionTx(ctx, tx, org, out.TaskID, question, text); err != nil {
+				return out, err
+			}
+		}
+	} else {
+		typ, payload["reason"] = EvReviewQuestionWithdrawn, text
+	}
+	ev := ledger.Event{Type: typ, OrganizationID: org, ProjectID: out.ProjectID, TaskID: out.TaskID,
+		ActorType: by.ActorType, ActorID: by.ActorID, Source: ledger.SourceOrchestrator, CorrelationID: out.TaskID, Payload: payload}
+	if by.conductor() {
+		ev.RunID, ev.ActorType, ev.ActorID = by.Run, ledger.ActorAgent, by.Run
+	}
+	_, err = ledger.Append(ctx, tx, ev)
+	return out, err
 }

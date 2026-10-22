@@ -877,6 +877,9 @@ export const reviewQuestionSchema = z.object({
   neededFrom: z.string(),
   status: reviewQuestionStatusSchema,
   answer: z.string().nullable(),
+  /** Who answered or withdrew it: the task's owner, or its conductor; null while open. */
+  answeredBy: z.enum(["person", "conductor"]).nullable().default(null),
+  answeredAt: z.string().nullable().default(null),
   createdAt: z.string(),
 });
 export type ReviewQuestion = z.infer<typeof reviewQuestionSchema>;

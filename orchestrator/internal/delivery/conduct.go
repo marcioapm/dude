@@ -649,6 +649,13 @@ const EvFindingResolved = "review.finding_resolved"
 // once per question.
 const EvReviewQuestionRaised = "review.question_raised"
 
+// A reviewer's open question answered or withdrawn, once per transition.
+// Payload: {questionId, by: person|conductor, answer} or {..., reason}.
+const (
+	EvReviewQuestionAnswered  = "review.question_answered"
+	EvReviewQuestionWithdrawn = "review.question_withdrawn"
+)
+
 // DismissedByConductor begins the resolution note of a finding the
 // conductor dismissed: accepted, by the conductor and not a person.
 const DismissedByConductor = "Dismissed by the conductor: "

@@ -125,6 +125,7 @@ func (s *Server) Handler() http.Handler {
 	s.recoverRoutes(mux)
 	s.lifecycleRoutes(mux)
 	s.stallRoutes(mux)
+	s.reviewQuestionRoutes(mux)
 	s.serverRoutes(mux)
 	s.memoryRoutes(mux)
 	s.helpRoutes(mux)
