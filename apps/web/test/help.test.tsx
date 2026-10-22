@@ -312,6 +312,30 @@ describe("searching the guide", () => {
     expect(container.querySelectorAll("[role=alert]").length).toBe(0);
   });
 
+  test("a query without a searchable word sends no request", async () => {
+    const client = new Searching("a");
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await type(field(container), "a !");
+    await settle(260);
+    expect(client.asked).toEqual([]);
+    expect(container.querySelector("[data-testid=help-page-link]")).not.toBeNull();
+  });
+
+  test("pages arriving during a search do not send the query again", async () => {
+    const client = new Searching("a");
+    let release!: (out: Awaited<ReturnType<Helping["helpPages"]>>) => void;
+    client.helpPages = () => new Promise((resolve) => { release = resolve; });
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await type(field(container), "reviewer");
+    await until(() => client.asked.length === 1 ? true : null, "the search");
+    await act(async () => release({ pages: Object.values(PAGES) }));
+    await settle(260);
+    expect(client.asked.map((a) => a.q)).toEqual(["reviewer"]);
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(2);
+  });
+
   test("Enter cannot open the previous query's result while the next search is pending", async () => {
     const opened: string[] = [];
     const { container, unmount } = await mount(<HelpScreen client={new Searching("a")} page="memory" onPage={() => {}}

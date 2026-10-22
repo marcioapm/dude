@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
-import { DocOutline, DocSearchResults, Markdown, ScreenHeader, docResultId, type DocSearchResult } from "@dude/design-system/components";
+import { DocOutline, DocSearchResults, Markdown, ScreenHeader, docResultId, queryWords, type DocSearchResult } from "@dude/design-system/components";
 import { Callout, SearchField, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient, HelpPage } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
@@ -138,7 +138,7 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
   // -- search --
   const listId = useId();
   const [query, setQuery] = useState("");
-  const [found, setFound] = useState<DocSearchResult[] | null>(null);
+  const [found, setFound] = useState<Awaited<ReturnType<ApiClient["searchMemory"]>>["results"] | null>(null);
   const [searchProblem, setSearchProblem] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const latest = useRef(0);
@@ -147,13 +147,13 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
     const mine = ++latest.current;
     setSearchProblem(null);
     setFound(null);
-    if (!words) return;
+    if (!queryWords(words).length) return;
     const t = setTimeout(() => {
       client.searchMemory({ q: words, types: "doc", limit: HELP_RESULTS_MAX }).then(
         (out) => {
           if (mine !== latest.current) return;
           setSearchProblem(null);
-          setFound(out.results.filter((r) => r.type === ("doc" as string)).map((r) => docResult(r, pages ?? [])));
+          setFound(out.results.filter((r) => r.type === ("doc" as string)));
           setActive(0);
         },
         (err: unknown) => {
@@ -164,9 +164,9 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
       );
     }, HELP_SEARCH_DELAY);
     return () => clearTimeout(t);
-  }, [client, words, pages]);
-  const searching = words.length > 0;
-  const results = searching ? found : null;
+  }, [client, words]);
+  const searching = queryWords(words).length > 0;
+  const results = searching && found ? found.map((r) => docResult(r, pages ?? [])) : null;
   const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
     const n = results?.length ?? 0;
     if (e.key === "Escape" && query) {
