@@ -115,7 +115,7 @@ const refusals = async (id: string, reason: string) =>
 test("the lifecycle routes forward the person's decision to the orchestrator, and answer as it answered", async () => {
   forwarded.length = 0;
   const t = await task();
-  expect((await call("POST", `/v1/tasks/${t}/close`, { resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false })).status).toBe(200);
+  expect((await call("POST", `/v1/tasks/${t}/close`, { resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false, closePullRequest: true })).status).toBe(200);
   expect((await call("POST", `/v1/tasks/${t}/reopen`)).status).toBe(200);
   const archived = await call("POST", `/v1/tasks/${t}/archive`);
   expect(archived.status).toBe(409);
@@ -127,8 +127,19 @@ test("the lifecycle routes forward the person's decision to the orchestrator, an
     `POST /internal/tasks/${t}/close`, `POST /internal/tasks/${t}/reopen`, `POST /internal/tasks/${t}/archive`,
     `POST /internal/tasks/${t}/unarchive`, "POST /internal/epics/epc_x/archive", "POST /internal/epics/epc_x/unarchive",
   ]);
-  expect(forwarded[0]!.body).toEqual({ resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false });
+  expect(forwarded[0]!.body).toEqual({ resolution: "duplicate", duplicateOf: "CP-9", removeRelations: false, closePullRequest: true });
   expect(forwarded[4]!.body).toEqual({ withEndedTasks: true });
+});
+
+test("Stop forwards the person's stop to the orchestrator; what it could never accept is refused first", async () => {
+  forwarded.length = 0;
+  const t = await task("running");
+  expect((await call("POST", `/v1/tasks/${t}/stop`, { andRestart: true, decider: "conductor", note: "Wrong approach" })).status).toBe(200);
+  for (const body of [{ decider: "someone" }, { andRestart: "yes" }, { note: "x".repeat(2001) }, { whatever: 1 }]) {
+    expect((await call("POST", `/v1/tasks/${t}/stop`, body)).status).toBe(400);
+  }
+  expect(forwarded).toEqual([{ method: "POST", path: `/internal/tasks/${t}/stop`,
+    body: { andRestart: true, decider: "conductor", note: "Wrong approach" } }]);
 });
 
 test("what Close could never accept is refused before the orchestrator is asked", async () => {

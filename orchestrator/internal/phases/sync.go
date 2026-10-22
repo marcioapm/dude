@@ -2632,12 +2632,14 @@ func pushRequest(r phaseRun) string {
 // agent's conversation with it; then, or straight away for any other, it is
 // cancelled. A succeeded lux Run is kept as a stopped one is: lux resumes
 // it (a lux from before refuses, and the resume fails it). A conductor or
-// session agent is never kept: nothing resumes an ended one, and the next
-// message starts another.
+// session agent is not kept, the next message starts another — but for a
+// conductor a person's Stop of its task aborted, which a resume of the
+// task goes on with.
 func (s *Syncer) end(ctx context.Context, r phaseRun) error {
 	s.unfollow(r.ID)
 	var err error
-	if r.Keep && !r.KeepExpired && !r.talker() && r.LuxRunID != "" && !lux.Terminated(r.LuxState) {
+	worthKeeping := !r.talker() || r.conductor() && r.Status == statusAborted
+	if r.Keep && !r.KeepExpired && worthKeeping && r.LuxRunID != "" && !lux.Terminated(r.LuxState) {
 		err = s.keep(ctx, r)
 	} else {
 		// Not worth keeping, its time is up, or lux has nothing left to resume.

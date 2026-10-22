@@ -26,10 +26,16 @@ func (s *Server) lifecycleRoutes(mux *http.ServeMux) {
 }
 
 type closeBody struct {
-	Resolution      string `json:"resolution"`
-	DuplicateOf     string `json:"duplicateOf"`
-	Note            string `json:"note"`
-	RemoveRelations bool   `json:"removeRelations"`
+	Resolution       string `json:"resolution"`
+	DuplicateOf      string `json:"duplicateOf"`
+	Note             string `json:"note"`
+	RemoveRelations  bool   `json:"removeRelations"`
+	ClosePullRequest bool   `json:"closePullRequest"`
+}
+
+func (b closeBody) input(taskID string, a delivery.Actor) delivery.CloseInput {
+	return delivery.CloseInput{TaskID: taskID, Resolution: b.Resolution, DuplicateOf: b.DuplicateOf, Note: b.Note,
+		RemoveRelations: b.RemoveRelations, ClosePullRequest: b.ClosePullRequest, Actor: a}
 }
 
 // lifecycleActor is the person deciding, refused 403 for anyone else.
@@ -93,7 +99,9 @@ func lifecycleFailure(err error) error {
 	return he
 }
 
-// taskDecision runs a lifecycle write on a task, its owner's or an admin's.
+// taskDecision runs a lifecycle write on a task, its owner's or an admin's;
+// a Close it made that asked for the task's pull requests closed closes
+// them on GitHub once committed.
 func (s *Server) taskDecision(w http.ResponseWriter, r *http.Request, org string, do func(tx pgx.Tx, a delivery.Actor) (any, error)) error {
 	taskID := r.PathValue("id")
 	var out any
@@ -118,6 +126,23 @@ func (s *Server) taskDecision(w http.ResponseWriter, r *http.Request, org string
 	if err != nil {
 		return lifecycleFailure(err)
 	}
+	var closed *delivery.Closed
+	switch o := out.(type) {
+	case delivery.Closed:
+		closed = &o
+	case delivery.Archived:
+		closed = o.Closed
+	}
+	if closed != nil && len(closed.PullRequests) > 0 {
+		// Each outcome in its own transaction: the close is committed whatever GitHub says.
+		s.closeOnForge(r.Context(), org, closed.PullRequests, closed.Comment, true, func(c closedOnForge) {
+			if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+				return delivery.RecordPullRequestCloseTx(r.Context(), tx, org, closed.Actor, c.ProjectID, c.TaskID, c.Repo, c.Number, c.Err)
+			}); err != nil && s.Log != nil {
+				s.Log.Warn("recording a pull request's close failed", "pr", c.Number, "repo", c.Repo, "error", err)
+			}
+		})
+	}
 	s.kick()
 	write(w, http.StatusOK, out)
 	return nil
@@ -129,8 +154,7 @@ func (s *Server) closeTask(w http.ResponseWriter, r *http.Request, org string) e
 		return err
 	}
 	return s.taskDecision(w, r, org, func(tx pgx.Tx, a delivery.Actor) (any, error) {
-		return delivery.CloseTx(r.Context(), tx, org, delivery.CloseInput{TaskID: r.PathValue("id"), Resolution: body.Resolution,
-			DuplicateOf: body.DuplicateOf, Note: body.Note, RemoveRelations: body.RemoveRelations, Actor: a})
+		return delivery.CloseTx(r.Context(), tx, org, body.input(r.PathValue("id"), a))
 	})
 }
 
@@ -147,9 +171,7 @@ func (s *Server) archiveTask(w http.ResponseWriter, r *http.Request, org string)
 		return err
 	}
 	return s.taskDecision(w, r, org, func(tx pgx.Tx, a delivery.Actor) (any, error) {
-		return delivery.ArchiveTaskTx(r.Context(), tx, org, delivery.ArchiveInput{CloseInput: delivery.CloseInput{
-			TaskID: r.PathValue("id"), Resolution: body.Resolution, DuplicateOf: body.DuplicateOf, Note: body.Note,
-			RemoveRelations: body.RemoveRelations, Actor: a}})
+		return delivery.ArchiveTaskTx(r.Context(), tx, org, delivery.ArchiveInput{CloseInput: body.input(r.PathValue("id"), a)})
 	})
 }
 

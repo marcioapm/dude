@@ -52,11 +52,11 @@ const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},
   -- Each delivery's own decider, by attempt: a start over writes state.attempt; a first start
   -- does not, and its generated branch (delivery.BranchFor: dude/<this task>/attempt-N) names it;
-  -- an adopted branch is not one, and neither is any other branch: attempt 1.
+  -- an adopted branch is not one, and neither is any other branch: attempt 1. Its branch as the delivery names it.
   (SELECT COALESCE(json_agg(json_build_object('attempt', COALESCE((w.state->>'attempt')::int,
       CASE WHEN w.state->>'branch' = 'dude/' || tasks.id || '/attempt-' || substring(w.state->>'branch' from '/attempt-([0-9]{1,6})$')
         THEN substring(w.state->>'branch' from '/attempt-([0-9]{1,6})$')::int END, 1),
-      'decider', COALESCE(w.state->>'decider', 'policy')) ORDER BY w.created_at), '[]'::json)
+      'decider', COALESCE(w.state->>'decider', 'policy'), 'branch', NULLIF(w.state->>'branch', '')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
   title, goal, acceptance_criteria AS "acceptanceCriteria", status,
   -- Lifecycle (migrations 157/158): why a person ended it, and whether it is put away.
@@ -271,6 +271,7 @@ const closeInput = z.object({
   duplicateOf: z.string().min(1).max(200).optional(),
   note: z.string().max(2000).optional(),
   removeRelations: z.boolean().optional(),
+  closePullRequest: z.boolean().optional(),
 }).strict();
 
 const archiveInput = closeInput.partial({ resolution: true });
@@ -366,6 +367,19 @@ async function recoveryOptions(ctx: RequestContext): Promise<Response> {
 async function recoverTask(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/recover`,
     await ctx.request.text(), ctx.principal);
+}
+
+const stopInput = z.object({
+  andRestart: z.boolean().optional(),
+  decider: z.enum(["conductor", "policy"]).optional(),
+  note: z.string().max(2000).optional(),
+}).strict();
+
+/** Stop the whole task where it stands, or stop it and start its next attempt: owner or admin. */
+async function stopTask(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, stopInput);
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/stop`,
+    JSON.stringify(input), ctx.principal);
 }
 
 async function listTasks(ctx: RequestContext): Promise<Response> {
@@ -680,6 +694,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/decider", setDecider);
   router.get("/v1/tasks/:id/recover", recoveryOptions);
   router.post("/v1/tasks/:id/recover", recoverTask);
+  router.post("/v1/tasks/:id/stop", stopTask);
   router.post("/v1/projects/:id/sources/check", checkSource);
   router.get("/v1/projects/:id/sources/repositories", sourceRepositories);
   router.get("/v1/projects/:id/sources/repositories/:repo/branches", sourceBranches);

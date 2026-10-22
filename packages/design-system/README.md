@@ -91,7 +91,9 @@ behind all of these, reached when something looks off.
    `role="button"`), and nothing takes it away. Links navigate; buttons
    act. Buttons come in four kinds: `primary` (one per view or panel),
    `secondary` (any other action), `quiet` (row and toolbar actions) and
-   `danger` (red text; `solid` only inside its own confirmation).
+   `danger` (red text; `solid` only inside its own confirmation; `quiet`,
+   transparent until hovered, where it sits among quiet actions, as a task
+   header's Stop beside Edit).
 12. **A cost is a total.** Every cost shown is model tokens plus machine
    time; the number is the sum and its tooltip gives the parts. Given
    where each part came from (`tokensFrom`, `machineFrom`, `settled`), the
@@ -561,6 +563,17 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   where "Sent as" would be. While the conductor asks, it steps back to the
   waiting line, as in an agent session; the answer is given in its
   question's turn.
+- **Attempts.** **`AttemptDivider`** marks where one attempt ends and the
+  next begins in a task's Chat: ChatNotice's hairline (`border-subtle`)
+  either side of "Attempt 2 · started by Ana · 1m ago" (the age a
+  `Duration`), and the note quoted under it. Only the first rule is a
+  separator, named "Attempt 2, started by Ana"; the words and the note are
+  plain text, so nothing flattens them away. The earlier attempt's turns sit
+  above it inside **`EarlierTurns`** (a `group` named "Attempt 1's
+  conversation"), muted but whole: its text is reachable and selectable,
+  never `inert`. Nothing in it can be answered or opened, by what renders:
+  `EarlierTurns` provides `useEarlier()`, and a `ChatRunLine` inside is a
+  plain line (no button, no chevron) while a `QuestionCard` shows no form or choices.
 
 ### Peers (agents on an epic)
 
@@ -858,7 +871,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Then the **three ways back**, as buttons, the one that fits first and
   primary: **Resume…** (the same agent, while it is kept), **Try again…**
   (a new agent on the same branch, from what was pushed), **Start over…**
-  (a new attempt on a new branch). Each opens one `Dialog` whose
+  (a new attempt on a new branch). They sit in **`CalloutActions`**: a list
+  named "Ways to pick it back up", each button beside one muted sentence
+  saying what it does (its `aria-describedby`, `calloutActionLineId`); the
+  pairs stack, button over sentence, on the callout's own width (a
+  container query), so a narrow main pane stacks them too. Each opens one `Dialog` whose
   `ChoiceList` holds all three, so the choice is made with what each keeps
   and throws away in view: under it, one line per thing the task has —
   conversation, workspace, branch, agent session (labelled "Session") —
@@ -1068,6 +1085,26 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   in Closed says its resolution on its marks line (`ResolutionMark`), and
   its foot says "closed" where a stopped one says "stopped".
 
+### Stopping a task
+
+- **`LiveWork`** says what a stop would stop, at the top of its
+  confirmation: one sentence, then a face per live Run — the live ring on
+  those at work, none on those queued or a conductor between turns — with
+  who it is and what it is doing. A list named "Live now". Wraps; never
+  scrolls. `liveWords(items)` gives the sentence's list ("the conductor, 2
+  reviewers and a queued fixer"). The Stop dialog and `CloseDialog` show the
+  same list.
+- **`DeciderField`** is who decides the next attempt, inside a dialog that
+  starts one. A labelled `Segmented` of two, "The conductor" and "Deliver",
+  each with its driver's glyph
+  (`DriverIcons`); the one that decided the current attempt says "as now"
+  and is the default. One muted line under it says what the chosen one
+  does ("A new conductor, briefed with your note and what attempt 1 did.
+  Each finished step comes back to it, in Chat, with you."). The group's
+  accessible name is its label; the hint is its
+  description. To change who decides the attempt running now, use
+  `DriverSwitch`.
+
 ### Lifecycle (closed, archived)
 
 - **Closed, archived.** Neutral, muted, never a tone: neither needs anyone.
@@ -1078,19 +1115,29 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The task's `…` menu carries the lifecycle** (`lifecycleMenuItems`):
   Close… (Reopen on a closed task), Archive… (Unarchive on an archived one),
   each shown to everyone and disabled with its reason, checked in order:
-  who may not ("Only Ana, the owner, or an admin can do this"), agents
-  working ("Stop its agents first"), a pull request open ("It has a pull
-  request open": `review` or `ready_to_merge`, or `pullRequestOpen` on any
-  other status), then the task's own state ("Already ended"; "Unarchive it
-  first, then reopen it").
+  who may not ("Only Ana, the owner, or an admin can do this"), then the
+  task's own state ("Already ended"; "Unarchive it first, then reopen it").
+  Agents working and a pull request open do not disable them: the dialog
+  says what closing stops and asks about the pull request.
 - **`CloseDialog`** is the decision: four resolutions as a `ChoiceList`, two
   disabled with why (Nothing to merge is Mark done's; Can't reproduce where
   the caller says so). Duplicate opens a `SearchPicker` that refuses the task
   itself and a duplicate ("pick that one") and says what the handover does.
   Any other resolution with something waiting on the task says it keeps
-  waiting, with **Remove the relation**. `andArchive` makes it Close and
-  archive: nothing chosen, one primary that does both. `refused` disables the
-  primary with whose decision it is.
+  waiting, with **Remove the relation**. **`live`**: with anything live the
+  dialog turns danger, lists it first (`LiveWork`, "Closing stops the
+  conductor and 1 reviewer. Nothing is kept to resume."), and its primary
+  says **Stop and close**; with nothing live it is the plain dialog.
+  **`pullRequests`**: every open pull request the close would touch, in one
+  `Checkbox` row: "Close pull request #412 on GitHub", or "Close pull
+  requests #12 and #14 on GitHub" for several. Ticked when dude opened every
+  one, unticked when any was the one the task was started from, which is
+  named with its own hint ("#9 was opened by someone else; it stays open
+  unless you tick this"); unticked, the task closes and the PRs stay open.
+  `andArchive` makes it
+  Close and archive: nothing chosen, one primary that does both ("Stop,
+  close and archive" when live). `refused` disables the primary with whose
+  decision it is.
 - **`ArchiveDialog`** is the plain confirmation for an ended task; Keep it
   holds the focus. **`ArchiveEpicDialog`** refuses an epic with unended
   tasks, listing them, and offers to archive its ended ones.
@@ -2024,7 +2071,12 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 
 ## Components
 
-`src/primitives/` — Button, IconButton, Input (`size="title"` for a
+`src/primitives/` — Button (`danger` with `solid` or `quiet`), IconButton,
+RefusedButton (a control that can't be used now and still says why: the
+Button drawn disabled inside a focusable wrapper with the control's focus
+ring and radius, its `reason` the tooltip and the accessible description,
+its `label` the name; StartGate's gated starts and a task header's refused
+Stop), Input (`size="title"` for a
 document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
 `footer`, `onOpenChange`), Checkbox (named by its `label`; its

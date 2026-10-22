@@ -298,11 +298,15 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 // (conductor_wake_attempts_briefing_idx). Each reaches runs through a
 // LATERAL primary-key lookup; OFFSET 0 keeps the planner from flattening it
 // into a join, which with retained attempt history it hashes over all runs.
+// A task its owner stopped is left out until it is picked up (HandOver
+// holds its input), so its held input cannot fill the sweep's batch.
 const Unheard = `(SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL
 	  UNION SELECT a.conductor_run_id FROM conductor_wake_attempts a
 	    WHERE a.directive_id IS NULL AND a.heard_at IS NULL AND a.failed_at IS NULL) c
 	CROSS JOIN LATERAL (SELECT u.id, u.organization_id, u.project_id, u.task_id, u.status, u.ended_at FROM runs u
-	  WHERE u.id = c.run_id AND u.role = 'conductor' AND u.status IN ('completed', 'failed', 'aborted') OFFSET 0) r`
+	  WHERE u.id = c.run_id AND u.role = 'conductor' AND u.status IN ('completed', 'failed', 'aborted')
+	    AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = u.task_id` + latestDelivery + `), false)
+	  OFFSET 0) r`
 
 // HandOver settles what a person sent an ended conductor and it never
 // read. With replace, each message goes to the task's live conductor, or
@@ -329,6 +333,14 @@ func handOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool, retries 
 	// The wake note it was started with and never heard is told again.
 	if err := BriefingUnheardTx(ctx, tx, ref.RunID); err != nil {
 		return "", err
+	}
+	// A task its owner stopped starts no conductor and queues nothing until
+	// it is picked up: what was sent stays unsettled, and the sweep (Unheard)
+	// hands it on after the pick-up — to the resumed conductor, or the new one.
+	if replace {
+		if halted, err := HaltedTx(ctx, tx, ref.TaskID); err != nil || halted {
+			return "", err
+		}
 	}
 	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt OR EXISTS (SELECT 1 FROM conductor_wake_attempts a WHERE a.directive_id = d.id)
 		OR EXISTS (SELECT 1 FROM child_result_outbox o WHERE o.directive_id=d.id),

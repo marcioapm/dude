@@ -429,3 +429,66 @@ func TestAPersonsResumeOfAParkedHeldRunKeepsTheHeldTurn(t *testing.T) {
 		t.Errorf("resumed %d times, want the person's once", resumed)
 	}
 }
+
+// The task's Stop of a parked held Run keeps it for a Resume, the hold
+// cleared with the delivery stopped at the checks gate; nothing resumes it
+// before the pick-up. Resume takes the same Run back up, and its report is
+// held at the gate again: nothing is pushed.
+func TestStoppingTheTaskOfAParkedHeldRunKeepsItForResume(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.parkedHeld()
+	owner, _, _ := w.people(wi)
+	w.stop(owner, wi, map[string]any{})
+	w.until("the parked Run to be kept", func() bool { return w.keptRun(runID) })
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'escalation' IS NULL
+		AND state->'stopped'->>'reason' = $2`, wi, delivery.ReasonChecksUnverified); n != 1 {
+		t.Fatalf("the delivery after the stop: %s", w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, wi))
+	}
+	for range 5 {
+		w.pump()
+	}
+	if resumed, _ := w.luxResumes(runID); resumed != 0 {
+		t.Fatalf("resumed %d times before the pick-up", resumed)
+	}
+	w.pickUp(owner, wi, map[string]any{"action": "resume"})
+	w.until("the same Run held at the gate again", func() bool { return w.checksEscalations(wi) == 2 })
+	if resumed, _ := w.luxResumes(runID); resumed != 1 {
+		t.Errorf("resumed %d times, want the pick-up's once", resumed)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi); n != 1 {
+		t.Errorf("%d implementers after Resume, want the parked one alone", n)
+	}
+	if n := w.implementerPushes(wi); n != 0 {
+		t.Errorf("%d pushes of a Run held again", n)
+	}
+}
+
+// Closing the task of a parked held Run releases it: aborted, not kept,
+// lux's Run cancelled, the delivery over. Nothing resumes it, nothing is
+// pushed, no pull request is opened.
+func TestClosingTheTaskOfAParkedHeldRunReleasesIt(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.parkedHeld()
+	owner, _, _ := w.people(wi)
+	if status, body := w.callAs(owner, "/internal/tasks/"+wi+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	w.until("the parked Run to be released", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND NOT keep AND lux_stop_reason = 'cancel'`, runID) == 1
+	})
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status <> 'completed'`, wi); n != 0 {
+		t.Errorf("%d deliveries still live after the Close", n)
+	}
+	if resumed, _ := w.luxResumes(runID); resumed != 0 {
+		t.Errorf("resumed %d times after the Close", resumed)
+	}
+	if n := w.implementerPushes(wi); n != 0 {
+		t.Errorf("%d pushes after the Close", n)
+	}
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Errorf("%d pull requests after the Close", n)
+	}
+}

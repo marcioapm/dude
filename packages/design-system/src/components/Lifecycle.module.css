@@ -76,3 +76,17 @@
   background: var(--ds-color-chrome);
   font-size: var(--ds-text-sm);
 }
+
+/* CloseDialog's "what stops" band: what is live, first, on the sunken shade. */
+.live {
+  padding: var(--ds-space-12);
+  background: var(--ds-color-sunken);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-control);
+}
+
+/* The open pull request's row, under the resolutions and above the note. */
+.prRow {
+  padding-top: var(--ds-space-12);
+  border-top: 1px solid var(--ds-color-border-subtle);
+}

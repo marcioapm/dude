@@ -42,6 +42,8 @@ import type {
   Verification,
   RecoverAction,
   RecoveryOptions,
+  StopRequest,
+  StopResult,
   Repository,
   PullRequest,
   PauseMode,
@@ -132,6 +134,8 @@ export type {
   VerdictStatus,
   RecoverAction,
   RecoveryOptions,
+  StopRequest,
+  StopResult,
   Person,
   PersonDetail,
   PersonRef,
@@ -306,7 +310,8 @@ export interface SourceRepository {
 /** A task with its attempts, newest first, and why it waits if delivery stopped for a person. `GET /v1/tasks/:id`. */
 export interface TaskDetail extends Task {
   runs: Run[];
-  deciders?: Array<{ attempt: number; decider: Decider }>;
+  /** Each delivery's attempt, who decided it, and the task branch it named (null before it named one). */
+  deciders?: Array<{ attempt: number; decider: Decider; branch?: string | null }>;
   escalation: Escalation | null;
   /** The machines its agents raised, by role, names resolved by the control plane; empty when none. */
   agentMachines: AgentMachine[];
@@ -1550,9 +1555,14 @@ export class ApiClient {
     return this.#request("GET", `/v1/tasks/${taskId}/recover`);
   }
 
-  /** Pick a stopped task back up — the task's owner does — with a note for the agents. */
-  recover(taskId: string, action: RecoverAction, note: string, start: { override?: true } = {}): Promise<{ action: RecoverAction }> {
+  /** Pick a stopped task back up — the task's owner does — with a note for the agents; Start over may say who decides the new attempt. */
+  recover(taskId: string, action: RecoverAction, note: string, start: { override?: true; decider?: Decider } = {}): Promise<{ action: RecoverAction }> {
     return this.#request("POST", `/v1/tasks/${taskId}/recover`, { action, note, ...start });
+  }
+
+  /** Stop the whole task where it stands, or stop it and start its next attempt (who decides it: `decider`). Owner or admin. */
+  stopTask(taskId: string, stop: StopRequest): Promise<StopResult> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/stop`, stop);
   }
 
   /**

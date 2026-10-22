@@ -19,6 +19,8 @@ import { ChatRunLine } from "../../components/ChatRunLine.tsx";
 import { StartChoice } from "../../components/StartChoice.tsx";
 import { DeciderLine } from "../../components/DeciderLine.tsx";
 import { DriverEnded, DriverGlyph, DriverSwitch } from "../../components/DriverMark.tsx";
+import { DeciderField, type NextDecider } from "../../components/DeciderField.tsx";
+import { AttemptDivider, EarlierTurns } from "../../components/AttemptDivider.tsx";
 import { ImagesBlock } from "./ChatImages.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
@@ -157,6 +159,12 @@ Raw HTML like <img src=x onerror=alert(1)> is shown literally, and a [javascript
 *Published by the investigator · 3 findings, 1 risk.*`;
 
 const SLOW_DEMO_MS = 6_000;
+
+/** A DeciderField that keeps its own choice, starting at `start` (default: as now). */
+function DeciderFieldDemo({ previous, start }: { readonly previous: NextDecider; readonly start?: NextDecider | undefined }) {
+  const [value, setValue] = useState<NextDecider>(start ?? previous);
+  return <DeciderField attempt={2} value={value} onChange={setValue} previous={previous} />;
+}
 
 export function ChatSection({ mode }: { readonly mode: PaneMode }) {
   return (
@@ -537,6 +545,44 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
               </div>
             </Col>
           )}
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-decider-field"
+        title="Who decides the next attempt"
+        note="DeciderField, beside DriverSwitch: inside a dialog that starts an attempt (Stop and start attempt 2, Start over), who decides it. Two choices with their drivers' glyphs; the one that decided the current attempt says “as now” and is the default; one muted line says what the chosen one does. DriverSwitch changes who decides the attempt running now."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <States items={[
+              ["conductor, as now", <DeciderFieldDemo previous="conductor" />],
+              ["Deliver, as now", <DeciderFieldDemo previous="deliver" />],
+              ["changed from as now", <DeciderFieldDemo previous="conductor" start="deliver" />],
+            ]} />
+            <Label>390px</Label>
+            <div style={{ width: 358 }}><DeciderFieldDemo previous="conductor" /></div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-attempts"
+        title="Attempts"
+        note="After a Start over, the earlier attempt's turns stay in the Chat above an AttemptDivider, inside EarlierTurns: muted but whole and readable, nothing in them answerable or opened (a Run line inside is plain text). The divider is ChatNotice's hairline either side of “Attempt 2 · started by Ana · 1m ago” and the note quoted under it; only the rule is a separator."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <EarlierTurns attempt={1}>
+              <ChatMessage role="human" intent="message" name="Ana" content="Let's split the pause into its own module." startedAt={at(0)} />
+              <ChatMessage role="conductor" content="I'll start the implementer on the split, then ask the reviewers." startedAt={at(10_000)} />
+              <ChatRunLine role="implementer" status="aborted" what="implement" facts={["7m 00s"]} onOpen={() => undefined} />
+            </EarlierTurns>
+            <AttemptDivider attempt={2} by="Ana" note="Start from the API, not the UI." at={Date.now() - 60_000} />
+            <ChatMessage role="conductor" content="Attempt 2: I read what attempt 1 did. Shall I start with the API?" startedAt={at(90_000)} />
+            <Label>without a note</Label>
+            <AttemptDivider attempt={3} by="Bo" at={Date.now() - 5 * 60_000} />
+          </Col>
         </Panes>
       </Block>
 

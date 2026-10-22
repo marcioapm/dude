@@ -10,18 +10,20 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, TaskHistory } from "@dude/design-system/components";
+import { AttemptDivider, ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, EarlierTurns, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
 import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
-import { steerWait, type HumanTurn } from "../api/conversation.ts";
+import { actorName, humanActor, steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
 import { dudeName } from "../DudeMark.tsx";
 import { clearDraftIfSent, draftKey, useDraft } from "../hooks/useDraft.ts";
 import { usePeople } from "../people.tsx";
 import { taskHistory } from "../taskHistory.ts";
 import { EndedConductor, RunScreen, pendingReason, type ChatVariant, type RunCost } from "./RunScreen.tsx";
+import { attemptOfRun, attemptsOf, eventAttempts } from "../attempts.ts";
+import { instant } from "../instant.ts";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { DriverControl } from "./DriverSwitch.tsx";
@@ -32,7 +34,7 @@ export interface ChatSectionProps {
   /** The task's conductor, the latest one if it has had several; null before anyone wrote. */
   conductorId: string | null;
   /** The task's earlier conductors, oldest first: ended, shown read-only above the latest. */
-  earlier?: ReadonlyArray<{ id: string; status: RunStatus }> | undefined;
+  earlier?: ReadonlyArray<{ id: string; status: RunStatus; attempt?: number | undefined }> | undefined;
   /** Their ledgers, read once for the task's page. */
   ledgers: EndedLedgers;
   findings: readonly Finding[];
@@ -51,6 +53,26 @@ export interface ChatSectionProps {
   driverControl: DriverControl;
   /** The reader may switch who decides: the owner's (or anyone's, unassigned) current attempt, never an earlier one. */
   canSwitchDriver: boolean;
+}
+
+/** A task's Start overs, by the attempt each started: who, when, and their note. */
+function startOversByAttempt(events: readonly PersistedEvent[], names: ReadonlyMap<string, string>): Map<number, { by: string; note?: string; at: number }> {
+  const out = new Map<number, { by: string; note?: string; at: number }>();
+  for (const e of events) {
+    if (e.eventType !== "task.recovered" || e.payload.action !== "restart" || typeof e.payload.attempt !== "number") continue;
+    const by = firstName(actorName(humanActor(e), names) ?? "Someone");
+    const note = typeof e.payload.note === "string" && e.payload.note ? e.payload.note : undefined;
+    out.set(e.payload.attempt, { by, ...(note ? { note } : {}), at: Date.parse(e.occurredAt) });
+  }
+  return out;
+}
+
+/** Why a Chat's composer waits while its task is stopped. */
+const STOPPED_COMPOSER = "The task is stopped. Resume, Try again or Start over above to go on.";
+
+/** A task the pick-up is for: stopped (aborted or failed), not closed or archived. */
+export function stoppedForPickUp(task: Pick<TaskDetail, "status" | "resolution" | "archivedAt">): boolean {
+  return (task.status === "aborted" || task.status === "failed") && !task.resolution && !task.archivedAt;
 }
 
 /**
@@ -83,8 +105,16 @@ function runFacts(run: Run, cost: RunCost | undefined): string[] {
   return facts;
 }
 
-export function ChatSection({ client, task, conductorId, earlier = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId: latestConductor, earlier: earlierConductors = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
   const people = usePeople();
+  // The task's current attempt, as its page has it (attemptsOf): under Deliver, attempt N+1 may have no conductor of its own.
+  const current = useMemo(() => attemptsOf(task.runs)[0] ?? null, [task.runs]);
+  // A latest conductor that ended on an earlier attempt is that attempt's: muted with it, and the next message starts another.
+  const latestRun = latestConductor ? task.runs.find((r) => r.id === latestConductor) : undefined;
+  const setAside = latestRun !== undefined && current !== null && attemptOfRun(latestRun, current) < current;
+  const conductorId = setAside ? null : latestConductor;
+  const earlier = useMemo(() => (setAside && latestRun ? [...earlierConductors, { id: latestRun.id, status: latestRun.status, attempt: latestRun.attempt }] : earlierConductors),
+    [setAside, latestRun, earlierConductors]);
   const [costUsd, setCostUsd] = useState<number | null>(null);
   // Each Run's cost, split as the task's metrics split it: the rail's conductor cost.
   const [runCosts, setRunCosts] = useState<ReadonlyMap<string, RunCost>>(new Map());
@@ -135,10 +165,9 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
   // One object while nothing in it changed: the conductor's transcript is not redrawn for each reload here.
   // Each earlier conductor a later one's run.created names as the one it retries (Try again).
   const retried = new Set(events.flatMap((e) => e.eventType === EventTypes.RunCreated && typeof e.payload.retries === "string" ? [e.payload.retries] : []));
-  const earlierKey = earlier.map((r) => `${r.id}:${retried.has(r.id)}`).join(",");
-  const before = useMemo(() => earlier.length === 0 ? null
-    : earlier.map((r) => <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} />),
-  [ledgers, earlierKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids and whether each was retried
+  const earlierKey = earlier.map((r) => `${r.id}:${r.attempt ?? 0}:${retried.has(r.id)}`).join(",");
+  // After a Start over, the earlier attempts' conversations sit muted above a divider naming who started the next.
+  const starts = useMemo(() => startOversByAttempt(events, people.names), [events, people.names]);
   // The failed conductor this one retries: its briefing, which Try again repeats, is in its own ledger.
   const retries = events.find((e) => e.eventType === EventTypes.RunCreated && e.runId === conductorId)?.payload.retries;
   const retriedRun = typeof retries === "string" ? retries : null;
@@ -179,6 +208,54 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
     }
     return conducted.map((l) => ({ id: l.id, at: l.at, node: lineNode(l) }));
   }, [linesKey, runCosts, dude, onOpenRun]); // eslint-disable-line react-hooks/exhaustive-deps -- the lines, by their ids and statuses
+  // A person's Stop of the task, in dude's words where it happened; the composer waits until it is picked back up.
+  const stoppedHere = stoppedForPickUp(task);
+  const stopLines = useMemo(() => {
+    if (!stoppedHere) return lines;
+    const stop = events.findLast((e) => e.eventType === "task.stopped");
+    if (!stop) return lines;
+    const by = actorName(humanActor(stop), people.names) ?? "Someone";
+    const note = typeof stop.payload.note === "string" && stop.payload.note ? `: “${stop.payload.note}”` : ".";
+    return [...lines, { id: `stopped:${stop.eventId}`, at: stop.occurredAt,
+      node: <ChatNotice data-testid="chat-stopped" kind="stopped" by={dude} text={`${firstName(by)} stopped the task${note}`} at={stop.occurredAt} /> }];
+  }, [lines, stoppedHere, events, people.names, dude]);
+
+  // Each side-line's attempt, from its Run or its ledger event: an earlier attempt's sit in its muted group.
+  const lineAttempts = useMemo(() => {
+    if (current === null) return new Map<string, number>();
+    const project = eventAttempts(task.runs, pullRequests, current, task.source);
+    const byId = new Map(events.map((e) => [e.eventId, e]));
+    return new Map(conducted.map((l): [string, number] => {
+      const e = byId.get(l.id);
+      return [l.id, l.kind === "run" ? l.run.attempt : (e ? project(e) : null) ?? current];
+    }));
+  }, [conducted, events, task.runs, task.source, pullRequests, current]);
+  const isEarlierLine = (id: string) => current !== null && (lineAttempts.get(id) ?? current) < current;
+  const currentLines = useMemo(() => stopLines.filter((l) => !isEarlierLine(l.id)), [stopLines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- isEarlierLine reads lineAttempts and current
+  const plainLines = useMemo(() => lines.filter((l) => !isEarlierLine(l.id)), [lines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- as currentLines
+  const before = useMemo(() => {
+    const node = (r: { id: string; status: RunStatus }, lines?: typeof stopLines) =>
+      <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} {...(lines ? { lines } : {})} />;
+    if (current === null) return earlier.length === 0 ? null : earlier.map((r) => node(r));
+    const attempts = [...new Set([...earlier.map((r) => r.attempt ?? current), ...lineAttempts.values()])].sort((a, b) => a - b);
+    const groups = attempts.map((n) => {
+      const mine = earlier.filter((r) => (r.attempt ?? current) === n);
+      if (n >= current) return mine.length === 0 ? null : <Fragment key={n}>{mine.map((r) => node(r))}</Fragment>;
+      const theirs = stopLines.filter((l) => lineAttempts.get(l.id) === n);
+      // Each line in the conductor of its time: the last one started by then, else the first.
+      const startedAt = (id: string) => task.runs.find((r) => r.id === id)?.createdAt ?? "";
+      const owner = (l: { at: string }) => mine.findLast((r) => instant(startedAt(r.id)) <= instant(l.at)) ?? mine[0];
+      const start = starts.get(n + 1);
+      return <Fragment key={n}>
+        <EarlierTurns attempt={n}>
+          {mine.map((r) => node(r, theirs.filter((l) => owner(l) === r)))}
+          {mine.length === 0 ? theirs.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
+        </EarlierTurns>
+        {start ? <AttemptDivider attempt={n + 1} by={start.by} note={start.note} at={start.at} /> : null}
+      </Fragment>;
+    }).filter((g) => g !== null);
+    return groups.length === 0 ? null : groups;
+  }, [ledgers, earlierKey, current, starts, lineAttempts, stopLines, task.runs]); // eslint-disable-line react-hooks/exhaustive-deps -- the conductors, by their ids, attempts and whether each was retried
 
   const inProgress = !["done", "aborted", "failed"].includes(task.status) && task.runs.some((r) => r.phase || isConductor(r));
   const waiting = task.awaitingDecision ? DECISION_POINT_LABEL[task.awaitingDecision.point] : undefined;
@@ -206,9 +283,10 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
     if (task.decider === "conductor") return <>To <b>Conductor</b></>;
     return task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</> : <>To <b>Conductor</b> · sending gives it the decisions</>;
   }, [inProgress, first.readOnly, task.decider, task.handedBack]);
-  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines, above, readOnly: gateHeld,
-    to, briefedBefore: briefedAgain }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, lines, above, gateHeld, to, briefedAgain]);
+  const stoppedWords = stoppedHere ? STOPPED_COMPOSER : undefined;
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines: currentLines, above, readOnly: gateHeld,
+    to, briefedBefore: briefedAgain, stopped: stoppedWords }),
+    [head, send, answer, retry, briefedWith, before, conductorCost, currentLines, above, gateHeld, to, briefedAgain, stoppedWords]);
 
   if (conductorId) {
     return (
@@ -248,8 +326,8 @@ export function ChatSection({ client, task, conductorId, earlier = [], ledgers, 
             />
           </>}
         >
-          {/* With no conductor yet, dude's lines (a person's machine Reset, a task relation) are the Chat's only turns. */}
-          {lines.length > 0 ? lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>) : null}
+          {/* With no conductor of this attempt, earlier attempts' turns above their divider, then dude's lines (a person's machine Reset, a task relation). */}
+          {before || plainLines.length > 0 ? <>{before}{plainLines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}</> : null}
         </ChatTranscript>
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>

@@ -42,16 +42,7 @@ export function startRefusalWords(reason: "archived" | "closed", taskKey: string
 }
 
 /** What Close and Archive refuse, as the routes' 409 codes. */
-export type LifecycleRefusalCode = "running" | "review" | "not_ended" | "kind" | "loop" | "unfinished" | "archived" | "conflict";
+export type LifecycleRefusalCode = "not_ended" | "kind" | "loop" | "unfinished" | "archived" | "conflict";
 
-/** The menu's and the routes' words for a task's state that refuses Close and Archive. */
-export const STOP_AGENTS_FIRST = "Stop its agents first";
-export const PULL_REQUEST_OPEN = "It has a pull request open";
+/** The menu's and the routes' words for a closed task Reopen waits on. */
 export const UNARCHIVE_FIRST = "Unarchive it first, then reopen it";
-
-/** Which of the refusals a task's status gives Close and Archive, if any. */
-export function lifecycleBusy(status: TaskStatus): "running" | "review" | null {
-  if (status === "running" || status === "awaiting_input") return "running";
-  if (status === "review" || status === "ready_to_merge") return "review";
-  return null;
-}

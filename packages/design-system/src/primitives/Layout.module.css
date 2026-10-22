@@ -112,6 +112,41 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* With ways in it, the body takes the callout's width: the box's inline-size
+   containment adds nothing to a shrink-to-fit body, which would then measure
+   only its other text. */
+.calloutBody:has(> .calloutActionsBox) {
+  flex: 1 1 auto;
+}
+/* CalloutActions: the wrapper is the container its pairs stack on, the callout's width, not the viewport's. */
+.calloutActionsBox {
+  container-type: inline-size;
+}
+.calloutActions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.calloutAction {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ds-space-12);
+}
+.calloutActionLine {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+@container (max-width: 480px) {
+  .calloutAction {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+    gap: var(--ds-space-4);
+  }
+}
 .callout[data-tone="danger"] {
   background: var(--ds-tone-danger-bg);
 }

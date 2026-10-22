@@ -1,0 +1,9 @@
+/* RefusedButton: the focusable wrapper round a disabled Button. Its ring follows the button's radius. */
+.root {
+  display: inline-flex;
+  border-radius: var(--ds-radius-control);
+  outline: none;
+}
+.root:focus-visible {
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
