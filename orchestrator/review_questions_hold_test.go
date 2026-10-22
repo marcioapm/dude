@@ -341,7 +341,11 @@ func TestASettledQuestionReleasesAConductedHold(t *testing.T) {
 // conductedHold takes a conducted delivery whose reviewer asked a question
 // to the pull request gate, has the person answer Open and the conductor
 // decide to open it, and waits until it is held there by the question.
-func (w *world) conductedHold(task string) {
+func (w *world) conductedHold(task string) { w.conductedHoldAfter(task, func() {}) }
+
+// conductedHoldAfter is conductedHold running beforeOpen just before the
+// conductor decides to open the pull request.
+func (w *world) conductedHoldAfter(task string, beforeOpen func()) {
 	w.t.Helper()
 	w.must(task, "decide", `{"action":"next"}`)
 	w.finishSimplifierReview(task)
@@ -350,6 +354,7 @@ func (w *world) conductedHold(task string) {
 	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
 		w.t.Fatalf("answer: %d %v", status, out)
 	}
+	beforeOpen()
 	w.must(task, "decide", `{"action":"open_pull_request"}`)
 	w.until("held at the pull request, or a pull request", func() bool {
 		return len(w.gh.Pulls()) > 0 || w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'openPullRequest' AND status = 'waiting'`, task) == 1
@@ -365,36 +370,57 @@ func (w *world) conductedHold(task string) {
 	}
 }
 
-// Releasing the hold does not end another wait on a person: the conductor
-// asks the owner something while the question holds the pull request; the
-// reviewer's question answered, the task still waits on the conductor's,
-// and nothing opens. Answered too, the delivery opens the pull request.
+// Two waits on a person, the reviewer's question holding the pull request
+// and a question the conductor asked the owner before deciding to open it,
+// end only together, in either order: after the first answer the task stays
+// awaiting_input with no status change and nothing opens; after the second,
+// one pull request opens in review.
 func TestReleasingTheHoldLeavesAnotherQuestionWaiting(t *testing.T) {
-	w, task, id := questioned(t)
-	w.conductedHold(task)
-	ana := w.person("Ana")
-	w.assignOwner(task, ana)
-	w.must(task, "ask_person", `{"question":"May the export run at night?"}`)
-	ask := w.conductorQuestion(task)
-	if ask == "" {
-		t.Fatal("the conductor's question was not recorded")
+	for _, askFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("askFirst=%v", askFirst), func(t *testing.T) {
+			w, task, id := questioned(t)
+			ana := w.person("Ana")
+			w.conductedHoldAfter(task, func() {
+				w.assignOwner(task, ana)
+				w.must(task, "ask_person", `{"question":"May the export run at night?"}`)
+			})
+			ask := w.conductorQuestion(task)
+			if ask == "" {
+				t.Fatal("the conductor's question was not recorded")
+			}
+			answerReviewer := func() {
+				if status, out := w.callAs(ana, "/internal/review-questions/"+id+"/answer", map[string]any{"answer": "In UTC."}); status != 200 {
+					t.Fatalf("answer: %d %v", status, out)
+				}
+			}
+			answerConductor := func() {
+				if status, out := w.callAs(ana, "/internal/questions/"+ask+"/answer", map[string]any{"text": "Yes."}); status != 200 {
+					t.Fatalf("answer the conductor: %d %v", status, out)
+				}
+			}
+			first, second := answerReviewer, answerConductor
+			if askFirst {
+				first, second = answerConductor, answerReviewer
+			}
+			changes := w.events(task, delivery.EvTaskStatusChanged)
+			first()
+			for range 5 {
+				w.pump()
+			}
+			// A restore re-held by the step's next pass ends at awaiting_input too.
+			if n := w.events(task, delivery.EvTaskStatusChanged) - changes; n != 0 {
+				t.Fatalf("%d task status changes with one question still open, want none", n)
+			}
+			if s := w.taskStatus(task); s != "awaiting_input" {
+				t.Fatalf("task %s with one question still open, want awaiting_input", s)
+			}
+			if n := len(w.gh.Pulls()); n != 0 {
+				t.Fatalf("%d pull requests opened with one question still open", n)
+			}
+			second()
+			w.until("the pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+		})
 	}
-	if status, out := w.callAs(ana, "/internal/review-questions/"+id+"/answer", map[string]any{"answer": "In UTC."}); status != 200 {
-		t.Fatalf("answer: %d %v", status, out)
-	}
-	for range 5 {
-		w.pump()
-	}
-	if s := w.taskStatus(task); s != "awaiting_input" {
-		t.Fatalf("task %s with the conductor's question open, want awaiting_input", s)
-	}
-	if n := len(w.gh.Pulls()); n != 0 {
-		t.Fatalf("%d pull requests opened with the conductor's question open", n)
-	}
-	if status, out := w.callAs(ana, "/internal/questions/"+ask+"/answer", map[string]any{"text": "Yes."}); status != 200 {
-		t.Fatalf("answer the conductor: %d %v", status, out)
-	}
-	w.until("the pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
 }
 
 // A question left open by attempt 1 does not hold attempt 2: the task,
@@ -406,7 +432,7 @@ func TestAnEarlierAttemptsQuestionHoldsNothingAfterStartOver(t *testing.T) {
 	wi := w.task()
 	w.deliver(wi)
 	w.heldAtThePullRequest(wi)
-	// Stopped as a person's abort leaves it; Start over takes an aborted task.
+	// Seeds an aborted task so restart starts attempt 2 beside attempt 1's open question.
 	mustExec(t, w.owner, `UPDATE tasks SET status = 'aborted' WHERE id = $1`, wi)
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
 		t.Fatalf("start over: %d %v", status, body)
