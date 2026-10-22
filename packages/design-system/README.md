@@ -2474,6 +2474,10 @@ MarkdownCheatsheet.
   `SessionHeader` its popup anchors (`SearchSelectorAnchor`) to the bottom-left
   of the whole header, so the owner/model/machine line stays visible; elsewhere
   it hangs below its title. Gallery `#l-selector` shows populated, empty, current, search and focus states.
+  Uncontrolled by default; pass `open` with `onOpenChange` to own the open state
+  when the selector can remount while open (a title rendered in a different
+  place once its content loads). `onOpenChange` reports the title press, Escape,
+  an outside press and a pick; the popup follows `open` alone.
 - **FileGallery / FileViewer** — a task's files and their versions. A
   `FileVersion`'s optional `description` (what its agent said the file is
   for) is a secondary line under the name, in a card and a row alike.

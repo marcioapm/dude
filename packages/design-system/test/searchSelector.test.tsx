@@ -96,6 +96,35 @@ test("in a session header the list opens at the header's bottom-left, not over i
   }
 });
 
+test("mounted already open in a session header, the list is placed at the header's bottom-left", async () => {
+  const sized: Array<[object, string, number]> = [[document.documentElement, "clientWidth", 1280], [document.documentElement, "clientHeight", 800],
+    [HTMLElement.prototype, "offsetWidth", 360], [HTMLElement.prototype, "offsetHeight", 200]];
+  for (const [target, key, value] of sized) Object.defineProperty(target, key, { configurable: true, get: () => value });
+  // Nothing exists to stub before the first render, so the prototype answers: the header by its tag, the trigger by its test id.
+  const measure = HTMLElement.prototype.getBoundingClientRect;
+  const rect = (top: number, bottom: number, left: number, width: number) =>
+    ({ x: left, y: top, top, bottom, left, right: left + width, width, height: bottom - top, toJSON: () => ({}) }) as DOMRect;
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this.tagName === "HEADER") return rect(100, 180, 20, 900);
+    if (this.getAttribute("data-testid") === "search-selector-trigger") return rect(110, 130, 80, 120);
+    return measure.call(this);
+  };
+  try {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(<SessionHeader session={{ id: "c", role: "conductor", title: "Conductor", status: "running" }}
+      titleSelector={(title) => <SearchSelector title={title} label="Select session" options={OPTIONS} open onOpenChange={() => {}}
+        optionKey={(o) => o.id} searchText={(o) => o.label} current={(o) => o.id === "c"} onPick={() => {}} renderOption={(o) => o.label} />} />));
+    await tick();
+    await tick();
+    expect(document.querySelector<HTMLElement>("[data-radix-popper-content-wrapper]")!.style.transform).toMatch(/^translate\(20px, 180px\)/);
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = measure;
+    for (const [target, key] of sized) delete (target as Record<string, unknown>)[key];
+  }
+});
+
 test("the highlight stays on its row when the app hands over fresh options while open", async () => {
   const many = [...OPTIONS, { id: "f", label: "Fix", model: "m", status: "Running" }, { id: "i", label: "Implement", model: "m", status: "Completed" }];
   const render = () => root!.render(<SearchSelector title="Conductor" label="Select session" options={many.map((o) => ({ ...o }))}
@@ -190,6 +219,38 @@ test("the trigger is named by the open session and says it opens the dialog it c
   expect(popups.length).toBe(1);
   expect(popups[0]!.getAttribute("role")).toBe("dialog");
   expect(trigger.getAttribute("aria-haspopup")).toBe(popups[0]!.getAttribute("role"));
+});
+
+test("controlled, it follows open and reports the trigger and Escape through onOpenChange", async () => {
+  const reported: boolean[] = [];
+  const render = (open: boolean) => root!.render(<SearchSelector title="Conductor" label="Select session" options={OPTIONS} open={open}
+    onOpenChange={(next) => reported.push(next)} optionKey={(o) => o.id} searchText={(o) => o.label} current={(o) => o.id === "c"}
+    onPick={() => {}} renderOption={(o) => o.label} />);
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const popup = () => document.querySelector("[data-testid=search-selector]");
+  await act(async () => render(true));
+  await tick();
+  expect(popup()).not.toBeNull();
+  // A remount keeps it open: the state is the owner's.
+  await act(async () => root!.unmount());
+  root = createRoot(host);
+  await act(async () => render(true));
+  await tick();
+  expect(document.querySelector("[role=option][aria-current=true]")?.textContent).toBe("Conductor");
+  await press(document.querySelector("input[role=combobox]")!, "Escape");
+  await tick();
+  expect(reported).toContain(false);
+  expect(popup()).not.toBeNull();
+  await act(async () => render(false));
+  await tick();
+  expect(popup()).toBeNull();
+  reported.length = 0;
+  await act(async () => host!.querySelector<HTMLButtonElement>("button[data-testid=search-selector-trigger]")!.click());
+  await tick();
+  expect(reported).toEqual([true]);
+  expect(popup()).toBeNull();
 });
 
 test("no options says so", async () => {

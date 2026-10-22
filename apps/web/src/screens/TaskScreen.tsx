@@ -24,7 +24,7 @@
  */
 
 import { flushSync } from "react-dom";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PageWithRail,
   PageRail,
@@ -47,6 +47,7 @@ import {
   PullRequestPanel,
   SessionItemContent,
   SearchSelector,
+  type SearchSelectorProps,
   StartChoice,
   StatusMark,
   StepList,
@@ -939,10 +940,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           {sessions.length > 0 ? (
             <div className="taskSessions">
               {openRun ? (
-                <FeedbackProvider value={sessionFeedback}>
-                  <RunScreen key={openRun} client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
+                <FeedbackProvider value={sessionFeedback}><SessionPickerState key={openRun}>
+                  <RunScreen client={client} runId={openRun} onBack={onBack} task={sessionTask} onOpenServers={openServers}
                     stopped={openStopped} titleSelector={sessionSelector} stopTask={stopFromSession} />
-                </FeedbackProvider>
+                </SessionPickerState></FeedbackProvider>
               ) : null}
             </div>
           ) : (
@@ -1104,12 +1105,30 @@ function Elsewhere({ icon, title, description, others, what, onAttempt }: {
   );
 }
 
+interface SessionPickerOpen { readonly open: boolean; readonly onOpenChange: (open: boolean) => void }
+const SessionPickerContext = createContext<SessionPickerOpen>({ open: false, onOpenChange: () => {} });
+
+// Holds the picker's open state above RunScreen, which remounts the selector once its run loads.
+// A toggle re-renders this and SessionPicker only: `children` keeps its identity, so the memoised
+// RunScreen and its transcript are skipped. Keyed by the session and unmounted with the Sessions
+// tab, so another session or tab closes it.
+function SessionPickerState({ children }: { children: ReactNode }) {
+  const [open, onOpenChange] = useState(false);
+  const value = useMemo(() => ({ open, onOpenChange }), [open]);
+  return <SessionPickerContext.Provider value={value}>{children}</SessionPickerContext.Provider>;
+}
+
+function SessionPicker(props: Omit<SearchSelectorProps<Run>, "open" | "onOpenChange">) {
+  const { open, onOpenChange } = useContext(SessionPickerContext);
+  return <SearchSelector {...props} open={open} onOpenChange={onOpenChange} />;
+}
+
 function sessionOptions(title: ReactNode, sessions: readonly Run[], openRun: string | undefined, onOpenRun: (id: string) => void) {
   const tops = sessions.filter(isConductor);
   const conductors = new Map(tops.map((r) => [r.id, r]));
   const delivered = sessions.filter((r) => !isConductor(r) && !conductors.has(r.conductorRunId ?? ""));
   const options = [...tops.flatMap((c) => [c, ...sessions.filter((r) => r.conductorRunId === c.id)]), ...delivered];
-  return <SearchSelector title={title} label="Select session" placeholder="Find a session…" options={options}
+  return <SessionPicker title={title} label="Select session" placeholder="Find a session…" options={options}
     optionKey={(run) => run.id} listTestId="sessions"
     optionAttributes={(run) => ({ "data-testid": "session", "data-run": run.id, "data-under": isConductor(run) ? undefined : run.conductorRunId ? "conductor" : "delivered" })}
     current={(run) => run.id === openRun} onPick={(run) => onOpenRun(run.id)}

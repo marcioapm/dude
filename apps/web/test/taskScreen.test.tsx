@@ -20,7 +20,7 @@ import type { Artifact, EscalationAction, Finding } from "../src/api/client.ts";
 import { RunScreen, type RunScreenProps } from "../src/screens/RunScreen.tsx";
 import { emit } from "../src/fixtures/client.ts";
 import { ORG, PEOPLE, PROJECT, RUN_ID } from "../src/fixtures/data.ts";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { unzipSync } from "fflate";
 import { ToastProvider } from "@dude/design-system/primitives";
@@ -185,6 +185,87 @@ describe("task rail filtering", () => {
       const other = rows.find((r) => r.getAttribute("aria-current") !== "true")!;
       await act(async () => { other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
       expect(opened).toEqual([other.getAttribute("data-run")!]);
+    });
+  }
+
+  test("the session picker opened while the run loads stays open once it arrives", async () => {
+    const client = new FixtureClient("d");
+    const getRun = client.getRun.bind(client);
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => { release = r; });
+    const asked: string[] = [];
+    client.getRun = async (id) => { asked.push(id); await held; return getRun(id); };
+    const page = await taskPage(client, { tab: "sessions" });
+    await until(() => page.textContent?.includes("Loading the run") ? true : null, "the run loading");
+    await sessionOptions(page);
+    await act(async () => release());
+    await until(() => page.querySelector('[data-testid="run-screen"]'), "the loaded run");
+    const current = await until(() => document.querySelector<HTMLElement>('[data-testid="sessions"] [aria-current="true"]'), "the current session, still listed");
+    expect(page.querySelector('[data-testid="search-selector-trigger"]')?.getAttribute("data-state")).toBe("open");
+    expect(current.getAttribute("data-run")).toBe(asked[0]!);
+    const trigger = page.querySelector<HTMLElement>('[data-testid="search-selector-trigger"]')!;
+    await act(async () => { document.querySelector('input[role="combobox"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await until(() => trigger.getAttribute("data-state") === "closed" ? true : null, "Escape closing the picker");
+    const list = await sessionOptions(page);
+    const other = [...list.querySelectorAll<HTMLElement>('[role="option"]')].find((r) => r.getAttribute("aria-current") !== "true")!;
+    await act(async () => { other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+    await until(() => trigger.getAttribute("data-state") === "closed" ? true : null, "a pick closing the picker");
+  });
+
+  test("opening and closing the session picker does not re-render the open RunScreen", async () => {
+    const memo = RunScreen as unknown as { type: (props: RunScreenProps) => ReactNode };
+    const screen = memo.type;
+    let renders = 0;
+    memo.type = (props) => { renders++; return screen(props); };
+    try {
+      const page = await taskPage(new FixtureClient("d"), { tab: "sessions" });
+      await until(() => page.querySelector('[data-testid="run-screen"]'), "the loaded run");
+      await settle(500);
+      renders = 0;
+      const trigger = page.querySelector<HTMLElement>('[data-testid="search-selector-trigger"]')!;
+      await sessionOptions(page);
+      expect(trigger.getAttribute("data-state")).toBe("open");
+      await act(async () => { document.querySelector('input[role="combobox"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+      await until(() => trigger.getAttribute("data-state") === "closed" ? true : null, "Escape closing the picker");
+      expect(renders).toBe(0);
+    } finally {
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+      memo.type = screen;
+    }
+  });
+
+  // Another tab's URL names no session (a runId would keep Sessions shown); Overview's names no tab.
+  for (const [left, to] of [["another session", { tab: "sessions", runId: "run_d4" }], ["another tab", { tab: undefined, runId: undefined }]] as const) {
+    test(`the session picker is closed after ${left} and back`, async () => {
+      const client = new FixtureClient("d");
+      const getRun = client.getRun.bind(client);
+      const read: string[] = [];
+      client.getRun = async (id) => { const run = await getRun(id); read.push(id); return run; };
+      type Place = { tab: "sessions" | undefined; runId: string | undefined };
+      let go: (place: Place) => void = () => {};
+      function Host() {
+        const [place, setPlace] = useState<Place>({ tab: "sessions", runId: "run_d2" });
+        go = setPlace;
+        return <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab={place.tab} runId={place.runId} />;
+      }
+      const { container: page, unmount } = await mount(<ToastProvider><PeopleProvider client={client}><Host /></PeopleProvider></ToastProvider>);
+      mounted.push(unmount);
+      const trigger = () => page.querySelector<HTMLElement>('[data-testid="run-screen"] [data-testid="search-selector-trigger"]');
+      // The RunScreen is keyed by its run and reads it again on each visit.
+      const loaded = (reads: number) =>
+        until(() => read.filter((id) => id === "run_d2").length >= reads ? trigger() : null, `run_d2 read ${reads}×`);
+      await loaded(1);
+      await sessionOptions(page);
+      expect(trigger()!.getAttribute("data-state")).toBe("open");
+      await act(async () => go(to));
+      await settle();
+      if (to.tab === undefined) expect(selectedTab(page)).toStartWith("Overview");
+      await act(async () => go({ tab: "sessions", runId: "run_d2" }));
+      await loaded(2);
+      await settle();
+      expect(trigger()!.getAttribute("data-state")).toBe("closed");
+      expect(document.querySelector('[data-testid="sessions"]')).toBeNull();
     });
   }
 
