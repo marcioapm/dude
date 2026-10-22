@@ -258,3 +258,29 @@ func TestARestartKeepsAParkedHeldRunHeld(t *testing.T) {
 	}
 	w.waivedFromPark(wi, runID, "Waived: CI runs it.", delivery.ScopeRun)
 }
+
+// A person's Resume of the parked Run before deciding takes it back up
+// still held, with no new turn: a later waiver pushes the held turn.
+func TestAPersonsResumeOfAParkedHeldRunKeepsTheHeldTurn(t *testing.T) {
+	w := newWorld(t)
+	wi, runID := w.parkedHeld()
+	// Taken back up, it is not parked again while this test looks at it.
+	w.syncer.ParkAfter = time.Hour
+	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the held Run to run again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND lux_state = 'running' AND waiting_since IS NOT NULL`, runID) == 1
+	})
+	if n := w.implementerPushes(wi); n != 0 {
+		t.Fatalf("%d pushes of a Run still held", n)
+	}
+	owner, _, _ := w.people(wi)
+	if code, body := w.decide(owner, wi, delivery.ActionWaive, "Waived: CI runs it."); code != 200 {
+		t.Fatalf("waive: %d %v", code, body)
+	}
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if resumed, _ := w.luxResumes(runID); resumed != 1 {
+		t.Errorf("resumed %d times, want the person's once", resumed)
+	}
+}
