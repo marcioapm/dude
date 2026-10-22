@@ -977,8 +977,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   aborted) are the board's. A search query or a triage filter lists every
   status, as before. The selected task is listed whatever its status, so
   opening a done task from the board still highlights it. An epic with
-  nothing listed is left out; a project keeps its header (it is where its
-  board opens) with no chevron. The roll-up counts still count every task.
+  nothing listed is left out. Unfiltered, a project keeps its header (it is
+  where its board opens) with no chevron; under Mine a project with nothing
+  of yours listed is left out too. The roll-up counts still count every task.
 - Levels differ in row grammar, not just indent (16px): projects are sticky
   small-caps headers, epics carry the layers glyph and a total, tasks
   lead with a mono key and trail with their one state. A tree three deep
@@ -1326,8 +1327,8 @@ here.
   `menu` render prop for full control); a row that returns nothing draws no
   trigger. The trigger is out of the tab order and visible on hover, focus,
    or while open, so the tree's ↑↓ → ← Home End `/` are untouched. No row
-   reserves space for the menu: it replaces trailing people, an epic's count
-   or a session's plan on hover/focus or while open. Each ancestor level has
+   reserves space for the menu: it replaces trailing people or an epic's
+   count on hover/focus or while open. Each ancestor level has
    a 1px border-colour guide through its chevron's centre, continuous across
    the row gap, driven by `--depth` and `--indent`.
 - **Input** renders its own label, hint and error, tied to the field by

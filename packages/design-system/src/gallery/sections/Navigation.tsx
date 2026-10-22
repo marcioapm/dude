@@ -15,7 +15,7 @@ import type { NavRow } from "../../util/navModel.ts";
 import { ALL_STATUSES, type Status } from "../../tokens/status.ts";
 import { COUNTED_TRIAGE_KINDS, TRIAGE_FOR_STATUS, TRIAGE_KINDS, TRIAGE_SPECS, type TriageCounts } from "../../tokens/triage.ts";
 import { globalCounts, type NavRef } from "../../util/navModel.ts";
-import { navProjects, navProjectsQuiet, people } from "../navFixtures.ts";
+import { navProjects, navProjectSettled, navProjectsQuiet, people } from "../navFixtures.ts";
 
 const ALL_PEOPLE = Object.values(people);
 
@@ -51,7 +51,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-tree"
         title="NavTree"
-        note="Project → Epic → Task, rendered flat with aria-level so keyboard movement is index arithmetic. Unsearched, the tree lists only work in progress — running, in review, ready to merge — and the selection; Backlog and Done are the board's, and a search finds them. An epic with nothing in progress is left out; a project keeps its header without a chevron. Each level has its own row grammar: projects are sticky small-caps headers, epics lead with the layers glyph and carry a total, tasks lead with a mono key and trail with their one state and who is involved, the agent working now on the owner's face. A task is a leaf; selecting one of its sessions selects it. Click a chevron or use ←→ to fold; a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
+        note="Project → Epic → Task, rendered flat with aria-level so keyboard movement is index arithmetic. Unsearched, the tree lists only work in progress — running, in review, ready to merge — and the selection; Backlog and Done are the board's, and a search finds them. An epic with nothing in progress is left out; unfiltered, a project keeps its header without a chevron (under Mine, a project with nothing of yours is left out). Each level has its own row grammar: projects are sticky small-caps headers, epics lead with the layers glyph and carry a total, tasks lead with a mono key and trail with their one state and who is involved, the agent working now on the owner's face. A task is a leaf; selecting one of its sessions selects it. Click a chevron or use ←→ to fold; a collapsed parent keeps its roll-up. Try ↑↓ → ← Home End Enter and / ."
       >
         <Panes mode={mode} surface>
           <TreeDemo />
@@ -105,7 +105,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="nav-sidebar-states" title="Sidebar — quiet, narrow, empty, loading" note="A quiet project shows no roll-ups, no pinned section and no attention ink anywhere. A search forces the ancestors open and greys the chevrons; Mine only opens them, and its chevrons still fold. Below 340px the chips other than Needs you drop their labels and keep mark + count. Empty and loading are one line and skeleton rows respectively.">
+      <Block id="nav-sidebar-states" title="Sidebar — quiet, narrow, settled, empty, loading" note="A quiet project shows no roll-ups, no pinned section and no attention ink anywhere. A search forces the ancestors open and greys the chevrons; Mine only opens them, and its chevrons still fold. Below 340px the chips other than Needs you drop their labels and keep mark + count. A project with nothing in progress keeps its header, without a chevron; a done task that is selected (opened from the board) is listed with its epic, and nothing else done is. Under Mine, with only done work of yours, the tree says so. Empty and loading are one line and skeleton rows respectively.">
         <Panes mode={mode}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
             {(
@@ -113,6 +113,9 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
                 ["quiet org", <Sidebar projects={navProjectsQuiet} title="quiet org" width="100%" />],
                 ["narrow (200px)", <Sidebar projects={navProjects} title="narrow" width={200} />],
                 ["no matches", <Sidebar projects={navProjects} title="no matches" width="100%" query="zzzz" />],
+                ["nothing in progress", <Sidebar projects={[navProjectSettled]} title="nothing in progress" width="100%" />],
+                ["a done task, selected", <Sidebar projects={[navProjectSettled]} title="done, selected" width="100%" selected={{ kind: "task", id: navProjectSettled.epics![0]!.tasks[0]!.id }} />],
+                ["Mine, only done work", <Sidebar projects={[navProjectSettled]} title="mine, done" width="100%" you="u_marcio" mine />],
                 ["empty", <Sidebar projects={[]} title="empty" width="100%" />],
                 ["loading", <Sidebar projects={[]} title="loading" width="100%" loading />],
               ] as const
