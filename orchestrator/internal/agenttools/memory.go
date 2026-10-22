@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/guide"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
 )
@@ -32,6 +33,8 @@ type searchHit struct {
 	Status  string `json:"status,omitempty"`
 	Title   string `json:"title"`
 	Snippet string `json:"snippet"`
+	// A guide section's: where a person reads it in the web app.
+	Link string `json:"link,omitempty"`
 }
 
 // embedQuery embeds search_memory's query before its transaction opens, so
@@ -52,7 +55,7 @@ func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, s
 		return nil, refuseText(rQueryRequired)
 	}
 	for _, t := range in.Types {
-		if !slices.Contains(memory.Types, t) {
+		if !slices.Contains(memory.AgentTypes, t) {
 			return nil, refuse(rTypesAreMemoryTaskEpicAnd, t)
 		}
 	}
@@ -61,7 +64,11 @@ func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, s
 	if limit <= 0 {
 		limit = 8
 	}
-	scope.Text, scope.Types, scope.Limit = in.Query, in.Types, min(limit, 20)
+	types := in.Types
+	if len(types) == 0 {
+		types = memory.AgentTypes
+	}
+	scope.Text, scope.Types, scope.Limit = in.Query, types, min(limit, 20)
 	// An agent finds its own session's memories, no other session's.
 	scope.Viewer = memory.Viewer{Session: c.SessionID}
 	out, err := memory.Ranked(ctx, tx, emb, scope)
@@ -69,11 +76,30 @@ func searchScoped(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn, s
 		return nil, err
 	}
 	hits := make([]searchHit, 0, len(out.Results))
+	var slug string
 	for _, r := range out.Results {
-		hits = append(hits, searchHit{Type: r.Type, ID: r.ID, Key: r.Key, Status: r.Status, Title: r.Title,
-			Snippet: r.Snippet})
+		hit := searchHit{Type: r.Type, ID: r.ID, Key: r.Key, Status: r.Status, Title: r.Title, Snippet: r.Snippet}
+		if r.Type == memory.DocType {
+			if slug == "" {
+				if slug, err = orgSlug(ctx, tx, c); err != nil {
+					return nil, err
+				}
+			}
+			page, anchor, _ := strings.Cut(r.ID, "#")
+			hit.ID, hit.Link = docPrefix+r.ID, guide.Link(c.env.publicURL, slug, page, anchor)
+		}
+		hits = append(hits, hit)
 	}
 	return hits, nil
+}
+
+// docPrefix marks a guide section's id among memory ids: doc:<page>#<anchor>.
+const docPrefix = "doc:"
+
+func orgSlug(ctx context.Context, tx pgx.Tx, c Caller) (string, error) {
+	var slug string
+	err := tx.QueryRow(ctx, `SELECT slug FROM organizations WHERE id = $1`, c.Org).Scan(&slug)
+	return slug, err
 }
 
 // ---- get_memory --------------------------------------------------------------
@@ -82,7 +108,46 @@ type getMemoryIn struct {
 	ID string `json:"id"`
 }
 
-func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
+// docOut is a guide section in full: dude's own text, not quoted as
+// external text.
+type docOut struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Title string `json:"title"`
+	Text  string `json:"text"`
+	Link  string `json:"link"`
+}
+
+// getDoc reads the guide section a doc: id names, as guide_sections holds
+// it (the text this deployment's search found).
+func getDoc(ctx context.Context, tx pgx.Tx, c Caller, id string) (docOut, error) {
+	key := strings.TrimPrefix(id, docPrefix)
+	out := docOut{ID: id, Type: memory.DocType}
+	var page, anchor string
+	err := tx.QueryRow(ctx, `SELECT page, anchor, title, body FROM guide_sections WHERE id = $1`, key).
+		Scan(&page, &anchor, &out.Title, &out.Text)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return docOut{}, refuse(rNoGuideSection, id)
+	}
+	if err != nil {
+		return docOut{}, err
+	}
+	slug, err := orgSlug(ctx, tx, c)
+	if err != nil {
+		return docOut{}, err
+	}
+	out.Link = guide.Link(c.env.publicURL, slug, page, anchor)
+	return out, nil
+}
+
+func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (any, error) {
+	if id := strings.TrimSpace(in.ID); strings.HasPrefix(id, docPrefix) {
+		return getDoc(ctx, tx, c, id)
+	}
+	return getOneMemory(ctx, tx, c, in)
+}
+
+func getOneMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
 	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	switch {
 	case errors.Is(err, memory.ErrNotFound):

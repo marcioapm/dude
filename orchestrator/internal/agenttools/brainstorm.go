@@ -292,7 +292,10 @@ func sessionSearchMemory(ctx context.Context, tx pgx.Tx, c Caller, in sessionSea
 	return searchScoped(ctx, tx, c, searchMemoryIn{Query: in.Query, Types: in.Types, Limit: in.Limit}, scope)
 }
 
-func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (memory.Memory, error) {
+func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (any, error) {
+	if id := strings.TrimSpace(in.ID); strings.HasPrefix(id, docPrefix) {
+		return getDoc(ctx, tx, c, id)
+	}
 	m, err := memory.Get(ctx, tx, strings.TrimSpace(in.ID), memory.Viewer{Session: c.SessionID})
 	if err != nil {
 		return memory.Memory{}, refuse(rNoMemory, in.ID)
@@ -307,7 +310,7 @@ func sessionGetMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) 
 		}
 	}
 	c.ProjectID = m.ProjectID
-	return getMemory(ctx, tx, c, in)
+	return getOneMemory(ctx, tx, c, in)
 }
 
 // sessionRememberIn has no scope or project: what a session's agent

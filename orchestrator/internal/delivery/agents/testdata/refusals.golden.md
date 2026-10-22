@@ -324,7 +324,7 @@ a query is required
 
 ## refusals/tools/memory/types-are-memory-task-epic-and
 
-types are memory, task, epic and project, not %q
+types are memory, task, epic, project and doc, not %q
 
 ## refusals/tools/memory/memory-was-archived-no-longer-held
 
@@ -521,6 +521,10 @@ no task %q in this organisation: name one by its key (ABC-12) or id
 ## refusals/tools/settings/section
 
 section is one of %s, or left out for all
+
+## refusals/tools/memory/no-guide-section
+
+no section %s in dude's guide: search it with types ["doc"] for the ids it has
 
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
