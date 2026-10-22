@@ -115,10 +115,16 @@ func (x *Indexer) Sweep(ctx context.Context) (int, error) {
 	}
 	var batch []pending
 	err := x.DB.InSystem(ctx, "indexer", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT source_type, source_id, content_hash, title || E'\n\n' || body, attempts
-			FROM search_documents
-			WHERE embedding IS NULL AND next_attempt_at <= $1
-			ORDER BY next_attempt_at LIMIT $2`, now(), embeddings.MaxBatch)
+		// The guide's sections (guide_sections, every organisation's) are
+		// one more source, under type doc, by the same rules.
+		rows, err := tx.Query(ctx, `SELECT typ, id, hash, text, attempts FROM (
+				SELECT source_type, source_id, content_hash, title || E'\n\n' || body, attempts, next_attempt_at
+				FROM search_documents WHERE embedding IS NULL AND next_attempt_at <= $1
+				UNION ALL
+				SELECT 'doc', id, content_hash, title || E'\n\n' || body, attempts, next_attempt_at
+				FROM guide_sections WHERE embedding IS NULL AND next_attempt_at <= $1
+			) p(typ, id, hash, text, attempts, due)
+			ORDER BY due LIMIT $2`, now(), embeddings.MaxBatch)
 		if err != nil {
 			return err
 		}
@@ -184,10 +190,15 @@ func (x *Indexer) oneByOne(ctx context.Context, batch []pending, texts []string,
 			return err
 		}
 		for i, p := range refused {
-			if _, err := tx.Exec(ctx, `UPDATE search_documents
+			sql := `UPDATE search_documents
 				SET attempts = attempts + 1, last_error = $4, last_attempt_at = $6, next_attempt_at = $5
-				WHERE source_type = $1 AND source_id = $2 AND content_hash = $3`,
-				p.typ, p.id, p.hash, truncate(causes[i].Error(), 500), at.Add(after(p.attempts+1)), at); err != nil {
+				WHERE source_type = $1 AND source_id = $2 AND content_hash = $3`
+			if p.typ == DocType {
+				sql = `UPDATE guide_sections
+					SET attempts = attempts + 1, last_error = $4, last_attempt_at = $6, next_attempt_at = $5
+					WHERE $1 = 'doc' AND id = $2 AND content_hash = $3`
+			}
+			if _, err := tx.Exec(ctx, sql, p.typ, p.id, p.hash, truncate(causes[i].Error(), 500), at.Add(after(p.attempts+1)), at); err != nil {
 				return err
 			}
 		}
@@ -230,8 +241,14 @@ func (x *Indexer) clearOtherModels(ctx context.Context, model string) error {
 		tag, err := tx.Exec(ctx, `UPDATE search_documents
 			SET embedding = NULL, embedding_model = NULL, embedded_at = NULL, attempts = 0, last_error = NULL, next_attempt_at = '-infinity'
 			WHERE embedding IS NOT NULL AND embedding_model IS DISTINCT FROM $1`, model)
-		if err == nil && tag.RowsAffected() > 0 && x.Log != nil {
-			x.Log.Info("embeddings from another model cleared, to embed again", "model", model, "documents", tag.RowsAffected())
+		if err != nil {
+			return err
+		}
+		docs, err := tx.Exec(ctx, `UPDATE guide_sections
+			SET embedding = NULL, embedding_model = NULL, embedded_at = NULL, attempts = 0, last_error = NULL, next_attempt_at = '-infinity'
+			WHERE embedding IS NOT NULL AND embedding_model IS DISTINCT FROM $1`, model)
+		if n := tag.RowsAffected() + docs.RowsAffected(); err == nil && n > 0 && x.Log != nil {
+			x.Log.Info("embeddings from another model cleared, to embed again", "model", model, "documents", n)
 		}
 		return err
 	})
@@ -277,10 +294,17 @@ func storeIn(ctx context.Context, tx pgx.Tx, batch []pending, vecs [][]float32, 
 	for i, p := range batch {
 		types[i], ids[i], hashes[i], vs[i] = p.typ, p.id, p.hash, Vector(vecs[i])
 	}
-	_, err := tx.Exec(ctx, `UPDATE search_documents d
+	if _, err := tx.Exec(ctx, `UPDATE search_documents d
 		SET embedding = u.v::halfvec, embedding_model = $5, embedded_at = $6, attempts = 0, last_error = NULL
 		FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) u(typ, id, hash, v)
 		WHERE d.source_type = u.typ AND d.source_id = u.id AND d.content_hash = u.hash`,
+		types, ids, hashes, vs, model, at); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE guide_sections g
+		SET embedding = u.v::halfvec, embedding_model = $5, embedded_at = $6, attempts = 0, last_error = NULL
+		FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) u(typ, id, hash, v)
+		WHERE u.typ = 'doc' AND g.id = u.id AND g.content_hash = u.hash`,
 		types, ids, hashes, vs, model, at)
 	return err
 }
