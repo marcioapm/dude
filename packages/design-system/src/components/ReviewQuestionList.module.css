@@ -35,7 +35,6 @@
   gap: var(--ds-space-2);
 }
 .item {
-  list-style: none;
   background: var(--ds-color-surface);
   padding-bottom: var(--ds-space-8);
 }
