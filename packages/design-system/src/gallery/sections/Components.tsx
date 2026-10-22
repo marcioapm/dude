@@ -11,6 +11,7 @@ import { SessionTree, SessionTreeNode } from "../../components/SessionTreeNode.t
 import { DiffView, parseUnifiedDiff } from "../../components/DiffView.tsx";
 import { LogStream, type LogLine } from "../../components/LogStream.tsx";
 import { FindingGroup, FindingRow, FINDING_SEVERITIES, FINDING_SEVERITY_SPECS, FINDING_STATUSES } from "../../components/FindingRow.tsx";
+import { ReviewQuestionList } from "../../components/ReviewQuestionList.tsx";
 import { CriterionRow, VerificationGroup, CRITERION_STATES, CRITERION_STATE_SPECS } from "../../components/CriterionRow.tsx";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
 import { ArtifactGroup, ArtifactRow, type ArtifactChange } from "../../components/ArtifactRow.tsx";
@@ -358,6 +359,26 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
                 <FindingRow severity="note" status="resolved" category="style" title="Prefer `for…of` over `forEach` here" file="apps/control-plane/src/webhooks.ts" line={130} />
               </ul>
             </div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="c-review-question"
+        title="ReviewQuestionList"
+        note="Questions a reviewer asked a person instead of guessing, above the findings: the question in the row, then who can answer it, the finding it is about (a link the app makes, by its title), why it matters and what the reviewer checked. Read-only and toneless: a question is no finding and blocks nothing. With none open it renders nothing."
+      >
+        <Panes mode={mode}>
+          <Col>
+            <Label>Open questions</Label>
+            <ReviewQuestionList questions={[
+              { id: "rvq_1", category: "correctness", question: "Do invoices close in UTC or in the organisation's zone?", neededFrom: "product",
+                about: <a href="#c-finding">Totals rounded per line</a>, whyItMatters: "The finding is blocking only if months close in UTC.",
+                evidenceChecked: "Read `api/export.go` and its configuration; neither names a zone." },
+              { id: "rvq_2", category: "security", question: "May a support agent download another organisation's export?", neededFrom: "security" },
+            ]} />
+            <Label>None open: nothing</Label>
+            <ReviewQuestionList questions={[]} />
           </Col>
         </Panes>
       </Block>

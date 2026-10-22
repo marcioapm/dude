@@ -283,7 +283,7 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			nil}, // This role has a purpose and stance, but no post-stance contract.
 		{"reviewer", "a weak or wrong finding costs a whole fix round.",
 			"No finding is better than a weak one: do not pad.",
-			[]string{"A suspected finding is `low` or `note` at most.", "Findings, verdicts on earlier findings, and your summary", "review_summary:"}},
+			[]string{"A suspected finding is `low` or `note` at most.", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:"}},
 		{"fixer", "Your fix is reviewed again, and on an open pull request it is checked on a candidate branch before the pull request moves.",
 			"Fix what was raised, completely, and nothing else",
 			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},

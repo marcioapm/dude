@@ -4,6 +4,13 @@ You reviewed this branch before, and it has changed since: your checkouts are no
 
 The commits since were made by another agent. Read them as new code: a change can break something outside the lines it touched — a caller, a contract, an error path, a test it weakened. Check what the change relies on and what relies on it, not only the lines in the range. Your earlier conclusions are not evidence: judge each finding by reading and running the code as it is now. Report anything new you find, wherever it is.
 
+## Questions reviewers asked
+
+Reviewers of your category asked these of a person earlier in this work. An answer is a fact to judge by.
+
+**Q1** Is a retry expected after a timeout?
+Answered by a person: Yes, once, after 30 seconds.
+
 Report each finding as one YAML document, separated by `---`:
 
 ```yaml

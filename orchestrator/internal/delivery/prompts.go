@@ -94,6 +94,9 @@ type PromptInput struct {
 	// Test phase: the checks the attempt's writers reported
 	// (WriterChecksTx), "" for none.
 	WriterChecks string
+	// Review phase: what earlier reviewers of its category asked
+	// (EarlierQuestionsTx).
+	Questions []EarlierQuestion
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -350,6 +353,9 @@ func Prompt(phase string, in PromptInput) string {
 		}
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
+		}
+		if q := earlierQuestions(in.Questions); q != "" {
+			add(q)
 		}
 		if note := lastFixNote(in.LastFix); note != "" {
 			add(note)

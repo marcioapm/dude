@@ -47,6 +47,7 @@ export const ID_PREFIXES = {
   feedbackItem: "fbi",
   feedbackReply: "fbr",
   modelCall: "mcl",
+  reviewQuestion: "rvq",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
