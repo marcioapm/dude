@@ -258,3 +258,11 @@ a message sent again carries the images it had: send new images in a new message
 
 image %s is not one of this session's
 
+## refusals/domain/escalations/nothing-to-carry-in-attempt
+
+nothing in the held report is a reported failure a later Run could repeat; waive it for this Run only
+
+## refusals/domain/escalations/scope-only-for-checks-waiver
+
+scope %q is not one this decision takes: "run", or "attempt" only when waiving unverified checks
+

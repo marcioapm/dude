@@ -810,6 +810,23 @@ const (
 var CheckOutputs = [2]string{"FAIL: TestGreeting (0.00s)\n    greeting_test.go:9: got \"\", want \"hello\"\nexit status 1",
 	"ok  \tgreeting\t0.01s"}
 
+// The checks gate's scripted writers that report a failure honestly, in
+// every writer phase and every turn: ChecksPreexistingModel sees
+// FailingCommand fail with PreexistingOutputs[0], a failure the work does
+// not cause; ChecksNewFailureModel sees the same command fail with that
+// failure and a new one (PreexistingOutputs[1]); ChecksOtherFailureModel
+// sees OtherFailingCommand fail.
+const (
+	ChecksPreexistingModel  = "fake/checks-preexisting"
+	ChecksNewFailureModel   = "fake/checks-new-failure"
+	ChecksOtherFailureModel = "fake/checks-other-failure"
+	FailingCommand          = "make test"
+	OtherFailingCommand     = "make lint"
+)
+
+var PreexistingOutputs = [2]string{"FAIL: TestClock (0.00s)\n    clock_test.go:4: needs a hardware clock\nexit status 1",
+	"FAIL: TestClock (0.00s)\n    clock_test.go:4: needs a hardware clock\nFAIL: TestGreeting (0.00s)\n    greeting_test.go:9: got \"\", want \"hello\"\nexit status 1"}
+
 // ChecksTurn is what a checks model does in a turn of its Run (0 the
 // first, later ones send-backs): its commands and its reply's checks
 // report. ok is false for a model that is not a checks model.
@@ -822,9 +839,22 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 		return [][3]string{passing}, claim, true
 	case model == ChecksUnbackedModel, model == ChecksFixedModel:
 		return [][3]string{failing}, claim, true
+	case model == ChecksPreexistingModel, model == ChecksNewFailureModel:
+		out := PreexistingOutputs[0]
+		if model == ChecksNewFailureModel {
+			out = PreexistingOutputs[1]
+		}
+		return [][3]string{{FailingCommand, out, "1"}}, ChecksReport([3]string{FailingCommand, "fail", "TestClock needs a hardware clock"}), true
+	case model == ChecksOtherFailureModel:
+		return [][3]string{{OtherFailingCommand, "lint: 1 issue\nexit status 1", "1"}},
+			ChecksReport([3]string{OtherFailingCommand, "fail", "one lint issue"}), true
 	}
 	return nil, "", false
 }
+
+// everyWriterReports are the checks models whose report every writer
+// phase makes, not the implementer's alone.
+var everyWriterReports = map[string]bool{ChecksPreexistingModel: true, ChecksNewFailureModel: true, ChecksOtherFailureModel: true}
 
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.
@@ -834,7 +864,7 @@ func For(phase, model, runID string, fixed bool) Step {
 	step := forPhase(phase, model, runID, fixed)
 	if !step.Hang && (phase == "implement" || phase == "fix" || phase == "simplify") {
 		step.Checks = NoChecks
-		if commands, report, ok := ChecksTurn(model, 0); ok && phase == "implement" {
+		if commands, report, ok := ChecksTurn(model, 0); ok && (phase == "implement" || everyWriterReports[model]) {
 			step.Commands, step.Checks = commands, report
 		}
 	}

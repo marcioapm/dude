@@ -22,12 +22,18 @@ type gatedJudgement struct {
 	Skipped   bool
 	Waived    bool
 	Unchanged bool
+	Carried   bool
 	Message   string
-	Checks    []struct{ Command, Result, Decision, Reason, CallID string } `json:"checks"`
+	Checks    []gatedCheck `json:"checks"`
+}
+
+type gatedCheck struct {
+	Command, Result, Decision, Reason, CallID, WaiverReason string
+	Waiver                                                  *CarriedWaiver
 }
 
 // status is a gated Run's outcome as its row in the pull request names it.
-// A waived, skipped or unchanged Run is never called verified.
+// A waived, carried, skipped or unchanged Run is never called verified.
 func (j gatedJudgement) status() string {
 	switch {
 	case j.Skipped:
@@ -36,10 +42,22 @@ func (j gatedJudgement) status() string {
 		return "waived"
 	case j.Unchanged:
 		return "no changes; checks not needed"
+	case j.Carried && j.Verified:
+		return "waiver carried"
 	case j.Verified:
 		return "backed"
 	}
 	return "not backed"
+}
+
+// carriedFrom is the waiver a carried Run's first waived check rests on.
+func (j gatedJudgement) carriedFrom() *CarriedWaiver {
+	for _, c := range j.Checks {
+		if c.Waiver != nil {
+			return c.Waiver
+		}
+	}
+	return nil
 }
 
 // gatedRuns is each gated Run of the current attempt with its newest
@@ -79,8 +97,10 @@ func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, err
 }
 
 var (
-	checksCompactTmpl = mustTemplate("notices/checks/account-compact")
-	checksOmittedTmpl = mustTemplate("notices/checks/account-omitted")
+	checksCompactTmpl     = mustTemplate("notices/checks/account-compact")
+	checksOmittedTmpl     = mustTemplate("notices/checks/account-omitted")
+	checksCarriedTmpl     = mustTemplate("notices/checks/account-carried")
+	checksCarriedFromTmpl = mustTemplate("notices/checks/account-carried-from")
 )
 
 // checksAccountText is the checks gate's compact account of runs (oldest
@@ -101,7 +121,7 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 		switch {
 		case j.Skipped:
 			skipped = true
-		case j.Waived:
+		case j.Waived, j.Carried && j.Verified:
 			waivers = append(waivers, j)
 		case j.Unchanged:
 			continue
@@ -123,6 +143,10 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 		// the ledger. The newest waivers that fit beside a compact newest Run.
 		shown := make([]string, len(waivers))
 		for i, j := range waivers {
+			if w := j.carriedFrom(); !j.Waived && w != nil {
+				shown[i] = render(checksCarriedTmpl, map[string]any{"Role": j.Role, "From": w.Role, "Note": checksField(w.Note)}) + "\n"
+				continue
+			}
 			shown[i] = fmt.Sprintf("- %s: %s\n", j.Role, checksField(j.Message))
 		}
 		from := newestThatFit(shown, min(checksWaiversMax, room-checksFixedMax-utf8.RuneCountInString(compact)))
@@ -207,6 +231,13 @@ func checksRow(j gatedJudgement) string {
 		if c.Reason != "" {
 			fmt.Fprintf(&b, " — %s", checksField(c.Reason))
 		}
+		if c.WaiverReason != "" {
+			fmt.Fprintf(&b, " — %s", checksField(c.WaiverReason))
+		}
+		if c.Waiver != nil {
+			fmt.Fprintf(&b, " — %s", render(checksCarriedFromTmpl, map[string]any{"Role": c.Waiver.Role, "Run": codeSpan(checksField(c.Waiver.RunID)),
+				"By": checksField(valueOr(c.Waiver.PersonName, "a person"))}))
+		}
 		if c.CallID != "" {
 			fmt.Fprintf(&b, " (%s)", codeSpan(checksField(c.CallID)))
 		}
@@ -239,7 +270,10 @@ func codeSpan(s string) string {
 	return fence + s + fence
 }
 
-var writerChecksTmpl = mustTemplate("contracts/writer-checks")
+var (
+	writerChecksTmpl      = mustTemplate("contracts/writer-checks")
+	writerCarriedFromTmpl = mustTemplate("notices/checks/writer-carried-from")
+)
 
 // writerChecksMax bounds the tester's account of the writers' checks; the
 // newest Runs that fit are kept, as the pull request's account keeps them.
@@ -250,7 +284,7 @@ const writerChecksMax = 12_000
 // each field one clipped line.
 type writerCheck struct {
 	Role, Heads, Status, Message string
-	Checks                       []struct{ Command, Result, Reason string }
+	Checks                       []struct{ Command, Result, Reason, WaiverReason, Waiver string }
 }
 
 // WriterChecksTx is what a tester of the task's attempt is told about the
@@ -279,8 +313,13 @@ func writerChecksText(runs []gatedJudgement, room int) string {
 			c.Message = checksField(j.Message)
 		}
 		for _, v := range j.Checks {
-			c.Checks = append(c.Checks, struct{ Command, Result, Reason string }{checksField(v.Command),
-				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason)})
+			waiver := ""
+			if w := v.Waiver; w != nil {
+				waiver = checksField(render(writerCarriedFromTmpl, map[string]any{"By": valueOr(w.PersonName, "a person"),
+					"Role": w.Role, "Run": w.RunID, "Turn": w.Turn, "Note": w.Note}))
+			}
+			c.Checks = append(c.Checks, struct{ Command, Result, Reason, WaiverReason, Waiver string }{checksField(v.Command),
+				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason), checksField(v.WaiverReason), waiver})
 		}
 		items[i] = c
 	}

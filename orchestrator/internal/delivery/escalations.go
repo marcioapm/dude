@@ -50,6 +50,9 @@ type EscalationDecision struct {
 	// The person deciding (the banner's), for a waiver's or acceptance's
 	// record; AnsweredBy stands for it on an answer.
 	Person string
+	// ScopeAttempt offers a checks waiver to later Runs of the attempt;
+	// "" or ScopeRun keeps it the held Run's.
+	Scope string
 	// Checks who may decide, once the escalation and action are known to
 	// be valid, given the escalation's reason; nil when the caller checked
 	// already.
@@ -156,6 +159,13 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return escalationErr("bad_request", mNotWayGoOnAfterOne,
 			in.Action, e.Reason, strings.Join(e.Actions(), ", "))
 	}
+	scope := in.Scope
+	if scope == ScopeRun {
+		scope = ""
+	}
+	if scope != "" && (scope != ScopeAttempt || e.Reason != ReasonChecksUnverified || in.Action != ActionWaive) {
+		return escalationErr("bad_request", mScopeOnlyForChecksWaiver, in.Scope)
+	}
 	if in.Authorize != nil {
 		if err := in.Authorize(e.Reason); err != nil {
 			return err
@@ -174,7 +184,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		}
 	}
 	if e.Reason == ReasonChecksUnverified {
-		if err := settleChecksTx(ctx, tx, org, projectID, taskID, e, in.Action, note); err != nil {
+		if err := settleChecksTx(ctx, tx, org, projectID, taskID, e, in.Action, note, valueOr(in.AnsweredBy, in.Person), scope); err != nil {
 			return err
 		}
 	}
@@ -194,7 +204,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	// from here on, before the workflow has acted on this one. One that
 	// ended (from before decisions) is reopened to wait for it.
 	e.Decided = &HumanDecision{Action: in.Action, Note: note, QuestionID: in.QuestionID, AnsweredBy: in.AnsweredBy,
-		Conductor: in.Conductor, Person: in.Person}
+		Conductor: in.Conductor, Person: in.Person, Scope: scope}
 	next, _ := json.Marshal(st)
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, status = CASE WHEN status = 'completed'
 			THEN 'waiting'::workflow_run_status ELSE status END, step = 'decide',

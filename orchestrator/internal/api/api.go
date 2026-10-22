@@ -1247,6 +1247,8 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 	var body struct {
 		Action string `json:"action"`
 		Note   string `json:"note"`
+		// "attempt": a checks waiver later Runs of the attempt may carry.
+		Scope string `json:"scope"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
@@ -1254,7 +1256,7 @@ func (s *Server) decideEscalation(w http.ResponseWriter, r *http.Request, org st
 	p := principalOf(r)
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		return escalationFailure(delivery.DecideEscalationTx(r.Context(), tx, org, taskID, delivery.EscalationDecision{
-			Action: body.Action, Note: body.Note, ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person,
+			Action: body.Action, Note: body.Note, Scope: body.Scope, ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person,
 			Authorize: func(reason string) error {
 				if delivery.NeedsReason(reason, body.Action) {
 					return ownerOrAdmin(r.Context(), tx, taskID, p, body.Action)

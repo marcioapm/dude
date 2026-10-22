@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,9 @@ var (
 	checksText          = delivery.MustText("notices/checks")
 	backedQuestion      = delivery.MustText("notices/checks/backed")
 	missingQuestion     = delivery.MustText("notices/checks/missing")
+	waivedQuestion      = delivery.MustText("notices/checks/waived")
+	checksWaivedContext = delivery.MustText("notices/checks/waived-context")
+	checksNotCovered    = delivery.MustText("notices/checks/not-covered")
 	checksSkip          = delivery.MustText("notices/checks/skip")
 	checksMany          = delivery.MustText("notices/checks/many")
 	checksUnparseable   = delivery.MustText("notices/checks/unparseable")
@@ -31,19 +35,30 @@ var (
 // plus one, made in turn before anything is pushed.
 const checksCountMax = 30
 
+// checksWaived is the result of a reported failure the judge found to be
+// one a person waived for the attempt: carried, never backed.
+const checksWaived = "waived"
+
 type checksVerdict struct {
 	Command  string `json:"command"`
 	Result   string `json:"result,omitempty"`
 	Decision string `json:"decision,omitempty"`
 	Reason   string `json:"reason"`
 	CallID   string `json:"callId,omitempty"`
+	// The person's waiver a waived result carries.
+	Waiver *delivery.CarriedWaiver `json:"waiver,omitempty"`
+	// Why an attempt waiver does not cover a reported failure, beside the
+	// agent's own result and evidence, which a person may still waive.
+	WaiverReason string `json:"waiverReason,omitempty"`
 }
 
 type checksDecision struct {
-	Turn     int64           `json:"turn"`
-	Round    int             `json:"round"`
-	Verified bool            `json:"verified"`
-	Skipped  bool            `json:"skipped,omitempty"`
+	Turn     int64 `json:"turn"`
+	Round    int   `json:"round"`
+	Verified bool  `json:"verified"`
+	Skipped  bool  `json:"skipped,omitempty"`
+	// Some reported failure passed as one a person waived for the attempt.
+	Carried  bool            `json:"carried,omitempty"`
 	Verdicts []checksVerdict `json:"checks"`
 	Message  string          `json:"message"`
 	// Unchanged: a fresh inspection at this turn found every repository the
@@ -127,7 +142,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	if !d.Verified {
 		// The send-back names only what the agent must fix; d.Verdicts,
 		// recorded below, keeps the passed checks too.
-		failed := slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return v.Result == "pass" })
+		failed := slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return v.Result == "pass" || v.Result == checksWaived })
 		d.Message = checksText.Render(failed)
 	}
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
@@ -197,8 +212,36 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			d.Verdicts = append(d.Verdicts, checksVerdict{Command: c.Command, Result: c.Result, Reason: c.Evidence})
 		}
 	}
+	// A reported failure passes only as one a person waived for the
+	// attempt, and only once the judge says it is that failure: any
+	// other non-pass, or one no waiver names, is rejected unasked.
+	rejected := d
+	var waivers []*delivery.CarriedWaiver
 	if len(d.Verdicts) > 0 {
-		return d, nil
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			turn, err := delivery.LatestTurnTx(ctx, tx, r.ID)
+			if err != nil {
+				return err
+			}
+			candidates, err := delivery.AttemptWaiversTx(ctx, tx, r.ID, turn)
+			if err != nil {
+				return err
+			}
+			for _, c := range checks {
+				if c.Result == delivery.CheckPass {
+					continue
+				}
+				w := candidates.For(c)
+				if w == nil {
+					waivers = nil
+					return nil
+				}
+				waivers = append(waivers, w)
+			}
+			return nil
+		}); err != nil || len(waivers) == 0 {
+			return rejected, err
+		}
 	}
 	text, err := s.checksContext(ctx, r, checks)
 	if err != nil {
@@ -208,18 +251,55 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	if svc == nil {
 		svc = &judge.Service{DB: s.DB}
 	}
+	d.Verdicts = []checksVerdict{}
+	for i, w := range waivers {
+		waived, err := s.waivedContext(ctx, r, w)
+		if err != nil {
+			return d, err
+		}
+		j, err := svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID,
+			Question: waivedQuestion.Render(w.Covered), Context: text + waived})
+		if errors.Is(err, judge.ErrOff) || errors.Is(err, judge.ErrNoModel) {
+			// No tier judges the failure the same: it stays rejected,
+			// never the skip a tier's absence gives passes.
+			return rejected, nil
+		}
+		if err != nil && ctx.Err() != nil {
+			return d, err
+		}
+		held := rejected.Verdicts[i]
+		if err == nil && j.CallID != "" && j.Decision == judge.Yes {
+			d.Verdicts = append(d.Verdicts, checksVerdict{Command: held.Command, Result: checksWaived, Decision: j.Decision,
+				Reason: j.Reasoning, CallID: j.CallID, Waiver: w})
+			continue
+		}
+		reason := j.Reasoning
+		if err != nil {
+			reason = err.Error()
+		}
+		held.Decision, held.CallID = j.Decision, j.CallID
+		held.WaiverReason = checksNotCovered.Render(struct{ Role, Reason string }{w.Role, cmp.Or(reason, checksUnestablished.Render(nil))})
+		// The send-back names this and every failure not yet judged.
+		d.Verdicts = append(append(d.Verdicts, held), rejected.Verdicts[i+1:]...)
+		return d, nil
+	}
+	d.Carried = len(waivers) > 0
+	passes := slices.DeleteFunc(slices.Clone(checks), func(c delivery.Check) bool { return c.Result != delivery.CheckPass })
 	verified := true
 	// One Backed question per check, answered yes to pass, then Missing,
 	// answered no to pass.
-	for i := range len(checks) + 1 {
+	for i := range len(passes) + 1 {
 		var name, q, want string
-		if i < len(checks) {
-			name, q, want = checks[i].Command, backedQuestion.Render(checks[i]), judge.Yes
+		if i < len(passes) {
+			name, q, want = passes[i].Command, backedQuestion.Render(passes[i]), judge.Yes
 		} else {
 			name, q, want = "missing checks", missingQuestion.Render(nil), judge.No
 		}
 		j, err := svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID, Question: q, Context: text})
 		if errors.Is(err, judge.ErrOff) || errors.Is(err, judge.ErrNoModel) {
+			if d.Carried {
+				return rejected, nil
+			}
 			d.Verified, d.Skipped = true, true
 			d.Message = checksSkip.Render(nil)
 			return d, nil
@@ -265,6 +345,9 @@ const (
 	checksNotesMax   = 8 << 10
 	checksChangesMax = 16 << 10
 	checksCallsMax   = 80 << 10
+	// checksWaivedCallsMax is the waiver's source Run's share, beside the
+	// judged Run's own calls.
+	checksWaivedCallsMax = 32 << 10
 )
 
 var (
@@ -323,7 +406,7 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		shown, total, err = newestCalls(ctx, tx, r.ID)
+		shown, total, err = newestCalls(ctx, tx, r.ID, 0, checksCallsMax)
 		return err
 	})
 	if err != nil {
@@ -337,22 +420,42 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 		shown, total - len(shown)}), nil
 }
 
+// waivedContext is what the judge reads beside checksContext about a
+// waiver's source: the person's note, the failure that Run reported and
+// its calls up to the waiver, under checksWaivedCallsMax. Its own Run's
+// earlier turn when the waiver is the judged Run's own.
+func (s *Syncer) waivedContext(ctx context.Context, r phaseRun, w *delivery.CarriedWaiver) (string, error) {
+	var shown []string
+	var total int
+	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		shown, total, err = newestCalls(ctx, tx, w.RunID, w.Cursor, checksWaivedCallsMax)
+		return err
+	})
+	return checksWaivedContext.Render(struct {
+		Role, RunID, Note, Command, Evidence string
+		Calls                                []string
+		Omitted                              int
+	}{w.Role, w.RunID, boundHead(w.Note, checksNotesMax), w.Covered.Command, boundHead(w.Covered.Evidence, checksReportMax),
+		shown, total - len(shown)}), err
+}
+
 // checksChangeMinRow is the length of the shortest rendered change row,
 // " +? -?\n".
 const checksChangeMinRow = 7
 
-// newestCalls renders the Run's newest whole calls up to checksCallsMax,
-// in the order they were made, and counts every call the Run recorded.
-// One query groups the calls once and streams them newest first; reading
-// stops at the first call that would not fit.
-func newestCalls(ctx context.Context, tx pgx.Tx, runID string) (shown []string, total int, err error) {
+// newestCalls renders the Run's newest whole calls recorded before cursor
+// before (0: all) up to maxBytes, in the order they were made, and counts
+// every such call. One query groups the calls once and streams them newest
+// first; reading stops at the first call that would not fit.
+func newestCalls(ctx context.Context, tx pgx.Tx, runID string, before int64, maxBytes int) (shown []string, total int, err error) {
 	rows, err := tx.Query(ctx, `WITH c AS (
 			SELECT `+checksCallKey+` AS id, min(cursor) AS first, count(*) OVER () AS total FROM events
-			WHERE run_id = $1 AND event_type IN ($2, $3) GROUP BY 1)
+			WHERE run_id = $1 AND event_type IN ($2, $3) AND ($4::bigint = 0 OR cursor < $4::bigint) GROUP BY 1)
 		SELECT c.first, c.total, e.event_type, e.payload FROM c
-		JOIN events e ON e.run_id = $1 AND e.event_type IN ($2, $3) AND `+strings.ReplaceAll(checksCallKey, "payload", "e.payload")+` = c.id
+		JOIN events e ON e.run_id = $1 AND e.event_type IN ($2, $3) AND ($4::bigint = 0 OR e.cursor < $4::bigint)
+			AND `+strings.ReplaceAll(checksCallKey, "payload", "e.payload")+` = c.id
 		ORDER BY c.first DESC, e.cursor`,
-		runID, evToolCalled, evToolCompleted)
+		runID, evToolCalled, evToolCompleted, before)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -362,7 +465,7 @@ func newestCalls(ctx context.Context, tx pgx.Tx, runID string) (shown []string, 
 	// call is kept whatever its size.
 	fits := func(c *checksCall) bool {
 		text := checksCallText.Render(*c)
-		if size+len(text) > checksCallsMax && len(shown) > 0 {
+		if size+len(text) > maxBytes && len(shown) > 0 {
 			return false
 		}
 		shown = append(shown, text)

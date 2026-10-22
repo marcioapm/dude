@@ -39,6 +39,14 @@ func (j *scriptedJudge) Judge(_ context.Context, _ string, a judge.Ask) (judge.J
 	d := j.answer
 	switch {
 	case d != "":
+	case strings.Contains(a.Question, "waived a reported failure"):
+		// The same failure: both Runs' recorded output names the same
+		// failing tests.
+		this, waived, _ := strings.Cut(a.Context, "### The waived failure")
+		d = judge.No
+		if failing(this) != "" && failing(this) == failing(waived) {
+			d = judge.Yes
+		}
 	case backedQ && failed(lastCompletion(a.Context)):
 		d = judge.No
 	case backedQ:
@@ -67,6 +75,18 @@ func lastCompletion(context string) string {
 // reports one.
 func failed(completion string) bool {
 	return strings.Contains(completion, `"status": "error"`) || strings.Contains(completion, `"status":"error"`) || strings.Contains(completion, "status: error")
+}
+
+// failing are the distinct "FAIL: <test>" lines of a context, sorted.
+func failing(context string) string {
+	var out []string
+	for _, line := range strings.Split(context, "\n") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, "FAIL: ") && !slices.Contains(out, line) {
+			out = append(out, line)
+		}
+	}
+	slices.Sort(out)
+	return strings.Join(out, ",")
 }
 
 func (j *scriptedJudge) count() int {

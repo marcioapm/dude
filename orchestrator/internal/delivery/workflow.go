@@ -384,6 +384,9 @@ type HumanDecision struct {
 	// The person who decided, when one did: an acceptance resolves the
 	// feedback items it names as theirs.
 	Person string `json:"person,omitempty"`
+	// "attempt": a checks waiver later Runs of the attempt may carry; ""
+	// is the Run's alone.
+	Scope string `json:"scope,omitempty"`
 }
 
 // BranchFor is the task's branch — the one its pull requests are opened
