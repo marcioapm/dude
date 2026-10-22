@@ -610,7 +610,10 @@ func TestTheConductorRetriesNotConvergingOnTheOwnersFreeAnswer(t *testing.T) {
 		t.Fatalf("a free answer decided the escalation: %v", d)
 	}
 	fixes := w.phaseRuns(task, "fix")
-	w.must(task, "decide_escalation", `{"action":"retry"}`)
+	// Told what to expect after a retry, not what an amend changed.
+	if out := w.must(task, "decide_escalation", `{"action":"retry"}`); out["next"] != delivery.EscalationDecidedNext(false) {
+		t.Fatalf("decide_escalation retry answered next %q", out["next"])
+	}
 	w.until("the next fix round", func() bool { return w.phaseRuns(task, "fix") == fixes+1 })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
 		AND payload->>'action' = 'retry' AND payload->>'reason' = $2 AND payload->>'questionId' = $3
@@ -639,7 +642,9 @@ func TestTheConductorAmendsNotConvergingWithTheOwnersWords(t *testing.T) {
 	if status, out := w.answerAs(ana, task, "  \n"+words+"\t\n"); status != 200 {
 		t.Fatalf("the answer: %d %v", status, out)
 	}
-	w.must(task, "decide_escalation", `{"action":"amend","note":"The conductor's own summary of the change."}`)
+	if out := w.must(task, "decide_escalation", `{"action":"amend","note":"The conductor's own summary of the change."}`); out["next"] != delivery.EscalationDecidedNext(true) {
+		t.Fatalf("decide_escalation amend answered next %q", out["next"])
+	}
 	w.until("the amend carried out", func() bool {
 		return w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND acceptance <> $2 AND id = $3`,
 			task, fakeagent.FindingAcceptance, named) == 1

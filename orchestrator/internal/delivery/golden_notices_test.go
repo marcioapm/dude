@@ -27,8 +27,8 @@ func goldenLines(t *testing.T, name string, lines [][2]string) {
 func TestGoldenToolResults(t *testing.T) {
 	goldenLines(t, "results-delivery", [][2]string{
 		{"pr-phase-started", prPhaseStarted(PhaseReview)},
-		{"escalation-decided", escalationDecidedNext(false)},
-		{"escalation-decided-amend", escalationDecidedNext(true)},
+		{"escalation-decided", EscalationDecidedNext(false)},
+		{"escalation-decided-amend", EscalationDecidedNext(true)},
 		{"gate-choices", strings.Join(GateChoices, "\n")},
 	})
 }

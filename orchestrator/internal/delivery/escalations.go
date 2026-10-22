@@ -586,14 +586,14 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"decided": action, "questionId": qID, "next": escalationDecidedNext(action == "amend")}, nil
+	return map[string]any{"decided": action, "questionId": qID, "next": EscalationDecidedNext(action == "amend")}, nil
 }
 
 var escalationDecidedTmpl = mustTemplate("results/escalation-decided")
 
-// escalationDecidedNext is what decide_escalation answers once it decided;
+// EscalationDecidedNext is what decide_escalation answers once it decided;
 // only an amend is told what it changed.
-func escalationDecidedNext(amend bool) string {
+func EscalationDecidedNext(amend bool) string {
 	return render(escalationDecidedTmpl, struct{ Amend bool }{amend})
 }
 
