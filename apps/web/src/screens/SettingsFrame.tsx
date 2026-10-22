@@ -94,7 +94,8 @@ export function SettingsFrame(props: {
 }) {
   if (props.loading) return <div className="centered">{props.problem ?? <Spinner label="Loading…" />}</div>;
   return (
-    <SettingsLayout data-testid={props.testId} scope={props.scope} items={props.items} current={props.page} onSelect={props.onPage} footer={props.footer}>
+    <SettingsLayout data-testid={props.testId} scope={props.scope} items={props.items} current={props.page} onSelect={props.onPage} footer={props.footer}
+      wide={isRole(props.page)}>
       {props.children}
     </SettingsLayout>
   );

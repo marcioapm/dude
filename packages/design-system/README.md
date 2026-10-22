@@ -1563,7 +1563,9 @@ here.
   `MarkdownDocument`, and an organisation's read-only copy): UI body size,
   a compact rhythm, `{{variables}}` as chips, and no measure
   (`--md-measure: none`) — a working document fills its container, as the
-  role's fields above it do.
+  role's fields above it do. A role's page passes `SettingsLayout wide`,
+  which lifts the settings column's 1100px cap so the prompt reaches the
+  pane's own gutter; every other settings page keeps the cap.
 - Inline code: 0.85em mono on the sunken fill, `mark` radius, a subtle inset
   ring. Code blocks: a square sunken well, 12×16 padding, no frame; the
   language and copy control appear on hover; long lines scroll sideways

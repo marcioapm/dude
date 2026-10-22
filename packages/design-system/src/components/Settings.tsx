@@ -32,10 +32,12 @@ export interface SettingsLayoutProps extends Omit<HTMLAttributes<HTMLDivElement>
   readonly onSelect: (id: string) => void;
   /** Under the menu: where values not changed here come from. */
   readonly footer?: ReactNode;
+  /** The page has no 1100px cap: a role's page, whose prompt is a working document that fills the pane. */
+  readonly wide?: boolean | undefined;
   readonly children: ReactNode;
 }
 
-export function SettingsLayout({ scope, items, current, onSelect, footer, className, children, ...rest }: SettingsLayoutProps) {
+export function SettingsLayout({ scope, items, current, onSelect, footer, wide, className, children, ...rest }: SettingsLayoutProps) {
   const open = (item: SettingsNavItem) => item.id === current || Boolean(item.items?.some((s) => s.id === current));
   const row = (item: SettingsNavItem, sub = false) => (
     <button
@@ -69,7 +71,7 @@ export function SettingsLayout({ scope, items, current, onSelect, footer, classN
         ))}
         {footer ? <div className={styles["navFooter"]}>{footer}</div> : null}
       </nav>
-      <div className={styles["main"]}>{children}</div>
+      <div className={cx(styles["main"], wide && styles["wide"])}>{children}</div>
     </div>
   );
 }
