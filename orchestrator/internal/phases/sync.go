@@ -1537,8 +1537,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A preview item's picture is said attached only when it goes with
 		// this prompt (PromptAttachments had room for it).
 		delivery.MarkPictures(peopleFeedback, taskImages)
-		// A review after a fix is told that fix's commits, to answer
-		// caused_by_fix by.
 		// A tester is told what its attempt's writers checked, so it does
 		// not rediscover failures already known or waived.
 		if r.Phase == delivery.PhaseTest && stored == nil {
@@ -1546,6 +1544,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 				return err
 			}
 		}
+		// A review after a fix is told that fix's commits, to answer
+		// caused_by_fix by.
 		if r.Phase == delivery.PhaseReview && stored == nil {
 			var parent string
 			if err := tx.QueryRow(ctx, `SELECT COALESCE(parent_run_id, '') FROM runs WHERE id = $1`, r.ID).Scan(&parent); err != nil {
