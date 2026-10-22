@@ -7,6 +7,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -268,6 +269,49 @@ func TestStopAndStartOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND continues_how = 'resume'`, task); n == 0 {
 		t.Error("attempt 2 resumed no reviewer for its next round: it kept attempt 1's policy")
+	}
+}
+
+// Stop and start over under settings that do not decode refuses the whole
+// request: nothing is stopped, the implementer works on, and a plain Stop
+// is still accepted.
+func TestStopAndStartOverUnderSettingsThatDoNotDecodeStopsNothing(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	w.deliver(task)
+	w.until("the implementer to be working", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task) == 1
+	})
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"maxReviewIterations": "many"}' WHERE id = $1`, w.project)
+	// 500, not 400: PolicyFor does not wrap the decode error as a PolicyError, as on main.
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/stop", map[string]any{"andRestart": true}); status != http.StatusInternalServerError {
+		t.Fatalf("stop and start over under settings that do not decode: %d %v", status, body)
+	}
+	if got := w.taskStatus(task); got != "running" {
+		t.Errorf("the refused Stop left the task %s", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task); n != 1 {
+		t.Errorf("%d implementers running after the refused Stop, want attempt 1's", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status <> 'aborted'`, task); n != 1 {
+		t.Errorf("%d live deliveries after the refused Stop, want attempt 1's", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task); n != 1 {
+		t.Errorf("%d deliveries after the refused Stop, want attempt 1's", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2`, task); n != 0 {
+		t.Errorf("the refused Stop started %d Runs of attempt 2", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type IN ('task.stopped', 'task.recovered')`, task); n != 0 {
+		t.Errorf("the refused Stop recorded %d task.stopped or task.recovered", n)
+	}
+	if out := w.stop(ana, task, map[string]any{}); out["status"] != "aborted" {
+		t.Fatalf("a plain Stop after the refusal answered %v", out)
+	}
+	if got := w.taskStatus(task); got != "aborted" {
+		t.Errorf("after a plain Stop the task is %s", got)
 	}
 }
 
