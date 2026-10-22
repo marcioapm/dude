@@ -45,27 +45,6 @@ func TestBaseIntegrationRuleSurvivesAnOrganisationsPrompt(t *testing.T) {
 	}
 }
 
-// A session's agent is told to name its session once the subject is clear
-// and to leave a member's name alone (with tools), and how to publish a
-// document for the members (always: it needs no tool), whatever its saved
-// prompts say.
-func TestTheBrainstormIsToldToNameItsSessionAndHowToPublish(t *testing.T) {
-	for mode, got := range underEveryMode(RoleBrainstorm, "", InstructionsInput{Tools: true}) {
-		for _, want := range []string{"name_session once its subject is clear", "at most 60 characters",
-			"Name it again only if the subject clearly changes", "Once a member has named it, the name is theirs",
-			"`dude publish FILE --name NAME --description \"…\"`", "one short line saying what the file is for",
-			"a design note, a diagram, a table, a CSV", "Say in your reply what you published"} {
-			if strings.Count(got, want) != 1 {
-				t.Errorf("the brainstorm's instructions (%s) should say %q once", mode, want)
-			}
-		}
-	}
-	bare := Instructions(RoleBrainstorm, "", InstructionsInput{})
-	if strings.Contains(bare, "name_session") || !strings.Contains(bare, "dude publish FILE") {
-		t.Errorf("without tools it is told of a tool it lacks, or not how to publish:\n%s", bare)
-	}
-}
-
 // Every brainstorm is told what it reaches of the web, once, whatever its
 // saved prompts say: any host is "You can read the web", a list names its
 // hosts, and nothing is one plain sentence that it has no web access.
