@@ -241,6 +241,24 @@ func TestStoppingAtAnEscalationClosesItsQuestion(t *testing.T) {
 	if got, _ := w.options(task); !slices.Contains(got, "retry") {
 		t.Fatalf("a task stopped at its escalation offers %v", got)
 	}
+	// The person stopped the task, not decided on the banner: the conductor
+	// is told no decision, now or by the next conductor after a pick-up.
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE '%:decided' AND delivered_at IS NULL`, task); n != 0 {
+		t.Errorf("%d pending escalation-decided wakes after a Stop", n)
+	}
+	w.pickUp(ana, task, map[string]any{"action": "retry"})
+	runs := w.conductorRuns(task)
+	next := runs[len(runs)-1]
+	for range 5 {
+		w.pump()
+	}
+	const banner = "decided the escalation on the banner"
+	if p := w.str(`SELECT prompt FROM runs WHERE id = $1`, next); strings.Contains(p, banner) {
+		t.Errorf("the new conductor's briefing tells it a banner decision:\n%s", p)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE task_id = $1 AND text LIKE '%' || $2 || '%'`, task, banner); n != 0 {
+		t.Errorf("a conductor was told a banner decision after the Stop")
+	}
 }
 
 // taskChild inserts a live child the conductor started, as start_child

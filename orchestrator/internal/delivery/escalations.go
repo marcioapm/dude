@@ -44,6 +44,9 @@ type EscalationDecision struct {
 	QuestionID, AnsweredBy string
 	// Taken by the conductor, on that answer: its Run.
 	Conductor string
+	// Taken by a person's Stop of the whole task: the conductor stops with
+	// it, so no wake tells it the escalation was decided.
+	Halting bool
 	// The person deciding (the banner's), for a waiver's or acceptance's
 	// record; AnsweredBy stands for it on an answer.
 	Person string
@@ -302,7 +305,7 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	}
 	var line string
 	switch {
-	case in.Conductor != "":
+	case in.Conductor != "", in.Halting:
 		return nil
 	case in.QuestionID != "":
 		line = escalationAnsweredLine(in.QuestionID, in.Action)
