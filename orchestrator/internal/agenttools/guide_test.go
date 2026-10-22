@@ -46,6 +46,10 @@ func TestAnAgentFindsAndReadsTheGuide(t *testing.T) {
 		VALUES ('mem_pol', $1, NULL, 'Our delivery policy', 'We review with two reviewers.', 'system', 'test')`, f.org)
 	token := f.run(t, "run_doc", "implementer", "running")
 
+	page, _ := guide.PageBy("delivery")
+	want, _ := page.Section("which-reviewers-run")
+	wantID, wantTitle := "doc:delivery#which-reviewers-run", page.Title+" — "+want.Heading
+	wantLink := "https://dude.example/#/o/" + slug + "/help/delivery/which-reviewers-run"
 	for _, args := range []string{`{"query": "delivery policy reviewers"}`, `{"query": "delivery policy reviewers", "types": ["doc"]}`} {
 		status, body := f.raw(t, token, "search_memory", args)
 		if status != 200 {
@@ -53,12 +57,11 @@ func TestAnAgentFindsAndReadsTheGuide(t *testing.T) {
 		}
 		var doc *docHit
 		for _, h := range hits(t, body) {
-			if h.ID == "doc:settings#delivery" {
+			if h.ID == wantID {
 				doc = &h
 			}
 		}
-		if doc == nil || doc.Type != "doc" || doc.Title != "Settings — Delivery" || doc.Snippet == "" ||
-			doc.Link != "https://dude.example/#/o/"+slug+"/help/settings/delivery" {
+		if doc == nil || doc.Type != "doc" || doc.Title != wantTitle || doc.Snippet == "" || doc.Link != wantLink {
 			t.Fatalf("%s: the delivery section as %+v in %s", args, doc, body)
 		}
 		if strings.Contains(body, "⟦external") {
@@ -70,13 +73,11 @@ func TestAnAgentFindsAndReadsTheGuide(t *testing.T) {
 		t.Errorf("types doc found a memory: %s", body)
 	}
 
-	status, body = f.raw(t, token, "get_memory", `{"id": "doc:settings#delivery"}`)
+	status, body = f.raw(t, token, "get_memory", `{"id": "`+wantID+`"}`)
 	var got struct{ ID, Type, Title, Text, Link string }
 	_ = json.Unmarshal([]byte(body), &got)
-	p, _ := guide.PageBy("settings")
-	want, _ := p.Section("delivery")
-	if status != 200 || got.ID != "doc:settings#delivery" || got.Type != "doc" || got.Title != "Settings — Delivery" ||
-		got.Text != want.Text || got.Link != "https://dude.example/#/o/"+slug+"/help/settings/delivery" || strings.Contains(body, "⟦external") {
+	if status != 200 || got.ID != wantID || got.Type != "doc" || got.Title != wantTitle ||
+		got.Text != want.Text || got.Link != wantLink || strings.Contains(body, "⟦external") {
 		t.Errorf("get_memory doc: %d %s", status, body)
 	}
 	// The intro's anchor is empty: the page's link alone.
@@ -109,8 +110,12 @@ func TestASessionsAgentFindsTheGuideWithARelativeLink(t *testing.T) {
 	}
 	found := false
 	for _, h := range hits(t, body) {
-		if h.ID == "doc:settings#memory" {
-			found = h.Link == "#/o/"+slug+"/help/settings/memory"
+		page, anchor, ok := strings.Cut(strings.TrimPrefix(h.ID, "doc:"), "#")
+		if h.Type == "doc" && ok {
+			found = true
+			if want := guide.HashPath(slug, page, anchor); h.Link != want {
+				t.Errorf("%s linked %q, want %q", h.ID, h.Link, want)
+			}
 		}
 	}
 	if !found {

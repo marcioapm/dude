@@ -22,8 +22,16 @@ func TestHelpServesTheEmbeddedGuide(t *testing.T) {
 		}
 	}
 	sections, _ := settings["sections"].([]any)
-	if settings["title"] != "Settings" || len(sections) == 0 || sections[0].(map[string]any)["anchor"] != "delivery" ||
-		sections[0].(map[string]any)["heading"] != "Delivery" {
+	sp, _ := guide.PageBy("settings")
+	var first guide.Section
+	for _, s := range sp.Sections {
+		if s.Anchor != "" {
+			first = s
+			break
+		}
+	}
+	if settings["title"] != sp.Title || len(sections) == 0 || first.Anchor == "" ||
+		sections[0].(map[string]any)["anchor"] != first.Anchor || sections[0].(map[string]any)["heading"] != first.Heading {
 		t.Errorf("settings page in the list: %v", settings)
 	}
 
