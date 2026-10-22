@@ -56,20 +56,22 @@ def test_help_search_sections_and_history(page: Page, web_url: str, client: ApiC
     last = sections[-1]
     previous = next(s for s in sections if s["anchor"] != last["anchor"])
     last_url = f'{help_base}/{quote(slug)}/{quote(last["anchor"])}'
+    last_link = outline.locator(f'[data-anchor="{last["anchor"]}"]')
+    last_heading = article.get_by_role("heading", name=last["heading"], exact=True)
+    previous_link = outline.locator(f'[data-anchor="{previous["anchor"]}"]')
     page.goto(last_url)
     # A first load at the section, not the same document moving its hash.
     page.reload()
     expect(article).to_have_attribute("data-page", slug)
-    last_link = outline.locator(f'[data-anchor="{last["anchor"]}"]')
     expect(last_link).to_have_attribute("aria-current", "location")
-    expect(article.get_by_role("heading", name=last["heading"], exact=True)).to_be_in_viewport()
-    outline.locator(f'[data-anchor="{previous["anchor"]}"]').click()
+    expect(last_heading).to_be_in_viewport()
+    previous_link.click()
     expect(page).to_have_url(f'{help_base}/{quote(slug)}/{quote(previous["anchor"])}')
-    expect(outline.locator(f'[data-anchor="{previous["anchor"]}"]')).to_have_attribute("aria-current", "location")
+    expect(previous_link).to_have_attribute("aria-current", "location")
     page.go_back()
     expect(page).to_have_url(last_url)
     expect(last_link).to_have_attribute("aria-current", "location")
-    expect(article.get_by_role("heading", name=last["heading"], exact=True)).to_be_in_viewport()
+    expect(last_heading).to_be_in_viewport()
     assert console_errors == []
     print(f"Help API: {len(pages)} pages; {len(docs)} guide hits; first={slug}#{anchor}; last={last['anchor']}; console/page errors={console_errors}")
     if directory := os.environ.get("DUDE_HELP_ARTIFACT_DIR"):
