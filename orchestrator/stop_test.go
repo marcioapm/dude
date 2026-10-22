@@ -245,7 +245,8 @@ func TestStoppingAtAnEscalationClosesItsQuestion(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE '%:decided' AND delivered_at IS NULL`, task); n != 0 {
 		t.Errorf("%d pending escalation-decided wakes after a Stop", n)
 	}
-	w.pickUp(ana, task, map[string]any{"action": "retry"})
+	// A stuck review's Try again needs the person's direction.
+	w.pickUp(ana, task, map[string]any{"action": "retry", "note": "Fix the wording only."})
 	runs := w.conductorRuns(task)
 	next := runs[len(runs)-1]
 	// Past the wake window: whatever is still pending is told to the new

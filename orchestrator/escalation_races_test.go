@@ -554,7 +554,8 @@ func TestDoneAndRecoveryLockTheDeliveryBeforeTheTask(t *testing.T) {
 			}
 			finished := make(chan int, 1)
 			go func() {
-				status, _ := w.callAs(ana, "/internal/tasks/"+task+"/"+c.route, map[string]any{"action": "retry"})
+				// A stuck review's Try again needs the person's direction.
+				status, _ := w.callAs(ana, "/internal/tasks/"+task+"/"+c.route, map[string]any{"action": "retry", "note": "Fix the wording only."})
 				finished <- status
 			}()
 			w.waiters(1)
