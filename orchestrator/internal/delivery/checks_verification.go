@@ -12,8 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// gatedJudgement is one gated Run's latest checks judgement. Unchanged: the
-// Run's turn changed nothing it could push, so no report was judged.
+// gatedJudgement is one gated Run's checks judgement: its newest that is not
+// unchanged, else its newest. Unchanged: the Run's turn changed nothing it
+// could push, so no report was judged.
 type gatedJudgement struct {
 	Heads     map[string]RunHead `json:"-"`
 	Role      string
@@ -41,10 +42,11 @@ func (j gatedJudgement) status() string {
 	return "not backed"
 }
 
-// gatedRuns is each gated Run of the current attempt with its latest
-// judgement, oldest Run first. A later unchanged turn pushed nothing new, so
-// it never displaces the Run's earlier judged, waived or skipped turn; a Run
-// with only unchanged turns reads as unchanged.
+// gatedRuns is each gated Run of the current attempt with its newest
+// judgement that is not unchanged (else its newest), oldest Run first. A
+// later unchanged turn pushed nothing new, so it never displaces the Run's
+// earlier judged, waived or skipped turn; a Run with only unchanged turns
+// reads as unchanged.
 func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, error) {
 	rows, err := tx.Query(ctx, `SELECT phase, heads, payload FROM (
 		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, r.heads, e.payload
