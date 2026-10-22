@@ -107,10 +107,12 @@ describe("a conductor's Run and the attempts", () => {
     expect(starts.get(3)).toBe(start);
   });
 
-  test("what happened on a conductor is its attempt's", () => {
-    const of = eventAttempts([...RESTARTED_RUNS, conductor(1)], [], 2);
+  test("what happened on an ended conductor is its attempt's; on a live one, the current attempt's", () => {
+    const of = eventAttempts([...RESTARTED_RUNS, conductor(1, { status: "aborted", endedAt: at(96) })], [], 2);
     expect(of({ eventType: "chat.message", runId: COND, occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBe(1);
     expect(of({ eventType: "run.steered", runId: "run_a1_fix", occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBe(1);
+    const live = eventAttempts([...RESTARTED_RUNS, conductor(1)], [], 2);
+    expect(live({ eventType: "chat.message", runId: COND, occurredAt: at(5), payload: {} } as unknown as PersistedEvent)).toBe(2);
   });
 });
 
@@ -375,6 +377,29 @@ describe("a conductor's session on an earlier attempt", () => {
     expect(shown(page)).toBe("2");
     expect(count(page, "[data-testid=earlier-bar]")).toBe(0);
     expect(count(page, "textarea")).toBe(1);
+  });
+});
+
+describe("a task started over before each attempt had its own conductor", () => {
+  // Its one conductor, recorded on attempt 1, still live and steering attempt 2.
+  test("its live conductor is the current attempt's: its session opens on attempt 2, writable, with no earlier bar", async () => {
+    const page = await taskPage(restartedWith(conductor(1)), { runId: COND });
+    await until(() => page.querySelector("[data-testid=abort]"), "Abort on the live conductor");
+    expect(shown(page)).toBe("2");
+    expect(count(page, "[data-testid=earlier-bar]")).toBe(0);
+    expect(count(page, "textarea")).toBe(1);
+  });
+
+  test("Sessions lists it with attempt 2's Runs", async () => {
+    const page = await taskPage(restartedWith(conductor(1)), { tab: "sessions" });
+    await until(() => (shown(page) === "2" ? true : null), "attempt 2");
+    expect(tabCount(page, "Sessions")).toBe("5");
+    const list = await sessionOptions(page);
+    const rows = await until(() => {
+      const r = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+      return r.length ? r : null;
+    }, "the sessions listed");
+    expect(rows[0]!.textContent).toContain("Conductor");
   });
 });
 

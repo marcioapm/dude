@@ -25,9 +25,14 @@ export function attemptsOf(runs: readonly Run[]): number[] {
   return [...new Set(runs.filter(isAttemptWork).map((r) => r.attempt))].sort((a, b) => b - a);
 }
 
-/** The attempt a Run's session is listed under: a branch preview serves the task now, so the current one. */
+/**
+ * The attempt a Run's session is listed under: a branch preview serves the
+ * task now, and so does a live conductor (one of a task started over before
+ * each attempt had its own still steers the current one): the current one.
+ * An ended conductor keeps its recorded attempt.
+ */
 export function attemptOfRun(run: Run, current: number): number {
-  return run.kind === "preview" ? current : run.attempt;
+  return run.kind === "preview" || isConductor(run) && !TERMINAL_RUN_STATUSES.includes(run.status) ? current : run.attempt;
 }
 
 /** A task's Runs by id, built once per read of them for the lookups below. */
