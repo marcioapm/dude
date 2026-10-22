@@ -33,9 +33,17 @@ test("every Accounts block renders in each theme and density, with the switcher'
     const panes = [...block.querySelectorAll("[data-theme][data-density]")].map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`);
     expect(panes, block.id).toEqual(["comfortable dark", "comfortable light", "compact dark", "compact light"]);
   }
-  // Two open menus per pane (band and rail), each inside the pane that themes it.
+  // Three open menus per pane (band, rail, and the API-key ProfileMenu), each inside the pane that themes it,
+  // each with Organisation settings and Help after Your settings.
   const switcherPanes = [...host.querySelector("#ac-switcher")!.querySelectorAll("[data-theme][data-density]")];
-  for (const pane of switcherPanes) expect(pane.querySelectorAll("[role=menu]").length).toBe(2);
+  for (const pane of switcherPanes) {
+    const menus = [...pane.querySelectorAll("[role=menu]")];
+    expect(menus.length).toBe(3);
+    for (const m of menus) {
+      const items = [...m.querySelectorAll("[role=menuitem]")].map((i) => i.getAttribute("data-testid"));
+      expect(items.slice(items.indexOf("rowmenu-settings"), items.indexOf("rowmenu-settings") + 3)).toEqual(["rowmenu-settings", "rowmenu-org-settings", "rowmenu-help"]);
+    }
+  }
   // Every chip state is shown.
   const states = new Set([...host.querySelectorAll("#ac-chips li[data-state]")].map((c) => c.getAttribute("data-state")));
   expect([...states].sort()).toEqual(["duplicate", "invalid", "invited", "member", "renew", "valid"]);

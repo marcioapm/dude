@@ -51,18 +51,18 @@ async function onServers(page: HTMLElement) {
 }
 
 describe("Waiting routes and sidebar", () => {
-  test("the others deep link selects its tab and sidebar row; tabs and sidebar keep the original you link", async () => {
+  test("the others deep link selects its tab; the sidebar has no others row and its Waiting on you stays current", async () => {
     const page = await app("#/waiting/others", new FixtureClient("a"));
     const inbox = await until(() => page.querySelector<HTMLElement>("[data-testid=inbox]"), "Waiting");
-    await until(() => page.querySelector("[data-testid=waiting-on-others]"), "others sidebar link");
+    await until(() => page.querySelector("[data-testid=waiting-on-you]"), "the waiting sidebar link");
     expect(inbox.querySelector("[role=tab][aria-selected=true]")?.textContent).toStartWith("On others");
-    expect(page.querySelector("[data-testid=waiting-on-others]")?.getAttribute("aria-current")).toBe("page");
-    expect(page.querySelector("[data-testid=waiting-on-you]")?.hasAttribute("aria-current")).toBe(false);
+    expect(page.querySelectorAll("[data-testid=waiting-on-others]").length).toBe(0);
+    expect(page.querySelector("[data-testid=waiting-on-you]")?.getAttribute("aria-current")).toBe("page");
     await act(async () => inbox.querySelector<HTMLElement>("[role=tab]")!.focus());
     expect(window.location.hash).toBe("#/waiting");
     expect(page.querySelector("[data-testid=waiting-on-you]")?.getAttribute("aria-current")).toBe("page");
-    await click(page.querySelector("[data-testid=waiting-on-others]")!);
-    expect(window.location.hash).toBe("#/waiting/others");
+    window.history.replaceState(null, "", "#/waiting/others");
+    await act(async () => window.dispatchEvent(new HashChangeEvent("hashchange")));
     expect(inbox.querySelector("[role=tab][aria-selected=true]")?.textContent).toStartWith("On others");
     window.history.replaceState(null, "", "#/waiting");
     await act(async () => window.dispatchEvent(new HashChangeEvent("hashchange")));
@@ -244,23 +244,91 @@ describe("settings pages", () => {
     await app("#/org/settings", new FixtureClient("a"));
     await until(() => (document.title === "Organisation settings — dude" ? true : null), "the tab title");
   });
+
+  test("a role's page has the wide column; another page does not", async () => {
+    const column = async (hash: string) => {
+      const page = await app(hash, new FixtureClient("a"));
+      const main = await until(() => page.querySelector<HTMLElement>("[data-testid=org-settings] [data-settings-main]"), `the column at ${hash}`);
+      const wide = main.getAttribute("data-wide");
+      for (const unmount of mounted) await unmount();
+      mounted = [];
+      return wide;
+    };
+    expect(await column("#/org/settings/implementer")).toBe("true");
+    expect(await column("#/org/settings/delivery")).toBeNull();
+  });
 });
 
 describe("the sidebar's profile band", () => {
-  test("Sign out and your settings each say what they do in a tooltip on keyboard focus, not only to a screen reader", async () => {
+  test("signed in by key, the band opens Your settings · Organisation settings · Help · Sign out, and each goes there", async () => {
+    let signedOut = 0;
+    window.history.replaceState(null, "", `#/project/${PROJECT.id}`);
+    const client = new FixtureClient("a");
+    const { container: page, unmount } = await mount(
+      <ThemeProvider><TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <App client={client} onSignOut={() => signedOut++} onKeyRefused={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider></ThemeProvider>,
+    );
+    mounted.push(unmount);
+    const band = await until(() => page.querySelector<HTMLElement>("[data-testid=my-settings-button]"), "the profile band");
+    await until(() => (band.textContent?.includes("Márcio") ? true : null), "who you are");
+    expect(band.getAttribute("aria-label")).toBe("Márcio Martins: your settings, organisation settings, help, sign out");
+    const openMenu = () => act(async () => void band.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await openMenu();
+    expect([...document.querySelectorAll("[role=menu] [role=menuitem]")].map((i) => i.getAttribute("data-testid"))).toEqual([
+      "rowmenu-settings", "rowmenu-org-settings", "rowmenu-help", "rowmenu-signout",
+    ]);
+    for (const [id, hash] of [["org-settings", "#/org/settings"], ["help", "#/help"], ["settings", "#/me"]] as const) {
+      if (!document.querySelector("[role=menu]")) await openMenu();
+      await click(await until(() => document.querySelector<HTMLElement>(`[data-testid=rowmenu-${id}]`), id));
+      expect(window.location.hash).toStartWith(hash);
+    }
+    await openMenu();
+    await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-signout]"), "Sign out"));
+    expect(signedOut).toBe(1);
+    // Neither is a row of the band any more.
+    expect(page.querySelectorAll("[data-testid=help-button], [data-testid=org-settings-button]").length).toBe(0);
+  });
+});
+
+describe("the sidebar's room", () => {
+  const at = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+  class FiveSessions extends FixtureClient {
+    override sessions(): Promise<SessionsList> {
+      const s = (id: string, minutes: number) => ({ id, title: id, role: "owner" as const, createdAt: at(9999),
+        owner: { id: YOU, name: "Márcio Martins", photoUrl: null, online: true }, shared: false, projects: [], runStatus: null, dudePause: null,
+        filed: 0, lastActivityAt: at(minutes), archived: false });
+      return Promise.resolve({ sessions: [s("one", 50), s("five", 1), s("three", 30), s("two", 40), s("four", 20)], invitations: [], questions: [] });
+    }
+  }
+  const shown = (page: HTMLElement) => [...page.querySelectorAll("[data-testid=sidebar-sessions] [data-session]")].map((r) => r.getAttribute("data-session"));
+
+  test("five sessions: the three latest by activity, newest first", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FiveSessions("a"));
+    await until(() => (shown(page).length ? true : null), "the sessions");
+    expect(shown(page)).toEqual(["five", "four", "three"]);
+  });
+
+  test("folding Sessions is kept across a reload", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FiveSessions("a"));
+    await until(() => (shown(page).length ? true : null), "the sessions");
+    await click(page.querySelector<HTMLElement>("[data-testid=sidebar-sessions] [aria-label='Fold sessions']")!);
+    expect(shown(page)).toEqual([]);
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const again = await app(`#/project/${PROJECT.id}`, new FiveSessions("a"));
+    await until(() => again.querySelector("[data-testid=sidebar-sessions] [aria-label='Unfold sessions']"), "folded after reload");
+    await settle();
+    expect(shown(again)).toEqual([]);
+    await click(again.querySelector<HTMLElement>("[data-testid=sidebar-sessions] [aria-label='Unfold sessions']")!);
+    expect(shown(again)).toEqual(["five", "four", "three"]);
+  });
+
+  test("the brand row's faces are the others online, not you", async () => {
     const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
-    const signOut = await until(() => page.querySelector<HTMLElement>("[data-testid=sign-out]"), "Sign out");
-    expect(signOut.getAttribute("aria-label")).toBe("Sign out");
-    // The DS tooltip is its only one: no native title beside it.
-    expect(signOut.hasAttribute("title")).toBe(false);
-    await settle(50);
-    await act(async () => signOut.focus());
-    expect((await until(() => document.querySelector("[role=tooltip]"), "Sign out's tooltip")).textContent).toBe("Sign out");
-    await act(async () => signOut.blur());
-    await until(() => (document.querySelector("[role=tooltip]") ? null : true), "its tooltip gone");
-    const settings = page.querySelector<HTMLElement>("[data-testid=my-settings-button]")!;
-    await act(async () => settings.focus());
-    expect((await until(() => document.querySelector("[role=tooltip]"), "the settings tooltip")).textContent).toBe("Your settings");
+    const online = await until(() => page.querySelector("header [data-testid=online]"), "who is online");
+    // The fixtures have you, Ana and Tom online.
+    expect(online.getAttribute("aria-label")).toBe("Online: Ana Ribeiro, Tom Okafor");
   });
 });
 
@@ -363,7 +431,7 @@ describe("home", () => {
     const row = await until(() => page.querySelector<HTMLElement>("[data-testid=sidebar-sessions] [data-session=bs_untitled]"), "the untitled row");
     expect(row.textContent).toBe("Untitled session");
     const action = page.querySelector<HTMLElement>("[data-testid=sidebar-sessions] [data-testid=new-session]")!;
-    expect(action.textContent).toBe("New session");
+    expect(action.getAttribute("aria-label")).toBe("New session");
   });
 
   test("an organisation with no projects gets the welcome, with New project in it for an admin", async () => {
@@ -544,6 +612,39 @@ describe("the sidebar's rail", () => {
     await key(document.body);
     expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
     expect(localStorage.getItem("dude.sidebar")).toBe("full");
+  });
+
+  test("folding with the profile menu open closes it, by [ and by the chevron, and it stays closed unfolded", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    const band = () => page.querySelector<HTMLElement>("[data-testid=my-settings-button]");
+    await until(() => (band()?.textContent?.includes("Márcio") ? true : null), "who you are");
+    const openMenu = () =>
+      act(async () => void band()!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const menu = () => document.querySelector("[role=menu]");
+    // Unfolded, the band is back; its menu's state is on the trigger at once, and
+    // a menu that came back open would be in the page once the render settles.
+    const closedOnUnfold = async () => {
+      expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+      expect((await until(band, "the band")).getAttribute("aria-expanded")).toBe("false");
+      await settle();
+      expect(menu()).toBeNull();
+    };
+    // [ folds to the rail and [ unfolds it: the menu does not follow, nor come back.
+    await openMenu();
+    await until(menu, "the menu");
+    await key(document.body);
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(menu()).toBeNull();
+    await key(document.body);
+    await closedOnUnfold();
+    // The sidebar's own chevron folds it too, and the rail's chevron unfolds it.
+    await openMenu();
+    await until(menu, "the menu again");
+    await click(page.querySelector("[data-testid=sidebar-collapse]")!);
+    expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
+    expect(menu()).toBeNull();
+    await click(page.querySelector("[data-testid=rail-expand]")!);
+    await closedOnUnfold();
   });
 
   test("a reload keeps the rail; a project's face opens its board; the chevron expands it", async () => {

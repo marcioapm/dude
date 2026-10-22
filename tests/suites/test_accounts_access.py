@@ -28,7 +28,7 @@ import requests
 from playwright.sync_api import Page, expect
 
 from conftest import ACCESS_OPERATOR
-from helpers import query
+from helpers import open_org_settings, query
 
 pytestmark = pytest.mark.ui
 
@@ -122,7 +122,7 @@ def test_the_first_admin_joins_and_invites_two_people_with_the_chip_editor(page:
     expect(page).to_have_url(re.compile(rf"#/o/{slug}/welcome$"))
     expect(page.get_by_test_id("first-one").get_by_role("heading", level=1)).to_have_text("Welcome to Initech, Bill")
 
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     expect(page).to_have_url(re.compile(rf"#/o/{slug}/org/settings"))
     members = page.get_by_test_id("members")
     expect(members).to_contain_text("People join Initech by invitation.")

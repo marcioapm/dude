@@ -807,8 +807,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   shared glyph, and the owner's face when it is not yours, so it reads
   without colour.
 - **`SidebarSessions`** sits above Projects in the sidebar: only the
-  sessions you are in, each with the bulb glyph and the `SharedMark`'s
-  parts, then New session. The app passes it as `Sidebar`'s `sessions`
+  sessions you are in, the latest three by last activity, each with the
+  bulb glyph and the `SharedMark`'s parts. Its heading folds the list
+  (the app remembers it), opens the whole list, and has a "+" for a new
+  session, as the Projects heading has for a project. The app passes it as `Sidebar`'s `sessions`
   slot, so the sidebar draws it in place and knows nothing of sessions.
 - **Archiving a session is yours alone**, from existing parts: a `quiet`
   **Archive** (or **Unarchive**) in the session header's actions, before
@@ -1315,7 +1317,11 @@ here.
 - `NavTree` / `Sidebar` take `menuItems={(row) => items | null}` (or a
   `menu` render prop for full control); a row that returns nothing draws no
   trigger. The trigger is out of the tab order and visible on hover, focus,
-  or while open, so the tree's ↑↓ → ← Home End `/` are untouched.
+   or while open, so the tree's ↑↓ → ← Home End `/` are untouched. No row
+   reserves space for the menu: it replaces trailing people, an epic's count
+   or a session's plan on hover/focus or while open. Each ancestor level has
+   a 1px border-colour guide through its chevron's centre, continuous across
+   the row gap, driven by `--depth` and `--indent`.
 - **Input** renders its own label, hint and error, tied to the field by
   `aria-describedby`. A refusal with a known fix ("BILL is already the key
   of Billing API; pick another") puts the fix beside the error as
@@ -1435,6 +1441,31 @@ here.
   and matched words are not highlighted in a hue. `SearchResultList` is the
   ordered list of them. The widths before the lead are the row's own
   custom properties, so the body indents with them.
+- **The guide (Help)** is not drawn with `SearchResultRow`: a guide section
+  has no rank worth showing, no lead in the sidebar's grammar (`RefLead`
+  has no doc type, and a section is not a thing you act on) and its snippet
+  is the point, not a detail behind a click; a 248px column cannot hold the
+  row's trailing facts. Help uses three pieces instead:
+  - **SearchField** (primitive) — the sidebar's "Find work…" box, made one
+    component: a wash at rest, a hairline on hover, the accent ring on focus,
+    a ✕ once there are words or the `shortcut` before. Named by `label`, never
+    its placeholder. The caller owns the keys (`onKeyDown`) and when to
+    search. `Sidebar`'s search is one.
+  - **DocOutline** — the guide's pages; under the current one, its `##`
+    sections (`currentSection` in bold, `aria-current="location"`). Every
+    entry is a link (`href`), so a modified click opens a tab; a plain click
+    is the caller's (`onPage`, `onSection`), which scrolls and names the
+    section in the URL. For a document's own headings, `outline` in
+    `util/markdown.ts` builds the list; the guide's sections come from its
+    API, already split.
+  - **DocSearchResults** — what a guide search found, in the list's place:
+    "N sections" (a `status`, so it is read out), then a listbox of
+    sections — heading, page title, a three-line snippet — with the query's
+    words in `<mark>` on the selection tint (`markWords`: a word matched by
+    its stem's first letters, as the search's English stemming finds it). The
+    field drives it: ↑↓ move (`aria-activedescendant`), Enter opens, Escape
+    clears; a press opens without taking the field's focus. Nothing found
+    says so in words.
 - **RefLead** is what a thing is, in the sidebar's grammar, wherever tasks,
   epics, projects and memories are named side by side: a task's
   `StatusMark` and its key in mono, the `layers` glyph for an epic, a
@@ -1574,7 +1605,14 @@ here.
   between blocks, headings 1.25em above and one step smaller than in a
   document. `variant="document"` is for published artifacts: 1em between
   blocks, 2.5em above headings, h1/h2/h3 at 1.618/1.462/1.318em, a 700px
-  measure and an optional outline.
+  measure and an optional outline. `variant="prompt"` is an agent's
+  instructions in settings (a role's prompt, read or edited in
+  `MarkdownDocument`, and an organisation's read-only copy): UI body size,
+  a compact rhythm, `{{variables}}` as chips, and no measure
+  (`--md-measure: none`) — a working document fills its container, as the
+  role's fields above it do. A role's page passes `SettingsLayout wide`,
+  which lifts the settings column's 1100px cap so the prompt reaches the
+  pane's own gutter; every other settings page keeps the cap.
 - Inline code: 0.85em mono on the sunken fill, `mark` radius, a subtle inset
   ring. Code blocks: a square sunken well, 12×16 padding, no frame; the
   language and copy control appear on hover; long lines scroll sideways
@@ -2187,8 +2225,13 @@ MarkdownCheatsheet.
 
 `src/components/` — navigation (the other half of the screen):
 
-- **Sidebar** — header, search (`/`), four triage chips with global counts,
-  the pinned Needs-you list across every project, the tree, a footer.
+- **Sidebar** — header (the brand, who else is online, collapse), search
+  (`/`), Waiting on you, the sessions slot, the tree, a footer.
+  `online` is drawn in the brand row: the others only (never `you`, who is
+  in the profile band), 20px faces, at most three then "+N", named in full
+  by the group's `aria-label` and its tooltip, absent when nobody else is
+  online; the brand's words truncate first. There is no "Waiting on
+  others" row: the inbox's Others tab is where that list lives.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
   controlled or uncontrolled. `collapsed` / `onCollapsedChange` fold it to
   the rail (a chevron in the header collapses it, `[` in the app); the rail
@@ -2443,8 +2486,11 @@ sessions*):
   each opening in `FileViewer`.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
   marker for one someone else is in too.
-- **SidebarSessions** — your brainstorm sessions above the projects, in
-  `Sidebar`'s `sessions` slot; `waitingExtra` counts their invitations and
+- **SidebarSessions** — your latest brainstorm sessions above the
+  projects, in `Sidebar`'s `sessions` slot: `limit` (3) by `lastActivityAt`,
+  newest first; the heading is a fold chevron (`folded` / `onFoldedChange`,
+  for the app to keep), Sessions (`onOpenList`) and a "+" `IconButton`
+  "New session" (`onNew`); `waitingExtra` counts their invitations and
   questions in Waiting on you.
 - **Welcome** — the first screen's stage: `mark` (the app's face; the
   design system has none), `greeting`, `line`, `composer` (a `ChatComposer
@@ -2495,12 +2541,19 @@ are in `docs/design/accounts.md`):
   the end (`trailing`), the current one ticked; **Join <org>…** per
   invitation (`onJoin`); **Your settings** (`settingsLabel`); **All
   organisations** with `superAdmin` (`adminLabel`, and `adminNote` under
-  it); **Sign out** with `signOutNote`. The trigger's name says
+  it); **Sign out** with `signOutNote`. With `onOrgSettings` and `onHelp`,
+  **Organisation settings** (building) and **Help** (book-open) follow Your
+  settings: the profile menu is where they live, not rows in the band. The
+  trigger's name says
   who, where, your role and what it opens. Enter or Space opens, arrows
   move, Enter picks, Escape closes and returns focus. Picking the current
   organisation does nothing; switching is the app's navigation
   (`onSwitch`). `switcherItems` is the menu's items, for a host that draws
-  its own trigger.
+  its own trigger; `profileItems` is its places and Sign out alone.
+- **ProfileMenu** — the same band and the same places (Your settings ·
+  Organisation settings · Help · Sign out) where there are no
+  organisations to switch between (API-key sign-in), so every sign-in mode
+  reaches them through the one menu.
 - **EmailChipsInput** — email addresses as chips, for an invite: `Input`'s
   field box holding chips and a bare input. Enter, a comma, a semicolon, a
   space or leaving the field make chips of what is typed; a paste is split

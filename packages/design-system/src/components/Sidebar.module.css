@@ -37,15 +37,16 @@
   text-overflow: ellipsis;
 }
 
+/* Others online, in the brand row: the brand's words give way first. */
 .online {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-8);
-  padding: var(--ds-space-4) var(--ds-space-8) var(--ds-space-12);
+  gap: var(--ds-space-4);
+  flex-shrink: 0;
 }
-.onlineCount {
+.onlineMore {
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 .headerActions {
@@ -55,76 +56,9 @@
   flex-shrink: 0;
 }
 
-/* Search: a field that looks like the rows around it, not a form control. */
+/* Search: a `SearchField`, set in from the sidebar's edges. */
 .search {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-6);
-  height: var(--ds-size-control-md);
   margin: 0 var(--ds-space-4) var(--ds-space-8);
-  padding: 0 var(--ds-space-8) 0 var(--ds-space-8);
-  background: var(--ds-color-active-wash);
-  border: 1px solid transparent;
-  border-radius: var(--ds-radius-control);
-  color: var(--ds-color-text-primary);
-  transition:
-    border-color var(--ds-duration-fast) var(--ds-ease-standard),
-    box-shadow var(--ds-duration-fast) var(--ds-ease-standard);
-}
-.search:hover {
-  border-color: var(--ds-color-border-subtle);
-}
-.search:focus-within {
-  border-color: var(--ds-color-accent);
-  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
-}
-.searchIcon {
-  color: var(--ds-color-text-muted);
-  flex-shrink: 0;
-}
-.searchInput {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  outline: none;
-  font-size: var(--ds-text-nav);
-  color: inherit;
-}
-/* The box's own frame is the focus ring: no second one inside it. */
-.searchInput:focus-visible {
-  outline: none;
-}
-.searchInput::placeholder {
-  color: var(--ds-color-text-muted);
-}
-.searchInput::-webkit-search-cancel-button {
-  display: none;
-}
-.searchKbd {
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-2xs);
-  line-height: 1;
-  padding: 2px 4px;
-  border-radius: var(--ds-radius-mark);
-  color: var(--ds-color-text-muted);
-}
-.searchClear {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--ds-radius-mark);
-  background: none;
-  color: var(--ds-color-text-muted);
-}
-.searchClear:hover {
-  color: var(--ds-color-text-primary);
-  background: var(--ds-color-active-wash);
 }
 
 /* Places outside the tree: Waiting on you, on others, settings. */

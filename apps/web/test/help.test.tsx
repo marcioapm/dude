@@ -4,12 +4,21 @@
  * guide's own anchors, and scrolls to the section the URL names.
  */
 
-import { afterEach, expect, test } from "bun:test";
-import { mount, until } from "./dom.ts";
+import { useState } from "react";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+
+// Under bun test a CSS module maps to {}: keep each class the stylesheet declares, as written.
+import { cssModuleAsWritten } from "../../../packages/design-system/test/cssModule.ts";
+mock.module(...cssModuleAsWritten(new URL("../../../packages/design-system/src/components/Markdown.module.css", import.meta.url)));
+import { ThemeProvider } from "@dude/design-system";
+import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
+import { act, click, mount, settle, type, until } from "./dom.ts";
 import type { HelpPage } from "../src/api/client.ts";
+import { App } from "../src/App.tsx";
 import { FixtureClient } from "../src/fixtures/client.ts";
+import { PeopleProvider } from "../src/people.tsx";
 import { setPlaceOrganization } from "../src/place.ts";
-import { HelpScreen, helpSectionId } from "../src/screens/HelpScreen.tsx";
+import { HelpScreen, docResult, helpSectionId } from "../src/screens/HelpScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -24,6 +33,12 @@ const PAGES: Record<string, HelpPage> = {
     { anchor: "searching", heading: "Searching", text: "Search finds by **words**." }] },
   settings: { slug: "settings", title: "Settings", sections: [{ anchor: "delivery", heading: "Delivery", text: "The delivery policy." }] },
 };
+
+test("a result id keeps everything after the first hash in the anchor", () => {
+  expect(docResult({ id: "memory#a#b", title: "Memory and search — Heading", snippet: "text" }, Object.values(PAGES))).toEqual({
+    page: "memory", anchor: "a#b", heading: "Heading", pageTitle: "Memory and search", snippet: "text",
+  });
+});
 
 class Helping extends FixtureClient {
   read: string[] = [];
@@ -88,4 +103,404 @@ test("a named section is scrolled to, and picking a page asks for it", async () 
   } finally {
     HTMLElement.prototype.scrollIntoView = original;
   }
+});
+
+describe("the layout", () => {
+  test("the list is sticky and 248px; the screen adds no padding of its own and the page has no measure", async () => {
+    const sheets = await Promise.all(["../../../packages/design-system/src/tokens/tokens.css", "../src/app.css", "../../../packages/design-system/src/components/Markdown.module.css"].map((p) => Bun.file(new URL(p, import.meta.url)).text()));
+    const styles = sheets.map((css) => Object.assign(document.createElement("style"), { textContent: css }));
+    document.head.append(...styles);
+    try {
+      const { container, unmount } = await mount(<HelpScreen client={new Helping("a")} page="memory" onPage={() => {}} />);
+      mounted.push(unmount);
+      await until(() => container.querySelector('[data-page="memory"]'), "the page");
+      const nav = getComputedStyle(container.querySelector(".helpPages")!);
+      expect([nav.position, nav.top, nav.width, nav.overflowY]).toEqual(["sticky", "0px", "248px", "auto"]);
+      const screen = getComputedStyle(container.querySelector(".helpScreen")!);
+      // No padding of its own: happy-dom computes an unset padding as "".
+      for (const pad of [screen.paddingTop, screen.paddingRight, screen.paddingBottom, screen.paddingLeft]) expect(["", "0px"]).toContain(pad);
+      expect(["", "none"]).toContain(getComputedStyle(container.querySelector(".helpPage")!).maxWidth);
+      expect(getComputedStyle(container.querySelector(".helpPage section > div")!).maxWidth).toBe("none");
+    } finally {
+      for (const s of styles) s.remove();
+    }
+  });
+});
+
+describe("the outline", () => {
+  const LONG: HelpPage = { slug: "delivery", title: "Delivering a task", sections: [
+    { anchor: "", heading: "", text: "Deliver runs agents." },
+    { anchor: "the-pipeline", heading: "The pipeline", text: "Steps." },
+    { anchor: "which-reviewers-run", heading: "Which reviewers run", text: "Reviewers." },
+    { anchor: "which-findings-block", heading: "Which findings block", text: "Findings." },
+  ] };
+  class Long extends Helping {
+    override helpPages() {
+      return Promise.resolve({ pages: [PAGES.memory!, { ...LONG, sections: LONG.sections.filter((s) => s.heading).map(({ anchor, heading }) => ({ anchor, heading })) }] });
+    }
+    override helpPage(slug: string) {
+      return slug === "delivery" ? Promise.resolve(LONG) : super.helpPage(slug);
+    }
+  }
+  const outline = (c: HTMLElement) => [...c.querySelectorAll("[data-testid=help-section-link]")].map((a) => [a.textContent, a.getAttribute("aria-current")]);
+
+  test("lists the current page's sections under it and marks the one scrolled into view", async () => {
+    const tops: Record<string, number> = { "the-pipeline": 40, "which-reviewers-run": 600, "which-findings-block": 1400 };
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const top = this.dataset["anchor"] ? tops[this.dataset["anchor"]] ?? 0 : 0;
+      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    try {
+      const { container, unmount } = await mount(<HelpScreen client={new Long("a")} page="delivery" onPage={() => {}} />);
+      mounted.push(unmount);
+      await until(() => container.querySelector('[data-page="delivery"]'), "the page");
+      await until(() => (outline(container).length === 3 ? true : null), "the sections");
+      expect(outline(container)).toEqual([["The pipeline", "location"], ["Which reviewers run", null], ["Which findings block", null]]);
+      // Scrolled: Which reviewers run's top has passed the list's.
+      tops["the-pipeline"] = -900;
+      tops["which-reviewers-run"] = 10;
+      tops["which-findings-block"] = 800;
+      await act(async () => void document.dispatchEvent(new Event("scroll")));
+      await until(() => outline(container)[1]?.[1] === "location" ? true : null, "the scrolled section");
+      expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", "location"], ["Which findings block", null]]);
+      // Only the current page has its sections listed.
+      expect(container.querySelectorAll("[data-testid=help-section-link]").length).toBe(3);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = original;
+    }
+  });
+
+  test("at the end of the page, a short last section that can't reach the top is the one in view", async () => {
+    const tops: Record<string, number> = { "the-pipeline": -1400, "which-reviewers-run": -500, "which-findings-block": 500 };
+    let pane: HTMLElement | null = null;
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this === pane) return { top: 0, bottom: 800, left: 0, right: 0, width: 0, height: 800, x: 0, y: 0, toJSON() {} } as DOMRect;
+      const top = this.dataset["anchor"] ? tops[this.dataset["anchor"]] ?? 0 : 0;
+      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    try {
+      // The pane scrolled to its end: 2200 of content, 800 shown, 1400 scrolled.
+      const { container, unmount } = await mount(
+        <div data-testid="pane" style={{ overflowY: "auto" }}><HelpScreen client={new Long("a")} page="delivery" section="which-findings-block" onPage={() => {}} /></div>,
+      );
+      mounted.push(unmount);
+      pane = container.querySelector<HTMLElement>("[data-testid=pane]")!;
+      for (const [k, v] of [["scrollHeight", 2200], ["clientHeight", 800], ["scrollTop", 1400]] as const) Object.defineProperty(pane, k, { configurable: true, value: v });
+      await until(() => (outline(container).length === 3 ? true : null), "the sections");
+      await act(async () => void pane!.dispatchEvent(new Event("scroll")));
+      await until(() => outline(container)[2]?.[1] === "location" ? true : null, "the final section");
+      expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", null], ["Which findings block", "location"]]);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = original;
+    }
+  });
+
+  test("a same-page valid URL section scrolls the new target and marks it current without reloading", async () => {
+    const client = new Long("a");
+    let reads = 0;
+    const read = client.helpPage.bind(client);
+    client.helpPage = (slug) => { reads++; return read(slug); };
+    const scrolled: string[] = [];
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    const originalScroll = HTMLElement.prototype.scrollIntoView;
+    let visible = "the-pipeline";
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const anchor = this.dataset["anchor"];
+      const order = ["the-pipeline", "which-reviewers-run", "which-findings-block"];
+      const top = anchor ? 10 + (order.indexOf(anchor) - order.indexOf(visible)) * 600 : 0;
+      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.id);
+      visible = this.dataset["anchor"]!;
+    };
+    function SamePage() {
+      const [section, setSection] = useState("the-pipeline");
+      return <><button onClick={() => setSection("which-reviewers-run")}>Change URL section</button>
+        <HelpScreen client={client} page="delivery" section={section} onPage={() => {}} /></>;
+    }
+    try {
+      const { container, unmount } = await mount(<SamePage />);
+      mounted.push(unmount);
+      await until(() => outline(container)[0]?.[1] === "location" ? true : null, "the first section");
+      const article = container.querySelector("article");
+      await click(container.querySelector("button")!);
+      await until(() => outline(container)[1]?.[1] === "location" ? true : null, "the new section");
+      expect(scrolled).toEqual([helpSectionId("the-pipeline"), helpSectionId("which-reviewers-run")]);
+      expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", "location"], ["Which findings block", null]]);
+      expect(reads).toBe(1);
+      expect(container.querySelector("article")).toBe(article);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect;
+      HTMLElement.prototype.scrollIntoView = originalScroll;
+    }
+  });
+
+  for (const next of [undefined, "nonexistent-section"]) {
+    test(`same-page URL section → ${next ?? "no section"} keeps the visible last section current`, async () => {
+      const client = new Long("a");
+      const scrolled: string[] = [];
+      const originalRect = HTMLElement.prototype.getBoundingClientRect;
+      const originalScroll = HTMLElement.prototype.scrollIntoView;
+      const tops: Record<string, number> = { "the-pipeline": -1400, "which-reviewers-run": -500, "which-findings-block": 500 };
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        const top = this.dataset["anchor"] ? tops[this.dataset["anchor"]] ?? 0 : 0;
+        return { top, bottom: this.dataset["testid"] === "pane" ? 800 : top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+      };
+      HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) { scrolled.push(this.id); };
+      function SamePage() {
+        const [section, setSection] = useState<string | undefined>("which-findings-block");
+        return <div data-testid="pane" style={{ overflowY: "auto" }}>
+          <button onClick={() => setSection(next)}>Unknown anchor</button>
+          <HelpScreen client={client} page="delivery" section={section} onPage={() => setSection(undefined)} />
+        </div>;
+      }
+      try {
+        const { container, unmount } = await mount(<SamePage />);
+        mounted.push(unmount);
+        const pane = container.querySelector<HTMLElement>("[data-testid=pane]")!;
+        for (const [k, v] of [["scrollHeight", 2200], ["clientHeight", 800], ["scrollTop", 1400]] as const) Object.defineProperty(pane, k, { configurable: true, value: v });
+        await until(() => outline(container).length === 3 ? true : null, "the sections");
+        await act(async () => void pane.dispatchEvent(new Event("scroll")));
+        await until(() => outline(container)[2]?.[1] === "location" ? true : null, "the final section");
+        const article = container.querySelector("article")!;
+        const lastSection = article.lastElementChild;
+        const target = next ? container.querySelector("button")! : [...container.querySelectorAll("[data-testid=help-page-link]")].find((a) => a.textContent === LONG.title)!;
+        await click(target);
+        expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", null], ["Which findings block", "location"]]);
+        expect(container.querySelector("article")!.lastElementChild).toBe(lastSection);
+        expect(pane.scrollTop).toBe(1400);
+        expect(scrolled).toEqual([helpSectionId("which-findings-block")]);
+      } finally {
+        HTMLElement.prototype.getBoundingClientRect = originalRect;
+        HTMLElement.prototype.scrollIntoView = originalScroll;
+      }
+    });
+  }
+
+  test("clicking a section asks for it in the URL, as the app's place", async () => {
+    const asked: string[] = [];
+    const { container, unmount } = await mount(<HelpScreen client={new Long("a")} page="delivery" onPage={() => {}} onSection={(p, s) => asked.push(`${p}/${s}`)} />);
+    mounted.push(unmount);
+    await until(() => (outline(container).length === 3 ? true : null), "the sections");
+    const link = container.querySelector<HTMLAnchorElement>("[data-anchor=which-findings-block][data-testid=help-section-link]")!;
+    expect(link.getAttribute("href")).toBe("#/help/delivery/which-findings-block");
+    await click(link);
+    expect(asked).toEqual(["delivery/which-findings-block"]);
+  });
+
+  test("in the app, a section click sets #/…/help/<page>/<section>", async () => {
+    window.history.replaceState(null, "", "#/help/delivery");
+    const client = new Long("a");
+    const { container, unmount } = await mount(
+      <ThemeProvider><TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider></ThemeProvider>,
+    );
+    mounted.push(unmount);
+    await until(() => (outline(container).length === 3 ? true : null), "the sections");
+    await click(container.querySelector("[data-anchor=which-reviewers-run][data-testid=help-section-link]")!);
+    expect(window.location.hash).toBe("#/help/delivery/which-reviewers-run");
+    window.history.replaceState(null, "", " ");
+  });
+});
+
+describe("searching the guide", () => {
+  const FOUND = [
+    { type: "doc", id: "settings#delivery", title: "Settings — Delivery", snippet: "The delivery policy names the reviewers.", textRank: 1, vectorRank: 0, score: 0.016, embedded: false },
+    { type: "doc", id: "memory#searching", title: "Memory and search — Searching", snippet: "Search finds a reviewer by words.", textRank: 2, vectorRank: 0, score: 0.015, embedded: false },
+  ];
+  class Searching extends Helping {
+    asked: Array<{ q: string; types?: string | undefined; limit?: number | undefined }> = [];
+    override searchMemory(params: { q: string; types?: string; limit?: number }) {
+      this.asked.push(params);
+      const results = params.q.includes("zebra") ? [] : FOUND;
+      return Promise.resolve({ results, mode: "words" as const }) as ReturnType<FixtureClient["searchMemory"]>;
+    }
+  }
+  const field = (c: HTMLElement) => c.querySelector<HTMLInputElement>("[data-testid=help-search]")!;
+  const key = (el: Element, k: string) => act(async () => void el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
+
+  test("typing replaces the list with what the guide search found: heading, page, snippet with the words marked, and a count", async () => {
+    const client = new Searching("a");
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    await type(field(container), "reviewer");
+    const results = await until(() => (container.querySelectorAll("[data-testid=help-search-result]").length === 2 ? container.querySelectorAll("[data-testid=help-search-result]") : null), "the results");
+    expect(client.asked).toEqual([{ q: "reviewer", types: "doc", limit: 20 }]);
+    expect(container.querySelectorAll("[data-testid=help-page-link]").length).toBe(0);
+    expect(container.querySelector("[data-testid=help-search-count]")!.textContent).toBe("2 sections");
+    expect([...results].map((r) => [r.querySelector("[class*=heading]")?.textContent ?? r.firstElementChild!.textContent, r.children[1]!.textContent])).toEqual([
+      ["Delivery", "Settings"], ["Searching", "Memory and search"],
+    ]);
+    expect([...results[0]!.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["reviewers"]);
+  });
+
+  test("↑/↓ move, Enter opens that page at that section, Escape clears", async () => {
+    const opened: string[] = [];
+    const { container, unmount } = await mount(<HelpScreen client={new Searching("a")} page="memory" onPage={() => {}}
+      onSection={(p, s) => opened.push(`${p}/${s}`)} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "reviewer");
+    await until(() => container.querySelector("[data-testid=help-search-result]"), "the results");
+    const selected = () => [...container.querySelectorAll("[role=option]")].findIndex((o) => o.getAttribute("aria-selected") === "true");
+    expect(selected()).toBe(0);
+    await key(input, "ArrowDown");
+    expect(selected()).toBe(1);
+    expect(input.getAttribute("aria-activedescendant")).toBe(container.querySelectorAll("[role=option]")[1]!.id);
+    await key(input, "ArrowUp");
+    await key(input, "ArrowUp");
+    expect(selected()).toBe(1);
+    await key(input, "Enter");
+    expect(opened).toEqual(["memory/searching"]);
+    await key(input, "Escape");
+    expect(input.value).toBe("");
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list back");
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
+  });
+
+  test("nothing found says so; the search waits for typing to pause and reads at most 200 characters", async () => {
+    const client = new Searching("a");
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "ze");
+    await settle(60);
+    expect(client.asked).toEqual([]);
+    await type(input, "zebra");
+    const empty = await until(() => container.querySelector("[data-testid=help-search-empty]"), "the empty state");
+    expect(empty.textContent).toBe("Nothing in the guide matches “zebra”.");
+    expect(container.querySelector("[data-testid=help-search-count]")!.textContent).toBe("0 sections");
+    // Two quick keystrokes, one search.
+    expect(client.asked.map((a) => a.q)).toEqual(["zebra"]);
+    expect(input.maxLength).toBe(200);
+  });
+
+  test("a failed search says so in place of the results, and the next search clears it", async () => {
+    const client = new Searching("a");
+    let fail = true;
+    let release!: () => void;
+    const answer = client.searchMemory.bind(client);
+    client.searchMemory = (params) => fail ? Promise.reject(new Error("search is down")) : new Promise((resolve) => {
+      release = () => resolve(answer(params));
+    });
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "beta");
+    const error = await until(() => container.querySelector("[data-testid=help-search-error]"), "the search error");
+    expect(error.textContent).toBe("Could not search the guide: search is down");
+    expect(container.querySelectorAll("[data-testid=help-search-count]").length).toBe(0);
+    expect(container.querySelectorAll("[data-testid=help-search-empty]").length).toBe(0);
+    // Only the search's own error: nothing screen-wide.
+    expect(container.querySelectorAll("[role=alert]").length).toBe(1);
+    fail = false;
+    await type(input, "reviewer");
+    expect(container.querySelectorAll("[data-testid=help-search-error]").length).toBe(0);
+    expect(container.querySelector("[data-testid=help-search-count]")?.textContent).toBe("Searching…");
+    expect(container.querySelectorAll("[role=alert]").length).toBe(0);
+    await until(() => release, "the held next search");
+    await act(async () => release());
+    await until(() => (container.querySelectorAll("[data-testid=help-search-result]").length === 2 ? true : null), "the results");
+    expect(container.querySelectorAll("[data-testid=help-search-error]").length).toBe(0);
+    expect(container.querySelectorAll("[role=alert]").length).toBe(0);
+  });
+
+  test("a query without a searchable word sends no request", async () => {
+    const client = new Searching("a");
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await type(field(container), "a !");
+    await settle(260);
+    expect(client.asked).toEqual([]);
+    expect(container.querySelector("[data-testid=help-page-link]")).not.toBeNull();
+  });
+
+  test("pages arriving during a search do not send the query again", async () => {
+    const client = new Searching("a");
+    let release!: (out: Awaited<ReturnType<Helping["helpPages"]>>) => void;
+    client.helpPages = () => new Promise((resolve) => { release = resolve; });
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await type(field(container), "reviewer");
+    await until(() => client.asked.length === 1 ? true : null, "the search");
+    await act(async () => release({ pages: Object.values(PAGES) }));
+    await settle(260);
+    expect(client.asked.map((a) => a.q)).toEqual(["reviewer"]);
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(2);
+  });
+
+  test("Enter cannot open the previous query's result while the next search is pending", async () => {
+    const opened: string[] = [];
+    const { container, unmount } = await mount(<HelpScreen client={new Searching("a")} page="memory" onPage={() => {}}
+      onSection={(p, s) => opened.push(`${p}/${s}`)} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "reviewer");
+    await until(() => container.querySelector("[data-testid=help-search-result]"), "the results");
+    await type(input, "zebra");
+    await key(input, "Enter");
+    expect(opened).toEqual([]);
+    expect(container.querySelector("[data-testid=help-search-count]")?.textContent).toBe("Searching…");
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
+  });
+
+  test("a slower rejection of an earlier query does not replace the later query's answer with an error", async () => {
+    const client = new Searching("a");
+    const held: Array<{ q: string; resolve: () => void; reject: () => void }> = [];
+    const answer = client.searchMemory.bind(client);
+    client.searchMemory = (params) => new Promise((resolve, reject) => {
+      held.push({ q: params.q, resolve: () => resolve(answer(params)), reject: () => reject(new Error("earlier search is down")) });
+    });
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "reviewer");
+    await until(() => (held.length === 1 ? true : null), "the first search");
+    await type(input, "zebra");
+    await until(() => (held.length === 2 ? true : null), "the second search");
+    expect(held.map((h) => h.q)).toEqual(["reviewer", "zebra"]);
+    await act(async () => held[1]!.resolve());
+    await until(() => container.querySelector("[data-testid=help-search-empty]"), "the second query's answer");
+    await act(async () => held[0]!.reject());
+    await settle();
+    expect(container.querySelector("[data-testid=help-search-empty]")?.textContent).toBe("Nothing in the guide matches “zebra”.");
+    expect(container.querySelector("[data-testid=help-search-count]")?.textContent).toBe("0 sections");
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
+    expect(container.querySelectorAll("[data-testid=help-search-error]").length).toBe(0);
+    expect(container.querySelectorAll("[role=alert]").length).toBe(0);
+  });
+
+  test("a slower answer to an earlier query does not replace the later query's results", async () => {
+    const client = new Searching("a");
+    const held: Array<{ q: string; resolve: () => void }> = [];
+    const answer = client.searchMemory.bind(client);
+    client.searchMemory = (params) => new Promise((resolve) => {
+      held.push({ q: params.q, resolve: () => resolve(answer(params)) });
+    });
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "reviewer");
+    await until(() => (held.length === 1 ? true : null), "the first search");
+    await type(input, "zebra");
+    await until(() => (held.length === 2 ? true : null), "the second search");
+    expect(held.map((h) => h.q)).toEqual(["reviewer", "zebra"]);
+    await act(async () => held[1]!.resolve());
+    await until(() => container.querySelector("[data-testid=help-search-empty]"), "the second query's answer");
+    await act(async () => held[0]!.resolve());
+    await settle();
+    expect(container.querySelector("[data-testid=help-search-empty]")?.textContent).toBe("Nothing in the guide matches “zebra”.");
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
+  });
 });

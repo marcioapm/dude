@@ -385,12 +385,12 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   if (kind === "epic") {
     const e = row.node as NavEpic;
     return (
-      <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"])}>
+      <div {...common} className={cx(styles["row"], styles["epic"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
         {chevron}
         <Icon name="layers" size={14} className={styles["epicGlyph"]} />
         <span className={styles["epicTitle"]}>{e.title}</span>
         {row.counts && row.counts.needs_you > 0 ? <NeedsYouCount count={row.counts.needs_you} className={styles["count"]} /> : null}
-        <span className={styles["epicCount"]}>{e.tasks.length}</span>
+        <span className={cx(styles["epicCount"], styles["rest"])}>{e.tasks.length}</span>
         {menuSlot}
       </div>
     );
@@ -406,7 +406,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
     const pr = currentPullRequest(wi);
     const driver = shownDriver(wi);
     return (
-      <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"])}>
+      <div {...common} className={cx(styles["row"], styles["task"], needsYou && styles["needsYou"], spec.terminal && styles["finished"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
         {chevron}
         <span className={styles["wiMain"]}>
           {wi.key ? <span className={styles["wiKey"]}>{wi.key}</span> : null}
@@ -422,7 +422,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
         ) : (
           <StatusBadge status={wi.status} variant="dot" iconOnly className={styles["mark"]} />
         )}
-        {people.length > 0 ? <PersonAvatarStack people={people} size={20} max={3} agents={agents} className={styles["wiPeople"]} /> : null}
+        {people.length > 0 ? <PersonAvatarStack people={people} size={20} max={3} agents={agents} className={cx(styles["wiPeople"], styles["rest"])} /> : null}
         {menuSlot}
       </div>
     );
@@ -431,7 +431,7 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   if (kind === "run") {
     const r = row.node as NavRun;
     return (
-      <div {...common} className={cx(styles["row"], styles["run"], selected && styles["selected"])}>
+      <div {...common} className={cx(styles["row"], styles["run"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
         {chevron}
         <StatusBadge status={r.status} variant="dot" iconOnly className={styles["mark"]} />
         <span className={styles["runTitle"]}>Attempt {r.attempt}</span>
@@ -444,14 +444,14 @@ export function NavTreeRow({ row, selected, tabIndex, onFocus, onKeyDown, onClic
   const s = row.node as NavSession;
   const title = s.title ?? ROLE_LABEL[s.role];
   return (
-    <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], selected && styles["selected"])}>
+    <div {...common} className={cx(styles["row"], styles["session"], needsYou && styles["needsYou"], selected && styles["selected"], menu ? styles["swapsForMenu"] : null)}>
       <AgentAvatar role={s.role} size="xs" live={s.status === "running"} className={styles["sessionAvatar"]} />
       <span className={styles["sessionMain"]} title={s.activity ? `${title} · ${s.activity}` : title}>
         <span className={styles["sessionTitle"]}>{title}</span>
         {s.activity ? <span className={styles["sessionActivity"]}> · {s.activity}</span> : null}
       </span>
       {s.plan && s.plan.total > 0 ? (
-        <span className={styles["sessionPlan"]} title={`Plan: ${s.plan.done} of ${s.plan.total}${s.plan.current ? `\nNow: ${s.plan.current}` : ""}`}>
+        <span className={cx(styles["sessionPlan"], styles["rest"])} title={`Plan: ${s.plan.done} of ${s.plan.total}${s.plan.current ? `\nNow: ${s.plan.current}` : ""}`}>
           {s.plan.done}/{s.plan.total}
         </span>
       ) : needsYou ? (

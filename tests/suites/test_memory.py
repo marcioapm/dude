@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, create_api_key, execute, query, sign_in, toast
+from helpers import ApiClient, create_api_key, execute, open_org_settings, query, sign_in, toast
 
 
 def test_a_memory_is_found_listed_edited_and_archived(client: ApiClient, project: dict):
@@ -79,7 +79,7 @@ def test_the_index_says_what_is_waiting_without_an_embedder(client: ApiClient, p
 def test_memory_is_searched_and_added_from_the_settings(page: Page, web_url: str, client: ApiClient, org: dict, project: dict, console_errors: list):
     client.create_task(project["id"], "Dedupe webhook deliveries", goal="A redelivery is processed once.")
     sign_in(page, web_url, org["api_key"])
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     page.locator("[data-settings-nav='memory']").click()
     # The group opens on its first page: Search.
     expect(page.locator("[data-settings-nav='memory-search']")).to_have_attribute("aria-current", "page")

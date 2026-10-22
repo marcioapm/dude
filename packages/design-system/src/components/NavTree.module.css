@@ -31,6 +31,16 @@
   user-select: none;
   transition: background-color var(--ds-duration-fast) var(--ds-ease-standard);
 }
+.row::before {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  left: calc(var(--ds-space-4) + 7px);
+  top: 0;
+  bottom: calc(-1 * var(--ds-space-nav-row-gap));
+  width: calc(var(--depth) * var(--indent));
+  background: repeating-linear-gradient(to right, var(--ds-color-border) 0 1px, transparent 1px var(--indent));
+}
 .row:hover {
   background: var(--ds-color-hover-wash);
 }
@@ -93,9 +103,7 @@
   width: 14px;
 }
 
-/* The row's "…" menu: space reserved so nothing shifts, invisible until
-   the row is hovered, focused, or the menu is open. Sits after whatever
-   trails the row, or pushes right when nothing does. */
+/* A row's menu replaces its trailing content; no slot is laid out at rest. */
 .menuSlot {
   display: inline-flex;
   align-items: center;
@@ -136,7 +144,7 @@
 .rest {
   flex-shrink: 0;
 }
-/* A project's people give way to its menu on hover, focus, or while open. */
+/* Trailing people, counts and plans give way on hover, focus, or while open. */
 .swapsForMenu .menuSlot {
   display: none;
 }

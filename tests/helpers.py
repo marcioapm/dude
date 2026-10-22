@@ -323,6 +323,23 @@ def open_my_settings(page) -> None:
     page.get_by_test_id("rowmenu-settings").click()
 
 
+def open_profile_item(page, item: str) -> None:
+    """An item of the profile band's menu: the switcher with accounts, the
+    profile menu (`my-settings-button`) when signed in by key."""
+    page.locator('[data-testid="switcher"], [data-testid="my-settings-button"]').first.click()
+    page.get_by_test_id(f"rowmenu-{item}").click()
+
+
+def open_org_settings(page) -> None:
+    """Organisation settings, from the profile band's menu."""
+    open_profile_item(page, "org-settings")
+
+
+def open_help(page) -> None:
+    """Help, from the profile band's menu."""
+    open_profile_item(page, "help")
+
+
 def toast(page, text: str):
     """A toast, by its text: the design system marks each one (data-toast),
     since Radix also renders a hidden copy of the text for a second."""

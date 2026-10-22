@@ -1,7 +1,10 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { NavTree, NavTreeRow } from "../../components/NavTree.tsx";
-import { SidebarLink, SidebarProfile, Sidebar } from "../../components/Sidebar.tsx";
+import { Sidebar, SidebarSessions, type SidebarSession } from "../../components/Sidebar.tsx";
+import { ProfileMenu } from "../../components/OrgSwitcher.tsx";
+import { DocOutline, DocSearchResults, type DocOutlinePage, type DocSearchResult } from "../../components/DocOutline.tsx";
+import { SearchField } from "../../primitives/SearchField.tsx";
 import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { Button } from "../../primitives/Button.tsx";
@@ -68,7 +71,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-tree-menus"
         title="NavTree — row menus"
-        note="Projects, epics and tasks get a '…' menu from the app via menuItems (or a menu render prop for full control); the tree knows nothing about the actions. The trigger is visible on hover and focus and stays out of the tab order: with a row focused, Shift+F10 or the context-menu key opens it, as does right-click, and focus returns to the row when it closes so ↑↓ keep working. Rows that return no items draw nothing. Try: focus a row, Shift+F10, ↓, Enter."
+        note="Projects, epics and tasks get a '…' menu from the app via menuItems (or a menu render prop for full control); the tree knows nothing about the actions. The trigger reserves no space on any row: on hover or focus it takes the trailing people's, epic count's or session plan's place. Nested rows show a border-colour guide per ancestor level through the chevrons. The trigger is visible on hover and focus and stays out of the tab order: with a row focused, Shift+F10 or the context-menu key opens it, as does right-click, and focus returns to the row when it closes so ↑↓ keep working. Rows that return no items draw nothing. Try: focus a row, Shift+F10, ↓, Enter."
       >
         <Panes mode={mode} surface>
           <TreeMenuDemo />
@@ -78,7 +81,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-sidebar"
         title="Sidebar — realistic"
-        note="The whole thing at its default 304px with three projects and fifty tasks. Header, search (/ from the tree, ↓ into it), four filter chips with global counts, the pinned Needs-you list across every project, then the tree. The pinned list is what makes 'what needs me' answerable without expanding anything: it names the task, who is asking, who it waits on, and where it lives. Select a row to see the selection follow into the tree."
+        note="The whole thing at its default 304px with three projects and fifty tasks. The brand row: the brand (its words truncate first), the others online (three faces and +N; hover names everyone), collapse. Search (/ from the tree, ↓ into it), Waiting on you, Sessions (latest three, folding), then the tree. The profile band opens Your settings · Organisation settings · Help · Sign out. Select a row to see the selection follow into the tree."
       >
         <Panes mode={mode}>
           <SidebarDemo />
@@ -96,11 +99,9 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="nav-sidebar-others" title="Sidebar — Waiting on others selected" note="waitingSelected='others' marks the On others link and keeps it visible while that tab is open.">
+      <Block id="nav-sidebar-sessions" title="SidebarSessions — folded, unfolded, more than three" note="The latest three by last activity, newest first. The heading: a fold chevron (the app keeps it), Sessions (the whole list), and + for a new session, as Projects has for a project. No New session row.">
         <Panes mode={mode}>
-          <div style={{ display: "flex", height: 360, overflow: "hidden" }}>
-            <Sidebar projects={navProjects} you="u_marcio" title="On others" width={304} waitingSelected="others" onWaitingSelect={() => {}} />
-          </div>
+          <SessionStates />
         </Panes>
       </Block>
 
@@ -121,6 +122,13 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
               </div>
             ))}
           </div>
+        </Panes>
+      </Block>
+
+      <Block id="nav-guide" title="SearchField / DocOutline / DocSearchResults"
+        note="The guide's column (Help): SearchField at the top (the sidebar's Find work box, one component), then DocOutline — the pages, and under the current one its sections, the one in view in bold — or, while there are words, DocSearchResults in its place: N sections, each its heading, its page and a snippet with the words marked. ↑↓ move, Enter opens, Escape clears.">
+        <Panes mode={mode} surface>
+          <GuideDemo />
         </Panes>
       </Block>
     </Section>
@@ -243,19 +251,30 @@ function TreeMenuDemo() {
   const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   const [last, setLast] = useState<string | null>(null);
   return (
-    <Col>
-      <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 420, overflow: "auto", width: 320, background: "var(--ds-color-surface)" }}>
-        <NavTree projects={navProjectsQuiet.concat(navProjects.slice(0, 1))} selected={selected} onSelect={setSelected} menuItems={(row) => menuItemsFor(row, setLast)} />
-      </div>
-      <Caption>last action: {last ?? "none"}</Caption>
-    </Col>
+    <Row top>
+      <Col>
+        <Caption>Hover a task: the ⋯ takes its people's place. Guides mark each level.</Caption>
+        <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 420, overflow: "auto", width: 320, background: "var(--ds-color-surface)" }}>
+          <NavTree projects={navProjectsQuiet.concat(navProjects.slice(0, 1))} selected={selected} onSelect={setSelected} menuItems={(row) => menuItemsFor(row, setLast)} />
+        </div>
+        <Caption>last action: {last ?? "none"}</Caption>
+      </Col>
+      <Col>
+        <Caption>Nested guides, everything open (no menus)</Caption>
+        <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 420, overflow: "auto", width: 320, background: "var(--ds-color-surface)" }}>
+          <NavTree projects={navProjects.slice(0, 1)} />
+        </div>
+      </Col>
+    </Row>
   );
 }
 
 function SidebarDemo() {
   const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   const [waiting, setWaiting] = useState(false);
-  const online = [people["marcio"]!, people["ana"]!, people["tom"]!].map((p) => ({ ...p, online: true }));
+  const [folded, setFolded] = useState(false);
+  // You and four others: the brand row shows three of the others and "+1".
+  const online = [people["marcio"]!, people["ana"]!, people["tom"]!, people["lin"]!, people["kai"]!].map((p) => ({ ...p, online: true }));
   return (
     <Col>
       <div style={{ display: "flex", height: 760, overflow: "hidden" }}>
@@ -271,20 +290,116 @@ function SidebarDemo() {
           onWaitingSelect={() => setWaiting(true)}
           waitingSelected={waiting}
           title="El Duderino"
+          onCollapsedChange={() => undefined}
+          sessions={<SidebarSessions sessions={SESSIONS} onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined}
+            folded={folded} onFoldedChange={setFolded} />}
           treeActions={<IconButton icon="plus" label="New project" size="sm" />}
-          footer={
-            <>
-              <SidebarLink icon="building" trailing={<span className="ds-label">Admin</span>}>
-                Organisation settings
-              </SidebarLink>
-              <SidebarProfile person={{ ...people["marcio"]!, online: true }} detail="marcio@example.com" onOpen={() => {}} />
-            </>
-          }
+          footer={<ProfileMenu person={{ ...people["marcio"]!, online: true }} detail="marcio@example.com" onSettings={() => undefined}
+            onOrgSettings={() => undefined} onHelp={() => undefined} onSignOut={() => undefined} signOutNote="Forget this browser's key" />}
         />
         <div style={{ flex: 1, display: "grid", placeItems: "center", background: "var(--ds-color-surface)", color: "var(--ds-color-text-muted)", fontSize: 12 }}>
           {waiting ? "Waiting on you" : selected ? `${selected.kind} · ${selected.id}` : "transcript goes here"}
         </div>
       </div>
     </Col>
+  );
+}
+
+const GUIDE: DocOutlinePage[] = [
+  { slug: "accounts", title: "Accounts and organisations", sections: [{ anchor: "keys", heading: "Keys" }] },
+  { slug: "delivery", title: "Delivering a task", sections: [
+    { anchor: "the-pipeline", heading: "The pipeline" }, { anchor: "which-reviewers-run", heading: "Which reviewers run" },
+    { anchor: "which-findings-block", heading: "Which findings block" }, { anchor: "when-the-loop-stops", heading: "When the loop stops" },
+  ] },
+  { slug: "github", title: "GitHub", sections: [] },
+  { slug: "memory", title: "Memory", sections: [] },
+];
+const GUIDE_FOUND: DocSearchResult[] = [
+  { page: "delivery", anchor: "which-reviewers-run", heading: "Which reviewers run", pageTitle: "Delivering a task",
+    snippet: "API joins for /routes/ or /api/. Documentation never runs by default. Tick it under Reviewers every delivery runs to have each round check the docs." },
+  { page: "why", anchor: "a-reviewer-didnt-run", heading: "A reviewer didn't run", pageTitle: "Why is dude doing this?",
+    snippet: "Documentation runs only where an organisation or project makes it a required reviewer. See Delivering a task." },
+];
+
+/** The guide's column: search, then the outline or what the search found. */
+function GuideDemo() {
+  const [query, setQuery] = useState("");
+  const [section, setSection] = useState("which-reviewers-run");
+  const [active, setActive] = useState(0);
+  const found = query.trim() ? (query.includes("zz") ? [] : GUIDE_FOUND) : null;
+  const openResult = (result: DocSearchResult) => {
+    setSection(result.anchor);
+    setQuery("");
+  };
+  const column = (body: ReactNode, label: string) => (
+    <Col style={{ width: 248 }}>
+      <Caption>{label}</Caption>
+      {body}
+    </Col>
+  );
+  return (
+    <Row top>
+      {column(
+        <>
+          <SearchField value={query} label="Search the guide" placeholder="Search the guide" onValueChange={setQuery}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQuery("");
+              if (e.key === "ArrowDown" && found?.length) setActive((active + 1) % found.length);
+              if (e.key === "ArrowUp" && found?.length) setActive((active - 1 + found.length) % found.length);
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const result = found?.[active];
+                if (result) openResult(result);
+              }
+            }} />
+          {found ? (
+            <DocSearchResults results={found} query={query} active={active} onActiveChange={setActive} onOpen={openResult} listId="gallery-guide" />
+          ) : (
+            <DocOutline pages={GUIDE} current="delivery" currentSection={section} href={(p, s) => `#${p}${s ? `/${s}` : ""}`}
+              onPage={() => undefined} onSection={(_, s) => setSection(s)} />
+          )}
+        </>, "live: type, or pick a section",
+      )}
+      {column(
+        <>
+          <SearchField value="documentation reviewer" label="Search the guide" onValueChange={() => undefined} />
+          <DocSearchResults results={GUIDE_FOUND} query="documentation reviewer" active={0} onActiveChange={() => undefined} onOpen={() => undefined} listId="gallery-guide-found" />
+        </>, "searching: 2 sections",
+      )}
+      {column(
+        <>
+          <SearchField value="zebra" label="Search the guide" onValueChange={() => undefined} />
+          <DocSearchResults results={[]} query="zebra" active={0} onActiveChange={() => undefined} onOpen={() => undefined} listId="gallery-guide-none" />
+        </>, "nothing found",
+      )}
+    </Row>
+  );
+}
+
+const minutesAgo = (m: number) => new Date(Date.UTC(2026, 9, 22, 12) - m * 60_000).toISOString();
+/** Five sessions out of order: the sidebar shows the latest three by activity. */
+const SESSIONS: SidebarSession[] = [
+  { id: "s_retry", title: "Retry policy for webhooks", lastActivityAt: minutesAgo(300) },
+  { id: "s_csv", title: "Invoice export as CSV", lastActivityAt: minutesAgo(5) },
+  { id: "s_copy", title: "Pricing page copy", lastActivityAt: minutesAgo(900) },
+  { id: "s_reopen", title: "Why do reviewers re-open fixed findings?", lastActivityAt: minutesAgo(40), shared: true },
+  { id: "s_onboard", title: "Onboarding checklist ideas", lastActivityAt: minutesAgo(2000), shared: true, owner: people["ana"]! },
+];
+
+function SessionStates() {
+  const [folded, setFolded] = useState(true);
+  const pane = (label: string, el: ReactNode) => (
+    <div key={label}>
+      <Caption>{label}</Caption>
+      <div style={{ width: 280, background: "var(--ds-color-chrome)", padding: 8 }}>{el}</div>
+    </div>
+  );
+  return (
+    <Row top>
+      {pane("unfolded: 5 sessions, the latest 3", <SidebarSessions sessions={SESSIONS} onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined} />)}
+      {pane("folded (click the chevron)", <SidebarSessions sessions={SESSIONS} onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined}
+        folded={folded} onFoldedChange={setFolded} />)}
+      {pane("limit 5", <SidebarSessions sessions={SESSIONS} limit={5} selected="s_reopen" onSelect={() => undefined} onNew={() => undefined} />)}
+    </Row>
   );
 }

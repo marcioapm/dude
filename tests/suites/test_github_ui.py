@@ -14,7 +14,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, sign_in, wait_until
+from helpers import ApiClient, open_org_settings, sign_in, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -115,7 +115,7 @@ def test_settings_show_webhook_health_and_save_how_dude_behaves_on_github(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, env, console_errors: list
 ):
     _sign_in(page, web_url, org["api_key"])
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     page.locator('[data-settings-nav="github"]').click()
     expect(page.get_by_test_id("webhook-summary")).to_contain_text("0 of 1 repository registered")
     page.get_by_test_id("webhook-register").click()

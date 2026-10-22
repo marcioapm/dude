@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Block, Caption, Label, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import { OrgFace } from "../../components/OrgFace.tsx";
-import { OrgSwitcher, type OrgInvitation, type OrgMembership } from "../../components/OrgSwitcher.tsx";
+import { OrgSwitcher, ProfileMenu, type OrgInvitation, type OrgMembership } from "../../components/OrgSwitcher.tsx";
 import { EmailChipsInput } from "../../components/EmailChipsInput.tsx";
 import { InvitationLinkList, type InvitationLink } from "../../components/InvitationLinkList.tsx";
 import { KeyShownOnce } from "../../components/KeyShownOnce.tsx";
@@ -48,12 +48,15 @@ const LINKS: InvitationLink[] = [
 ];
 
 /** The switcher with its menu drawn open in place, in its pane's theme. */
-function OpenSwitcher({ variant }: { readonly variant: "band" | "rail" }) {
+function OpenSwitcher({ variant }: { readonly variant: "band" | "rail" | "key" }) {
   const [host, setHost] = useState<HTMLElement | null>(null);
   return (
-    <div ref={setHost} style={{ position: "relative", minHeight: 420, display: "flex", alignItems: "flex-end", width: variant === "band" ? 284 : 56 }}>
-      {host ? <OrgSwitcher you={YOU} current={ACME} memberships={MEMBERSHIPS} invitations={INVITES} superAdmin variant={variant}
-        onSwitch={() => undefined} onJoin={() => undefined} onSettings={() => undefined} onAdmin={() => undefined} onSignOut={() => undefined}
+    <div ref={setHost} style={{ position: "relative", minHeight: 420, display: "flex", alignItems: "flex-end", width: variant === "rail" ? 56 : 284 }}>
+      {host && variant === "key" ? <ProfileMenu person={YOU} detail="marcio@example.com" onSettings={() => undefined} onOrgSettings={() => undefined}
+        onHelp={() => undefined} onSignOut={() => undefined} signOutNote="Forget this browser's key" open forceMount container={host} /> : null}
+      {host && variant !== "key" ? <OrgSwitcher you={YOU} current={ACME} memberships={MEMBERSHIPS} invitations={INVITES} superAdmin variant={variant}
+        onSwitch={() => undefined} onJoin={() => undefined} onSettings={() => undefined} onOrgSettings={() => undefined} onHelp={() => undefined}
+        onAdmin={() => undefined} onSignOut={() => undefined}
         adminNote="Super-admin: this dude's organisations"
         signOutNote="Of Cloudflare Access, on this browser" open forceMount container={host} /> : null}
     </div>
@@ -85,7 +88,7 @@ export function AccountsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="ac-switcher" title="OrgSwitcher"
-        note="You at the foot of the sidebar, and the one menu for you. band: SidebarProfile's anatomy (your face and name, the organisation's face, name and your role under it, a dot when an invitation waits, a sort chevron). rail: your face with the organisation's in its corner. The menu is RowMenu: your organisations as radio items with their face, your role and what waits on you there (the needs-you pill at the end), the current one ticked; Join… for each invitation; Your settings; All organisations for a super-admin; Sign out. Enter or Space opens, arrows move, Escape closes.">
+        note="You at the foot of the sidebar, and the one menu for you. band: SidebarProfile's anatomy (your face and name, the organisation's face, name and your role under it, a dot when an invitation waits, a sort chevron). rail: your face with the organisation's in its corner. The menu is RowMenu: your organisations as radio items with their face, your role and what waits on you there (the needs-you pill at the end), the current one ticked; Join… for each invitation; Your settings, Organisation settings and Help; All organisations for a super-admin; Sign out. Enter or Space opens, arrows move, Escape closes.">
         <Panes mode={mode}>
           <Label>closed: in Acme, an invitation waiting; without one</Label>
           <Row>
@@ -97,10 +100,11 @@ export function AccountsSection({ mode }: { readonly mode: PaneMode }) {
             </div>
             <OrgSwitcher variant="rail" you={YOU} current={ACME} memberships={MEMBERSHIPS} invitations={INVITES} onSwitch={() => undefined} onSettings={() => undefined} onSignOut={() => undefined} />
           </Row>
-          <Label>open, from the band and from the rail</Label>
+          <Label>open, from the band and from the rail; and ProfileMenu, the band with no organisations to switch (API-key sign-in)</Label>
           <Row top>
             <OpenSwitcher variant="band" />
             <OpenSwitcher variant="rail" />
+            <OpenSwitcher variant="key" />
           </Row>
         </Panes>
       </Block>

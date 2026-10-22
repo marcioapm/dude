@@ -6,6 +6,7 @@ import { Icon, type IconName } from "../icons/index.tsx";
 import { IconButton, type IconButtonProps } from "../primitives/Button.tsx";
 import { EmptyState, Skeleton } from "../primitives/Feedback.tsx";
 import { ScrollArea } from "../primitives/ScrollArea.tsx";
+import { SearchField } from "../primitives/SearchField.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import {
@@ -53,12 +54,12 @@ export interface SidebarProps extends Omit<HTMLAttributes<HTMLElement>, "onSelec
    * of it is yours and there is no Mine.
    */
   readonly you?: string | null | undefined;
-  /** Who is online, when the app knows: faces under the brand. */
+  /** Who is online, when the app knows: the others' faces in the brand row. */
   readonly online?: ReadonlyArray<Person> | undefined;
-  /** Open "Waiting on you" (or on others): a full inbox. Without it the rows are not drawn. */
-  readonly onWaitingSelect?: ((whose: "you" | "others") => void) | undefined;
+  /** Open "Waiting on you": a full inbox. Without it the row is not drawn. */
+  readonly onWaitingSelect?: ((whose: "you") => void) | undefined;
   /** The inbox is what is open: its row is current. */
-  readonly waitingSelected?: boolean | "you" | "others" | undefined;
+  readonly waitingSelected?: boolean | undefined;
   /** Waiting on you beyond the tree's tasks: session invitations and questions put to you. */
   readonly waitingExtra?: number | undefined;
   /** Controlled "Mine" (the tree shows only your tasks). Uncontrolled when omitted. */
@@ -115,6 +116,9 @@ export interface SidebarRailSessions {
 /** Where a `collapsible` sidebar becomes a drawer. Kept in step with Sidebar.module.css. */
 export const SIDEBAR_DRAWER_QUERY = "(max-width: 999.98px)";
 
+/** Faces of others online in the brand row; the rest are a "+N". */
+const ONLINE_FACES = 3;
+
 function isDrawerViewport(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches;
 }
@@ -146,16 +150,16 @@ export function projectCountWords(c: TriageCounts): string {
 /**
  * The persistent navigation beside everything else. Top to bottom:
  *
- *   brand       dude, and the organisation
- *   online      who is here now, as faces (when the app knows)
+ *   brand       dude, and the organisation; who else is online, as up to
+ *               three faces and "+N"; collapse
  *   search      `/` from anywhere in the tree; ↓ moves into the tree
- *   waiting     "Waiting on you" with the one loud count, and "Waiting on
- *               others" — what needs a person, answerable without
- *               expanding anything
+ *   waiting     "Waiting on you" with the one loud count (what waits on
+ *               others is the inbox's Others tab, not a row here)
+ *   sessions    the `sessions` slot (`SidebarSessions`)
  *   projects    Everyone / Mine, then the tree: projects with their faces,
  *               epics, tasks with their people, and under a task only the
  *               agents working now
- *   band        on its own shade: organisation settings, and you
+ *   band        on its own shade: you, and your menu
  *
  * Calm at fifty tasks: colour is on faces and marks, and the one amber
  * thing is the count of what waits on you.
@@ -270,7 +274,7 @@ export function Sidebar({
     },
     [onSelect, drawerOpen, onOpenChange],
   );
-  const openWaiting = (whose: "you" | "others") => {
+  const openWaiting = (whose: "you") => {
     onWaitingSelect?.(whose);
     if (drawerOpen) onOpenChange?.(false);
   };
@@ -362,6 +366,8 @@ export function Sidebar({
     );
   }
 
+  const othersOnline = online?.filter((p) => p.id !== you) ?? [];
+  const onlineNames = `Online: ${othersOnline.map((p) => p.name).join(", ")}`;
   const aside = (
     <aside
       className={cx(styles["root"], collapsible && styles["collapsible"], drawerOpen && styles["open"], className)}
@@ -373,6 +379,14 @@ export function Sidebar({
       {title !== undefined || headerActions !== undefined || onCollapsedChange ? (
         <header className={styles["header"]}>
           <span className={styles["title"]}>{title}</span>
+          {othersOnline.length > 0 ? (
+            <Tooltip content={onlineNames}>
+              <div className={styles["online"]} role="group" tabIndex={0} aria-label={onlineNames} data-testid="online">
+                <PersonAvatarStack people={othersOnline.slice(0, ONLINE_FACES)} size={20} max={ONLINE_FACES} aria-hidden />
+                {othersOnline.length > ONLINE_FACES ? <span className={styles["onlineMore"]} aria-hidden>+{othersOnline.length - ONLINE_FACES}</span> : null}
+              </div>
+            </Tooltip>
+          ) : null}
           {headerActions ? <span className={styles["headerActions"]}>{headerActions}</span> : null}
           {onCollapsedChange ? (
             <Tooltip content="Collapse sidebar" shortcut="[" side="right">
@@ -383,55 +397,29 @@ export function Sidebar({
         </header>
       ) : null}
 
-      {online && online.length > 0 ? (
-        <div className={styles["online"]} role="group" aria-label={`Online: ${online.map((p) => p.name).join(", ")}`} data-testid="online">
-          <span className={cx(styles["label"], "ds-label")} aria-hidden>Online</span>
-          <PersonAvatarStack people={online} size={24} max={6} />
-          <span className={styles["onlineCount"]}>{online.length}</span>
-        </div>
-      ) : null}
 
-      <div className={styles["search"]}>
-        <Icon name="search" size={14} className={styles["searchIcon"]} />
-        <input
-          ref={searchRef}
-          id={searchId}
-          className={styles["searchInput"]}
-          type="search"
-          value={q}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onSearchKey}
-          placeholder="Find work…"
-          aria-label="Find tasks, people, epics"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        {q ? (
-          <button type="button" className={styles["searchClear"]} aria-label="Clear search" onClick={() => setQuery("")}>
-            <Icon name="close" size={10} />
-          </button>
-        ) : (
-          <kbd className={styles["searchKbd"]} aria-hidden>
-            /
-          </kbd>
-        )}
-      </div>
+      <SearchField
+        ref={searchRef}
+        id={searchId}
+        className={styles["search"]}
+        value={q}
+        onValueChange={setQuery}
+        onKeyDown={onSearchKey}
+        placeholder="Find work…"
+        label="Find tasks, people, epics"
+        shortcut="/"
+      />
 
       {onWaitingSelect ? (
         <nav className={styles["waiting"]} aria-label="Waiting">
           <SidebarLink
-            current={waitingSelected === true || waitingSelected === "you"}
+            current={Boolean(waitingSelected)}
             onClick={() => openWaiting("you")}
             leading={waiting.yours.length + waitingExtra > 0 ? <NeedsYouCount count={waiting.yours.length + waitingExtra} /> : undefined}
             data-testid="waiting-on-you"
           >
             Waiting on you
           </SidebarLink>
-          {waiting.others.length > 0 || waitingSelected === "others" ? (
-            <SidebarLink current={waitingSelected === "others"} onClick={() => openWaiting("others")} count={waiting.others.length} data-testid="waiting-on-others">
-              Waiting on others
-            </SidebarLink>
-          ) : null}
         </nav>
       ) : null}
 
@@ -485,6 +473,7 @@ export function Sidebar({
 export interface SidebarSession {
   readonly id: string;
   readonly title: string;
+  readonly lastActivityAt?: string | undefined;
   /** In it with others; with the owner's face when it is not yours. */
   readonly shared?: boolean | undefined;
   readonly owner?: Person | null | undefined;
@@ -497,22 +486,31 @@ export interface SidebarSessionsProps {
   /** The label opens the list of them all. */
   readonly onOpenList?: (() => void) | undefined;
   readonly onNew: () => void;
+  readonly limit?: number | undefined;
+  readonly folded?: boolean | undefined;
+  readonly onFoldedChange?: ((folded: boolean) => void) | undefined;
 }
 
-/**
- * Your brainstorm sessions, above the projects: only those you are in.
- * Each row has the bulb glyph; one shared carries the shared glyph, and the
- * owner's face when the owner is someone else. Then New session.
- */
-export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNew }: SidebarSessionsProps) {
+/** Recent brainstorm sessions; the heading opens the list and creates a new one. */
+export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNew, limit = 3, folded, onFoldedChange }: SidebarSessionsProps) {
+  const [localFolded, setLocalFolded] = useState(false);
+  const isFolded = folded ?? localFolded;
+  const recent = [...sessions].sort((a, b) => (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "")).slice(0, Math.max(0, limit));
   return (
     <nav className={styles["sessions"]} aria-label="Sessions" data-testid="sidebar-sessions">
       <div className={styles["treeHead"]}>
+        <IconButton size="sm" icon={isFolded ? "chevron-right" : "chevron-down"} label={isFolded ? "Unfold sessions" : "Fold sessions"}
+          aria-expanded={!isFolded} onClick={() => {
+            onFoldedChange?.(!isFolded);
+            if (folded === undefined) setLocalFolded(!isFolded);
+          }} />
         {onOpenList ? (
           <button type="button" className={cx(styles["link"], "ds-label")} onClick={onOpenList}>Sessions</button>
         ) : <span className="ds-label">Sessions</span>}
+        <span className={styles["spacer"]} />
+        <IconButton size="sm" icon="plus" label="New session" onClick={onNew} data-testid="new-session" />
       </div>
-      {sessions.map((s) => (
+      {!isFolded && recent.map((s) => (
         <SidebarLink key={s.id} icon="brainstorm" current={selected === s.id} onClick={() => onSelect(s.id)} data-session={s.id}
           trailing={s.shared ? (
             <span className={styles["sessionShared"]} aria-label={s.owner ? `shared, ${s.owner.name}'s` : "shared"}>
@@ -523,7 +521,6 @@ export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNe
           {s.title}
         </SidebarLink>
       ))}
-      <SidebarLink icon="plus" onClick={onNew} data-testid="new-session">New session</SidebarLink>
     </nav>
   );
 }

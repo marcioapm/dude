@@ -411,13 +411,15 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
           <TiersDemo />
         </Panes>
       </Block>
-      <Block id="s-markdown" title="MarkdownDocument" note="Reads rendered; Edit swaps in the Markdown source, lightly highlighted, in place; Save or Cancel returns to reading.">
+      <Block id="s-markdown" title="MarkdownDocument" note="Reads rendered; Edit swaps in the Markdown source, lightly highlighted, in place; Save or Cancel returns to reading. A prompt (variant prompt, the default) has no measure: it fills the pane, as the role's fields above it do.">
         <Panes mode={mode}>
           <Col>
             <Label>Prompt, with how a project uses it</Label>
             <Segmented label="Prompt" size="sm" value={prompt} onChange={setPrompt}
               options={[{ value: "add", label: "Add to Acme’s" }, { value: "replace", label: "Replace Acme’s" }, { value: "inherit", label: "Use Acme’s" }]} />
             <MarkdownDocument source={source} onSave={setSource} meta="Last changed by Eli · yesterday" />
+            <Label>A long line fills the pane (no measure)</Label>
+            <MarkdownDocument source={"Review every change against the acceptance criteria first, then the repository's conventions, and say plainly which criterion a finding is about, quoting the line it rests on so the fixer reads the same thing you did."} />
             <Label>Editing, empty</Label>
             <MarkdownDocument source="" onSave={() => {}} defaultEditing emptyText="Nothing added." />
             <Label>Read-only</Label>
