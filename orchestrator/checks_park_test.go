@@ -113,6 +113,37 @@ func TestAHeldRunSteeredInsideTheGraceIsParkedAfterIt(t *testing.T) {
 	}
 }
 
+// A decision ends the Run's wait on the checks escalation, and only that
+// one: a question the Run has open still waits on its person.
+func TestADecisionKeepsTheWaitOfAnotherOpenAsk(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		question bool
+		waiting  int
+	}{
+		{"nothing else open", false, 0},
+		{"a question open", true, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.syncer.ParkAfter = time.Hour
+			wi := w.unbackedUntilEscalated(0)
+			runID := w.implementerOf(wi)
+			if c.question {
+				mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status)
+					VALUES ('q_'||$1, $2, $3, $1, 'Which?', 'open')`, runID, w.org, wi)
+			}
+			owner, _, _ := w.people(wi)
+			if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
+				t.Fatalf("retry: %d %v", code, body)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL`, runID); n != c.waiting {
+				t.Errorf("%d Runs still waiting after the decision, want %d", n, c.waiting)
+			}
+		})
+	}
+}
+
 // luxInputs are the inputs lux's Run for runID was given, the prompt aside.
 func (w *world) luxInputs(runID string) []string {
 	w.t.Helper()

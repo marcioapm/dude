@@ -139,9 +139,11 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksDecided, ledger.ActorHuman, decided)); err != nil {
 		return err
 	}
-	// Decided: the Run no longer waits on a person (ChecksHeld ends with
-	// this transaction).
-	if _, err := tx.Exec(ctx, `UPDATE runs SET waiting_since = NULL WHERE id = $1`, id); err != nil {
+	// Decided: the Run no longer waits on this person (ChecksHeld ends with
+	// this transaction). Another wait that holds it keeps its start: OpenAsk
+	// would still count ChecksHeld here.
+	if _, err := tx.Exec(ctx, `UPDATE runs r SET waiting_since = CASE WHEN `+HoldsTurn+` THEN r.waiting_since END
+		WHERE r.id = $1`, id); err != nil {
 		return err
 	}
 	switch action {
