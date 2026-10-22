@@ -539,6 +539,14 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   const { prs, mine, others, sessions } = parts;
   const visibleFindings = filterFindings(mine.findings, findingStatuses, findingSeverities);
+  // Clears the facets first, synchronously, so a finding they hid has a row to scroll to.
+  const showFinding = (id: string) => {
+    flushSync(() => {
+      setFindingStatuses([]);
+      setFindingSeverities([]);
+    });
+    document.querySelector(`[data-finding="${id}"]`)?.scrollIntoView({ block: "center" });
+  };
   const owner = item.owner ? (people.byId.get(item.owner.id) ?? item.owner) : null;
   const working = currentPhases.find((r) => r.status === "running");
   // Who drives it, after the status: an earlier attempt's own last decider when known, an
@@ -859,17 +867,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <VerificationSection client={client} verifications={parts.verifications} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
             <ReviewQuestionList data-testid="review-questions" questions={mine.questions.map((q) => {
               const about = q.findingId ? findings.find((f) => f.id === q.findingId) : undefined;
-              return { id: q.id, category: q.category, question: q.question, whyItMatters: q.whyItMatters, evidenceChecked: q.evidenceChecked,
-                neededFrom: q.neededFrom, about: about ? (
-                  <Button size="sm" variant="quiet" data-testid="review-question-about" title={`Show ${about.title}`}
-                    onClick={() => {
-                      flushSync(() => {
-                        setFindingStatuses([]);
-                        setFindingSeverities([]);
-                      });
-                      document.querySelector(`[data-finding="${about.id}"]`)?.scrollIntoView({ block: "center" });
-                    }}>{about.title}</Button>
-                ) : undefined };
+              return { ...q, about: about ? (
+                <Button size="sm" variant="quiet" data-testid="review-question-about" title={`Show ${about.title}`}
+                  onClick={() => showFinding(about.id)}>{about.title}</Button>
+              ) : undefined };
             })} />
             {mine.findings.length > 0 && visibleFindings.length === 0 ? (
               <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." />
