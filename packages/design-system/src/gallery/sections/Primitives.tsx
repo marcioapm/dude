@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import styles from "../gallery.module.css";
 import { Button, IconButton } from "../../primitives/Button.tsx";
@@ -530,15 +530,7 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
               <Button variant="primary">Save</Button>
             </FormActions>
             <Callout tone="success">Connected as marcioapm · scopes: repo</Callout>
-            <Callout tone="attention">
-              Ana stopped the task: “wrong plan”.
-              <CalloutActions id="gallery-ways" label="Ways to pick it back up" items={[
-                { id: "resume", action: <Button size="sm" variant="primary" leadingIcon="play" aria-describedby={calloutActionLineId("gallery-ways", "resume")}>Resume…</Button>,
-                  line: "The same conductor goes on, with its whole conversation and its agents." },
-                { id: "retry", action: <Button size="sm" leadingIcon="retry" aria-describedby={calloutActionLineId("gallery-ways", "retry")}>Try again…</Button>,
-                  line: "A new conductor on this attempt, briefed with what the stopped one did." },
-              ]} />
-            </Callout>
+            <GalleryWays />
             <div style={{ maxWidth: 320 }}>
               <Callout tone="attention">
                 Narrow: each button over its sentence.
@@ -629,6 +621,22 @@ export function PrimitivesSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
     </Section>
+  );
+}
+
+// One per pane: each theme's copy names its own sentences.
+function GalleryWays() {
+  const ways = useId();
+  return (
+    <Callout tone="attention">
+      Ana stopped the task: “wrong plan”.
+      <CalloutActions id={ways} label="Ways to pick it back up" items={[
+        { id: "resume", action: <Button size="sm" variant="primary" leadingIcon="play" aria-describedby={calloutActionLineId(ways, "resume")}>Resume…</Button>,
+          line: "The same conductor goes on, with its whole conversation and its agents." },
+        { id: "retry", action: <Button size="sm" leadingIcon="retry" aria-describedby={calloutActionLineId(ways, "retry")}>Try again…</Button>,
+          line: "A new conductor on this attempt, briefed with what the stopped one did." },
+      ]} />
+    </Callout>
   );
 }
 

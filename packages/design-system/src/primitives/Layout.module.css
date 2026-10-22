@@ -112,6 +112,12 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* With ways in it, the body takes the callout's width: the box's inline-size
+   containment adds nothing to a shrink-to-fit body, which would then measure
+   only its other text. */
+.calloutBody:has(> .calloutActionsBox) {
+  flex: 1 1 auto;
+}
 /* CalloutActions: the wrapper is the container its pairs stack on, the callout's width, not the viewport's. */
 .calloutActionsBox {
   container-type: inline-size;
