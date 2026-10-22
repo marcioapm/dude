@@ -32,6 +32,7 @@ const (
 	DeliveryRead    Key = "delivery.read"
 	Conduct         Key = "conduct"
 	Session         Key = "session"
+	SessionName     Key = "session.name"
 	SessionAgents   Key = "session.agents"
 	SessionCheckout Key = "session.checkout"
 	RunsRead        Key = "runs.read"
@@ -94,8 +95,10 @@ var All = []Capability{
 	{Key: Conduct, Description: "Drive the task's delivery: start phases and agents, steer and restart Runs, decide, update the task, publish, and act on its pull requests.",
 		Tools: []string{"start_phase", "start_agent", "steer", "restart_run", "decide", "dismiss_finding", "answer_review_question",
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
-	{Key: Session, Description: "Propose tasks, relations and projects to link for a member to file, and name the session.",
-		Tools: []string{"propose", "relate", "name_session"}},
+	{Key: Session, Description: "Propose tasks, relations and projects to link for a member to file.",
+		Tools: []string{"propose", "relate"}},
+	{Key: SessionName, Description: "Name the session, until a member names it.",
+		Tools: []string{"name_session"}},
 	{Key: SessionAgents, Description: "Start read-only investigator agents to research the linked repositories.",
 		Tools: []string{"start_agent"}},
 	{Key: SessionCheckout, Description: "Ask again for a linked repository whose checkout failed, and be told why it failed last; at most 3 a Run.",
@@ -123,7 +126,7 @@ var All = []Capability{
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
 		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionAgents, SessionCheckout, RunsRead,
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
@@ -146,11 +149,24 @@ type Grants struct {
 	keys []Key
 }
 
-// Resolve is the capabilities a has. Today its role's defaults; a stored
-// per-organisation or per-agent override is applied here, in tx, and
-// nowhere else.
+// Resolve is the capabilities a has: its role's defaults, less
+// session.name once a member has named a's session (titled_by 'person',
+// which the agent may not override). A stored per-organisation or
+// per-agent override is applied here, in tx, and nowhere else.
 func Resolve(ctx context.Context, tx pgx.Tx, a Agent) (Grants, error) {
-	return Default(a.Role), nil
+	g := Default(a.Role)
+	if a.Session == "" || !g.Has(SessionName) {
+		return g, nil
+	}
+	var byPerson bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(bool_or(titled_by = 'person'), false) FROM sessions WHERE id = $1`,
+		a.Session).Scan(&byPerson); err != nil {
+		return Grants{}, err
+	}
+	if byPerson {
+		g = g.Without(SessionName)
+	}
+	return g, nil
 }
 
 // Default is role's row of Defaults, or the "" row for a role it does not

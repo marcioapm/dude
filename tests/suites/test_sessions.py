@@ -372,12 +372,12 @@ def test_a_session_starts_untitled_its_agent_names_it_and_a_persons_name_wins(cl
     # A reader can't rename it; someone not in it is told it does not exist.
     assert reader_client.post(f"/v1/brainstorms/{session}/title", {"title": "Mine"}).status_code == 403
     assert otto_client.post(f"/v1/brainstorms/{session}/title", {"title": "Mine"}).status_code == 404
-    # Ana can, and her name wins: the agent's next name_session is refused (the scripted agent says the 422).
+    # Ana can, and her name wins: the agent is no longer given name_session (the scripted agent says the 404).
     assert ana_client.post(f"/v1/brainstorms/{session}/title", {"title": "Billing v2"}).status_code == 200
     said = len(_said(client, session))
     client.post(f"/v1/brainstorms/{session}/chat", {"text": "rename\n" + _tool("name_session", {"title": "Something else"})})
     wait_until(lambda: len(_said(client, session)) > said, timeout=60, message="the agent never answered")
-    assert any("dude name_session answered 422" in s for s in _said(client, session)[said:]), _said(client, session)[said:]
+    assert any("dude name_session answered 404" in s for s in _said(client, session)[said:]), _said(client, session)[said:]
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] == "Billing v2"
     renamed = [(e["payload"]["title"], e["payload"]["by"]) for e in client.events(sessionId=session, limit=1000)
                if e["eventType"] == "session.renamed"]

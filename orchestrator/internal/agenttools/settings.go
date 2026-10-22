@@ -215,6 +215,10 @@ func readSettings(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (sett
 	}
 	grants := map[string]capabilities.Grants{}
 	for _, role := range settingsRoles {
+		if role == c.Role {
+			grants[role] = c.grants
+			continue
+		}
 		if grants[role], err = capabilities.Resolve(ctx, tx, capabilities.Agent{Role: settingsToolRole(role), Org: c.Org}); err != nil {
 			return out, err
 		}
