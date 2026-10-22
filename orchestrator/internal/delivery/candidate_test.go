@@ -203,10 +203,11 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 					prState = "closed"
 				}
 				sc := workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org}
-				seed := []struct {
+				type stmt struct {
 					sql  string
 					args []any
-				}{
+				}
+				seed := []stmt{
 					{`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`, nil},
 					{`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`, nil},
 					{`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_t', $1, 'prj_e', 'target', 'https://github.com/acme/target')`, nil},
@@ -219,10 +220,7 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 					 VALUES ('wf_e', $1, $2, 'e', 'wi_e', 'running', 'implementRun', '{}')`, []any{WorkflowType}},
 				}
 				if v.saved {
-					seed = append(seed, struct {
-						sql  string
-						args []any
-					}{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
+					seed = append(seed, stmt{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
 					 VALUES ('run_saved', $1, 'prj_e', 'wi_e', 1, $2, 'implementer', 'agent', 'pending', '{"target":"saved"}', $3, NULLIF($4, ''))`, []any{phase, writerKey(sc, &saved, phase), branch}})
 				}
 				for _, q := range seed {

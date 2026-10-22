@@ -1794,8 +1794,9 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	return park("awaitPRFix", st, []string{runID}), nil
 }
 
+// writerKey is the creation key of the Run a review-loop writer step
+// (implementRun, fix, simplify) creates for phase.
 func writerKey(sc workflow.StepContext, st *State, phase string) string {
-	var parts []any
 	// Read, not spent: the step spends its direction once (directed).
 	d := st.Directed
 	if d != nil && d.Phase != "" && d.Phase != phase {
@@ -1803,28 +1804,30 @@ func writerKey(sc workflow.StepContext, st *State, phase string) string {
 	}
 	switch phase {
 	case PhaseImplement:
-		parts = []any{":implement"}
+		if d != nil {
+			return conductorKey(sc, st, d, ":implement")
+		}
+		return key(sc, st, ":implement")
 	case PhaseSimplify:
 		if d != nil {
 			return conductorKey(sc, st, d, ":simplify")
 		}
 		return testRoundKey(sc, st, ":simplify")
 	case PhaseFix:
-		parts = []any{":fix:", st.Iteration}
-		if st.Integration != nil {
-			parts = []any{":integration:", st.Integration.RunID, ":fix:", st.Iteration}
+		switch {
+		case d != nil:
+			return conductorKey(sc, st, d, ":fix:", st.Iteration)
+		case len(st.TestFindingIDs) > 0:
+			return key(sc, st, ":fix:", st.Iteration, ":test:", st.TestFixRounds)
+		case st.Integration != nil:
+			return key(sc, st, ":integration:", st.Integration.RunID, ":fix:", st.Iteration)
 		}
-		if len(st.TestFindingIDs) > 0 {
-			parts = []any{":fix:", st.Iteration, ":test:", st.TestFixRounds}
-		}
+		return key(sc, st, ":fix:", st.Iteration)
 	}
 	if d != nil {
-		if phase == PhaseFix {
-			parts = []any{":fix:", st.Iteration}
-		}
-		return conductorKey(sc, st, d, parts...)
+		return conductorKey(sc, st, d)
 	}
-	return key(sc, st, parts...)
+	return key(sc, st)
 }
 
 // writerCandidate recovers this step's persisted writer before live PR routing.
@@ -2341,16 +2344,18 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 	// obligations again, and its retry is the writer step it opened with.
 	retryStep := "fix"
 	if c.Loop {
-		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			phase, err := discardLoopCandidateTx(ctx, tx, st.TaskID, sc.WorkflowRunID, st.Attempt, c.Round, slices.Sorted(maps.Keys(moved)))
-			if phase == PhaseImplement {
-				retryStep = "implementRun"
-			} else if phase == PhaseSimplify {
-				retryStep = "simplify"
-			}
+		var phase string
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+			phase, err = discardLoopCandidateTx(ctx, tx, st.TaskID, sc.WorkflowRunID, st.Attempt, c.Round, slices.Sorted(maps.Keys(moved)))
 			return err
 		}); err != nil {
 			return workflow.Result{}, err
+		}
+		switch phase {
+		case PhaseImplement:
+			retryStep = "implementRun"
+		case PhaseSimplify:
+			retryStep = "simplify"
 		}
 		st.SimplifyBase = nil
 	}
