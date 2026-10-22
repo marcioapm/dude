@@ -463,6 +463,64 @@ func TestWakingAStoppedTaskStartsNoConductor(t *testing.T) {
 	}
 }
 
+// Try again on a failed conductor of a task its owner then stopped is
+// refused like a message in Chat: the stopped task starts no conductor.
+func TestRetryingAFailedConductorOfAStoppedTaskIsRefused(t *testing.T) {
+	w, task, run := failedConductor(t)
+	ana := w.ownedBy(task, "Ana")
+	w.stop(ana, task, map[string]any{})
+	key := w.str(`SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, task)
+	status, out := w.callAs(ana, "/internal/tasks/"+task+"/retry", map[string]any{})
+	e, _ := out["error"].(map[string]any)
+	if status != 409 || e["code"] != "stopped" || e["message"] != key+" is stopped: Resume, Try again or Start over first" {
+		t.Fatalf("Try again on a stopped task: %d %v", status, out)
+	}
+	if got := w.conductorRuns(task); len(got) != 1 || got[0] != run {
+		t.Errorf("conductors after a refused Try again: %v, want only %s", got, run)
+	}
+	if n := w.liveTalkers("task_id", task); n != 0 {
+		t.Errorf("%d live conductors on a stopped task", n)
+	}
+}
+
+// A conductor that ended holding a message, on a task its owner stopped
+// beside the kept conductor: the sweep starts no conductor and leaves the
+// message unsettled; Resume takes the kept conductor up, and the message
+// goes to it.
+func TestTheHandOverWaitsForAStoppedTasksPickUp(t *testing.T) {
+	w := conducting(t)
+	task, ana, conductor := w.stoppedAtDecision()
+	failed := "run_failed_" + task
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role, created_at, started_at, ended_at)
+		SELECT $1, organization_id, project_id, task_id, attempt, 'failed', 'agent', 'conductor',
+			created_at - interval '1 minute', created_at - interval '1 minute', created_at FROM runs WHERE id = $2`, failed, conductor)
+	mustExec(t, w.owner, `INSERT INTO directives (id, organization_id, task_id, run_id, text) VALUES ('dir_held', $1, $2, $3, 'and the tests?')`,
+		w.org, task, failed)
+	if n := w.count(`SELECT count(*) FROM `+delivery.Unheard+` WHERE r.task_id = $1`, task); n != 0 {
+		t.Errorf("the sweep selects a stopped task's unheard conductor")
+	}
+	for range 10 {
+		w.pump()
+	}
+	if got := w.conductorRuns(task); len(got) != 2 || got[0] != failed || got[1] != conductor {
+		t.Fatalf("conductors after the sweep on a stopped task: %v, want [%s %s]", got, failed, conductor)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE id = 'dir_held' AND delivered_at IS NULL AND failed_at IS NULL`); n != 1 {
+		t.Errorf("the held message was settled while the task was stopped: %s", w.str(`SELECT COALESCE(error, '') FROM directives WHERE id = 'dir_held'`))
+	}
+	w.pickUp(ana, task, map[string]any{"action": "resume"})
+	w.until("the held message handed to the kept conductor", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND supersedes = 'dir_held'`, conductor) == 1
+	})
+	w.until("the kept conductor to hear it", func() bool {
+		r := w.luxRunFor(conductor)
+		return r != nil && slicesContainsSub(r.Inputs, "and the tests?")
+	})
+	if got := w.conductorRuns(task); len(got) != 2 {
+		t.Errorf("conductors after the resume: %v", got)
+	}
+}
+
 func slicesContainsSub(items []string, want string) bool {
 	for _, s := range items {
 		if strings.Contains(s, want) {

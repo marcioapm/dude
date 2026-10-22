@@ -104,8 +104,9 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 		stoppedRuns = e.RunIDs()
 	}
 	if h := t.State.Halt; h != nil && h.Conductor != "" {
-		// No conductor starts while the task is halted (delivery.HaltedTx),
-		// so the one the Stop kept is still the task's.
+		// No conductor starts while the task is halted (delivery.HaltedTx:
+		// Chat, Talk, Try again, a mention, a wake and the hand-over all
+		// check it), so the one the Stop kept is still the task's.
 		stoppedRuns = append(slices.Clone(stoppedRuns), h.Conductor)
 	}
 	if len(stoppedRuns) == 0 {
