@@ -894,6 +894,28 @@ describe("the tester's verdict on the task page", () => {
     expect(banner.querySelectorAll("[data-testid=escalation-stop]").length).toBe(0);
   });
 
+  test("a loop that is not converging names, on the task's banner, the escalated finding's criterion and no other", async () => {
+    class NotConverging extends FixtureClient {
+      override async getTask(id: string) {
+        const task = await super.getTask(id);
+        return { ...task, escalation: { reason: "not_converging", actions: ["retry", "accept", "amend", "stop"] as EscalationAction[],
+          at: "2026-10-01T00:00:00Z", detail: { reason: "not_converging", findingIds: ["f4"] } } };
+      }
+      override listFindings(taskId: string) {
+        return super.listFindings(taskId).then(({ findings }) => ({ findings: findings.map((f) => f.id === "f4"
+          ? { ...f, status: "open" as const, acceptance: "No stylesheet keeps an unused class." } : f) }));
+      }
+    }
+    const page = await taskPage(new NotConverging("d"));
+    const banner = await until(() => page.querySelector<HTMLElement>("[data-testid=escalation]"), "the banner");
+    const named = await until(() => {
+      const items = [...banner.querySelectorAll<HTMLElement>("[data-testid=escalation-finding]")];
+      return items.length > 0 ? items : null;
+    }, "the named finding");
+    expect(named.map((f) => [f.getAttribute("data-finding-id"), f.textContent]))
+      .toEqual([["f4", "Unused class .legacy — Done when: No stylesheet keeps an unused class."]]);
+  });
+
   test("a tester's finding a person waived reads Waived in the Findings list, not Accepted", async () => {
     class Waived extends FixtureClient {
       override listFindings(taskId: string) {

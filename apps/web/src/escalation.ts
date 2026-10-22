@@ -49,13 +49,20 @@ function criteriaList(criteria: Array<{ criterion: number; text: string }>): str
 /**
  * An action that ships past what nobody saw work (a failed criterion, a check the
  * tester could not make, an unbacked checks report): it needs the person's reason.
-  * The orchestrator's delivery.NeedsReason also permits admin decisions for these actions.
+ * Mirrors the orchestrator's delivery.NeedsReason, which refuses these actions
+ * without a note and lets an organisation admin take them as well as the owner.
  */
 export function needsReason(reason: string, action: string): boolean {
   return (reason === "test_failed_criteria" && action === "accept")
     || ((reason === "test_blocked" || reason === "checks_unverified") && action === "waive");
 }
 
+/**
+ * An action that needs the person's own words: a reason (needsReason), or the
+ * direction for a stuck retry or a not_converging retry, accept or amend.
+ * Mirrors the orchestrator's delivery.NeedsNote, which refuses these actions
+ * without a note; it grants no admin access beyond needsReason's.
+ */
 export function needsNote(reason: string, action: string): boolean {
   return needsReason(reason, action)
     || (reason === "stuck" && action === "retry")

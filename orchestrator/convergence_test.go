@@ -384,6 +384,60 @@ func TestStuckRetryNeedsDirectionThatReachesTheNextFixer(t *testing.T) {
 	}
 }
 
+// Stop, then Try again, on a loop stopped not converging or stuck takes the
+// owner's direction as the banner's retry does: no note is a 400 that picks
+// nothing up; the note reaches the next fixer; and a not_converging loop
+// needs two new still verdicts before it escalates again.
+func TestTryAgainAfterStoppingAStalledLoopNeedsDirection(t *testing.T) {
+	for _, reason := range []string{delivery.ReasonNotConverging, "stuck"} {
+		t.Run(reason, func(t *testing.T) {
+			w := newWorld(t)
+			convergenceScript(w, func(round int) string {
+				if round == 1 {
+					finding := fakeagent.Finding
+					if reason == "stuck" {
+						finding = strings.Replace(finding, "acceptance: "+fakeagent.FindingAcceptance+"\n", "", 1)
+					}
+					return "```yaml\n" + finding + "```\n"
+				}
+				return "```yaml\nverdicts:\n  F1: still\n```\n"
+			})
+			p := scriptedPolicy()
+			fixes := 2
+			p.MaxAttemptsPerFinding = 4
+			if reason == "stuck" {
+				p.MaxAttemptsPerFinding, fixes = 1, 1
+			}
+			wi := startConvergence(w, p)
+			convergenceStop(w, wi, reason, fixes)
+			owner, _, _ := w.people(wi)
+			if code, out := w.decide(owner, wi, "stop", ""); code != 200 {
+				t.Fatalf("stop: %d %v", code, out)
+			}
+			w.until("stopped", func() bool { return w.taskStatus(wi) == "aborted" })
+			for _, note := range []string{"", " \n\t"} {
+				code, out := w.callAs(owner, "/internal/tasks/"+wi+"/recover", map[string]any{"action": "retry", "note": note})
+				if e, _ := out["error"].(map[string]any); code != 400 || e["code"] != "bad_request" {
+					t.Fatalf("try again with note %q: %d %v, want 400 bad_request", note, code, out)
+				}
+			}
+			if s := w.taskStatus(wi); s != "aborted" {
+				t.Fatalf("a refused try again picked the task up: %s", s)
+			}
+			const note = "Name the finding on FACTORY.md's first line."
+			if code, out := w.callAs(owner, "/internal/tasks/"+wi+"/recover", map[string]any{"action": "retry", "note": note}); code != 200 {
+				t.Fatalf("try again: %d %v", code, out)
+			}
+			w.directionReachesNextFix(wi, fixes, false, note)
+			if reason == "stuck" {
+				return
+			}
+			w.until("escalated again", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+			convergenceStop(w, wi, delivery.ReasonNotConverging, 4)
+		})
+	}
+}
+
 // After a convergence retry or amend, the next fixer's own input carries
 // the owner's direction, with rounds resumed or not.
 func TestConvergenceDirectionIsTheNextFixersInput(t *testing.T) {
@@ -479,6 +533,13 @@ func TestConvergenceAcceptLeavesAnUnrelatedBlockerToBeFixed(t *testing.T) {
 // criterion finding still after two fixes the conductor started: escalated
 // not_converging, the conductor told.
 func notConvergingConducted(t *testing.T) (*world, string) {
+	return notConvergingConductedWith(t, "")
+}
+
+// notConvergingConductedWith is notConvergingConducted whose first review
+// also reports extra (YAML documents after the criterion finding). The
+// conductor's wake names the escalated finding.
+func notConvergingConductedWith(t *testing.T, extra string) (*world, string) {
 	w := conducting(t)
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -486,7 +547,7 @@ func notConvergingConducted(t *testing.T) (*world, string) {
 		switch labels["dude.phase"] {
 		case "review":
 			if fmt.Sprint(labels["dude.run"]) == w.firstReview() {
-				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + extra + "```\n"}
 			}
 			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
 		case "implement", "fix":
@@ -506,7 +567,22 @@ func notConvergingConducted(t *testing.T) (*world, string) {
 		w.carriedOut(task, "decide", `{"action":"next"}`)
 	}
 	w.until("not converging", func() bool { return w.escalationReason(task) == delivery.ReasonNotConverging })
+	_, e := w.escalationOf(task)
+	raw, _ := json.Marshal(e.Detail)
+	var exit delivery.LoopExit
+	if err := json.Unmarshal(raw, &exit); err != nil || len(exit.FindingIDs) != 1 {
+		t.Fatalf("escalation detail %s: %v", raw, err)
+	}
 	w.wokenWith(task, "Escalated to a person: not converging")
+	// The wake as recorded (a batched note shortens each line).
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'escalation'
+		ORDER BY created_at DESC LIMIT 1`, task).Scan(&line); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(line, "Findings: "+exit.FindingIDs[0]+".") {
+		t.Fatalf("the wake does not name the escalated finding %s: %s", exit.FindingIDs[0], line)
+	}
 	return w, task
 }
 
@@ -537,6 +613,85 @@ func TestTheConductorRetriesNotConvergingOnTheOwnersFreeAnswer(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND run_id IS NULL AND status = 'answered'
 		AND strpos(answer, $2) > 0`, task, words); n != 1 {
 		t.Errorf("the owner's direction is not one of the task's decisions")
+	}
+}
+
+// A conducted amend replaces the named finding's criterion with exactly the
+// owner's own words, trimmed: not the conductor's proposal or note, not the
+// question. Another finding's criterion and the task's criteria stay.
+func TestTheConductorAmendsNotConvergingWithTheOwnersWords(t *testing.T) {
+	const other = "---\nseverity: low\ncategory: correctness\nfile: FACTORY.md\nline: 1\n" +
+		"title: FACTORY.md has no summary\ndescription: The summary line is missing.\nacceptance: FACTORY.md ends with a summary line.\n"
+	w, task := notConvergingConductedWith(t, other)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	_, e := w.escalationOf(task)
+	named := e.Detail.(map[string]any)["findingIds"].([]any)[0].(string)
+	w.must(task, "ask_person", `{"question":"What should the criterion say instead?","choices":["Stop"],"actions":["stop"]}`)
+	const words = "FACTORY.md names the finding it fixes on its first line."
+	if status, out := w.answerAs(ana, task, "  \n"+words+"\t\n"); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	w.must(task, "decide_escalation", `{"action":"amend","note":"The conductor's own summary of the change."}`)
+	w.until("the amend carried out", func() bool {
+		return w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND acceptance <> $2 AND id = $3`,
+			task, fakeagent.FindingAcceptance, named) == 1
+	})
+	rows, err := w.owner.Query(context.Background(), `SELECT id, COALESCE(acceptance, '') FROM review_findings WHERE task_id = $1`, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	criteria := map[string]string{}
+	for rows.Next() {
+		var id, acceptance string
+		if err := rows.Scan(&id, &acceptance); err != nil {
+			t.Fatal(err)
+		}
+		criteria[id] = acceptance
+	}
+	rows.Close()
+	if len(criteria) != 2 || criteria[named] != words {
+		t.Fatalf("criteria after amend = %q, want %s = %q", criteria, named, words)
+	}
+	for id, c := range criteria {
+		if id != named && c != "FACTORY.md ends with a summary line." {
+			t.Errorf("unnamed finding %s criterion changed to %q", id, c)
+		}
+	}
+	var taskCriteria []string
+	if err := w.owner.QueryRow(context.Background(), `SELECT acceptance_criteria FROM tasks WHERE id = $1`, task).Scan(&taskCriteria); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(taskCriteria, []string{"it greets"}) {
+		t.Errorf("task criteria changed: %q", taskCriteria)
+	}
+}
+
+// A task nobody owns is anyone's to direct: a member's free answer hands a
+// not_converging or stuck retry to the conductor, which needs no admin for
+// it (an admin is needed only to ship past a failed test or waive a check).
+func TestTheConductorRetriesAnOwnerlessStalledLoopOnAMembersDirection(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func(*testing.T) (*world, string)
+	}{
+		{"not converging", notConvergingConducted},
+		{"stuck", stuck},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, task := c.setup(t)
+			mustExec(t, w.owner, `DELETE FROM task_people WHERE task_id = $1`, task)
+			bo := w.person("Bo")
+			mustExec(t, w.owner, `UPDATE people SET role = 'member' WHERE organization_id = $1`, w.org)
+			w.must(task, "ask_person", `{"question":"How should the next fix differ?","choices":["Stop"],"actions":["stop"]}`)
+			const words = "Have the fixer quote the finding inside FACTORY.md."
+			if status, out := w.answerAs(bo, task, words); status != 200 {
+				t.Fatalf("the answer: %d %v", status, out)
+			}
+			fixes := w.phaseRuns(task, "fix")
+			w.must(task, "decide_escalation", `{"action":"retry"}`)
+			w.until("the next fix round", func() bool { return w.phaseRuns(task, "fix") == fixes+1 })
+		})
 	}
 }
 

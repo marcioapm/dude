@@ -193,6 +193,21 @@ test("stuck retry needs direction without granting admins owner-only decisions",
   }
 });
 
+test("a stalled loop's note asks for the person's direction, before and after an action is picked", async () => {
+  const noteLabel = (page: HTMLElement) =>
+    page.querySelector(`label[for="${page.querySelector("[data-testid=escalation-note]")!.id}"]`)?.textContent ?? "";
+  const nc = await banner("not_converging", ["retry", "accept", "amend", "stop"]);
+  expect(noteLabel(nc.page)).toContain("A note for the agents (required to fix differently or accept the risk or change the intended behaviour)");
+  await click(nc.page.querySelector("[data-testid=escalation-amend]")!);
+  expect(noteLabel(nc.page)).toContain("Your direction to change the intended behaviour (required)");
+  expect(nc.page.textContent).toContain("Give your direction: how to fix differently, the risk you accept, or the intended behaviour.");
+  const stuck = await banner("stuck", ["retry", "accept", "stop"]);
+  expect(noteLabel(stuck.page)).toContain("A note for the agents (required to try again)");
+  await click(stuck.page.querySelector("[data-testid=escalation-retry]")!);
+  expect(noteLabel(stuck.page)).toContain("Your direction to try again (required)");
+  expect(stuck.page.textContent).toContain("Give your direction: how to fix differently, the risk you accept, or the intended behaviour.");
+});
+
 test("convergence shows only named findings and their loaded criteria", async () => {
   const { page } = await banner("not_converging", ["retry", "accept", "amend", "stop"], {
     detail: { findingIds: ["f2", "f3", "missing"] },
