@@ -177,15 +177,16 @@ func TestBrainstormStartsOnlyInvestigatorChildren(t *testing.T) {
 // is given it.
 func TestABrainstormIsNotGivenNameSessionOnceAMemberNamedTheSession(t *testing.T) {
 	f := setup(t)
-	for session, want := range map[string]bool{"ssn_untitled": true, "ssn_agents": true, "ssn_members": false} {
-		title, by := "", ""
-		switch session {
-		case "ssn_agents":
-			title, by = "Metering", "agent"
-		case "ssn_members":
-			title, by = "Dry run", "person"
-		}
-		token := f.session(t, session, title, by)
+	for _, s := range []struct {
+		id, title, by string
+		granted       bool
+	}{
+		{"ssn_untitled", "", "", true},
+		{"ssn_agents", "Metering", "agent", true},
+		{"ssn_members", "Dry run", "person", false},
+	} {
+		session, want := s.id, s.granted
+		token := f.session(t, session, s.title, s.by)
 		if _, ok := f.getTools(t, token)["name_session"]; ok != want {
 			t.Errorf("%s: GET /tools lists name_session %v, want %v", session, ok, want)
 		}
