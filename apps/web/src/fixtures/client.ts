@@ -22,7 +22,7 @@ import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, F
 import { RUN_KEY } from "./scenario.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
+import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
@@ -568,8 +568,24 @@ export class FixtureClient extends ApiClient {
     if (this.#restarted) return Promise.resolve({ findings: taskId === TASK_ID ? RESTARTED_FINDINGS : [] });
     return Promise.resolve({ findings: this.#scenario === "d" && taskId === TASK_ID ? FINDINGS : [] });
   }
+  /** The reviewers' questions, settled in memory as the API settles them: only an open one changes. */
+  #reviewQuestions: ReviewQuestion[] = REVIEW_QUESTIONS.map((q) => ({ ...q }));
   override reviewQuestions(taskId: string) {
-    return Promise.resolve({ questions: !this.#restarted && this.#scenario === "d" && taskId === TASK_ID ? REVIEW_QUESTIONS : [] });
+    return Promise.resolve({ questions: !this.#restarted && this.#scenario === "d" && taskId === TASK_ID ? this.#reviewQuestions.map((q) => ({ ...q })) : [] });
+  }
+  #settleReviewQuestion(id: string, status: "answered" | "withdrawn", answer: string | null) {
+    const q = this.#reviewQuestions.find((x) => x.id === id);
+    if (!q) return Promise.reject(new ApiError(404, "not_found", `reviewer question ${id} not found`));
+    if (q.status !== "open") return Promise.reject(new ApiError(409, "conflict", `reviewer question ${id} is ${q.status} already`));
+    Object.assign(q, { status, answer, answeredBy: "person", answeredAt: new Date().toISOString() });
+    return Promise.resolve({ id, status });
+  }
+  override answerReviewQuestion(id: string, answer: string) {
+    return this.#settleReviewQuestion(id, "answered", answer) as Promise<{ id: string; status: "answered" }>;
+  }
+  override withdrawReviewQuestion(id: string, reason: string) {
+    void reason;
+    return this.#settleReviewQuestion(id, "withdrawn", null) as Promise<{ id: string; status: "withdrawn" }>;
   }
   /** People's feedback, kept in memory as the API keeps it: a draft listed to its author alone. */
   feedbackItems: FeedbackItem[] = [];

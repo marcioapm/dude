@@ -1,12 +1,13 @@
 /**
- * The Findings tab's "Questions from reviewers": the attempt's open
- * questions above the findings, each with its fields and the finding it is
- * about by title; nothing when none is open.
+ * The Findings tab's "Questions from reviewers": the attempt's questions
+ * above the findings, each open one with its fields, the finding it is
+ * about by title and, for the owner, a form to answer or withdraw it; an
+ * answered one folded to its answer; nothing when none is left to show.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { click, facetCheckbox, mount, settle, until } from "./dom.ts";
+import { act, click, facetCheckbox, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { REVIEW_QUESTIONS, TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -48,10 +49,10 @@ test("the open question shows above the findings with its fields and the finding
   ]);
   expect(text(items[0])).toContain("Is the invoice option meant for annual plans only?");
   expect(items[0]!.querySelectorAll("[data-testid=review-question-about]").length).toBe(1);
-  // Above the findings, and no control to answer it.
+  // Above the findings; the owner (the fixture's reader) can answer it.
   const findings = page.querySelector("[data-testid=findings]")!;
   expect(list.compareDocumentPosition(findings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(list.querySelectorAll("textarea, input").length).toBe(0);
+  expect(items[0]!.querySelectorAll("[data-testid=review-question-form] textarea").length).toBe(1);
 });
 
 test("about scrolls only its referenced finding", async () => {
@@ -117,4 +118,68 @@ test("with no open question, nothing is shown", async () => {
   client.reviewQuestions = async () => ({ questions: [] });
   const page = await findingsTab(client);
   expect(page.querySelectorAll("[data-testid=review-questions]").length).toBe(0);
+});
+
+async function typeArea(el: Element, text: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+test("the owner answers: the forwarder is called, and the question then shows its answer, folded", async () => {
+  const client = new FixtureClient("d");
+  const sent: Array<[string, string]> = [];
+  const answer = client.answerReviewQuestion.bind(client);
+  client.answerReviewQuestion = (id, text) => { sent.push([id, text]); return answer(id, text); };
+  const page = await findingsTab(client);
+  const item = await until(() => page.querySelector('[data-testid=review-questions] [data-question="rvq_1"]'), "the open question");
+  await typeArea(item.querySelector("[data-testid=review-question-answer-text]")!, "Annual plans only.");
+  await click(item.querySelector("[data-testid=review-question-answer-send]")!);
+  const answered = await until(() => page.querySelector('[data-question="rvq_1"][data-status="answered"]'), "the answered question");
+  expect(sent).toEqual([["rvq_1", "Annual plans only."]]);
+  expect(text(answered.querySelector("[data-testid=review-question-answer]"))).toBe("Annual plans only.");
+  expect(text(answered.querySelector("[data-testid=review-question-answered-by]"))).toBe("A person answered:");
+  expect(answered.querySelectorAll("textarea").length).toBe(0);
+});
+
+test("withdraw needs a reason, then calls the forwarder and the question leaves the list", async () => {
+  const client = new FixtureClient("d");
+  const withdrawn: Array<[string, string]> = [];
+  const withdraw = client.withdrawReviewQuestion.bind(client);
+  client.withdrawReviewQuestion = (id, reason) => { withdrawn.push([id, reason]); return withdraw(id, reason); };
+  const page = await findingsTab(client);
+  const item = await until(() => page.querySelector('[data-testid=review-questions] [data-question="rvq_1"]'), "the open question");
+  await click(item.querySelector("[data-testid=review-question-withdraw]")!);
+  const confirm = item.querySelector<HTMLButtonElement>("[data-testid=review-question-withdraw-confirm]")!;
+  expect(confirm.disabled).toBe(true);
+  await typeArea(item.querySelector("[data-testid=review-question-reason]")!, "Invoices are gone from checkout.");
+  await click(confirm);
+  await settle();
+  expect(withdrawn).toEqual([["rvq_1", "Invoices are gone from checkout."]]);
+  expect(page.querySelectorAll("[data-testid=review-questions]").length).toBe(0);
+});
+
+test("anyone but the owner sees the form disabled, saying whose it is", async () => {
+  const client = new FixtureClient("d");
+  const task = await client.getTask(TASK_ID);
+  client.getTask = async () => ({ ...task, owner: { ...task.owner!, id: "u_ana", name: "Ana Souza" } });
+  const page = await findingsTab(client);
+  const item = await until(() => page.querySelector('[data-testid=review-questions] [data-question="rvq_1"]'), "the open question");
+  expect(item.querySelector<HTMLTextAreaElement>("[data-testid=review-question-answer-text]")!.disabled).toBe(true);
+  expect(text(item.querySelector("[data-testid=review-question-not-allowed]"))).toBe("Only Ana, its owner, answers its reviewers' questions.");
+});
+
+test("a task held by an open question says so where it waits on a person", async () => {
+  const client = new FixtureClient("d");
+  const task = await client.getTask(TASK_ID);
+  client.getTask = async () => ({ ...task, status: "awaiting_input", escalation: null });
+  const page = await findingsTab(client);
+  const hold = await until(() => page.querySelector("[data-testid=questions-hold]"), "the hold notice");
+  expect(text(hold)).toContain("A reviewer's question holds the pull request.");
+  await click(page.querySelector('[data-testid=review-questions] [data-question="rvq_1"] [data-testid=review-question-withdraw]')!);
+  await typeArea(page.querySelector("[data-testid=review-question-reason]")!, "Moot.");
+  await click(page.querySelector("[data-testid=review-question-withdraw-confirm]")!);
+  await settle();
+  expect(page.querySelectorAll("[data-testid=questions-hold]").length).toBe(0);
 });

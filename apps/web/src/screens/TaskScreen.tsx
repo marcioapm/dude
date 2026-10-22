@@ -410,7 +410,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const parts = useMemo(() => {
     const ofAttempt = (n: number) => ({
       findings: findings.filter((f) => attemptOfWork(f.runId, byId, current) === n),
-      questions: questions.filter((q) => q.status === "open" && attemptOfWork(q.runId, byId, current) === n),
+      // Every status: ReviewQuestionList folds the answered ones and leaves out the withdrawn.
+      questions: questions.filter((q) => attemptOfWork(q.runId, byId, current) === n),
       artifacts: artifacts.filter((a) => attemptOfWork(a.runId, byId, current) === n),
     });
     return {
@@ -592,6 +593,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       ? `reviewers, a fixer if they find problems, a simplifier, then pull request #${source.number}'s feedback`
       : "reviewers, a fixer if they find problems, a simplifier, then a pull request once you say Open or Draft");
   const commentingNotices = !earlier && commentingNoticeShown(commenting) ? <CommentingNotices control={commenting} /> : null;
+  // Waiting on a person for the reviewers' open questions alone: the pull request is held until each is answered or withdrawn.
+  const openQuestions = parts.mine.questions.filter((q) => q.status === "open").length;
+  const heldByQuestions = !earlier && item.status === "awaiting_input" && !item.escalation && !openOrDraft && openQuestions > 0;
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
@@ -659,13 +663,29 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <DriverConfirmation control={driverControl} />
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
-      {item.escalation || stop || aside || problem || blocked || openOrDraft || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || openOrDraft || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} conductorOpen={tab === "sessions" && shownConductor} onCurrent={() => pickAttempt(current)} /> : null}
           {!earlier ? lifecycle.notice : null}
           {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
           {openOrDraft && source ? <OpenOrDraft client={client} task={item} source={source} you={people.you} onDone={() => void load()} /> : null}
+          {heldByQuestions ? (
+            <Callout tone="attention" data-testid="questions-hold">
+              <div className="escalation">
+                <p>
+                  <strong>{openQuestions === 1 ? "A reviewer's question holds" : `${openQuestions} reviewers' questions hold`} the pull request.</strong>{" "}
+                  {yours ? "Answer or withdraw each on Findings" : `Waiting for ${owner ? firstName(owner.name) : "the owner"} to answer or withdraw each`}
+                  {item.decider === "conductor" ? ", or the conductor answers what it can establish" : ""}; then delivery goes on.
+                </p>
+                {tab !== "findings" ? (
+                  <div className="escalationActions">
+                    <Button size="sm" variant="secondary" onClick={() => pickTab("findings")} data-testid="questions-hold-open">Show the questions</Button>
+                  </div>
+                ) : null}
+              </div>
+            </Callout>
+          ) : null}
           {item.escalation && !earlier ? (
             <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
               youAdmin={people.me?.role === "admin"} onOpenRun={onOpenRun} onDecided={() => void load()} />
@@ -867,11 +887,19 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <VerificationSection client={client} verifications={parts.verifications} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
             <ReviewQuestionList data-testid="review-questions" questions={mine.questions.map((q) => {
               const about = q.findingId ? findings.find((f) => f.id === q.findingId) : undefined;
-              return { ...q, about: about ? (
-                <Button size="sm" variant="quiet" data-testid="review-question-about" title={`Show ${about.title}`}
-                  onClick={() => showFinding(about.id)}>{about.title}</Button>
-              ) : undefined };
-            })} />
+              return { ...q, answer: q.answer ?? undefined,
+                answeredBy: { kind: q.answeredBy === "conductor" ? "conductor" as const : "person" as const },
+                about: about ? (
+                  <Button size="sm" variant="quiet" data-testid="review-question-about" title={`Show ${about.title}`}
+                    onClick={() => showFinding(about.id)}>{about.title}</Button>
+                ) : undefined };
+            })}
+              // An earlier attempt's are only to read; the API refuses anyone but the owner, and the form says so first.
+              {...(!earlier ? {
+                onAnswer: async (id: string, answer: string) => { await client.answerReviewQuestion(id, answer); reload(); },
+                onWithdraw: async (id: string, reason: string) => { await client.withdrawReviewQuestion(id, reason); reload(); },
+                notAllowed: yours || people.you === null ? undefined : `Only ${owner ? firstName(owner.name) : "the task's owner"}, its owner, answers its reviewers' questions.`,
+              } : {})} />
             {mine.findings.length > 0 && visibleFindings.length === 0 ? (
               <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." />
             ) : visibleFindings.length > 0 ? (

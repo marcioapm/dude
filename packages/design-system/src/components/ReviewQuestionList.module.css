@@ -1,7 +1,8 @@
 /*
- * ReviewQuestionList: questions reviewers asked a person, read-only. No
- * tone: a question blocks nothing and is no finding. Each is a row with
- * its fields under it, aligned past the glyph.
+ * ReviewQuestionList: questions reviewers asked a person. No tone: a
+ * question is no finding, and what it holds the task's status says. Each
+ * open one is a row with its fields and its answer form under it, aligned
+ * past the glyph; an answered one folds to its row and its answer.
  */
 
 .group {
@@ -94,4 +95,46 @@
 }
 .prose {
   font-size: var(--ds-text-sm);
+}
+
+.settled {
+  padding-bottom: var(--ds-space-4);
+}
+.settledQuestion {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+}
+.answer {
+  margin: 0;
+  padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-4) + var(--ds-size-icon-sm) + var(--ds-space-8));
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.by {
+  color: var(--ds-color-text-muted);
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  max-width: var(--ds-measure-message);
+  padding: var(--ds-space-8) var(--ds-space-8) 0 calc(var(--ds-space-4) + var(--ds-size-icon-sm) + var(--ds-space-8));
+}
+.actions {
+  display: flex;
+  gap: var(--ds-space-8);
+}
+.hint {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.problem {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-danger-fg);
 }

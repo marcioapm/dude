@@ -158,9 +158,9 @@ export const FINDINGS: Finding[] = [
 export const REVIEW_QUESTIONS: ReviewQuestion[] = [
   { id: "rvq_1", taskId: TASK_ID, runId: "run_d2", category: "correctness", findingId: "f1", question: "Is the invoice option meant for annual plans only?",
     whyItMatters: "f1 is blocking only if monthly plans must never see it.", evidenceChecked: "Read PaymentStep.tsx and the plan settings; neither says.",
-    neededFrom: "product", status: "open", answer: null, createdAt: iso(139 * MIN) },
+    neededFrom: "product", status: "open", answer: null, answeredBy: null, answeredAt: null, createdAt: iso(139 * MIN) },
   { id: "rvq_2", taskId: TASK_ID, runId: "run_d2", category: "correctness", findingId: null, question: "Is the legacy checkout still reachable?",
-    whyItMatters: "", evidenceChecked: "", neededFrom: "operations", status: "withdrawn", answer: null, createdAt: iso(139 * MIN) },
+    whyItMatters: "", evidenceChecked: "", neededFrom: "operations", status: "withdrawn", answer: null, answeredBy: "person", answeredAt: iso(130 * MIN), createdAt: iso(139 * MIN) },
 ];
 
 // -- Started over: attempt 1 set aside, attempt 2 at work ----------------------

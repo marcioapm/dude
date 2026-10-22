@@ -779,6 +779,16 @@ export class ApiClient {
     return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/review-questions`);
   }
 
+  /** The task's owner answers a reviewer's open question. */
+  answerReviewQuestion(id: string, answer: string): Promise<{ id: string; status: "answered" }> {
+    return this.#request("POST", `/v1/review-questions/${encodeURIComponent(id)}/answer`, { answer });
+  }
+
+  /** The task's owner withdraws a reviewer's open question as moot, saying why. */
+  withdrawReviewQuestion(id: string, reason: string): Promise<{ id: string; status: "withdrawn" }> {
+    return this.#request("POST", `/v1/review-questions/${encodeURIComponent(id)}/withdraw`, { reason });
+  }
+
   /** The attempt's submitted feedback and your own drafts on it; the current attempt unless named. */
   feedback(taskId: string, attempt?: number): Promise<FeedbackList> {
     return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/feedback${qs({ attempt })}`);
