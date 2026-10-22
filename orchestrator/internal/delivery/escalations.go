@@ -219,8 +219,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return err
 	}
 	if note != "" {
-		if err := RecordDecisionTx(ctx, tx, org, taskID,
-			"Delivery stopped ("+strings.ReplaceAll(e.Reason, "_", " ")+"). How should it go on?", note); err != nil {
+		if err := RecordDecisionTx(ctx, tx, org, taskID, EscalationDecisionQuestion(e.Reason), note); err != nil {
 			return err
 		}
 	}
@@ -387,6 +386,12 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],
 		Note:      escalationNote(prompt, answer, ""),
 		ActorType: actorType, ActorID: actorID, QuestionID: questionID, AnsweredBy: person})
+}
+
+// EscalationDecisionQuestion is the question a person's note on an
+// escalation is recorded under (RecordDecisionTx).
+func EscalationDecisionQuestion(reason string) string {
+	return "Delivery stopped (" + strings.ReplaceAll(reason, "_", " ") + "). How should it go on?"
 }
 
 // PickUpRetryTx is a Try again's part in an escalation it stopped at: a

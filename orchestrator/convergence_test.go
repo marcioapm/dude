@@ -424,9 +424,16 @@ func TestTryAgainAfterStoppingAStalledLoopNeedsDirection(t *testing.T) {
 			if s := w.taskStatus(wi); s != "aborted" {
 				t.Fatalf("a refused try again picked the task up: %s", s)
 			}
+			if needs := w.retryNeedsNote(wi); needs != true {
+				t.Fatalf("recovery options retryNeedsNote = %v, want true", needs)
+			}
 			const note = "Name the finding on FACTORY.md's first line."
 			if code, out := w.callAs(owner, "/internal/tasks/"+wi+"/recover", map[string]any{"action": "retry", "note": note}); code != 200 {
 				t.Fatalf("try again: %d %v", code, out)
+			}
+			// Recorded as the answer to the escalation it stopped at, as the banner records it.
+			if got := w.str(`SELECT COALESCE(string_agg(prompt, ' | '), '') FROM questions WHERE task_id = $1 AND answer = $2`, wi, note); got != delivery.EscalationDecisionQuestion(reason) {
+				t.Fatalf("the direction is recorded under %q", got)
 			}
 			w.directionReachesNextFix(wi, fixes, false, note)
 			if reason == "stuck" {
