@@ -188,6 +188,30 @@ describe("task rail filtering", () => {
     });
   }
 
+  test("the session picker opened while the run loads stays open once it arrives", async () => {
+    const client = new FixtureClient("d");
+    const getRun = client.getRun.bind(client);
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => { release = r; });
+    const asked: string[] = [];
+    client.getRun = async (id) => { asked.push(id); await held; return getRun(id); };
+    const page = await taskPage(client, { tab: "sessions" });
+    await until(() => page.textContent?.includes("Loading the run") ? true : null, "the run loading");
+    await sessionOptions(page);
+    await act(async () => release());
+    await until(() => page.querySelector('[data-testid="run-screen"]'), "the loaded run");
+    const current = await until(() => document.querySelector<HTMLElement>('[data-testid="sessions"] [aria-current="true"]'), "the current session, still listed");
+    expect(page.querySelector('[data-testid="search-selector-trigger"]')?.getAttribute("data-state")).toBe("open");
+    expect(current.getAttribute("data-run")).toBe(asked[0]!);
+    const trigger = page.querySelector<HTMLElement>('[data-testid="search-selector-trigger"]')!;
+    await act(async () => { document.querySelector('input[role="combobox"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await until(() => trigger.getAttribute("data-state") === "closed" ? true : null, "Escape closing the picker");
+    const list = await sessionOptions(page);
+    const other = [...list.querySelectorAll<HTMLElement>('[role="option"]')].find((r) => r.getAttribute("aria-current") !== "true")!;
+    await act(async () => { other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+    await until(() => trigger.getAttribute("data-state") === "closed" ? true : null, "a pick closing the picker");
+  });
+
   test("Files kind counts stay put and Download all reads only displayed latest versions", async () => {
     const client = new FixtureClient("a");
     const artifact = (id: string, name: string, contentType: string) => ({ id, name, phase: "implement", role: "implementer", contentType, sizeBytes: 3, version: 1, createdAt: "2026-10-01", description: "" }) as Artifact;

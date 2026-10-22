@@ -201,6 +201,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const latest = useRef({ pickTab: (_tab: string) => {}, toCurrent: () => {}, selector: (_title: ReactNode): ReactNode => null });
   const openServers = useCallback(() => latest.current.pickTab("servers"), []);
   const toCurrent = useCallback(() => latest.current.toCurrent(), []);
+  // The session whose picker is open. Held here, not in the selector: RunScreen draws
+  // the selector in another place once its run has loaded, which remounts it.
+  const [sessionPickerOn, setSessionPickerOn] = useState<string | null>(null);
   // The session shown when none is asked for: the last one open, else one
   // picked the first time Sessions shows (what is running, else the newest)
   // and kept — a phase ending must not swap it under someone reading.
@@ -430,7 +433,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
   }, [findings, questions, artifacts, verifications, allPrs, item, byId, attempts, current, shown]);
-  const sessionSelector = useCallback((title: ReactNode) => latest.current.selector(title), [parts.sessions]);
+  const sessionSelector = useCallback((title: ReactNode) => latest.current.selector(title), [parts.sessions, sessionPickerOn]);
 
   // What the attempt's pull requests heard, for why a fix ran: a few of the ledger's many.
   const prEvents = useMemo(() => {
@@ -585,7 +588,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     ?? (picked && sessions.some((r) => r.id === picked) ? picked : undefined)
     ?? (sessions.find((r) => r.status === "running") ?? sessions[0])?.id;
   if (tab === "sessions" && openRun && openRun !== picked) setPicked(openRun);
-  latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun);
+  // Closed on leaving Sessions or the session, as the unmounted selector was.
+  if (sessionPickerOn !== null && (tab !== "sessions" || sessionPickerOn !== openRun)) setSessionPickerOn(null);
+  const picker = { open: sessionPickerOn !== null && sessionPickerOn === openRun, onOpenChange: (next: boolean) => setSessionPickerOn(next ? (openRun ?? null) : null) };
+  latest.current.selector = (title) => sessionOptions(title, sessions, openRun, onOpenRun, picker);
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
   const source = item.source ?? null;
@@ -1104,12 +1110,14 @@ function Elsewhere({ icon, title, description, others, what, onAttempt }: {
   );
 }
 
-function sessionOptions(title: ReactNode, sessions: readonly Run[], openRun: string | undefined, onOpenRun: (id: string) => void) {
+function sessionOptions(title: ReactNode, sessions: readonly Run[], openRun: string | undefined, onOpenRun: (id: string) => void,
+  picker: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const tops = sessions.filter(isConductor);
   const conductors = new Map(tops.map((r) => [r.id, r]));
   const delivered = sessions.filter((r) => !isConductor(r) && !conductors.has(r.conductorRunId ?? ""));
   const options = [...tops.flatMap((c) => [c, ...sessions.filter((r) => r.conductorRunId === c.id)]), ...delivered];
   return <SearchSelector title={title} label="Select session" placeholder="Find a session…" options={options}
+    open={picker.open} onOpenChange={picker.onOpenChange}
     optionKey={(run) => run.id} listTestId="sessions"
     optionAttributes={(run) => ({ "data-testid": "session", "data-run": run.id, "data-under": isConductor(run) ? undefined : run.conductorRunId ? "conductor" : "delivered" })}
     current={(run) => run.id === openRun} onPick={(run) => onOpenRun(run.id)}
