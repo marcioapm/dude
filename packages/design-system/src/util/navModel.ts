@@ -339,8 +339,9 @@ interface Ctx {
   readonly rows: NavRow[];
   /** No query and no triage filter: only work in progress is listed. */
   readonly trimmed: boolean;
-  /** The row key that stands for the selection (a task, or an epic); listed even when the trim would drop it. */
-  readonly pinned: string | null;
+  /** The selection's task and epic ids, listed even when the trim would drop them; null while searching. */
+  readonly pinnedTask: string | null;
+  readonly pinnedEpic: string | null;
 }
 
 function matches(q: string, ...texts: ReadonlyArray<string | undefined>): boolean {
@@ -392,8 +393,7 @@ function eligibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavT
 
 function listed(ctx: Ctx, eligible: ReadonlyArray<NavTask>): NavTask[] {
   if (!ctx.trimmed) return [...eligible];
-  const pinnedTask = ctx.pinned?.startsWith("task:") ? ctx.pinned.slice("task:".length) : null;
-  return eligible.filter((wi) => inProgress(wi.status) || wi.id === pinnedTask);
+  return eligible.filter((wi) => inProgress(wi.status) || wi.id === ctx.pinnedTask);
 }
 
 /** The id of the task a ref is or belongs to (a session's or run's task); null for projects, epics and unknown refs. */
@@ -402,14 +402,6 @@ export function taskOf(projects: ReadonlyArray<NavProject>, ref: NavRef): string
   if (ref.kind !== "session" && ref.kind !== "run") return null;
   const key = ancestorKeys(projects, ref).findLast((k) => k.startsWith("task:"));
   return key ? key.slice("task:".length) : null;
-}
-
-/** The row that stands for the selection: its task, or the epic itself. A project's header needs no pin. */
-function pinnedKey(projects: ReadonlyArray<NavProject>, selected: NavRef | null | undefined): string | null {
-  if (!selected || selected.kind === "project") return null;
-  if (selected.kind === "epic") return navKey(selected);
-  const task = taskOf(projects, selected);
-  return task ? navKey({ kind: "task", id: task }) : null;
 }
 
 /**
@@ -428,7 +420,16 @@ export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOv
   // Search forces matching ancestors open; Mine only changes their default.
   const searching = q.length > 0 || (filter.triage ?? null) !== null;
   const filtering = searching || (filter.person ?? null) !== null;
-  const ctx: Ctx = { overrides, filter, rows: [], trimmed: !searching, pinned: searching ? null : pinnedKey(projects, filter.selected) };
+  // A project's header is always listed, so only a task or epic needs the pin.
+  const pin = searching ? null : (filter.selected ?? null);
+  const ctx: Ctx = {
+    overrides,
+    filter,
+    rows: [],
+    trimmed: !searching,
+    pinnedTask: pin ? taskOf(projects, pin) : null,
+    pinnedEpic: pin?.kind === "epic" ? pin.id : null,
+  };
 
   for (const p of projects) {
     const pref = { kind: "project", id: p.id } as const;
@@ -441,7 +442,7 @@ export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOv
       .map((e) => {
         const eligible = eligibleTasks(ctx, e.tasks, projectHit || matches(q, e.title) ? "" : q);
         // The selected epic keeps its row through the trim, as long as Mine would show it.
-        const pinned = ctx.pinned === navKey({ kind: "epic", id: e.id }) && ((filter.person ?? null) === null || eligible.length > 0);
+        const pinned = e.id === ctx.pinnedEpic && ((filter.person ?? null) === null || eligible.length > 0);
         return { epic: e, items: listed(ctx, eligible), pinned };
       })
       .filter((x) => x.items.length > 0 || x.pinned);
