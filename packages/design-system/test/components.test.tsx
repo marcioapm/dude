@@ -17,7 +17,7 @@ import { EventRow } from "../src/components/EventRow.tsx";
 import { ToolCallCard } from "../src/components/ToolCallCard.tsx";
 import { Icon } from "../src/icons/index.tsx";
 import { formatTimestamp } from "../src/util/format.ts";
-import type { NavProject, NavRow, NavTask } from "../src/util/navModel.ts";
+import type { NavRow, NavTask } from "../src/util/navModel.ts";
 import { EMPTY_TRIAGE_COUNTS } from "../src/tokens/triage.ts";
 
 const noop = () => {};
@@ -234,29 +234,6 @@ describe("NavTree epic row: the layers glyph leads it", () => {
   test("a task row never draws it", () => {
     const host = render(navRow(epic.tasks[0]!, "task"));
     expect(host.querySelectorAll('svg[data-icon="layers"]').length).toBe(0);
-  });
-});
-
-describe("the tree under a task: only what works now", () => {
-  test("finished phases are not rows; the running one is", async () => {
-    const { flattenNav } = await import("../src/util/navModel.ts");
-    const project: NavProject = {
-      id: "p",
-      name: "p",
-      tasks: [
-        {
-          id: "t",
-          title: "t",
-          status: "running",
-          runs: [{ id: "r", attempt: 1, status: "running", sessions: [
-            { id: "impl", role: "implementer", status: "completed" },
-            { id: "rev", role: "reviewer", status: "completed" },
-            { id: "fix", role: "implementer", status: "running", activity: "fixing" },
-          ] }],
-        },
-      ],
-    };
-    expect(flattenNav([project], new Map()).map((r) => r.key)).toEqual(["project:p", "task:t", "session:fix"]);
   });
 });
 

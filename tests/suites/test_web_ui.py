@@ -1108,7 +1108,10 @@ def test_epics_are_made_ordered_and_removed_from_the_sidebar_and_board(
         page.get_by_test_id("epic-save").click()
         expect(page.get_by_role("treeitem", name=title)).to_be_visible()
 
-    # Move the loose task into Billing from its row's menu.
+    # Move the loose task into Billing from its row's menu. Not started, it
+    # is the board's until a search lists it; the search stays for the rest,
+    # so Billing keeps its row while its one task is in the backlog.
+    page.get_by_role("searchbox", name="Find tasks, people, epics").fill("Loose work")
     row = page.get_by_role("treeitem", name="Loose work", exact=False)
     row.focus()
     page.keyboard.press("Shift+F10")

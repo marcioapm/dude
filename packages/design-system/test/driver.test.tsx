@@ -179,7 +179,8 @@ describe("cards and rows", () => {
   });
 
   test("a sidebar row in progress carries the glyph and its words; queued and ended ones none", async () => {
-    const el = await mount(<NavTree projects={[project]} expanded={new Map([["project:p", true]])} />);
+    // Searched, so the queued and done rows are listed too.
+    const el = await mount(<NavTree projects={[project]} expanded={new Map([["project:p", true]])} filter={{ query: "task" }} />);
     const rows = [...el.querySelectorAll<HTMLElement>("[data-kind=task]")];
     const by = Object.fromEntries(rows.map((r) => [r.getAttribute("data-nav-key"), r]));
     expect(glyphOf(by["task:b"]!)).toBe("conductor");

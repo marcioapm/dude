@@ -2,8 +2,8 @@
  * The navigation tree. Every row is a sibling (flat tree), indented by
  * --depth. No borders: hover is a wash, selection a stronger wash with
  * strong ink. Projects wear their face, tasks their people (the agent
- * working for the owner on the owner's face), and under a task only the
- * agents working now. The one loud thing is the needs-you count.
+ * working for the owner on the owner's face). The one loud thing is the
+ * needs-you count.
  */
 
 .tree {
@@ -55,8 +55,7 @@
 }
 .selected,
 .selected .epicTitle,
-.selected .wiTitle,
-.selected .sessionTitle {
+.selected .wiTitle {
   color: var(--ds-color-text-strong);
   font-weight: var(--ds-weight-medium);
 }
@@ -144,7 +143,7 @@
 .rest {
   flex-shrink: 0;
 }
-/* Trailing people, counts and plans give way on hover, focus, or while open. */
+/* Trailing people and counts give way on hover, focus, or while open. */
 .swapsForMenu .menuSlot {
   display: none;
 }
@@ -253,38 +252,4 @@
 .runTitle {
   flex: 1;
   min-width: 0;
-}
-
-/* -- An agent working now, under its task: tile, what it is and does, its plan. -- */
-.session {
-  min-height: var(--ds-size-row-item-sm);
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-secondary);
-}
-.sessionAvatar {
-  flex-shrink: 0;
-}
-.sessionMain {
-  display: block;
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sessionTitle {
-  color: var(--ds-color-text-secondary);
-}
-.sessionActivity {
-  color: var(--ds-color-text-muted);
-}
-.needsYou .sessionTitle,
-.needsYou .sessionActivity {
-  color: var(--ds-color-text-primary);
-}
-.sessionPlan {
-  flex-shrink: 0;
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-  font-variant-numeric: tabular-nums;
 }
