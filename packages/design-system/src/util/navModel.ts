@@ -420,7 +420,7 @@ export function flattenNav(projects: ReadonlyArray<NavProject>, overrides: NavOv
   // Search forces matching ancestors open; Mine only changes their default.
   const searching = q.length > 0 || (filter.triage ?? null) !== null;
   const filtering = searching || (filter.person ?? null) !== null;
-  // A project's header is always listed, so only a task or epic needs the pin.
+  // A project needs no pin: unfiltered its header is always listed, and Mine keeps its own rule.
   const pin = searching ? null : (filter.selected ?? null);
   const ctx: Ctx = {
     overrides,
