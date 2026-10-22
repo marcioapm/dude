@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ThemeProvider } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, click, mount, type, until } from "./dom.ts";
+import { act, click, mount, settle, type, until } from "./dom.ts";
 import type { HelpPage } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { FixtureClient } from "../src/fixtures/client.ts";
@@ -304,5 +304,29 @@ describe("searching the guide", () => {
     await until(() => (container.querySelectorAll("[data-testid=help-search-result]").length === 2 ? true : null), "the results");
     expect(container.querySelector("[data-testid=help-search-error]")).toBeNull();
     expect(container.querySelectorAll("[role=alert]").length).toBe(0);
+  });
+
+  test("a slower answer to an earlier query does not replace the later query's results", async () => {
+    const client = new Searching("a");
+    const held: Array<{ q: string; resolve: () => void }> = [];
+    const answer = client.searchMemory.bind(client);
+    client.searchMemory = (params) => new Promise((resolve) => {
+      held.push({ q: params.q, resolve: () => resolve(answer(params)) });
+    });
+    const { container, unmount } = await mount(<HelpScreen client={client} page="memory" onPage={() => {}} />);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=help-page-link]"), "the list");
+    const input = field(container);
+    await type(input, "reviewer");
+    await until(() => (held.length === 1 ? true : null), "the first search");
+    await type(input, "zebra");
+    await until(() => (held.length === 2 ? true : null), "the second search");
+    expect(held.map((h) => h.q)).toEqual(["reviewer", "zebra"]);
+    await act(async () => held[1]!.resolve());
+    await until(() => container.querySelector("[data-testid=help-search-empty]"), "the second query's answer");
+    await act(async () => held[0]!.resolve());
+    await settle();
+    expect(container.querySelector("[data-testid=help-search-empty]")?.textContent).toBe("Nothing in the guide matches “zebra”.");
+    expect(container.querySelectorAll("[data-testid=help-search-result]").length).toBe(0);
   });
 });
