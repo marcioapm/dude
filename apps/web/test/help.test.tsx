@@ -4,7 +4,10 @@
  * guide's own anchors, and scrolls to the section the URL names.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+
+// Under bun test a CSS module maps to {}: keep each class name as written.
+mock.module("../../../packages/design-system/src/components/Markdown.module.css", () => ({ default: new Proxy({}, { get: (_, key) => (typeof key === "string" ? key : undefined) }) }));
 import { ThemeProvider } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, type, until } from "./dom.ts";
@@ -96,7 +99,7 @@ test("a named section is scrolled to, and picking a page asks for it", async () 
 
 describe("the layout", () => {
   test("the list is sticky and 248px; the screen adds no padding of its own and the page has no measure", async () => {
-    const sheets = await Promise.all(["../../../packages/design-system/src/tokens/tokens.css", "../src/app.css"].map((p) => Bun.file(new URL(p, import.meta.url)).text()));
+    const sheets = await Promise.all(["../../../packages/design-system/src/tokens/tokens.css", "../src/app.css", "../../../packages/design-system/src/components/Markdown.module.css"].map((p) => Bun.file(new URL(p, import.meta.url)).text()));
     const styles = sheets.map((css) => Object.assign(document.createElement("style"), { textContent: css }));
     document.head.append(...styles);
     try {
@@ -109,6 +112,7 @@ describe("the layout", () => {
       // No padding of its own: happy-dom computes an unset padding as "".
       for (const pad of [screen.paddingTop, screen.paddingRight, screen.paddingBottom, screen.paddingLeft]) expect(["", "0px"]).toContain(pad);
       expect(["", "none"]).toContain(getComputedStyle(container.querySelector(".helpPage")!).maxWidth);
+      expect(getComputedStyle(container.querySelector(".helpPage section > div")!).maxWidth).toBe("none");
     } finally {
       for (const s of styles) s.remove();
     }
