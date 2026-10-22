@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -179,6 +180,40 @@ func TestTheReviewerCatalogueIsTheDomainPackages(t *testing.T) {
 	}
 	if len(reviewFocus) != len(reviewerOrder) {
 		t.Errorf("reviewFocus has %d categories, the catalogue %d", len(reviewFocus), len(reviewerOrder))
+	}
+}
+
+// Every reviewer costs a model run on each delivery its rules match, so
+// documentation runs only where a project or organisation requires it:
+// the factory's policy selects it for no change, its own docs included.
+func TestTheFactoryNeverSelectsTheDocumentationReviewer(t *testing.T) {
+	for _, paths := range [][]string{
+		nil,
+		{"README.md"},
+		{"docs/guide.md", "CHANGELOG.md"},
+		{"web/src/settings.tsx", "api/routes/settings.ts", "cli/main.go", "migrations/001.sql", "src/auth/x.ts"},
+	} {
+		if got := ReviewersFor(DefaultPolicy(), paths); slices.Contains(got, "documentation") {
+			t.Errorf("%v: the default policy selected %v", paths, got)
+		}
+	}
+}
+
+func TestARequiredDocumentationReviewerRunsInCatalogueOrderWithItsOwnAspect(t *testing.T) {
+	p, err := ResolvePolicy(json.RawMessage(`{"requiredReviewers":["performance","documentation","correctness"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ReviewersFor(p, []string{"lib/invoice.go"}); !slices.Equal(got, []string{"correctness", "documentation", "performance"}) {
+		t.Errorf("required documentation: %v", got)
+	}
+	// The Run's instruction file carries the documentation aspect, not the
+	// correctness one an unknown category falls back to.
+	text := Instructions("reviewer", "documentation", InstructionsInput{Tools: true})
+	for c, focus := range reviewFocus {
+		if want := map[bool]int{true: 1, false: 0}[c == "documentation"]; strings.Count(text, focus) != want {
+			t.Errorf("the documentation reviewer's instructions hold the %s aspect %d times, want %d", c, strings.Count(text, focus), want)
+		}
 	}
 }
 
