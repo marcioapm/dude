@@ -210,9 +210,9 @@ func AttemptWaiversTx(ctx context.Context, tx pgx.Tx, runID string, before int64
 	rows, err := tx.Query(ctx, `SELECT e.run_id, src.phase::text, e.cursor, e.payload
 		FROM runs judged JOIN runs src ON src.task_id = judged.task_id AND src.attempt = judged.attempt
 		JOIN events e ON e.run_id = src.id
-		WHERE judged.id = $1 AND e.event_type = $2 AND e.payload->>'action' = $3 AND e.payload->>'scope' = $4
-		  AND e.cursor < $5
-		ORDER BY e.cursor DESC`, runID, EvRunChecksDecided, ActionWaive, ScopeAttempt, before)
+		WHERE judged.id = $1 AND e.event_type = 'run.checks.decided' AND e.payload->>'action' = $2 AND e.payload->>'scope' = $3
+		  AND e.cursor < $4
+		ORDER BY e.cursor DESC`, runID, ActionWaive, ScopeAttempt, before)
 	if err != nil {
 		return nil, err
 	}
