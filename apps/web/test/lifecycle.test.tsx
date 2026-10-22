@@ -356,4 +356,22 @@ describe("Stop in Activity", () => {
     ], people, runs, [], 1, "GREE-2");
     expect(said(lines)).toEqual(["Ana Ribeiro aborted the implementer", "Ana Ribeiro picked the task back up: resumed where it stopped"]);
   });
+
+  test("a Run a Stop named, resumed and later aborted from its session keeps that Abort's line", () => {
+    const lines = activityLines([
+      aborted("run_c1", "hold"), ev("task.stopped", { by: ANA, note: "hold", runIds: ["run_c1"], decider: "conductor" }),
+      ev("task.recovered", { action: "resume", note: "go", runIds: ["run_c1"] }),
+      ev(EventTypes.RunAborted, { reason: "Not this way." }, { runId: "run_c1" }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro stopped the task · stopped the conductor",
+      "Ana Ribeiro picked the task back up: resumed where it stopped", "Ana Ribeiro aborted the conductor"]);
+  });
+
+  test("a Stop's abort of a Run no Stop names keeps its line", () => {
+    const lines = activityLines([
+      aborted("run_c1", "hold"), aborted("run_i1", "hold"),
+      ev("task.stopped", { by: ANA, note: "hold", runIds: ["run_c1"], decider: "conductor" }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro aborted the implementer", "Ana Ribeiro stopped the task · stopped the conductor"]);
+  });
 });
