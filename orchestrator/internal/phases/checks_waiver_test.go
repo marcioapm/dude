@@ -110,8 +110,14 @@ func TestAWaivedFailurePassesOnlyOnTheJudgesYes(t *testing.T) {
 				t.Fatalf("%+v %v, %d waiver questions", got, err, fake.waiverQuestions())
 			}
 			if !tc.verified {
-				if got.Carried || len(got.Verdicts) != 1 || got.Verdicts[0].Result == checksWaived || got.Verdicts[0].Waiver != nil {
+				// The agent's reported failure stays as it reported it, so
+				// a person may still waive it; the judge's no is beside it.
+				v := got.Verdicts
+				if got.Carried || len(v) != 1 || v[0].Result != delivery.CheckFail || v[0].Reason != "TestClock needs a hardware clock" || v[0].Waiver != nil {
 					t.Fatalf("a failure not carried was recorded %+v", got)
+				}
+				if asked := tc.err == nil || !(errors.Is(tc.err, judge.ErrOff) || errors.Is(tc.err, judge.ErrNoModel)); asked != (v[0].WaiverReason != "") {
+					t.Fatalf("the waiver's reason is %q", v[0].WaiverReason)
 				}
 				return
 			}

@@ -225,6 +225,41 @@ func TestAFailureTheWaiverDoesNotCoverIsHeld(t *testing.T) {
 	}
 }
 
+// A failure the waiver does not cover is still the failure the agent
+// reported: the fixer's escalation offers it, and a person may waive the
+// fixer's own report for the attempt.
+func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("fixer", fakeagent.ChecksNewFailureModel)
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
+	owner, _, _ := w.people(wi)
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestClock needs a hardware clock CI lacks.", delivery.ScopeAttempt); code != 200 {
+		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
+	}
+	w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
+	failures := `[{"result": "fail", "command": "make test", "evidence": "TestClock needs a hardware clock"}]`
+	if got := w.ids(`SELECT payload->'detail'->>'failures' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 ||
+		got[1] != failures {
+		t.Errorf("the escalations' failures are %q", got)
+	}
+	// The held message keeps the agent's evidence and says why the waiver
+	// does not cover it.
+	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
+		"- make test: TestClock needs a hardware clock — the Implementer's waiver does not cover this failure: the recorded call says so (judgement: no)\n\n" +
+		"Run the missing or unsuccessful checks as separate commands, read their output, and correct the report. End your next reply with a checks: YAML block. If you cannot proceed, ask a person what you need."
+	if got := w.ids(`SELECT payload->'detail'->>'message' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 || got[1] != want {
+		t.Errorf("the fixer's held message is %q, want %q", got, want)
+	}
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestGreeting is flaky too.", delivery.ScopeAttempt); code != 200 {
+		t.Fatalf("the attempt waiver of the fixer's report: %d %v", code, body)
+	}
+	got := w.ids(`SELECT e.payload->>'covers' FROM events e JOIN runs r ON r.id = e.run_id
+		WHERE e.task_id = $1 AND e.event_type = $2 AND r.phase = 'fix'`, wi, delivery.EvRunChecksDecided)
+	if len(got) != 1 || got[0] != failures {
+		t.Errorf("the fixer's waiver covers %q", got)
+	}
+}
+
 // A later checks escalation's retry and stop work as ever, and the earlier
 // waiver is not revoked by them; Start over is a new attempt, which
 // inherits nothing.

@@ -46,6 +46,9 @@ type checksVerdict struct {
 	CallID   string `json:"callId,omitempty"`
 	// The person's waiver a waived result carries.
 	Waiver *delivery.CarriedWaiver `json:"waiver,omitempty"`
+	// Why an attempt waiver does not cover a reported failure, beside the
+	// agent's own result and evidence, which a person may still waive.
+	WaiverReason string `json:"waiverReason,omitempty"`
 }
 
 type checksDecision struct {
@@ -240,10 +243,11 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			d.Verdicts = append(d.Verdicts, v)
 			continue
 		}
-		v.Result, v.Waiver = "unverified", nil
-		v.Reason = checksNotCovered.Render(struct{ Role, Reason string }{w.Role, cmp.Or(v.Reason, checksUnestablished.Render(nil))})
+		held := rejected.Verdicts[i]
+		held.Decision, held.CallID = v.Decision, v.CallID
+		held.WaiverReason = checksNotCovered.Render(struct{ Role, Reason string }{w.Role, cmp.Or(v.Reason, checksUnestablished.Render(nil))})
 		// The send-back names this and every failure not yet judged.
-		d.Verdicts = append(append(d.Verdicts, v), rejected.Verdicts[i+1:]...)
+		d.Verdicts = append(append(d.Verdicts, held), rejected.Verdicts[i+1:]...)
 		return d, nil
 	}
 	d.Carried = len(waivers) > 0

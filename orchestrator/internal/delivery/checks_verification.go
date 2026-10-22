@@ -23,8 +23,8 @@ type gatedJudgement struct {
 }
 
 type gatedCheck struct {
-	Command, Result, Decision, Reason, CallID string
-	Waiver                                    *CarriedWaiver
+	Command, Result, Decision, Reason, CallID, WaiverReason string
+	Waiver                                                  *CarriedWaiver
 }
 
 // status is a gated Run's outcome as its row in the pull request names it.
@@ -204,6 +204,9 @@ func checksRow(j gatedJudgement) string {
 		fmt.Fprintf(&b, "  - %s — **%s**", codeSpan(checksField(c.Command)), checksField(valueOr(c.Result, c.Decision)))
 		if c.Reason != "" {
 			fmt.Fprintf(&b, " — %s", checksField(c.Reason))
+		}
+		if c.WaiverReason != "" {
+			fmt.Fprintf(&b, " — %s", checksField(c.WaiverReason))
 		}
 		if c.Waiver != nil {
 			fmt.Fprintf(&b, " — %s", render(checksCarriedFromTmpl, map[string]any{"Role": c.Waiver.Role, "Run": codeSpan(checksField(c.Waiver.RunID))}))
