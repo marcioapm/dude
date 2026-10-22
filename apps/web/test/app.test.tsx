@@ -621,23 +621,30 @@ describe("the sidebar's rail", () => {
     const openMenu = () =>
       act(async () => void band()!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
     const menu = () => document.querySelector("[role=menu]");
-    // [ folds to the rail; the menu does not follow, and unfolding does not bring it back.
+    // Unfolded, the band is back; its menu's state is on the trigger at once, and
+    // a menu that came back open would be in the page once the render settles.
+    const closedOnUnfold = async () => {
+      expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
+      expect((await until(band, "the band")).getAttribute("aria-expanded")).toBe("false");
+      await settle();
+      expect(menu()).toBeNull();
+    };
+    // [ folds to the rail and [ unfolds it: the menu does not follow, nor come back.
     await openMenu();
     await until(menu, "the menu");
     await key(document.body);
     expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
     expect(menu()).toBeNull();
-    await click(page.querySelector("[data-testid=rail-expand]")!);
-    expect(page.querySelector("[data-testid=sidebar-rail]") === null).toBe(true);
-    expect(menu()).toBeNull();
-    // The sidebar's own chevron folds it too, and closes the menu the same way.
+    await key(document.body);
+    await closedOnUnfold();
+    // The sidebar's own chevron folds it too, and the rail's chevron unfolds it.
     await openMenu();
     await until(menu, "the menu again");
     await click(page.querySelector("[data-testid=sidebar-collapse]")!);
     expect(page.querySelector("[data-testid=sidebar-rail]") !== null).toBe(true);
     expect(menu()).toBeNull();
     await click(page.querySelector("[data-testid=rail-expand]")!);
-    expect(menu()).toBeNull();
+    await closedOnUnfold();
   });
 
   test("a reload keeps the rail; a project's face opens its board; the chevron expands it", async () => {
