@@ -37,7 +37,9 @@ export interface OrgSwitcherProps {
   readonly superAdmin?: boolean | undefined;
   readonly onSwitch: (org: Organisation) => void;
   readonly onJoin?: ((invitation: OrgInvitation) => void) | undefined;
-  readonly onSettings: () => void;
+   readonly onSettings: () => void;
+   readonly onOrgSettings?: (() => void) | undefined;
+   readonly onHelp?: (() => void) | undefined;
   readonly onAdmin?: (() => void) | undefined;
   readonly onSignOut: () => void;
   /** What signing out does here: "Of Cloudflare Access, on this browser". */
@@ -84,11 +86,32 @@ export function switcherItems(p: OrgSwitcherProps): RowMenuItem[] {
     });
   }
   if (invitations.length) items.push({ kind: "separator" });
-  items.push({ id: "settings", label: p.settingsLabel ?? "Your settings", icon: "settings", onSelect: p.onSettings });
+  const [settings, ...rest] = profileItems(p);
+  items.push(settings!);
   if (p.superAdmin && p.onAdmin) {
-    items.push({ id: "admin", label: p.adminLabel ?? "All organisations", icon: "building", onSelect: p.onAdmin,
+    // All organisations sits with the places, before the separator and Sign out.
+    const at = rest.findIndex((it) => it.kind === "separator");
+    rest.splice(at, 0, { id: "admin", label: p.adminLabel ?? "All organisations", icon: "building", onSelect: p.onAdmin,
       ...(p.adminNote ? { description: p.adminNote } : {}) });
   }
+  items.push(...rest);
+  return items;
+}
+
+export interface ProfileMenuActions {
+  readonly onSettings: () => void;
+  readonly settingsLabel?: string | undefined;
+  readonly onOrgSettings?: (() => void) | undefined;
+  readonly onHelp?: (() => void) | undefined;
+  readonly onSignOut: () => void;
+  readonly signOutNote?: string | undefined;
+}
+
+/** Your settings · Organisation settings · Help, then Sign out: the profile menu in every sign-in mode. */
+export function profileItems(p: ProfileMenuActions): RowMenuItem[] {
+  const items: RowMenuItem[] = [{ id: "settings", label: p.settingsLabel ?? "Your settings", icon: "settings", onSelect: p.onSettings }];
+  if (p.onOrgSettings) items.push({ id: "org-settings", label: "Organisation settings", icon: "building", onSelect: p.onOrgSettings });
+  if (p.onHelp) items.push({ id: "help", label: "Help", icon: "book-open", onSelect: p.onHelp });
   items.push({ kind: "separator" }, {
     id: "signout", label: "Sign out", icon: "arrow-right", onSelect: p.onSignOut,
     ...(p.signOutNote ? { description: p.signOutNote } : {}),
@@ -100,6 +123,42 @@ export function switcherItems(p: OrgSwitcherProps): RowMenuItem[] {
 const Trigger = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement>>(function Trigger(props, ref) {
   return <button ref={ref} type="button" {...props} />;
 });
+
+export interface ProfileMenuProps extends ProfileMenuActions {
+  /** Unknown while people load: the band says "Your settings" with no face. */
+  readonly person?: Person | null | undefined;
+  /** Under the name: an email. */
+  readonly detail?: string | undefined;
+  readonly open?: boolean | undefined;
+  readonly onOpenChange?: ((open: boolean) => void) | undefined;
+  readonly forceMount?: true | undefined;
+  readonly container?: HTMLElement | null | undefined;
+  readonly "data-testid"?: string | undefined;
+}
+
+/**
+ * You at the foot of the sidebar when there are no organisations to switch
+ * between (API-key sign-in): the band of `OrgSwitcher`, opening the same
+ * profile items without the organisations.
+ */
+export function ProfileMenu(p: ProfileMenuProps) {
+  const name = p.person ? `${p.person.name}: your settings, organisation settings, help, sign out` : "Your settings, organisation settings, help, sign out";
+  return (
+    <RowMenu items={profileItems(p)} label="You" side="top" align="start" className={styles["menu"]}
+      trigger={
+        <Trigger className={styles["band"]} aria-label={name} data-testid={p["data-testid"] ?? "profile-menu"}>
+          {p.person ? <PersonAvatar person={p.person} size={40} aria-hidden title="" /> : null}
+          <span className={styles["text"]}>
+            <span className={styles["name"]}>{p.person?.name ?? (p.settingsLabel ?? "Your settings")}</span>
+            {p.detail ? <span className={styles["org"]}><span className={styles["orgName"]}>{p.detail}</span></span> : null}
+          </span>
+          <Icon name="sort" size={14} className={styles["chevron"]} />
+        </Trigger>
+      }
+      {...(p.open !== undefined ? { open: p.open } : {})} {...(p.onOpenChange ? { onOpenChange: p.onOpenChange } : {})}
+      {...(p.forceMount ? { forceMount: p.forceMount } : {})} {...(p.container ? { container: p.container } : {})} />
+  );
+}
 
 /**
  * You, at the foot of the sidebar, and the one menu for you: your
@@ -117,7 +176,7 @@ export function OrgSwitcher(p: OrgSwitcherProps) {
   const variant = p.variant ?? "band";
   const membership = p.memberships.find((m) => m.org.id === p.current.id);
   const pending = p.invitations?.length ?? 0;
-  const name = `${p.you.name}, ${p.current.name}${membership ? `, ${roleWord(membership.role).toLowerCase()}` : ""}: switch organisation, your settings, sign out`;
+  const name = `${p.you.name}, ${p.current.name}${membership ? `, ${roleWord(membership.role).toLowerCase()}` : ""}: switch organisation, your settings${p.onOrgSettings ? ", organisation settings" : ""}${p.onHelp ? ", help" : ""}, sign out`;
   const items = switcherItems(p);
   const menu = (trigger: ReactNode, side: "top" | "right", align: "start" | "end") => (
     <RowMenu items={items} label="You and your organisations" trigger={trigger} side={side} align={align}

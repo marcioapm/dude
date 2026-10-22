@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, open_my_settings, sign_in, toast, wait_for_escalation, wait_until
+from helpers import ApiClient, create_api_key, open_my_settings, open_org_settings, sign_in, toast, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -1066,7 +1066,7 @@ def test_the_github_connection_is_checked_and_replaced_in_settings(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     sign_in(page, web_url, org["api_key"])
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     # Settings open on Members; GitHub is the next page.
     page.locator('[data-settings-nav="github"]').click()
     expect(page.get_by_test_id("org-settings")).to_contain_text("Connected")
@@ -1169,7 +1169,7 @@ def test_back_and_forward_move_between_places(
     sign_in(page, web_url, org["api_key"])
     page.get_by_text("Somewhere to go").last.click()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     expect(page.get_by_test_id("org-settings")).to_be_visible()
 
     page.go_back()

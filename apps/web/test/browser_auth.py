@@ -119,13 +119,10 @@ class BrowserAuth(unittest.TestCase):
         expect(self.page.get_by_test_id("shell")).to_be_visible()
 
     def sign_out(self):
-        """From the profile band's menu once it knows who you are; the band's own link before."""
+        """From the profile band's menu: the switcher with accounts, the profile menu otherwise."""
         switcher = self.page.get_by_test_id("switcher")
-        if switcher.count():
-            switcher.click()
-            self.page.get_by_test_id("rowmenu-signout").click()
-        else:
-            self.page.get_by_test_id("sign-out").click()
+        (switcher if switcher.count() else self.page.get_by_test_id("my-settings-button")).click()
+        self.page.get_by_test_id("rowmenu-signout").click()
 
     def prompt(self):
         expect(self.page.get_by_label("API key", exact=True)).to_be_visible()

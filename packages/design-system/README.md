@@ -794,8 +794,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   shared glyph, and the owner's face when it is not yours, so it reads
   without colour.
 - **`SidebarSessions`** sits above Projects in the sidebar: only the
-  sessions you are in, each with the bulb glyph and the `SharedMark`'s
-  parts, then New session. The app passes it as `Sidebar`'s `sessions`
+  sessions you are in, the latest three by last activity, each with the
+  bulb glyph and the `SharedMark`'s parts. Its heading folds the list
+  (the app remembers it), opens the whole list, and has a "+" for a new
+  session, as the Projects heading has for a project. The app passes it as `Sidebar`'s `sessions`
   slot, so the sidebar draws it in place and knows nothing of sessions.
 - **Archiving a session is yours alone**, from existing parts: a `quiet`
   **Archive** (or **Unarchive**) in the session header's actions, before
@@ -2144,8 +2146,13 @@ MarkdownCheatsheet.
 
 `src/components/` — navigation (the other half of the screen):
 
-- **Sidebar** — header, search (`/`), four triage chips with global counts,
-  the pinned Needs-you list across every project, the tree, a footer.
+- **Sidebar** — header (the brand, who else is online, collapse), search
+  (`/`), Waiting on you, the sessions slot, the tree, a footer.
+  `online` is drawn in the brand row: the others only (never `you`, who is
+  in the profile band), 20px faces, at most three then "+N", named in full
+  by the group's `aria-label` and its tooltip, absent when nobody else is
+  online; the brand's words truncate first. There is no "Waiting on
+  others" row: the inbox's Others tab is where that list lives.
   Loading (skeleton rows), empty, and no-match states. Search and filter are
   controlled or uncontrolled. `collapsed` / `onCollapsedChange` fold it to
   the rail (a chevron in the header collapses it, `[` in the app); the rail
@@ -2400,8 +2407,11 @@ sessions*):
   each opening in `FileViewer`.
 - **SessionRow / SharedMark** — a brainstorm session in the list, and the
   marker for one someone else is in too.
-- **SidebarSessions** — your brainstorm sessions above the projects, in
-  `Sidebar`'s `sessions` slot; `waitingExtra` counts their invitations and
+- **SidebarSessions** — your latest brainstorm sessions above the
+  projects, in `Sidebar`'s `sessions` slot: `limit` (3) by `lastActivityAt`,
+  newest first; the heading is a fold chevron (`folded` / `onFoldedChange`,
+  for the app to keep), Sessions (`onOpenList`) and a "+" `IconButton`
+  "New session" (`onNew`); `waitingExtra` counts their invitations and
   questions in Waiting on you.
 - **Welcome** — the first screen's stage: `mark` (the app's face; the
   design system has none), `greeting`, `line`, `composer` (a `ChatComposer
@@ -2452,12 +2462,19 @@ are in `docs/design/accounts.md`):
   the end (`trailing`), the current one ticked; **Join <org>…** per
   invitation (`onJoin`); **Your settings** (`settingsLabel`); **All
   organisations** with `superAdmin` (`adminLabel`, and `adminNote` under
-  it); **Sign out** with `signOutNote`. The trigger's name says
+  it); **Sign out** with `signOutNote`. With `onOrgSettings` and `onHelp`,
+  **Organisation settings** (building) and **Help** (book-open) follow Your
+  settings: the profile menu is where they live, not rows in the band. The
+  trigger's name says
   who, where, your role and what it opens. Enter or Space opens, arrows
   move, Enter picks, Escape closes and returns focus. Picking the current
   organisation does nothing; switching is the app's navigation
   (`onSwitch`). `switcherItems` is the menu's items, for a host that draws
-  its own trigger.
+  its own trigger; `profileItems` is its places and Sign out alone.
+- **ProfileMenu** — the same band and the same places (Your settings ·
+  Organisation settings · Help · Sign out) where there are no
+  organisations to switch between (API-key sign-in), so every sign-in mode
+  reaches them through the one menu.
 - **EmailChipsInput** — email addresses as chips, for an invite: `Input`'s
   field box holding chips and a bare input. Enter, a comma, a semicolon, a
   space or leaving the field make chips of what is typed; a paste is split

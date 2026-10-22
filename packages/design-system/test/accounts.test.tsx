@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { OrgFace } from "../src/components/OrgFace.tsx";
-import { OrgSwitcher, type OrgInvitation, type OrgMembership } from "../src/components/OrgSwitcher.tsx";
+import { OrgSwitcher, ProfileMenu, type OrgInvitation, type OrgMembership } from "../src/components/OrgSwitcher.tsx";
 import { EmailChipsInput } from "../src/components/EmailChipsInput.tsx";
 import { InvitationLinkList, invitationLinesText, type InvitationLink } from "../src/components/InvitationLinkList.tsx";
 import { KeyShownOnce } from "../src/components/KeyShownOnce.tsx";
@@ -138,6 +138,39 @@ describe("OrgSwitcher", () => {
       await act(async () => root?.unmount());
       host?.remove();
     }
+  });
+
+  test("with places: Organisation settings and Help follow Your settings, and each does its own", async () => {
+    const places = { ...props, onOrgSettings: () => calls.push("org"), onHelp: () => calls.push("help") };
+    const el = await mount(<OrgSwitcher {...places} />);
+    expect(byRole(el, "button", "Márcio Martins, Acme, admin: switch organisation, your settings, organisation settings, help, sign out")).toBeTruthy();
+    await open(el.querySelector("[data-testid=switcher]")!);
+    expect(allByRole(document, "menuitem").map(spoken).slice(1)).toEqual([
+      "Your settings", "Organisation settings", "Help", "All organisations", "Sign out Of Cloudflare Access, on this browser",
+    ]);
+    for (const [id, want] of [["org-settings", "org"], ["help", "help"]] as const) {
+      await act(async () => root?.unmount());
+      host?.remove();
+      const again = await mount(<OrgSwitcher {...places} />);
+      await open(again.querySelector("[data-testid=switcher]")!);
+      await act(async () => (document.querySelector(`[data-testid=rowmenu-${id}]`) as HTMLElement).click());
+      expect(calls.pop()).toBe(want);
+    }
+  });
+
+  test("ProfileMenu: with no organisations to switch, the same places and Sign out", async () => {
+    const el = await mount(<ProfileMenu person={YOU} detail="m@example.com" onSettings={() => calls.push("settings")}
+      onOrgSettings={() => calls.push("org")} onHelp={() => calls.push("help")} onSignOut={() => calls.push("signout")}
+      signOutNote="Forget this browser's key" />);
+    const trigger = byRole(el, "button", "Márcio Martins: your settings, organisation settings, help, sign out");
+    expect(trigger.textContent).toContain("m@example.com");
+    await open(trigger);
+    expect(allByRole(document, "menuitem").map(spoken)).toEqual([
+      "Your settings", "Organisation settings", "Help", "Sign out Forget this browser's key",
+    ]);
+    expect(allByRole(document, "menuitemradio").length).toBe(0);
+    await act(async () => (document.querySelector("[data-testid=rowmenu-help]") as HTMLElement).click());
+    expect(calls.pop()).toBe("help");
   });
 
   test("not a super-admin: no All organisations; no invitations: no Join… and no dot", async () => {

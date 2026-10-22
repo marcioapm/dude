@@ -18,7 +18,7 @@ import pytest
 import requests
 
 from env import REPO_ROOT, find_free_port
-from helpers import provision_person, ApiClient, create_api_key, execute, open_my_settings, query, sign_in, wait_until
+from helpers import provision_person, ApiClient, create_api_key, execute, open_my_settings, open_org_settings, query, sign_in, wait_until
 
 
 @pytest.fixture
@@ -434,10 +434,13 @@ def test_waiting_on_you_is_split_by_whose_it_is(
     expect(inbox.get_by_role("tab", name=re.compile(r"^On you"))).to_have_attribute("aria-selected", "true")
     expect(inbox.get_by_role("list", name="On you")).to_contain_text("Bo's question")
 
-    # The first person: not theirs, so calm, under Waiting on others.
+    # The first person: not theirs, so calm, on the inbox's Others tab (the sidebar has no row for it).
     _sign_in(page, web_url, client.api_key)
-    expect(page.get_by_test_id("waiting-on-others")).to_contain_text("1")
-    page.get_by_test_id("waiting-on-others").click()
+    expect(page.get_by_test_id("waiting-on-others")).to_have_count(0)
+    page.get_by_test_id("waiting-on-you").click()
+    others_tab = inbox.get_by_role("tab", name=re.compile(r"^On others"))
+    expect(others_tab).to_contain_text("1")
+    others_tab.click()
     others = inbox.get_by_role("list", name="On others")
     expect(others).to_contain_text("Bo's question")
     expect(others).to_contain_text("Bo's task")
@@ -458,8 +461,8 @@ def test_online_row_and_profile_band(page: Page, web_url: str, client: ApiClient
     presence_session.get(ana_client, "/v1/me")  # Cy's designated person session is active.
     presence_session.browser(page, client)
     online = page.get_by_test_id("online")
-    # You and Cy; Ana was never seen.
-    expect(online).to_have_attribute("aria-label", "Online: e2e user, Cy")
+    # Cy, in the brand row; you are in the profile band, and Ana was never seen.
+    expect(online).to_have_attribute("aria-label", "Online: Cy")
     band = page.get_by_test_id("switcher")
     expect(band).to_contain_text("e2e user")
     open_my_settings(page)
@@ -503,7 +506,10 @@ def test_a_background_tab_stops_saying_you_are_here(page: Page, web_url: str, cl
     page.clock.install()
     page.on("request", record)
     presence_session.browser(page, client)
-    expect(page.get_by_test_id("online")).to_have_attribute("aria-label", "Online: e2e user")
+    # You are online; the brand row shows only others, so it draws no faces.
+    wait_until(lambda: next(p for p in client.get("/v1/people").json()["people"] if p["id"] == me["id"])["online"] is True,
+               timeout=10, message="you never came online")
+    expect(page.get_by_test_id("online")).to_have_count(0)
     # Just opened is in use: the first read says so.
     wait_until(lambda: people_reads, timeout=10, message="the people were never read")
     assert people_reads[0] == "1"
@@ -525,7 +531,7 @@ def test_a_background_tab_stops_saying_you_are_here(page: Page, web_url: str, cl
     page.evaluate(_SHOW_UNFOCUSED)
     wait_until(lambda: people_reads, timeout=10, message="the people were not read when shown")
     assert people_reads == [None]
-    # Nobody else is in the organisation, so the Online row goes.
+    # Nobody else is in the organisation: the brand row still has no faces.
     expect(page.get_by_test_id("online")).to_have_count(0)
     assert next(p for p in client.get("/v1/people").json()["people"] if p["id"] == me["id"])["online"] is False
     assert console_errors == []
@@ -566,7 +572,7 @@ def test_your_profile_and_keys_in_your_settings(page: Page, web_url: str, client
 @pytest.mark.ui
 def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, env, console_errors: list):
     _sign_in(page, web_url, client.api_key, board=False)
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     members = page.get_by_test_id("members")
     expect(members.get_by_test_id("member")).to_have_count(1)
 
@@ -580,7 +586,7 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
 
     _, dee = _invite(client, env, "Dee")
     page.reload()
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     row = members.locator('[data-member="Dee"]')
     role = row.get_by_role("combobox", name="Role of Dee")
     expect(role).to_have_text("Member")
@@ -604,7 +610,7 @@ def test_an_admin_manages_members(page: Page, web_url: str, client: ApiClient, e
     # A member sees the list, and nothing to manage it with.
     _, cy = _invite(client, env, "Cy")
     _sign_in(page, web_url, cy.api_key, board=False)
-    page.get_by_test_id("org-settings-button").click()
+    open_org_settings(page)
     expect(page.get_by_test_id("member")).to_have_count(2)
     expect(page.get_by_test_id("invite")).to_have_count(0)
     expect(page.get_by_test_id("member-remove")).to_have_count(0)

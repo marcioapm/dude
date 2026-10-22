@@ -14,8 +14,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventTypes } from "@dude/domain";
 import { boardScope, type BoardCard, type BoardFilter, type NavProject, type NavRow, type NavTask } from "@dude/design-system";
-import { Board, Breadcrumb, OrgSwitcher, ScreenHeader, Segmented, Sidebar, SidebarLink, SidebarProfile, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
-import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, Tooltip, isBareKey, useToast } from "@dude/design-system/primitives";
+import { Board, Breadcrumb, OrgSwitcher, ProfileMenu, ScreenHeader, Segmented, Sidebar, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
+import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
 import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
@@ -115,6 +115,7 @@ export function withPullRequests(projects: NavProject[], prs: readonly PullReque
 }
 
 const MINE = "dude.tree.mine";
+const SESSIONS_FOLDED = "dude.sessions.folded";
 const SIDEBAR = "dude.sidebar";
 
 /**
@@ -142,6 +143,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // Making a project is an admin's: it brings its own models, image and repositories.
   const isAdmin = people.me?.role === "admin";
   const [mine, setMine] = useState(() => localStorage.getItem(MINE) === "1");
+  const [sessionsFolded, setSessionsFolded] = useState(() => localStorage.getItem(SESSIONS_FOLDED) === "1");
   // The sidebar drawer, on a narrow screen.
   const [navOpen, setNavOpen] = useState(false);
   // Folded to its rail on a wide screen: the person's choice, kept as the density is.
@@ -685,7 +687,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     <OrgSwitcher variant={variant} you={you} current={orgOf(account.current)}
       memberships={switcherMemberships(account.memberships)} invitations={switcherInvitations(account.invitations)}
       superAdmin={account.superAdmin} onSwitch={(o) => account.switchTo(o.id)} onJoin={(i) => account.join(i.code)}
-      onSettings={() => go({ view: "mySettings" })} onAdmin={account.admin} adminNote="Super-admin: this dude's organisations" onSignOut={onSignOut}
+      onSettings={() => go({ view: "mySettings" })} onOrgSettings={() => go({ view: "orgSettings" })} onHelp={() => go({ view: "help" })}
+      onAdmin={account.admin} adminNote="Super-admin: this dude's organisations" onSignOut={onSignOut}
       signOutNote={account.authMethod === "cloudflare_access" ? "Of Cloudflare Access, on this browser" : "Forget this browser's key"}
       data-testid={variant === "rail" ? "rail-switcher" : "switcher"} />
   ) : null;
@@ -745,7 +748,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         sessions={
           <SidebarSessions
             sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: sessionTitle(s), shared: s.shared,
-              owner: s.role === "owner" ? null : s.owner }))}
+              lastActivityAt: s.lastActivityAt, owner: s.role === "owner" ? null : s.owner }))}
+            limit={3}
+            folded={sessionsFolded}
+            onFoldedChange={(folded) => {
+              localStorage.setItem(SESSIONS_FOLDED, folded ? "1" : "0");
+              setSessionsFolded(folded);
+            }}
             selected={place?.view === "brainstorm" ? place.id : null}
             onSelect={openSession}
             onOpenList={() => go({ view: "sessions" })}
@@ -764,30 +773,11 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         treeActions={isAdmin ? (
           <IconButton size="sm" icon="plus" label="New project" onClick={() => setOpen({ kind: "newProject" })} data-testid="new-project" />
         ) : undefined}
-        footer={
-          <>
-            <SidebarLink icon="book-open" current={place?.view === "help"} onClick={() => go({ view: "help" })} data-testid="help-button">
-              Help
-            </SidebarLink>
-            <SidebarLink icon="building" current={place?.view === "orgSettings"} onClick={() => go({ view: "orgSettings" })}
-              data-testid="org-settings-button">
-              Organisation settings
-            </SidebarLink>
-            {account && you ? switcher("band") : you ? (
-              <SidebarProfile person={you} detail={you.email ?? undefined} onOpen={() => go({ view: "mySettings" })} openProps={{ "data-testid": "my-settings-button" }}
-                actions={<Tooltip content="Sign out"><IconButton size="sm" icon="arrow-right" label="Sign out" title={undefined} onClick={onSignOut} data-testid="sign-out" /></Tooltip>} />
-            ) : (
-              <>
-                <SidebarLink icon="human" onClick={() => go({ view: "mySettings" })} data-testid="my-settings-button">
-                  Your settings
-                </SidebarLink>
-                <SidebarLink icon="arrow-right" onClick={onSignOut} data-testid="sign-out">
-                  Sign out
-                </SidebarLink>
-              </>
-            )}
-          </>
-        }
+        footer={account && you ? switcher("band") : (
+          <ProfileMenu person={you} detail={you?.email ?? undefined} onSettings={() => go({ view: "mySettings" })}
+            onOrgSettings={() => go({ view: "orgSettings" })} onHelp={() => go({ view: "help" })} onSignOut={onSignOut}
+            signOutNote="Forget this browser's key" data-testid="my-settings-button" />
+        )}
       />
       {open?.kind === "newProject" ? (
         <NewProjectDialog

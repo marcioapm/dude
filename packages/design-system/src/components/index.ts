@@ -185,8 +185,8 @@ export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionP
 export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, ProposalRelation, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
 export { OrgFace } from "./OrgFace.tsx";
 export type { OrgFaceProps, Organisation } from "./OrgFace.tsx";
-export { OrgSwitcher, roleWord, switcherItems } from "./OrgSwitcher.tsx";
-export type { OrgInvitation, OrgMembership, OrgRole, OrgSwitcherProps } from "./OrgSwitcher.tsx";
+export { OrgSwitcher, ProfileMenu, profileItems, roleWord, switcherItems } from "./OrgSwitcher.tsx";
+export type { OrgInvitation, OrgMembership, OrgRole, OrgSwitcherProps, ProfileMenuActions, ProfileMenuProps } from "./OrgSwitcher.tsx";
 export { EmailChipsInput } from "./EmailChipsInput.tsx";
 export type { EmailChipsInputProps } from "./EmailChipsInput.tsx";
 export { emailChipSummary, emailChipViews, emailEntry, parseEmailEntries, TAKEN as EMAIL_CHIP_TAKEN } from "../util/emails.ts";

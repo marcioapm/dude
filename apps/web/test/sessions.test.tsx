@@ -1769,7 +1769,8 @@ describe("archiving a session, for yourself", () => {
     expect(page.querySelectorAll("[data-testid=session-archived]").length).toBe(0);
     expect(page.querySelector("[data-testid=session-archive]")).not.toBeNull();
 
-    await click(page.querySelector("[data-testid=sidebar-sessions] button")!);
+    const heading = [...page.querySelectorAll<HTMLElement>("[data-testid=sidebar-sessions] button")].find((b) => b.textContent === "Sessions")!;
+    await click(heading);
     await until(() => (listed(page).length === 2 ? true : null), "both sessions in the list");
     expect(listed(page).sort()).toEqual([OTHER, SESSION].sort());
   });

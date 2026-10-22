@@ -37,15 +37,16 @@
   text-overflow: ellipsis;
 }
 
+/* Others online, in the brand row: the brand's words give way first. */
 .online {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-8);
-  padding: var(--ds-space-4) var(--ds-space-8) var(--ds-space-12);
+  gap: var(--ds-space-4);
+  flex-shrink: 0;
 }
-.onlineCount {
+.onlineMore {
   font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
+  color: var(--ds-color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 .headerActions {

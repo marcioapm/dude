@@ -1,7 +1,8 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Block, Caption, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { NavTree, NavTreeRow } from "../../components/NavTree.tsx";
-import { SidebarLink, SidebarProfile, Sidebar } from "../../components/Sidebar.tsx";
+import { Sidebar, SidebarSessions, type SidebarSession } from "../../components/Sidebar.tsx";
+import { ProfileMenu } from "../../components/OrgSwitcher.tsx";
 import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { Button } from "../../primitives/Button.tsx";
@@ -78,7 +79,7 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="nav-sidebar"
         title="Sidebar — realistic"
-        note="The whole thing at its default 304px with three projects and fifty tasks. Header, search (/ from the tree, ↓ into it), four filter chips with global counts, the pinned Needs-you list across every project, then the tree. The pinned list is what makes 'what needs me' answerable without expanding anything: it names the task, who is asking, who it waits on, and where it lives. Select a row to see the selection follow into the tree."
+        note="The whole thing at its default 304px with three projects and fifty tasks. The brand row: the brand (its words truncate first), the others online (three faces and +N; hover names everyone), collapse. Search (/ from the tree, ↓ into it), Waiting on you, Sessions (latest three, folding), then the tree. The profile band opens Your settings · Organisation settings · Help · Sign out. Select a row to see the selection follow into the tree."
       >
         <Panes mode={mode}>
           <SidebarDemo />
@@ -96,11 +97,9 @@ export function NavigationSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="nav-sidebar-others" title="Sidebar — Waiting on others selected" note="waitingSelected='others' marks the On others link and keeps it visible while that tab is open.">
+      <Block id="nav-sidebar-sessions" title="SidebarSessions — folded, unfolded, more than three" note="The latest three by last activity, newest first. The heading: a fold chevron (the app keeps it), Sessions (the whole list), and + for a new session, as Projects has for a project. No New session row.">
         <Panes mode={mode}>
-          <div style={{ display: "flex", height: 360, overflow: "hidden" }}>
-            <Sidebar projects={navProjects} you="u_marcio" title="On others" width={304} waitingSelected="others" onWaitingSelect={() => {}} />
-          </div>
+          <SessionStates />
         </Panes>
       </Block>
 
@@ -243,19 +242,30 @@ function TreeMenuDemo() {
   const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   const [last, setLast] = useState<string | null>(null);
   return (
-    <Col>
-      <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 420, overflow: "auto", width: 320, background: "var(--ds-color-surface)" }}>
-        <NavTree projects={navProjectsQuiet.concat(navProjects.slice(0, 1))} selected={selected} onSelect={setSelected} menuItems={(row) => menuItemsFor(row, setLast)} />
-      </div>
-      <Caption>last action: {last ?? "none"}</Caption>
-    </Col>
+    <Row top>
+      <Col>
+        <Caption>Hover a task: the ⋯ takes its people's place. Guides mark each level.</Caption>
+        <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 420, overflow: "auto", width: 320, background: "var(--ds-color-surface)" }}>
+          <NavTree projects={navProjectsQuiet.concat(navProjects.slice(0, 1))} selected={selected} onSelect={setSelected} menuItems={(row) => menuItemsFor(row, setLast)} />
+        </div>
+        <Caption>last action: {last ?? "none"}</Caption>
+      </Col>
+      <Col>
+        <Caption>Nested guides, everything open (no menus)</Caption>
+        <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: 6, maxHeight: 420, overflow: "auto", width: 320, background: "var(--ds-color-surface)" }}>
+          <NavTree projects={navProjects.slice(0, 1)} />
+        </div>
+      </Col>
+    </Row>
   );
 }
 
 function SidebarDemo() {
   const [selected, setSelected] = useState<NavRef | null>({ kind: "task", id: "wi_2402" });
   const [waiting, setWaiting] = useState(false);
-  const online = [people["marcio"]!, people["ana"]!, people["tom"]!].map((p) => ({ ...p, online: true }));
+  const [folded, setFolded] = useState(false);
+  // You and four others: the brand row shows three of the others and "+1".
+  const online = [people["marcio"]!, people["ana"]!, people["tom"]!, people["lin"]!, people["kai"]!].map((p) => ({ ...p, online: true }));
   return (
     <Col>
       <div style={{ display: "flex", height: 760, overflow: "hidden" }}>
@@ -271,20 +281,45 @@ function SidebarDemo() {
           onWaitingSelect={() => setWaiting(true)}
           waitingSelected={waiting}
           title="El Duderino"
+          onCollapsedChange={() => undefined}
+          sessions={<SidebarSessions sessions={SESSIONS} onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined}
+            folded={folded} onFoldedChange={setFolded} />}
           treeActions={<IconButton icon="plus" label="New project" size="sm" />}
-          footer={
-            <>
-              <SidebarLink icon="building" trailing={<span className="ds-label">Admin</span>}>
-                Organisation settings
-              </SidebarLink>
-              <SidebarProfile person={{ ...people["marcio"]!, online: true }} detail="marcio@example.com" onOpen={() => {}} />
-            </>
-          }
+          footer={<ProfileMenu person={{ ...people["marcio"]!, online: true }} detail="marcio@example.com" onSettings={() => undefined}
+            onOrgSettings={() => undefined} onHelp={() => undefined} onSignOut={() => undefined} signOutNote="Forget this browser's key" />}
         />
         <div style={{ flex: 1, display: "grid", placeItems: "center", background: "var(--ds-color-surface)", color: "var(--ds-color-text-muted)", fontSize: 12 }}>
           {waiting ? "Waiting on you" : selected ? `${selected.kind} · ${selected.id}` : "transcript goes here"}
         </div>
       </div>
     </Col>
+  );
+}
+
+const minutesAgo = (m: number) => new Date(Date.UTC(2026, 9, 22, 12) - m * 60_000).toISOString();
+/** Five sessions out of order: the sidebar shows the latest three by activity. */
+const SESSIONS: SidebarSession[] = [
+  { id: "s_retry", title: "Retry policy for webhooks", lastActivityAt: minutesAgo(300) },
+  { id: "s_csv", title: "Invoice export as CSV", lastActivityAt: minutesAgo(5) },
+  { id: "s_copy", title: "Pricing page copy", lastActivityAt: minutesAgo(900) },
+  { id: "s_reopen", title: "Why do reviewers re-open fixed findings?", lastActivityAt: minutesAgo(40), shared: true },
+  { id: "s_onboard", title: "Onboarding checklist ideas", lastActivityAt: minutesAgo(2000), shared: true, owner: people["ana"]! },
+];
+
+function SessionStates() {
+  const [folded, setFolded] = useState(true);
+  const pane = (label: string, el: ReactNode) => (
+    <div key={label}>
+      <Caption>{label}</Caption>
+      <div style={{ width: 280, background: "var(--ds-color-chrome)", padding: 8 }}>{el}</div>
+    </div>
+  );
+  return (
+    <Row top>
+      {pane("unfolded: 5 sessions, the latest 3", <SidebarSessions sessions={SESSIONS} onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined} />)}
+      {pane("folded (click the chevron)", <SidebarSessions sessions={SESSIONS} onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined}
+        folded={folded} onFoldedChange={setFolded} />)}
+      {pane("limit 5", <SidebarSessions sessions={SESSIONS} limit={5} selected="s_reopen" onSelect={() => undefined} onNew={() => undefined} />)}
+    </Row>
   );
 }

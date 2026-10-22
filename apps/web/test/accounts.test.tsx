@@ -275,7 +275,7 @@ describe("switching organisation", () => {
     const w = world();
     const { page } = await open("#/o/acme/", w);
     const band = await until(() => byTestId(page, "switcher"), "the switcher");
-    expect(band.getAttribute("aria-label")).toBe("Márcio Martins, Acme, admin: switch organisation, your settings, sign out");
+    expect(band.getAttribute("aria-label")).toBe("Márcio Martins, Acme, admin: switch organisation, your settings, organisation settings, help, sign out");
     await pointer(band);
     const menu = document.querySelector("[role=menu]")!;
     expect(text(menu)).toContain("Admin · 2 waiting on you");
@@ -289,10 +289,13 @@ describe("switching organisation", () => {
     await until(() => w.calls.slice(before).some((c) => c.method === "navigation") ? true : null, "Northwind's tree");
     expect(w.calls.slice(before).filter((c) => c.method === "navigation").every((c) => c.org === NORTHWIND.id)).toBe(true);
     expect(localStorage.getItem(LAST_ORGANIZATION)).toBe("northwind");
-    // Links written from here on are Northwind's.
-    await until(() => byTestId(page, "org-settings-button"), "the band");
-    await click(byTestId(page, "org-settings-button")!);
+    // Links written from here on are Northwind's: Organisation settings and Help are in the profile menu.
+    await pointer(await until(() => byTestId(page, "switcher"), "the band"));
+    await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-org-settings]"), "Organisation settings"));
     expect(window.location.hash).toBe("#/o/northwind/org/settings");
+    await pointer(await until(() => byTestId(page, "switcher"), "the band again"));
+    await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-help]"), "Help"));
+    expect(window.location.hash).toBe("#/o/northwind/help");
   });
 
   test("after a switch nothing read for Acme shows under Northwind: Acme's members are gone before Northwind's arrive", async () => {
@@ -1148,9 +1151,13 @@ describe("api_key mode", () => {
     await until(() => byTestId(page, "shell"), "the shell");
     expect(window.location.hash).toBe(`#/task/${TASK_ID}`);
     expect(w.calls.some((c) => c.method === "locate")).toBe(false);
-    // Places written from here stay bare too.
-    await click(await until(() => byTestId(page, "org-settings-button"), "Organisation settings"));
+    // Places written from here stay bare too; Organisation settings and Help are the profile menu's.
+    await pointer(await until(() => byTestId(page, "switcher"), "the switcher"));
+    await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-org-settings]"), "Organisation settings"));
     expect(window.location.hash).toBe("#/org/settings");
+    await pointer(await until(() => byTestId(page, "switcher"), "the switcher"));
+    await click(await until(() => document.querySelector<HTMLElement>("[data-testid=rowmenu-help]"), "Help"));
+    expect(window.location.hash).toBe("#/help");
     await pointer(await until(() => byTestId(page, "switcher"), "the switcher"));
     expect([...document.querySelectorAll("[role=menuitemradio]")].map(text)).toEqual(["EXExampleAdmin"]);
     expect(text(document.querySelector("[role=menu]"))).not.toContain("All organisations");
