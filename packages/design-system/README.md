@@ -970,9 +970,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   runs and agent sessions are on its page, the agent working now rides on
   its owner's face, and they still roll up into its triage. Selecting a
   session (a link, the inbox, a board card) selects its task's row.
-- **Only work in progress is listed.** Unsearched — and under Mine, which
+- **Only work under way is listed.** Unsearched — and under Mine, which
   is not a search — the tree lists the tasks in the board's middle columns:
-  running (and awaiting input), in review, ready to merge. Backlog
+  In progress (running or awaiting input), In review, Ready to merge. Backlog
   (received, intake, awaiting confirmation, queued) and Done (done, failed,
   aborted) are the board's. A search query or a triage filter lists every
   status, as before. The selected task is listed whatever its status, so
