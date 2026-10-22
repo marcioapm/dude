@@ -327,6 +327,10 @@ function GuideDemo() {
   const [section, setSection] = useState("which-reviewers-run");
   const [active, setActive] = useState(0);
   const found = query.trim() ? (query.includes("zz") ? [] : GUIDE_FOUND) : null;
+  const openResult = (result: DocSearchResult) => {
+    setSection(result.anchor);
+    setQuery("");
+  };
   const column = (body: ReactNode, label: string) => (
     <Col style={{ width: 248 }}>
       <Caption>{label}</Caption>
@@ -342,9 +346,14 @@ function GuideDemo() {
               if (e.key === "Escape") setQuery("");
               if (e.key === "ArrowDown" && found?.length) setActive((active + 1) % found.length);
               if (e.key === "ArrowUp" && found?.length) setActive((active - 1 + found.length) % found.length);
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const result = found?.[active];
+                if (result) openResult(result);
+              }
             }} />
           {found ? (
-            <DocSearchResults results={found} query={query} active={active} onActiveChange={setActive} onOpen={(r) => setSection(r.anchor)} listId="gallery-guide" />
+            <DocSearchResults results={found} query={query} active={active} onActiveChange={setActive} onOpen={openResult} listId="gallery-guide" />
           ) : (
             <DocOutline pages={GUIDE} current="delivery" currentSection={section} href={(p, s) => `#${p}${s ? `/${s}` : ""}`}
               onPage={() => undefined} onSection={(_, s) => setSection(s)} />
