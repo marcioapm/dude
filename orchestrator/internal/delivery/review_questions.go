@@ -10,6 +10,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // EarlierQuestion is a reviewer's question (review_questions) as the next
@@ -46,6 +47,50 @@ func earlierQuestions(questions []EarlierQuestion) string {
 		return ""
 	}
 	return render(earlierQuestionsTmpl, questions)
+}
+
+// SignalReviewQuestion wakes a delivery held by open reviewer questions
+// (holdForQuestions) once one is answered or withdrawn: the held step runs
+// again and goes on when none is left open. Its own signal, because the
+// others' steps read theirs as something else to do: human.decision as an
+// escalation's decision, conductor.decision as the conductor's, and
+// human.feedback as people's feedback to fix.
+const SignalReviewQuestion = "review.question_settled"
+
+// The task's status reasons while a reviewer's question holds the pull
+// request, and once the last is settled.
+const (
+	reasonQuestionsOpen    = "a reviewer's question waits on an answer"
+	reasonQuestionsSettled = "reviewers' questions settled"
+)
+
+// holdForQuestions parks step while the delivery's attempt has an open
+// reviewer question: the pull request is not opened, nor a checked fix
+// promoted to it, past a question nobody answered. The task waits on a
+// person; an answer or a withdrawal, the conductor's included, signals the
+// step to run again. People's feedback wakes it too: it goes to a fixer
+// first, as the step would send it.
+func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, st *State, step string) (workflow.Result, bool, error) {
+	var open []OpenReviewQuestion
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		open, err = openReviewQuestionsTx(ctx, tx, st.TaskID, st.Attempt, nil)
+		return err
+	}); err != nil {
+		return workflow.Result{}, false, err
+	}
+	if len(open) == 0 {
+		if st.QuestionsHeld {
+			// Released: the task works again until the step says otherwise.
+			st.QuestionsHeld = false
+			return workflow.Result{}, false, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", reasonQuestionsSettled)
+		}
+		return workflow.Result{}, false, nil
+	}
+	st.QuestionsHeld = true
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reasonQuestionsOpen); err != nil {
+		return workflow.Result{}, false, err
+	}
+	return workflow.Result{Next: step, State: st, AwaitSignals: []string{SignalReviewQuestion, SignalHumanFeedback}}, true, nil
 }
 
 // ConductAnswerReviewQuestion is answer_review_question: the task's live
@@ -181,6 +226,11 @@ func settleReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, status, tex
 	}
 	d, err := ReadDelivery(ctx, tx, out.TaskID)
 	if err != nil || d == nil || !d.Live() {
+		return out, err
+	}
+	// A step held by open questions reads them again (holdForQuestions).
+	if err := workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalReviewQuestion, map[string]any{"questionId": id},
+		"review-question:"+id); err != nil {
 		return out, err
 	}
 	if !by.conductor() && d.State.conducted() {

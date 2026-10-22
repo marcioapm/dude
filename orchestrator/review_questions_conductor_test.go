@@ -14,14 +14,19 @@ import (
 const conductedQuestion = "Do invoices close in UTC or in the organisation's zone?"
 
 // questioned is a conducted delivery whose first review asked one question
-// and raised no finding: parked after the review round for its conductor.
+// and raised no finding, and whose later reviews report nothing: parked
+// after the review round for its conductor.
 // Returns the task and the question's id.
 func questioned(t *testing.T) (*world, string, string) {
 	w := conducting(t)
 	scripted := w.lux.Decide
+	var reviews int
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		labels, _ := spec["labels"].(map[string]any)
 		if labels["dude.phase"] == "review" {
+			if reviews++; reviews > 1 {
+				return fakelux.Behaviour{Reply: "Nothing to report."}
+			}
 			return fakelux.Behaviour{Reply: "Nothing wrong; one thing I could not establish.\n\n```yaml\nquestion: " +
 				conductedQuestion + "\nneeded_from: product\n```\n"}
 		}
