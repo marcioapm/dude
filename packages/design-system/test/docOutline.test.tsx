@@ -106,6 +106,16 @@ describe("DocSearchResults", () => {
     expect(opened).toEqual(["a-reviewer-didnt-run"]);
   });
 
+  test("snippets are literal text, not HTML, even around highlighted words", async () => {
+    const snippet = "a <b>reviewer</b> & <img src=x>";
+    const el = await mount(<DocSearchResults results={[{ ...FOUND[0]!, snippet }]} query="reviewer" active={0}
+      onActiveChange={() => undefined} onOpen={() => undefined} listId="literal" />);
+    const option = el.querySelector("[role=option]")!;
+    expect(option.querySelector("b, img")).toBeNull();
+    expect(option.lastElementChild!.textContent).toBe(snippet);
+    expect([...option.lastElementChild!.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["reviewer"]);
+  });
+
   test("says so when nothing matches, and is searching before the first answer", async () => {
     const el = await mount(<DocSearchResults results={[]} query="zebra" active={0} onActiveChange={() => undefined} onOpen={() => undefined} listId="l" />);
     expect(el.querySelector("[data-testid=help-search-count]")!.textContent).toBe("0 sections");
