@@ -1646,6 +1646,12 @@ func TestAnAgentWaitingOnARepositoryIsParkedAndTheApprovalResumesIt(t *testing.T
 	if r := w.lux.Runs()[0]; r.Resumed != 1 || len(r.Inputs) != 1 || !strings.Contains(r.Inputs[0], "web is checked out at") {
 		t.Errorf("resumed %d times, told %q", r.Resumed, r.Inputs)
 	}
+	// Parked mid-turn: the resume starts a new turn, with the carry-on.
+	want := "A person approved your request. web is checked out at /workspace/repos/web (read only) unless dude tells you its clone failed. Carry on.\n\n" +
+		"You were paused and have been resumed. Continue the task where you left off."
+	if got := w.lux.ResumeInputs(w.luxRunOf(runID)); len(got) != 1 || got[0] != want {
+		t.Errorf("the resume carried %q, want %q", got, want)
+	}
 }
 
 // A request the agent does not wait on does not hold its turn: it ends,
