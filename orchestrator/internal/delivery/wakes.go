@@ -183,13 +183,16 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 const attemptHolds = `(CASE WHEN o.directive_id IS NULL THEN o.heard_at IS NOT NULL OR o.failed_at IS NULL
 	ELSE EXISTS (SELECT 1 FROM directives od WHERE od.id = o.directive_id AND (od.delivered_at IS NOT NULL OR od.failed_at IS NULL)) END)`
 
-// requeueTx puts reasons back to pending once no attempt holds them.
+// requeueTx puts reasons back to pending once no attempt holds them. A
+// closed task's (a resolution set) stay settled: EndWakesTx settled them
+// for good, and a note failing after the Close must not start a conductor.
 func requeueTx(ctx context.Context, tx pgx.Tx, wakeIDs []string) error {
 	if len(wakeIDs) == 0 {
 		return nil
 	}
 	_, err := tx.Exec(ctx, `UPDATE conductor_wakes c SET delivered_at = NULL, conductor_run_id = NULL
 		WHERE c.id = ANY($1) AND c.delivered_at IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = c.task_id AND t.resolution IS NOT NULL)
 		  AND NOT EXISTS (SELECT 1 FROM conductor_wake_attempts o WHERE o.wake_id = c.id AND `+attemptHolds+`)`, wakeIDs)
 	return err
 }
