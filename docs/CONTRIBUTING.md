@@ -288,8 +288,16 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   pull request opens at it. A person's Chat message may lead the conductor
   to request reviewers, re-run checks, mark a pull request ready or resolve
   threads, within the conductor's limits; it can never merge a pull request
-  or press **Update branch**. The remaining gap: a conductor's writer child already running when
-  the pull request opens still publishes to its branch.
+  or press **Update branch**. As a backstop, `Syncer.publish` fails any
+  writer Run whose publish would move a branch with a pull request open
+  (as recorded when the publish starts), before it moves anything ("an
+  open pull request's branch moves only by promotion of a reviewed
+  candidate"), such as a conductor's writer child already running when the
+  pull request opened; its conductor's child result says why. A Run that
+  committed nothing completes. Under `whenBehind: tell`, a pull request
+  dude opens while a conductor's writer child is still publishing is not
+  seen by that publish; under `update` (the default) `syncBeforePR` waits
+  for live writers, so the window does not exist there.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.

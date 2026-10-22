@@ -1881,7 +1881,7 @@ func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st
 	}
 	var open bool
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		open, err = pullRequestOpenOnTx(ctx, tx, st.TaskID, st.taskBranch(st.TaskID))
+		open, err = PullRequestOpenOnTx(ctx, tx, st.TaskID, st.taskBranch(st.TaskID))
 		return err
 	}); err != nil || !open {
 		return err
