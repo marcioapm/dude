@@ -79,7 +79,7 @@ type State struct {
 	RetryCategories []string `json:"retryCategories,omitempty"`
 	// Review → fix cycles spent.
 	Iteration       int       `json:"iteration,omitempty"`
-	ConvergenceFrom time.Time `json:"convergenceFrom,omitempty"`
+	ConvergenceFrom time.Time `json:"convergenceFrom,omitzero"`
 	// PR feedback → fix cycles spent in this review round: a person's new
 	// review (not a comment, not CI failing again) starts another.
 	PRIteration int `json:"prIteration,omitempty"`
@@ -376,7 +376,7 @@ func (e *Escalation) spent() []string {
 // HumanDecision is a person's answer to an escalation (SignalHumanDecision),
 // kept on it once taken (Escalation.Decided).
 type HumanDecision struct {
-	At time.Time `json:"at,omitempty"`
+	At time.Time `json:"at,omitzero"`
 	// "resume" the Run that failed; "retry" the step that stopped; "accept"
 	// the findings a review got stuck on, or a test's failed criteria, and
 	// go on; "waive" the criteria a test could not check; "done" — what is

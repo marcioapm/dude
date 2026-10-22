@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These pure functions are all that stands between a review → fix cycle and
@@ -349,4 +350,41 @@ func TestTheFactoryRequiresCorrectnessTestsAndPerformance(t *testing.T) {
 	if got := ReviewersFor(own, []string{"README.md"}); !slices.Equal(got, []string{"security"}) {
 		t.Errorf("a project's own required reviewers: %v", got)
 	}
+}
+
+// An undecided escalation and a loop never redirected persist no zero time;
+// a set one round-trips.
+func TestConvergenceTimesAreOmittedUntilSet(t *testing.T) {
+	keys := func(v any) map[string]json.RawMessage {
+		t.Helper()
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(marshalled(t, v), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if _, ok := keys(State{TaskID: "wi_1"})["convergenceFrom"]; ok {
+		t.Fatal("a never-redirected state has convergenceFrom")
+	}
+	if _, ok := keys(HumanDecision{Action: "retry"})["at"]; ok {
+		t.Fatal("a decision without a time has at")
+	}
+	at := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	var st State
+	if err := json.Unmarshal(marshalled(t, State{ConvergenceFrom: at}), &st); err != nil || !st.ConvergenceFrom.Equal(at) {
+		t.Fatalf("convergenceFrom round trip: %v, %v", st.ConvergenceFrom, err)
+	}
+	var d HumanDecision
+	if err := json.Unmarshal(marshalled(t, HumanDecision{At: at}), &d); err != nil || !d.At.Equal(at) {
+		t.Fatalf("at round trip: %v, %v", d.At, err)
+	}
+}
+
+func marshalled(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
