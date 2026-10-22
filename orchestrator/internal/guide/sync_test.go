@@ -2,6 +2,7 @@ package guide_test
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -106,11 +107,12 @@ func TestSyncsInParallelEndCorrect(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	errs := make([]error, 8)
+	results := make([]guide.SyncResult, len(errs))
 	for i := range errs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = guide.Sync(context.Background(), app, "new", ps)
+			results[i], errs[i] = guide.Sync(context.Background(), app, "new", ps)
 		}()
 	}
 	wg.Wait()
@@ -122,6 +124,46 @@ func TestSyncsInParallelEndCorrect(t *testing.T) {
 	got := sections(t, owner)
 	if len(got) != 3 || got["a#one"].Body != "1" || got["a#two"].Body != "2" || got["b#"].Body != "Intro" {
 		t.Errorf("after parallel syncs: %+v", got)
+	}
+	var total guide.SyncResult
+	for _, res := range results {
+		total.Written += res.Written
+		total.Deleted += res.Deleted
+	}
+	if total != (guide.SyncResult{Written: 3, Deleted: 1}) {
+		t.Errorf("parallel changes: %+v", total)
+	}
+	embedAll(t, owner)
+	if res, err := guide.Sync(context.Background(), app, "new", ps); err != nil || res != (guide.SyncResult{}) {
+		t.Errorf("identical sync: %+v, %v", res, err)
+	}
+	for id, s := range sections(t, owner) {
+		if !s.Embedded {
+			t.Errorf("identical sync cleared %s's embedding", id)
+		}
+	}
+}
+
+func TestRollbackUsesTheLastStartedBuildsGuide(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	old := []guide.Page{page(t, "a", "---\ntitle: A\n---\n## Kept\nSame.\n## Changed\nOld.\n## Old only\nRestored.\n")}
+	newer := []guide.Page{page(t, "a", "---\ntitle: A\n---\n## Kept\nSame.\n## Changed\nNew.\n## New only\nRemoved on rollback.\n")}
+	if _, err := guide.Sync(context.Background(), app, "v2", newer); err != nil {
+		t.Fatal(err)
+	}
+	embedAll(t, owner)
+	res, err := guide.Sync(context.Background(), app, "v1", old)
+	if err != nil || res != (guide.SyncResult{Written: 2, Deleted: 1}) {
+		t.Fatalf("rollback: %+v, %v", res, err)
+	}
+	got := sections(t, owner)
+	want := map[string]stored{
+		"a#kept":     {"A — Kept", "Same.", "v2", true},
+		"a#changed":  {"A — Changed", "Old.", "v1", false},
+		"a#old-only": {"A — Old only", "Restored.", "v1", false},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rollback rows: %+v, want %+v", got, want)
 	}
 }
 

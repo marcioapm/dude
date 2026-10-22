@@ -49,9 +49,11 @@ type SyncResult struct {
 
 // Sync makes guide_sections hold ps's sections, in one transaction: a new
 // or changed section is written and waits for an embedding; a section no
-// page has is deleted; an unchanged one keeps its row and embedding. Two
-// syncs of the same pages at once (a rolling deploy) take the rows' locks
-// in id order, so one waits for the other and then changes nothing.
+// page has is deleted; an unchanged one keeps its row and embedding.
+// The supported single orchestrator uses its build's guide on each start,
+// including rollback: the last-started build's content wins, not the newest version.
+// Concurrent syncs of identical pages lock rows in id order; unlike page
+// sets are not supported concurrently.
 func Sync(ctx context.Context, d *db.DB, version string, ps []Page) (SyncResult, error) {
 	rows := Rows(ps)
 	n := len(rows)

@@ -105,7 +105,10 @@ func TestSearchFindsTheGuideByWordsAndByMeaning(t *testing.T) {
 	if got := search(t, app, a, nil, memory.Query{Text: "preview wakes", Project: project}).Results; len(got) != 0 {
 		t.Errorf("the default types found the guide: %+v", got)
 	}
-	if got := search(t, app, a, nil, memory.Query{Text: "preview wakes -host", Types: []string{"doc"}}).Results; len(got) != 1 {
+	if got := search(t, app, a, nil, memory.Query{Text: "preview person", Types: []string{"doc"}}).Results; len(got) != 2 {
+		t.Fatalf("positive terms must match both sections: %+v", got)
+	}
+	if got := search(t, app, a, nil, memory.Query{Text: "preview person -host", Types: []string{"doc"}}).Results; len(got) != 1 || got[0].ID != "previews#waking" {
 		t.Errorf("a -word did not leave the other section out: %+v", got)
 	}
 
@@ -118,5 +121,8 @@ func TestSearchFindsTheGuideByWordsAndByMeaning(t *testing.T) {
 	if out.Mode != "hybrid" || len(out.Results) == 0 || out.Results[0].ID != "parking#why-a-run-parks" || out.Results[0].VectorRank != 1 ||
 		out.Results[0].TextRank != 0 || !out.Results[0].Embedded || out.Results[0].Title != "Parking — Why a Run parks" {
 		t.Errorf("by meaning: %+v", out)
+	}
+	if got := search(t, app, a, fake, memory.Query{Text: "so it no is -host", Types: []string{"doc"}}); got.Mode != "hybrid" || len(got.Results) != 1 || got.Results[0].ID != "previews#waking" || got.Results[0].TextRank != 0 || got.Results[0].VectorRank == 0 {
+		t.Errorf("vector exclusion must leave only the other section: %+v", got)
 	}
 }
