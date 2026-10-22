@@ -4,22 +4,33 @@
  * pages, and the page picked; a section named in the URL is scrolled to.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { Markdown, ScreenHeader } from "@dude/design-system/components";
 import { Callout, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient, HelpPage } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { formatPlace } from "../place.ts";
 
-/** A section's element id: the guide's anchor, apart from the Markdown's own heading ids. */
-export const helpSectionId = (anchor: string) => `help-${anchor || "intro"}`;
+// Keep section anchors separate from Markdown's own heading ids.
+export function helpSectionId(anchor: string): string {
+  return `help-${anchor || "intro"}`;
+}
 
-export function HelpScreen({ client, page, section, onPage }: {
+function resolveHelpLinks(text: string): string {
+  return text.replace(
+    /\]\(help:([a-z0-9]+(?:-[a-z0-9]+)*)(?:#([a-z0-9]+(?:-[a-z0-9]+)*)?)?\)/g,
+    (_, page: string, section?: string) => `](${formatPlace({ view: "help", page, ...(section ? { section } : {}) })})`,
+  );
+}
+
+type HelpScreenProps = {
   client: ApiClient;
   page?: string | undefined;
   section?: string | undefined;
   onPage: (page: string) => void;
-}) {
+};
+
+export function HelpScreen({ client, page, section, onPage }: HelpScreenProps): ReactElement {
   const [pages, setPages] = useState<HelpPage[] | null>(null);
   const [shown, setShown] = useState<HelpPage | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -86,10 +97,7 @@ export function HelpScreen({ client, page, section, onPage }: {
               {shown.sections.map((s) => (
                 <section key={s.anchor} id={helpSectionId(s.anchor)} data-anchor={s.anchor}>
                   {s.heading ? <h2>{s.heading}</h2> : null}
-                  <Markdown variant="document" linkTarget="_self" source={(s.text ?? "").replace(
-                    /\]\(help:([a-z0-9]+(?:-[a-z0-9]+)*)(?:#([a-z0-9]+(?:-[a-z0-9]+)*)?)?\)/g,
-                    (_, page: string, section?: string) => `](${formatPlace({ view: "help", page, ...(section ? { section } : {}) })})`,
-                  )} />
+                  <Markdown variant="document" linkTarget="_self" source={resolveHelpLinks(s.text ?? "")} />
                 </section>
               ))}
             </>
