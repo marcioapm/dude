@@ -224,3 +224,26 @@ func TestConductFixConvergenceKeepsNamedValidation(t *testing.T) {
 		})
 	}
 }
+
+// An escalation's wake longer than the table admits is clipped to its bound,
+// not refused: escalate records it in the step's own transaction.
+func TestAnEscalationWakePastItsBoundIsClippedToTheTablesBound(t *testing.T) {
+	w := newConvergenceWorld(t)
+	ctx := context.Background()
+	line := strings.Repeat("é", 1500) + " Findings: f."
+	err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, w.task, "escalation", "escalation:long", line)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("recording a long escalation wake: %v", err)
+	}
+	var stored string
+	var chars int
+	if err := w.owner.QueryRow(ctx, `SELECT line, length(line) FROM conductor_wakes WHERE key = 'escalation:long'`).Scan(&stored, &chars); err != nil {
+		t.Fatal(err)
+	}
+	if chars != 1200 || !strings.HasSuffix(stored, "é…") {
+		t.Fatalf("stored %d characters ending %q, want 1200 ending in …", chars, stored[len(stored)-8:])
+	}
+}

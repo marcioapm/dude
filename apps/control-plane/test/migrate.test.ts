@@ -1039,3 +1039,30 @@ test("120 widens the pause and resume checks to a machine move without scanning 
     await sql.end();
   }
 }, 120_000);
+
+test("179 lets an escalation's wake line run to 1200 characters, keeping every other kind's bound and the rows before it", async () => {
+  const { url, sql } = await migratedBefore("179");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_w', 'w', 'w')`;
+    await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_w', 'org_w', 'W', 'w', 'W')`;
+    await sql`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_w', 'org_w', 'prj_w', 1, 'T')`;
+    const wake = (key: string, kind: string, chars: number) =>
+      sql`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
+        VALUES (${"cwk_" + key}, 'org_w', 'wi_w', ${kind}, ${key}, ${"é".repeat(chars)})`.then(() => "inserted", (e: Error) => e.message);
+    expect(await wake("old", "escalation", 300)).toBe("inserted");
+    expect(await wake("old-long", "escalation", 301)).toContain("conductor_wakes_line_check");
+
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["179_escalation_wake_lines.sql"]);
+    expect([...await sql`SELECT key, length(line) AS chars FROM conductor_wakes`]).toEqual([{ key: "old", chars: 300 }]);
+    expect(await wake("at-bound", "escalation", 1200)).toBe("inserted");
+    expect(await wake("past-bound", "escalation", 1201)).toContain("conductor_wakes_line_check");
+    expect(await wake("decision", "decision", 301)).toContain("conductor_wakes_line_check");
+    expect(await wake("stalled", "stalled", 2000)).toBe("inserted");
+    expect(await wake("stalled-long", "stalled", 2001)).toContain("conductor_wakes_line_check");
+    // Added unvalidated: the bound only widens 090's, so no row before it can break it.
+    expect([...await sql`SELECT convalidated FROM pg_constraint WHERE conname = 'conductor_wakes_line_check'`])
+      .toEqual([{ convalidated: false }]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
