@@ -47,9 +47,9 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 		// Held again after a person steered it during the hold: the steer's
 		// turn cleared the wait, so it is set again for the park.
 		if e := st.Escalation; e.Reason == ReasonChecksUnverified && e.Decided == nil && e.RunID() == runID {
-			_, err = tx.Exec(ctx, `UPDATE runs SET waiting_since = COALESCE(waiting_since, now()) WHERE id = $1`, runID)
+			return waitOnPersonTx(ctx, tx, runID)
 		}
-		return err
+		return nil
 	}
 	detail := map[string]any{"runId": runID, "message": message, "rounds": rounds}
 	// The reported failures an attempt waiver could carry (settleChecksTx),
@@ -81,9 +81,7 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 		awaiting_signals = '["human.decision"]', wake_at = NULL WHERE id = $1`, d.WorkflowID, raw); err != nil {
 		return err
 	}
-	// The held Run waits on a person (checksHeld): parked like one asking
-	// a question once its project's grace is over.
-	if _, err = tx.Exec(ctx, `UPDATE runs SET waiting_since = COALESCE(waiting_since, now()) WHERE id = $1`, runID); err != nil {
+	if err = waitOnPersonTx(ctx, tx, runID); err != nil {
 		return err
 	}
 	if _, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, taskID, "", "awaiting_input", ReasonChecksUnverified); err != nil {
@@ -91,6 +89,14 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	}
 	return emitTx(ctx, tx, org, &st, EvQuestionAsked, map[string]any{"kind": "escalation", "reason": ReasonChecksUnverified,
 		"detail": st.Escalation.Detail, "actions": st.Escalation.Actions()})
+}
+
+// waitOnPersonTx starts the held Run's wait on a person (checksHeld), kept
+// if one is already running: it is parked like one asking a question once
+// its project's grace is over.
+func waitOnPersonTx(ctx context.Context, tx pgx.Tx, runID string) error {
+	_, err := tx.Exec(ctx, `UPDATE runs SET waiting_since = COALESCE(waiting_since, now()) WHERE id = $1`, runID)
+	return err
 }
 
 // settleChecksTx carries a person's decision to the held Run, in the
