@@ -3,6 +3,7 @@ package agenttools_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,83 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 )
+
+func TestSettingsReportTheCallersResolvedGrants(t *testing.T) {
+	for _, restrictedWeb := range []bool{false, true} {
+		t.Run(map[bool]string{false: "session-name", true: "session-name-and-web"}[restrictedWeb], func(t *testing.T) {
+			srv := &agenttools.Server{}
+			if restrictedWeb {
+				srv.ResolveCapabilitiesWith(func(ctx context.Context, tx pgx.Tx, a capabilities.Agent) (capabilities.Grants, error) {
+					g, err := capabilities.Resolve(ctx, tx, a)
+					return g.Without(capabilities.WebSearch, capabilities.WebFetch), err
+				})
+			}
+			f := setupWith(t, srv)
+			token := f.session(t, "ssn_settings", "Member's title", "person")
+			listed := f.getTools(t, token)
+			if _, ok := listed["name_session"]; ok {
+				t.Fatal("GET /tools lists name_session for a member-named session")
+			}
+			for _, args := range []string{`{"section":"capabilities"}`, `{"section":"network"}`, `{}`} {
+				t.Run(args, func(t *testing.T) {
+					out := f.settingsOf(t, token, args)
+					if args != `{"section":"network"}` {
+						var got struct {
+							Capabilities []struct {
+								Role    string
+								Yours   bool
+								Granted []struct{ Key capabilities.Key }
+							}
+						}
+						raw, _ := json.Marshal(out)
+						if err := json.Unmarshal(raw, &got); err != nil {
+							t.Fatal(err)
+						}
+						if len(got.Capabilities) != 8 {
+							t.Fatalf("capability roles: %d, want 8", len(got.Capabilities))
+						}
+						for _, role := range got.Capabilities {
+							toolRole := role.Role
+							if toolRole == "fixer" {
+								toolRole = "implementer"
+							}
+							want := capabilities.Default(toolRole)
+							if role.Role == "brainstorm" {
+								want = want.Without(capabilities.SessionName)
+								if restrictedWeb {
+									want = want.Without(capabilities.WebSearch, capabilities.WebFetch)
+								}
+							}
+							var keys, wantKeys []capabilities.Key
+							for _, cap := range role.Granted {
+								keys = append(keys, cap.Key)
+							}
+							for _, cap := range want.Granted() {
+								wantKeys = append(wantKeys, cap.Key)
+							}
+							if role.Yours != (role.Role == "brainstorm") || !slices.Equal(keys, wantKeys) {
+								t.Errorf("%s: yours %v, grants %v; want %v", role.Role, role.Yours, keys, wantKeys)
+							}
+						}
+					}
+					if args != `{"section":"capabilities"}` {
+						web := field(out, "settings", 0, "network", "web").([]any)
+						if len(web) != 8 {
+							t.Fatalf("network roles: %d, want 8", len(web))
+						}
+						for _, entry := range web {
+							role := entry.(map[string]any)
+							want := role["role"] != "brainstorm" || !restrictedWeb
+							if role["webSearch"] != want || role["webFetch"] != want {
+								t.Errorf("network %v: want search/fetch %v", role, want)
+							}
+						}
+					}
+				})
+			}
+		})
+	}
+}
 
 // A session's agent resolved without session.checkout has no
 // refresh_checkout: refused as a tool the Run does not have, and not

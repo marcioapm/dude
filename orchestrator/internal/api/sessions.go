@@ -200,7 +200,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, org strin
 }
 
 // renameSession is a member who can chat naming the session. A person's
-// title wins: the agent's name_session refuses from then on.
+// title wins: from then on the agent is not granted name_session
+// (capabilities.Resolve), and a call already under way refuses.
 func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {

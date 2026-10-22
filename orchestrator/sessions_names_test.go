@@ -75,8 +75,8 @@ func TestABrainstormsPublishedFileIsItsSessions(t *testing.T) {
 }
 
 // A member who can chat renames the session: one session.renamed by them,
-// and the agent's name_session refuses from then on. A reader cannot, and
-// someone not in it is told it does not exist.
+// and the agent is not given name_session from then on. A reader cannot,
+// and someone not in it is told it does not exist.
 func TestAPersonsRenameWinsAndAReaderCannotRename(t *testing.T) {
 	s := newSessionWorld(t)
 	s.withTools()
@@ -119,9 +119,11 @@ func TestAPersonsRenameWinsAndAReaderCannotRename(t *testing.T) {
 		t.Errorf("session.renamed %v, want %v", got, want)
 	}
 
+	// The agent is no longer given name_session (the mid-turn refusal:
+	// TestAPersonsRenameAndTheAgentsAreSettledInTurnAndThePersonWins).
 	status, out := s.tool(run, "name_session", `{"title":"Something else"}`)
-	if status != 422 || !strings.Contains(out["error"].(string), "a member named this session") {
-		t.Errorf("name_session after a person renamed: %d %v", status, out)
+	if status != 404 {
+		t.Errorf("name_session after a person renamed: %d %v, want no such tool", status, out)
 	}
 	_ = s.owner.QueryRow(context.Background(), `SELECT title FROM sessions WHERE id = $1`, id).Scan(&title)
 	if title != "Billing v2" {

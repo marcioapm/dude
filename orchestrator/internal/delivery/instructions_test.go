@@ -35,6 +35,10 @@ func TestGoldenChildInstructions(t *testing.T) {
 	}
 }
 
+func TestGoldenBrainstormInstructionsWithoutTools(t *testing.T) {
+	golden(t, "instructions-brainstorm-without-tools", Instructions(RoleBrainstorm, "", InstructionsInput{}))
+}
+
 func TestInstructionsKeepFixedSectionsUnderSavedPrompts(t *testing.T) {
 	org := "Organisation's stance: {{task.title}}."
 	for _, role := range PromptRoles {
