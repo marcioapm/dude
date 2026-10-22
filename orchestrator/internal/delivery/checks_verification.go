@@ -15,7 +15,6 @@ import (
 // gatedJudgement is one gated Run's latest checks judgement. Unchanged: the
 // Run's turn changed nothing it could push, so no report was judged.
 type gatedJudgement struct {
-	RunID     string             `json:"-"`
 	Heads     map[string]RunHead `json:"-"`
 	Role      string
 	Verified  bool
@@ -45,7 +44,7 @@ func (j gatedJudgement) status() string {
 // gatedRuns is each gated Run of the current attempt with its latest
 // judgement, oldest Run first.
 func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, error) {
-	rows, err := tx.Query(ctx, `SELECT id, phase, heads, payload FROM (
+	rows, err := tx.Query(ctx, `SELECT phase, heads, payload FROM (
 		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, r.heads, e.payload
 		FROM events e JOIN runs r ON r.id=e.run_id
 		WHERE r.task_id=$1 AND r.phase IN ('implement','fix','simplify') AND e.event_type=$3
@@ -55,16 +54,15 @@ func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, err
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (gatedJudgement, error) {
-		var id, phase string
+		var phase string
 		var heads, payload []byte
 		var j gatedJudgement
-		if err := row.Scan(&id, &phase, &heads, &payload); err != nil {
+		if err := row.Scan(&phase, &heads, &payload); err != nil {
 			return j, err
 		}
 		if err := json.Unmarshal(payload, &j); err != nil {
 			return j, err
 		}
-		j.RunID = id
 		// Heads in another shape only lose the Run its heads, never the
 		// account or the tester's prompt.
 		if json.Unmarshal(heads, &j.Heads) != nil {
