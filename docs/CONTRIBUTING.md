@@ -228,8 +228,14 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   tester) may instead ask a narrow factual question, a `question:`
   document (`ParseQuestions`): kept in `review_questions` across retried
   reports, shown to the next reviewer of its category in the same attempt
-  and read-only on the task's Findings tab. It is never a finding, never
-  reaches a fixer, and nothing waits on it yet.
+  and listed on the task's Findings tab. It is never a finding and never
+  reaches a fixer. The task's owner answers or withdraws it there
+  (`delivery.AnswerReviewQuestionTx`/`WithdrawReviewQuestionTx`, the one
+  path); under the conductor it is woken with it and may answer it
+  (`answer_review_question`), which is not a person's decision. A person's
+  answer is one of the task's decisions. An open one holds the pull
+  request's opening and a checked fix's promotion (`holdForQuestions`,
+  task `awaiting_input`) until it is settled (`review.question_settled`).
 - **The tester is on by default and gates the pull request**
   (`delivery/verification.go`). It ends its reply with one YAML document
   per acceptance criterion (`ParseAcceptance`); dude records each in
@@ -322,8 +328,16 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   pull request opens at it. A person's Chat message may lead the conductor
   to request reviewers, re-run checks, mark a pull request ready or resolve
   threads, within the conductor's limits; it can never merge a pull request
-  or press **Update branch**. The remaining gap: a conductor's writer child already running when
-  the pull request opens still publishes to its branch.
+  or press **Update branch**. As a backstop, `Syncer.publish` fails any
+  writer Run whose publish would move a branch with a pull request open
+  (as recorded when the publish starts), before it moves anything ("an
+  open pull request's branch moves only by promotion of a reviewed
+  candidate"), such as a conductor's writer child already running when the
+  pull request opened; its conductor's child result says why. A Run that
+  committed nothing completes. Under `whenBehind: tell`, a pull request
+  dude opens while a conductor's writer child is still publishing is not
+  seen by that publish; under `update` (the default) `syncBeforePR` waits
+  for live writers, so the window does not exist there.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxPRFixIterations`. An escalation stops the
   workflow and sets the task to `awaiting_input`.

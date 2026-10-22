@@ -381,6 +381,21 @@ func dismissFinding(ctx context.Context, tx pgx.Tx, c Caller, in dismissIn) (map
 	return conducted(map[string]any{"dismissed": in.ID}, err)
 }
 
+type answerReviewQuestionIn struct {
+	ID       string `json:"id"`
+	Answer   string `json:"answer,omitempty"`
+	Withdraw bool   `json:"withdraw,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+func answerReviewQuestion(ctx context.Context, tx pgx.Tx, c Caller, in answerReviewQuestionIn) (map[string]any, error) {
+	out, err := delivery.ConductAnswerReviewQuestion(ctx, tx, c.run(), strings.TrimSpace(in.ID), in.Answer, in.Withdraw, in.Reason)
+	if err == nil && c.env.kick != nil {
+		c.env.kick()
+	}
+	return conducted(map[string]any{"id": out.ID, "status": out.Status}, err)
+}
+
 type decideEscalationIn struct {
 	Action string `json:"action"`
 	Note   string `json:"note,omitempty"`

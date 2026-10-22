@@ -2428,6 +2428,10 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	// The Run is kept for its next round once it completes (finish's keep):
 	// its per-Run branch is kept with it.
 	var keepBranch bool
+	// A pull request is open on branch: only promoteCandidate moves it, to
+	// a reviewed (and tested) candidate head. A writer that still targets it
+	// (one already running when the pull request opened) fails here.
+	var prOpen bool
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return err
@@ -2445,7 +2449,8 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if own != "" {
 			branch = own
 		}
-		return nil
+		prOpen, err = delivery.PullRequestOpenOnTx(ctx, tx, r.TaskID, branch)
+		return err
 	}); err != nil {
 		return nil, "", err
 	}
@@ -2484,6 +2489,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		if res.Commit == base {
 			continue // nothing committed there
+		}
+		if prOpen {
+			return nil, "", fmt.Errorf("not moving %s in %s: an open pull request's branch moves only by promotion of a reviewed candidate: use start_phase fix with a note saying what to change", branch, repo.Name)
 		}
 		if gh == nil {
 			var err error

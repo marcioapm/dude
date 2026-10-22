@@ -71,4 +71,8 @@ const (
 	mLifecycleClosedPickUp                = "%s was closed: reopen it to pick it back up."
 	mLifecycleClosed                      = "%s was closed as %s: reopen it to start it."
 	mLifecycleAgent                       = "%s Nobody can start it anyway until a person does that. Tell the person, and end your turn."
+	mReviewQuestionNotFound               = "%s is not a reviewer question of this task"
+	mReviewQuestionNotOpen                = "reviewer question %s is %s already: only an open one is answered or withdrawn"
+	mReviewQuestionAnswerRequired         = "say the answer: the fact the reviewer asked for"
+	mReviewQuestionReasonRequired         = "a withdrawal needs its reason: why the question no longer matters"
 )

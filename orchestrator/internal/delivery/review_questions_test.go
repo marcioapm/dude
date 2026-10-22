@@ -72,3 +72,35 @@ func TestEarlierQuestionsAreAReviewOfTheSameCategorysOnly(t *testing.T) {
 	}
 	golden(t, "earlier-questions", earlierQuestions(correctness))
 }
+
+// The hold reads only its own attempt's open questions: one left open by
+// an attempt-1 review never holds attempt 2, for the attempt asked for and
+// for attempt 0 (the task's highest, State.Attempt from before attempts
+// were kept), while attempt 1 still reads its own.
+func TestOpenReviewQuestionsAreTheAttemptsOwn(t *testing.T) {
+	w := newGoldenWorld(t)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, category, kind, created_at)
+		VALUES
+		('run_a1', $1, 'prj_g', 'wi_g', 1, 'completed', 'review', 'reviewer', 'correctness', 'agent', '2026-01-02 10:00Z'),
+		('run_a2', $1, 'prj_g', 'wi_g', 2, 'completed', 'review', 'reviewer', 'correctness', 'agent', '2026-01-03 10:00Z')`)
+	w.exec(t, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, needed_from, status, created_at)
+		VALUES
+		('rvq_a1', $1, 'wi_g', 'run_a1', 1, 'correctness', 'Asked on attempt 1', '', 'open', '2026-01-02 10:30Z'),
+		('rvq_a2', $1, 'wi_g', 'run_a2', 1, 'correctness', 'Asked on attempt 2', '', 'open', '2026-01-03 10:30Z')`)
+	open := func(attempt int) []string {
+		var ids []string
+		w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+			qs, err := openReviewQuestionsTx(ctx, tx, "wi_g", attempt, nil)
+			for _, q := range qs {
+				ids = append(ids, q.ID)
+			}
+			return "", err
+		})
+		return ids
+	}
+	for attempt, want := range map[int]string{0: "[rvq_a2]", 1: "[rvq_a1]", 2: "[rvq_a2]"} {
+		if got := fmt.Sprint(open(attempt)); got != want {
+			t.Errorf("attempt %d reads %s, want %s", attempt, got, want)
+		}
+	}
+}

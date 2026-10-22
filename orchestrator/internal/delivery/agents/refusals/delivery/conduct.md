@@ -63,3 +63,5 @@
 {{- define "refusals/delivery/conduct/give-goal-acceptance-criteria-or-both"}}give a goal, acceptance criteria, or both{{end}}
 
 {{- define "refusals/delivery/conduct/nothing-was-saved"}}%s; nothing was saved{{end}}
+
+{{- define "refusals/delivery/conduct/answer-or-withdraw-review-question"}}give an answer, or withdraw: true with a reason; one of the two{{end}}

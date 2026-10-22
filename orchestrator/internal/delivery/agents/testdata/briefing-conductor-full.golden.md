@@ -30,6 +30,12 @@ Acceptance criteria:
 - fnd_3 · low · tests · dismissed by the conductor: out of scope for this task
 - fnd_4 · note · tests · accepted by a person
 
+## Reviewers' open questions (2)
+
+Answer each with answer_review_question for a fact you established; else ask the person.
+- rvq_g1 · security · needed from security · Who may download another organisation's export? It decides F1.
+- rvq_g2 · security · Do months close in UTC?
+
 ## Since you last looked, on this epic (12:30 → NOW UTC)
 
 Messages to or from GLD-7:

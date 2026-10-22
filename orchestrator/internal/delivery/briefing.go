@@ -138,6 +138,9 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if b.Findings, err = briefFindings(ctx, tx, taskID); err != nil {
 		return "", err
 	}
+	if b.Questions, err = briefReviewQuestions(ctx, tx, taskID); err != nil {
+		return "", err
+	}
 	// The epic it is on, and what its peers did since it last looked:
 	// told here, never a wake of its own.
 	var org string
@@ -177,9 +180,11 @@ type conductorBrief struct {
 	Criteria                   []string
 	MoreCriteria               int
 	Runs, Findings             briefLines
-	Digest, Epic, Replay       string
-	PullRequests               []briefPullRequest
-	Heads                      []RepoHead
+	// The current attempt's open reviewer questions, one line each.
+	Questions            []string
+	Digest, Epic, Replay string
+	PullRequests         []briefPullRequest
+	Heads                []RepoHead
 	// Who decides: no live delivery, Deliver, or else the conductor.
 	NoDelivery, DeliverDecides bool
 	Waiting, Step              string
@@ -295,6 +300,20 @@ func briefFindings(ctx context.Context, tx pgx.Tx, taskID string) (briefLines, e
 			f.ID, f.Severity, f.Category, where, settled(f.Status, f.ResolvedBy, f.Attempts, f.Note)}))
 	}
 	return out, nil
+}
+
+// briefReviewQuestions is the open reviewer questions of the task's latest
+// attempt, one line each, at most briefFindingsMax.
+func briefReviewQuestions(ctx context.Context, tx pgx.Tx, taskID string) ([]string, error) {
+	qs, err := openReviewQuestionsTx(ctx, tx, taskID, 0, nil)
+	var out []string
+	for i, q := range qs {
+		if i == briefFindingsMax {
+			break
+		}
+		out = append(out, q.line())
+	}
+	return out, err
 }
 
 // settled says how a finding stands, in a few words.

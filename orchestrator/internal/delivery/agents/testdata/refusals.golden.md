@@ -1202,3 +1202,7 @@ session children cannot be restarted; start a new investigator child from the li
 
 a pull request is open on this branch, so changes reach it only after review on a candidate: use start_phase fix with a note saying what to change
 
+## refusals/delivery/conduct/answer-or-withdraw-review-question
+
+give an answer, or withdraw: true with a reason; one of the two
+

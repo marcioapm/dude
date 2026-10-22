@@ -1,0 +1,1 @@
+{{if .Withdrawn}}The person withdrew reviewer question {{.ID}}.{{else}}The person answered reviewer question {{.ID}}: {{clip (oneLine .Answer) 140}}{{end}} Decide whether a review should weigh it (start_phase review).

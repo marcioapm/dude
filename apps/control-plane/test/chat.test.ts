@@ -159,6 +159,19 @@ test("a task says who decides, and the decision its conductor is asked for", asy
   expect(taken.awaitingDecision).toBeNull();
 });
 
+test("a task says whether its live delivery is held by reviewers' questions", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+    VALUES ('wi_held', ${ORG}, ${PROJECT}, 5, 'Held', 'awaiting_input')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
+    VALUES ('wfr_held', ${ORG}, 'task.delivery', 'delivery:wi_held', 'waiting', 'openPullRequest', '{"questionsHeld":true}', 'wi_held')`;
+  const held = async () => ((await (await call("GET", "/v1/tasks/wi_held")).json()) as { heldByQuestions: boolean }).heldByQuestions;
+  expect(await held()).toBe(true);
+  await owner`UPDATE workflow_runs SET state = '{}' WHERE id = 'wfr_held'`;
+  expect(await held()).toBe(false);
+  await owner`UPDATE workflow_runs SET state = '{"questionsHeld":true}', status = 'aborted' WHERE id = 'wfr_held'`;
+  expect(await held()).toBe(false);
+});
+
 type NavSession = { id: string; role: string; status: string; title: string; activity?: string };
 type NavTask = { id: string; runs: Array<{ status: string; sessions: NavSession[] }> };
 

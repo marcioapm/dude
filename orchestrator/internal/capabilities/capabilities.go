@@ -92,7 +92,7 @@ var All = []Capability{
 	{Key: DeliveryRead, Description: "Read review findings and the task's pull requests.",
 		Tools: []string{"findings", "pull_requests"}},
 	{Key: Conduct, Description: "Drive the task's delivery: start phases and agents, steer and restart Runs, decide, update the task, publish, and act on its pull requests.",
-		Tools: []string{"start_phase", "start_agent", "steer", "restart_run", "decide", "dismiss_finding",
+		Tools: []string{"start_phase", "start_agent", "steer", "restart_run", "decide", "dismiss_finding", "answer_review_question",
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
 	{Key: Session, Description: "Propose tasks, relations and projects to link for a member to file, and name the session.",
 		Tools: []string{"propose", "relate", "name_session"}},

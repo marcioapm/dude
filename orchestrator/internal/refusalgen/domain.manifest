@@ -68,3 +68,7 @@ mLifecycleArchived                    refusals/domain/lifecycle/archived
 mLifecycleClosedPickUp                refusals/domain/lifecycle/closed-pick-up
 mLifecycleClosed                      refusals/domain/lifecycle/closed
 mLifecycleAgent                       refusals/domain/lifecycle/agent
+mReviewQuestionNotFound               refusals/domain/review-questions/not-found
+mReviewQuestionNotOpen                refusals/domain/review-questions/not-open
+mReviewQuestionAnswerRequired         refusals/domain/review-questions/answer-required
+mReviewQuestionReasonRequired         refusals/domain/review-questions/reason-required

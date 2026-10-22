@@ -173,4 +173,5 @@ const (
 	rVerifyNoSuchRepository                 = "%s is not one of this task's repositories"
 	rVerifyCommitNotSHA                     = "%q is not a commit: name it by its full SHA (git rev-parse HEAD), as pushed; your checkout's unpublished commits are not reachable, publish them first"
 	rVerifyNoCommit                         = "%s has no published commit for this task yet: publish first, or name the commit to verify by its full SHA"
+	rAnswerOrWithdrawReviewQuestion         = "give an answer, or withdraw: true with a reason; one of the two"
 )
