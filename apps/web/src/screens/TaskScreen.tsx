@@ -38,6 +38,7 @@ import {
   FindingGroup,
   FindingRow,
   Markdown,
+  ReviewQuestionList,
   PersonAvatar,
   PersonLine,
   PlanMeter,
@@ -56,7 +57,7 @@ import {
 import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, RESOLUTION_LABEL, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskResolution, type TaskStatus } from "@dude/domain";
-import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
+import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, ReviewQuestion, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
@@ -205,6 +206,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [item, setItem] = useState<TaskDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [questions, setQuestions] = useState<ReviewQuestion[]>([]);
   const [verifications, setVerifications] = useState<Verification[]>([]);
   const [findingStatuses, setFindingStatuses] = useState<string[]>([]);
   const [findingSeverities, setFindingSeverities] = useState<string[]>([]);
@@ -249,9 +251,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     const since = ledger.current.at(-1)?.cursor ?? 0;
     const more = allEvents(client, taskId, since).catch(() => [] as PersistedEvent[]);
     try {
-      const [fresh, f, p, a, v] = await Promise.all([
+      const [fresh, f, q, p, a, v] = await Promise.all([
         client.getTask(taskId),
         client.listFindings(taskId),
+        // A backend without reviewer questions leaves none shown.
+        client.reviewQuestions(taskId).catch(() => ({ questions: [] as ReviewQuestion[] })),
         client.listPullRequests(taskId),
         client.listArtifacts(taskId),
         // Only the tester's: a backend without it leaves the page as it was.
@@ -261,6 +265,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         applied.current = seq;
         setItem(fresh);
         setFindings(f.findings);
+        setQuestions(q.questions);
         setVerifications(v.verifications);
         setArtifacts(a.artifacts);
         setPullRequests(p.pullRequests);
@@ -404,6 +409,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const parts = useMemo(() => {
     const ofAttempt = (n: number) => ({
       findings: findings.filter((f) => attemptOfWork(f.runId, byId, current) === n),
+      questions: questions.filter((q) => q.status === "open" && attemptOfWork(q.runId, byId, current) === n),
       artifacts: artifacts.filter((a) => attemptOfWork(a.runId, byId, current) === n),
     });
     return {
@@ -418,7 +424,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       sessions: (item?.runs ?? []).filter((r) => isConductor(r) || attemptOfRun(r, current) === shown)
         .sort((a, b) => Number(isConductor(b)) - Number(isConductor(a)) || b.createdAt.localeCompare(a.createdAt)),
     };
-  }, [findings, artifacts, verifications, allPrs, item, byId, attempts, current, shown]);
+  }, [findings, questions, artifacts, verifications, allPrs, item, byId, attempts, current, shown]);
   const sessionSelector = useCallback((title: ReactNode) => latest.current.selector(title), [parts.sessions]);
 
   // What the attempt's pull requests heard, for why a fix ran: a few of the ledger's many.
@@ -850,12 +856,20 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <p className="muted">Counts cover every finding in this attempt, before filters.</p></PageRailBlock>
           </PageRail>}><div className="taskPane">
             <VerificationSection client={client} verifications={parts.verifications} artifacts={mine.artifacts} onOpenRun={onOpenRun} />
+            <ReviewQuestionList data-testid="review-questions" questions={mine.questions.map((q) => {
+              const about = q.findingId ? findings.find((f) => f.id === q.findingId) : undefined;
+              return { id: q.id, category: q.category, question: q.question, whyItMatters: q.whyItMatters, evidenceChecked: q.evidenceChecked,
+                neededFrom: q.neededFrom, about: about ? (
+                  <Button size="sm" variant="quiet" data-testid="review-question-about" title={`Show ${about.title}`}
+                    onClick={() => document.querySelector(`[data-finding="${about.id}"]`)?.scrollIntoView({ block: "center" })}>{about.title}</Button>
+                ) : undefined };
+            })} />
             {mine.findings.length > 0 && visibleFindings.length === 0 ? (
               <EmptyState compact icon="check" title="No matching findings" description="Clear a status or severity filter to show more findings." />
             ) : visibleFindings.length > 0 ? (
             <FindingGroup data-testid="findings" findings={visibleFindings}
               renderRow={(f) => (
-                <FindingRow key={f.id} data-testid="finding" data-status={f.status} severity={f.severity} status={f.status}
+                <FindingRow key={f.id} data-testid="finding" data-finding={f.id} data-status={f.status} severity={f.severity} status={f.status}
                   category={f.topic ? `${f.category} · ${f.topic}` : f.category} title={f.title} file={f.file} line={f.line} description={f.description}
                   acceptance={f.acceptance ?? undefined} suggestedFix={f.suggestedFix} resolutionNote={f.resolutionNote} statusLabel={findingStatusLabel(f)} fixAttempts={f.fixAttempts}
                   fixedIn={f.resolvedByRunId ? resolvedIn(item, f.resolvedByRunId, onOpenRun) : undefined} />

@@ -1,0 +1,96 @@
+/*
+ * ReviewQuestionList: questions reviewers asked a person, read-only. No
+ * tone: a question blocks nothing and is no finding. Each is a row with
+ * its fields under it, aligned past the glyph.
+ */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding: 0 var(--ds-space-4);
+}
+.groupTitle {
+  white-space: nowrap;
+}
+.count {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.item {
+  list-style: none;
+  background: var(--ds-color-surface);
+  padding-bottom: var(--ds-space-8);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-default);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.glyph {
+  flex-shrink: 0;
+  color: var(--ds-color-text-secondary);
+}
+.category {
+  flex-shrink: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.question {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--ds-weight-medium);
+}
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  margin: 0;
+  padding: 0 var(--ds-space-8) 0 calc(var(--ds-space-4) + 12px + var(--ds-space-8));
+}
+.field {
+  display: flex;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.label {
+  flex-shrink: 0;
+  width: 104px;
+  font-size: var(--ds-text-2xs);
+  padding-top: 2px;
+}
+.value {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.prose {
+  font-size: var(--ds-text-sm);
+}
