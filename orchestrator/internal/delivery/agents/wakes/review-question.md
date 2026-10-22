@@ -1,0 +1,1 @@
+Reviewer {{.Category}} ({{.RunID}}) asks {{.ID}}{{with .NeededFrom}}, needed from {{clip (oneLine .) 24}}{{end}}: {{clip (oneLine .Question) 70}} Answer it with answer_review_question only if you established the fact, else ask the person.

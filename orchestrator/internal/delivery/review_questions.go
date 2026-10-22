@@ -176,6 +176,71 @@ func settleReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, status, tex
 	if by.conductor() {
 		ev.RunID, ev.ActorType, ev.ActorID = by.Run, ledger.ActorAgent, by.Run
 	}
-	_, err = ledger.Append(ctx, tx, ev)
-	return out, err
+	if _, err := ledger.Append(ctx, tx, ev); err != nil {
+		return out, err
+	}
+	d, err := ReadDelivery(ctx, tx, out.TaskID)
+	if err != nil || d == nil || !d.Live() {
+		return out, err
+	}
+	if !by.conductor() && d.State.conducted() {
+		// The conductor decides whether a review should weigh it.
+		line := reviewQuestionAnsweredLine(id, text, status == "withdrawn")
+		if _, err := RecordWakeTx(ctx, tx, org, out.TaskID, "question", "review-question:"+id+":answered", line); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+// OpenReviewQuestion is an open reviewer question as the conductor is told
+// of it: in a wake when it is raised, and in its briefing.
+type OpenReviewQuestion struct {
+	ID, RunID, Category, NeededFrom, Question string
+}
+
+// line is the question in the conductor's briefing; wakeLine, in the wake
+// that tells the conductor it was raised.
+func (q OpenReviewQuestion) line() string     { return render(reviewQuestionLineTmpl, q) }
+func (q OpenReviewQuestion) wakeLine() string { return render(reviewQuestionWakeTmpl, q) }
+
+// reviewQuestionAnsweredLine wakes the conductor with a person's answer to
+// question id, or its withdrawal (answer is then the reason, not shown).
+func reviewQuestionAnsweredLine(id, answer string, withdrawn bool) string {
+	return render(reviewQuestionAnsweredTmpl, struct {
+		ID, Answer string
+		Withdrawn  bool
+	}{id, answer, withdrawn})
+}
+
+// openReviewQuestionsTx is the task's open reviewer questions of attempt,
+// oldest first (0: the task's highest attempt, as State.Attempt reads); of
+// the review Runs runIDs only when given.
+func openReviewQuestionsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, runIDs []string) ([]OpenReviewQuestion, error) {
+	rows, err := tx.Query(ctx, `SELECT q.id, COALESCE(q.run_id, ''), q.category, q.needed_from, q.question
+		FROM review_questions q JOIN runs r ON r.id = q.run_id
+		WHERE q.task_id = $1 AND q.status = 'open'
+		  AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1 AND phase IS NOT NULL))
+		  AND ($3::text[] IS NULL OR q.run_id = ANY($3))
+		ORDER BY q.created_at, q.run_id, q.n`, taskID, attempt, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[OpenReviewQuestion])
+}
+
+// recordReviewQuestionWakesTx records one wake for the conductor per open
+// question the review Runs asked, keyed on the question: a step replayed
+// records each once.
+func recordReviewQuestionWakesTx(ctx context.Context, tx pgx.Tx, org, taskID string, runIDs []string) error {
+	qs, err := openReviewQuestionsTx(ctx, tx, taskID, 0, runIDs)
+	if err != nil {
+		return err
+	}
+	for _, q := range qs {
+		if _, err := RecordWakeTx(ctx, tx, org, taskID, "question", "review-question:"+q.ID, q.wakeLine()); err != nil {
+			return err
+		}
+	}
+	return nil
 }

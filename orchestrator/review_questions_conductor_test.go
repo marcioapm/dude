@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -98,5 +100,41 @@ func TestTheConductorWithdrawsAReviewQuestion(t *testing.T) {
 	}
 	if d := w.taskDecisions(task); len(d) != 0 {
 		t.Errorf("a withdrawal recorded decisions %q", d)
+	}
+}
+
+// A reviewer's question wakes the conductor with its line, recorded once per
+// question; the conductor's briefing lists it while it is open. A person's
+// answer wakes the conductor again with the answer.
+func TestAReviewQuestionWakesTheConductorAndItsAnswerToo(t *testing.T) {
+	w, task, id := questioned(t)
+	w.wokenWith(task, "asks "+id+", needed from product: "+conductedQuestion)
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key = $2 AND kind = 'question'`,
+		task, "review-question:"+id); n != 1 {
+		t.Errorf("%d wakes for the question, want one", n)
+	}
+	brief := func() string {
+		var b string
+		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+			b, err = delivery.Briefing(context.Background(), tx, task, "run_next", "", "hello")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	listed := "- " + id + " · correctness · needed from product · " + conductedQuestion
+	if b := brief(); !strings.Contains(b, listed) {
+		t.Errorf("the briefing does not list the open question:\n%s", b)
+	}
+
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	if status, body := w.callAs(ana, "/internal/review-questions/"+id+"/answer", map[string]any{"answer": "In UTC."}); status != 200 {
+		t.Fatalf("the owner's answer: %d %v", status, body)
+	}
+	w.wokenWith(task, "The person answered reviewer question "+id+": In UTC.")
+	if b := brief(); strings.Contains(b, listed) {
+		t.Errorf("the briefing still lists the answered question:\n%s", b)
 	}
 }
