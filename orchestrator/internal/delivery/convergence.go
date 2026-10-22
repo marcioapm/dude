@@ -32,10 +32,13 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 	}
 	// Range containment matches rangeFindings: earlier anchors may be a subset
 	// of the current range after a fix starts changing another repository.
-	// The origin reviews are one array and the fix-caused findings grouped
-	// once per review, so a generic plan cannot rescan findings per row.
+	// CTE row estimates are 1, so a join between two CTEs plans as a nested
+	// loop that rescans one per row of the other. Each review's facts are
+	// therefore one UNION ALL grouped by review id, the parent fix is a
+	// primary-key lookup, and findings are joined once as a hash of the
+	// sent-and-judged ids of all reviews.
 	rows, err := tx.Query(ctx, `WITH attempt_runs AS MATERIALIZED (
-		SELECT id, phase, status, replaced_by, parent_run_id, finding_ids, verdicts, branch, review_range, created_at
+		SELECT id, attempt, phase, status, replaced_by, parent_run_id, finding_ids, verdicts, review_range, created_at
 		FROM runs WHERE task_id = $1
 		AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
 	), origins AS MATERIALIZED (
@@ -46,23 +49,35 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 	), findings AS MATERIALIZED (
 		SELECT f.id, f.run_id, f.status, f.severity, f.caused_by_fix FROM review_findings f, origins o
 		WHERE f.task_id = $1 AND f.run_id = ANY(o.ids)
-	), raised AS MATERIALIZED (
-		SELECT run_id, array_agg(id ORDER BY id) ids, array_agg(id ORDER BY id) FILTER (WHERE status = 'open') open_ids
-		FROM findings WHERE caused_by_fix AND severity::text = ANY($5::text[]) GROUP BY run_id
+	), reviews AS MATERIALIZED (
+		SELECT r.id, x.id fix, r.verdicts, x.finding_ids sent, r.finding_ids judged,
+			x.created_at fix_at, r.created_at review_at
+		FROM attempt_runs r JOIN runs x ON x.id = r.parent_run_id
+		WHERE r.phase = 'review' AND r.status = 'completed' AND r.replaced_by IS NULL
+			AND x.task_id = $1 AND x.attempt = r.attempt
+			AND x.phase = 'fix' AND x.replaced_by IS NULL AND r.created_at > $3
+			AND ($6::text IS NULL OR x.branch = $6)
+			AND ($4::jsonb = 'null'::jsonb OR (r.review_range->>'of' = $4::jsonb->>'of'
+				AND ($4::jsonb->'base') @> (r.review_range->'base')))
+	), facts AS (
+		SELECT v.id, v.fix, v.verdicts, v.fix_at, v.review_at,
+			NULL::text shown, false fixed, NULL::text raised, NULL::text raised_open
+		FROM reviews v
+		UNION ALL
+		SELECT v.id, NULL, NULL, NULL, NULL, CASE WHEN f.status = 'open' THEN f.id END,
+			v.verdicts->>f.id = 'fixed' AND f.severity::text = ANY($5::text[]), NULL, NULL
+		FROM reviews v CROSS JOIN LATERAL (SELECT unnest(v.sent) INTERSECT SELECT unnest(v.judged)) s(id)
+		JOIN findings f ON f.id = s.id
+		UNION ALL
+		SELECT f.run_id, NULL, NULL, NULL, NULL, NULL, false, f.id, CASE WHEN f.status = 'open' THEN f.id END
+		FROM findings f WHERE f.caused_by_fix AND f.severity::text = ANY($5::text[])
 	)
-	SELECT x.id, r.verdicts,
-		ARRAY(SELECT f.id FROM findings f WHERE f.status = 'open'
-			AND f.id IN (SELECT unnest(x.finding_ids) INTERSECT SELECT unnest(r.finding_ids)) ORDER BY f.id),
-		EXISTS (SELECT 1 FROM findings f WHERE f.id IN (SELECT unnest(x.finding_ids) INTERSECT SELECT unnest(r.finding_ids))
-			AND r.verdicts->>f.id = 'fixed' AND f.severity::text = ANY($5::text[])),
-		COALESCE(n.ids, '{}'), COALESCE(n.open_ids, '{}')
-	FROM attempt_runs r JOIN attempt_runs x ON x.id = r.parent_run_id LEFT JOIN raised n ON n.run_id = r.id
-	WHERE r.phase = 'review' AND r.status = 'completed' AND r.replaced_by IS NULL
-		AND x.phase = 'fix' AND x.replaced_by IS NULL AND r.created_at > $3
-		AND ($6::text IS NULL OR x.branch = $6)
-		AND ($4::jsonb = 'null'::jsonb OR (r.review_range->>'of' = $4::jsonb->>'of'
-			AND ($4::jsonb->'base') @> (r.review_range->'base')))
-	ORDER BY x.created_at, x.id, r.created_at, r.id`,
+	SELECT max(fix), (array_agg(verdicts) FILTER (WHERE fix IS NOT NULL))[1],
+		COALESCE(array_agg(shown ORDER BY shown) FILTER (WHERE shown IS NOT NULL), '{}'), bool_or(fixed),
+		COALESCE(array_agg(raised ORDER BY raised) FILTER (WHERE raised IS NOT NULL), '{}'),
+		COALESCE(array_agg(raised_open ORDER BY raised_open) FILTER (WHERE raised_open IS NOT NULL), '{}')
+	FROM facts GROUP BY id HAVING count(fix) > 0
+	ORDER BY max(fix_at), max(fix), max(review_at), id`,
 		st.TaskID, st.Attempt, st.ConvergenceFrom, rangeJSON, st.Policy.BlockingSeverities, candidateBranch)
 	if err != nil {
 		return Convergence{}, err
