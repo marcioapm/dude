@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
+	"github.com/marciomartins/dude/orchestrator/internal/memory"
 )
 
 // settingsOf is what the settings tool answers token for args.
@@ -33,8 +35,18 @@ func (f *fixture) settingsOf(t *testing.T, token, args string) map[string]any {
 // over the fixture's database and an orchestrator API on it.
 func (f *fixture) settingsRoute(t *testing.T, path string) map[string]any {
 	t.Helper()
+	return f.settingsRouteWith(t, path, nil, nil)
+}
+
+// settingsRouteWith is settingsRoute with the orchestrator API given an
+// embedder and an indexer, for the memory index page.
+func (f *fixture) settingsRouteWith(t *testing.T, path string, e embeddings.Embedder, indexer interface {
+	Health() memory.Health
+	Resume()
+}) map[string]any {
+	t.Helper()
 	orch := httptest.NewServer((&api.Server{DB: f.app, Token: "svc", Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Kick: func() {}}).Handler())
+		Kick: func() {}, Embedder: e, Indexer: indexer}).Handler())
 	defer orch.Close()
 	_, file, _, _ := runtime.Caller(0)
 	cmd := exec.Command("bun", "run", "orchestrator/testdata/settings-route.ts", f.org, "psn_member", path)
@@ -52,6 +64,7 @@ func (f *fixture) settingsRoute(t *testing.T, path string) map[string]any {
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("settings route %s: %v: %s", path, err, out)
 	}
+	recordRoute(path, body)
 	return body
 }
 
@@ -336,7 +349,18 @@ func TestASessionsInvestigatorRowIsTheOneItsBrainstormStarts(t *testing.T) {
 	mustExec(t, f.owner, `UPDATE projects SET agent_models = agent_models || $2::jsonb WHERE id = $1`, f.project,
 		`{"investigator":{"tier":"mtr_small","harness":"codex","machineSize":"msz_l","image":"img_web","timeLimitMinutes":30}}`)
 
+	out := f.settingsOf(t, token, `{"section":"prompts"}`)
+	for _, p := range field(out, "settings", 0, "prompts").([]any) {
+		if m := p.(map[string]any); m["role"] == "investigator" {
+			if m["organization"] != "per-run" || m["note"] != "per-run child prompt, not saved org/project prompts" || m["organizationSaved"] != nil || m["project"] != nil || m["projectSaved"] != nil {
+				t.Errorf("session investigator prompt: %v", m)
+			}
+		}
+	}
 	inv := roleIn(f.settingsOf(t, token, `{}`), "investigator")
+	if field(inv, "timeLimitMinutes", "value") != nil || field(inv, "timeLimitMinutes", "note") != "not enforced for session investigators" {
+		t.Errorf("session investigator no-progress limit: %v", inv["timeLimitMinutes"])
+	}
 	for _, key := range []string{"tier", "harness", "timeLimitMinutes", "machineSize", "image"} {
 		if s := field(inv, key, "source"); s != "dude" {
 			t.Errorf("a brainstorm's investigator %s: %v", key, field(inv, key))
@@ -354,8 +378,18 @@ func TestASessionsInvestigatorRowIsTheOneItsBrainstormStarts(t *testing.T) {
 
 	inv = roleIn(f.settingsOf(t, conductor, `{}`), "investigator")
 	if field(inv, "tier", "value", "id") != "mtr_small" || field(inv, "tier", "source") != "project" ||
-		field(inv, "machineSize", "source") != "project" {
+		field(inv, "machineSize", "source") != "project" || field(inv, "timeLimitMinutes", "value") != 30.0 ||
+		field(inv, "timeLimitMinutes", "source") != "project" || field(inv, "timeLimitMinutes", "note") != nil {
 		t.Errorf("a conductor's investigator: %v", inv)
+	}
+	// A task's investigator takes the project's saved prompt.
+	mustExec(t, f.owner, `INSERT INTO prompt_versions (id, organization_id, project_id, role, mode, body, created_by, created_at)
+		VALUES ('pv_inv', $1, $2, 'investigator', 'replace', 'x', 'psn_ana', '2026-02-03T04:05:06Z')`, f.org, f.project)
+	for _, p := range field(f.settingsOf(t, conductor, `{"section":"prompts"}`), "settings", 0, "prompts").([]any) {
+		if m := p.(map[string]any); m["role"] == "investigator" && (m["organization"] != "dude" || m["note"] != nil || m["project"] != "replace" ||
+			field(m, "projectSaved", "savedAt") != "2026-02-03T04:05:06Z") {
+			t.Errorf("a conductor's investigator prompt: %v", m)
+		}
 	}
 }
 
@@ -396,8 +430,15 @@ func TestABrainstormWithNoProjectReadsTheOrganisationAlone(t *testing.T) {
 	}
 
 	page := f.settingsRoute(t, "/v1/settings/organization")
-	sameRolesAsThePage(t, out, page)
+	roles := map[string]any{}
 	for role, shown := range page["roles"].(map[string]any) {
+		// A session investigator uses its per-run child prompt and has no enforced no-progress bound.
+		if role != "investigator" {
+			roles[role] = shown
+		}
+	}
+	sameRolesAsThePage(t, out, map[string]any{"roles": roles})
+	for role, shown := range roles {
 		var p map[string]any
 		for _, x := range field(out, "settings", 0, "prompts").([]any) {
 			if m := x.(map[string]any); m["role"] == role {

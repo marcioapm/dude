@@ -91,6 +91,12 @@ type PromptInput struct {
 	Replay string
 	// Review phase following a fix: what that fix published (LastFixTx).
 	LastFix []FixRange
+	// Test phase: the checks the attempt's writers reported
+	// (WriterChecksTx), "" for none.
+	WriterChecks string
+	// Review phase: what earlier reviewers of its category asked
+	// (EarlierQuestionsTx).
+	Questions []EarlierQuestion
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -348,6 +354,9 @@ func Prompt(phase string, in PromptInput) string {
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
 		}
+		if q := earlierQuestions(in.Questions); q != "" {
+			add(q)
+		}
 		if note := lastFixNote(in.LastFix); note != "" {
 			add(note)
 		}
@@ -363,6 +372,9 @@ func Prompt(phase string, in PromptInput) string {
 		add(in.task())
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
+		}
+		if in.WriterChecks != "" {
+			add(in.WriterChecks)
 		}
 
 	default:

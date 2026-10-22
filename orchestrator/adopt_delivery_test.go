@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -67,10 +70,25 @@ func TestAPullRequestToContinueIsImplementedOnBeforeItsReview(t *testing.T) {
 	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
 	start := w.gh.SHA("feature/half")
 	w.gh.Comment(n, "jerv", "Still needs the farewell.")
-	wi := w.startDelivery(w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue))
+	// A standing approval: whatever head the branch shows can be merged.
+	w.gh.Review(n, "ana", "APPROVED")
+	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue)
+	moved := len(w.gh.BranchLog("feature/half"))
+	check := w.prShowsOnlyChecked(t, wi, "target", "feature/half", false)
+	w.startDelivery(wi)
 	w.until("waiting on the pull request", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
 	})
+	// The implementer's work and its loop's reached the person's pull
+	// request by one promotion, and jerv's comment's fix by another, each
+	// at a head reviewed there.
+	check()
+	moves := w.gh.BranchLog("feature/half")[moved:]
+	if len(moves) != 2 || moves[1] != w.gh.SHA("feature/half") || w.fixes(wi) != 1 ||
+		w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvPullRequestFixMoved) != 2 {
+		t.Errorf("feature/half moved to %v, want the loop's promotion and the comment's fix's\n%s", moves, w.describeRuns())
+	}
+	w.writersOnCandidate(wi, nil, "implement", "fix", "simplify")
 	got := w.phasesRun(wi)
 	if len(got) < 2 || got[0] != "implement" || got[1] != "review" {
 		t.Fatalf("phases %v, want implement then review", got)
@@ -379,6 +397,155 @@ func (w *world) phasesRun(wi string) []string {
 	return out
 }
 
+// A taken-over pull request whose whole review is clear reaches its first
+// writer at the simplifier: that writer opens the candidate, its diff alone
+// is reviewed and the candidate tested, and only then does the person's
+// pull request move, once.
+func TestASimplifierThatIsAnAdoptedPullRequestsFirstWriterReachesItOnlyByPromotion(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("qa_browser", "fake/scripted")
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"requiredReviewers":["correctness"],"test":true}' WHERE id = $1`, w.project)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
+			return fakelux.Behaviour{Reply: "Reviewed it; no problems."}
+		}
+		return scripted(spec)
+	}
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+	start := w.gh.SHA("feature/greet")
+	// A standing approval: whatever head the branch shows can be merged.
+	w.gh.Review(n, "ana", "APPROVED")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
+	moved := len(w.gh.BranchLog("feature/greet"))
+	check := w.prShowsOnlyChecked(t, wi, "target", "feature/greet", true)
+	w.startDelivery(wi)
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(wi) })
+
+	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "simplify", "review", "test"}) {
+		t.Fatalf("phases %v, want the whole review, the simplifier, its diff's review and the test\n%s", got, w.describeRuns())
+	}
+	check()
+	head := w.gh.SHA("feature/greet")
+	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != head || head == start {
+		t.Errorf("feature/greet moved to %v from %s, want one promotion", moves, start)
+	}
+	w.writersOnCandidate(wi, nil, "simplify")
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
+		AND review_range->'base'->>'target' = $3`, wi, delivery.RangeSimplify, start); n != 1 {
+		t.Errorf("%d reviews of the simplifier's diff from the person's head, want 1", n)
+	}
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", start, head).CombinedOutput(); err != nil {
+		t.Errorf("the person's commit %s is not under the promoted head: %v %s", start, err, out)
+	}
+}
+
+// A taken-over pull request whose loop writer opens a candidate and commits
+// nothing has nothing to promote: the person's branch does not move, its
+// description stays theirs, and the delivery goes back to waiting on it.
+// A fix the conductor starts at the wait that commits nothing goes on as
+// its loop does: the candidate is dropped, and the conductor is back at
+// the wait, its next phase its to start.
+func TestALoopWriterThatCommitsNothingLeavesTheAdoptedPullRequestAsItWas(t *testing.T) {
+	t.Run("adopted", func(t *testing.T) {
+		w := newWorld(t)
+		scripted := w.lux.Decide
+		w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+			switch labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] {
+			case "review":
+				return fakelux.Behaviour{Reply: "Reviewed it; no problems."}
+			case "simplify":
+				return fakelux.Behaviour{Reply: "Simple enough already."}
+			}
+			return scripted(spec)
+		}
+		n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+		start, body := w.gh.SHA("feature/greet"), w.gh.Pull(n).Body
+		w.gh.Review(n, "ana", "APPROVED")
+		wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
+		moved := len(w.gh.BranchLog("feature/greet"))
+		w.startDelivery(wi)
+		w.until("waiting on the pull request", func() bool { return w.waitingOnPR(wi) })
+		w.writersOnCandidate(wi, nil, "simplify")
+		if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 0 || w.gh.SHA("feature/greet") != start {
+			t.Fatalf("feature/greet moved to %v, want no move", moves)
+		}
+		if got := w.gh.Pull(n); got.Body != body || len(w.gh.Pulls()) != 1 || got.State != "open" {
+			t.Errorf("the pull request is %+v, want the person's, open, as it was", got)
+		}
+		// Its feedback still goes to a fix, which reaches it by promotion.
+		w.gh.Comment(n, "alice", "Please rename the greeting.")
+		w.until("the feedback fixed", func() bool {
+			w.sync()
+			return w.fixes(wi) == 1 && w.gh.SHA("feature/greet") != start && w.waitingOnPR(wi)
+		})
+	})
+	t.Run("at the conductor's wait", func(t *testing.T) {
+		w := conducting(t)
+		scripted := w.lux.Decide
+		var armed atomic.Bool
+		var reviews atomic.Int32
+		w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+			labels, _ := spec["labels"].(map[string]any)
+			switch labels["dude.phase"] {
+			case "review":
+				if !armed.Load() {
+					break
+				}
+				if reviews.Add(1) == 1 {
+					return fakelux.Behaviour{Reply: "One problem:\n\n```yaml\n" + fakeagent.Finding + "```\n"}
+				}
+				return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
+			case "fix", "simplify":
+				if armed.Load() {
+					return fakelux.Behaviour{Reply: "Nothing to change."}
+				}
+			}
+			return scripted(spec)
+		}
+		task := w.reviewing()
+		setPolicy(w, task, `{"maxReviewIterations":9}`)
+		if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+			t.Fatalf("chat: %d %v", status, out)
+		}
+		w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+		branch := w.gh.Pull(1).Head
+		before, moves, body := w.gh.SHA(branch), len(w.gh.BranchLog(branch)), w.gh.Pull(1).Body
+		earlier := w.runsSoFar(task)
+		armed.Store(true)
+		// The review started at the wait; its loop goes on as the policy's.
+		w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+		w.until("waiting on the pull request again", func() bool {
+			switch w.decisionAt(task) {
+			case delivery.PointReviewed, delivery.PointFixed:
+				w.must(task, "decide", `{"action":"next"}`)
+			}
+			return w.phaseRuns(task, "simplify") > 1 && w.waitingOnPR(task)
+		})
+		w.writersOnCandidate(task, earlier, "fix", "simplify")
+		if got := w.gh.BranchLog(branch)[moves:]; len(got) != 0 || w.gh.SHA(branch) != before || w.gh.Pull(1).Body != body {
+			t.Errorf("the pull request moved to %v or its description changed", got)
+		}
+		// Back at the wait as the loop leaves it (the pull request step),
+		// no longer acting on the pull request, no candidate kept.
+		if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state ? 'actingOnPr' OR state ? 'candidate')`, task); n != 0 {
+			var state string
+			_ = w.owner.QueryRow(context.Background(), `SELECT state::text FROM workflow_runs WHERE task_id = $1`, task).Scan(&state)
+			t.Errorf("waiting again still acting on the pull request: %s", state)
+		}
+		if point := w.decisionAt(task); point != "" {
+			t.Errorf("parked on the conductor's %q decision, want the wait", point)
+		}
+		// Feedback after it is handed to the conductor's pull request fix.
+		armed.Store(false)
+		w.gh.Comment(1, "ana", "Please rename the greeting.")
+		w.until("the feedback's decision", func() bool {
+			w.sync()
+			return w.decisionAt(task) == delivery.PointPRFeedback
+		})
+	})
+}
+
 // A pull request a person opened is taken over: dude reviews it (nothing
 // is implemented), fixes what review found on the same branch by
 // fast-forward, and waits on that pull request — never opening another.
@@ -390,7 +557,10 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	start := w.gh.SHA("feature/greet")
 	w.gh.ReviewSaying(n, "jerv", "APPROVED", "")
 
-	wi := w.adopting("pr", n, "feature/greet", "main")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
+	moved := len(w.gh.BranchLog("feature/greet"))
+	check := w.prShowsOnlyChecked(t, wi, "target", "feature/greet", false)
+	w.startDelivery(wi)
 	// jerv's approval stands on GitHub and its checks pass: once the pull
 	// request is read back, it is ready to merge.
 	w.until("waiting on the pull request", func() bool {
@@ -402,6 +572,13 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "fix", "review", "simplify", "review"}) {
 		t.Fatalf("phases %v, want review, fix, re-review, simplify, its diff's review (no implement)", got)
 	}
+	// The review loop's fix and simplification reached the person's pull
+	// request once, by promotion, at a head reviewed there.
+	check()
+	if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != w.gh.SHA("feature/greet") {
+		t.Errorf("feature/greet moved to %v, want one promotion", moves)
+	}
+	w.writersOnCandidate(wi, nil, "fix", "simplify")
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests, want the one taken over", len(w.gh.Pulls()))
 	}
@@ -465,6 +642,144 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests after the fix", len(w.gh.Pulls()))
+	}
+}
+
+// A person pushes to the pull request dude adopted while its first review
+// loop's writer is checked on the candidate: the promotion does not
+// overwrite their commit. The delivery stops for a person
+// (pull_request_moved), and the pull request stays at the person's commit.
+// Trying again is the loop's own writer on a candidate from their commit,
+// given what the discarded candidate was given: the finding whose fix never
+// reached the pull request, or the implementer's assignment.
+func TestAPersonsPushDuringAnAdoptedPullRequestsFirstLoopRefusesItsPromotion(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, writer, gate string
+		resume                   bool
+	}{
+		{"review/fresh", delivery.ModeReview, "fix", "awaitFix", false},
+		{"review/resumed", delivery.ModeReview, "fix", "awaitFix", true},
+		{"continue", delivery.ModeContinue, "implement", "awaitImplement", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			if tc.resume {
+				mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
+			}
+			// Named models: lux is given each writer's prompt itself, which the
+			// scripted agent still plays.
+			w.onModel("fixer", "llm-fix")
+			w.onModel("implementer", "llm-impl")
+			// The finding names its repository, as a multi-repository review's does.
+			scripted := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				b := scripted(spec)
+				b.Reply = strings.Replace(b.Reply, fakeagent.Finding, fakeagent.Finding+"repo: target\n", 1)
+				return b
+			}
+			// One pull request fix round: a retry the prFix path took would spend it.
+			mustExec(t, w.owner, `UPDATE forge_credentials SET settings = settings || '{"fixRoundsPerPr":1}' WHERE organization_id = $1`, w.org)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet in Portuguese")
+			w.gh.Review(n, "ana", "APPROVED")
+			var once sync.Once
+			var person string
+			armed := w.gated(func(step, next string) {
+				if step == tc.gate && next == "review" {
+					once.Do(func() {
+						person = w.commitFileIn(w.gh.Repo, "feature/greet", "PERSON.md", "mine\n", "A person's push")
+					})
+				}
+			})
+			wi := w.adopted("pr", n, "feature/greet", "main", tc.mode)
+			moved := len(w.gh.BranchLog("feature/greet"))
+			armed.Store(true)
+			w.startDelivery(wi)
+			w.until("refused", func() bool { return w.escalationReason(wi) != "" })
+			if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+				t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+			}
+			if got := w.gh.SHA("feature/greet"); person == "" || got != person {
+				t.Fatalf("feature/greet at %s, want the person's %s", got, person)
+			}
+			// No API write of dude's moved it: the person's push is its only move.
+			if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 0 {
+				t.Errorf("dude moved feature/greet to %v", moves)
+			}
+			w.writersOnCandidate(wi, nil, tc.writer)
+			// The discarded candidate's fix resolved the review's finding there.
+			var findingIDs []string
+			var title, acceptance, findingRepo string
+			_ = w.owner.QueryRow(context.Background(), `SELECT finding_ids FROM runs WHERE task_id = $1 AND phase = 'fix'
+				ORDER BY created_at LIMIT 1`, wi).Scan(&findingIDs)
+			if len(findingIDs) != 1 {
+				t.Fatalf("the candidate's fix was given %v, want the review's one finding\n%s", findingIDs, w.describeRuns())
+			}
+			_ = w.owner.QueryRow(context.Background(), `SELECT title, COALESCE(acceptance, ''), COALESCE(repo, '') FROM review_findings WHERE id = $1`,
+				findingIDs[0]).Scan(&title, &acceptance, &findingRepo)
+			if findingRepo != "target" {
+				t.Fatalf("the finding names repository %q, want target", findingRepo)
+			}
+			earlier := w.runsSoFar(wi)
+
+			// Trying again: every move it makes is checked when asked.
+			check := w.prShowsOnlyChecked(t, wi, "target", "feature/greet", false)
+			if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
+				t.Fatal(code, body)
+			}
+			w.until("the retried loop promoted", func() bool {
+				return w.waitingOnPR(wi) && len(w.gh.BranchLog("feature/greet")) > moved
+			})
+			check()
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)
+				AND base_refs->>'target' = $4 AND branch LIKE '%-candidate'`, wi, tc.writer, earlier, person); n != 1 {
+				t.Errorf("%d %s Runs on a candidate from the person's commit, want 1\n%s", n, tc.writer, w.describeRuns())
+			}
+			// The retry's fixer is told the finding again, as the original was.
+			var retryFix string
+			var retryIDs []string
+			_ = w.owner.QueryRow(context.Background(), `SELECT id, finding_ids FROM runs WHERE task_id = $1 AND phase = 'fix'
+				AND id <> ALL($2) ORDER BY created_at LIMIT 1`, wi, earlier).Scan(&retryFix, &retryIDs)
+			if !slices.Contains(retryIDs, findingIDs[0]) {
+				t.Errorf("the retry's fix was given %v, want the discarded candidate's finding %s", retryIDs, findingIDs[0])
+			}
+			given := w.promptOf(retryFix)
+			if lr := w.luxRunOf(retryFix); lr != "" {
+				given += strings.Join(w.lux.Inputs(lr), "\n")
+			}
+			if !strings.Contains(given, title) || acceptance != "" && !strings.Contains(given, acceptance) {
+				t.Errorf("the retry's fixer was not told %q (acceptance %q):\n%s", title, acceptance, given)
+			}
+			if tc.mode == delivery.ModeContinue {
+				// The implementer's assignment, not a generic fix in its place.
+				var retryImpl string
+				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+					AND id <> ALL($2)`, wi, earlier).Scan(&retryImpl)
+				if retryImpl == "" || !strings.Contains(w.promptOf(retryImpl), "Say hello") {
+					t.Errorf("the retry's implementer %q was not given the task\n%s", retryImpl, w.describeRuns())
+				}
+			}
+			// The loop's retry is reviewed as the loop is, never as a pull request fix.
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND id <> ALL($2)
+				AND review_range->>'of' = $3`, wi, earlier, delivery.RangePullRequestFix); n != 0 {
+				t.Errorf("%d reviews of the retry over a pull request fix's range", n)
+			}
+			head := w.gh.SHA("feature/greet")
+			if moves := w.gh.BranchLog("feature/greet")[moved:]; len(moves) != 1 || moves[0] != head {
+				t.Errorf("feature/greet moved to %v, want one promotion", moves)
+			}
+			if out, err := exec.Command("git", "-C", w.gh.Repo, "merge-base", "--is-ancestor", person, head).CombinedOutput(); err != nil {
+				t.Errorf("the promoted head %s does not hold the person's commit: %v %s", head, err, out)
+			}
+			// The pull request's one fix round is still there for its feedback.
+			w.gh.Comment(n, "alice", "Please rename the greeting.")
+			w.until("the feedback fixed", func() bool {
+				w.sync()
+				return w.fixes(wi) == 1 && w.gh.SHA("feature/greet") != head && w.waitingOnPR(wi)
+			})
+			if r := w.escalationReason(wi); r != delivery.ReasonPullRequestMoved {
+				t.Errorf("after the feedback the delivery escalated %q", r)
+			}
+		})
 	}
 }
 

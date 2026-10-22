@@ -132,12 +132,19 @@ func WriterChildRefusedTx(ctx context.Context, tx pgx.Tx, taskID string) (string
 // a candidate reviewed (and tested) reaches it. Open (or draft) is as the
 // pull request syncer last recorded it.
 func pullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (string, error) {
-	var open bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft'))`, taskID, d.Branch(taskID)).Scan(&open); err != nil || !open {
+	if open, err := pullRequestOpenOnTx(ctx, tx, taskID, d.Branch(taskID)); err != nil || !open {
 		return "", err
 	}
 	return rPullRequestOpenOnBranch, nil
+}
+
+// pullRequestOpenOnTx says whether one of the task's pull requests is open
+// (or a draft) on branch, as the pull request syncer last recorded it.
+func pullRequestOpenOnTx(ctx context.Context, tx pgx.Tx, taskID, branch string) (bool, error) {
+	var open bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft'))`, taskID, branch).Scan(&open)
+	return open, err
 }
 
 // ConductPublish is publish: the task's live conductor asks for what it
@@ -213,11 +220,13 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 }
 
 // Branch is the delivery's task branch.
-func (d *Delivery) Branch(taskID string) string {
-	if d.State.Branch != "" {
-		return d.State.Branch
+func (d *Delivery) Branch(taskID string) string { return d.State.taskBranch(taskID) }
+
+func (st *State) taskBranch(taskID string) string {
+	if st.Branch != "" {
+		return st.Branch
 	}
-	return BranchFor(taskID, d.State.Attempt)
+	return BranchFor(taskID, st.Attempt)
 }
 
 // publishLive (SQL list): the statuses of a publish not settled yet.

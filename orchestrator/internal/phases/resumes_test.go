@@ -392,8 +392,15 @@ func luxState(epoch int, state string) lux.Frame {
 // follow-up before the next, so the order is the test's.
 func (w *resumeWorld) follow(frames ...lux.Frame) {
 	w.t.Helper()
+	w.followFrom(statusRunning, "resuming", frames...)
+}
+
+// followFrom is follow with the translator first seeing the Run in status
+// and luxState (follow: a resuming Run; a fresh start: scheduled).
+func (w *resumeWorld) followFrom(status, luxState string, frames ...lux.Frame) {
+	w.t.Helper()
 	t := &translator{run: w.run}
-	t.run.Status, t.run.LuxState = statusRunning, "resuming"
+	t.run.Status, t.run.LuxState = status, luxState
 	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error { return t.load(w.ctx, tx) }); err != nil {
 		w.t.Fatal(err)
 	}

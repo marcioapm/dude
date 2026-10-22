@@ -2237,6 +2237,9 @@ MarkdownCheatsheet.
 - **FindingRow / FindingGroup** — a review finding, and the open-first list
   of them; `FINDING_SEVERITY_SPECS` / `FINDING_STATUS_SPECS` are the
   vocabulary.
+- **ReviewQuestionList** — questions reviewers asked a person instead of
+  guessing: the question, who can answer it, why it matters, what was
+  checked, and the finding it is about; read-only, nothing when empty.
 - **CriterionRow / VerificationGroup** — the tester's verdict per
   acceptance criterion, under the commits tested; `CRITERION_STATE_SPECS`
   is the vocabulary.

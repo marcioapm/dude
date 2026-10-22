@@ -83,6 +83,8 @@ type world struct {
 	// the fake GitHub is.
 	ghApp atomic.Pointer[fakegithub.App]
 	ghURL string
+	// checksDelivery starts its delivery with the scripted tester on.
+	checksTested bool
 }
 
 func newWorld(t *testing.T) *world {

@@ -4,58 +4,77 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
 
-// gatedJudgement is one gated Run's latest checks judgement.
+// gatedJudgement is one gated Run's checks judgement: its newest that is not
+// unchanged, else its newest. Unchanged: the Run's turn changed nothing it
+// could push, so no report was judged.
 type gatedJudgement struct {
-	Role     string
-	Verified bool
-	Skipped  bool
-	Waived   bool
-	Message  string
-	Checks   []struct{ Command, Result, Decision, Reason, CallID string } `json:"checks"`
+	Heads     map[string]RunHead `json:"-"`
+	Role      string
+	Verified  bool
+	Skipped   bool
+	Waived    bool
+	Unchanged bool
+	Message   string
+	Checks    []struct{ Command, Result, Decision, Reason, CallID string } `json:"checks"`
 }
 
 // status is a gated Run's outcome as its row in the pull request names it.
-// A waived or skipped Run is never called verified.
+// A waived, skipped or unchanged Run is never called verified.
 func (j gatedJudgement) status() string {
 	switch {
 	case j.Skipped:
 		return "not model-checked"
 	case j.Waived:
 		return "waived"
+	case j.Unchanged:
+		return "no changes; checks not needed"
 	case j.Verified:
 		return "backed"
 	}
 	return "not backed"
 }
 
-// gatedRuns is each gated Run of the current attempt with its latest
-// judgement, oldest Run first.
+// gatedRuns is each gated Run of the current attempt with its newest
+// judgement that is not unchanged (else its newest), oldest Run first. A
+// later unchanged turn pushed nothing new, so it never displaces the Run's
+// earlier judged, waived or skipped turn; a Run with only unchanged turns
+// reads as unchanged.
 func gatedRuns(ctx context.Context, tx pgx.Tx, st *State) ([]gatedJudgement, error) {
-	rows, err := tx.Query(ctx, `SELECT phase, payload FROM (
-		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, e.payload
+	rows, err := tx.Query(ctx, `SELECT phase, heads, payload FROM (
+		SELECT DISTINCT ON (r.id) r.id, r.created_at, r.phase::text AS phase, r.heads, e.payload
 		FROM events e JOIN runs r ON r.id=e.run_id
 		WHERE r.task_id=$1 AND r.phase IN ('implement','fix','simplify') AND e.event_type=$3
-		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)) ORDER BY r.id, e.cursor DESC) latest
+		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
+		ORDER BY r.id, (e.payload->>'unchanged')::boolean IS TRUE, e.cursor DESC) latest
 		ORDER BY created_at, id`, st.TaskID, st.Attempt, EvRunChecksJudged)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (gatedJudgement, error) {
 		var phase string
-		var payload []byte
+		var heads, payload []byte
 		var j gatedJudgement
-		if err := row.Scan(&phase, &payload); err != nil {
+		if err := row.Scan(&phase, &heads, &payload); err != nil {
 			return j, err
 		}
-		err := json.Unmarshal(payload, &j)
+		if err := json.Unmarshal(payload, &j); err != nil {
+			return j, err
+		}
+		// Heads in another shape only lose the Run its heads, never the
+		// account or the tester's prompt.
+		if json.Unmarshal(heads, &j.Heads) != nil {
+			j.Heads = nil
+		}
 		j.Role = RoleName(PromptRoleForPhase[phase])
-		return j, err
+		return j, nil
 	})
 }
 
@@ -68,22 +87,28 @@ var (
 // first) for a PR, in at most room characters as long as its headline fits:
 // the headline is the weakest of them all (a skip, else any waiver with each
 // reason, else verified), then the newest Run, compactly if its full row does
-// not fit, then older Runs newest-first while they fit. "" for no Runs.
+// not fit, then older Runs newest-first while they fit. "" for no Runs. A
+// Run that changed nothing weakens nothing and backs nothing: with only such
+// Runs the headline says no checks were needed.
 func checksAccountText(runs []gatedJudgement, room int) string {
 	if len(runs) == 0 {
 		return ""
 	}
 	var skipped, unverified bool
 	var waivers []gatedJudgement
+	judged := 0
 	for _, j := range runs {
 		switch {
 		case j.Skipped:
 			skipped = true
 		case j.Waived:
 			waivers = append(waivers, j)
+		case j.Unchanged:
+			continue
 		case !j.Verified:
 			unverified = true
 		}
+		judged++
 	}
 	newest := runs[len(runs)-1]
 	compact := render(checksCompactTmpl, map[string]any{"Role": newest.Role, "Status": newest.status(), "Count": len(newest.Checks)}) + "\n"
@@ -107,6 +132,8 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 		}
 	case unverified:
 		b.WriteString("Checks were not verified; the work was sent back or awaits a person.\n")
+	case judged == 0:
+		b.WriteString("No gated Run changed anything; no checks were needed.\n")
 	default:
 		b.WriteString("Checks were verified against the Run's recorded commands.\n")
 	}
@@ -210,4 +237,59 @@ func codeSpan(s string) string {
 		s = " " + s + " "
 	}
 	return fence + s + fence
+}
+
+var writerChecksTmpl = mustTemplate("contracts/writer-checks")
+
+// writerChecksMax bounds the tester's account of the writers' checks; the
+// newest Runs that fit are kept, as the pull request's account keeps them.
+const writerChecksMax = 12_000
+
+// writerCheck is one gated Run as the tester reads it: its role, the
+// commits it published (repository@short sha), its outcome and its checks,
+// each field one clipped line.
+type writerCheck struct {
+	Role, Heads, Status, Message string
+	Checks                       []struct{ Command, Result, Reason string }
+}
+
+// WriterChecksTx is what a tester of the task's attempt is told about the
+// checks its writers reported (contracts/writer-checks), from the same
+// judgements the pull request's account reads (gatedRuns): "" with none.
+func WriterChecksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (string, error) {
+	runs, err := gatedRuns(ctx, tx, &State{TaskID: taskID, Attempt: attempt})
+	if err != nil || len(runs) == 0 {
+		return "", err
+	}
+	return writerChecksText(runs, writerChecksMax), nil
+}
+
+// writerChecksText renders runs (oldest first) in at most room characters,
+// the newest Runs that fit; with none fitting, the newest alone without its
+// checks.
+func writerChecksText(runs []gatedJudgement, room int) string {
+	items := make([]writerCheck, len(runs))
+	for i, j := range runs {
+		var heads []string
+		for _, repo := range slices.Sorted(maps.Keys(j.Heads)) {
+			heads = append(heads, repo+"@"+short(j.Heads[repo].SHA))
+		}
+		c := writerCheck{Role: j.Role, Heads: strings.Join(heads, ", "), Status: j.status()}
+		if j.Waived {
+			c.Message = checksField(j.Message)
+		}
+		for _, v := range j.Checks {
+			c.Checks = append(c.Checks, struct{ Command, Result, Reason string }{checksField(v.Command),
+				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason)})
+		}
+		items[i] = c
+	}
+	for from := range items {
+		if text := render(writerChecksTmpl, items[from:]); utf8.RuneCountInString(text) <= room {
+			return text
+		}
+	}
+	last := items[len(items)-1]
+	last.Checks = nil
+	return render(writerChecksTmpl, []writerCheck{last})
 }

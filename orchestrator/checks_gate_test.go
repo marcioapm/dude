@@ -8,8 +8,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
 
@@ -81,7 +84,20 @@ func (w *world) checksDelivery(model string, j *scriptedJudge) string {
 	}
 	w.onModel("implementer", model)
 	wi := w.task()
-	w.deliver(wi)
+	if !w.checksTested {
+		w.deliver(wi)
+		return wi
+	}
+	// With the scripted tester, on a task of one criterion.
+	mustExec(w.t, w.owner, `UPDATE tasks SET acceptance_criteria = '["it greets"]' WHERE id = $1`, wi)
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		return delivery.NameOnlyRepository(context.Background(), tx, wi)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	p := scriptedPolicy()
+	p.Test = true
+	w.start(wi, p)
 	return wi
 }
 
@@ -215,11 +231,17 @@ func TestRetryingAnUnverifiedReportNamesTheDirectiveItSends(t *testing.T) {
 // to the escalation, asserting no push was asked for.
 func (w *world) unbackedUntilEscalated(rounds int) string {
 	w.t.Helper()
+	return w.unbackedUntilEscalatedWith(rounds, &scriptedJudge{})
+}
+
+// unbackedUntilEscalatedWith is unbackedUntilEscalated judged by j.
+func (w *world) unbackedUntilEscalatedWith(rounds int, j *scriptedJudge) string {
+	w.t.Helper()
 	if rounds >= 0 {
 		mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = jsonb_build_object('checksFixRounds', $2::int)
 			WHERE organization_id = $1`, w.org, rounds)
 	}
-	wi := w.checksDelivery(fakeagent.ChecksUnbackedModel, &scriptedJudge{})
+	wi := w.checksDelivery(fakeagent.ChecksUnbackedModel, j)
 	w.until("the checks escalation", func() bool { return w.escalationReason(wi) == delivery.ReasonChecksUnverified })
 	if n := w.implementerPushes(wi); n != 0 {
 		w.t.Fatalf("%d pushes of an unbacked report", n)
@@ -334,5 +356,119 @@ func TestAReviewerIsNeverJudged(t *testing.T) {
 		if !strings.Contains(a.About, "run_") {
 			t.Errorf("asked about %q", a.About)
 		}
+	}
+}
+
+// scriptedSimplifier makes the scripted simplifier commit nothing and end
+// its turn without a checks report, after writing edits (none for nil)
+// into its checkout and leaving them there.
+func (w *world) scriptedSimplifier(edits map[string]string) {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
+			b.Commit, b.Checks, b.NoChecksReport, b.Reply, b.Edits = nil, "", true, "Nothing to simplify.", edits
+		}
+		return b
+	}
+}
+
+// simplifierAsked is how many judge questions were about the task's
+// simplifier Runs.
+func (w *world) simplifierAsked(wi string, j *scriptedJudge) int {
+	w.t.Helper()
+	ids := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'simplify'`, wi)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	n := 0
+	for _, a := range j.asked {
+		if slices.Contains(ids, a.About) {
+			n++
+		}
+	}
+	return n
+}
+
+// simplifierJudged is judged's for the simplifier, "unchanged" for a turn
+// recorded as changing nothing.
+func (w *world) simplifierJudged(wi string) []string {
+	w.t.Helper()
+	return w.ids(`SELECT CASE WHEN payload ? 'unchanged' THEN 'unchanged' WHEN payload ? 'waived' THEN 'waived'
+			WHEN (payload->>'verified')::bool THEN 'verified' ELSE 'unverified' END
+		FROM events e JOIN runs r ON r.id = e.run_id AND r.phase = 'simplify'
+		WHERE r.task_id = $1 AND e.event_type = $2 ORDER BY e.cursor`, wi, delivery.EvRunChecksJudged)
+}
+
+// A simplifier that changes nothing and reports no checks goes on with no
+// judge call and nothing sent back, recorded as needing no checks; the pull
+// request still says the implementer's checks were waived, and why, and
+// names the simplifier's outcome as its own, not as backed.
+func TestAnUnchangedSimplifierNeedsNoChecksAndKeepsTheImplementersWaiver(t *testing.T) {
+	w := newWorld(t)
+	w.scriptedSimplifier(nil)
+	// A real model's tester, so its spec carries the prompt a real one gets;
+	// the fake lux still plays it as the scripted tester.
+	w.checksTested = true
+	w.onModel("qa_browser", "claude-test")
+	j := &scriptedJudge{}
+	wi := w.unbackedUntilEscalatedWith(0, j)
+	owner, _, _ := w.people(wi)
+	if code, body := w.decide(owner, wi, delivery.ActionWaive, "Pre-existing failures on main."); code != 200 {
+		t.Fatalf("the owner's waiver: %d %v", code, body)
+	}
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.phaseRuns(wi, "test"); n != 1 {
+		t.Fatalf("%d tester Runs, want 1", n)
+	}
+	if got := w.simplifierJudged(wi); strings.Join(got, ",") != "unchanged" {
+		t.Errorf("the simplifier was judged %v, want one unchanged turn", got)
+	}
+	if n := w.simplifierAsked(wi, j); n != 0 {
+		t.Errorf("%d judge questions about the unchanged simplifier", n)
+	}
+	if n := w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id
+		WHERE r.task_id = $1 AND r.phase = 'simplify'`, wi); n != 0 {
+		t.Errorf("%d directives sent to the unchanged simplifier", n)
+	}
+	backed := "  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
+	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+
+		"- Implementer: Pre-existing failures on main.\n\n"+
+		"- **Implementer** — waived\n"+
+		"- **Fixer** — backed\n"+backed+"\n"+
+		"- **Simplifier** — no changes; checks not needed"; got != want {
+		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
+	}
+	// The tester is given the writers' outcomes: the implementer's waiver
+	// and its reason, with the commit it published, so it does not rerun
+	// the failing checks to find them again.
+	var implementerHead string
+	_ = w.owner.QueryRow(context.Background(), `SELECT heads->'target'->>'sha' FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).
+		Scan(&implementerHead)
+	prompt := ""
+	for _, r := range w.luxRuns() {
+		if spec := submitted(w.t, r); spec.Labels["dude.task"] == wi && spec.Labels["dude.phase"] == "test" {
+			prompt = spec.Workload.Prompt
+		}
+	}
+	if line := "- Implementer (target@" + implementerHead[:7] + "): waived: Pre-existing failures on main."; !strings.Contains(prompt, line) {
+		t.Errorf("the tester's prompt does not carry %q:\n%s", line, prompt)
+	}
+}
+
+// A simplifier that leaves an edit in its checkout, uncommitted and with no
+// report, is gated as before: sent back, then held for a person, its work
+// unpublished.
+func TestASimplifierWithAnUncommittedEditIsStillGated(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
+	w.scriptedSimplifier(map[string]string{"SCRATCH.md": "notes\n"})
+	j := &scriptedJudge{}
+	wi := w.checksDelivery(fakeagent.ChecksHonestModel, j)
+	w.until("the checks escalation", func() bool { return w.escalationReason(wi) == delivery.ReasonChecksUnverified })
+	if got := w.simplifierJudged(wi); strings.Join(got, ",") != "unverified" {
+		t.Errorf("the simplifier was judged %v, want its missing report rejected", got)
+	}
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Errorf("%d pull requests opened over a held simplifier", n)
 	}
 }

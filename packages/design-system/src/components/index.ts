@@ -99,6 +99,8 @@ export { FindingRow, FindingGroup, sortFindings, countFindings, FINDING_SEVERITI
 export type { FindingRowProps, FindingGroupProps, FindingLike, FindingCounts, FindingSeveritySpec, FindingStatusSpec } from "./FindingRow.tsx";
 export { CriterionRow, VerificationGroup, criterionState, CRITERION_STATES, CRITERION_STATE_SPECS } from "./CriterionRow.tsx";
 export type { CriterionRowProps, VerificationGroupProps, CriterionState, CriterionStateSpec } from "./CriterionRow.tsx";
+export { ReviewQuestionList } from "./ReviewQuestionList.tsx";
+export type { ReviewQuestionListProps, ReviewQuestionItem } from "./ReviewQuestionList.tsx";
 export { Breadcrumb, elideMiddle } from "./Breadcrumb.tsx";
 export type { BreadcrumbProps, BreadcrumbItem } from "./Breadcrumb.tsx";
 export { ArtifactRow, ArtifactGroup, artifactKind, ARTIFACT_KIND_SPECS } from "./ArtifactRow.tsx";

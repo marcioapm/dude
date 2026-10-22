@@ -120,6 +120,17 @@ func goldenFindings() []Finding {
 	}
 }
 
+// goldenQuestions are earlier reviewers' questions in each status a
+// reviewer is shown: open (about a finding), answered by a person, by the
+// conductor. A withdrawn one is never loaded (EarlierQuestionsTx).
+func goldenQuestions() []EarlierQuestion {
+	return []EarlierQuestion{
+		{Question: "Do invoices close in UTC or in the organisation's zone?", FindingTitle: "Totals off by one cent", Status: "open"},
+		{Question: "Is a retry expected after a timeout?", Status: "answered", Answer: "Yes, once, after 30 seconds.", ByPerson: true},
+		{Question: "Are refunds in scope?", Status: "answered", Answer: "No: the task names invoices only."},
+	}
+}
+
 func goldenPRFeedback() []forge.ActionableFeedback {
 	return []forge.ActionableFeedback{
 		{Source: "review", ID: "line-comment-11", Repo: "api", Author: "ana", Path: "api/export.go", Body: "Stream the rows; a year is big.", Kind: forge.KindLineComment},
@@ -168,6 +179,7 @@ func goldenPhaseScenarios() []struct {
 	review.Category = "correctness"
 	review.BlockingSeverities = []string{"blocking", "high"}
 	review.Findings = goldenFindings()
+	review.Questions = goldenQuestions()
 	fix := goldenTask()
 	fix.Findings = goldenFindings()
 	fix.PRFeedback = goldenPRFeedback()
@@ -255,15 +267,15 @@ func TestGoldenReviewPrompts(t *testing.T) {
 func TestGoldenResumeRounds(t *testing.T) {
 	from, to := map[string]string{"api": "aaa111", "web": "ccc333"}, map[string]string{"api": "bbb222", "web": "ccc333"}
 	lastFix := []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}
-	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings(), lastFix))
+	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings(), goldenQuestions(), lastFix))
 	// Two checkouts, the fix publishing only api: BaseRefs holds api alone.
 	golden(t, "resume-review-one-published", RoundMessage(PhaseReview, map[string]string{"api": "aaa111"},
-		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], lastFix))
+		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, lastFix))
 	golden(t, "resume-review-simplify-two", RoundMessage(PhaseReview, map[string]string{"api": "aaa111", "web": "ccc000"}, to,
-		rangeReason[RangeSimplify], nil, nil))
-	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1], nil))
+		rangeReason[RangeSimplify], nil, goldenQuestions()[1:2], nil))
+	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1], nil, nil))
 	// A round on the same head (a retry): nothing to name as changed.
-	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil, nil))
+	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil, nil, nil))
 	// A fixer's round: the implementer's first carries the fix contract,
 	// a fixer's next does not; what it fixes is Prompt(PhaseFix)'s.
 	fixIn := PromptInput{Findings: goldenFindings(), Tools: true, CLI: true,
@@ -425,4 +437,22 @@ func TestGoldenMachineOffers(t *testing.T) {
 	for _, m := range goldenMachineChoices() {
 		golden(t, "machine-offer-"+m.name, m.c.Offer())
 	}
+}
+
+// A tester's first message with its attempt's writers' checks: a waived
+// implementer, a backed fixer and a simplifier that changed nothing, each
+// with the commits it published.
+func TestGoldenTesterWriterChecks(t *testing.T) {
+	type check = struct{ Command, Result, Decision, Reason, CallID string }
+	runs := []gatedJudgement{
+		{Role: "Implementer", Verified: true, Waived: true, Message: "Three tests fail on main as well; tracked separately.",
+			Heads: map[string]RunHead{"api": {SHA: "1111111aaaaaaa"}}},
+		{Role: "Fixer", Verified: true, Heads: map[string]RunHead{"api": {SHA: "2222222bbbbbbb"}, "web": {SHA: "3333333ccccccc"}},
+			Checks: []check{{Command: "go test ./export/...", Result: "pass", Reason: "the recorded call says so", CallID: "mcall_1"}}},
+		{Role: "Simplifier", Verified: true, Unchanged: true, Message: "No changes; checks not needed."},
+	}
+	in := goldenTask()
+	in.Tools, in.CLI, in.Repositories = true, true, twoRepos()
+	in.WriterChecks = writerChecksText(runs, writerChecksMax)
+	golden(t, "prompt-test-writer-checks", Prompt(PhaseTest, in))
 }

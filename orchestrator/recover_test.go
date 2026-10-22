@@ -65,6 +65,15 @@ func (w *world) options(wi string) (actions []string, attempt int) {
 	return out.Actions, out.Attempt
 }
 
+func (w *world) closePullRequestAndAwaitAbort(wi string) {
+	w.t.Helper()
+	w.gh.Close(1)
+	w.until("the task to be aborted by the close", func() bool {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		return w.taskStatus(wi) == "aborted"
+	})
+}
+
 func TestAnAbortedTaskOffersEveryWayBack(t *testing.T) {
 	w := newWorld(t)
 	wi, _ := w.aborted()
@@ -165,11 +174,7 @@ func TestStartingOverIsANewAttemptOnItsOwnBranch(t *testing.T) {
 	// A finding of attempt 1, left open, and a person closing its pull request.
 	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title)
 		SELECT 'f_old', organization_id, task_id, id, 'correctness', 'high', 'old' FROM runs WHERE task_id = $1 AND phase = 'review' LIMIT 1`, wi)
-	w.gh.Close(1)
-	w.until("the task to be aborted by the close", func() bool {
-		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return w.taskStatus(wi) == "aborted"
-	})
+	w.closePullRequestAndAwaitAbort(wi)
 	if got, _ := w.options(wi); strings.Join(got, " ") != "restart" {
 		t.Fatalf("a task whose pull request was closed offers %v", got)
 	}
@@ -191,6 +196,55 @@ func TestStartingOverIsANewAttemptOnItsOwnBranch(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE id = 'f_old' AND status = 'open'`); n != 1 {
 		t.Errorf("attempt 1's finding changed")
+	}
+}
+
+// The scripted reviewer's finding gives each attempt a second review round.
+func TestStartingOverTakesTheSettingsAsTheyAreNow(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	w.deliver(wi)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 1 AND phase = 'review' AND category = 'performance'`, wi); n != 0 {
+		t.Fatalf("attempt 1 ran %d performance reviewers before the settings asked for one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 1 AND phase = 'review' AND continues_how = 'resume'`, wi); n != 0 {
+		t.Fatalf("attempt 1 resumed %d reviewers before the settings turned resuming on", n)
+	}
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy
+		|| '{"requiredReviewers":["correctness","performance"],"resumeRounds":true}' WHERE id = $1`, w.project)
+	w.closePullRequestAndAwaitAbort(wi)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	w.until("attempt 2's pull request", func() bool { return len(w.gh.Pulls()) == 2 })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND category = 'performance'`, wi); n == 0 {
+		t.Error("attempt 2 ran no performance reviewer: it kept attempt 1's reviewers")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'review' AND continues_how = 'resume'`, wi); n == 0 {
+		t.Error("attempt 2 resumed no reviewer for its next round: it kept attempt 1's policy")
+	}
+}
+
+// Unreadable settings must leave the stopped task and its recovery options intact.
+func TestStartingOverUnderSettingsThatDoNotDecodeLeavesTheTaskStopped(t *testing.T) {
+	w := newWorld(t)
+	wi, _ := w.aborted()
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"maxReviewIterations": "many"}' WHERE id = $1`, w.project)
+	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart", "note": "Start fresh."}); status != http.StatusInternalServerError {
+		t.Fatalf("restart under settings that do not decode: %d %v", status, body)
+	}
+	if got := w.taskStatus(wi); got != "aborted" {
+		t.Errorf("the refused Start over left the task %s", got)
+	}
+	if got, attempt := w.options(wi); strings.Join(got, " ") != "resume retry restart" || attempt != 1 {
+		t.Errorf("the refused Start over left %v (attempt %d)", got, attempt)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, wi); n != 1 {
+		t.Errorf("%d deliveries after the refused Start over, want the stopped one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.recovered'`, wi); n != 0 {
+		t.Errorf("the refused Start over recorded %d task.recovered", n)
 	}
 }
 

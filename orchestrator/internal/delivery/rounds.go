@@ -369,7 +369,7 @@ func handOverTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun, p prede
 		FROM runs o WHERE n.id = $1 AND o.id = $2`, created, p.ID, luxRunID); err != nil {
 		return "", err
 	}
-	text, err := roundMessageTx(ctx, tx, in, p)
+	text, err := roundMessageTx(ctx, tx, in, p, created)
 	if err != nil {
 		return "", err
 	}
@@ -399,7 +399,7 @@ func continuesEventTx(ctx context.Context, tx pgx.Tx, ref RunRef, from, how stri
 // head; then, for a reviewer or tester, the findings it judges
 // (in.FindingIDs, answered by position, as a fresh Run's prompt lists
 // them) and how it reports; for a fixer, what it fixes (FixRoundMessage).
-func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (string, error) {
+func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow, created string) (string, error) {
 	findings, err := findingsInOrderTx(ctx, tx, in.FindingIDs)
 	if err != nil {
 		return "", err
@@ -433,12 +433,27 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 			reason = rangeReason[in.ReviewRange.Of]
 		}
 		var lastFix []FixRange
+		var questions []EarlierQuestion
 		if in.Phase == PhaseReview {
 			if lastFix, err = LastFixTx(ctx, tx, in.ParentRunID); err != nil {
 				return "", err
 			}
+			// The new row's own: it is a review, of its category, so it is
+			// shown what that category asked.
+			if questions, err = EarlierQuestionsTx(ctx, tx, created); err != nil {
+				return "", err
+			}
 		}
-		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, lastFix)
+		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix)
+		if in.Phase == PhaseTest {
+			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
+			if err != nil {
+				return "", err
+			}
+			if checks != "" {
+				message += "\n\n" + checks
+			}
+		}
 	}
 	if note := strings.TrimSpace(in.ConductorNote); note != "" {
 		message += "\n\n" + render(fromConductorTmpl, note)
@@ -518,19 +533,21 @@ func roundRanges(from, to map[string]string) []roundRange {
 }
 
 // RoundMessage renders contracts/resume/round: from and to are each
-// repository's commit at the last round and now; lastFix, the commits of
-// the fix this round follows (LastFixTx).
-func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, lastFix []FixRange) string {
+// repository's commit at the last round and now; questions, what earlier
+// reviewers of a review's category asked; lastFix, the commits of the fix
+// this round follows (LastFixTx).
+func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
+	lastFix []FixRange) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
 	}
 	return render(roundTmpl, struct {
-		Test                      bool
-		Ranges                    []roundRange
-		Reason, Findings, LastFix string
-		Format, Summary           string
-	}{phase == PhaseTest, roundRanges(from, to), reason, list, lastFixNote(lastFix), findingFormat, reviewSummary})
+		Test                                 bool
+		Ranges                               []roundRange
+		Reason, Findings, Questions, LastFix string
+		Format, Summary                      string
+	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), findingFormat, reviewSummary})
 }
 
 // FixRange is what a fix Run published in one repository: its commits are

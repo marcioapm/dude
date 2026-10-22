@@ -1393,6 +1393,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var lastFix []delivery.FixRange
+	var writerChecks string
+	var questions []delivery.EarlierQuestion
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
@@ -1536,6 +1538,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A preview item's picture is said attached only when it goes with
 		// this prompt (PromptAttachments had room for it).
 		delivery.MarkPictures(peopleFeedback, taskImages)
+		// A tester is told what its attempt's writers checked, so it does
+		// not rediscover failures already known or waived.
+		if r.Phase == delivery.PhaseTest && stored == nil {
+			if writerChecks, err = delivery.WriterChecksTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+				return err
+			}
+		}
 		// A review after a fix is told that fix's commits, to answer
 		// caused_by_fix by.
 		if r.Phase == delivery.PhaseReview && stored == nil {
@@ -1544,6 +1553,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 				return err
 			}
 			if lastFix, err = delivery.LastFixTx(ctx, tx, parent); err != nil {
+				return err
+			}
+		}
+		// What earlier reviewers of its category asked: none for any Run
+		// that is no review (EarlierQuestionsTx keys on the Run's phase).
+		if stored == nil {
+			if questions, err = delivery.EarlierQuestionsTx(ctx, tx, r.ID); err != nil {
 				return err
 			}
 		}
@@ -1610,6 +1626,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
+		WriterChecks: writerChecks, Questions: questions,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of
@@ -2129,6 +2146,11 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	heads := map[string]delivery.RunHead{}
 	branch := ""
 	if pushes {
+		if delivery.ChecksGated[r.Phase] {
+			if refused, err := s.unchangedPushRefused(ctx, r); refused || err != nil {
+				return true, err
+			}
+		}
 		var err error
 		if heads, branch, err = s.publish(ctx, r); err != nil {
 			// A forge that is down or rate-limiting will answer later; a
@@ -2572,7 +2594,7 @@ func (s *Syncer) reportFindings(ctx context.Context, r phaseRun) error {
 		return err
 	}
 	return RecordFindings(ctx, s.DB, r.Org, r.ID, delivery.ParseFindings(reply),
-		judged(r.FindingIDs, delivery.ParseVerdicts(reply)))
+		judged(r.FindingIDs, delivery.ParseVerdicts(reply)), delivery.ParseQuestions(reply))
 }
 
 // judged maps a re-review's verdicts, given by position, to the findings it
@@ -3848,16 +3870,19 @@ func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor st
 // the finding from a new review, nor a fix having touched its file, both of
 // which close findings nobody checked.
 func RecordFindings(ctx context.Context, database *db.DB, org, runID string, findings []delivery.Finding,
-	verdicts map[string]bool) error {
+	verdicts map[string]bool, questions []delivery.ReviewQuestion) error {
 	return database.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return recordFindingsTx(ctx, tx, org, runID, findings, verdicts)
+		return recordFindingsTx(ctx, tx, org, runID, findings, verdicts, questions)
 	})
 }
 
-func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, findings []delivery.Finding, verdicts map[string]bool) error {
+func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, findings []delivery.Finding, verdicts map[string]bool,
+	questions []delivery.ReviewQuestion) error {
 	var projectID, taskID, phase, category string
-	if err := tx.QueryRow(ctx, `SELECT project_id, task_id, phase::text, COALESCE(category, '') FROM runs WHERE id = $1`, runID).
-		Scan(&projectID, &taskID, &phase, &category); err != nil {
+	var shown []string
+	if err := tx.QueryRow(ctx, `SELECT project_id, task_id, phase::text, COALESCE(category, ''), COALESCE(finding_ids, '{}')
+			FROM runs WHERE id = $1`, runID).
+		Scan(&projectID, &taskID, &phase, &category, &shown); err != nil {
 		return err
 	}
 	// Only a review or test Run may report: a fixer reporting findings
@@ -3909,6 +3934,43 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
 			db.Nullable(f.Acceptance), f.CausedByFix); err != nil {
 			return err
+		}
+	}
+	// A reviewer's questions, a tester's never (it reports blocked). Kept
+	// across reports, unlike the findings above: a question answered
+	// between two reports of the Run keeps its answer.
+	if phase == delivery.PhaseReview {
+		// A conductor's child reviewer has no category and reviews to the
+		// correctness contract; EarlierQuestionsTx reads "" the same way.
+		if category == "" {
+			category = "correctness"
+		}
+		for i, q := range questions {
+			var finding *string
+			if q.About > 0 && q.About <= len(shown) {
+				finding = &shown[q.About-1]
+			}
+			id := ids.New(ids.ReviewQuestion)
+			tag, err := tx.Exec(ctx, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, finding_id,
+					question, why_it_matters, evidence_checked, needed_from)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (run_id, n) DO NOTHING`,
+				id, org, taskID, runID, i+1, category, finding, q.Question, q.Why, q.Evidence, q.NeededFrom)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				continue
+			}
+			payload := map[string]any{"questionId": id, "n": i + 1, "category": category, "neededFrom": q.NeededFrom}
+			if finding != nil {
+				payload["findingId"] = *finding
+			}
+			if _, err := ledger.Append(ctx, tx, ledger.Event{
+				Type: delivery.EvReviewQuestionRaised, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
+				ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID, Payload: payload,
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{

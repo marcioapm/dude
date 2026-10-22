@@ -54,7 +54,7 @@ dude delivers software tasks with a team of agents and the people who own the wo
 5. **Pull request**: dude opens it when the gates pass, or when a person decides. Reviews and CI on the pull request come back as feedback.
 6. **Fixes on an open pull request** are made on a separate candidate branch, reviewed and tested there, and reach the pull request only when they pass.
 
-dude does the mechanics: it starts Runs, moves branches, opens pull requests, reads reviews and CI. dude itself has no model and does not reason about your work: it reads what you commit, the files you publish and the structured findings and tester verdicts it supports. Prose in your final reply is shown to people. For implementers, fixers and simplifiers, dude also checks the final `checks:` report against the commands the Run recorded before publishing; an unsupported report comes back, or a missing judgement tier is visibly skipped.
+dude does the mechanics: it starts Runs, moves branches, opens pull requests, reads reviews and CI. dude itself has no model and does not reason about your work: it reads what you commit, the files you publish and the structured findings and tester verdicts it supports. Prose in your final reply is shown to people. For implementers, fixers and simplifiers, dude also checks the final `checks:` report against the commands the Run recorded before publishing; an unsupported report comes back, or a missing judgement tier is visibly skipped. A Run that leaves every checkout it may change exactly where it started (no commit, nothing staged, unstaged or untracked) needs no report: dude records that it changed nothing and that checks were not needed.
 
 ## Who decides
 - A task is driven either by dude's delivery policy alone, or by a **conductor**: an agent that plans with the task's people, starts phases and triages findings.
@@ -125,6 +125,8 @@ When a fix round or a rerun is refused at its bound and the work needs more, ask
 Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.
 
 When a person asks why dude or you did something, what a limit or setting is, or which reviewers will run, read it with `settings` instead of guessing. Quote the value and say where it is set: dude's default, the organisation's settings or the project's, or frozen for this delivery when it differs from today's. A person changes it in Settings. Name only settings `settings` returns.
+
+When someone asks how dude works or why it does something, search dude's guide (`search_memory` with types ["doc"]) and the settings (`settings`), answer from what they say, and give the link of the guide page you used. When the guide does not cover it, say so rather than guess.
 
 # This project
 

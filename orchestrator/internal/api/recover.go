@@ -427,7 +427,7 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 	if out.Attempt, err = delivery.NextAttemptTx(ctx, tx, taskID, t.State.Attempt); err != nil {
 		return out, err
 	}
-	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, t.ProjectID, t.State.Policy, out.Attempt, decider, w, override != nil); err != nil {
+	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, out.Attempt, decider, w, override != nil); err != nil {
 		return out, err
 	}
 	out.ClosePRs = t.State.PullRequestIDs
@@ -507,11 +507,16 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 }
 
 // startOver starts the task's next attempt: a delivery of its own, decided
-// by decider, on a branch of its own from the default branch — or, for a
-// task started from existing work, on that work's head branch again
+// by decider, under the settings as they are now (not the stopped attempt's
+// frozen policy), on a branch of its own from the default branch — or, for
+// a task started from existing work, on that work's head branch again
 // (delivery.NewState), whose adopted pull request it carries on.
-func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectID string, policy delivery.Policy, attempt int,
+func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int,
 	decider string, w delivery.Writer, overridden bool) (string, error) {
+	projectID, policy, err := policyFor(ctx, tx, taskID)
+	if err != nil {
+		return "", err
+	}
 	// The last attempt's delivery is over, whatever state it stopped in.
 	var was string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT state->>'decider' FROM workflow_runs WHERE task_id = $1

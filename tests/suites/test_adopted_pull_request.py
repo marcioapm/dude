@@ -69,7 +69,10 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
     assert f"Tested at `{head[:7]}`." in verdict["body"], verdict
     assert "dude's test verdict for this pull request" in verdict["body"], verdict
     assert "## Verification" in verdict["body"] and f"/task/{task['id']}" in verdict["body"], verdict
-    assert verdict["user"]["login"] == fake_github.token_login and verdict.get("updated_at"), verdict
+    # The failed test and its re-test ran on the candidate: the verdict is
+    # posted once, after promotion, and never edited (the fake sets
+    # updated_at only on an edit).
+    assert verdict["user"]["login"] == fake_github.token_login and "updated_at" not in verdict, verdict
     assert len(fake_github.pulls[1].comments) == 1, fake_github.pulls[1].comments
     assert fake_github.pulls[1].body == "", "the person's description was edited"
     phases = [r["phase"] for r in client.task_runs(task["id"]) if r["phase"]]
@@ -226,8 +229,13 @@ def test_a_draft_pull_request_is_continued_on_its_own_branch_then_reviewed(
                timeout=120, message="the continued draft never got back to review")
     phases = _phases(client, task["id"])
     assert phases[:2] == ["implement", "review"], phases
-    log = fake_github.branch_log("feature/half")
-    assert any(m.startswith("Add FACTORY.md") for m in log) and "work on feature/half" in log, log
+    # The writers commit on feature/half-candidate; feature/half takes them
+    # only when the candidate is promoted, after the loop's review.
+    log = wait_until(
+        lambda: (lg := fake_github.branch_log("feature/half")) and any(m.startswith("Add FACTORY.md") for m in lg) and lg,
+        timeout=90, message="the continued draft's candidate was never promoted onto feature/half",
+    )
+    assert "work on feature/half" in log, log
     assert fake_github._git_out("merge-base", "--is-ancestor", person_head, "feature/half") == ""
     assert len(fake_github.pulls) == 1, "dude opened a second pull request"
     assert [pr["number"] for pr in _pull_requests(client, task["id"])] == [1]

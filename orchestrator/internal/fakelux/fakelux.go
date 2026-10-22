@@ -22,6 +22,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -2764,14 +2765,7 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 			continue
 		}
 		result["branch"] = branch
-		files := map[string]string{}
-		for path, content := range run.behavior.Commit {
-			if name, rest, ok := strings.Cut(path, ":"); ok && (name == repo.Name || name == "*") {
-				files[rest] = content
-			} else if !ok && repo.Name == first {
-				files[path] = content
-			}
-		}
+		files := scriptedFiles(run.behavior.Commit, repo.Name, first)
 		path := s.repoPath(repo.URL)
 		base := head(path, repo.Ref)
 		if run.pushedTo[repo.Name] != "" && run.at[repo.Name] != "" {
@@ -2860,6 +2854,57 @@ func leaseFails(run *Run, repo, tip, base, work string, files map[string]string)
 type specRepo struct {
 	Name, URL, Ref string
 	Push           bool
+}
+
+// scriptedFiles are the files of a scripted step's Commit that go to repo:
+// "repo:path" or "*:path" by name, a bare path to first, the first pushed.
+func scriptedFiles(commit map[string]string, repo, first string) map[string]string {
+	files := map[string]string{}
+	for path, content := range commit {
+		if name, rest, ok := strings.Cut(path, ":"); ok && (name == repo || name == "*") {
+			files[rest] = content
+		} else if !ok && repo == first {
+			files[path] = content
+		}
+	}
+	return files
+}
+
+// writeScripted leaves a scripted step's Commit in its checkouts as the
+// agent's turn ends, as an agent that wrote its work there has: dude
+// inspects the checkouts then (whether the turn changed anything), and the
+// push commits them as before. A file already as scripted is left alone.
+// Callers hold s.mu.
+func (s *Server) writeScripted(run *Run) {
+	if len(run.behavior.Commit) == 0 {
+		return
+	}
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	repos := specRepos(spec)
+	first := ""
+	for _, repo := range repos {
+		if repo.Push && first == "" {
+			first = repo.Name
+		}
+	}
+	dir, err := s.checkout(run, spec)
+	if err != nil {
+		return
+	}
+	for _, repo := range repos {
+		if !repo.Push {
+			continue
+		}
+		for path, content := range scriptedFiles(run.behavior.Commit, repo.Name, first) {
+			full := filepath.Join(dir, "repos", repo.Name, path)
+			if old, err := os.ReadFile(full); err == nil && string(old) == content {
+				continue
+			}
+			_ = os.MkdirAll(filepath.Dir(full), 0o755)
+			_ = os.WriteFile(full, []byte(content), 0o644)
+		}
+	}
 }
 
 // credentialsProblem refuses a push's or sync's credentials as lux does: a

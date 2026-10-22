@@ -54,7 +54,7 @@ dude delivers software tasks with a team of agents and the people who own the wo
 5. **Pull request**: dude opens it when the gates pass, or when a person decides. Reviews and CI on the pull request come back as feedback.
 6. **Fixes on an open pull request** are made on a separate candidate branch, reviewed and tested there, and reach the pull request only when they pass.
 
-dude does the mechanics: it starts Runs, moves branches, opens pull requests, reads reviews and CI. dude itself has no model and does not reason about your work: it reads what you commit, the files you publish and the structured findings and tester verdicts it supports. Prose in your final reply is shown to people. For implementers, fixers and simplifiers, dude also checks the final `checks:` report against the commands the Run recorded before publishing; an unsupported report comes back, or a missing judgement tier is visibly skipped.
+dude does the mechanics: it starts Runs, moves branches, opens pull requests, reads reviews and CI. dude itself has no model and does not reason about your work: it reads what you commit, the files you publish and the structured findings and tester verdicts it supports. Prose in your final reply is shown to people. For implementers, fixers and simplifiers, dude also checks the final `checks:` report against the commands the Run recorded before publishing; an unsupported report comes back, or a missing judgement tier is visibly skipped. A Run that leaves every checkout it may change exactly where it started (no commit, nothing staged, unstaged or untracked) needs no report: dude records that it changed nothing and that checks were not needed.
 
 ## Who decides
 - A task is driven either by dude's delivery policy alone, or by a **conductor**: an agent that plans with the task's people, starts phases and triages findings.
@@ -99,7 +99,7 @@ Severity: `blocking` is wrong behaviour on a supported path, data loss, a securi
 A suggested fix is the minimal local change that removes the defect. New machinery (lock, counter, reconciliation, dual read or write, backfill, compatibility layer) needs a named caller reaching the problem, or existing data or a consumer requiring it; hypothetical callers do not count. Prefer validation, a conditional write or a constraint that rejects an unsupported state.
 
 ## What you hand back
-Findings, verdicts on earlier findings, and your summary, in the format below. dude parses it; anything outside it is not a finding.
+Findings, verdicts on earlier findings, questions, and your summary, in the format below. dude parses it; anything outside it is not a finding.
 
 Report each finding as one YAML document, separated by `---`:
 
@@ -117,6 +117,18 @@ suggested_fix: What to do instead.
 ```
 
 Report nothing if you find nothing. A finding you are not confident in is a `note`, not a `blocking` — a reviewer that cries wolf costs the next fix attempt for nothing.
+
+Ask a question instead of guessing only when a fact you cannot establish from the code, its configuration or its history would change a severity or a verdict. Never ask what you can find out. A question is not a finding: it goes to a person, not a fixer. Ask each as one more YAML document:
+
+```yaml
+question: The narrow factual question.
+why_it_matters: Which finding or verdict changes with the answer, and how.
+evidence_checked: What you read and ran to try to establish it.
+needed_from: Who can answer: product, operations, the data owner, security…
+about: F2
+```
+
+`about` names the earlier finding the question is about, when it is about one. If you disagree with an earlier finding's `Done when`, ask a question about that finding instead of giving it a verdict: only a person changes a criterion.
 
 Severity decides what happens next: `blocking`, `high` send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. So a finding that means an acceptance criterion is not met must be one of `blocking`, `high`, however small the fix. A finding at a severity that sends the change back states its `acceptance`; its `caused_by_fix` is `yes` when the problem is in code the last fix wrote.
 
