@@ -79,7 +79,7 @@ func (s *Store) RerequestReviews(ctx context.Context, org string, st *State, gh 
 		}
 		c := rerequestClaim{s: s, org: org, taskID: st.TaskID, repo: p.Repo, number: p.Number, head: head}
 		asked, err := c.run(ctx, st, gh, p.Slug)
-		if errors.Is(err, errClaimBusy) {
+		if errors.Is(err, errClaimBusy) || errors.Is(err, errHeadLags) {
 			busy = true
 			continue
 		}
@@ -101,9 +101,14 @@ func (s *Store) RerequestReviews(ctx context.Context, org string, st *State, gh 
 }
 
 // ErrRerequestBusy: another caller holds a pull request's re-request for
-// its head, or every re-request slot is taken; the step runs again shortly.
+// its head, every re-request slot is taken, or GitHub does not show the
+// head yet; the step runs again shortly.
 var ErrRerequestBusy = workflow.Wait{After: 5 * time.Second,
 	Why: "another worker is asking reviewers again, for this pull request or others; waiting for it"}
+
+// errHeadLags: GitHub still shows the pull request's head before dude's
+// fix. The claim stays unfinished, and the step asks again shortly.
+var errHeadLags = errors.New("GitHub does not show the fix on the pull request yet")
 
 // errClaimBusy: another session holds the head's lock, or this caller's
 // own session, and with it the lock, ended mid-way.
@@ -118,6 +123,9 @@ type rerequestClaim struct {
 	conn *pgxpool.Conn
 	// Who a lost holder was asking, when this claim took over from one.
 	asking []string
+	// GitHub has shown an older head than dude's for longer than
+	// headLagWait: no more waiting for it.
+	waitedOut *bool
 }
 
 // run is one pull request's re-request, under its head's lock. asked: a
@@ -239,8 +247,8 @@ func (c *rerequestClaim) take(ctx context.Context) (done bool, err error) {
 		}
 		err = tx.QueryRow(ctx, `UPDATE pull_request_rerequests SET token = $5, claimed_at = now()
 			WHERE task_id = $1 AND repo = $2 AND number = $3 AND head = $4 AND finished_at IS NULL
-			RETURNING COALESCE(asking, '{}')`,
-			c.taskID, c.repo, c.number, c.head, c.token).Scan(&c.asking)
+			RETURNING COALESCE(asking, '{}'), now() - (outcome->>'lagSince')::timestamptz > make_interval(secs => $6)`,
+			c.taskID, c.repo, c.number, c.head, c.token, headLagWait.Seconds()).Scan(&c.asking, &c.waitedOut)
 		if db.IsNotFound(err) {
 			done = true
 			return nil
@@ -260,8 +268,15 @@ func (c *rerequestClaim) ask(ctx context.Context, gh *forge.GitHub, slug string)
 		payload["error"] = err.Error()
 		return payload, nil
 	case stale.Head != c.head:
-		// Someone pushed on top of dude's commit since: the head is
-		// theirs, and so is asking for a review of it.
+		// GitHub moves a pull request's head a moment after its branch:
+		// a head dude's descends from is that lag, and the step waits for
+		// GitHub. Otherwise someone pushed on top of dude's commit since:
+		// the head is theirs, and so is asking for a review of it.
+		if c.waitedOut == nil || !*c.waitedOut {
+			if cmp, err := gh.Compare(ctx, slug, stale.Head, c.head); err == nil && cmp.AheadBy > 0 && cmp.BehindBy == 0 {
+				return nil, c.lags(ctx)
+			}
+		}
 		return nil, nil
 	}
 	// A lost holder's login GitHub no longer counts as owing a review took
@@ -292,6 +307,26 @@ func (c *rerequestClaim) ask(ctx context.Context, gh *forge.GitHub, slug string)
 	}
 	return payload, nil
 }
+
+// lags records when GitHub was first seen showing an older head than
+// dude's, the claim left unfinished, and returns errHeadLags.
+func (c *rerequestClaim) lags(ctx context.Context) error {
+	if err := c.inTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE pull_request_rerequests
+			SET outcome = jsonb_build_object('lagSince', COALESCE(outcome->>'lagSince', now()::text))
+			WHERE task_id = $1 AND repo = $2 AND number = $3 AND head = $4 AND token = $5 AND finished_at IS NULL`,
+			c.taskID, c.repo, c.number, c.head, c.token)
+		return err
+	}); err != nil {
+		return err
+	}
+	return errHeadLags
+}
+
+// headLagWait is how long a re-request waits for GitHub to show dude's
+// fix as the pull request's head. GitHub takes seconds; past this the
+// head it shows is taken as someone else's.
+const headLagWait = 2 * time.Minute
 
 // mark writes who the holder is about to ask, before asking.
 func (c *rerequestClaim) mark(ctx context.Context, logins []string) error {

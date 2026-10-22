@@ -18,7 +18,7 @@ const SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail
 
 # The repository's own pre-commit hook. dude's co-author hook runs first.
-ln -sf ../../scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"
+ln -sf ../../scripts/pre-commit "$DUDE_REPO_HOOKS_DIR/pre-commit"
 
 # The client's dependencies, from the image's npm cache.
 cd client
@@ -35,7 +35,7 @@ npm ci --prefer-offline
 
 const SETUP_PLACEHOLDER = `# Runs once in each new checkout of this repository, before the agent starts.
 # For example, install the repository's own git hooks:
-#   ln -sf ../../scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"
+#   ln -sf ../../scripts/pre-commit "$DUDE_REPO_HOOKS_DIR/pre-commit"
 npm ci --prefer-offline`;
 
 const bytes = (s: string) => new TextEncoder().encode(s).length;
@@ -46,7 +46,7 @@ function ScriptFrame({ initial, readOnly, maxLines = 14 }: { readonly initial: s
   const diagnostics = useMemo<CodeDiagnostic[]>(() => text.split("\n").flatMap((l, i) => {
     const at = l.indexOf("core.hooksPath");
     return at < 0 ? [] : [{ severity: "warning" as const, line: i + 1, from: at, to: at + "core.hooksPath".length,
-      message: "Moves git’s hooks away from dude’s own commit hook. Install the hook into $(git rev-parse --git-path hooks) instead." }];
+      message: "Moves git’s hooks away from dude’s own commit hook. Install the hook into $DUDE_REPO_HOOKS_DIR instead." }];
   }), [text]);
   const size = bytes(text);
   return (

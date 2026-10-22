@@ -2,7 +2,8 @@
  * A repository's setup script as its editor checks it: the server's rule
  * (setupScriptInput: UTF-8 bytes against SETUP_SCRIPT_MAX_BYTES, no NUL,
  * blank is none) and the lines that would take git's hooks away from
- * dude's own commit hook, which are warned about and never refused.
+ * dude's own commit hook, or write into dude's hooks directory, which are
+ * warned about and never refused.
  */
 
 import { SETUP_SCRIPT_MAX_BYTES, setupScriptInput } from "@dude/domain";
@@ -23,10 +24,17 @@ export function checkSetupScript(text: string): SetupScriptCheck {
   return { ok: false, problem: text.includes("\0") ? "nul" : "too-long" };
 }
 
-const BYPASSES: ReadonlyArray<{ pattern: RegExp; message: string }> = [
+/** quoted: matched in quoted text too, as a command substitution in a quoted path is code. */
+const BYPASSES: ReadonlyArray<{ pattern: RegExp; message: string; quoted?: true }> = [
   {
     pattern: /core\.hooksPath/gi,
-    message: "Moves git’s hooks away from dude’s own commit hook. Install the hook into $(git rev-parse --git-path hooks) instead.",
+    message: "Moves git’s hooks away from dude’s own commit hook. Install the hook into $DUDE_REPO_HOOKS_DIR instead.",
+  },
+  {
+    // In a script git still reads the image's system core.hooksPath: dude's own directory, which only root writes.
+    pattern: /--git-path\s+hooks\b/g,
+    quoted: true,
+    message: "Names dude’s own hooks directory, which the script cannot write. Install the hook into $DUDE_REPO_HOOKS_DIR instead.",
   },
   {
     pattern: /--no-verify\b/g,
@@ -39,7 +47,7 @@ const BYPASSES: ReadonlyArray<{ pattern: RegExp; message: string }> = [
 ];
 
 /**
- * Warnings for each use of core.hooksPath, --no-verify or HUSKY=0 outside a
+ * Warnings for each use of core.hooksPath, --git-path hooks, --no-verify or HUSKY=0 outside a
  * whole-line comment, at the words themselves. Heredoc bodies are not understood.
  */
 export function lintSetupScript(text: string): CodeDiagnostic[] {
@@ -47,6 +55,7 @@ export function lintSetupScript(text: string): CodeDiagnostic[] {
   text.split("\n").forEach((line, i) => {
     let quote: '"' | "'" | null = null;
     let code = "";
+    let end = line.length;
     for (let j = 0; j < line.length; j++) {
       const ch = line[j]!;
       if (quote) {
@@ -54,13 +63,14 @@ export function lintSetupScript(text: string): CodeDiagnostic[] {
       } else if (ch === '"' || ch === "'") {
         quote = ch;
       } else if (ch === "#" && (j === 0 || /\s/.test(line[j - 1]!))) {
+        end = j;
         break;
       } else {
         code += ch;
       }
     }
-    for (const { pattern, message } of BYPASSES) {
-      for (const m of code.matchAll(pattern)) {
+    for (const { pattern, message, quoted } of BYPASSES) {
+      for (const m of (quoted ? line.slice(0, end) : code).matchAll(pattern)) {
         out.push({ severity: "warning", line: i + 1, from: m.index, to: m.index + m[0].length, message });
       }
     }

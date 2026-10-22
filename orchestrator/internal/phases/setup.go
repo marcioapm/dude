@@ -85,7 +85,12 @@ func DeclaresSetup(stored lux.StoredSpec) bool {
 //
 // The command-scope git settings every Run carries (workloadGitConfig)
 // are cleared for a script, so a hook installer writes the repository's
-// own config and hooks directory, which dude's hook then runs. A word of
+// own config. The image's system config still names dude's own hooks
+// directory (core.hooksPath, root's, which the agent cannot write), so
+// `git rev-parse --git-path hooks` answers that one: a script is given
+// DUDE_REPO_HOOKS_DIR instead, the checkout's own hooks directory (made if
+// missing), which dude's hook runs unless the repository names its own
+// core.hooksPath (images/runtime/git-hooks/dude-hook, repo_hooks). A word of
 // env's output that is no identifier (a line of a multi-line value) is
 // passed over: dash would refuse to unset it and stop init. A decoded
 // name or path keeps a trailing newline: each substitution ends with "."
@@ -97,6 +102,9 @@ cd ` + shellQuote(workspace) + ` || exit
 dude_setup() (
 	cd "$2" || exit
 	done=$(git rev-parse --git-path dude-setup-done) && script=$(git rev-parse --git-path dude-setup.sh) || exit
+	DUDE_REPO_HOOKS_DIR=$(git rev-parse --path-format=absolute --git-common-dir)/hooks || exit
+	mkdir -p "$DUDE_REPO_HOOKS_DIR" || exit
+	export DUDE_REPO_HOOKS_DIR
 	[ -e "$done" ] && exit 0
 	printf '%s%s\n' '` + setupRunningPrefix + `' "$1" >&2
 	printf '%s' "$3" | base64 -d > "$script" || exit

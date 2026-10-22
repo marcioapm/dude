@@ -664,7 +664,7 @@ func (w *steps) awaitImplement(ctx context.Context, sc workflow.StepContext) (wo
 		return workflow.Result{}, err
 	}
 	if !out.Succeeded {
-		return w.escalate(ctx, sc, st, "implement_failed", map[string]any{"runId": runID, "error": out.Error})
+		return w.escalate(ctx, sc, st, out.failedReason("implement_failed"), out.failedDetail(runID))
 	}
 	// An implementer that changed nothing has not done the work, and there
 	// is nothing for a reviewer to look at — unless the work changes no
@@ -1099,7 +1099,7 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 		return workflow.Result{}, err
 	}
 	if !out.Succeeded {
-		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
+		return w.escalate(ctx, sc, st, out.failedReason("fix_failed"), out.failedDetail(runID))
 	}
 	// A repository the fix changed first joins the range under review, from
 	// where it stood before the fix: the range's next review names it. On a
@@ -1272,7 +1272,7 @@ func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflo
 	}
 	if !out.Succeeded {
 		// A tester that did not finish proved nothing: a person decides.
-		return w.escalate(ctx, sc, st, "test_failed", map[string]any{"runId": runID, "error": out.Error})
+		return w.escalate(ctx, sc, st, out.failedReason("test_failed"), out.failedDetail(runID))
 	}
 	// Finished is not passed: the gate weighs what it found.
 	st.PendingRunIDs, st.TestRunID = nil, runID
@@ -2144,7 +2144,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		if st.Integration != nil {
 			return w.integrationFailure(ctx, sc, st, causeRunFailed, out.Error)
 		}
-		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error})
+		return w.escalate(ctx, sc, st, out.failedReason("pr_fix_failed"), out.failedDetail(runID))
 	}
 	if st.Integration != nil {
 		st.PendingRunIDs, st.Heads, st.ChangedPaths = nil, out.advance(st.Heads), withPaths(st.ChangedPaths, out.ChangedPaths)

@@ -98,6 +98,18 @@ export function escalationWords(e: Escalation): EscalationWords {
       return failed("Fixer");
     case "test_failed":
       return failed("Tester");
+    case "setup_failed": {
+      // detail: {runId, error, repository, exitCode, output} (delivery.Outcome.failedDetail).
+      const repo = typeof d.repository === "string" && d.repository ? d.repository : "a repository";
+      const code = typeof d.exitCode === "number" ? ` with exit code ${d.exitCode}` : "";
+      const lines = typeof d.output === "string" ? d.output.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("dude: ")) : [];
+      const last = lines.length ? `: ${shortError(lines.at(-1)!)}` : "";
+      return {
+        short: "Setup script failed",
+        sentence: `The setup script of ${repo} failed${code}${last}. The same script fails the same way every time, so dude did not try again: fix it in the project's repository settings, then retry.`,
+        runId,
+      };
+    }
     case "test_failed_criteria":
     case "test_blocked": {
       const criteria = testCriteria(e);

@@ -45,6 +45,13 @@ func WakeNote(lines []string) string {
 // started, briefed with it. Returns the conductor woken, "" for none yet.
 // The caller holds the task's Chat lock.
 func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64) (string, error) {
+	return wakeConductorTx(ctx, tx, org, taskID, windowSecs, "")
+}
+
+// wakeConductorTx is WakeConductorTx; with retries, a person's Try again
+// on that conductor, which a setup script failed: the reasons go to a new
+// conductor now, whose run.created names it.
+func wakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64, retries string) (string, error) {
 	type reason struct{ ID, Kind, Line, Key string }
 	pendingNow := func() ([]reason, error) {
 		rows, err := tx.Query(ctx, `SELECT id, kind, line, key FROM conductor_wakes
@@ -76,6 +83,13 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	// a note would start a conductor beside the kept one.
 	if halted, err := HaltedTx(ctx, tx, taskID); err != nil || halted {
 		return "", err
+	}
+	// Nor while a setup script failed the last conductor: the next would
+	// fail the same way. The reasons wait for a person's Try again.
+	if runID == "" && retries == "" {
+		if blocked, err := SetupBlockedTx(ctx, tx, taskID); err != nil || blocked {
+			return "", err
+		}
 	}
 	pending, err := pendingNow()
 	if err != nil || len(pending) == 0 {
@@ -128,7 +142,7 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	var directiveID string
 	if runID == "" {
 		if runID, err = startConductor(ctx, tx, org, projectID, taskID, Writer{ActorType: ledger.ActorSystem, ActorID: "dude"},
-			note, true, "", ""); err != nil {
+			note, true, retries, ""); err != nil {
 			return "", err
 		}
 		payload["started"] = true
@@ -395,9 +409,12 @@ func HaltedTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 // (it is ended first). Selected before the sweep's batch limit, so tasks
 // that must wait (a conductor mid-turn) cannot fill the batch. Held
 // reasons alone (heldWakePrefix) wait for a conductor running between turns.
-// A task whose newest delivery a person stopped (Halt) waits for its pick-up.
+// A task whose newest delivery a person stopped (Halt) waits for its pick-up;
+// one with no live conductor whose last a setup script failed waits for a
+// person's Try again (setupBlockedOf).
 const Wakeable = `c.delivered_at IS NULL
 	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
+	AND (EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + `) OR NOT ` + setupBlockedWake + `)
 	AND NOT EXISTS (SELECT 1 FROM conductor_wakes n WHERE n.task_id = c.task_id AND n.delivered_at IS NULL
 		AND n.created_at >= now() - make_interval(secs => $1))
 	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)

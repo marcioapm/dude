@@ -213,6 +213,12 @@ test("lintSetupScript marks each bypass at its words, and only outside a comment
   expect(lintSetupScript("npm ci  # no HUSKY=0 here")).toEqual([]);
   expect(lintSetupScript("git commit --no-verify")).toHaveLength(1);
   expect(lintSetupScript("git -c core.hooksPath=x")).toHaveLength(1);
+  // dude's own hooks directory, which a script cannot write: quoted, as a path usually is, and bare.
+  const trap = 'ln -sf ../../pre-commit "$(git rev-parse --git-path hooks)/pre-commit"';
+  expect(lintSetupScript(trap).map((d) => [d.line, d.from, d.to])).toEqual([[1, 41, 57]]);
+  expect(lintSetupScript(trap)[0]!.message).toContain("$DUDE_REPO_HOOKS_DIR");
+  expect(lintSetupScript("hooks=$(git rev-parse --git-path hooks)")).toHaveLength(1);
+  expect(lintSetupScript('ln -sf x "$DUDE_REPO_HOOKS_DIR/pre-commit"  # not --git-path hooks')).toEqual([]);
 });
 
 test("a reader gets no row menu, and the mark opens the script read-only with Close", async () => {
