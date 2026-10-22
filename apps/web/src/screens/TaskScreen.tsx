@@ -23,6 +23,7 @@
  * is said by the shell, and the page re-reads when it is back.
  */
 
+import { flushSync } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PageWithRail,
@@ -861,7 +862,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               return { id: q.id, category: q.category, question: q.question, whyItMatters: q.whyItMatters, evidenceChecked: q.evidenceChecked,
                 neededFrom: q.neededFrom, about: about ? (
                   <Button size="sm" variant="quiet" data-testid="review-question-about" title={`Show ${about.title}`}
-                    onClick={() => document.querySelector(`[data-finding="${about.id}"]`)?.scrollIntoView({ block: "center" })}>{about.title}</Button>
+                    onClick={() => {
+                      flushSync(() => {
+                        setFindingStatuses([]);
+                        setFindingSeverities([]);
+                      });
+                      document.querySelector(`[data-finding="${about.id}"]`)?.scrollIntoView({ block: "center" });
+                    }}>{about.title}</Button>
                 ) : undefined };
             })} />
             {mine.findings.length > 0 && visibleFindings.length === 0 ? (

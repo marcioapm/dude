@@ -4,9 +4,9 @@
  * about by title; nothing when none is open.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { mount, settle, until } from "./dom.ts";
+import { click, facetCheckbox, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -53,6 +53,20 @@ test("the open question shows above the findings with its fields and the finding
   const findings = page.querySelector("[data-testid=findings]")!;
   expect(list.compareDocumentPosition(findings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(list.querySelectorAll("textarea, input").length).toBe(0);
+});
+
+test("about reveals its finding when a status facet hides it", async () => {
+  const page = await findingsTab(new FixtureClient("d"));
+  await click(facetCheckbox(page.querySelector('[aria-label="Finding status"]')!, "Open"));
+  expect(page.querySelectorAll('[data-finding="f1"]').length).toBe(0);
+  const scroll = spyOn(HTMLElement.prototype, "scrollIntoView");
+  try {
+    await click(page.querySelector('[data-testid="review-question-about"]')!);
+    expect(page.querySelectorAll('[data-finding="f1"]').length).toBe(1);
+    expect(scroll).toHaveBeenCalledWith({ block: "center" });
+  } finally {
+    scroll.mockRestore();
+  }
 });
 
 test("with no open question, nothing is shown", async () => {
