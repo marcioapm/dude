@@ -42,3 +42,18 @@ func TestAMissingChecksReportIsSentBackWithoutAYAMLError(t *testing.T) {
 		t.Fatalf("decision %+v", d)
 	}
 }
+
+// YAML of the wrong shape is told what shape a report has, not to quote.
+func TestAChecksReportOfTheWrongShapeIsSentBackWithTheShape(t *testing.T) {
+	w := newHarnessWorld(t)
+	checksReply(w, "checks:\n  command: make\n  result: pass\n")
+	d, err := w.s.judgeChecks(context.Background(), w.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := d.Verdicts[0].Reason
+	if !strings.Contains(reason, "must be a list of entries") || strings.Contains(reason, "single quotes") ||
+		strings.Contains(reason, "delivery.") {
+		t.Errorf("reason %q", reason)
+	}
+}

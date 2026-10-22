@@ -26,7 +26,7 @@ That report said {{printf "%q" .Command}} failed:
 {{define "notices/checks/not-covered"}}the {{.Role}}'s waiver does not cover this failure: {{.Reason}}{{end}}
 {{define "notices/checks/many"}}the report lists {{.Count}} checks, more than the {{.Max}} that are verified; report at most {{.Max}}, one per command you ran, not one per test or file{{end}}
 {{define "notices/checks/skip"}}Checks not model-checked: no judgement tier. Set a judgement tier in the organisation's settings to verify checks reports before publication.{{end}}
-{{define "notices/checks/unparseable"}}missing or unparseable checks YAML block{{with .}}: the YAML does not parse ({{.}}). Wrap every command and evidence value in single quotes, doubling any ' inside: evidence: 'it''s done: exit 0'{{end}}{{end}}
+{{define "notices/checks/unparseable"}}missing or unparseable checks YAML block{{with .Syntax}}: the YAML does not parse ({{.}}). Wrap every command and evidence value in single quotes, doubling any ' inside: evidence: 'it''s done: exit 0'{{end}}{{if .Shape}}: checks must be a list of entries, each starting with "- " and holding command, result and evidence{{end}}{{end}}
 {{define "notices/checks/unestablished"}}the judgement did not establish verification{{end}}
 {{define "notices/checks/unchanged"}}No changes; checks not needed. When the turn ended, every repository this Run may push was at the commit it started from, with nothing staged, unstaged or untracked.{{end}}
 {{define "notices/checks/account-compact"}}- **{{.Role}}** — {{.Status}}

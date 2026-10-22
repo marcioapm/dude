@@ -199,7 +199,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	}
 	checks, ok := delivery.ParseChecks(reply)
 	if !ok {
-		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:", Reason: checksUnparseable.Render(delivery.ChecksYAMLError(reply))})
+		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:", Reason: checksUnparseable.Render(delivery.ChecksYAMLErrorOf(reply))})
 		return d, nil
 	}
 	if len(checks) > checksCountMax {

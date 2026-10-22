@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -81,27 +82,42 @@ func checksBlock(reply string) (string, bool) {
 // block, not the reply, and is often not where the fault is.
 var yamlLinePrefix = regexp.MustCompile(`(?m)^\s*line \d+: `)
 
-// ChecksYAMLError is why the last checks block does not decode as YAML,
-// in yaml.v3's words without its line numbers, or "" when there is no
-// block or it decodes. It explains an unparseable report to the writer.
-func ChecksYAMLError(reply string) string {
+// ChecksYAMLError is why the last checks block does not decode, or ""
+// when there is no block or it decodes. Syntax is yaml.v3's reason
+// without its line numbers; Shape is set instead when the block is YAML
+// of the wrong shape (a mapping or a value where the list of checks
+// belongs), which quoting does not fix.
+type ChecksYAMLError struct {
+	Syntax string
+	Shape  bool
+}
+
+// ChecksYAMLErrorOf explains an unparseable report to the writer.
+func ChecksYAMLErrorOf(reply string) ChecksYAMLError {
 	block, ok := checksBlock(reply)
 	if !ok {
-		return ""
+		return ChecksYAMLError{}
 	}
 	var doc checksDoc
 	err := yaml.Unmarshal([]byte(block), &doc)
 	if err == nil {
-		return ""
+		return ChecksYAMLError{}
 	}
-	msg := strings.TrimPrefix(err.Error(), "yaml: ")
-	msg = strings.TrimPrefix(msg, "unmarshal errors:")
-	msg = yamlLinePrefix.ReplaceAllString(msg, "")
-	msg = strings.Join(strings.Fields(msg), " ")
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		return ChecksYAMLError{Shape: true}
+	}
+	var parts []string
+	for _, line := range strings.Split(strings.TrimPrefix(err.Error(), "yaml: "), "\n") {
+		if line = strings.Join(strings.Fields(yamlLinePrefix.ReplaceAllString(line, "")), " "); line != "" {
+			parts = append(parts, line)
+		}
+	}
+	msg := strings.Join(parts, "; ")
 	if utf8.RuneCountInString(msg) > 300 {
 		msg = string([]rune(msg)[:300]) + "…"
 	}
-	return msg
+	return ChecksYAMLError{Syntax: msg}
 }
 
 // LatestTurnTx is the cursor of the Run's latest ended turn (its newest

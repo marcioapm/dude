@@ -19,18 +19,39 @@ func TestAnUnparseableChecksReportNamesTheYAMLError(t *testing.T) {
 				"    evidence: ModuleNotFoundError: No module named 'fastapi' (dependencies not installed)\n",
 			"mapping values are not allowed in this context",
 		},
-		"a mapping where a list belongs": {
-			"checks:\n  command: make\n  result: pass\n",
-			"cannot unmarshal !!map into []delivery.Check",
-		},
 	} {
 		if _, ok := ParseChecks(tc.reply); ok {
 			t.Fatalf("%s: parsed", name)
 		}
-		got := ChecksYAMLError(tc.reply)
-		if !strings.Contains(got, tc.want) || strings.Contains(got, "line ") || strings.HasPrefix(got, "yaml:") {
-			t.Errorf("%s: %q, want it to contain %q with no yaml: prefix or line number", name, got, tc.want)
+		got := ChecksYAMLErrorOf(tc.reply)
+		if got.Shape || !strings.Contains(got.Syntax, tc.want) || strings.Contains(got.Syntax, "line ") ||
+			strings.HasPrefix(got.Syntax, "yaml:") {
+			t.Errorf("%s: %+v, want Syntax containing %q with no yaml: prefix or line number", name, got, tc.want)
 		}
+	}
+}
+
+// YAML of the wrong shape is not a quoting fault: it is told apart, and no
+// Go type name reaches the writer.
+func TestAChecksBlockOfTheWrongShapeIsNotASyntaxError(t *testing.T) {
+	for name, reply := range map[string]string{
+		"a mapping where a list belongs":      "checks:\n  command: make\n  result: pass\n",
+		"a list value where a string belongs": "checks:\n  - command: [a]\n    result: pass\n",
+	} {
+		if _, ok := ParseChecks(reply); ok {
+			t.Fatalf("%s: parsed", name)
+		}
+		if got := ChecksYAMLErrorOf(reply); !got.Shape || got.Syntax != "" {
+			t.Errorf("%s: %+v, want Shape only", name, got)
+		}
+	}
+}
+
+// Several syntax reasons stay apart.
+func TestSeveralYAMLReasonsAreSeparated(t *testing.T) {
+	got := ChecksYAMLErrorOf("checks:\n  - command: a\n    result: pass\n  bad: [\n")
+	if got.Syntax == "" || strings.Contains(got.Syntax, "\n") {
+		t.Fatalf("%+v", got)
 	}
 }
 
@@ -42,8 +63,8 @@ func TestAChecksReportThatIsYAMLHasNoYAMLError(t *testing.T) {
 		"valid":     "checks:\n  - command: 'go test ./...'\n    result: pass\n    evidence: 'ok  pkg 0.1s'\n",
 		"bad field": "checks:\n  - command: a\n    result: maybe\n",
 	} {
-		if got := ChecksYAMLError(reply); got != "" {
-			t.Errorf("%s: %q", name, got)
+		if got := ChecksYAMLErrorOf(reply); got != (ChecksYAMLError{}) {
+			t.Errorf("%s: %+v", name, got)
 		}
 	}
 }
