@@ -30,6 +30,12 @@ Acceptance criteria:
 - fnd_3 · low · tests · dismissed by the conductor: out of scope for this task
 - fnd_4 · note · tests · accepted by a person
 
+## Reviewers' open questions (2)
+
+Answer each with answer_review_question for a fact you established; else ask the person.
+- rvq_g1 · security · needed from security · Who may download another organisation's export? It decides F1.
+- rvq_g2 · security · Do months close in UTC?
+
 ## Pull requests
 
 - api#12 · open · head 3333333 · checks failing · review changes_requested · 2 feedback items

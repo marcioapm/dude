@@ -54,6 +54,7 @@ var tools = []tool{
 	define("restart_run", restartRun),
 	define("decide", decide),
 	define("dismiss_finding", dismissFinding),
+	define("answer_review_question", answerReviewQuestion),
 	define("decide_escalation", decideEscalation),
 	define("update_task", updateTask),
 	around(define("reply_on_pull_request", replyOnPullRequest).before(forgeFor), postReply, recordReply),

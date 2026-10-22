@@ -145,6 +145,13 @@ func (w goldenWorld) history(t *testing.T) {
 		('fnd_5', $1, 'wi_g', 'run_rev', 'api', 'medium', 'superseded', NULL, NULL, 'T', 'D', 'F', NULL, 0, '', '2026-01-02 10:49Z'),
 		('fnd_6', $1, 'wi_g', 'run_rev', 'database', 'medium', 'open', 'migrations/`+strings.Repeat("deep/", 20)+`x.sql', 3, 'T', 'D', 'F', NULL, 0, '', '2026-01-02 10:50Z'),
 		('fnd_7', $1, 'wi_g', 'run_rev', 'correctness', 'high', 'resolved', NULL, NULL, 'T', 'D', 'F', NULL, 1, '', '2026-01-02 10:51Z')`)
+	w.exec(t, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, needed_from, status, answer,
+			answered_at, created_at)
+		VALUES
+		('rvq_g1', $1, 'wi_g', 'run_rev', 1, 'security', 'Who may download another organisation''s export?
+It decides F1.', 'security', 'open', NULL, NULL, '2026-01-02 10:52Z'),
+		('rvq_g2', $1, 'wi_g', 'run_rev', 2, 'security', 'Do months close in UTC?', '', 'open', NULL, NULL, '2026-01-02 10:53Z'),
+		('rvq_g3', $1, 'wi_g', 'run_rev', 3, 'security', 'Answered: not listed', 'product', 'answered', 'yes', '2026-01-02 11:00Z', '2026-01-02 10:54Z')`)
 	w.exec(t, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
 			base_branch, head_sha, title, state, checks, review, created_at)
 		VALUES ('pr_g', $1, 'prj_g', 'wi_g', 'repo_api', 12, 'https://x/pull/12', 'dude/wi_g/attempt-1', 'main', '3333333ccccccc',

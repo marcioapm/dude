@@ -188,8 +188,14 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   tester) may instead ask a narrow factual question, a `question:`
   document (`ParseQuestions`): kept in `review_questions` across retried
   reports, shown to the next reviewer of its category in the same attempt
-  and read-only on the task's Findings tab. It is never a finding, never
-  reaches a fixer, and nothing waits on it yet.
+  and listed on the task's Findings tab. It is never a finding and never
+  reaches a fixer. The task's owner answers or withdraws it there
+  (`delivery.AnswerReviewQuestionTx`/`WithdrawReviewQuestionTx`, the one
+  path); under the conductor it is woken with it and may answer it
+  (`answer_review_question`), which is not a person's decision. A person's
+  answer is one of the task's decisions. An open one holds the pull
+  request's opening and a checked fix's promotion (`holdForQuestions`,
+  task `awaiting_input`) until it is settled (`review.question_settled`).
 - **The tester is on by default and gates the pull request**
   (`delivery/verification.go`). It ends its reply with one YAML document
   per acceptance criterion (`ParseAcceptance`); dude records each in

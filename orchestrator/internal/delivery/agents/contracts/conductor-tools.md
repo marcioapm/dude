@@ -17,7 +17,8 @@
 		"update_task" "update_task writes an agreed goal or acceptance criteria into the task, before the implementer"
 		"start_phase" "start_phase starts implement, review (some or all categories), fix (some or all findings), simplify or test"
 		"decide" (.Wrap "decide takes the decision waited on (" (.List ", " ", " "" "next" "ask_person" "ask_person" "" "wait" "" "open_pull_request") ")")
-		"dismiss_finding" "dismiss_finding leaves a finding as it is, with the reason") ". Each is refused, saying why, when it is not yours to take.")
+		"dismiss_finding" "dismiss_finding leaves a finding as it is, with the reason"
+		"answer_review_question" "answer_review_question answers a reviewer's question with a fact you established, or withdraws it as moot (a reviewer's question is for a person or for you, never for a fixer)") ". Each is refused, saying why, when it is not yours to take.")
 	"decide_escalation" "decide_escalation decides an escalation the owner handed you with a free answer to your question about it."
 	"" (.Wrap "" (.List "; " "; "
 		"steer" "steer tells a running phase Run of this task something, whoever decides"

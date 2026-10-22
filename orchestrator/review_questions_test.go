@@ -87,12 +87,13 @@ func TestAQuestionInTheFindingFormatIsNeverSentToAFixer(t *testing.T) {
 	}
 }
 
-// A reply with a question and no finding holds nothing: the delivery goes
-// on through the simplifier to its pull request with no fixer, and the
-// question is stored. Its review Run reported again (a retried finish)
+// A reply with a question and no finding sends no fixer: the delivery goes
+// on through the simplifier to the pull request step (where the question
+// holds it, TestAnOpenQuestionHoldsThePullRequest), and the question is
+// stored. Its review Run reported again (a retried finish)
 // stores it once and writes no second event, and keeps an answer given
 // between the two reports.
-func TestAQuestionAloneHoldsNothingAndIsStoredOnce(t *testing.T) {
+func TestAQuestionAloneSendsNoFixerAndIsStoredOnce(t *testing.T) {
 	w := newWorld(t)
 	var reviews int
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {

@@ -98,6 +98,22 @@ GLD-8 merged: GLD-7 can start now. Its owner set it to start when unblocked, so 
 
 Your implement Run run_impl asks the person a question (qst_3): read it in its chat.
 
+## review-question
+
+Reviewer correctness (run_rev) asks rvq_1, needed from product: Do invoices close in UTC or in the organisation's zone? wwwwwwwwwwwww… Answer it with answer_review_question only if you established the fact, else ask the person.
+
+## review-question-no-needed-from
+
+Reviewer security (run_rev) asks rvq_2: Who may export? Answer it with answer_review_question only if you established the fact, else ask the person.
+
+## review-question-answered
+
+The person answered reviewer question rvq_1: In UTC. Always. Decide whether a review should weigh it (start_phase review).
+
+## review-question-withdrawn
+
+The person withdrew reviewer question rvq_1. Decide whether a review should weigh it (start_phase review).
+
 ## base-moved
 
 `main` moved: GLD-8 merged (#14). Call sync_base if your work depends on it; while a pull request is open on the task branch, publish is refused, so use start_phase fix to bring it in instead.

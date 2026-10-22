@@ -366,16 +366,28 @@ export function ComponentsSection({ mode }: { readonly mode: PaneMode }) {
       <Block
         id="c-review-question"
         title="ReviewQuestionList"
-        note="Questions a reviewer asked a person instead of guessing, above the findings: the question in the row, then who can answer it, the finding it is about (a link the app makes, by its title), why it matters and what the reviewer checked. Read-only and toneless: a question is no finding and blocks nothing. With none open it renders nothing."
+        note="Questions a reviewer asked a person instead of guessing, above the findings: the question in the row, then who can answer it, the finding it is about (a link the app makes, by its title), why it matters and what the reviewer checked. For the task's owner each open one has an answer box with Answer, and Withdraw, which asks why first; anyone else sees the form disabled and why. An answered one folds to its row and its answer, saying whether a person or the conductor gave it; a withdrawn one is left out. Toneless: what an open question holds, the task's status says. With none to show it renders nothing."
       >
         <Panes mode={mode}>
           <Col>
-            <Label>Open questions</Label>
+            <Label>Open, for the task's owner</Label>
             <ReviewQuestionList questions={[
               { id: "rvq_1", category: "correctness", question: "Do invoices close in UTC or in the organisation's zone?", neededFrom: "product",
                 about: <a href="#c-finding">Totals rounded per line</a>, whyItMatters: "The finding is blocking only if months close in UTC.",
                 evidenceChecked: "Read `api/export.go` and its configuration; neither names a zone." },
               { id: "rvq_2", category: "security", question: "May a support agent download another organisation's export?", neededFrom: "security" },
+            ]} onAnswer={async () => {}} onWithdraw={async () => {}} />
+            <Label>Open, for anyone else</Label>
+            <ReviewQuestionList questions={[
+              { id: "rvq_3", category: "correctness", question: "Is a retry expected after a timeout?", neededFrom: "operations" },
+            ]} onAnswer={async () => {}} onWithdraw={async () => {}} notAllowed="Only Ana, the task's owner, answers its reviewers' questions." />
+            <Label>Answered by a person, and by the conductor</Label>
+            <ReviewQuestionList questions={[
+              { id: "rvq_4", category: "correctness", question: "Do invoices close in UTC or in the organisation's zone?", status: "answered",
+                answer: "In UTC, always.", answeredBy: { kind: "person", name: "Ana" } },
+              { id: "rvq_5", category: "api", question: "Is the v1 endpoint still called?", status: "answered",
+                answer: "No: the gateway's routes name v2 only (gateway/routes.yml).", answeredBy: { kind: "conductor" } },
+              { id: "rvq_6", category: "tests", question: "Withdrawn: not shown", status: "withdrawn" },
             ]} />
             <Label>None open: nothing</Label>
             <ReviewQuestionList questions={[]} />

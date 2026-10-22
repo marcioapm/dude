@@ -1,0 +1,5 @@
+{
+  "ReviewQuestionRaised": "review.question_raised",
+  "ReviewQuestionAnswered": "review.question_answered",
+  "ReviewQuestionWithdrawn": "review.question_withdrawn"
+}

@@ -2187,7 +2187,12 @@ MarkdownCheatsheet.
   vocabulary.
 - **ReviewQuestionList** — questions reviewers asked a person instead of
   guessing: the question, who can answer it, why it matters, what was
-  checked, and the finding it is about; read-only, nothing when empty.
+  checked, and the finding it is about. Given `onAnswer` and `onWithdraw`,
+  each open one has an answer box with Answer and a Withdraw that asks why
+  first; `notAllowed` shows the form disabled with that sentence (the
+  reader is not the owner). An answered one folds to its row and its
+  answer, by a person (named) or the conductor; withdrawn ones are left
+  out; nothing when none is left to show.
 - **CriterionRow / VerificationGroup** — the tester's verdict per
   acceptance criterion, under the commits tested; `CRITERION_STATE_SPECS`
   is the vocabulary.

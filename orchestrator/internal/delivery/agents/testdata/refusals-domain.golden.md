@@ -258,6 +258,22 @@ a message sent again carries the images it had: send new images in a new message
 
 image %s is not one of this session's
 
+## refusals/domain/review-questions/answer-required
+
+say the answer: the fact the reviewer asked for
+
+## refusals/domain/review-questions/not-found
+
+%s is not a reviewer question of this task
+
+## refusals/domain/review-questions/not-open
+
+reviewer question %s is %s already: only an open one is answered or withdrawn
+
+## refusals/domain/review-questions/reason-required
+
+a withdrawal needs its reason: why the question no longer matters
+
 ## refusals/domain/escalations/nothing-to-carry-in-attempt
 
 nothing in the held report is a reported failure a later Run could repeat; waive it for this Run only

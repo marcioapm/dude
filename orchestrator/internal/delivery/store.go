@@ -931,14 +931,30 @@ func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID str
 	var before string
 	err := tx.QueryRow(ctx, conductorWait+` AND NOT `+waitBlocked+` ORDER BY e.cursor LIMIT 1`,
 		taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&before)
+	if err == nil {
+		_, err = SetTaskStatusTx(ctx, tx, org, projectID, taskID, "awaiting_input", before, "nothing waits on a person any more")
+	}
+	if err != nil && !db.IsNotFound(err) {
+		return err
+	}
+	return wakeQuestionHoldTx(ctx, tx, org, taskID)
+}
+
+// wakeQuestionHoldTx signals a delivery held by reviewer questions
+// (holdForQuestions) once nothing else on the task waits on a person: the
+// held step reads its questions again and goes on when none is open.
+func wakeQuestionHoldTx(ctx context.Context, tx pgx.Tx, org, taskID string) error {
+	var wf string
+	err := tx.QueryRow(ctx, `SELECT w.id FROM tasks t JOIN workflow_runs w ON w.task_id = t.id AND w.workflow_type = $2
+		WHERE t.id = $1 AND w.status IN ('running', 'waiting') AND COALESCE((w.state->>'questionsHeld')::boolean, false)
+		  AND NOT `+waitBlockedElse, taskID, WorkflowType).Scan(&wf)
 	if db.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	_, err = SetTaskStatusTx(ctx, tx, org, projectID, taskID, "awaiting_input", before, "nothing waits on a person any more")
-	return err
+	return workflow.SignalTx(ctx, tx, org, wf, SignalReviewQuestion, map[string]any{}, "")
 }
 
 // ConductorOwnsWait says whether the task's current wait was raised by a
@@ -967,11 +983,16 @@ const conductorWait = `SELECT e.payload->>'taskStatus' FROM tasks t
 	WHERE t.id = $1 AND t.status = 'awaiting_input'`
 
 // waitBlocked (SQL, over tasks t): something on the task still waits on a
-// person — an open question, a pending blocking repository request, an
-// undecided escalation in its live workflow, or a phase Run parked as idle
-// or paused by a person, or with a person's pause or resume still pending
-// (dude's own control requests set dude_pause).
-const waitBlocked = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open')
+// person: waitBlockedElse, or its live delivery held by reviewers' open
+// questions (holdForQuestions), which ends that wait itself.
+const waitBlocked = `(` + waitBlockedElse + ` OR EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id
+	AND wf.status IN ('running', 'waiting') AND COALESCE((wf.state->>'questionsHeld')::boolean, false)))`
+
+// waitBlockedElse (SQL, over tasks t): an open question, a pending blocking
+// repository request, an undecided escalation in its live workflow, or a
+// phase Run parked as idle or paused by a person, or with a person's pause
+// or resume still pending (dude's own control requests set dude_pause).
+const waitBlockedElse = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open')
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking)
 	OR EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id AND wf.status IN ('running', 'waiting')
 		AND wf.state ? 'escalation' AND NOT wf.state->'escalation' ? 'decided')

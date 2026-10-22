@@ -42,7 +42,11 @@ const DECIDING_JSON = `
   (SELECT json_build_object('point', w.state->'decision'->>'point')
    FROM workflow_runs w WHERE w.task_id = tasks.id AND w.status IN ('running', 'waiting')
      AND w.step = 'conductorDecision' AND w.state ? 'decision' AND NOT w.state->'decision' ? 'taken'
-   ORDER BY w.created_at DESC LIMIT 1) AS "awaitingDecision"`;
+    ORDER BY w.created_at DESC LIMIT 1) AS "awaitingDecision",
+  -- The live delivery parked by reviewers' open questions (the orchestrator's State.QuestionsHeld).
+  COALESCE((SELECT (w.state->>'questionsHeld')::boolean FROM workflow_runs w WHERE w.task_id = tasks.id
+    AND w.workflow_type = 'task.delivery' AND w.status IN ('running', 'waiting')
+    ORDER BY w.created_at DESC LIMIT 1), false) AS "heldByQuestions"`;
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},

@@ -28,6 +28,11 @@ The latest {{len .Runs.Lines}}; the rest are older.{{end}}{{range .Runs.Lines}}
 {{if eq .Findings.Total 0}}
 None.{{else}}{{if gt .Findings.Total (len .Findings.Lines)}}
 The first {{len .Findings.Lines}}, open and most severe first.{{end}}{{range .Findings.Lines}}
+- {{.}}{{end}}{{end}}{{with .Questions}}
+
+## Reviewers' open questions ({{len .}})
+
+Answer each with answer_review_question for a fact you established; else ask the person.{{range .}}
 - {{.}}{{end}}{{end}}{{with .Digest}}
 
 {{.}}{{end}}

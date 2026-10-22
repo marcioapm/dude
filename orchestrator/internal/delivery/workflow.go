@@ -146,6 +146,9 @@ type State struct {
 	// one, on a branch of its own. Zero from before attempts were kept here
 	// (the attempt is then the task's highest).
 	Attempt int `json:"attempt,omitempty"`
+	// A step is held by open reviewer questions (holdForQuestions): the
+	// task waits on a person until the last is settled.
+	QuestionsHeld bool `json:"questionsHeld,omitempty"`
 	// The escalation a person stopped the delivery at, kept so the task can
 	// be picked back up from where it stopped.
 	Stopped *Escalation `json:"stopped,omitempty"`
@@ -867,6 +870,15 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 		return w.escalate(ctx, sc, st, "review_failed", detail)
 	}
 	st.ReviewRunIDs = nil
+	// The round's reviewers' questions are the conductor's to answer or
+	// take to a person, whatever the loop does next.
+	if st.conducted() {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			return recordReviewQuestionWakesTx(ctx, tx, sc.OrganizationID, st.TaskID, round)
+		}); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	findings, err := w.loopFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
@@ -1410,6 +1422,10 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		if len(open) > 0 {
 			return w.next(ctx, sc, st, PointReviewed, "fix",
 				feedbackOpenLine(feedbackBeforePR, len(open)))
+		}
+		// Nor past a reviewer's question nobody answered, whoever decides.
+		if res, held, err := w.holdForQuestions(ctx, sc, st, "openPullRequest"); held || err != nil {
+			return res, err
 		}
 	}
 	// The gate holds at the opening itself: a delivery taken over after the
@@ -2196,6 +2212,10 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 		return workflow.Result{}, err
 	} else if len(unreviewed) > 0 {
 		return workflow.Result{Next: "review", State: st}, nil
+	}
+	// Nor past a question its reviewers asked that nobody answered.
+	if res, held, err := w.holdForQuestions(ctx, sc, st, "promoteCandidate"); held || err != nil {
+		return res, err
 	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
 	if err != nil {
