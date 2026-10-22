@@ -317,6 +317,26 @@ func TestStopEndsAParkedHeldRunWithoutAResume(t *testing.T) {
 	}
 }
 
+// Stop decided inside the grace hands the running held Run's abort to the
+// Syncer (control 'abort'): the decision itself records no run.aborted.
+func TestAStopInsideTheGraceLeavesTheAbortToTheSyncer(t *testing.T) {
+	w := newWorld(t)
+	w.syncer.ParkAfter = time.Hour
+	wi := w.unbackedUntilEscalated(0)
+	runID := w.implementerOf(wi)
+	owner, _, _ := w.people(wi)
+	if code, body := w.decide(owner, wi, "stop", ""); code != 200 {
+		t.Fatalf("stop: %d %v", code, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.aborted'
+		AND payload->>'reason' = 'a person stopped it at the checks gate'`, runID); n != 0 {
+		t.Errorf("%d run.aborted events from the decision, want 0", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND control = 'abort'`, runID); n != 1 {
+		t.Errorf("the stopped Run is not running with control abort")
+	}
+}
+
 // Decided inside the grace, the Run is taken as it is: never parked
 // afterwards, never resumed.
 func TestADecisionInsideTheGraceNeitherResumesNorParks(t *testing.T) {
