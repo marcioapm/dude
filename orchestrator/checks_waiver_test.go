@@ -1,7 +1,6 @@
 package orchestrator_test
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -16,6 +15,9 @@ func (w *world) decideScoped(as, wi, action, note, scope string) (int, map[strin
 	w.t.Helper()
 	return w.callAs(as, "/internal/tasks/"+wi+"/decide", map[string]any{"action": action, "note": note, "scope": scope})
 }
+
+// clockNote is the owner's note on a waiver of fakeagent's preexisting failure.
+const clockNote = "TestClock needs a hardware clock CI lacks."
 
 // checksEscalations counts the checks escalations the task was asked.
 func (w *world) checksEscalations(wi string) int {
@@ -139,8 +141,7 @@ func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
 	j := &scriptedJudge{}
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
 	owner, _, _ := w.people(wi)
-	note := "TestClock needs a hardware clock CI lacks."
-	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, note, delivery.ScopeAttempt); code != 200 {
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -154,22 +155,21 @@ func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
 		t.Errorf("%d waiver questions, want the changed fixer's alone", n)
 	}
 	account := checksSection(w.gh.Pull(1).Body)
-	for _, want := range []string{"Checks were waived by a person:", "- Implementer: " + note,
+	for _, want := range []string{"Checks were waived by a person:", "- Implementer: " + clockNote,
 		"- **Fixer** — waiver carried", "carried from Ana's waiver of the Implementer's report",
 		"- **Simplifier** — no changes; checks not needed"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("PR account lacks %q:\n%s", want, account)
 		}
 	}
-	var implementer string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&implementer)
+	implementer := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi)
 	prompt := ""
 	for _, r := range w.luxRuns() {
 		if spec := submitted(w.t, r); spec.Labels["dude.task"] == wi && spec.Labels["dude.phase"] == "test" {
 			prompt = spec.Workload.Prompt
 		}
 	}
-	for _, want := range []string{"waived: " + note, "): waiver carried", "carried from Ana's waiver of the Implementer's report (" + implementer + ", turn ", note,
+	for _, want := range []string{"waived: " + clockNote, "): waiver carried", "carried from Ana's waiver of the Implementer's report (" + implementer + ", turn ", clockNote,
 		"- Simplifier: no changes; checks not needed"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("tester's prompt lacks %q:\n%s", want, prompt)
@@ -185,7 +185,7 @@ func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 	j := &scriptedJudge{}
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
 	owner, _, _ := w.people(wi)
-	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestClock needs a hardware clock CI lacks.", delivery.ScopeAttempt); code != 200 {
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -200,15 +200,14 @@ func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 	}
 	// The pull request says the later Runs carried the person's waiver, of
 	// whose report, who waived it and why; never that they were backed.
-	var implementer string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&implementer)
+	implementer := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi)
 	carried := "  - `" + fakeagent.FailingCommand + "` — **waived** — the recorded call says so — carried from Ana's waiver of the Implementer's report (`" +
 		implementer + "`) (`mcall_test`)\n" +
 		"  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
 	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+
-		"- Implementer: TestClock needs a hardware clock CI lacks.\n"+
-		"- Fixer: carried the Implementer's waiver of the same failure: TestClock needs a hardware clock CI lacks.\n"+
-		"- Simplifier: carried the Implementer's waiver of the same failure: TestClock needs a hardware clock CI lacks.\n\n"+
+		"- Implementer: "+clockNote+"\n"+
+		"- Fixer: carried the Implementer's waiver of the same failure: "+clockNote+"\n"+
+		"- Simplifier: carried the Implementer's waiver of the same failure: "+clockNote+"\n\n"+
 		"- **Implementer** — waived\n"+
 		"- **Fixer** — waiver carried\n"+carried+"\n"+
 		"- **Simplifier** — waiver carried\n"+carried; got != want {
@@ -230,7 +229,7 @@ func TestAResumedFixerCarriesTheImplementersWaiver(t *testing.T) {
 	w.start(wi, resumingPolicy())
 	w.until("the checks escalation", func() bool { return w.checksEscalations(wi) == 1 })
 	owner, _, _ := w.people(wi)
-	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestClock needs a hardware clock CI lacks.", delivery.ScopeAttempt); code != 200 {
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -264,7 +263,7 @@ func TestAFailureTheWaiverDoesNotCoverIsHeld(t *testing.T) {
 			w.onModel("fixer", tc.fixer)
 			wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, tc.judge)
 			owner, _, _ := w.people(wi)
-			if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestClock needs a hardware clock CI lacks.", tc.scope); code != 200 {
+			if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, tc.scope); code != 200 {
 				t.Fatalf("the owner's waiver: %d %v", code, body)
 			}
 			w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
@@ -291,7 +290,7 @@ func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
 	w.onModel("fixer", fakeagent.ChecksNewFailureModel)
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
 	owner, _, _ := w.people(wi)
-	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestClock needs a hardware clock CI lacks.", delivery.ScopeAttempt); code != 200 {
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
@@ -327,7 +326,7 @@ func TestRetryAndStopAfterACarriedWaiverAndStartOverInheritsNothing(t *testing.T
 	j := &scriptedJudge{}
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
 	owner, _, _ := w.people(wi)
-	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestClock needs a hardware clock CI lacks.", delivery.ScopeAttempt); code != 200 {
+	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
