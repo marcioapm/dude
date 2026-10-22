@@ -45,7 +45,7 @@ export function liveItemsOf(task: Pick<TaskDetail, "runs" | "awaitingDecision">)
 }
 
 /** "The conductor and 2 reviewers are working; a fixer is queued." */
-export function liveSummary(items: readonly LiveItem[]): string {
+function liveSummary(items: readonly LiveItem[]): string {
   const working = items.filter((i) => i.state !== "queued");
   const queued = items.filter((i) => i.state === "queued").map((i) => ({ ...i, state: undefined }));
   if (items.length === 0) return "Nothing is running now: the delivery waits.";

@@ -55,7 +55,7 @@ export interface ChatSectionProps {
 }
 
 /** A task's Start overs, by the attempt each started: who, when, and their note. */
-export function startOversByAttempt(events: readonly PersistedEvent[], names: ReadonlyMap<string, string>): Map<number, { by: string; note?: string; at: number }> {
+function startOversByAttempt(events: readonly PersistedEvent[], names: ReadonlyMap<string, string>): Map<number, { by: string; note?: string; at: number }> {
   const out = new Map<number, { by: string; note?: string; at: number }>();
   for (const e of events) {
     if (e.eventType !== "task.recovered" || e.payload.action !== "restart" || typeof e.payload.attempt !== "number") continue;
@@ -66,8 +66,8 @@ export function startOversByAttempt(events: readonly PersistedEvent[], names: Re
   return out;
 }
 
-/** A Chat while its task is stopped: dude's line saying so, and why the composer waits. */
-export const STOPPED_COMPOSER = "The task is stopped. Resume, Try again or Start over above to go on.";
+/** Why a Chat's composer waits while its task is stopped. */
+const STOPPED_COMPOSER = "The task is stopped. Resume, Try again or Start over above to go on.";
 
 /** A task the pick-up is for: stopped (aborted or failed), not closed or archived. */
 export function stoppedForPickUp(task: Pick<TaskDetail, "status" | "resolution" | "archivedAt">): boolean {

@@ -76,7 +76,7 @@ import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
-import { ChatSection } from "./ChatSection.tsx";
+import { ChatSection, stoppedForPickUp } from "./ChatSection.tsx";
 import { EndedLedgers } from "./endedLedgers.ts";
 import { OwnerSelect } from "./OwnerSelect.tsx";
 import { TaskMachineRaises } from "./actions.tsx";
@@ -531,10 +531,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   };
   // Overview's StartChoice cards offer both then; the header's buttons are for every other tab.
   const startInHeader = startable && tab !== "overview";
-  const stopped = item.status === "aborted" || item.status === "failed";
   // The pick-up is the current attempt's: an earlier one is only to read. A
   // closed task is picked back up by none of the ways: its notice offers Reopen.
-  const stop = stopped && !earlier && !item.resolution && !item.archivedAt ? stopOfTask : null;
+  const stop = stoppedForPickUp(item) && !earlier ? stopOfTask : null;
   // The reader picks it up when it is theirs, or nobody's.
   const yours = !item.owner || (people.you !== null && item.owner.id === people.you);
   const { prs, mine, others, sessions } = parts;
