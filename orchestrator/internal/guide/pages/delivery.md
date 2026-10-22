@@ -53,11 +53,18 @@ Every loop ends on a limit. These are set in **Settings → Delivery**, section 
 | --- | --- | --- |
 | Review rounds | 5 | Review → fix cycles before the owner is asked. |
 | Attempts per finding | 2 | Fixes one finding may survive before it is raised on its own. |
+| Unmet criterion rounds | 2 | Consecutive explicit still verdicts on a blocking finding's acceptance criterion. 0 disables. |
+| Regression rounds | 2 | Consecutive fix rounds that resolve blockers but introduce new blockers declared caused by the fix. 0 disables. |
 | Pull request fix rounds | 3 | Fixes for pull request feedback, per review round, before the owner is asked. |
+
+Convergence counts only completed, non-replaced reviews of findings sent to both the reviewer and its parent fixer in the current attempt. A fixed verdict or silence breaks a finding's still streak. Regression rounds group reviews of the same fix; each round must both resolve a blocking finding and raise a blocking finding declared caused by that fix. Blocking severities come from the delivery's policy, not a fixed severity list. Human feedback and tester findings do not count toward these limits.
+
+With no blockers the loop is clear. Otherwise **Not converging** takes precedence over **Review stuck**, which takes precedence over **Review rounds used up**. Findings without acceptance criteria still use the attempts limit. Older deliveries whose frozen policy lacks the convergence limits keep them disabled.
 
 When a limit is reached, delivery stops and asks the task's owner. This is an **escalation**. The task page explains why in a banner, with the choices:
 
-- **Review stuck** — the fixer could not resolve a finding after repeated attempts.
+- **Fixes are not converging** — the same named criteria remain unmet after consecutive fixes, or fixes keep causing new blockers. **Fix differently** requires your direction; **Accept the risk** accepts only the named findings with your risk note; **Change the intended behaviour** replaces their criteria with your words and sends them to the fixer. These are owner-only decisions. Stop needs no note.
+- **Review stuck** — the fixer could not resolve a finding after repeated attempts. Trying again requires your direction for the next fix.
 - **Review rounds used up** — blocking findings are still open after the last allowed round.
 - **No changes made** — the implementer finished without changing anything.
 - **A reviewer failed** — try it again, or go on without it.

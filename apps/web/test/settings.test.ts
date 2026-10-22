@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { DeliverySettings, FullDeliveryPolicy, RoleSettings } from "@dude/domain";
-import { deliveryChanged, deliveryPatch, roleChanged, settingsPage, timeLimitLabel } from "../src/settings.ts";
+import { deliveryPolicySchema, settingsPatchSchema, type DeliverySettings, type FullDeliveryPolicy, type RoleSettings } from "@dude/domain";
+import { deliveryChanged, deliveryPatch, deliveryValues, roleChanged, settingsPage, timeLimitLabel } from "../src/settings.ts";
 
 const org = <T,>(value: T) => ({ value, source: "organization" as const });
 const proj = <T,>(value: T) => ({ value, source: "project" as const });
@@ -10,6 +10,8 @@ const delivery: DeliverySettings = {
   blockingSeverities: org(["blocking", "high"]),
   maxReviewIterations: proj(3),
   maxAttemptsPerFinding: org(2),
+  maxStillRounds: org(2),
+  maxRegressionRounds: org(2),
   maxPrFixIterations: org(3),
   simplify: org(true),
   test: org(false),
@@ -30,6 +32,30 @@ const role = (over: Partial<RoleSettings> = {}): RoleSettings => ({
 });
 
 describe("settings helpers", () => {
+  for (const key of ["maxStillRounds", "maxRegressionRounds"] as const) {
+    test(`${key} accepts bounds, reset and omission without inserting frozen defaults`, () => {
+      for (const value of [0, 2, 20]) {
+        expect(deliveryPolicySchema.parse({ [key]: value })).toEqual({ [key]: value });
+        expect(settingsPatchSchema.parse({ delivery: { [key]: value } })).toEqual({ delivery: { [key]: value } });
+      }
+      for (const value of [-1, 21, 1.5, "2", null]) {
+        expect(deliveryPolicySchema.safeParse({ [key]: value }).success).toBe(false);
+        if (value !== null) expect(settingsPatchSchema.safeParse({ delivery: { [key]: value } }).success).toBe(false);
+      }
+      expect(settingsPatchSchema.parse({ delivery: { [key]: null } })).toEqual({ delivery: { [key]: null } });
+      expect(deliveryPolicySchema.parse({})).toEqual({});
+      expect(settingsPatchSchema.parse({ delivery: {} })).toEqual({ delivery: {} });
+    });
+
+    test(`${key} preserves zero as an explicit project override`, () => {
+      const form = { ...deliveryValues(delivery), [key]: 0 };
+      expect(deliveryPatch(delivery, form)).toEqual({ [key]: 0 });
+      const saved = { ...delivery, [key]: proj(0) };
+      expect(deliveryValues(saved)[key]).toBe(0);
+      expect(deliveryChanged(saved)).toBe(2);
+      expect(deliveryPatch(saved, form)).toEqual({});
+    });
+  }
   test("a delivery form's patch is only what it changed", () => {
     const form = { ...Object.fromEntries(Object.entries(delivery).map(([k, s]) => [k, s.value])), test: true, requiredReviewers: ["correctness", "security"] } as FullDeliveryPolicy;
     expect(deliveryPatch(delivery, form)).toEqual({ test: true, requiredReviewers: ["correctness", "security"] });
