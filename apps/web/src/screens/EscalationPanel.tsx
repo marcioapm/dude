@@ -17,8 +17,8 @@ import { useState } from "react";
 import { Button, Callout, Checkbox, Textarea } from "@dude/design-system/primitives";
 import { Markdown } from "@dude/design-system/components";
 import { runLabel } from "@dude/domain";
-import type { ApiClient, EscalationAction, Person, TaskDetail } from "../api/client.ts";
-import { checksFailures, checksMessage, escalationWords, needsReason, testCriteria } from "../escalation.ts";
+import type { ApiClient, EscalationAction, Finding, Person, TaskDetail } from "../api/client.ts";
+import { checksFailures, checksMessage, escalationWords, needsNote, needsReason, testCriteria } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { MonoWords } from "../monoWords.tsx";
 
@@ -26,6 +26,7 @@ const ACTION_LABEL: Record<EscalationAction, string> = {
   resume: "Resume it",
   retry: "Try again",
   accept: "Accept the findings and go on",
+  amend: "Change the intended behaviour",
   waive: "Waive and go on",
   done: "Take what was merged",
   wait: "Wait on the rest",
@@ -34,6 +35,10 @@ const ACTION_LABEL: Record<EscalationAction, string> = {
 
 /** What an action reads as for this reason. */
 const actionLabel = (action: EscalationAction, reason: string) => {
+  if (reason === "not_converging") {
+    if (action === "retry") return "Fix differently";
+    if (action === "accept") return "Accept the risk";
+  }
   if (action === "accept" && reason === "review_failed") return "Go on without it";
   if (action === "accept" && reason === "test_failed_criteria") return "Accept the failure and go on";
   if (action === "retry" && reason === "test_failed_criteria") return "Fix it once more";
@@ -47,7 +52,8 @@ function reasonVerb(action: EscalationAction, reason: string): string {
   return actionLabel(action, reason).toLowerCase().replace(/ and go on$/, "");
 }
 
-export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun, onDecided }: {
+export function EscalationPanel({ client, task, findings = [], you, youAdmin = false, onOpenRun, onDecided }: {
+  findings?: Finding[];
   client: ApiClient;
   task: TaskDetail & { escalation: NonNullable<TaskDetail["escalation"]> };
   /**
@@ -63,6 +69,9 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
   const { reason, actions: all } = task.escalation;
   const words = escalationWords(task.escalation);
   const criteria = testCriteria(task.escalation);
+  const namedIds = task.escalation.detail?.findingIds;
+  const named = reason === "not_converging" && Array.isArray(namedIds)
+    ? findings.filter((f) => namedIds.includes(f.id)) : [];
   const sentBack = checksMessage(task.escalation);
   const failures = checksFailures(task.escalation);
   const [note, setNote] = useState("");
@@ -81,7 +90,7 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
   else if (youAdmin && you !== null) actions = all.filter((a) => needsReason(reason, a));
 
   const decide = async (action: EscalationAction) => {
-    if (needsReason(reason, action) && !note.trim()) {
+    if (needsNote(reason, action) && !note.trim()) {
       setReasoning(action);
       setProblem(null);
       return;
@@ -102,9 +111,10 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
 
   const required = reasoning !== null;
   // Before one is picked, the label names the actions the note is required for.
-  const reasoned = actions.filter((a) => needsReason(reason, a)).map((a) => reasonVerb(a, reason));
+  const reasoned = actions.filter((a) => needsNote(reason, a)).map((a) => reasonVerb(a, reason));
+  const direction = reason === "not_converging" || reason === "stuck";
   let noteLabel = "A note for the agents (optional)";
-  if (required) noteLabel = `Why may it ${reasonVerb(reasoning, reason)}? (required)`;
+  if (required) noteLabel = direction ? `Your direction to ${reasonVerb(reasoning, reason)} (required)` : `Why may it ${reasonVerb(reasoning, reason)}? (required)`;
   else if (reasoned.length) noteLabel = `A note for the agents (required to ${reasoned.join(" or ")})`;
   return (
     <Callout tone="attention" data-testid="escalation" data-reason={reason}>
@@ -127,6 +137,15 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
             ))}
           </ul>
         ) : null}
+        {named.length > 0 ? (
+          <ul className="escalationCriteria" data-testid="escalation-findings">
+            {named.map((f) => (
+              <li key={f.id} data-testid="escalation-finding" data-finding-id={f.id}>
+                <strong>{f.title}</strong>{f.acceptance ? <> — Done when: {f.acceptance}</> : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {sentBack ? <Markdown source={sentBack} unmeasured className="escalationSentBack" data-testid="escalation-checks" /> : null}
         {someoneElse && actions.length === 0 ? (
           <p className="escalationWaiting">Waiting for {owner.name} to decide.</p>
@@ -139,7 +158,7 @@ export function EscalationPanel({ client, task, you, youAdmin = false, onOpenRun
             <Textarea
               label={noteLabel}
               rows={2} value={note} onChange={(e) => setNote(e.target.value)} required={required}
-              error={required && !note.trim() ? `Say why: it is kept with the ${reason === "checks_unverified" ? "checks" : "test's"} verdict and on the pull request.` : undefined}
+              error={required && !note.trim() ? direction ? "Give your direction: how to fix differently, the risk you accept, or the intended behaviour." : `Say why: it is kept with the ${reason === "checks_unverified" ? "checks" : "test's"} verdict and on the pull request.` : undefined}
               hint="Kept with the task: every agent from here on is told it." data-testid="escalation-note" />
             {failures.length > 0 && actions.includes("waive") ? (
               <div data-testid="escalation-later-runs">

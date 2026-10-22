@@ -694,7 +694,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             </Callout>
           ) : null}
           {item.escalation && !earlier ? (
-            <EscalationPanel client={client} task={{ ...item, escalation: item.escalation }} you={people.you}
+            <EscalationPanel client={client} findings={mine.findings} task={{ ...item, escalation: item.escalation }} you={people.you}
               youAdmin={people.me?.role === "admin"} onOpenRun={onOpenRun} onDecided={() => void load()} />
           ) : null}
           {!earlier && !item.escalation ? stalledForOwner(item.runs).map((r) => (

@@ -6,13 +6,23 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Escalation } from "@dude/domain";
-import { checksMessage, escalationWords as wordsFor, needsReason, shortError } from "../src/escalation.ts";
+import { checksMessage, escalationWords as wordsFor, needsNote, needsReason, shortError } from "../src/escalation.ts";
 
 const at = "2026-01-01T00:00:00Z";
 // The words read only reason and detail; the escalation's actions are left out.
 const escalationWords = (e: Omit<Escalation, "actions">) => wordsFor(e as Escalation);
 
 describe("escalationWords", () => {
+  test("convergence distinguishes unmet criteria from fix-caused blockers", () => {
+    expect(escalationWords({ reason: "not_converging", detail: { findingIds: ["f1"] }, at })).toEqual({
+      short: "Fixes are not converging",
+      sentence: "1 acceptance criterion remains unmet after consecutive fixes. Give the fixer different direction, accept the named risks, or change the intended behaviour.",
+      runId: null,
+    });
+    expect(escalationWords({ reason: "not_converging", detail: { findingIds: ["f2"], regressionRounds: 2 }, at }).sentence)
+      .toBe("Fixes keep causing new blockers. Give the fixer different direction, accept the named risks, or change the intended behaviour.");
+  });
+
   test("a stuck review counts the findings it is stuck on", () => {
     const words = escalationWords({ reason: "stuck", detail: { reason: "stuck", findingIds: ["f1", "f2"] }, at });
     expect(words.short).toBe("Review stuck on 2 findings");
@@ -102,6 +112,18 @@ test("shortError keeps the first line, and cuts a long one", () => {
   expect(shortError("first\nsecond")).toBe("first");
   expect(shortError("x".repeat(10), 5)).toBe("xxxx…");
 
+});
+
+test("note requirements do not broaden admin eligibility", () => {
+  for (const action of ["retry", "accept", "amend"]) {
+    expect(needsNote("not_converging", action)).toBe(true);
+    expect(needsReason("not_converging", action)).toBe(false);
+  }
+  expect(needsNote("not_converging", "stop")).toBe(false);
+  expect(needsNote("stuck", "retry")).toBe(true);
+  expect(needsReason("stuck", "retry")).toBe(false);
+  expect(needsNote("stuck", "accept")).toBe(false);
+  expect(needsNote("test_blocked", "waive")).toBe(true);
 });
 
 // The orchestrator's delivery.NeedsReason, case for case.

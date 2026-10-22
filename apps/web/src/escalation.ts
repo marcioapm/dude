@@ -49,11 +49,17 @@ function criteriaList(criteria: Array<{ criterion: number; text: string }>): str
 /**
  * An action that ships past what nobody saw work (a failed criterion, a check the
  * tester could not make, an unbacked checks report): it needs the person's reason.
- * The orchestrator's delivery.NeedsReason refuses the same actions without one.
+  * The orchestrator's delivery.NeedsReason also permits admin decisions for these actions.
  */
 export function needsReason(reason: string, action: string): boolean {
   return (reason === "test_failed_criteria" && action === "accept")
     || ((reason === "test_blocked" || reason === "checks_unverified") && action === "waive");
+}
+
+export function needsNote(reason: string, action: string): boolean {
+  return needsReason(reason, action)
+    || (reason === "stuck" && action === "retry")
+    || (reason === "not_converging" && action !== "stop");
 }
 
 /** The send-back a checks escalation stopped at: each unbacked check and why, "" for any other. */
@@ -76,6 +82,16 @@ export function escalationWords(e: Escalation): EscalationWords {
   const error = typeof d.error === "string" && d.error ? `: ${shortError(d.error)}` : ".";
   const failed = (who: string) => ({ short: `${who} failed`, sentence: `The ${who.toLowerCase()} failed${error}`, runId });
   switch (e.reason) {
+    case "not_converging": {
+      const n = Array.isArray(d.findingIds) ? d.findingIds.length : 0;
+      return {
+        short: "Fixes are not converging",
+        sentence: num("regressionRounds") > 0
+          ? "Fixes keep causing new blockers. Give the fixer different direction, accept the named risks, or change the intended behaviour."
+          : `${n ? plural(n, "acceptance criterion", "acceptance criteria") : "Acceptance criteria"} ${n === 1 ? "remains" : "remain"} unmet after consecutive fixes. Give the fixer different direction, accept the named risks, or change the intended behaviour.`,
+        runId,
+      };
+    }
     case "stuck": {
       const n = Array.isArray(d.findingIds) ? d.findingIds.length : 0;
       return {
