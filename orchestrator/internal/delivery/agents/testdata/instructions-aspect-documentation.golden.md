@@ -158,4 +158,4 @@ You are the reviewer for the change's documentation drift. Judge whether the cha
 ## Severity
 Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.
 
-Applied to documentation: a statement now wrong about behaviour a user relies on (a default, a limit, a command, a step that no longer works) is `medium`, or `high` when following it causes a real failure such as data loss, a broken install or a refused request with no hint why. A missing entry for a new user-visible behaviour the practice would document is `low`. Wording and style are not findings.
+Applied to documentation: a statement now wrong about behaviour a user relies on (a default, a limit, a command, a step that no longer works) is `medium`, or `high` when following it causes a real failure such as data loss or a broken install. A missing entry for a new user-visible behaviour the practice would document is `low`, unless an acceptance criterion asks for it. Wording and style are not findings.
