@@ -34,11 +34,19 @@ export const HELP_SEARCH_DELAY = 200;
 /**
  * The section in view: the last whose top has reached `line` (the list's
  * top, plus a little), else the first. `tops` are in document order.
+ * `bottom` is given when the pane is scrolled to its end, where a short last
+ * section can never reach `line`: then the last whose top is above `bottom`.
  */
-export function sectionInView(tops: ReadonlyArray<{ readonly anchor: string; readonly top: number }>, line: number): string | undefined {
+export function sectionInView(tops: ReadonlyArray<{ readonly anchor: string; readonly top: number }>, line: number, bottom?: number): string | undefined {
   let seen = tops[0]?.anchor;
-  for (const t of tops) if (t.top <= line) seen = t.anchor;
+  for (const t of tops) if (t.top <= line || (bottom !== undefined && t.top < bottom)) seen = t.anchor;
   return seen;
+}
+
+// The box that scrolls the page: the nearest ancestor that scrolls (the app's main pane), else the document.
+function scrollerOf(el: HTMLElement): HTMLElement {
+  for (let p = el.parentElement; p; p = p.parentElement) if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
+  return (document.scrollingElement as HTMLElement | null) ?? document.documentElement;
 }
 
 /** A guide section's id (`<page>#<anchor>`) and title (`<page> — <heading>`) as Help shows them. */
@@ -102,15 +110,17 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
 
   // The section in view follows the scroll of whatever scrolls the page (the app's main pane).
   useEffect(() => {
-    if (!shown) return;
+    const article = articleRef.current;
+    if (!shown || !article) return;
+    const scroller = scrollerOf(article);
     const follow = () => {
-      const article = articleRef.current;
-      if (!article) return;
       const line = (listRef.current?.getBoundingClientRect().top ?? 0) + 24;
       const tops = [...article.querySelectorAll<HTMLElement>("section[data-anchor]")]
         .filter((s) => s.dataset["anchor"])
         .map((s) => ({ anchor: s.dataset["anchor"]!, top: s.getBoundingClientRect().top }));
-      setInView(sectionInView(tops, line));
+      const atEnd = scroller.scrollHeight > scroller.clientHeight && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+      const bottom = scroller === document.scrollingElement ? window.innerHeight : scroller.getBoundingClientRect().bottom;
+      setInView(sectionInView(tops, line, atEnd ? bottom : undefined));
     };
     follow();
     document.addEventListener("scroll", follow, { capture: true, passive: true });

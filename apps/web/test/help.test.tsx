@@ -158,6 +158,31 @@ describe("the outline", () => {
     }
   });
 
+  test("at the end of the page, a short last section that can't reach the top is the one in view", async () => {
+    const tops: Record<string, number> = { "the-pipeline": -1400, "which-reviewers-run": -500, "which-findings-block": 500 };
+    let pane: HTMLElement | null = null;
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this === pane) return { top: 0, bottom: 800, left: 0, right: 0, width: 0, height: 800, x: 0, y: 0, toJSON() {} } as DOMRect;
+      const top = this.dataset["anchor"] ? tops[this.dataset["anchor"]] ?? 0 : 0;
+      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    try {
+      // The pane scrolled to its end: 2200 of content, 800 shown, 1400 scrolled.
+      const { container, unmount } = await mount(
+        <div data-testid="pane" style={{ overflowY: "auto" }}><HelpScreen client={new Long("a")} page="delivery" section="which-findings-block" onPage={() => {}} /></div>,
+      );
+      mounted.push(unmount);
+      pane = container.querySelector<HTMLElement>("[data-testid=pane]")!;
+      for (const [k, v] of [["scrollHeight", 2200], ["clientHeight", 800], ["scrollTop", 1400]] as const) Object.defineProperty(pane, k, { configurable: true, value: v });
+      await until(() => (outline(container).length === 3 ? true : null), "the sections");
+      await act(async () => void pane!.dispatchEvent(new Event("scroll")));
+      expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", null], ["Which findings block", "location"]]);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = original;
+    }
+  });
+
   test("clicking a section asks for it in the URL, as the app's place", async () => {
     const asked: string[] = [];
     const { container, unmount } = await mount(<HelpScreen client={new Long("a")} page="delivery" onPage={() => {}} onSection={(p, s) => asked.push(`${p}/${s}`)} />);
