@@ -247,3 +247,34 @@ func TestAnEscalationWakePastItsBoundIsClippedToTheTablesBound(t *testing.T) {
 		t.Fatalf("stored %d characters ending %q, want 1200 ending in …", chars, stored[len(stored)-8:])
 	}
 }
+
+// A fix of the people's feedback alone never reads the review loop's
+// convergence: a review history it could not read holds no such fix, and
+// does hold a fix that names a review finding.
+func TestConductFixOfFeedbackAloneReadsNoConvergence(t *testing.T) {
+	for _, named := range [][]string{nil, {"f"}} {
+		t.Run(fmt.Sprint(named), func(t *testing.T) {
+			w := newConvergenceWorld(t)
+			_, ref := conductConvergenceSetup(t, w)
+			w.phase(t, "fix1", "fix", "", []string{"f"}, nil, 1)
+			w.phase(t, "review1", "review", "fix1", []string{"f"}, nil, 2)
+			// Not a verdict map ConvergenceTx can scan.
+			w.exec(t, `UPDATE runs SET verdicts = '{"f": 1}' WHERE id = 'review1'`)
+			if named == nil {
+				w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
+			}
+			w.draft(t, "feedback", w.ana, "Please rename the flag")
+			w.exec(t, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+				VALUES ('batch', $1, $2, 1, $3, 'k')`, w.org, w.task, w.ana)
+			w.exec(t, `UPDATE feedback_items SET status = 'open', submitted_at = now(), batch_id = 'batch' WHERE id = 'feedback'`)
+			err := conductConvergenceStart(w, ref, delivery.PhaseFix, named)
+			if named == nil && err != nil {
+				t.Fatalf("feedback-only fix: %v", err)
+			}
+			if named != nil && (err == nil || !strings.Contains(err.Error(), "cannot unmarshal number")) {
+				t.Fatalf("a fix of a review finding did not read the convergence: %v", err)
+
+			}
+		})
+	}
+}

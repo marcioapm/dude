@@ -310,21 +310,6 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	conv, err := ConvergenceTx(ctx, tx, st)
-	if err != nil {
-		return nil, err
-	}
-	// A tester's finding has no still streak and is never fix-caused
-	// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
-	weighed := make([]FindingState, len(all))
-	for i, f := range all {
-		f.StillRounds = conv.StillRounds[f.ID]
-		weighed[i] = f
-	}
-	// A stalled review loop holds every fix, including a named subset.
-	if exit := Exit(st.Policy, weighed, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
-		return nil, refuseText(rReviewLoopNotConverging)
-	}
 	byID := map[string]FindingState{}
 	var open []string
 	for _, f := range all {
@@ -335,6 +320,25 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	}
 	if len(named) == 0 {
 		named = open
+	}
+	// A fix of no review finding (the people's feedback alone, or ids
+	// refused below) is not held by the review loop's convergence.
+	if slices.ContainsFunc(named, func(id string) bool { _, ok := byID[id]; return ok }) {
+		conv, err := ConvergenceTx(ctx, tx, st)
+		if err != nil {
+			return nil, err
+		}
+		// A tester's finding has no still streak and is never fix-caused
+		// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
+		weighed := make([]FindingState, len(all))
+		for i, f := range all {
+			f.StillRounds = conv.StillRounds[f.ID]
+			weighed[i] = f
+		}
+		// A stalled review loop holds every fix, including a named subset.
+		if exit := Exit(st.Policy, weighed, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
+			return nil, refuseText(rReviewLoopNotConverging)
+		}
 	}
 	if len(named) == 0 {
 		// A fix for the people's feedback alone: every open item goes with it.
