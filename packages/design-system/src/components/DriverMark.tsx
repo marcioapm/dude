@@ -204,7 +204,7 @@ export function DriverSwitch({ mode, waiting, running, handedBack, canSwitch, ow
 /**
  * A board card's or a sidebar row's mark: the glyphs alone, the words in
  * the tooltip; the card or row says them in its own name (`driverLabel`).
- * In progress only, and never a switch.
+ * Under way only, and never a switch.
  */
 export function DriverGlyph({ mode, className }: { readonly mode: DriverMode; readonly className?: string | undefined }) {
   const w = driverWords(mode);

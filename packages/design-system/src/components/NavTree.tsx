@@ -70,7 +70,7 @@ export interface NavRowMenuControls {
  * sibling with `aria-level`) so keyboard movement is index arithmetic and
  * project headers can stick to the top of the scroll.
  *
- * Unsearched it lists only work in progress (running, in review, ready to
+ * Unsearched it lists only work under way (in progress, in review, ready to
  * merge) and the selection; a search or triage filter lists every status.
  * A task is a leaf: the agent working on it sits on its owner's face.
  *

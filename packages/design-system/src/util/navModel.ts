@@ -88,7 +88,7 @@ export interface NavTask {
   /** The reader may start it: draws a Backlog card's start. */
   readonly canStart?: boolean | undefined;
   /**
-   * Who drives its delivery while in progress (`driverMode`): its card and
+   * Who drives its delivery while under way (`driverMode`): its card and
    * row carry the glyph, read-only. Absent for a task not started or ended.
    */
   readonly driver?: "deliver" | "conductor" | "deliver-chat" | undefined;
@@ -133,14 +133,14 @@ export function waitingWords(task: NavTask): string {
   return task.waitingFor ?? (task.status === "awaiting_confirmation" ? "plan needs your confirmation" : "waiting for you");
 }
 
-/** Started and not ended: the board's In progress, In review and Ready to merge columns. */
-function inProgress(status: TaskStatus): boolean {
+/** Under way — started, not ended: the board's In progress, In review and Ready to merge columns. */
+function underWay(status: TaskStatus): boolean {
   return !notStarted(status) && !TERMINAL_TASK_STATUSES.includes(status);
 }
 
-/** The driver a card or row shows: only while the task is in progress. */
+/** The driver a card or row shows: only while the task is under way. */
 export function shownDriver(task: NavTask): NavTask["driver"] {
-  return inProgress(task.status) ? task.driver : undefined;
+  return underWay(task.status) ? task.driver : undefined;
 }
 
 export interface NavEpic {
@@ -337,7 +337,7 @@ interface Ctx {
   readonly overrides: NavOverrides;
   readonly filter: NavFilter;
   readonly rows: NavRow[];
-  /** No query and no triage filter: only work in progress is listed. */
+  /** No query and no triage filter: only work under way is listed. */
   readonly trimmed: boolean;
   /** The selection's task and epic ids, listed even when the trim would drop them; null while searching. */
   readonly pinnedTask: string | null;
@@ -382,7 +382,7 @@ function pushTask(ctx: Ctx, wi: NavTask, depth: number, parentKey: string, proje
   ctx.rows.push({ key: navKey(ref), ref, depth, parentKey, expandable: false, expanded: false, forced: false, node: wi, counts: null, triage: taskTriage(wi, ctx.filter.you), projectId });
 }
 
-/** The tasks the filter lets through, before the trim to work in progress. */
+/** The tasks the filter lets through, before the trim to work under way. */
 function eligibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavTask[] {
   const t = ctx.filter.triage ?? null;
   const person = ctx.filter.person ?? null;
@@ -393,7 +393,7 @@ function eligibleTasks(ctx: Ctx, items: ReadonlyArray<NavTask>, q: string): NavT
 
 function listed(ctx: Ctx, eligible: ReadonlyArray<NavTask>): NavTask[] {
   if (!ctx.trimmed) return [...eligible];
-  return eligible.filter((wi) => inProgress(wi.status) || wi.id === ctx.pinnedTask);
+  return eligible.filter((wi) => underWay(wi.status) || wi.id === ctx.pinnedTask);
 }
 
 /** The id of the task a ref is or belongs to (a session's or run's task); null for projects, epics and unknown refs. */
@@ -410,8 +410,9 @@ export function taskOf(projects: ReadonlyArray<NavProject>, ref: NavRef): string
  * navigation trivial (index arithmetic) and leaves the door open to
  * virtualisation.
  *
- * Unsearched (no query, no triage filter; Mine included), only work in
- * progress is listed — the board's middle columns — plus the selection; an
+ * Unsearched (no query, no triage filter; Mine included), only work under
+ * way is listed — the board's In progress, In review and Ready to merge
+ * columns — plus the selection; an
  * epic with none of that is left out. Backlog and Done are the board's.
  * Searching lists every status.
  */

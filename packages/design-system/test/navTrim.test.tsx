@@ -1,6 +1,6 @@
 /**
- * What the projects tree lists. Unsearched (and under Mine) only work in
- * progress — the board's In progress, In review and Ready to merge — plus
+ * What the projects tree lists. Unsearched (and under Mine) only work
+ * under way — the board's In progress, In review and Ready to merge — plus
  * the selection; a query or a triage filter lists every status. A task is
  * a leaf: no session rows, and a selected session highlights its task.
  */
@@ -38,7 +38,7 @@ const keys = (projects: ReadonlyArray<NavProject>, filter: NavFilter = {}, overr
 
 const BACKLOG: TaskStatus[] = ["received", "intake", "awaiting_confirmation", "queued"];
 const CLOSED: TaskStatus[] = ["done", "failed", "aborted"];
-const IN_PROGRESS: TaskStatus[] = ["running", "awaiting_input", "review", "ready_to_merge"];
+const UNDER_WAY: TaskStatus[] = ["running", "awaiting_input", "review", "ready_to_merge"];
 
 // Open by hand, so the default open state never hides what the trim keeps.
 const OPEN: NavOverrides = new Map([["project:p", true], ["epic:e", true]]);
@@ -46,13 +46,13 @@ const ME = { id: "me", name: "Me" };
 
 const rowKeys = (el: HTMLElement) => allByRole(el, "treeitem").map((r) => r.getAttribute("data-nav-key"));
 
-describe("the unsearched tree lists only work in progress", () => {
+describe("the unsearched tree lists only work under way", () => {
   test.each([...BACKLOG, ...CLOSED])("a %s task is not listed", (status) => {
     const p: NavProject = { id: "p", name: "Web", tasks: [task("t", status), task("live", "running")] };
     expect(keys([p], {}, OPEN)).toEqual(["project:p", "task:live"]);
   });
 
-  test.each(IN_PROGRESS)("a %s task is listed", (status) => {
+  test.each(UNDER_WAY)("a %s task is listed", (status) => {
     const p: NavProject = { id: "p", name: "Web", tasks: [task("t", status)] };
     expect(keys([p], {}, OPEN)).toEqual(["project:p", "task:t"]);
   });
@@ -106,14 +106,14 @@ describe("empty shells", () => {
     expect(rows.slice(0, 2).map((r) => [r.expandable, r.expanded])).toEqual([[true, true], [true, true]]);
   });
 
-  test("an epic with work in progress keeps its chevron", () => {
+  test("an epic with work under way keeps its chevron", () => {
     const live: NavProject = { ...p, epics: [{ id: "e", title: "Billing", tasks: [task("a", "done"), task("r", "running")] }] };
     const rows = flattenNav([live], new Map());
     expect(rows.map((r) => r.key)).toEqual(["project:p", "epic:e", "task:r"]);
     expect(rows[1]).toMatchObject({ expandable: true, expanded: true });
   });
 
-  test("a project with nothing in progress draws its header and no Expand button", async () => {
+  test("a project with nothing under way draws its header and no Expand button", async () => {
     const el = await mount(<NavTree projects={[p]} />);
     const header = byRole(el, "treeitem", "Web");
     expect(allByRole(el, "treeitem").length).toBe(1);
@@ -260,16 +260,16 @@ describe("Mine keeps its own rule over the pin", () => {
 describe("the sidebar's no-matches state", () => {
   const p: NavProject = { id: "p", name: "Web", tasks: [task("old", "done", { people: [ME], title: "Old invoice work" })] };
 
-  test("Mine with nothing of yours in progress says so", async () => {
+  test("Mine with nothing of yours under way says so", async () => {
     const el = await mount(<Sidebar projects={[p]} you="me" mine />);
-    expect(el.textContent).toContain("Nothing of yours in progress.");
+    expect(el.textContent).toContain("Nothing of yours under way.");
     expect(rowKeys(el)).toEqual([]);
   });
 
   test("Mine with your only task done and selected lists it, not the empty state", async () => {
     const el = await mount(<Sidebar projects={[p]} you="me" mine selected={{ kind: "task", id: "old" }} />);
     expect(rowKeys(el)).toEqual(["project:p", "task:old"]);
-    expect(el.textContent).not.toContain("Nothing of yours in progress.");
+    expect(el.textContent).not.toContain("Nothing of yours under way.");
   });
 
   test("a query finds the done task the default view leaves out", async () => {

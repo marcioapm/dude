@@ -444,7 +444,7 @@ export function Sidebar({
             compact
             icon="search"
             title="No matches"
-            description={isMine && !q ? "Nothing of yours in progress." : q ? `Nothing matches “${q}”.` : "Nothing here."}
+            description={isMine && !q ? "Nothing of yours under way." : q ? `Nothing matches “${q}”.` : "Nothing here."}
             action={
               <button type="button" className={styles["link"]} onClick={clear}>
                 Clear

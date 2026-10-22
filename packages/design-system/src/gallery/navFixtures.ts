@@ -255,7 +255,7 @@ export const navProjectEverything: NavProject = {
 /** A project with nothing in it yet. */
 export const navProjectEmpty: NavProject = { id: "p_new", name: "new-service", epics: [], tasks: [] };
 
-/** A project with nothing in progress: Márcio's work is done, Ana's is queued. */
+/** A project with nothing under way: Márcio's work is done, Ana's is queued. */
 export const navProjectSettled: NavProject = {
   id: "p_site",
   name: "website",
