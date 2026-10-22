@@ -14,7 +14,7 @@ import { RUN_ID, TASK_ID, run } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import type { TaskTab } from "../src/place.ts";
-import { NOT_STARTED, NOT_STARTED_TAKEN, READ_WHEN_BACK, READ_WHEN_STARTED, project, type StartState } from "../src/api/conversation.ts";
+import { NOT_STARTED, NOT_STARTED_TAKEN, READ_WHEN_BACK, READ_WHEN_STARTED, apply, emptyProjection, project, snapshot, type StartState } from "../src/api/conversation.ts";
 import { SLOW_AFTER_MS, slowNote } from "../src/startCue.tsx";
 import { runStatusShown } from "../src/runPresentation.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
@@ -220,6 +220,43 @@ describe("the projection", () => {
     const bare = project([created(), ev("run.failed", { status: "failed", error, setup: { repository: "api", exitCode: 124, output: "" } }, 50_000)], "failed")
       .turns.find((t) => t.kind === "ended")!;
     expect(bare).toMatchObject({ text: `Failed: ${error}`, setup: { repository: "api", exitCode: 124, output: "" } });
+  });
+
+  // lux preempts an idle Run and resumes it elsewhere itself (prod, #262): the agent writes nothing on its new host, so
+  // the orchestrator's servers.changed {luxState: running}, written once lux has it running from away, ends the move.
+  const luxState = (luxState: string, ms: number) => ev("servers.changed", { taskId: TASK_ID, runId: RUN_ID, change: "state", luxState }, ms);
+  const preemptedIdle = () => [created(), stage("waiting", 0), stage("running", 9_000), ev("agent.session.started", { role: "fixer" }, 10_000),
+    ev("agent.message", { text: "Waiting on your decision." }, 20_000),
+    // 18:50:35 park … 18:51:09 running, as dude wrote them.
+    stage("park", 100_000, 1, "preempt"), luxState("resuming", 108_000), luxState("resuming", 108_001), stage("waiting", 108_000, 1),
+    luxState("scheduled", 110_000), stage("image", 110_000, 2), stage("volumes", 130_000, 2), stage("repositories", 132_000, 2),
+    stage("container", 132_000, 2), stage("running", 134_000, 2)];
+  const startedLines = (c: ReturnType<typeof project>) => c.turns.flatMap((t) => t.kind === "notice" && t.text.startsWith("Started") ? [t.at] : []);
+
+  test("a lux preemption of an idle Run: the move ends once lux has it running again, with no agent output and no Started line", () => {
+    const events = [...preemptedIdle(), luxState("running", 134_500)];
+    const c = project(events, "running");
+    expect(c.start).toBeNull();
+    // The first start's line alone: a move says no "Started in".
+    expect(startedLines(c)).toEqual([at(10_000)]);
+    // Folded one event at a time, as the stream does: the same.
+    const live = emptyProjection();
+    for (const e of events) apply(live, [e]);
+    expect(snapshot(live, "running")).toEqual(c);
+    // Without that event, nothing ends it: the agent stays idle.
+    expect(project(preemptedIdle(), "running").start).toMatchObject({ kind: "move", stage: "running" });
+  });
+
+  test("a resume ended by lux's running before the agent's output still says 'Taken back up', timed when its timing comes", () => {
+    const events = [created(), stage("waiting", 0), ev("agent.message", { text: "hi" }, 10_000), ev("run.parked", { reason: "session" }, 20_000),
+      ev("run.unparked", { reason: "session", epoch: 2 }, 30_000), stage("waiting", 30_000, 2), luxState("scheduled", 32_000),
+      stage("volumes", 32_000, 2), stage("running", 40_000, 2), luxState("running", 41_000)];
+    const back = project(events, "running");
+    expect(back.start).toBeNull();
+    expect(takenBack(events)).toEqual(["Taken back up where it left off."]);
+    expect(startedLines(back)).toEqual([at(10_000)]);
+    const timed = [...events, ev("run.resume.timed", { epoch: 2, totalMs: 30_000, phases: {} }, 60_000), ev("agent.message", { text: "back" }, 60_001)];
+    expect(takenBack(timed)).toEqual(["Taken back up in 30s."]);
   });
 
   test("a drained Run whose resumePolicy (manual) fails it at the stop did not fail a start: no stopping-it failure", () => {

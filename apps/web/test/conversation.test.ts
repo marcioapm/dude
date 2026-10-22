@@ -112,6 +112,19 @@ describe("machine moves", () => {
     expect(notices(done).at(-1)).toBe("The implementer moved to XL, with its conversation and work.");
   });
 
+  test("lux reporting the Run running before its stop does not end a requested move; once back from it, it does", () => {
+    const events = acceptedMove("implementer", XL, TO_HIGHMEM);
+    const running = () => ev(EventTypes.ServersChanged, { change: "state", luxState: "running" });
+    // Before dude's stop (run.paused confirmed): the Run is still on its old machine.
+    const stopped = events.findIndex((e) => e.eventType === EventTypes.RunPaused);
+    expect(stopped).toBeGreaterThan(0);
+    expect(project([...events.slice(0, stopped), running()], "running").start?.machine?.to).toBe("XL");
+    // Stopped, and lux has it running on XL: the move is over, the agent idle.
+    const back = project([...events, ev(EventTypes.RunResized, { machine: { ...XL, from: "task" } }), running()], "running");
+    expect(back.start).toBeNull();
+    expect(notices(back).at(-1)).toBe("The implementer moved to XL, with its conversation and work.");
+  });
+
   test("lux refusing the real resume ends the move with whom it was kept on and the backend's words", () => {
     const refused: MachineRefusedPayload = { moveId: "mmv_1", role: "implementer", from: STANDARD, to: XL, pool: TO_HIGHMEM, kind: "raise",
       kept: STANDARD, code: "platform_mismatch", message: "XL is in highmem, whose machines are linux/arm64; this agent's image is linux/amd64 only" };
