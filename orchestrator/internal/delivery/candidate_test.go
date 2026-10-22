@@ -156,24 +156,54 @@ func TestDiscardingALoopCandidateReopensWhatItsRoundResolved(t *testing.T) {
 	}
 }
 
+// A loop writer's step recovers the Run it saved under either key, the
+// task branch's or the candidate's, whichever way the pull request went
+// since. A conductor-directed writer's is recovered too, and the step still
+// spends the direction; with no saved Run, the Run it creates carries the
+// conductor's mark.
 func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
-	for _, phase := range []string{PhaseImplement, PhaseFix, PhaseSimplify} {
+	type variant struct {
+		candidate, directed, saved bool
+	}
+	var variants []variant
+	for _, directed := range []bool{false, true} {
 		for _, candidate := range []bool{false, true} {
-			t.Run(phase+map[bool]string{false: "/closed-to-open", true: "/open-to-closed"}[candidate], func(t *testing.T) {
+			variants = append(variants, variant{candidate, directed, true})
+		}
+	}
+	variants = append(variants, variant{directed: true})
+	for _, phase := range []string{PhaseImplement, PhaseFix, PhaseSimplify} {
+		for _, v := range variants {
+			candidate := v.candidate
+			name := phase + map[bool]string{false: "/closed-to-open", true: "/open-to-closed"}[candidate]
+			if !v.saved {
+				name = phase + "/no-saved-run"
+			}
+			if v.directed {
+				name += "/directed"
+			}
+			t.Run(name, func(t *testing.T) {
 				app, owner := dbtest.Open(t)
 				org := dbtest.Org(t, owner)
 				ctx := context.Background()
 				st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Branch: "dude/wi_e/attempt-1",
 					PullRequestIDs: []string{"pr_t"}, Heads: map[string]string{"target": "stale"}, Iteration: 2,
 					PRFixKey: 3, PRIteration: 1, PRFixes: map[string]int{"target": 1}}
+				if v.directed {
+					st.Directed, st.Decisions = &Directed{Phase: phase, By: "run_conductor", Note: "n"}, 2
+				}
 				saved := *st
 				branch, prState := "", "open"
 				if candidate {
 					saved.Candidate = &Candidate{Round: 4}
 					branch, prState = st.candidateBranch(), "closed"
 				}
+				if !v.saved {
+					// Closed: the step creates its Run on the task branch.
+					prState = "closed"
+				}
 				sc := workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org}
-				for _, q := range []struct {
+				seed := []struct {
 					sql  string
 					args []any
 				}{
@@ -182,9 +212,20 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 					{`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_t', $1, 'prj_e', 'target', 'https://github.com/acme/target')`, nil},
 					{`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
 					 VALUES ('pr_t', $1, 'prj_e', 'wi_e', 'repo_t', 1, 'https://github.com/acme/target/pull/1', 'dude/wi_e/attempt-1', 'main', 'person', 'Greet', $2::pull_request_state)`, []any{prState}},
-					{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
-					 VALUES ('run_saved', $1, 'prj_e', 'wi_e', 1, $2, 'implementer', 'agent', 'pending', '{"target":"saved"}', $3, NULLIF($4, ''))`, []any{phase, writerKey(sc, &saved, phase), branch}},
-				} {
+					{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status)
+					 VALUES ('run_conductor', $1, 'prj_e', 'wi_e', 1, 'conductor', 'agent', 'running')`, nil},
+					// The live delivery an implementer is created for.
+					{`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
+					 VALUES ('wf_e', $1, $2, 'e', 'wi_e', 'running', 'implementRun', '{}')`, []any{WorkflowType}},
+				}
+				if v.saved {
+					seed = append(seed, struct {
+						sql  string
+						args []any
+					}{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
+					 VALUES ('run_saved', $1, 'prj_e', 'wi_e', 1, $2, 'implementer', 'agent', 'pending', '{"target":"saved"}', $3, NULLIF($4, ''))`, []any{phase, writerKey(sc, &saved, phase), branch}})
+				}
+				for _, q := range seed {
 					if _, err := owner.Exec(ctx, q.sql, append([]any{org}, q.args...)...); err != nil {
 						t.Fatal(err)
 					}
@@ -197,6 +238,21 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := res.State.(*State)
+				if got.Directed != nil {
+					t.Errorf("the step did not spend the conductor's direction: %+v", got.Directed)
+				}
+				if !v.saved {
+					var runs int
+					var conductor, note string
+					if err := owner.QueryRow(ctx, `SELECT count(*) OVER (), COALESCE(conductor_run_id, ''), COALESCE(conductor_note, '')
+						FROM runs WHERE task_id = 'wi_e' AND phase = $1::run_phase`, phase).Scan(&runs, &conductor, &note); err != nil {
+						t.Fatalf("%v; the step went to %s waiting on %v", err, res.Next, got.PendingRunIDs)
+					}
+					if runs != 1 || conductor != "run_conductor" || note != "n" {
+						t.Fatalf("%d %s Runs, conductor %q note %q; want 1 with the conductor's mark", runs, phase, conductor, note)
+					}
+					return
+				}
 				if !reflect.DeepEqual(got.PendingRunIDs, []string{"run_saved"}) {
 					t.Fatalf("replayed Runs = %v", got.PendingRunIDs)
 				}
@@ -218,7 +274,7 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 				}
 				if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
 					var count int
-					if err := tx.QueryRow(ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_e'`).Scan(&count); err != nil {
+					if err := tx.QueryRow(ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_e' AND phase IS NOT NULL`).Scan(&count); err != nil {
 						return err
 					}
 					if count != 1 {
