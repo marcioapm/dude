@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -161,5 +162,58 @@ func TestAQuestionAloneHoldsNothingAndIsStoredOnce(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM review_questions WHERE run_id = $1`, "run_tq_"+wi); n != 0 {
 		t.Errorf("a tester's question was stored (%d rows)", n)
+	}
+}
+
+// A conductor's child reviewer has no category and works to the correctness
+// contract: it and a correctness reviewer of the same attempt are shown each
+// other's questions. A reviewer of another category or attempt is not.
+func TestAChildReviewerAndACorrectnessReviewerShareQuestions(t *testing.T) {
+	w := newWorld(t)
+	wi := w.task()
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, category, kind)
+		SELECT r.id || $1, t.organization_id, t.project_id, t.id, r.attempt, r.status::run_status, 'review', 'reviewer', r.category, 'agent'
+		FROM tasks t, (VALUES ('run_child_', 1, 'completed', NULL), ('run_corr_', 1, 'completed', 'correctness'),
+			('run_sec_', 1, 'completed', 'security'), ('run_child2_', 1, 'running', NULL), ('run_corr2_', 1, 'running', 'correctness'),
+			('run_sec2_', 1, 'running', 'security'), ('run_next_', 2, 'running', NULL)) AS r(id, attempt, status, category)
+		WHERE t.id = $1`, wi)
+	ctx := context.Background()
+	asked := map[string]string{
+		"run_child_": "Is a retry expected after a timeout?",
+		"run_corr_":  "Do invoices close in UTC?",
+		"run_sec_":   "Who may download another org's export?",
+	}
+	for run, q := range asked {
+		doc := "question: " + q + "\nwhy_it_matters: W.\nevidence_checked: E.\nneeded_from: product\n"
+		if err := phases.RecordFindings(ctx, w.app, w.org, run+wi, nil, nil, delivery.ParseQuestions(doc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shown := func(run string) []string {
+		var got []string
+		if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			qs, err := delivery.EarlierQuestionsTx(ctx, tx, run+wi)
+			for _, q := range qs {
+				got = append(got, q.Question)
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		slices.Sort(got)
+		return got
+	}
+	both := []string{asked["run_corr_"], asked["run_child_"]}
+	slices.Sort(both)
+	for _, run := range []string{"run_child2_", "run_corr2_"} {
+		if got := shown(run); !slices.Equal(got, both) {
+			t.Errorf("%s is shown %q, want %q", run, got, both)
+		}
+	}
+	if got := shown("run_sec2_"); !slices.Equal(got, []string{asked["run_sec_"]}) {
+		t.Errorf("the security reviewer is shown %q, want only its own category's", got)
+	}
+	if got := shown("run_next_"); len(got) != 0 {
+		t.Errorf("a reviewer of the next attempt is shown %q, want none", got)
 	}
 }

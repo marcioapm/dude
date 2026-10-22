@@ -3925,6 +3925,11 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 	// across reports, unlike the findings above: a question answered
 	// between two reports of the Run keeps its answer.
 	if phase == delivery.PhaseReview {
+		// A conductor's child reviewer has no category and reviews to the
+		// correctness contract; EarlierQuestionsTx reads "" the same way.
+		if category == "" {
+			category = "correctness"
+		}
 		for i, q := range questions {
 			var finding *string
 			if q.About > 0 && q.About <= len(shown) {
