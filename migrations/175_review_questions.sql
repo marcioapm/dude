@@ -32,7 +32,8 @@ CREATE TABLE review_questions (
   CHECK ((status = 'answered') = (answer IS NOT NULL))
 );
 
-CREATE INDEX review_questions_task_open_idx ON review_questions (task_id, created_at) WHERE status = 'open';
+-- A task's questions of every status in the order the API lists them.
+CREATE INDEX review_questions_task_idx ON review_questions (task_id, created_at, run_id, n);
 
 ALTER TABLE review_questions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE review_questions FORCE ROW LEVEL SECURITY;
