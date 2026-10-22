@@ -93,6 +93,8 @@ func TestAnAttemptWaiverCoversOnlyReportedFailures(t *testing.T) {
 		{"a fail beside a not-run", `[{"command":"make test","result":"fail","reason":"TestClock"},{"command":"make e2e","result":"not-run","reason":"no browser"}]`,
 			`[{"result": "fail", "command": "make test", "evidence": "TestClock"}]`},
 		{"a not-run alone", `[{"command":"make e2e","result":"not-run","reason":"no browser"}]`, ""},
+		// Not a list of verdicts: an error, never "nothing to carry".
+		{"a malformed judgement", `{"command":"make test"}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app, owner := dbtest.Open(t)
@@ -122,6 +124,12 @@ func TestAnAttemptWaiverCoversOnlyReportedFailures(t *testing.T) {
 			var covers string
 			_ = owner.QueryRow(ctx, `SELECT COALESCE(max(payload->>'covers'), '') FROM events WHERE run_id = 'run_w' AND event_type = $1`,
 				EvRunChecksDecided).Scan(&covers)
+			if tc.name == "a malformed judgement" {
+				if _, refused := err.(EscalationError); err == nil || refused || covers != "" {
+					t.Fatalf("a malformed judgement: %v, covers %q", err, covers)
+				}
+				return
+			}
 			if tc.covers == "" {
 				if e, ok := err.(EscalationError); !ok || e.Kind != "bad_request" || covers != "" {
 					t.Fatalf("a not-run alone: %v, covers %q", err, covers)

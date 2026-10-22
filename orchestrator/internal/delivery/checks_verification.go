@@ -209,7 +209,8 @@ func checksRow(j gatedJudgement) string {
 			fmt.Fprintf(&b, " — %s", checksField(c.WaiverReason))
 		}
 		if c.Waiver != nil {
-			fmt.Fprintf(&b, " — %s", render(checksCarriedFromTmpl, map[string]any{"Role": c.Waiver.Role, "Run": codeSpan(checksField(c.Waiver.RunID))}))
+			fmt.Fprintf(&b, " — %s", render(checksCarriedFromTmpl, map[string]any{"Role": c.Waiver.Role, "Run": codeSpan(checksField(c.Waiver.RunID)),
+				"By": checksField(valueOr(c.Waiver.PersonName, "a person"))}))
 		}
 		if c.CallID != "" {
 			fmt.Fprintf(&b, " (%s)", codeSpan(checksField(c.CallID)))

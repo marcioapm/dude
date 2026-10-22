@@ -152,10 +152,10 @@ func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 		t.Errorf("%d waiver questions, want one each for the fixer and simplifier", n)
 	}
 	// The pull request says the later Runs carried the person's waiver, of
-	// whose report and why; never that they were backed.
+	// whose report, who waived it and why; never that they were backed.
 	var implementer string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&implementer)
-	carried := "  - `" + fakeagent.FailingCommand + "` — **waived** — the recorded call says so — carried from a person's waiver of the Implementer's report (`" +
+	carried := "  - `" + fakeagent.FailingCommand + "` — **waived** — the recorded call says so — carried from Ana's waiver of the Implementer's report (`" +
 		implementer + "`) (`mcall_test`)\n" +
 		"  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
 	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+

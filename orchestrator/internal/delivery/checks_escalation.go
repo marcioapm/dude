@@ -21,7 +21,7 @@ const ReasonChecksUnverified = "checks_unverified"
 // turn's report (payload {turn, round, verified, checks, message,
 // skipped?, escalated?, waived?, carried?, directiveId?}), and each
 // person's decision on a held report ({action, note, directiveId?}, with
-// {scope: "attempt", person, turn, covers} for a waiver later Runs of the
+// {scope: "attempt", person, personName?, turn, covers} for a waiver later Runs of the
 // attempt may carry). directiveId is the directive carrying a send-back's
 // message to the agent.
 const (
@@ -106,7 +106,14 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		if len(covers) == 0 {
 			return escalationErr("bad_request", "%s", mNothingToCarryInAttempt)
 		}
+		name, err := PersonName(ctx, tx, person)
+		if err != nil {
+			return err
+		}
 		decided["scope"], decided["person"], decided["turn"], decided["covers"] = scope, person, turn, covers
+		if name != "" {
+			decided["personName"] = name
+		}
 	}
 	if action == "retry" {
 		var detail struct {
@@ -160,7 +167,9 @@ func heldFailuresTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) ([
 		return nil, err
 	}
 	var verdicts []struct{ Command, Result, Reason string }
-	_ = json.Unmarshal(raw, &verdicts)
+	if err := json.Unmarshal(raw, &verdicts); err != nil {
+		return nil, fmt.Errorf("Run %s's held checks judgement at turn %d: %w", runID, turn, err)
+	}
 	var out []Check
 	for _, v := range verdicts {
 		if v.Result == CheckFail {
@@ -178,9 +187,11 @@ type CarriedWaiver struct {
 	Role    string `json:"role"`
 	Turn    int64  `json:"turn"`
 	Person  string `json:"person,omitempty"`
-	Note    string `json:"note"`
-	Cursor  int64  `json:"cursor"`
-	Covered Check  `json:"-"`
+	// The person's name when they waived, for the pull request's account.
+	PersonName string `json:"personName,omitempty"`
+	Note       string `json:"note"`
+	Cursor     int64  `json:"cursor"`
+	Covered    Check  `json:"-"`
 }
 
 // AttemptWaivers are the attempt-scoped checks waivers a judged turn may
@@ -209,15 +220,16 @@ func AttemptWaiversTx(ctx context.Context, tx pgx.Tx, runID string, before int64
 		var w attemptWaiver
 		var phase string
 		var p struct {
-			Note   string  `json:"note"`
-			Person string  `json:"person"`
-			Turn   int64   `json:"turn"`
-			Covers []Check `json:"covers"`
+			Note       string  `json:"note"`
+			Person     string  `json:"person"`
+			PersonName string  `json:"personName"`
+			Turn       int64   `json:"turn"`
+			Covers     []Check `json:"covers"`
 		}
 		if err := row.Scan(&w.RunID, &phase, &w.Cursor, &p); err != nil {
 			return w, err
 		}
-		w.Role, w.Turn, w.Person, w.Note, w.covers = RoleName(PromptRoleForPhase[phase]), p.Turn, p.Person, p.Note, p.Covers
+		w.Role, w.Turn, w.Person, w.PersonName, w.Note, w.covers = RoleName(PromptRoleForPhase[phase]), p.Turn, p.Person, p.PersonName, p.Note, p.Covers
 		return w, nil
 	})
 }

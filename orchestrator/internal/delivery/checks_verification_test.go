@@ -90,7 +90,8 @@ func TestACarriedWaiverIsAccountedAsTheWaiverItCarries(t *testing.T) {
 		{Command: "missing checks", Result: "pass", Decision: "no", CallID: "mcall_2"},
 	}}
 	runs := []gatedJudgement{{Role: "Implementer", Verified: true, Waived: true, Message: "Needs a hardware clock."}, carried,
-		{Role: "Simplifier", Carried: true}}
+		{Role: "Simplifier", Carried: true, Checks: []gatedCheck{{Command: "make test", Result: "fail", Decision: "no", Reason: "TestClock, TestGreeting",
+			WaiverReason: "the Implementer's waiver does not cover this failure: TestGreeting is new", CallID: "mcall_3"}}}}
 	want := "### Checks\nChecks were waived by a person:\n" +
 		"- Implementer: Needs a hardware clock.\n" +
 		"- Fixer: carried the Implementer's waiver of the same failure: Needs a hardware clock.\n\n" +
@@ -98,7 +99,8 @@ func TestACarriedWaiverIsAccountedAsTheWaiverItCarries(t *testing.T) {
 		"- **Fixer** — waiver carried\n" +
 		"  - `make test` — **waived** — the same TestClock failure — carried from a person's waiver of the Implementer's report (`run_impl`) (`mcall_1`)\n" +
 		"  - `missing checks` — **pass** (`mcall_2`)\n" +
-		"- **Simplifier** — not backed"
+		"- **Simplifier** — not backed\n" +
+		"  - `make test` — **fail** — TestClock, TestGreeting — the Implementer's waiver does not cover this failure: TestGreeting is new (`mcall_3`)"
 	if got := checksAccountText(runs, prBodyMax); got != want {
 		t.Errorf("the checks account is\n%s\nwant\n%s", got, want)
 	}
