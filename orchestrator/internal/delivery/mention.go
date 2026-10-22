@@ -74,10 +74,9 @@ func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 		Scan(&seen); err != nil || seen {
 		return false, err
 	}
-	if halted, err := HaltedTx(ctx, tx, m.TaskID); err != nil || halted {
-		if err != nil {
-			return false, err
-		}
+	if halted, err := HaltedTx(ctx, tx, m.TaskID); err != nil {
+		return false, err
+	} else if halted {
 		return false, mentionHeldTx(ctx, tx, m)
 	}
 	body := clipBytes(strings.TrimSpace(m.Feedback.Body), ChatMessageMax)

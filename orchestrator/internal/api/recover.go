@@ -552,14 +552,7 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID, projectI
 // closePullRequests closes an attempt's pull requests still open on GitHub.
 // Best effort: the pull request sync records the close either way.
 func (s *Server) closePullRequests(ctx context.Context, org string, ids []string) {
-	s.closePullRequestsSaying(ctx, org, ids, "", false)
-}
-
-// closePullRequestsSaying closes the pull requests still open on GitHub,
-// each with comment first when one is given; adopted ones too only with
-// adopted (a person asked). Best effort, as closePullRequests.
-func (s *Server) closePullRequestsSaying(ctx context.Context, org string, ids []string, comment string, adopted bool) {
-	s.closeOnForge(ctx, org, ids, comment, adopted, nil)
+	s.closeOnForge(ctx, org, ids, "", false, nil)
 }
 
 // closedOnForge is what GitHub did with one pull request asked closed:
@@ -570,8 +563,10 @@ type closedOnForge struct {
 	Err                     error
 }
 
-// closeOnForge closes the pull requests still open on GitHub, as
-// closePullRequestsSaying, telling done what came of each one it tried.
+// closeOnForge closes the pull requests still open on GitHub, each with
+// comment first when one is given; adopted ones too only with adopted (a
+// person asked). Best effort: done, when given, is told what came of each
+// one it tried.
 func (s *Server) closeOnForge(ctx context.Context, org string, ids []string, comment string, adopted bool, done func(closedOnForge)) {
 	if len(ids) == 0 || s.Forges == nil {
 		return

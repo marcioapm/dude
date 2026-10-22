@@ -47,8 +47,9 @@ type Restart struct {
 // creates its replacement in the same slot, in one transaction, under the
 // task's lock order: Chat (taken here, reentrant for a caller already
 // holding it), the delivery and the task (LockEscalationTx), then the Run.
-// A caller holds no delivery, task or Run lock before it. Refused (Refusal) for a Run not of the task, not one the delivery
-// waits on, or already ended. Returns the new Run.
+// A caller holds no delivery, task or Run lock before it. Refused (Refusal)
+// for a Run not of the task, not one the delivery waits on, or already
+// ended. Returns the new Run.
 func RestartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart) (string, error) {
 	return restartRunTx(ctx, tx, org, taskID, in, nil)
 }
