@@ -1,0 +1,68 @@
+/**
+ * The checks gate's judgements in a task's Activity, as the orchestrator
+ * records them (`run.checks.judged`): a turn that changed nothing it could
+ * push reads as checks not needed, never as verified, and the earlier Run's
+ * waiver keeps its own line.
+ */
+
+import { describe, expect, test } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { EventTypes, type PersistedEvent, type Run } from "@dude/domain";
+import { TASK_ID } from "../src/fixtures/data.ts";
+import { activityLines } from "../src/screens/TaskScreen.tsx";
+
+const at = (s: number) => new Date(Date.UTC(2026, 9, 21, 10, 0, s)).toISOString();
+
+function run(id: string, phase: string, role: string): Run {
+  return { id, organizationId: "org", projectId: "prj", taskId: TASK_ID, attempt: 1, status: "completed", workerId: null,
+    workspacePath: null, error: null, kind: "agent", phase, role, category: null, parentRunId: null,
+    conductorRunId: null, baseRefs: {}, heads: {}, branch: null, harness: "scripted", model: "fake/scripted", modelTier: null, dudePause: null,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 }, machine: null, image: null, preparingImage: null,
+    createdAt: at(0), startedAt: at(0), endedAt: at(1) } as unknown as Run;
+}
+
+let cursor = 0;
+function judged(runId: string, payload: Record<string, unknown>, s: number): PersistedEvent {
+  cursor++;
+  return { eventId: `evt_cj${cursor}`, cursor: 30_000 + cursor, eventType: EventTypes.RunChecksJudged, occurredAt: at(s), organizationId: "org",
+    projectId: "prj", taskId: TASK_ID, runId, sessionId: null, workflowRunId: null,
+    actor: { type: payload.waived ? "person" : "system", id: "dude" }, source: "orchestrator",
+    correlationId: null, causationId: null, payload } as unknown as PersistedEvent;
+}
+
+const people = { names: new Map(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
+const textOf = (node: React.ReactNode) => {
+  const div = document.createElement("div");
+  div.innerHTML = renderToStaticMarkup(<>{node}</>);
+  return div.textContent;
+};
+
+describe("checks judgements in the task's Activity", () => {
+  const impl = run("run_impl_cj", "implement", "implementer");
+  const simp = run("run_simp_cj", "simplify", "simplifier");
+  const unchangedMessage = "No changes; checks not needed. When the turn ended, every repository this Run may push was at the commit it started from, with nothing staged, unstaged or untracked.";
+
+  test("an unchanged turn says its checks were not needed, beside the implementer's waiver", () => {
+    const lines = activityLines([
+      judged(impl.id, { turn: 1, verified: true, waived: true, message: "Pre-existing failures on main.", checks: [] }, 1),
+      judged(simp.id, { turn: 2, round: 0, verified: true, unchanged: true, epoch: 1, heads: { api: "a".repeat(40) },
+        message: unchangedMessage, checks: [] }, 2),
+    ], people, [impl, simp], [], 1);
+    const texts = lines.filter((l) => textOf(l.text)?.includes("checks")).map((l) => [textOf(l.text), l.quote]);
+    expect(texts).toEqual([
+      ["The simplifier's checks were not needed: it changed nothing", unchangedMessage],
+      ["The implementer's checks were waived", "Pre-existing failures on main."],
+    ]);
+  });
+
+  test("a judged turn still reads as verified, and no-tier as not model-checked", () => {
+    const lines = activityLines([
+      judged(impl.id, { turn: 1, round: 0, verified: true, message: "", checks: [] }, 1),
+      judged(simp.id, { turn: 2, verified: true, skipped: true, message: "no tier", checks: [] }, 2),
+    ], people, [impl, simp], [], 1);
+    expect(lines.filter((l) => textOf(l.text)?.includes("checks")).map((l) => textOf(l.text))).toEqual([
+      "The simplifier's checks were not model-checked",
+      "The implementer's checks were verified",
+    ]);
+  });
+});

@@ -66,6 +66,7 @@ func (s *Server) agent(run *Run, update map[string]any) {
 // Claude Code's result line is relayed as lux does: claude.turn_end, the
 // idle, then the line itself as claude.result. Callers hold s.mu.
 func (s *Server) turnEnd(run *Run, data map[string]any, idle bool) {
+	s.writeScripted(run)
 	switch run.dialect() {
 	case dialectClaude:
 		s.sayFlush(run)
