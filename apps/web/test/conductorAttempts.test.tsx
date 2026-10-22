@@ -14,6 +14,7 @@ import { act, click, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { RESTARTED_RUNS, TASK_ID } from "../src/fixtures/data.ts";
 import type { PersistedEvent, Run } from "@dude/domain";
+import { DECISION_POINT_LABEL } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
@@ -182,12 +183,11 @@ describe("the task page with a conductor", () => {
    * phase Runs and its conductor aborted), and attempt 2 has only the new
    * conductor dude started for it, no phase Run yet.
    */
-  function stoppedAndStarted() {
+  function stoppedAndStarted(olds: Run[] = [conductor(1, { id: OLD, status: "aborted", createdAt: at(230), endedAt: at(96) })]) {
     localStorage.setItem("dude.fixtures.run", "restarted");
     const client = new FixtureClient("a");
-    const old = conductor(1, { id: OLD, status: "aborted", createdAt: at(230), endedAt: at(96) });
     const fresh = conductor(2, { createdAt: at(5), startedAt: at(5) });
-    const runs = [fresh, old, ...RESTARTED_RUNS.filter((r) => r.attempt === 1)];
+    const runs = [fresh, ...olds, ...RESTARTED_RUNS.filter((r) => r.attempt === 1)];
     const getTask = client.getTask.bind(client);
     client.getTask = async (id) => ({ ...(await getTask(id)), status: "running", decider: "conductor", runs } as Task);
     const getRun = client.getRun.bind(client);
@@ -274,6 +274,46 @@ describe("the task page with a conductor", () => {
     const said = (text: string) => [...earlier.querySelectorAll<HTMLElement>("*")].find((n) => n.children.length === 0 && n.textContent?.includes(text))!;
     expect([follows(said("Plan the greeting."), decision), follows(decision, said("Planned: one file.")), follows(decision, ended)])
       .toEqual([true, true, true]);
+  });
+
+  test("Chat with two conductors in attempt 1 (Try again) puts each line in the conductor of its time, and one after its end after its ended line", async () => {
+    const A = "run_cond_a";
+    const B = "run_cond_b";
+    const client = stoppedAndStarted([
+      conductor(1, { id: A, status: "failed", error: "host lost", createdAt: at(220), startedAt: at(220), endedAt: at(180) }),
+      conductor(1, { id: B, status: "aborted", createdAt: at(170), startedAt: at(170), endedAt: at(96) }),
+    ]);
+    const ledgers: Record<string, PersistedEvent[]> = {
+      [A]: [ev("evt_a_msg", "chat.message", 215, { text: "Plan the greeting." }, A, ana),
+        ev("evt_a_fail", "run.failed", 180, { error: "host lost" }, A, { type: "system", id: "dude" })],
+      [B]: [ev("evt_b_msg", "chat.message", 165, { text: "Carry on." }, B, ana),
+        ev("evt_b_abort", "run.aborted", 96, { reason: "Start fresh.", by: "stop" }, B, ana)],
+    };
+    const dude = { type: "system", id: "dude" } as const;
+    // At 175 only A had started; at 150 B had; at 90 B had ended.
+    const waited = [ev("evt_wait_a", "conductor.decision_awaited", 175, { point: "start" }, null, dude),
+      ev("evt_wait_b", "conductor.decision_awaited", 150, { point: "after_implement" }, null, dude),
+      ev("evt_wait_late", "conductor.decision_awaited", 90, { point: "after_review" }, null, dude)];
+    const events = client.events.bind(client);
+    client.events = async (params) => {
+      const own = params.runId ? ledgers[params.runId] : undefined;
+      if (own) return { events: own.filter((e) => e.cursor > (params.after ?? 0)), nextCursor: own.at(-1)!.cursor };
+      const r = await events(params);
+      return params.runId ? r : { ...r, events: [...r.events, ...waited] };
+    };
+    const page = await taskPage(client);
+    const inA = await until(() => page.querySelector<HTMLElement>(`[data-testid=earlier-conductor][data-run=${A}]`), "the first conductor");
+    const inB = await until(() => page.querySelector<HTMLElement>(`[data-testid=earlier-conductor][data-run=${B}]`), "its retry");
+    await until(() => inA.querySelector("[data-testid=earlier-conductor-ended]") && inB.querySelector("[data-testid=earlier-conductor-ended]"), "both read");
+    const decisions = (root: HTMLElement) => [...root.querySelectorAll<HTMLElement>("[data-testid=chat-decision]")].map((d) => d.textContent ?? "");
+    const point = (label: string) => `Waiting on the conductor: ${label}.`;
+    expect(decisions(inA).map((t) => t.includes(point(DECISION_POINT_LABEL.start)))).toEqual([true]);
+    expect(decisions(inB).map((t) => [t.includes(point(DECISION_POINT_LABEL.after_implement)), t.includes(point(DECISION_POINT_LABEL.after_review))]))
+      .toEqual([[true, false], [false, true]]);
+    const late = [...inB.querySelectorAll<HTMLElement>("[data-testid=chat-decision]")].at(-1)!;
+    const lateEnded = inB.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")!;
+    const during = inB.querySelector<HTMLElement>("[data-testid=chat-decision]")!;
+    expect([follows(lateEnded, late), follows(during, lateEnded)]).toEqual([true, true]);
   });
 
   /** Attempt 1's conductor whose ledger read is `read`, with attempt 1's decision line in the task's ledger. */
