@@ -88,7 +88,7 @@ export interface NavTask {
   /** The reader may start it: draws a Backlog card's start. */
   readonly canStart?: boolean | undefined;
   /**
-   * Who drives its delivery while in progress (`driverMode`): its card and
+   * Who drives its delivery while under way (`driverMode`): its card and
    * row carry the glyph, read-only. Absent for a task not started or ended.
    */
   readonly driver?: "deliver" | "conductor" | "deliver-chat" | undefined;
@@ -410,8 +410,9 @@ export function taskOf(projects: ReadonlyArray<NavProject>, ref: NavRef): string
  * navigation trivial (index arithmetic) and leaves the door open to
  * virtualisation.
  *
- * Unsearched (no query, no triage filter; Mine included), only work in
- * progress is listed — the board's middle columns — plus the selection; an
+ * Unsearched (no query, no triage filter; Mine included), only work under
+ * way is listed — the board's In progress, In review and Ready to merge
+ * columns — plus the selection; an
  * epic with none of that is left out. Backlog and Done are the board's.
  * Searching lists every status.
  */
