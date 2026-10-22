@@ -82,17 +82,14 @@ func checksBlock(reply string) (string, bool) {
 // block, not the reply, and is often not where the fault is.
 var yamlLinePrefix = regexp.MustCompile(`(?m)^\s*line \d+: `)
 
-// ChecksYAMLError is why the last checks block does not decode, or ""
-// when there is no block or it decodes. Syntax is yaml.v3's reason
-// without its line numbers; Shape is set instead when the block is YAML
-// of the wrong shape (a mapping or a value where the list of checks
-// belongs), which quoting does not fix.
+// ChecksYAMLError is why the last checks block does not decode; zero when
+// there is no block or it decodes. Shape marks well-formed YAML of the
+// wrong shape, which quoting does not fix.
 type ChecksYAMLError struct {
 	Syntax string
 	Shape  bool
 }
 
-// ChecksYAMLErrorOf explains an unparseable report to the writer.
 func ChecksYAMLErrorOf(reply string) ChecksYAMLError {
 	block, ok := checksBlock(reply)
 	if !ok {

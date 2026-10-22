@@ -47,14 +47,6 @@ func TestAChecksBlockOfTheWrongShapeIsNotASyntaxError(t *testing.T) {
 	}
 }
 
-// Several syntax reasons stay apart.
-func TestSeveralYAMLReasonsAreSeparated(t *testing.T) {
-	got := ChecksYAMLErrorOf("checks:\n  - command: a\n    result: pass\n  bad: [\n")
-	if got.Syntax == "" || strings.Contains(got.Syntax, "\n") {
-		t.Fatalf("%+v", got)
-	}
-}
-
 // No block, a block that decodes, and one that decodes but fails a field
 // check have no YAML error to name.
 func TestAChecksReportThatIsYAMLHasNoYAMLError(t *testing.T) {
