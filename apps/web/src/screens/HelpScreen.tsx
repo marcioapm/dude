@@ -6,7 +6,7 @@
  * scrolled to; picking one names it in the URL.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import { DocOutline, DocSearchResults, Markdown, ScreenHeader, docResultId, queryWords, type DocSearchResult } from "@dude/design-system/components";
 import { Callout, SearchField, Spinner } from "@dude/design-system/primitives";
 import type { ApiClient, HelpPage } from "../api/client.ts";
@@ -122,9 +122,21 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
       const bottom = scroller === document.scrollingElement ? window.innerHeight : scroller.getBoundingClientRect().bottom;
       setInView(sectionInView(tops, line, atEnd ? bottom : undefined));
     };
+    let frame: number | null = null;
+    const schedule = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        follow();
+      });
+    };
     follow();
-    document.addEventListener("scroll", follow, { capture: true, passive: true });
-    return () => document.removeEventListener("scroll", follow, { capture: true });
+    const target = scroller === document.scrollingElement ? document : scroller;
+    target.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      target.removeEventListener("scroll", schedule);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [shown]);
 
   const openSection = useCallback((p: string, anchor: string) => {
@@ -184,6 +196,13 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
     }
   };
 
+  const articleSections = useMemo(() => shown?.sections.map((s) => (
+    <section key={s.anchor} id={helpSectionId(s.anchor)} data-anchor={s.anchor}>
+      {s.heading ? <h2>{s.heading}</h2> : null}
+      <Markdown variant="document" unmeasured linkTarget="_self" source={resolveHelpLinks(s.text ?? "")} />
+    </section>
+  )), [shown]);
+
   return (
     <div className="helpScreen" data-testid="help">
       <ScreenHeader title="Help" />
@@ -208,12 +227,7 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
           {shown ? (
             <>
               <h1>{shown.title}</h1>
-              {shown.sections.map((s) => (
-                <section key={s.anchor} id={helpSectionId(s.anchor)} data-anchor={s.anchor}>
-                  {s.heading ? <h2>{s.heading}</h2> : null}
-                  <Markdown variant="document" unmeasured linkTarget="_self" source={resolveHelpLinks(s.text ?? "")} />
-                </section>
-              ))}
+              {articleSections}
             </>
           ) : slug && !problem ? <Spinner label="Loading…" /> : null}
         </article>

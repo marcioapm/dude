@@ -154,6 +154,7 @@ describe("the outline", () => {
       tops["which-reviewers-run"] = 10;
       tops["which-findings-block"] = 800;
       await act(async () => void document.dispatchEvent(new Event("scroll")));
+      await until(() => outline(container)[1]?.[1] === "location" ? true : null, "the scrolled section");
       expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", "location"], ["Which findings block", null]]);
       // Only the current page has its sections listed.
       expect(container.querySelectorAll("[data-testid=help-section-link]").length).toBe(3);
@@ -181,6 +182,7 @@ describe("the outline", () => {
       for (const [k, v] of [["scrollHeight", 2200], ["clientHeight", 800], ["scrollTop", 1400]] as const) Object.defineProperty(pane, k, { configurable: true, value: v });
       await until(() => (outline(container).length === 3 ? true : null), "the sections");
       await act(async () => void pane!.dispatchEvent(new Event("scroll")));
+      await until(() => outline(container)[2]?.[1] === "location" ? true : null, "the final section");
       expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", null], ["Which findings block", "location"]]);
     } finally {
       HTMLElement.prototype.getBoundingClientRect = original;
