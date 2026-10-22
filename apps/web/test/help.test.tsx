@@ -196,6 +196,47 @@ describe("the outline", () => {
     }
   });
 
+  test("a same-page valid URL section scrolls the new target and marks it current without reloading", async () => {
+    const client = new Long("a");
+    let reads = 0;
+    const read = client.helpPage.bind(client);
+    client.helpPage = (slug) => { reads++; return read(slug); };
+    const scrolled: string[] = [];
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    const originalScroll = HTMLElement.prototype.scrollIntoView;
+    let visible = "the-pipeline";
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const anchor = this.dataset["anchor"];
+      const order = ["the-pipeline", "which-reviewers-run", "which-findings-block"];
+      const top = anchor ? 10 + (order.indexOf(anchor) - order.indexOf(visible)) * 600 : 0;
+      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.id);
+      visible = this.dataset["anchor"]!;
+    };
+    function SamePage() {
+      const [section, setSection] = useState("the-pipeline");
+      return <><button onClick={() => setSection("which-reviewers-run")}>Change URL section</button>
+        <HelpScreen client={client} page="delivery" section={section} onPage={() => {}} /></>;
+    }
+    try {
+      const { container, unmount } = await mount(<SamePage />);
+      mounted.push(unmount);
+      await until(() => outline(container)[0]?.[1] === "location" ? true : null, "the first section");
+      const article = container.querySelector("article");
+      await click(container.querySelector("button")!);
+      await until(() => outline(container)[1]?.[1] === "location" ? true : null, "the new section");
+      expect(scrolled).toEqual([helpSectionId("the-pipeline"), helpSectionId("which-reviewers-run")]);
+      expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", "location"], ["Which findings block", null]]);
+      expect(reads).toBe(1);
+      expect(container.querySelector("article")).toBe(article);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect;
+      HTMLElement.prototype.scrollIntoView = originalScroll;
+    }
+  });
+
   for (const next of [undefined, "nonexistent-section"]) {
     test(`same-page URL section → ${next ?? "no section"} keeps the visible last section current`, async () => {
       const client = new Long("a");
