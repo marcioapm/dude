@@ -42,6 +42,9 @@ const IN_PROGRESS: TaskStatus[] = ["running", "awaiting_input", "review", "ready
 
 // Open by hand, so the default open state never hides what the trim keeps.
 const OPEN: NavOverrides = new Map([["project:p", true], ["epic:e", true]]);
+const ME = { id: "me", name: "Me" };
+
+const rowKeys = (el: HTMLElement) => allByRole(el, "treeitem").map((r) => r.getAttribute("data-nav-key"));
 
 describe("the unsearched tree lists only work in progress", () => {
   test.each([...BACKLOG, ...CLOSED])("a %s task is not listed", (status) => {
@@ -55,8 +58,7 @@ describe("the unsearched tree lists only work in progress", () => {
   });
 
   test("Mine is not a search: it trims too", () => {
-    const me = { id: "me", name: "Me" };
-    const p: NavProject = { id: "p", name: "Web", tasks: [task("done", "done", { people: [me] }), task("live", "review", { people: [me] })] };
+    const p: NavProject = { id: "p", name: "Web", tasks: [task("done", "done", { people: [ME] }), task("live", "review", { people: [ME] })] };
     expect(keys([p], { person: "me", you: "me" })).toEqual(["project:p", "task:live"]);
   });
 
@@ -231,13 +233,12 @@ describe("a search drops the pin: the selection is listed only if it matches", (
 });
 
 describe("Mine keeps its own rule over the pin", () => {
-  const me = { id: "me", name: "Me" };
   const them = { id: "them", name: "Them" };
   const p: NavProject = {
     id: "p",
     name: "Web",
     epics: [
-      { id: "e", title: "Billing", tasks: [task("mine-done", "done", { people: [me] }), task("theirs-done", "done", { people: [them] }), task("mine-live", "running", { people: [me] })] },
+      { id: "e", title: "Billing", tasks: [task("mine-done", "done", { people: [ME] }), task("theirs-done", "done", { people: [them] }), task("mine-live", "running", { people: [ME] })] },
       { id: "theirs", title: "Docs", tasks: [task("doc", "done", { people: [them] })] },
     ],
   };
@@ -257,23 +258,22 @@ describe("Mine keeps its own rule over the pin", () => {
 });
 
 describe("the sidebar's no-matches state", () => {
-  const me = { id: "me", name: "Me" };
-  const p: NavProject = { id: "p", name: "Web", tasks: [task("old", "done", { people: [me], title: "Old invoice work" })] };
+  const p: NavProject = { id: "p", name: "Web", tasks: [task("old", "done", { people: [ME], title: "Old invoice work" })] };
 
   test("Mine with nothing of yours in progress says so", async () => {
     const el = await mount(<Sidebar projects={[p]} you="me" mine />);
     expect(el.textContent).toContain("Nothing of yours in progress.");
-    expect(allByRole(el, "treeitem").length).toBe(0);
+    expect(rowKeys(el)).toEqual([]);
   });
 
   test("Mine with your only task done and selected lists it, not the empty state", async () => {
     const el = await mount(<Sidebar projects={[p]} you="me" mine selected={{ kind: "task", id: "old" }} />);
-    expect(allByRole(el, "treeitem").map((r) => r.getAttribute("data-nav-key"))).toEqual(["project:p", "task:old"]);
+    expect(rowKeys(el)).toEqual(["project:p", "task:old"]);
     expect(el.textContent).not.toContain("Nothing of yours in progress.");
   });
 
   test("a query finds the done task the default view leaves out", async () => {
     const el = await mount(<Sidebar projects={[p]} query="invoice" />);
-    expect(allByRole(el, "treeitem").map((r) => r.getAttribute("data-nav-key"))).toEqual(["project:p", "task:old"]);
+    expect(rowKeys(el)).toEqual(["project:p", "task:old"]);
   });
 });
