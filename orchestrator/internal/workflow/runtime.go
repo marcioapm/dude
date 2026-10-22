@@ -267,12 +267,15 @@ func signalTx(ctx context.Context, tx pgx.Tx, organizationID, runID, name string
 
 // Abort stops a live workflow run.
 func (r *Runtime) Abort(ctx context.Context, organizationID, runID, reason string) error {
-	return r.db.InOrg(ctx, organizationID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
-			UPDATE workflow_runs SET status = 'aborted', last_error = $2, wake_at = NULL, locked_by = NULL, locked_until = NULL
-			WHERE id = $1 AND status IN ('running', 'waiting')`, runID, reason)
-		return err
-	})
+	return r.db.InOrg(ctx, organizationID, func(tx pgx.Tx) error { return AbortTx(ctx, tx, runID, reason) })
+}
+
+// AbortTx is Abort in the caller's transaction.
+func AbortTx(ctx context.Context, tx pgx.Tx, runID, reason string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE workflow_runs SET status = 'aborted', last_error = $2, wake_at = NULL, locked_by = NULL, locked_until = NULL
+		WHERE id = $1 AND status IN ('running', 'waiting')`, runID, reason)
+	return err
 }
 
 // Get returns a run, or ErrNotFound when the organization cannot see it.

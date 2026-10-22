@@ -44,6 +44,9 @@ type EscalationDecision struct {
 	QuestionID, AnsweredBy string
 	// Taken by the conductor, on that answer: its Run.
 	Conductor string
+	// Taken by a person's Stop of the whole task: the conductor stops with
+	// it, so no wake tells it the escalation was decided.
+	Halting bool
 	// The person deciding (the banner's), for a waiver's or acceptance's
 	// record; AnsweredBy stands for it on an answer.
 	Person string
@@ -64,11 +67,16 @@ type EscalationDecision struct {
 //
 // as do the delivery's other writers (parked → AskTx → SetTaskStatusTx; an
 // ending SetTaskStatusTx; markDone; recovery), the lifecycle writes
-// (lockLifecycleTask: Close, Reopen, Archive, Unarchive), the starts
-// (StartTx, AutoStarts.fire, a writer's createPhaseRunTx) and a
-// conductor's children (StartChildTx, RestartChildTx: after Chat and the
-// parent Run). The opposite order deadlocks with a Close or an ending
-// status change (child_lock_order_test.go). What follows differs:
+// (lockLifecycleTask: Close, Reopen, Archive, Unarchive), a person's Stop
+// (StopAllTx: the Chat and the live conductor's row first, the phase Runs
+// and children after the task), a Run's restart (RestartRunTx: Chat always,
+// its Run after the task; its replacement's insert takes a key share on the
+// conductor's row, so without Chat it cycles with Stop's conductor lock),
+// the starts (StartTx, AutoStarts.fire, a writer's
+// createPhaseRunTx) and a conductor's children (StartChildTx,
+// RestartChildTx: after Chat and the parent Run). The opposite order
+// deadlocks with a Close or an ending status change
+// (child_lock_order_test.go). What follows differs:
 //
 //	banner (no Chat)      kept Runs (ResumeKeptTx/ReleaseKeptTx) → open escalation questions
 //	answer to a conductor the question → its Run → the owner's person (answered_by_person FK)
@@ -307,7 +315,7 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	}
 	var line string
 	switch {
-	case in.Conductor != "":
+	case in.Conductor != "", in.Halting:
 		return nil
 	case in.QuestionID != "":
 		line = escalationAnsweredLine(in.QuestionID, in.Action)

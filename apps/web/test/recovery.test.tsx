@@ -10,13 +10,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, facetCheckbox, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
-import { ORG, ORPHAN_FINDING, PROJECT, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
+import { ORG, ORPHAN_FINDING, PROJECT, PULL_REQUEST, RESTART, RESTARTED_RUNS, RUN_ID, TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
 import { stopOf } from "../src/screens/Recovery.tsx";
 import { ApiError, type RecoverAction, type Run, type TaskDetail } from "../src/api/client.ts";
 import type { PersistedEvent } from "@dude/domain";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
+import { ChatSection } from "../src/screens/ChatSection.tsx";
+import { EndedLedgers } from "../src/screens/endedLedgers.ts";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -137,7 +139,8 @@ describe("a stopped task", () => {
     await until(() => dialog.textContent?.includes("is blocked by CP-41 (in review): it can start once that's merged.") || null, "the refusal");
     await click(await until(() => dialog.querySelector("[data-testid=recover-anyway]"), "Start over anyway"));
     await until(() => !document.querySelector("[role=dialog]"), "the dialog to close");
-    expect(sent).toEqual([["restart", {}], ["restart", { override: true }]]);
+    // Start over always says who decides attempt 2: by default whoever decided attempt 1 (Deliver here).
+    expect(sent).toEqual([["restart", { decider: "policy" }], ["restart", { override: true, decider: "policy" }]]);
   });
 
   test("each way opens the one dialog on it, and what it keeps follows the choice", async () => {
@@ -964,6 +967,175 @@ describe("a task started over, from its URL", () => {
     const page = await app("#/session/run_a1_review");
     await until(() => (shownIn(page) === "1" ? true : null), "the session's attempt");
     await until(() => page.querySelector("[data-testid=earlier-bar]"), "the earlier-attempt bar");
+  });
+});
+
+describe("a task stopped under the conductor", () => {
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+  /** The task decided by the conductor, its conductor (attempt `attempt`) aborted by Márcio, the recover answer as given. */
+  async function conductorStopped(opts: { attempt?: number; actions?: RecoverAction[]; stoppedEvent?: boolean; prs?: boolean | number[] } = {}) {
+    const attempt = opts.attempt ?? 3;
+    const client = new FixtureClient("a");
+    const base = await client.getTask(TASK_ID);
+    const conductor: Run = { ...base.runs[0]!, id: "run_conductor", role: "conductor", phase: null, category: null, attempt,
+      status: "aborted", createdAt: minutesAgo(40), startedAt: minutesAgo(40), endedAt: minutesAgo(4), heads: {}, branch: null };
+    const implementer: Run = { ...base.runs[0]!, id: "run_impl_done", attempt, status: "completed", endedAt: minutesAgo(30) };
+    const task: TaskDetail = { ...base, status: "aborted", decider: "conductor", runs: [implementer, conductor] };
+    client.getTask = async () => task;
+    client.getRun = (async () => ({ ...(await new FixtureClient("a").getRun(base.runs[0]!.id)), ...conductor })) as typeof client.getRun;
+    client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: opts.actions ?? ["retry", "restart"], attempt, keptUntil: null });
+    if (opts.prs) {
+      const numbers = opts.prs === true ? [412] : opts.prs;
+      client.listPullRequests = async () => ({ pullRequests: numbers.map((number) => ({ ...PULL_REQUEST, id: `pr_${number}`, state: "open" as const, number })) });
+    }
+    const events = await client.events({ taskId: TASK_ID });
+    const extra: PersistedEvent[] = [
+      { ...events.events[0]!, cursor: 30_000, eventId: "evt_awaited", eventType: "conductor.decision_awaited", runId: null,
+        occurredAt: minutesAgo(10), actor: { type: "system", id: "workflow" }, payload: { point: "after_review" } },
+      opts.stoppedEvent
+        ? { ...events.events[0]!, cursor: 30_001, eventId: "evt_stopped", eventType: "task.stopped", runId: null, occurredAt: minutesAgo(4),
+          actor: { type: "human", id: "u_ana", name: "Ana Ribeiro" }, payload: { note: "Wrong plan", runIds: ["run_conductor"], decider: "conductor" } }
+        : { ...events.events[0]!, cursor: 30_001, eventId: "evt_cond_abort", eventType: "run.aborted", runId: "run_conductor", occurredAt: minutesAgo(4),
+          actor: { type: "human", id: YOU, name: "Márcio Martins" }, payload: { reason: "nothing to build" } },
+    ];
+    client.events = async () => ({ ...events, events: [...events.events, ...extra], nextCursor: 30_001 });
+    return client;
+  }
+
+  // The prod case: the owner aborted the conductor; recover offered retry and restart, and the page offered nothing.
+  test("the owner aborted the conductor: the notice says so and offers Try again and Start over", async () => {
+    const page = await taskPage(await conductorStopped());
+    const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
+    expect(notice.textContent).toContain("Márcio Martins aborted the conductor");
+    expect(notice.textContent).toContain("nothing to build");
+    await until(() => notice.querySelector("[data-testid=recover-retry]"), "the ways back");
+    expect([...notice.querySelectorAll("[data-testid^=recover-]")].map((b) => b.textContent)).toEqual(["Try again…", "Start over…"]);
+    const retry = notice.querySelector<HTMLElement>("[data-testid=recover-retry]")!;
+    expect(document.getElementById(retry.getAttribute("aria-describedby")!)!.textContent)
+      .toBe("A new conductor on this attempt, briefed with what the stopped one did.");
+    expect(notice.querySelector('[aria-label="Ways to pick it back up"]')!.tagName).toBe("UL");
+  });
+
+  test("its session's end strip offers the pick-up", async () => {
+    const page = await taskPage(await conductorStopped(), { runId: "run_conductor" });
+    const strip = await until(() => page.querySelector<HTMLElement>("[data-testid=run-ended]"), "the end strip");
+    await until(() => strip.querySelector("[data-testid=run-ended-other]"), "the pick-up on the strip");
+  });
+
+  test("a Stop of the task names who, what the conductor was deciding, and the three ways with a line each", async () => {
+    const page = await taskPage(await conductorStopped({ stoppedEvent: true, actions: ["resume", "retry", "restart"], prs: true }));
+    const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
+    expect(notice.textContent).toContain("Ana Ribeiro stopped the task");
+    expect(notice.textContent).toContain("while the conductor was deciding after review: “Wrong plan”");
+    await until(() => notice.querySelector("[data-testid=recover-resume]"), "the ways back");
+    const lines = [...notice.querySelectorAll<HTMLElement>("[data-testid^=recover-]")]
+      .map((b) => document.getElementById(b.getAttribute("aria-describedby")!)!.textContent);
+    expect(lines).toEqual([
+      "The same conductor goes on, with its whole conversation and its agents. PR #412 stays open.",
+      "A new conductor on this attempt, briefed with what the stopped one did.",
+      "Attempt 4 on a new branch; PR #412 is closed.",
+    ]);
+  });
+
+  test("two open pull requests: the notice and the dialog name both, as Start over closes both", async () => {
+    const page = await taskPage(await conductorStopped({ stoppedEvent: true, actions: ["resume", "retry", "restart"], prs: [412, 415] }));
+    const notice = await until(() => page.querySelector<HTMLElement>("[data-testid=stopped]"), "the stopped notice");
+    await until(() => notice.querySelector("[data-testid=recover-resume]"), "the ways back");
+    const lines = [...notice.querySelectorAll<HTMLElement>("[data-testid^=recover-]")]
+      .map((b) => document.getElementById(b.getAttribute("aria-describedby")!)!.textContent);
+    expect(lines).toEqual([
+      "The same conductor goes on, with its whole conversation and its agents. PR #412 and #415 stay open.",
+      "A new conductor on this attempt, briefed with what the stopped one did.",
+      "Attempt 4 on a new branch; PR #412 and #415 are closed.",
+    ]);
+    await act(async () => notice.querySelector<HTMLElement>("[data-testid=recover-restart]")!.click());
+    const dialog = await until(() => document.querySelector<HTMLElement>('[role="dialog"]'), "the pick-up dialog");
+    const shown = [...dialog.querySelectorAll('.pickUpWay[data-shown="true"] .pickUpEffects li')].map((li) => li.textContent ?? "");
+    expect(shown.filter((e) => e.startsWith("Pull request"))).toEqual(
+      ["Pull requestclosed#412 and #415, opened by dude on attempt 3's branch, are closed. Attempt 4 opens its own."]);
+    const resume = [...dialog.querySelectorAll<HTMLElement>('[role="radio"]')].find((r) => r.textContent?.startsWith("Resume the conductor"))!;
+    await act(async () => resume.click());
+    const resumed = [...dialog.querySelectorAll('.pickUpWay[data-shown="true"] .pickUpEffects li')].map((li) => li.textContent ?? "");
+    expect(resumed.filter((e) => e.startsWith("Pull request"))).toEqual(["Pull requestkept#412 and #415 stay open."]);
+  });
+
+  test("Start over carries who decides, the conductor by default, and sends it", async () => {
+    const client = await conductorStopped();
+    const sent: unknown[] = [];
+    client.recover = async (_id, action, _note, start) => {
+      sent.push([action, start]);
+      return { action };
+    };
+    const page = await taskPage(client);
+    await click(await until(() => page.querySelector("[data-testid=recover-restart]"), "Start over…"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+    const radios = [...dialog.querySelectorAll<HTMLElement>("[role=radio]")].map((r) => r.textContent ?? "");
+    expect(radios[0]).toContain("Resume the conductor and its agents");
+    expect(radios[1]).toContain("Try again with a new conductor");
+    const field = dialog.querySelector<HTMLElement>('.pickUpWay[data-shown="true"] [data-testid=decider-field]')!;
+    expect(field.getAttribute("data-value")).toBe("conductor");
+    await click([...field.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent?.startsWith("Deliver"))!);
+    await click(dialog.querySelector("[data-testid=recover-confirm]")!);
+    expect(sent).toEqual([["restart", { decider: "policy" }]]);
+  });
+
+  test("Chat says the task is stopped, and its composer waits", async () => {
+    const page = await taskPage(await conductorStopped({ stoppedEvent: true }), { tab: "chat" } as never);
+    await openTab(page, "Chat");
+    const line = await until(() => page.querySelector<HTMLElement>("[data-testid=chat-stopped]"), "the stopped line");
+    expect(line.textContent).toContain("Ana stopped the task: “Wrong plan”");
+    const composer = await until(() => page.querySelector<HTMLTextAreaElement>('[data-testid=task-chat] textarea'), "the composer");
+    expect(composer.disabled).toBe(true);
+    expect(composer.placeholder).toBe("The task is stopped. Resume, Try again or Start over above to go on.");
+  });
+  test("Chat after a Start over: attempt 3's conversation muted above the divider naming who started attempt 4", async () => {
+    const client = await conductorStopped();
+    const task = await client.getTask(TASK_ID);
+    const next: Run = { ...task.runs.find((r) => r.id === "run_conductor")!, id: "run_conductor_4", attempt: 4, status: "running",
+      createdAt: minutesAgo(1), endedAt: null };
+    const events = (await client.events({ taskId: TASK_ID })).events;
+    const recovered: PersistedEvent = { ...events[0]!, cursor: 40_000, eventId: "evt_restart", eventType: "task.recovered", runId: null, occurredAt: minutesAgo(1),
+      actor: { type: "human", id: "u_ana", name: "Ana Ribeiro" }, payload: { action: "restart", attempt: 4, note: "Start from the API.", decider: "conductor" } };
+    const { container, unmount } = await mount(
+      <TooltipProvider><PeopleProvider client={client}><ToastProvider>
+        <ChatSection client={client} task={{ ...task, status: "running", runs: [...task.runs, next] }} conductorId="run_conductor_4"
+          earlier={[{ id: "run_conductor", status: "aborted", attempt: 3 }]} ledgers={new EndedLedgers(client)} findings={[]} pullRequests={[]}
+          events={[...events, recovered]} owner={{ owner: null }} version={0} onSent={() => {}} onOpenRun={() => {}} onBack={() => {}}
+          driverControl={{ busy: false, problem: null, confirmOpen: false, change: async () => {}, cancel: () => {} }} canSwitchDriver />
+      </ToastProvider></PeopleProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    const group = await until(() => container.querySelector<HTMLElement>('[role=group][aria-label="Attempt 3\'s conversation"]'), "attempt 3's turns");
+    const divider = container.querySelector<HTMLElement>('[data-testid=attempt-divider]:has(hr[aria-label="Attempt 4, started by Ana"])')!;
+    expect(divider.textContent).toContain("Start from the API.");
+    expect(group.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // Mockup 08b: Start over handed attempt 2 to Deliver, so it has an implementer and no conductor of its own.
+  test("Chat after a Start over to Deliver: the conductor's attempt muted above the divider naming who started the next", async () => {
+    const client = await conductorStopped();
+    const task = await client.getTask(TASK_ID);
+    const implementer: Run = { ...task.runs.find((r) => r.id === "run_impl_done")!, id: "run_impl_4", attempt: 4, status: "running",
+      createdAt: minutesAgo(1), endedAt: null };
+    const events = (await client.events({ taskId: TASK_ID })).events;
+    const recovered: PersistedEvent = { ...events[0]!, cursor: 40_000, eventId: "evt_restart", eventType: "task.recovered", runId: null, occurredAt: minutesAgo(1),
+      actor: { type: "human", id: "u_ana", name: "Ana Ribeiro" }, payload: { action: "restart", attempt: 4, note: "Keep the protocol.", decider: "policy" } };
+    const { container, unmount } = await mount(
+      <TooltipProvider><PeopleProvider client={client}><ToastProvider>
+        <ChatSection client={client} task={{ ...task, status: "running", decider: "policy", runs: [...task.runs, implementer] }} conductorId="run_conductor"
+          earlier={[]} ledgers={new EndedLedgers(client)} findings={[]} pullRequests={[]}
+          events={[...events, recovered]} owner={{ owner: null }} version={0} onSent={() => {}} onOpenRun={() => {}} onBack={() => {}}
+          driverControl={{ busy: false, problem: null, confirmOpen: false, change: async () => {}, cancel: () => {} }} canSwitchDriver />
+      </ToastProvider></PeopleProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    const group = await until(() => container.querySelector<HTMLElement>('[role=group][aria-label="Attempt 3\'s conversation"]'), "attempt 3's turns");
+    await until(() => group.querySelector(`[data-testid=earlier-conductor][data-run=run_conductor]`), "attempt 3's conductor in its group");
+    const divider = container.querySelector<HTMLElement>("[data-testid=attempt-divider]")!;
+    expect(divider.textContent).toContain("Attempt 4");
+    expect(divider.textContent).toContain("started by Ana");
+    expect(divider.textContent).toContain("Keep the protocol.");
+    expect(group.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 

@@ -999,6 +999,148 @@ func TestAFailedWakeNoteIsToldAgain(t *testing.T) {
 	}
 }
 
+// A wake note in flight when the task is closed, failed by lux afterwards,
+// gives nothing back: the Close settled its reasons, and no conductor is
+// started or woken for the closed task.
+func TestAWakeNoteFailedAfterTheCloseIsNotToldAgain(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	w.lux.InputGate = make(chan struct{})
+	t.Cleanup(func() { close(w.lux.InputGate) })
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:in-flight", "the note in flight")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var note string
+	w.until("the note sent", func() bool {
+		_ = w.owner.QueryRow(ctx, `SELECT COALESCE(payload->>'directiveId', '') FROM events WHERE task_id = $1
+			AND event_type = 'conductor.woken' ORDER BY cursor LIMIT 1`, task).Scan(&note)
+		return note != "" && w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, note) == 1
+	})
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	w.lux.FailInput(w.luxRunOf(conductor), note, "the agent stopped before reading it")
+	w.until("the note's failure recorded", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, note) == 1
+	})
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE task_id = $1`, task)
+	for range 3 {
+		w.sweep()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
+		t.Errorf("%d reasons pending again on the closed task", n)
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("conductors %v on the closed task, want only %s", got, conductor)
+	}
+	if n := len(w.woken(task)); n != 1 {
+		t.Errorf("%d notes, want only the one in flight at the Close", n)
+	}
+}
+
+// noteInFlight records a reason on a talked-through task and waits for its
+// wake note to be sent to the conductor, held by lux's InputGate: the
+// note's directive.
+func (w *world) noteInFlight(task, line string) string {
+	w.t.Helper()
+	w.lux.InputGate = make(chan struct{})
+	w.t.Cleanup(func() { close(w.lux.InputGate) })
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:in-flight", line)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	var note string
+	w.until("the note sent", func() bool {
+		_ = w.owner.QueryRow(ctx, `SELECT COALESCE(payload->>'directiveId', '') FROM events WHERE task_id = $1
+			AND event_type = 'conductor.woken' ORDER BY cursor LIMIT 1`, task).Scan(&note)
+		return note != "" && w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, note) == 1
+	})
+	return note
+}
+
+// A wake note in flight at the Close, failed by lux after the task was
+// reopened, gives nothing back either: the Close ended its reasons, and the
+// reopened task is briefed afresh on its next delivery.
+func TestAWakeNoteFailedAfterTheReopenIsNotToldAgain(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	note := w.noteInFlight(task, "the note in flight")
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/reopen", map[string]any{}); status != 200 {
+		t.Fatalf("reopen: %d %v", status, body)
+	}
+	w.lux.FailInput(w.luxRunOf(conductor), note, "the agent stopped before reading it")
+	w.until("the note's failure recorded", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, note) == 1
+	})
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE task_id = $1`, task)
+	for range 3 {
+		w.sweep()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
+		t.Errorf("%d reasons pending again on the reopened task", n)
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("conductors %v on the reopened task, want only %s", got, conductor)
+	}
+	if n := len(w.woken(task)); n != 1 {
+		t.Errorf("%d notes, want only the one in flight at the Close", n)
+	}
+}
+
+// Stop and start over handed to Deliver with a wake note in flight: the
+// stopped conductor's unread note is failed by the stop itself, and its
+// reasons stay attempt 1's. No conductor is started with them; attempt 2
+// runs under the policy alone.
+func TestAWakeNoteFailedByStartingOverIsNotToldAgain(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	note := w.noteInFlight(task, "the note in flight")
+	if out := w.stop(ana, task, map[string]any{"andRestart": true, "decider": "policy"}); out["attempt"] != float64(2) || out["decider"] != "policy" {
+		t.Fatalf("stop and start over answered %v", out)
+	}
+	w.until("the unread note failed by the stop", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, note) == 1
+	})
+	w.until("attempt 2's implementer", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, task) == 1
+	})
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE task_id = $1`, task)
+	for range 3 {
+		w.sweep()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
+		t.Errorf("%d of attempt 1's reasons pending again after the start over", n)
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("conductors %v after starting over to Deliver, want only attempt 1's %s", got, conductor)
+	}
+	if n := len(w.woken(task)); n != 1 {
+		t.Errorf("%d notes, want only the one in flight at the stop", n)
+	}
+	if d := w.decider(task); d != "policy" {
+		t.Errorf("attempt 2 is decided by %s", d)
+	}
+}
+
 // A conductor lux ended for good mid-turn, with no turn end seen,
 // does not hold the task's live slot against a decision's note: its
 // replacement is started with the note, no person's message needed.

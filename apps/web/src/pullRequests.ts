@@ -158,6 +158,12 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
       if (p.to === "clean" && p.from !== "unknown") return system(`${pr} is up to date with its base`);
       return null;
     case "pull_request.action": {
+      // A Close that asked dude to close the pull request: what GitHub did with it.
+      if (p.action === "close") {
+        const line = p.closed === true ? system(`closed ${pr} on GitHub with the task`)
+          : system(`asked to close ${pr} with the task; GitHub did not close it`, p.error ? str(p.error) : undefined);
+        return { ...line, actorId: e.actor.id };
+      }
       // The base by name, in mono where it is shown.
       const base: Words = p.base ? [{ mono: str(p.base) }] : ["its base"];
       const target = p.number ? pr : `the branch in ${str(p.repo)}`;

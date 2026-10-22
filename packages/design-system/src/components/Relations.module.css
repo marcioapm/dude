@@ -291,14 +291,6 @@
   align-items: center;
   gap: var(--ds-space-8);
 }
-.gateTrigger {
-  display: inline-flex;
-  border-radius: var(--ds-radius-control);
-  outline: none;
-}
-.gateTrigger:focus-visible {
-  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
-}
 
 /* -- DependencyStrip: steps on the chrome shade, told apart by space. -- */
 .strip {

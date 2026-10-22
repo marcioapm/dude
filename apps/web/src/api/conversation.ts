@@ -1311,6 +1311,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         // Try again handing on a message the failed Run never read: the same turn, now the fresh agent's to read.
         if (handedOn(state, payload, directiveId)) break;
         const github = githubOf(payload.github);
+        // dude's own message starting a conductor (a pick-up's note, a start when unblocked): dude's, not a person's.
+        if (event.actor?.type === "system" && event.actor.id === "dude" && !github && payload.by !== "conductor" && !directiveId) {
+          const text = String(payload.text ?? "");
+          if (text.trim()) turns.push({ kind: "told", id: event.eventId, text, at: event.occurredAt });
+          break;
+        }
         const turn: HumanTurn = {
           ...humanTurn(event, "message", String(payload.text ?? ""), directiveId ? null : event.occurredAt),
           directiveId,

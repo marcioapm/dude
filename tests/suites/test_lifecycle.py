@@ -102,14 +102,13 @@ def test_close_and_archive_is_one_write(client: ApiClient, project: dict, owner_
 
 
 def test_every_refusal_says_why_by_its_code(client: ApiClient, project: dict, org: dict, owner_dsn: str):
+    # Running and in review are not refused: Close and Archive stop what is live and close.
     running, review = _task(client, project, "Running"), _task(client, project, "In review")
     execute(owner_dsn, "UPDATE tasks SET status = 'running' WHERE id = %s", (running["id"],))
     execute(owner_dsn, "UPDATE tasks SET status = 'review' WHERE id = %s", (review["id"],))
-    for route in ("close", "archive"):
-        assert _refused(client.post(f"/v1/tasks/{running['id']}/{route}", {"resolution": "wont_do"}), 409, "running")["message"] \
-            .startswith("Stop its agents first")
-        assert _refused(client.post(f"/v1/tasks/{review['id']}/{route}", {"resolution": "wont_do"}), 409, "review")["message"] \
-            .startswith("It has a pull request open")
+    assert client.post(f"/v1/tasks/{running['id']}/close", {"resolution": "wont_do"}).status_code == 200
+    assert client.post(f"/v1/tasks/{review['id']}/archive", {"resolution": "wont_do"}).status_code == 200
+    assert (_get(client, running["id"])["resolution"], _get(client, review["id"])["resolution"]) == ("wont_do", "wont_do")
 
     # loop: closing as a duplicate whose handover would make a task wait on itself.
     canonical, dup, waiting = _task(client, project, "A"), _task(client, project, "B"), _task(client, project, "C")
@@ -146,6 +145,72 @@ def test_a_start_is_refused_on_a_closed_or_archived_task(client: ApiClient, proj
     refusals = [e["payload"] for e in client.events(taskId=closed["id"], limit=200) if e["eventType"] == "task.start_refused"]
     assert {(r["path"], r["reason"]) for r in refusals} == {("deliver", "closed"), ("talk", "closed"), ("create_run", "closed")}
     assert client.task_runs(closed["id"]) == []
+
+
+def _pull_requests(client: ApiClient, task_id: str) -> list[dict]:
+    return client.get("/v1/pull-requests", params={"taskId": task_id}).json()["pullRequests"]
+
+
+def _in_review_with_a_pull_request(client: ApiClient, task: dict) -> dict:
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    pr = wait_until(lambda: _pull_requests(client, task["id"]), timeout=90, message="no pull request opened")[0]
+    wait_until(lambda: _get(client, task["id"])["status"] == "review", timeout=60, message="the task never reached review")
+    return pr
+
+
+def test_close_with_close_pull_request_closes_dudes_pull_request_on_github(client: ApiClient, forge_project: dict, fake_github):
+    task = _task(client, forge_project, "Greet in Portuguese")
+    pr = _in_review_with_a_pull_request(client, task)
+    resp = client.post(f"/v1/tasks/{task['id']}/close", {"resolution": "wont_do", "note": "the greeter is retired", "closePullRequest": True})
+    assert resp.status_code == 200, resp.text
+
+    assert fake_github.pulls[pr["number"]].state == "closed"
+    assert fake_github.state_changes == [(pr["number"], "closed")]
+    comments = [c["body"] for c in fake_github.pulls[pr["number"]].comments]
+    assert comments == [f"Closed with {task['key']} as Won't do: the greeter is retired"], comments
+    got = _get(client, task["id"])
+    assert (got["status"], got["resolution"]) == ("aborted", "wont_do")
+    wait_until(lambda: _pull_requests(client, task["id"])[0]["state"] == "closed", timeout=30,
+               message="the closed webhook never reached dude's pull request")
+
+    events = client.events(taskId=task["id"], limit=500)
+    [closed] = [e for e in events if e["eventType"] == "task.closed"]
+    assert closed["payload"]["pullRequestCloseRequested"] is True
+    outcomes = [e["payload"] for e in events if e["eventType"] == "pull_request.action" and e["payload"].get("action") == "close"]
+    assert outcomes == [{"action": "close", "repo": "greeter", "number": pr["number"], "closed": True}], outcomes
+
+
+def test_close_without_close_pull_request_leaves_an_adopted_pull_request_open(client: ApiClient, forge_project: dict, fake_github):
+    fake_github.open_pull("feature/greet", title="Greet in Portuguese", author="gus")
+    task = client.create_task(forge_project["id"], "Finish the Portuguese greeting", goal="Take over the open pull request.",
+                              source={"kind": "pr", "repositoryId": forge_project["repositories"][0]["id"], "pullRequest": "#1"})
+    pr = _in_review_with_a_pull_request(client, task)
+    assert pr["number"] == 1
+    resp = client.post(f"/v1/tasks/{task['id']}/close", {"resolution": "wont_do", "closePullRequest": False})
+    assert resp.status_code == 200, resp.text
+
+    assert _get(client, task["id"])["resolution"] == "wont_do"
+    assert fake_github.pulls[1].state == "open" and fake_github.state_changes == []
+    assert fake_github.pulls[1].comments == []
+    events = client.events(taskId=task["id"], limit=500)
+    [closed] = [e for e in events if e["eventType"] == "task.closed"]
+    assert closed["payload"]["pullRequestCloseRequested"] is False
+    assert not [e for e in events if e["eventType"] == "pull_request.action" and e["payload"].get("action") == "close"]
+
+
+def test_close_without_close_pull_request_leaves_dudes_own_pull_request_open(client: ApiClient, forge_project: dict, fake_github):
+    task = _task(client, forge_project, "Greet in Galician")
+    pr = _in_review_with_a_pull_request(client, task)
+    resp = client.post(f"/v1/tasks/{task['id']}/close", {"resolution": "wont_do", "closePullRequest": False})
+    assert resp.status_code == 200, resp.text
+
+    assert _get(client, task["id"])["resolution"] == "wont_do"
+    assert fake_github.pulls[pr["number"]].state == "open" and fake_github.state_changes == []
+    assert fake_github.pulls[pr["number"]].comments == []
+    events = client.events(taskId=task["id"], limit=500)
+    [closed] = [e for e in events if e["eventType"] == "task.closed"]
+    assert closed["payload"]["pullRequestCloseRequested"] is False
+    assert not [e for e in events if e["eventType"] == "pull_request.action" and e["payload"].get("action") == "close"]
 
 
 def test_archived_tasks_leave_navigation_and_list_tasks(client: ApiClient, forge_project: dict, owner_dsn: str):

@@ -1,0 +1,30 @@
+/* DeciderField: a labelled choice of two, one muted line under it. Tokens only. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ds-space-6);
+}
+
+.label {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+
+.option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+
+.asNow {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+.hint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}

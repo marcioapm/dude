@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { EventTypes, type PersistedEvent } from "@dude/domain";
+import { EventTypes, type PersistedEvent, type Run } from "@dude/domain";
 import { activityLines } from "../src/screens/TaskScreen.tsx";
 import { afterEach, beforeEach } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
@@ -17,6 +17,7 @@ import { ArchiveEpicConfirm, epicRef } from "../src/screens/actions.tsx";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { ApiError, type TaskDetail } from "../src/api/client.ts";
+import type { CloseDecision } from "@dude/design-system/components";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -75,13 +76,18 @@ const menuItems = async (page: HTMLElement) => {
 const itemText = (el: HTMLElement) => el.textContent ?? "";
 
 describe("the fixture client's lifecycle", () => {
-  test("refuses a running task as the orchestrator does, by code", async () => {
+  test("closes a running task as the orchestrator does, stopping what is live; refuses Reopen and Unarchive by code", async () => {
     const client = new FixtureClient("a");
     const code = async (p: Promise<unknown>) => p.then(() => "ok", (e: unknown) => (e as ApiError).code);
-    expect(await code(client.closeTask(TASK_ID, { resolution: "wont_do" }))).toBe("running");
-    expect(await code(client.archiveTask(TASK_ID, { resolution: "wont_do" }))).toBe("running");
     expect(await code(client.reopenTask(TASK_ID))).toBe("conflict");
     expect(await code(client.unarchiveTask(TASK_ID))).toBe("conflict");
+    expect(await code(client.closeTask(TASK_ID, { resolution: "wont_do", closePullRequest: true }))).toBe("ok");
+    const task = await client.getTask(TASK_ID);
+    expect(task.runs.every((r) => ["completed", "failed", "aborted"].includes(r.status))).toBe(true);
+    const closed = (await client.events({ taskId: TASK_ID })).events.findLast((e) => e.eventType === "task.closed")!;
+    expect((closed.payload.stopped as string[]).length).toBeGreaterThan(0);
+    expect(closed.payload.pullRequestCloseRequested).toBe(true);
+    expect(closed.payload).not.toHaveProperty("pullRequestClosed");
     expect((await client.archivedTasks(TASK_ID)).tasks).toEqual([]);
   });
 });
@@ -111,14 +117,15 @@ describe("the epic archive dialog callback", () => {
 });
 
 describe("the task page's lifecycle", () => {
-  test("a task in progress: Close… and Archive… are there, each disabled with Stop its agents first", async () => {
+  test("a task in progress: Close… and Archive… are there and enabled, after Stop…", async () => {
     const page = await taskPage(new FixtureClient("a"));
     const items = await menuItems(page);
+    expect(itemText(items[0]!)).toContain("Stop…");
     const close = items.find((i) => itemText(i).startsWith("Close"))!;
     const archive = items.find((i) => itemText(i).startsWith("Archive"))!;
     for (const i of [close, archive]) {
-      expect(i.getAttribute("aria-disabled")).toBe("true");
-      expect(itemText(i)).toContain("Stop its agents first");
+      expect(i.getAttribute("aria-disabled")).toBeNull();
+      expect(itemText(i)).not.toContain("Stop its agents first");
     }
   });
 
@@ -170,13 +177,13 @@ describe("the task page's lifecycle", () => {
     expect(items.find((t) => t.startsWith("Closed"))).toContain("Already ended");
   });
 
-  test("a stopped task with its pull request still open: Close… and Archive… are disabled, saying so", async () => {
+  test("a stopped task with its pull request still open: Close… and Archive… are enabled", async () => {
     const client = await clientWith({ status: "aborted" });
     client.listPullRequests = async () => ({ pullRequests: [{ ...PULL_REQUEST, state: "open" }] });
     const page = await taskPage(client);
     const items = (await menuItems(page)).filter((i) => /^(Close|Archive)/.test(itemText(i)));
-    expect(items.map(itemText)).toEqual(["Close…. It has a pull request open", "Archive…. It has a pull request open"]);
-    for (const i of items) expect(i.getAttribute("aria-disabled")).toBe("true");
+    expect(items.map(itemText)).toEqual(["Close…", "Archive…"]);
+    for (const i of items) expect(i.getAttribute("aria-disabled")).toBeNull();
   });
 
   test("a member sees the lifecycle disabled with whose decision it is", async () => {
@@ -188,6 +195,75 @@ describe("the task page's lifecycle", () => {
       expect(i.getAttribute("aria-disabled")).toBe("true");
       expect(itemText(i)).toContain("Only Ana, the owner, or an admin can do this");
     }
+  });
+});
+
+describe("Close and Archive while live", () => {
+  const pick = async (dialog: HTMLElement, label: string) =>
+    act(async () => [...dialog.querySelectorAll<HTMLElement>('[role="radio"]')].find((r) => r.textContent?.startsWith(label))!.click());
+
+  /** A running conductor task: its conductor between turns and an implementer at work; its PR as given; its closes recorded. */
+  async function liveTask(prs: Array<typeof PULL_REQUEST>, source?: TaskDetail["source"]) {
+    const client = new FixtureClient("a");
+    const base = await client.getTask(TASK_ID);
+    const conductor = { ...base.runs[0]!, id: "run_cond_live", role: "conductor" as const, phase: null, category: null, status: "paused" as const };
+    const task: TaskDetail = { ...base, status: "running", decider: "conductor", runs: [conductor, ...base.runs], ...(source ? { source } : {}) };
+    client.getTask = async () => task;
+    client.listPullRequests = async () => ({ pullRequests: prs });
+    const sent: Array<[string, CloseDecision]> = [];
+    client.closeTask = async (_id, d) => { sent.push(["close", d]); return {}; };
+    client.archiveTask = async (_id, d) => { sent.push(["archive", d!]); return {}; };
+    return { client, sent };
+  }
+  const openFromMenu = async (page: HTMLElement, label: string) => {
+    const item = (await menuItems(page)).find((i) => itemText(i).startsWith(label))!;
+    expect(item.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => item.click());
+    return until(() => document.querySelector<HTMLElement>('[role="dialog"]'), "the dialog");
+  };
+
+  test("on a running conductor task, Close… is enabled; the dialog lists what stops and says Stop and close", async () => {
+    const { client, sent } = await liveTask([]);
+    const page = await taskPage(client);
+    const dialog = await openFromMenu(page, "Close");
+    const live = dialog.querySelector<HTMLElement>('[data-testid="live-work"]')!;
+    expect(live.textContent).toContain("Closing stops the conductor and an implementer. Nothing is kept to resume.");
+    expect(dialog.querySelector('[data-testid="close-pull-request"]')).toBeNull();
+    await pick(dialog, "Won't do");
+    const confirm = dialog.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!;
+    expect(confirm.textContent).toBe("Stop and close");
+    await act(async () => confirm.click());
+    expect(sent).toEqual([["close", { resolution: "wont_do" }]]);
+  });
+
+  test("dude's open PR is ticked to close with the task; the decision says so", async () => {
+    const { client, sent } = await liveTask([{ ...PULL_REQUEST, state: "open", number: 412 }]);
+    const page = await taskPage(client);
+    const dialog = await openFromMenu(page, "Close");
+    const row = await until(() => dialog.querySelector<HTMLElement>('[data-testid="close-pull-request"]'), "the PR row");
+    expect(row.getAttribute("data-opened-by")).toBe("dude");
+    expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("true");
+    await pick(dialog, "Won't do");
+    await act(async () => dialog.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!.click());
+    expect(sent).toEqual([["close", { resolution: "wont_do", closePullRequest: true }]]);
+  });
+
+  test("Archive… on a live task with an adopted PR: Close and archive, nothing chosen, the PR unticked", async () => {
+    const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: "repo_wc", repository: "web-console",
+      title: "Pause split", mode: "review" as const };
+    const { client, sent } = await liveTask([{ ...PULL_REQUEST, state: "open", number: 412 }], source);
+    const page = await taskPage(client);
+    const dialog = await openFromMenu(page, "Archive");
+    expect(dialog.textContent).toContain("Close and archive WC-214");
+    expect(dialog.querySelector('[role="radio"][aria-checked="true"]')).toBeNull();
+    const row = await until(() => dialog.querySelector<HTMLElement>('[data-testid="close-pull-request"]'), "the PR row");
+    expect(row.getAttribute("data-opened-by")).toBe("someone");
+    expect(row.querySelector('[role="checkbox"]')!.getAttribute("aria-checked")).toBe("false");
+    await pick(dialog, "Won't do");
+    const confirm = dialog.querySelector<HTMLButtonElement>('[data-testid="close-confirm"]')!;
+    expect(confirm.textContent).toBe("Stop, close and archive");
+    await act(async () => confirm.click());
+    expect(sent).toEqual([["archive", { resolution: "wont_do", closePullRequest: false }]]);
   });
 });
 
@@ -237,5 +313,69 @@ describe("lifecycle in Activity", () => {
       ev(EventTypes.TaskAutoStartCancelled, { how: "deliver", why: "closed" }),
     ], people, [], [], 1, "CP-46");
     expect(said(lines)).toEqual(["Ana Ribeiro archived CP-46 with its epic", "Ana Ribeiro closed it, which ends start when unblocked"]);
+  });
+});
+
+describe("Stop in Activity", () => {
+  const run = (id: string, attempt: number, p: Partial<Run>): Run => ({ id, organizationId: "org", projectId: "prj", taskId: "wi_63", attempt,
+    status: "aborted", workerId: null, workspacePath: null, error: null, kind: "agent", phase: null, role: null, category: null, parentRunId: null,
+    baseRefs: {}, heads: {}, branch: null, harness: null, model: null, dudePause: null, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, context: 0 },
+    machine: null, createdAt: new Date(Date.UTC(2026, 9, 17, 9)).toISOString(), startedAt: null, endedAt: null, ...p }) as Run;
+  const runs = [run("run_c1", 1, { role: "conductor" }), run("run_i1", 1, { phase: "implement", role: "implementer" }),
+    run("run_c2", 2, { role: "conductor", status: "running", createdAt: new Date(Date.UTC(2026, 9, 17, 11)).toISOString() })];
+  const aborted = (runId: string, note: string) => ev(EventTypes.RunAborted, { reason: note, by: "stop" }, { runId });
+
+  test("Stop here is one line naming what it stopped, the note under it; its Runs' aborts are not said again", () => {
+    const note = "Wrong greeting: hold on.";
+    const lines = activityLines([
+      aborted("run_c1", note), aborted("run_i1", note),
+      ev("task.stopped", { by: ANA, note, runIds: ["run_c1", "run_i1"], decider: "conductor" }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro stopped the task · stopped the conductor and the implementer"]);
+    expect(lines[0]!.quote).toBe(note);
+    expect(lines[0]!.attempt).toBe(1);
+  });
+
+  test("Stop and start over is one line: the attempt stopped, the one started and who decides it, never a pick-up", () => {
+    const note = "Start fresh.";
+    const lines = activityLines([
+      aborted("run_c1", note), aborted("run_i1", note),
+      ev("task.stopped", { by: ANA, note, runIds: ["run_c1", "run_i1"], decider: "conductor", andRestart: true, nextDecider: "policy" }),
+      ev(EventTypes.TaskDeciderChanged, { from: "conductor", to: "policy", why: "start over" }),
+      ev("task.recovered", { action: "restart", note, attempt: 2, runIds: [], decider: "policy", via: "stop" }),
+      // Attempt 2's own decider change, after the start: its line stays.
+      ev(EventTypes.TaskDeciderChanged, { from: "policy", to: "conductor", why: "a person wrote in Chat" }),
+    ], people, runs, [], 2, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro stopped attempt 1 and started attempt 2 · Deliver decides · stopped the conductor and the implementer",
+      "Ana Ribeiro wrote in Chat, which gave the decisions to the conductor"]);
+    const stopLine = lines.at(-1)!;
+    expect(stopLine.quote).toBe(note);
+    expect(stopLine.attempt).toBe(1);
+  });
+
+  test("a session's own Abort keeps its line, and a pick-up from the stopped notice is still a pick-up", () => {
+    const lines = activityLines([
+      ev(EventTypes.RunAborted, { reason: "Not this way." }, { runId: "run_i1" }),
+      ev("task.recovered", { action: "resume", note: "Go on.", runIds: ["run_i1"] }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro aborted the implementer", "Ana Ribeiro picked the task back up: resumed where it stopped"]);
+  });
+
+  test("a Run a Stop named, resumed and later aborted from its session keeps that Abort's line", () => {
+    const lines = activityLines([
+      aborted("run_c1", "hold"), ev("task.stopped", { by: ANA, note: "hold", runIds: ["run_c1"], decider: "conductor" }),
+      ev("task.recovered", { action: "resume", note: "go", runIds: ["run_c1"] }),
+      ev(EventTypes.RunAborted, { reason: "Not this way." }, { runId: "run_c1" }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro stopped the task · stopped the conductor",
+      "Ana Ribeiro picked the task back up: resumed where it stopped", "Ana Ribeiro aborted the conductor"]);
+  });
+
+  test("a Stop's abort of a Run no Stop names keeps its line", () => {
+    const lines = activityLines([
+      aborted("run_c1", "hold"), aborted("run_i1", "hold"),
+      ev("task.stopped", { by: ANA, note: "hold", runIds: ["run_c1"], decider: "conductor" }),
+    ], people, runs, [], 1, "GREE-2");
+    expect(said(lines)).toEqual(["Ana Ribeiro aborted the implementer", "Ana Ribeiro stopped the task · stopped the conductor"]);
   });
 });

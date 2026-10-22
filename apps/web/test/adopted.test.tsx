@@ -342,12 +342,14 @@ describe("Start over on adopted work", () => {
 
   test("an adopted pull request: the same branch and pull request, kept, never a new dude/… branch or pull request", async () => {
     const { lines, said, option } = await restartDialog(PR_SOURCE);
-    expect(option).toBe("Start over as attempt 2The same pull request and branch, reviewed again from the start.");
+    expect(option).toBe("Start over as attempt 2The whole thing again on PR #12's branch, pushing to the same PR.");
     expect(lines).toEqual([
       ["Conversation", "new", "Fresh agents, told the task as it is now — edit it first if what it asks for was the problem."],
       ["Workspace", "new", "A clean checkout of feature/greet as GitHub has it."],
-      ["Branch", "kept", "feature/greet, and pull request #12 on it, which stays open."],
+      ["Branch", "kept", "feature/greet, PR #12's: attempt 2 works on it from where attempt 1 left it."],
+      ["Pull request", "kept", "#12 stays open — attempt 2 continues on it. dude never closes it."],
       ["Session", "new", "Attempt 2, from review again. Attempt 1's sessions stay, marked as such."],
+      ["Deliver", "new", "Runs attempt 2 to the pull request on its own, with your note."],
     ]);
     for (const words of [said, option]) {
       expect(words).not.toContain("new branch");
@@ -364,10 +366,11 @@ describe("Start over on adopted work", () => {
     expect(lines[1]).toEqual(["Workspace", "new", "A clean checkout of stack/top as GitHub has it."]);
   });
 
-  test("new work keeps its words: a new branch, and the last pull request closed", async () => {
+  test("new work keeps its words: a new branch; no pull request open, no pull request row", async () => {
     const { lines, option } = await restartDialog(null);
-    expect(option).toBe("Start over as attempt 2A new branch from the default branch, and the whole pipeline again.");
-    expect(lines[2]).toEqual(["Branch", "new", "A new branch for attempt 2. Attempt 1's is kept; a pull request on it is closed."]);
+    expect(option).toBe("Start over as attempt 2A new branch from the default branch, and the whole thing again.");
+    expect(lines[2]).toEqual(["Branch", "new", "A new branch for attempt 2. Attempt 1's is kept."]);
+    expect(lines.some((l) => l[0] === "Pull request")).toBe(false);
   });
 });
 

@@ -184,6 +184,12 @@ a:hover {
   border: 0;
 }
 
+/* A muted sentence beside a control, saying what it does or where to go instead. */
+.ds-hint {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+
 /* Small-caps label used for section headers and table headings. */
 .ds-label {
   font-size: var(--ds-text-xs);
