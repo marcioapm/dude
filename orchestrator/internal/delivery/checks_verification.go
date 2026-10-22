@@ -265,7 +265,10 @@ func codeSpan(s string) string {
 	return fence + s + fence
 }
 
-var writerChecksTmpl = mustTemplate("contracts/writer-checks")
+var (
+	writerChecksTmpl      = mustTemplate("contracts/writer-checks")
+	writerCarriedFromTmpl = mustTemplate("notices/checks/writer-carried-from")
+)
 
 // writerChecksMax bounds the tester's account of the writers' checks; the
 // newest Runs that fit are kept, as the pull request's account keeps them.
@@ -307,8 +310,8 @@ func writerChecksText(runs []gatedJudgement, room int) string {
 		for _, v := range j.Checks {
 			waiver := ""
 			if w := v.Waiver; w != nil {
-				waiver = checksField(fmt.Sprintf("carried from %s's waiver of the %s's report (%s, turn %d): %s",
-					valueOr(w.PersonName, "a person"), w.Role, w.RunID, w.Turn, w.Note))
+				waiver = checksField(render(writerCarriedFromTmpl, map[string]any{"By": valueOr(w.PersonName, "a person"),
+					"Role": w.Role, "Run": w.RunID, "Turn": w.Turn, "Note": w.Note}))
 			}
 			c.Checks = append(c.Checks, struct{ Command, Result, Reason, WaiverReason, Waiver string }{checksField(v.Command),
 				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason), checksField(v.WaiverReason), waiver})

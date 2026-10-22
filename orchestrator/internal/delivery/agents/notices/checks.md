@@ -34,6 +34,7 @@ That report said {{printf "%q" .Command}} failed:
 {{define "notices/checks/account-omitted"}}Checks account omitted: see the task's Activity.{{end}}
 {{define "notices/checks/account-carried"}}- {{.Role}}: carried the {{.From}}'s waiver of the same failure: {{.Note}}{{end}}
 {{define "notices/checks/account-carried-from"}}carried from {{.By}}'s waiver of the {{.Role}}'s report ({{.Run}}){{end}}
+{{define "notices/checks/writer-carried-from"}}carried from {{.By}}'s waiver of the {{.Role}}'s report ({{.Run}}, turn {{.Turn}}): {{.Note}}{{end}}
 {{define "notices/checks/context"}}### The checks report
 {{.Report}}
 
