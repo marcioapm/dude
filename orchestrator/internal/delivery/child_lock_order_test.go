@@ -136,9 +136,9 @@ const raceTimeout = 15 * time.Second
 // ender once the hook is reached, lets hold go on once the ender waits on
 // a lock, and returns both transactions' errors. Both run under one
 // deadline context, which their SQL takes. On every exit the hook is
-// released, the context cancelled when the harness itself failed, and both
-// goroutines joined before it returns, so no transaction outlives it into
-// the fixture's cleanup. err is the harness's failure: the hook never
+// released and both goroutines joined before the context is cancelled, so
+// each transaction ends on a live connection and none outlives it into the
+// fixture's cleanup. err is the harness's failure: the hook never
 // reached, the ender never waiting on a lock, the deadline.
 func (w *childWorld) raceEnder(end func(context.Context, pgx.Tx, string) error,
 	hold func(ctx context.Context, tx pgx.Tx, between func()) error) (holdErr, endErr, err error) {
@@ -150,16 +150,18 @@ func (w *childWorld) raceEnder(end func(context.Context, pgx.Tx, string) error,
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	var wg sync.WaitGroup
 	var hErr, eErr error
+	// ctx stays live until both goroutines are joined: a COMMIT or ROLLBACK
+	// on a cancelled context makes pgx abandon the connection, and its
+	// backend can hold the row locks for a moment after this returns.
+	// raceTimeout still bounds a stuck transaction, since all SQL takes ctx.
 	defer func() {
 		unblock()
-		if err != nil {
-			cancel()
-		}
 		wg.Wait()
 		holdErr, endErr = hErr, eErr
 		if err == nil && ctx.Err() != nil {
 			err = fmt.Errorf("the race outlived its deadline: %w", ctx.Err())
 		}
+		cancel()
 	}()
 	wg.Add(1)
 	go func() {
