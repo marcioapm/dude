@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,6 +32,11 @@ func TestTheNextReviewerOfTheCategoryIsShownTheQuestion(t *testing.T) {
 			// scripted agent plays it all the same.
 			w.onModel("reviewer", "llm-review")
 			w.onModel("fixer", "llm-fix")
+			if resume {
+				// The fixer's model for the implementer too, so the first fix
+				// round resumes the implementer's lux Run instead of replaying.
+				w.onModel("implementer", "llm-fix")
+			}
 			scripted := w.lux.Decide
 			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 				b := scripted(spec)
@@ -88,6 +94,9 @@ func TestTheNextReviewerOfTheCategoryIsShownTheQuestion(t *testing.T) {
 			open := []delivery.EarlierQuestion{{Question: "Do invoices close in UTC or in the organisation's zone?", Status: "open"}}
 			section := inserted(delivery.RoundMessage(delivery.PhaseReview, nil, nil, "", nil, nil, nil),
 				delivery.RoundMessage(delivery.PhaseReview, nil, nil, "", nil, open, nil))
+			if section == "" || !strings.Contains(section, open[0].Question) {
+				t.Fatalf("RoundMessage renders no section for an open question: %q", section)
+			}
 			if len(messages["correctness"]) < 2 {
 				t.Fatalf("%d correctness review messages, want the first and the re-review's", len(messages["correctness"]))
 			}
@@ -95,7 +104,7 @@ func TestTheNextReviewerOfTheCategoryIsShownTheQuestion(t *testing.T) {
 				t.Errorf("the first correctness review was shown a question before any was asked:\n%s", first)
 			}
 			second := messages["correctness"][1]
-			if !strings.Contains(second, section) {
+			if !strings.Contains(second, open[0].Question) || !strings.Contains(second, section) {
 				t.Errorf("the re-review was not shown the open question:\n%s\nwant within it:\n%s", second, section)
 			}
 			if resume {
@@ -108,6 +117,33 @@ func TestTheNextReviewerOfTheCategoryIsShownTheQuestion(t *testing.T) {
 				if strings.Contains(m, open[0].Question) {
 					t.Errorf("the security reviewer was shown the correctness reviewer's question:\n%s", m)
 				}
+			}
+			if resume {
+				// The first fix round goes on in the implementer's lux Run: what
+				// it was sent is the fix row's queued round message, delivered
+				// to that lux Run as an input.
+				var fixID, how, luxRun string
+				if err := w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(continues_how, ''), COALESCE(lux_run_id, '')
+					FROM runs WHERE task_id = $1 AND phase = 'fix' ORDER BY created_at, id LIMIT 1`, wi).Scan(&fixID, &how, &luxRun); err != nil {
+					t.Fatal(err)
+				}
+				if how != delivery.ContinuesResume {
+					t.Fatalf("the first fix round continues by %q, want %q", how, delivery.ContinuesResume)
+				}
+				var round string
+				if err := w.owner.QueryRow(context.Background(), `SELECT text FROM directives WHERE run_id = $1 AND scope = 'run'
+					ORDER BY created_at LIMIT 1`, fixID).Scan(&round); err != nil {
+					t.Fatalf("the resumed fix round's message: %v", err)
+				}
+				if !slices.Contains(w.lux.Inputs(luxRun), round) {
+					t.Fatalf("the resumed fix round's message was not sent to lux Run %s:\n%s", luxRun, round)
+				}
+				if strings.Contains(round, open[0].Question) {
+					t.Errorf("the resumed fixer's round message carries the reviewer's question:\n%s", round)
+				}
+			}
+			if !resume && len(w.luxRunsOf("fix")) == 0 {
+				t.Fatal("no fresh fixer was submitted to lux")
 			}
 			for _, phase := range []string{"fix", "implement"} {
 				for _, lr := range w.luxRunsOf(phase) {
