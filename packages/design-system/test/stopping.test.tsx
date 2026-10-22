@@ -122,11 +122,11 @@ describe("AttemptDivider and EarlierTurns", () => {
     expect(group.textContent).toContain("Earlier turn");
     expect(group.querySelectorAll("button, [role=radio], textarea, input")).toHaveLength(0);
     // Read only, the earlier line draws no chevron, the sign that it opens.
-    expect(group.querySelector('svg[data-icon="chevron-right"]')).toBeNull();
+    expect(group.querySelectorAll('svg[data-icon="chevron-right"]').length).toBe(0);
     // The same line outside the group still opens its session.
     const live = [...el.querySelectorAll<HTMLButtonElement>("button")].filter((b) => !group.contains(b));
     expect(live).toHaveLength(1);
-    expect(live[0]!.querySelector('svg[data-icon="chevron-right"]')).not.toBeNull();
+    expect(live[0]!.querySelectorAll('svg[data-icon="chevron-right"]').length).toBe(1);
     await act(async () => live[0]!.click());
     expect([opened, chosen]).toEqual([1, 0]);
   });

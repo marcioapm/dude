@@ -60,10 +60,8 @@ test("Chat's Who decides and Attempts blocks draw in every pane", async () => {
   // The earlier Run line is read, not opened: no chevron in any pane's group.
   const groups = [...el.querySelectorAll('#ch-attempts [role="group"]')];
   expect(groups.length).toBeGreaterThan(0);
-  for (const g of groups) {
-    expect(g.querySelector('[data-role]')).not.toBeNull();
-    expect(g.querySelector('svg[data-icon="chevron-right"]')).toBeNull();
-  }
+  expect(groups.map((g) => g.querySelectorAll("[data-role]").length > 0)).not.toContain(false);
+  expect(groups.map((g) => g.querySelectorAll('svg[data-icon="chevron-right"]').length)).toEqual(groups.map(() => 0));
 });
 
 test("#nav-tree-epics: every epic row leads with one layers glyph; no task row has one", async () => {
