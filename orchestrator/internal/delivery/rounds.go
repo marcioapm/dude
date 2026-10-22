@@ -445,6 +445,15 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 			}
 		}
 		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix)
+		if in.Phase == PhaseTest {
+			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
+			if err != nil {
+				return "", err
+			}
+			if checks != "" {
+				message += "\n\n" + checks
+			}
+		}
 	}
 	if note := strings.TrimSpace(in.ConductorNote); note != "" {
 		message += "\n\n" + render(fromConductorTmpl, note)

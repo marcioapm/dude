@@ -438,3 +438,21 @@ func TestGoldenMachineOffers(t *testing.T) {
 		golden(t, "machine-offer-"+m.name, m.c.Offer())
 	}
 }
+
+// A tester's first message with its attempt's writers' checks: a waived
+// implementer, a backed fixer and a simplifier that changed nothing, each
+// with the commits it published.
+func TestGoldenTesterWriterChecks(t *testing.T) {
+	type check = struct{ Command, Result, Decision, Reason, CallID string }
+	runs := []gatedJudgement{
+		{Role: "Implementer", Verified: true, Waived: true, Message: "Three tests fail on main as well; tracked separately.",
+			Heads: map[string]RunHead{"api": {SHA: "1111111aaaaaaa"}}},
+		{Role: "Fixer", Verified: true, Heads: map[string]RunHead{"api": {SHA: "2222222bbbbbbb"}, "web": {SHA: "3333333ccccccc"}},
+			Checks: []check{{Command: "go test ./export/...", Result: "pass", Reason: "the recorded call says so", CallID: "mcall_1"}}},
+		{Role: "Simplifier", Verified: true, Unchanged: true, Message: "No changes; checks not needed."},
+	}
+	in := goldenTask()
+	in.Tools, in.CLI, in.Repositories = true, true, twoRepos()
+	in.WriterChecks = writerChecksText(runs, writerChecksMax)
+	golden(t, "prompt-test-writer-checks", Prompt(PhaseTest, in))
+}

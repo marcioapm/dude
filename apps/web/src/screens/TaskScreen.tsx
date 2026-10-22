@@ -1635,11 +1635,15 @@ const AUTO_END: Record<string, string> = {
 
 type ChecksVerdict = { command?: string; result?: string; reason?: string; decision?: string; callId?: string };
 
-/** A run.checks.judged event's outcome ("were verified") and its quote: the send-back message, then each verdict. */
+/**
+ * A run.checks.judged event's outcome ("were verified") and its quote: the send-back message, then each verdict.
+ * `unchanged` is a turn that changed nothing it could push: no report was judged, and it is not a pass of any check.
+ */
 function checksJudgedLine(p: Record<string, unknown>): { outcome: string; quote: string } {
   let outcome: string;
   if (p.skipped) outcome = "were not model-checked";
   else if (p.waived) outcome = "were waived";
+  else if (p.unchanged) outcome = "were not needed: it changed nothing";
   else if (p.verified) outcome = "were verified";
   else outcome = "were not verified";
   const verdicts = Array.isArray(p.checks) ? p.checks as ChecksVerdict[] : [];
