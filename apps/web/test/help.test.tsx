@@ -4,6 +4,7 @@
  * guide's own anchors, and scrolls to the section the URL names.
  */
 
+import { useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 // Under bun test a CSS module maps to {}: keep each class name as written.
@@ -194,6 +195,48 @@ describe("the outline", () => {
       HTMLElement.prototype.getBoundingClientRect = original;
     }
   });
+
+  for (const next of [undefined, "nonexistent-section"]) {
+    test(`same-page URL section → ${next ?? "no section"} keeps the visible last section current`, async () => {
+      const client = new Long("a");
+      const scrolled: string[] = [];
+      const originalRect = HTMLElement.prototype.getBoundingClientRect;
+      const originalScroll = HTMLElement.prototype.scrollIntoView;
+      const tops: Record<string, number> = { "the-pipeline": -1400, "which-reviewers-run": -500, "which-findings-block": 500 };
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        const top = this.dataset["anchor"] ? tops[this.dataset["anchor"]] ?? 0 : 0;
+        return { top, bottom: this.dataset["testid"] === "pane" ? 800 : top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+      };
+      HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) { scrolled.push(this.id); };
+      function SamePage() {
+        const [section, setSection] = useState<string | undefined>("which-findings-block");
+        return <div data-testid="pane" style={{ overflowY: "auto" }}>
+          <button onClick={() => setSection(next)}>Unknown anchor</button>
+          <HelpScreen client={client} page="delivery" section={section} onPage={() => setSection(undefined)} />
+        </div>;
+      }
+      try {
+        const { container, unmount } = await mount(<SamePage />);
+        mounted.push(unmount);
+        const pane = container.querySelector<HTMLElement>("[data-testid=pane]")!;
+        for (const [k, v] of [["scrollHeight", 2200], ["clientHeight", 800], ["scrollTop", 1400]] as const) Object.defineProperty(pane, k, { configurable: true, value: v });
+        await until(() => outline(container).length === 3 ? true : null, "the sections");
+        await act(async () => void pane.dispatchEvent(new Event("scroll")));
+        await until(() => outline(container)[2]?.[1] === "location" ? true : null, "the final section");
+        const article = container.querySelector("article")!;
+        const lastSection = article.lastElementChild;
+        const target = next ? container.querySelector("button")! : [...container.querySelectorAll("[data-testid=help-page-link]")].find((a) => a.textContent === LONG.title)!;
+        await click(target);
+        expect(outline(container)).toEqual([["The pipeline", null], ["Which reviewers run", null], ["Which findings block", "location"]]);
+        expect(container.querySelector("article")!.lastElementChild).toBe(lastSection);
+        expect(pane.scrollTop).toBe(1400);
+        expect(scrolled).toEqual([helpSectionId("which-findings-block")]);
+      } finally {
+        HTMLElement.prototype.getBoundingClientRect = originalRect;
+        HTMLElement.prototype.scrollIntoView = originalScroll;
+      }
+    });
+  }
 
   test("clicking a section asks for it in the URL, as the app's place", async () => {
     const asked: string[] = [];

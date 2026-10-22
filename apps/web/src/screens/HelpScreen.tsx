@@ -105,15 +105,11 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
     };
   }, [client, slug]);
 
-  useEffect(() => {
-    if (shown && section) document.getElementById(helpSectionId(section))?.scrollIntoView({ block: "start" });
-    setInView(section);
-  }, [shown, section]);
-
   // The section in view follows the scroll of whatever scrolls the page (the app's main pane).
   useEffect(() => {
     const article = articleRef.current;
     if (!shown || !article) return;
+    if (section) document.getElementById(helpSectionId(section))?.scrollIntoView({ block: "start" });
     const scroller = scrollerOf(article);
     const follow = () => {
       const line = (listRef.current?.getBoundingClientRect().top ?? 0) + 24;
@@ -139,7 +135,7 @@ export function HelpScreen({ client, page, section, onPage, onSection }: HelpScr
       target.removeEventListener("scroll", schedule);
       if (frame !== null) cancelAnimationFrame(frame);
     };
-  }, [shown]);
+  }, [shown, section]);
 
   const openSection = useCallback((p: string, anchor: string) => {
     if (!anchor) return onPage(p);
