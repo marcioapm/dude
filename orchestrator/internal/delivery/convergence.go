@@ -8,17 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Convergence reads the current review loop's explicit judgements after fixes.
-func (s *Store) Convergence(ctx context.Context, org string, st *State) (Convergence, error) {
-	var out Convergence
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		out, err = ConvergenceTx(ctx, tx, st)
-		return err
-	})
-	return out, err
-}
-
-// ConvergenceTx shares the caller's snapshot, including uncommitted review rows.
+// ConvergenceTx reads the current review loop's explicit judgements after
+// fixes, in the caller's snapshot, including uncommitted review rows.
 func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, error) {
 	rangeJSON, err := json.Marshal(st.reviewRange())
 	if err != nil {

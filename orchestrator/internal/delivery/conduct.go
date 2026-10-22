@@ -330,13 +330,11 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 		}
 		// A tester's finding has no still streak and is never fix-caused
 		// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
-		weighed := make([]FindingState, len(all))
-		for i, f := range all {
-			f.StillRounds = conv.StillRounds[f.ID]
-			weighed[i] = f
+		for i := range all {
+			all[i].StillRounds = conv.StillRounds[all[i].ID]
 		}
 		// A stalled review loop holds every fix, including a named subset.
-		if exit := Exit(st.Policy, weighed, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
+		if exit := Exit(st.Policy, all, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
 			return nil, refuseText(rReviewLoopNotConverging)
 		}
 	}

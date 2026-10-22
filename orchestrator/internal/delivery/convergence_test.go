@@ -38,8 +38,11 @@ func (w *convergenceWorld) finding(t *testing.T, id, run, severity string, cause
 
 func (w *convergenceWorld) convergence(t *testing.T, st *delivery.State) delivery.Convergence {
 	t.Helper()
-	got, err := (&delivery.Store{DB: w.app}).Convergence(context.Background(), w.org, st)
-	if err != nil {
+	var got delivery.Convergence
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		got, err = delivery.ConvergenceTx(context.Background(), tx, st)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return got
