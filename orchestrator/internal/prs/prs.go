@@ -645,6 +645,14 @@ func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forg
 	if signal.Kind == "ci_stuck" {
 		key += fmt.Sprintf(":stuck:%d:%d", pendingSince.Unix(), stuckFor)
 	}
+	if signal.Kind == "terminal" {
+		// A step held by reviewer questions waits on this one, not on
+		// pr.feedback, whose other kinds it must leave to awaitPullRequest.
+		// Keys are unique per workflow across names: its own.
+		if err := s.Signal(ctx, org, workflowRunID, delivery.SignalPullRequestEnded, signal, "ended:"+key); err != nil {
+			return err
+		}
+	}
 	return s.Signal(ctx, org, workflowRunID, delivery.SignalPRFeedback, signal, key)
 }
 
