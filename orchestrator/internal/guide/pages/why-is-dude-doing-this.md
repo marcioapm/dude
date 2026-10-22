@@ -51,7 +51,7 @@ An agent asks when it needs a decision only a person can make, or when a loop's 
 
 ## A reviewer didn't run
 
-Every round runs the **required reviewers** (Correctness, Tests and Performance by default). The others — Security, Database, Frontend, API — join only when the change touches their paths. See [Delivering a task](help:delivery#which-reviewers-run). Ask the conductor which reviewers a task's changed paths pick; it reads that with `settings`.
+Every round runs the **required reviewers** (Correctness, Tests and Performance by default). Security, Database, Frontend and API join only when the change touches their paths. Documentation runs only where an organisation or project makes it a required reviewer. See [Delivering a task](help:delivery#which-reviewers-run). Ask the conductor which reviewers a task's changed paths pick; it reads that with `settings`.
 
 A review of the simplifier's changes, or of a pull request fix, covers only that diff and runs the required reviewers.
 

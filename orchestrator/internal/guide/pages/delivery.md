@@ -29,6 +29,7 @@ Every review round runs the **required reviewers**, plus any **conditional revie
 - **Database** joins for `**/migrations/**` or `**/*.sql`.
 - **Frontend** joins for `**/*.tsx` or `**/*.css`.
 - **API** joins for `**/routes/**` or `**/api/**`.
+- **Documentation** never runs by default. Tick it under **Reviewers every delivery runs** (below) to have each round check the repository's product documentation (READMEs, docs, help pages, a changelog if the repository keeps one) against the change: docs the change makes wrong, and user-visible behaviour the repository's own practice would document. Code comments and commit messages are not its concern.
 
 Change the required reviewers in **Settings → Delivery → Reviewers every delivery runs**. At least one must be chosen.
 
