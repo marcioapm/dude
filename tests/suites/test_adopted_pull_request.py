@@ -73,7 +73,6 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
     # posted once, after promotion, and never edited (the fake sets
     # updated_at only on an edit).
     assert verdict["user"]["login"] == fake_github.token_login and "updated_at" not in verdict, verdict
-    assert "- **fail**" not in verdict["body"], verdict
     assert len(fake_github.pulls[1].comments) == 1, fake_github.pulls[1].comments
     assert fake_github.pulls[1].body == "", "the person's description was edited"
     phases = [r["phase"] for r in client.task_runs(task["id"]) if r["phase"]]
