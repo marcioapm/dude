@@ -147,13 +147,34 @@ func TestARetryResumesAParkedHeldRunWithTheSendBack(t *testing.T) {
 	owner, _, _ := w.people(wi)
 	before := len(w.luxInputs(runID))
 	requests := w.resumeRequests(runID)
+	held := w.str(`SELECT payload->>'turn' FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor DESC LIMIT 1`,
+		runID, delivery.EvRunChecksJudged)
+	heldDone := w.str(`SELECT turn_done_at::text FROM runs WHERE id = $1`, runID)
 	if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
 		t.Fatalf("retry: %d %v", code, body)
 	}
+	// The held turn is not kept: once resumed, the Run waits on the
+	// send-back's new turn, never on the held one's done mark.
+	kept := false
 	w.until("the send-back to be delivered", func() bool {
+		if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND turn_done_at::text = $2`, runID, heldDone) == 1 {
+			kept = true
+		}
 		return w.count(`SELECT count(*) FROM directives d JOIN events e ON e.payload->>'directiveId' = d.id
 			WHERE d.run_id = $1 AND d.delivered_at IS NOT NULL AND e.event_type = $2`, runID, delivery.EvRunChecksDecided) == 1
 	})
+	if kept {
+		t.Errorf("the resumed Run kept its held turn done")
+	}
+	w.until("the send-back's turn to be judged", func() bool {
+		return w.count(`SELECT count(*) FROM events j WHERE j.run_id = $1 AND j.event_type = $2 AND j.cursor >
+			(SELECT max(cursor) FROM events WHERE run_id = $1 AND event_type = $3)`, runID, delivery.EvRunChecksJudged, delivery.EvRunChecksDecided) > 0
+	})
+	if n := w.count(`SELECT count(*) FROM events j WHERE j.run_id = $1 AND j.event_type = $2 AND j.cursor >
+		(SELECT max(cursor) FROM events WHERE run_id = $1 AND event_type = $3) AND (j.payload->>'turn')::bigint <= $4::bigint`,
+		runID, delivery.EvRunChecksJudged, delivery.EvRunChecksDecided, held); n != 0 {
+		t.Errorf("%d judgements after the retry of a turn up to the held %s, want only later turns", n, held)
+	}
 	if resumed, _ := w.luxResumes(runID); resumed != 1 {
 		t.Errorf("resumed %d times, want once", resumed)
 	}
