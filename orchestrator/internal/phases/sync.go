@@ -1393,6 +1393,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var criteria, projectModels, orgModels json.RawMessage
 	var findings []delivery.Finding
 	var lastFix []delivery.FixRange
+	var questions []delivery.EarlierQuestion
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
 	var prompts delivery.Prompts
@@ -1547,6 +1548,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 				return err
 			}
 		}
+		// What earlier reviewers of its category asked: none for any Run
+		// that is no review (EarlierQuestionsTx keys on the Run's phase).
+		if stored == nil {
+			if questions, err = delivery.EarlierQuestionsTx(ctx, tx, r.ID); err != nil {
+				return err
+			}
+		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
@@ -1610,6 +1618,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
+		Questions: questions,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of

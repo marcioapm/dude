@@ -55,6 +55,7 @@ var (
 	conductorCheckoutTmpl      = mustTemplate("contracts/conductor-checkout")
 	continueTmpl               = mustTemplate("contracts/continue")
 	earlierFindingsTmpl        = mustTemplate("contracts/earlier-findings")
+	earlierQuestionsTmpl       = mustTemplate("contracts/earlier-questions")
 	feedbackTmpl               = mustTemplate("contracts/feedback")
 	fromConductorTmpl          = mustTemplate("contracts/from-conductor")
 	lastFixTmpl                = mustTemplate("contracts/last-fix")
