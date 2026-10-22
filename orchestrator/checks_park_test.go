@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,6 +125,20 @@ func (w *world) luxInputs(runID string) []string {
 	return nil
 }
 
+// resumeRequests counts the resume requests lux is sent for runID's lux
+// Run from now on, dry runs aside: a replayed one counts, unlike Resumed.
+func (w *world) resumeRequests(runID string) *atomic.Int32 {
+	w.t.Helper()
+	luxID := w.luxRunOf(runID)
+	var n atomic.Int32
+	w.lux.OnResume = func(id string, validateOnly bool) {
+		if id == luxID && !validateOnly {
+			n.Add(1)
+		}
+	}
+	return &n
+}
+
 // A retry resumes the parked Run once, and the send-back is its next turn:
 // no carry-on as well.
 func TestARetryResumesAParkedHeldRunWithTheSendBack(t *testing.T) {
@@ -131,6 +146,7 @@ func TestARetryResumesAParkedHeldRunWithTheSendBack(t *testing.T) {
 	wi, runID := w.parkedHeld()
 	owner, _, _ := w.people(wi)
 	before := len(w.luxInputs(runID))
+	requests := w.resumeRequests(runID)
 	if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
 		t.Fatalf("retry: %d %v", code, body)
 	}
@@ -140,6 +156,9 @@ func TestARetryResumesAParkedHeldRunWithTheSendBack(t *testing.T) {
 	})
 	if resumed, _ := w.luxResumes(runID); resumed != 1 {
 		t.Errorf("resumed %d times, want once", resumed)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("%d lux resume requests, want 1", n)
 	}
 	if got := w.luxInputs(runID)[before:]; len(got) != 1 || !strings.HasPrefix(got[0], "Your checks report was not verified") {
 		t.Errorf("after the retry the agent was given %q, want the send-back alone", got)
@@ -157,12 +176,16 @@ func TestARetryResumesAParkedHeldRunWithTheSendBack(t *testing.T) {
 func (w *world) waivedFromPark(wi, runID, note, scope string) {
 	w.t.Helper()
 	owner, _, _ := w.people(wi)
+	requests := w.resumeRequests(runID)
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, note, scope); code != 200 {
 		w.t.Fatalf("the owner's waiver: %d %v", code, body)
 	}
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if resumed, _ := w.luxResumes(runID); resumed != 1 {
 		w.t.Errorf("resumed %d times, want once, to push", resumed)
+	}
+	if n := requests.Load(); n != 1 {
+		w.t.Errorf("%d lux resume requests, want 1", n)
 	}
 	if n := w.implementerPushes(wi); n != 1 {
 		w.t.Errorf("%d pushes, want 1", n)
