@@ -190,6 +190,75 @@ func TestAutomationIssuesStableScopedToken(t *testing.T) {
 	}
 }
 
+// A preset's override of each field reaches the run's spec; without one,
+// the role's resolved value does.
+func TestAutomationPresetOverridesEachField(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	exec(t, h.owner, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ($1 || '_big', $1, 'Big', 'acme-large')`, h.org)
+	exec(t, h.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES
+		($1 || '_s', $1, 'Role size', 1, 1024, 10), ($1 || '_l', $1, 'Override size', 8, 8192, 80)`, h.org)
+	for _, img := range []string{"role", "own"} {
+		id := h.org + "_img_" + img
+		exec(t, h.owner, `INSERT INTO images (id, organization_id, name) VALUES ($1, $2, $3)`, id, h.org, img)
+		exec(t, h.owner, `INSERT INTO image_versions (id, organization_id, image_id, number, containerfile, state, user_ref)
+			VALUES ($1 || '_v', $2, $1, 1, 'FROM debian', 'published', 'registry.example.com/' || $3 || ':1')`, id, h.org, img)
+		exec(t, h.owner, `UPDATE images SET published_version_id = $1 || '_v' WHERE id = $1`, id)
+		exec(t, h.owner, `INSERT INTO image_finals (organization_id, image_version_id, layer_ref, final_ref)
+			VALUES ($2, $1 || '_v', 'registry.example.com/dude-layer:1', 'registry.example.com/' || $3 || ':1')`, id, h.org, img)
+	}
+	h.runner.Agent.Layer = "registry.example.com/dude-layer:1"
+	models, _ := json.Marshal(map[string]any{"qa_browser": map[string]any{"tier": h.tier, "harness": "opencode", "timeLimitMinutes": 60,
+		"machineSize": h.org + "_s", "image": h.org + "_img_role"}})
+	exec(t, h.owner, `UPDATE organizations SET default_agent_models = $2 WHERE id = $1`, h.org, string(models))
+	overrides := map[string]map[string]any{
+		"none":      {},
+		"harness":   {"harness": "claude-code"},
+		"tier":      {"tierId": h.org + "_big"},
+		"timeLimit": {"timeLimitMinutes": 240},
+		"machine":   {"machineSizeId": h.org + "_l"},
+		"image":     {"imageId": h.org + "_img_own"},
+	}
+	type got struct {
+		harness, model, timeout, image string
+		cpus                           float64
+	}
+	results := map[string]got{}
+	for name, o := range overrides {
+		id := "aut_ovr_" + name
+		h.automation(id, "agent", map[string]any{"kind": "schedule", "cron": "0 * * * *", "tz": "UTC"},
+			map[string]any{"agent": map[string]any{"preset": map[string]any{"role": "qa_browser", "overrides": o}, "brief": "Check"}})
+		var a Automation
+		if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) (err error) { a, err = Load(ctx, tx, id); return err }); err != nil {
+			t.Fatal(err)
+		}
+		spec, why, err := h.runner.spec(ctx, a, "arn_"+name, nil, nil)
+		if err != nil || why != "" {
+			t.Fatalf("%s: %s %v", name, why, err)
+		}
+		g := got{harness: spec.Labels["dude.harness"], model: spec.Labels["dude.model"], timeout: spec.Timeout, image: spec.Image.Ref}
+		if spec.Resources != nil {
+			g.cpus = spec.Resources.CPUs
+		}
+		results[name] = g
+	}
+	base := results["none"]
+	if base.model != "fake/scripted" || base.timeout != "60m" || base.cpus != 1 || !strings.Contains(base.image, "role:1") {
+		t.Fatalf("role's values: %+v", base)
+	}
+	for name, check := range map[string]func(got) bool{
+		"harness":   func(g got) bool { return g.harness == "claude-code" && g.harness != base.harness },
+		"tier":      func(g got) bool { return g.model == "acme-large" },
+		"timeLimit": func(g got) bool { return g.timeout == "240m" },
+		"machine":   func(g got) bool { return g.cpus == 8 },
+		"image":     func(g got) bool { return strings.Contains(g.image, "own:1") },
+	} {
+		if !check(results[name]) {
+			t.Errorf("%s override not applied: %+v (role's %+v)", name, results[name], base)
+		}
+	}
+}
+
 // An agent on a GitHub event, resumable: the first matching delivery
 // starts a session it keeps (stopped, not cancelled), the next resumes it,
 // a non-matching one fires nothing, and a test event gets a fresh,

@@ -53,10 +53,13 @@ import {
   CONCURRENCY,
   CONCURRENCY_LABEL,
   FILTER_LABEL,
+  HARNESSES,
+  HARNESS_LABEL,
   PRESET_ROLE_LABEL,
   PRESET_ROLES,
   REVIEWER_NEEDS_PULL_REQUEST,
   automationProblem,
+  type AgentOverrides,
   type Automation,
   type AutomationInput,
   type AutomationKind,
@@ -65,8 +68,13 @@ import {
   type AutomationRunsResponse,
   type EventSubscriptions,
   type EventVerdict,
+  type Harness,
+  type ImageChoice,
+  type MachineSizeWithUse,
+  type ModelTier,
   type PastDelivery,
   type PresetRole,
+  type SettingsResponse,
   type Trigger,
 } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
@@ -471,19 +479,8 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
             </SettingRow>
             {preset ? (
               <>
-                <SettingRow label="Settings" data-testid="preset-fields"
-                  help={`${PRESET_ROLE_LABEL[preset.preset.role]}'s harness, model, time limit, machine and image, as ${orgName}'s Agents settings say for this ${a.projectId ? "project" : "organisation"}.`}>
-                  {preset.preset.overrides.timeLimitMinutes ? (
-                    <SettingSource source="project" from={PRESET_ROLE_LABEL[preset.preset.role]} inherited="its own"
-                      onReset={ro ? undefined : () => set("agent", { ...preset, preset: { ...preset.preset, overrides: { ...preset.preset.overrides, timeLimitMinutes: undefined } } })} />
-                  ) : (
-                    <SettingSource source="organization" from={`${PRESET_ROLE_LABEL[preset.preset.role]} · ${orgName}`} />
-                  )}
-                </SettingRow>
-                <SettingRow label="Time limit" help="Without progress, in minutes.">
-                  <NumberInput step={1} aria-label="Time limit in minutes" min={30} max={10_080} disabled={ro} value={preset.preset.overrides.timeLimitMinutes ?? 0}
-                    onValueChange={(n) => set("agent", { ...preset, preset: { ...preset.preset, overrides: { ...preset.preset.overrides, timeLimitMinutes: n || undefined } } })} />
-                </SettingRow>
+                <PresetFields client={client} a={a} orgName={orgName} ro={ro} role={preset.preset.role} overrides={preset.preset.overrides}
+                  onChange={(overrides) => set("agent", { ...preset, preset: { ...preset.preset, overrides } })} />
                 <SettingRow label="Instructions for this run" block data-testid="role-prompt"
                   help={`${PRESET_ROLE_LABEL[preset.preset.role]} gets its own prompt, as every task gives it, then these instructions as the task brief.`}>
                   <Textarea aria-label="Task brief" rows={8} disabled={ro} value={preset.brief}
@@ -557,6 +554,107 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
         </div>
       )}
     </form>
+  );
+}
+
+type OverrideKey = keyof AgentOverrides;
+
+/**
+ * A preset's harness, model, time limit, machine and image: each shows the
+ * role's value as Agents settings resolve it for this scope, with its own
+ * override (Reset goes back to the role's).
+ */
+function PresetFields({ client, a, orgName, ro, role, overrides, onChange }: {
+  client: ApiClient;
+  a: Automation;
+  orgName: string;
+  ro: boolean;
+  role: PresetRole;
+  overrides: AgentOverrides;
+  onChange: (o: AgentOverrides) => void;
+}) {
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
+  const [tiers, setTiers] = useState<readonly ModelTier[]>([]);
+  const [sizes, setSizes] = useState<readonly MachineSizeWithUse[]>([]);
+  const [images, setImages] = useState<readonly ImageChoice[]>([]);
+  useEffect(() => {
+    (a.projectId ? client.projectSettings(a.projectId) : client.organizationSettings()).then(setSettings, () => setSettings(null));
+    client.modelTiers().then((r) => setTiers(r.tiers), () => undefined);
+    client.machineSizes().then((r) => setSizes(r.sizes), () => undefined);
+    client.imageChoices().then((r) => setImages(r.images), () => undefined);
+  }, [client, a.projectId]);
+  const r = settings?.roles[role];
+  const scopeName = settings?.project?.name ?? orgName;
+  const roleName = PRESET_ROLE_LABEL[role];
+  const tierName = (id: string | null | undefined) => tiers.find((t) => t.id === id)?.name ?? (id ? id : "No tier");
+  const sizeName = (id: string | null | undefined) => sizes.find((s) => s.id === id)?.name ?? sizes.find((s) => s.isDefault)?.name ?? "Default";
+  const imageName = (id: string | null | undefined) => images.find((i) => i.id === id)?.name ?? (id ?? "The project's runtime image");
+  const resolved: Record<OverrideKey, string> = {
+    harness: r ? HARNESS_LABEL[r.harness.value] : "…",
+    tierId: r ? tierName(r.tier.value) : "…",
+    timeLimitMinutes: r ? (r.timeLimitMinutes.value ? `${r.timeLimitMinutes.value} min` : "No limit") : "…",
+    machineSizeId: r ? sizeName(r.machineSize.value) : "…",
+    imageId: r ? imageName(r.image.value) : "…",
+  };
+  const setOne = <K extends OverrideKey>(k: K, v: AgentOverrides[K] | undefined) => {
+    const next = { ...overrides };
+    if (v === undefined || v === null || v === "") delete next[k];
+    else next[k] = v;
+    onChange(next);
+  };
+  const first: Record<OverrideKey, AgentOverrides[OverrideKey]> = {
+    harness: r?.harness.value ?? "opencode",
+    tierId: r?.tier.value ?? tiers[0]?.id,
+    timeLimitMinutes: r?.timeLimitMinutes.value ?? 120,
+    machineSizeId: r?.machineSize.value ?? sizes.find((s) => s.isDefault)?.id ?? sizes[0]?.id,
+    imageId: r?.image.value ?? images[0]?.id,
+  };
+  const control = (k: OverrideKey) => {
+    switch (k) {
+      case "harness":
+        return <Select<string> aria-label="Harness" value={overrides.harness ?? ""} disabled={ro}
+          options={HARNESSES.map((h) => ({ value: h, label: HARNESS_LABEL[h] }))} onValueChange={(v) => setOne("harness", v as Harness)} />;
+      case "tierId":
+        return <Select<string> aria-label="Model" value={overrides.tierId ?? ""} disabled={ro}
+          options={tiers.map((t) => ({ value: t.id, label: t.name, meta: t.model ?? "No model" }))} onValueChange={(v) => setOne("tierId", v)} />;
+      case "timeLimitMinutes":
+        return <NumberInput step={1} aria-label="Time limit in minutes" min={30} max={10_080} disabled={ro} value={overrides.timeLimitMinutes ?? 120}
+          onValueChange={(n) => setOne("timeLimitMinutes", n ?? undefined)} />;
+      case "machineSizeId":
+        return <Select<string> aria-label="Machine" value={overrides.machineSizeId ?? ""} disabled={ro}
+          options={sizes.map((s) => ({ value: s.id, label: s.name, meta: `${s.cpus} CPUs` }))} onValueChange={(v) => setOne("machineSizeId", v)} />;
+      case "imageId":
+        return <Select<string> aria-label="Image" value={overrides.imageId ?? ""} disabled={ro}
+          options={images.map((i) => ({ value: i.id, label: i.name }))} onValueChange={(v) => setOne("imageId", v)} />;
+    }
+  };
+  const rows: Array<[OverrideKey, string, string]> = [
+    ["harness", "Harness", "The coding agent that runs it."],
+    ["tierId", "Model", "The model tier it asks for."],
+    ["timeLimitMinutes", "Time limit", "Without progress, in minutes."],
+    ["machineSizeId", "Machine", "CPUs · memory · disk."],
+    ["imageId", "Image", "What it works in."],
+  ];
+  const from = `${roleName} · ${scopeName}`;
+  return (
+    <div data-testid="preset-fields">
+      {rows.map(([k, label, help]) => {
+        const set = overrides[k] !== undefined;
+        return (
+          <SettingRow key={k} label={label} help={help} data-testid={`preset-${k}`}
+            source={set
+              ? <SettingSource source="project" from={roleName} inherited={resolved[k]} onReset={ro ? undefined : () => setOne(k, undefined)} />
+              : <SettingSource source="organization" from={from} />}>
+            {set ? control(k) : (
+              <>
+                <span className="automationFact" data-testid={`preset-${k}-value`}>{resolved[k]}</span>
+                {ro || first[k] === undefined ? null : <TextButton data-testid={`preset-${k}-override`} onClick={() => setOne(k, first[k])}>Override for this automation</TextButton>}
+              </>
+            )}
+          </SettingRow>
+        );
+      })}
+    </div>
   );
 }
 

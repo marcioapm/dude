@@ -117,7 +117,46 @@ describe("an automation's page", () => {
       onPlace={() => undefined} onBack={() => undefined} />);
     const brief = await until(() => c.querySelector("[data-testid=role-prompt]"), "the brief");
     expect(brief.textContent).toContain("Tester gets its own prompt, as every task gives it, then these instructions as the task brief.");
-    expect(c.querySelector("[data-testid=preset-fields]")?.textContent).toContain("Overridden");
+    // The fixture overrides only the time limit.
+    const field = (k: string) => c.querySelector<HTMLElement>(`[data-testid=preset-${k}]`)!;
+    await until(() => (field("harness").textContent?.includes("From Tester ·") ? true : null), "the role's values");
+    for (const k of ["harness", "tierId", "machineSizeId", "imageId"]) {
+      expect(field(k).querySelector("[data-source=organization]")).not.toBeNull();
+    }
+    // The fixtures' image library is empty: there is nothing to override the image with.
+    for (const k of ["harness", "tierId", "machineSizeId"]) {
+      expect(c.querySelector(`[data-testid=preset-${k}-override]`)).not.toBeNull();
+    }
+    expect(c.querySelector("[data-testid=preset-imageId-override]")).toBeNull();
+    expect(field("timeLimitMinutes").textContent).toContain("Overridden");
+    expect(field("timeLimitMinutes").textContent).toContain("Tester:");
+  });
+
+  test("each preset field is overridden and reset on its own, and Save sends exactly those overrides", async () => {
+    const client = new FixtureClient("a");
+    const sent: unknown[] = [];
+    const update = client.updateAutomation.bind(client);
+    client.updateAutomation = (id, input) => { sent.push(input.agent); return update(id, input); };
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    await until(() => c.querySelector("[data-testid=preset-harness-override]"), "the override buttons");
+    for (const k of ["harness", "tierId", "machineSizeId", "imageId"]) {
+      const button = c.querySelector<HTMLElement>(`[data-testid=preset-${k}-override]`);
+      if (button) await click(button);
+    }
+    const timeLimit = c.querySelector<HTMLElement>("[data-testid=preset-timeLimitMinutes]")!;
+    await click([...timeLimit.querySelectorAll("button")].find((b) => b.textContent === "Reset")!);
+    expect(timeLimit.querySelector("[data-source=organization]")).not.toBeNull();
+    for (const k of ["harness", "tierId", "machineSizeId"]) {
+      expect(c.querySelector(`[data-testid=preset-${k}]`)!.textContent).toContain("Overridden");
+    }
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => (sent.length ? sent : null), "the save");
+    const overrides = (sent[0] as { preset: { overrides: Record<string, unknown> } }).preset.overrides;
+    expect(overrides["timeLimitMinutes"]).toBeUndefined();
+    expect(overrides["harness"]).toBeDefined();
+    expect(overrides["tierId"]).toBeDefined();
+    expect(overrides["machineSizeId"]).toBeDefined();
   });
 });
 
