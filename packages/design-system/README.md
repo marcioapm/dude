@@ -782,7 +782,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   there is no task to take over.
 - **The rail** is `SessionRail` with a `SessionRailBlock` per part:
   `SessionPeople` (owner first, each with their role in words — Owner, Can
-  chat, Can read, Invited), `LinkedProjects` (each project and its
+  chat, Can read, Invited; a member with `left: <org>`, the owner of record
+  of a session its admins own, reads "Left <org> · No access"), `LinkedProjects` (each project and its
   repositories, read only; "No project linked yet" when none), **Model**
   (`ModelPicker`; read only but for the owner), **Files**
   and `Capabilities` (what it can and cannot do, each line a check or a
@@ -854,7 +855,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   an `outside` person), with the keys under it. The composer keeps focus
   (`aria-activedescendant`); a pointer press picks without taking it.
   `MentionChip` is a mention in a sent message: the face and "@First" on the
-  info wash, named "Mention: <name>"; `you` when it is the reader.
+  info wash, named "Mention: <name>"; `you` when it is the reader. It sits
+  in the sentence, in place of the "@Name" the composer wrote:
+  `ChatMessage mentions` (and `Markdown mentions`) take `{ name, chip }` per
+  person and draw the chip for each "@<name>" that starts a word in plain
+  text (not in code or a link), the longest name first; the name is never
+  shown twice.
   `MentionShareConfirm` sits under the composer (its `below` slot) after a
   pick of someone who can't open a private session: the owner gets **Share
   and send**, **Send without sharing** (the name stays as text; nobody is

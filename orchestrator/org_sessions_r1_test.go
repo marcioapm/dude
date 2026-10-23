@@ -218,6 +218,28 @@ func TestOrgSessionMentionOfARemovedMemberStopsWaiting(t *testing.T) {
 	}
 }
 
+// A question put to nobody by name waits on the owner; while the session's
+// admins own it, on every active admin (Waiting on you), not on a member.
+func TestOrgSessionAnOwnerQuestionWaitsOnTheAdmins(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "let's plan"})
+	run := s.started(id)
+	mustExec(t, s.owner, `INSERT INTO questions (id, organization_id, run_id, prompt) VALUES ($1, $2, $3, 'Which plan?')`, "q_own_"+s.org, s.org, run)
+	waits := func(who string) int { return len(s.ok(who, "GET", "/internal/sessions", nil)["questions"].([]any)) }
+	if waits(s.admin) != 0 {
+		t.Errorf("an admin is waited on while the session has its owner")
+	}
+	s.ownerLeaves(id)
+	if waits(s.admin) != 1 {
+		t.Errorf("the owner's question does not wait on the admin of an admin-owned session")
+	}
+	if waits(s.ana) != 0 {
+		t.Errorf("the owner's question waits on a member")
+	}
+}
+
 // The route's negatives: PUT access by someone outside a private session is
 // a 404; take-ownership by a removed admin or another organisation's is a
 // 403 (the principal is refused), and by a member with a role on an owned

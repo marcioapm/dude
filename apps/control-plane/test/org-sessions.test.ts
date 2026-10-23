@@ -122,7 +122,11 @@ test("the open list, access and take-ownership forward as the person; a message'
     { text: "x", mentions: "per_a" },
   ]) expect((await call(eli, "POST", "/v1/brainstorms/ssn_x/chat", body)).status).toBe(400);
   expect((await call(eli, "PUT", "/v1/brainstorms/ssn_x/access", {})).status).toBe(400);
+  expect((await call(eli, "PUT", "/v1/brainstorms/ssn_x/access", { access: "everyone" })).status).toBe(400);
   expect(forwarded).toEqual([]);
+  // "private" is a known access: the orchestrator answers it (its 409, one way).
+  expect((await call(eli, "PUT", "/v1/brainstorms/ssn_x/access", { access: "private" })).status).toBe(200);
+  expect(forwarded.map((f) => f.body)).toEqual([{ access: "private" }]);
 });
 
 test("removing a person hands their reachable sessions to the admins and archives the ones nobody else is in", async () => {

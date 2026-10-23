@@ -661,7 +661,13 @@ gets `owned_by_admins` (`session.owner_left`); a private one nobody else is in
 is archived with them. While it is set every active admin is `owner` in
 `session_role()` (and may open it); `POST …/take-ownership` makes one of them
 the owner row and clears it (`session.owner_taken`), else 409. Handing it on
-waits until an admin has taken it.
+waits until an admin has taken it. `passOnSessions` takes each owned
+session's `session:` advisory lock (`lockOwnedSessions`, before the person's
+row), voids the departed owner's pending handover, and queues the owner-left
+notice as a directive for a live agent (`session.told`); take-ownership tells
+it through `notices/told/session-owner`. Writing a message, answering, filing
+and Try again join an organisation session; renaming takes an owner or chat
+row (or an admin while its admins own it).
 
 **Mentions** ride on a session message (`mentions`, `shareWith`: person ids).
 `shareWith` is the owner's only (403, nothing sent) and adds each as accepted

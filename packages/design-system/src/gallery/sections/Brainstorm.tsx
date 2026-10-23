@@ -8,6 +8,7 @@ import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
 import { ChatComposer } from "../../components/ChatComposer.tsx";
+import { ChatMessage } from "../../components/ChatMessage.tsx";
 import { ScreenHeader, Segmented } from "../../components/ScreenHeader.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Button } from "../../primitives/Button.tsx";
@@ -290,7 +291,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-mentions" title="MentionMenu / MentionChip / MentionShareConfirm"
-        note="@ in a session's composer: a live ChatComposer with mentionables (type @ — the menu opens above the field; in the private one a pick of someone outside it shows the share confirm in the composer's below slot, at full width and at 390px), the menu with a query and with none, a private session's menu with outside people (locked, in the attention ink), a message with two chips (one you), the share confirm for the owner and for anyone else at 390px, and a mention's Waiting on you row.">
+        note="@ in a session's composer: a live ChatComposer with mentionables (type @ — the menu opens above the field; in the private one a pick of someone outside it shows the share confirm in the composer's below slot, at full width and at 390px), the menu with a query and with none, a private session's menu with outside people (locked, in the attention ink), a message with its two chips in the sentence (one you), the share confirm for the owner and for anyone else at 390px, and a mention's Waiting on you row.">
         <Panes mode={mode}>
           <Col style={{ width: 460 }}>
             <Label>ChatComposer, organisation session: type @</Label>
@@ -304,7 +305,8 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
             <MentionMenu id="g-menu-private" query="" active={0} onPick={() => undefined}
               items={[MENTION_ITEMS[0]!, { ...MENTION_ITEMS[1]!, outside: true }, { ...MENTION_ITEMS[2]!, outside: true }]} />
             <MentionMenu id="g-menu-none" query="zed" active={0} onPick={() => undefined} items={[]} />
-            <p>Can you check the rows, <MentionChip person={P["ana"]!} /> and <MentionChip person={P["tom"]!} you />?</p>
+            <ChatMessage role="human" name="Márcio Martins" person={P["marcio"]} content="Can you check the rows, @Ana Ribeiro and @Tom Okafor?"
+              mentions={[{ name: P["ana"]!.name, chip: <MentionChip person={P["ana"]!} /> }, { name: P["tom"]!.name, chip: <MentionChip person={P["tom"]!} you /> }]} />
             <div style={{ width: 390, display: "flex", flexDirection: "column", gap: 8 }}>
               <MentionShareConfirm person={P["tom"]!} owner ownerName="Márcio Martins" onShare={() => undefined}
                 onPlain={() => undefined} onCancel={() => undefined} />
