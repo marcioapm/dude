@@ -177,7 +177,6 @@ func TestAutomationRunIsClaimedBeforeItStarts(t *testing.T) {
 // container, then the run ends.
 func TestAutomationServerKeepsAnEventThatArrivesAsItIdles(t *testing.T) {
 	h := newHarness(t)
-	h.runner.Idle = 0
 	var mu sync.Mutex
 	var deliveries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

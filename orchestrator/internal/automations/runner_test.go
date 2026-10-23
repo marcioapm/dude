@@ -57,7 +57,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(h.fake.Close)
 	h.lux = lux.New(srv.URL, "k")
 	h.runner = &Runner{DB: app, Lux: h.lux, Agent: phases.AgentConfig{DefaultImage: "agent:1"},
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Idle: 150 * time.Millisecond}
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	h.runner.Now = func() time.Time {
 		if f := h.frozen.Load(); f != 0 {
 			return time.Unix(0, f)
@@ -547,7 +547,6 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		w.WriteHeader(202)
 	}))
 	t.Cleanup(srv.Close)
-	h.runner.Idle = 0 // ServerIdle, on the runner's clock
 	if ServerIdle != 30*time.Second {
 		t.Fatalf("ServerIdle %v, the decision says 30 s (Q3, Q16)", ServerIdle)
 	}

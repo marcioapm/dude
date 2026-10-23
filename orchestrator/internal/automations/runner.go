@@ -65,8 +65,6 @@ type Runner struct {
 	// Run and server; nil asks lux for the server's url.
 	ServerURL func(ctx context.Context, luxRunID string, port int) (string, error)
 	Now       func() time.Time
-	// Idle overrides ServerIdle (tests).
-	Idle time.Duration
 	// Workers bounds the runs followed and webhooks POSTed at once, off the
 	// sweep; zero is DefaultWorkers.
 	Workers int
@@ -123,13 +121,6 @@ func (r *Runner) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
-}
-
-func (r *Runner) idle() time.Duration {
-	if r.Idle > 0 {
-		return r.Idle
-	}
-	return ServerIdle
 }
 
 func (r *Runner) client() *http.Client {
@@ -1146,7 +1137,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 			return err
 		})
 	}
-	if r.now().Sub(last) < r.idle() {
+	if r.now().Sub(last) < ServerIdle {
 		return false, nil
 	}
 	status := "succeeded"
