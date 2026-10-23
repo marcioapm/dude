@@ -247,25 +247,32 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	return createPhaseRunTx(ctx, tx, org, in)
 }
 
-// timeSpentTx says whether the lux Run predecessor holds has less than half
-// of limit left: lux times a Run's running time summed over all its
-// placements, and a resume cannot give it more, so a round handed a Run
-// with less could be stopped at its limit before it ends. Used is each
-// row's active time (run_metrics: started to ended, less dude's parks)
-// over the resume chain, the rows that held that lux Run in turn. A zero
-// limit is unknown: nothing is spent.
+// timeSpentTx says whether the lux Run predecessor holds has too little of
+// limit left for another round: lux times a Run's running time summed over
+// all its placements, and a resume cannot give it more. Enough is half the
+// limit, or the longest round of predecessor's chain if that is more: a
+// round that ran that long may run that long again. Used is each row's
+// active time (run_metrics: started to ended, less dude's parks) over the
+// rows that held that lux Run in turn (linked by resume); the longest is
+// over every round the chain continues, replays included, as its replay
+// (chainScope) covers. The measure is dude's clock, which can be a few
+// minutes under lux's at each stop: a heuristic, with phases' replay of a
+// round lux timed out as its backstop. A zero limit is unknown: nothing
+// is spent.
 func timeSpentTx(ctx context.Context, tx pgx.Tx, predecessor string, limit time.Duration) (bool, error) {
 	if limit <= 0 {
 		return false, nil
 	}
-	var used float64
+	var used, longest float64
 	err := tx.QueryRow(ctx, `WITH RECURSIVE chain AS (
-			SELECT id, continues_run_id, continues_how FROM runs WHERE id = $1
+			SELECT id, continues_run_id, continues_how, true AS held FROM runs WHERE id = $1
 			UNION ALL
-			SELECT r.id, r.continues_run_id, r.continues_how FROM runs r JOIN chain c ON r.id = c.continues_run_id
-			WHERE c.continues_how = 'resume')
-		SELECT COALESCE(sum(m.active_seconds), 0) FROM chain, run_metrics(chain.id) m`, predecessor).Scan(&used)
-	return limit-time.Duration(used*float64(time.Second)) < limit/2, err
+			SELECT r.id, r.continues_run_id, r.continues_how, c.held AND c.continues_how = 'resume'
+			FROM runs r JOIN chain c ON r.id = c.continues_run_id)
+		SELECT COALESCE(sum(m.active_seconds) FILTER (WHERE chain.held), 0), COALESCE(max(m.active_seconds), 0)
+		FROM chain, run_metrics(chain.id) m`, predecessor).Scan(&used, &longest)
+	seconds := func(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
+	return limit-seconds(used) < max(limit/2, seconds(longest)), err
 }
 
 // headMovedTx says whether a writer predecessor's checkout cannot be

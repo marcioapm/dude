@@ -113,31 +113,57 @@ func TestTheTimeUsedIsTheWholeResumeChains(t *testing.T) {
 			// Three rounds of 50 minutes each on one lux Run: each under
 			// two hours, 2h30m together.
 			w := b.world(t, 50*time.Minute)
-			w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category,
-					base_refs, started_at, ended_at, continues_run_id, continues_how)
-				VALUES ('run_b1', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
-					now() - interval '5 hours', now() - interval '4 hours 10 minutes', NULL, NULL),
-				       ('run_b2', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
-					now() - interval '3 hours', now() - interval '2 hours 10 minutes', 'run_b1', 'resume')`,
-				w.org, w.project, w.task, b.phase, b.role, b.category)
-			w.exec(t, `UPDATE runs SET continues_run_id = 'run_b2', continues_how = 'resume' WHERE id = 'run_b'`)
+			b.before(t, w, chainRow{"run_b1", 50 * time.Minute, ""}, chainRow{"run_b2", 50 * time.Minute, "resume"})
 			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != timeReplayed {
 				t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
 			}
 			// The same two rounds on this lux Run, after a replay of a round
-			// that ran for five hours on another: 1h40m used.
+			// that ran 2h10m on another: 1h40m used, 2h20m left.
 			w = b.world(t, 50*time.Minute)
-			w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category,
-					base_refs, started_at, ended_at, continues_run_id, continues_how)
-				VALUES ('run_b0', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
-					now() - interval '11 hours', now() - interval '6 hours', NULL, NULL),
-				       ('run_b1', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
-					now() - interval '3 hours', now() - interval '2 hours 10 minutes', 'run_b0', 'replay')`,
-				w.org, w.project, w.task, b.phase, b.role, b.category)
-			w.exec(t, `UPDATE runs SET continues_run_id = 'run_b1', continues_how = 'resume' WHERE id = 'run_b'`)
+			b.before(t, w, chainRow{"run_b0", 2*time.Hour + 10*time.Minute, ""}, chainRow{"run_b1", 50 * time.Minute, "replay"})
 			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != resumed {
 				t.Fatalf("after a replay: how|lux|fresh = %q, want %q", got, resumed)
 			}
 		})
 	}
+}
+
+// A round of the chain ran 3h, on a lux Run an earlier replay left: its
+// next round may run as long, so 2h20m left (over half of 4h) is not
+// enough, and the round is replayed.
+func TestARoundNeedsTheChainsLongestRoundLeft(t *testing.T) {
+	for _, b := range []budgetRound{testerRound, reviewerRound} {
+		t.Run(b.phase, func(t *testing.T) {
+			w := b.world(t, 50*time.Minute)
+			b.before(t, w, chainRow{"run_b0", 3 * time.Hour, ""}, chainRow{"run_b1", 50 * time.Minute, "replay"})
+			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != timeReplayed {
+				t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
+			}
+		})
+	}
+}
+
+// chainRow is an earlier round of the same phase: its id, how long it ran
+// and how it continues the row before it ("" for none).
+type chainRow struct {
+	id  string
+	ran time.Duration
+	how string
+}
+
+// before inserts rows, oldest first, each continuing the one before it as
+// its how says, and has run_b resume the last.
+func (b budgetRound) before(t *testing.T, w *roundWorld, rows ...chainRow) {
+	t.Helper()
+	prev := ""
+	for i, r := range rows {
+		ended := time.Duration(len(rows)-i) * 6 * time.Hour
+		w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category,
+				base_refs, started_at, ended_at, continues_run_id, continues_how)
+			VALUES ($1, $2, $3, $4, 1, 'completed', $5::run_phase, $6::agent_role, 'agent', NULLIF($7, ''), '{}',
+				now() - make_interval(secs => $8::float8 + $9::float8), now() - make_interval(secs => $8::float8), NULLIF($10, ''), NULLIF($11, ''))`,
+			r.id, w.org, w.project, w.task, b.phase, b.role, b.category, ended.Seconds(), r.ran.Seconds(), prev, r.how)
+		prev = r.id
+	}
+	w.exec(t, `UPDATE runs SET continues_run_id = $1, continues_how = 'resume' WHERE id = 'run_b'`, prev)
 }
