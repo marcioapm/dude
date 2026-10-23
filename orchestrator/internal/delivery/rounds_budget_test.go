@@ -28,15 +28,12 @@ func TestTheTimeUsedIsReadWithoutJIT(t *testing.T) {
 		if err := tx.QueryRow(ctx, `SELECT set_config('jit', 'on', true)`).Scan(&before); err != nil {
 			return err
 		}
-		if id, err = delivery.CreatePhaseRunTx(ctx, tx, w.org, delivery.PhaseRun{TaskID: w.task, Phase: delivery.PhaseTest, Attempt: 1,
-			BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_b"}}, 4*time.Hour); err != nil {
+		if id, err = delivery.CreatePhaseRunTx(ctx, tx, w.org, testerRound.round(w), 4*time.Hour); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, `SELECT current_setting('jit')`).Scan(&after)
 	})
-	if got := w.how(t, id); got != timeReplayed {
-		t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
-	}
+	w.wantHow(t, id, timeReplayed)
 	if before != "on" || during != "off" || after != "on" {
 		t.Errorf("jit %q before, %q during the query, %q after; want on, off, on", before, during, after)
 	}
@@ -68,30 +65,49 @@ func (b budgetRound) world(t *testing.T, used time.Duration) *roundWorld {
 			now() - interval '10 minutes' - make_interval(secs => $7), now() - interval '10 minutes', true, now() + interval '1 day',
 			'lrun_b', 'fake/scripted', 'Checking', 'opencode')`,
 		w.org, w.project, w.task, b.phase, b.role, b.category, used.Seconds())
-	w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
-		VALUES ('ev_b', $1, 'agent.message', 'run_b', $2, 'agent', 'run_b', 'test', '{"text":"Earlier round"}')`, w.org, w.task)
+	w.said(t, "run_b", "Earlier round")
 	return w
 }
 
-// next creates the round after run_b through the store, as the workflow's
-// steps do, on a deployment whose phase Runs get limit.
+// round is the round after run_b.
+func (b budgetRound) round(w *roundWorld) delivery.PhaseRun {
+	return delivery.PhaseRun{TaskID: w.task, Phase: b.phase, Category: b.category, Key: "next", Attempt: 1,
+		BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_b"}}
+}
+
 func (b budgetRound) next(t *testing.T, w *roundWorld, limit time.Duration) string {
 	t.Helper()
-	id, err := (&delivery.Store{DB: w.app, RunTimeLimit: limit}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
-		TaskID: w.task, Phase: b.phase, Category: b.category, Key: "next", Attempt: 1,
-		BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_b"}})
+	return w.createWithin(t, limit, b.round(w))
+}
+
+// createWithin creates in through the store, as the workflow's steps do, on
+// a deployment whose phase Runs get limit.
+func (w *roundWorld) createWithin(t *testing.T, limit time.Duration, in delivery.PhaseRun) string {
+	t.Helper()
+	id, err := (&delivery.Store{DB: w.app, RunTimeLimit: limit}).CreatePhaseRun(context.Background(), w.org, in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-// how is the new round's continuation, lux Run and run.created's fresh.
-func (w *roundWorld) how(t *testing.T, id string) string {
+// said gives run an agent message, for a replay to have a conversation.
+func (w *roundWorld) said(t *testing.T, run, text string) {
 	t.Helper()
-	return w.str(t, `SELECT COALESCE(continues_how, '') || '|' || COALESCE(lux_run_id, '') || '|' ||
+	w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_'||$3, $1, 'agent.message', $3, $2, 'agent', $3, 'test', jsonb_build_object('text', $4::text))`, w.org, w.task, run, text)
+}
+
+// wantHow checks the new round's continuation, lux Run and run.created's
+// fresh.
+func (w *roundWorld) wantHow(t *testing.T, id, want string) {
+	t.Helper()
+	got := w.str(t, `SELECT COALESCE(continues_how, '') || '|' || COALESCE(lux_run_id, '') || '|' ||
 		COALESCE((SELECT payload->>'fresh' FROM events WHERE run_id = r.id AND event_type = 'run.created'), '')
 		FROM runs r WHERE id = $1`, id)
+	if got != want {
+		t.Fatalf("how|lux|fresh = %q, want %q", got, want)
+	}
 }
 
 const (
@@ -123,9 +139,7 @@ func TestARoundIsNotHandedALuxRunWithLittleTimeLeft(t *testing.T) {
 			t.Run(name+"/"+tc.used.String()+"-of-"+tc.limit.String(), func(t *testing.T) {
 				w := b.world(t, tc.used)
 				id := b.next(t, w, tc.limit)
-				if got := w.how(t, id); got != tc.want {
-					t.Fatalf("how|lux|fresh = %q, want %q", got, tc.want)
-				}
+				w.wantHow(t, id, tc.want)
 				if tc.want == resumed {
 					return
 				}
@@ -152,16 +166,12 @@ func TestTheTimeUsedIsTheWholeResumeChains(t *testing.T) {
 			// two hours, 2h30m together.
 			w := b.world(t, 50*time.Minute)
 			b.before(t, w, chainRow{"run_b1", 50 * time.Minute, ""}, chainRow{"run_b2", 50 * time.Minute, "resume"})
-			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != timeReplayed {
-				t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
-			}
+			w.wantHow(t, b.next(t, w, 4*time.Hour), timeReplayed)
 			// The same two rounds on this lux Run, after a replay of a round
 			// that ran 2h10m on another: 1h40m used, 2h20m left.
 			w = b.world(t, 50*time.Minute)
 			b.before(t, w, chainRow{"run_b0", 2*time.Hour + 10*time.Minute, ""}, chainRow{"run_b1", 50 * time.Minute, "replay"})
-			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != resumed {
-				t.Fatalf("after a replay: how|lux|fresh = %q, want %q", got, resumed)
-			}
+			w.wantHow(t, b.next(t, w, 4*time.Hour), resumed)
 		})
 	}
 }
@@ -174,9 +184,7 @@ func TestARoundNeedsTheChainsLongestRoundLeft(t *testing.T) {
 		t.Run(b.phase, func(t *testing.T) {
 			w := b.world(t, 50*time.Minute)
 			b.before(t, w, chainRow{"run_b0", 3 * time.Hour, ""}, chainRow{"run_b1", 50 * time.Minute, "replay"})
-			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != timeReplayed {
-				t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
-			}
+			w.wantHow(t, b.next(t, w, 4*time.Hour), timeReplayed)
 		})
 	}
 }
@@ -186,9 +194,7 @@ func TestARoundNeedsTheChainsLongestRoundLeft(t *testing.T) {
 func TestASpentRoundStillCollectingIsReplayedAtOnce(t *testing.T) {
 	w := testerRound.world(t, 2*time.Hour+6*time.Minute)
 	w.exec(t, `UPDATE runs SET artifacts_due_at = now() WHERE id = 'run_b'`)
-	if got := w.how(t, testerRound.next(t, w, 4*time.Hour)); got != timeReplayed {
-		t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
-	}
+	w.wantHow(t, testerRound.next(t, w, 4*time.Hour), timeReplayed)
 }
 
 // A fixer going on from the implementer takes its lux Run over by the same
@@ -198,21 +204,14 @@ func TestAFixerIsNotHandedAnImplementersLuxRunWithLittleTimeLeft(t *testing.T) {
 	for _, tc := range []struct {
 		used time.Duration
 		want string
-	}{{2*time.Hour + 6*time.Minute, "replay||time_budget"}, {90 * time.Minute, "resume|lrun_im|"}} {
+	}{{2*time.Hour + 6*time.Minute, timeReplayed}, {90 * time.Minute, "resume|lrun_im|"}} {
 		t.Run(tc.used.String(), func(t *testing.T) {
 			w := writerWorld(t)
 			w.exec(t, `UPDATE runs SET started_at = ended_at - make_interval(secs => $1) WHERE id = 'run_im'`, tc.used.Seconds())
-			w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
-				VALUES ('ev_im', $1, 'agent.message', 'run_im', $2, 'agent', 'run_im', 'test', '{"text":"Implemented it"}')`, w.org, w.task)
-			id, err := (&delivery.Store{DB: w.app, RunTimeLimit: 4 * time.Hour}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
-				TaskID: w.task, Phase: delivery.PhaseFix, Key: "f1", Attempt: 1,
+			w.said(t, "run_im", "Implemented it")
+			id := w.createWithin(t, 4*time.Hour, delivery.PhaseRun{TaskID: w.task, Phase: delivery.PhaseFix, Key: "f1", Attempt: 1,
 				BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_im"}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := w.how(t, id); got != tc.want {
-				t.Fatalf("how|lux|fresh = %q, want %q", got, tc.want)
-			}
+			w.wantHow(t, id, tc.want)
 		})
 	}
 }

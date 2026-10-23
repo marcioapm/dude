@@ -231,8 +231,7 @@ type phaseRun struct {
 	// due (nil for none), as the sweep read them (migration 139).
 	RetryFailures int
 	RetryDueAt    *time.Time
-	// lux stopped it, a resumed round, at its time limit
-	// (replayAtTimeLimit): it is replayed in its slot.
+	// Held by holdTimedOut, to be replayed in its slot.
 	TimedOut bool
 }
 

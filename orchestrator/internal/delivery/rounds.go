@@ -249,17 +249,19 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 }
 
 // timeSpentTx says whether the lux Run predecessor holds has too little of
-// limit left for another round: lux times a Run's running time summed over
-// all its placements, and a resume cannot give it more. Enough is half the
-// limit, or the longest round of predecessor's chain if that is more: a
-// round that ran that long may run that long again. Used is each row's
-// active time (run_metrics: started to ended, less dude's parks) over the
-// rows that held that lux Run in turn (linked by resume); the longest is
-// over every round the chain continues, replays included, as its replay
-// (chainScope) covers. The measure is dude's clock, which can be a few
-// minutes under lux's at each stop: a heuristic, with phases' replay of a
-// round lux timed out as its backstop. A zero limit is unknown: nothing
-// is spent.
+// limit left for another round. lux times a Run's running time summed over
+// all its placements, and a resume cannot give it more.
+//
+//   - Used: the active time (run_metrics: started to ended, less dude's
+//     parks) of the rows that held that lux Run in turn, linked by resume.
+//   - Enough: half the limit, or the chain's longest round if that is more
+//     (a round that ran that long may run that long again), taken over
+//     every round the chain continues, replays included, as its replay
+//     (chainScope) covers.
+//
+// dude's clock can be a few minutes under lux's at each stop, so this is a
+// heuristic; phases' holdTimedOut is its backstop. A zero limit is
+// unknown: nothing is spent.
 func timeSpentTx(ctx context.Context, tx pgx.Tx, predecessor string, limit time.Duration) (bool, error) {
 	if limit <= 0 {
 		return false, nil

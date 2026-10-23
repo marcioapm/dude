@@ -630,7 +630,7 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 		if broken != nil {
 			failure, agentErr = broken.Error, broken.AgentError
 		}
-		if replay, err := t.replayAtTimeLimit(ctx, tx, *stop, failure, agentErr); replay || err != nil {
+		if held, err := t.holdTimedOut(ctx, tx, *stop, failure, agentErr); held || err != nil {
 			return err
 		}
 		why = luxStopWords(*stop, s.timeout())

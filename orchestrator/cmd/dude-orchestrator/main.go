@@ -89,16 +89,15 @@ func main() {
 	}
 }
 
-// deliveryStore is the delivery store the workflow runs on, with what it
-// takes from the agent configuration: whether the dude CLI is served in
-// containers, and the time limit a next round weighs its predecessor's lux
-// Run against (zero, with a warning, for one that is not a Go duration).
+// deliveryStore is the workflow's delivery store, with what it takes from
+// the agent configuration: ToolsService and the phase Runs' time limit.
 func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) *delivery.Store {
-	if agent.TimeLimit() <= 0 {
+	limit := agent.TimeLimit()
+	if limit <= 0 {
 		log.Warn("agent.timeout is not a Go duration: next rounds resume their predecessor's lux Run whatever time it has left",
 			"timeout", agent.Timeout)
 	}
-	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: agent.TimeLimit()}
+	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
 }
 
 func run(log *slog.Logger) error {

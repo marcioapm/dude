@@ -58,6 +58,15 @@ func (w *harnessWorld) held() (status string, timedOut bool, failed int) {
 // processExited is the shim's turn end when lux killed the agent's process.
 var processExited = map[string]any{"type": "acp.turn_end", "data": map[string]any{"stopReason": "", "error": "session/prompt: process exited (137)"}}
 
+// timesOutMidTurn is lux timing the Run out while its agent is mid-turn:
+// stopping, the agent's process exiting, then failed.
+func (w *harnessWorld) timesOutMidTurn() {
+	w.t.Helper()
+	w.luxState("stopping")
+	w.feed(processExited)
+	w.luxState("failed")
+}
+
 // lux times out a resumed round while its agent is mid-turn: it begins
 // stopping (timeout), the agent's process exits, and the Run fails
 // (timeout), the turn's end arriving before or after lux's stopping. The
@@ -65,9 +74,7 @@ var processExited = map[string]any{"type": "acp.turn_end", "data": map[string]an
 // sweep to replay, not failed. A replay, which is no continuation, fails:
 // at most one replay per round.
 func TestAResumedRoundLuxTimesOutMidTurnIsHeldForAReplay(t *testing.T) {
-	stopping := func(w *harnessWorld) {
-		w.luxState("stopping")
-	}
+	stopping := func(w *harnessWorld) { w.luxState("stopping") }
 	exited := func(w *harnessWorld) { w.feed(processExited) }
 	for _, tc := range []struct {
 		name, how    string
@@ -102,15 +109,14 @@ func TestAResumedRoundLuxTimesOutMidTurnIsHeldForAReplay(t *testing.T) {
 // time limit fails a Run, not kept, and the hold is gone.
 func TestAHeldRoundTheDeliveryNoLongerWaitsOnFails(t *testing.T) {
 	w := timeLimitWorld(t, "resume", false)
-	w.luxState("stopping")
-	w.feed(processExited)
-	w.luxState("failed")
+	w.timesOutMidTurn()
 	if _, err := w.s.advance(context.Background(), w.swept()); err != nil {
 		t.Fatal(err)
 	}
 	status, timedOut, failed := w.held()
 	var keep bool
-	if err := w.owner.QueryRow(context.Background(), `SELECT keep FROM runs WHERE id = $1`, w.run.ID).Scan(&keep); err != nil {
+	var errText string
+	if err := w.owner.QueryRow(context.Background(), `SELECT keep, error FROM runs WHERE id = $1`, w.run.ID).Scan(&keep, &errText); err != nil {
 		t.Fatal(err)
 	}
 	if status != "failed" || keep || timedOut || failed != 1 {
@@ -120,10 +126,6 @@ func TestAHeldRoundTheDeliveryNoLongerWaitsOnFails(t *testing.T) {
 	// the agent's failure, and the agent's own error.
 	if p := w.failedWith(); p["luxStop"] != "timeout" || p["agentError"] != "session/prompt: process exited (137)" {
 		t.Errorf("run.failed %v, want luxStop timeout and the agent's error", p)
-	}
-	var errText string
-	if err := w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, w.run.ID).Scan(&errText); err != nil {
-		t.Fatal(err)
 	}
 	if want := "lux stopped the Run at its time limit: 4h of running; the agent's turn failed: session/prompt: process exited (137)"; errText != want {
 		t.Errorf("error %q, want %q", errText, want)
@@ -144,9 +146,7 @@ func TestAHeldRoundWithAPausePendingIsReplayedNotPaused(t *testing.T) {
 		w.run.ID); err != nil {
 		t.Fatal(err)
 	}
-	w.luxState("stopping")
-	w.feed(processExited)
-	w.luxState("failed")
+	w.timesOutMidTurn()
 	if _, err := w.s.advance(context.Background(), w.swept()); err != nil {
 		t.Fatal(err)
 	}

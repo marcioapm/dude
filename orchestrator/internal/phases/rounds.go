@@ -20,7 +20,7 @@ import (
 // resumed with each checkout moved to the head the round starts from. One
 // that cannot be (lux refuses the resume, the secrets it had are gone, the
 // harness came back with a blank session, lux stopped it at its time
-// limit: replayAtTimeLimit) is replaced in its slot by a fresh Run given
+// limit: holdTimedOut) is replaced in its slot by a fresh Run given
 // its predecessor's conversation (replaceRound).
 
 // roundRefs is a continuation's sync on its resume: each repository the

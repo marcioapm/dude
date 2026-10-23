@@ -86,8 +86,7 @@ type Store struct {
 	// ToolsService): a resumed fixer's round message names it only then.
 	ToolsService bool
 	// The running time lux gives a phase Run (phases.AgentConfig's
-	// TimeLimit), summed over every resume of it; zero: unknown, and a next
-	// round is never refused its predecessor's lux Run for it.
+	// TimeLimit), for timeSpentTx; zero checks nothing.
 	RunTimeLimit time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
