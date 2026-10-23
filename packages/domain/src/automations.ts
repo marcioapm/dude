@@ -185,6 +185,12 @@ export function repoFilterAllows(filter: RepoFilter | null | undefined, fullName
   return filter.mode === "only" ? named : !named;
 }
 
+/** A repository's `owner/name` on its forge, from its clone URL (https, ssh or scp-like); null when it names none. */
+export function repositoryFullName(url: string): string | null {
+  const m = /^(?:[a-z+]+:\/\/(?:[^@/]+@)?[^/]+\/|[^@\s]+@[^:\s]+:)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
 /** A project automation's checkouts: all of the project's repositories, none, or these ids. */
 export const automationReposSchema = z.union([z.literal("all"), z.literal("none"), z.array(z.string().min(1)).max(100)]);
 export type AutomationRepos = z.infer<typeof automationReposSchema>;

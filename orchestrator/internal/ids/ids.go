@@ -43,6 +43,9 @@ const (
 	ModelCall = "mcl"
 	// A reviewer's question (migration 175).
 	ReviewQuestion = "rvq"
+	// Automations (migration 180): a firing, and one POST it made.
+	AutomationRun     = "arn"
+	AutomationRequest = "arq"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

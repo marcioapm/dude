@@ -37,6 +37,12 @@ export const EventTypes = {
   SettingsUpdated: "settings.updated",
   /** A role's prompt was saved or restored. Payload: `{ role, versionId, projectId?, restoredFrom? }`. */
   PromptSaved: "prompt.saved",
+  /**
+   * An automation was created, changed, turned on or off, transferred or
+   * deleted, or its owner left. Payload: `{ automationId, name, changed }`;
+   * `changed.owner` is `{ from, to }` (to null: the organisation's admins hold it).
+   */
+  AutomationChanged: "automation.changed",
 
   // The image library (the backend writes the person's acts, dude-image-builder the builds')
   /** An image was added, described, archived or made the default base. Payload: `{ imageId, name, changed }`. */
