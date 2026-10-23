@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type Ref } from "react";
+import { Fragment, useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { outline as buildOutline, parseMarkdown, type Block, type Inline } from "../util/markdown.ts";
@@ -74,6 +74,19 @@ export interface MarkdownProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
    * an editor's, which adds selection and handles around the same frame.
    */
   readonly attachmentFrame?: ((image: AttachmentFrameProps) => ReactNode) | undefined;
+  /**
+   * People the text @-mentions: each "@<name>" run in plain text (not code,
+   * not a link) is drawn as `chip` in its place. Longest name first, so
+   * "@Ana Nunes" wins over "@Ana".
+   */
+  readonly mentions?: ReadonlyArray<MarkdownMention> | undefined;
+}
+
+/** One mentioned person, for `Markdown`'s `mentions`. */
+export interface MarkdownMention {
+  /** As written after "@": the name the composer put in the text. */
+  readonly name: string;
+  readonly chip: ReactNode;
 }
 
 /** One attachment image as Markdown frames it: what it is, its place, its layout, and what the resolver drew. */
@@ -107,6 +120,7 @@ export function Markdown({
   diffs = true,
   attachmentImage,
   attachmentFrame,
+  mentions,
   className,
   ...rest
 }: MarkdownProps) {
@@ -121,7 +135,9 @@ export function Markdown({
   );
   const headings = useMemo(() => (outline && variant === "document" ? buildOutline(blocks) : []), [blocks, outline, variant]);
   const imageOrder = useMemo(() => (attachmentImage ? numberAttachmentImages(blocks) : new Map<Inline, number>()), [blocks, attachmentImage]);
-  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt", attachmentImage, attachmentFrame, imageOrder };
+  const named = useMemo(() => (mentions?.length ? [...mentions].sort((a, b) => b.name.length - a.name.length) : undefined), [mentions]);
+  const ctx: RenderCtx = { linkTarget, diffs, streaming: streaming === true, variables: variant === "prompt", attachmentImage, attachmentFrame, imageOrder,
+    mentions: named };
 
   const body = (
     <div className={cx(styles["root"], variant === "message" ? styles["message"] : styles[variant], variant === "message" && !streaming && blocks.length > 1 && styles["long"], streaming && styles["streaming"], unmeasured && styles["unmeasured"], imageOrder.size > 0 && styles["figures"], className)} {...rest}>
@@ -164,6 +180,8 @@ interface RenderCtx {
   readonly attachmentFrame: MarkdownProps["attachmentFrame"];
   /** Each attachment image node's place among them, in reading order. */
   readonly imageOrder: ReadonlyMap<Inline, number>;
+  /** The mentioned, longest name first. */
+  readonly mentions?: ReadonlyArray<MarkdownMention> | undefined;
 }
 
 /** The attachment image nodes in reading order, numbered from 0: a block's inlines before the next block's, list items and table cells in order. */
@@ -401,6 +419,29 @@ function WithVariables({ text }: { readonly text: string }) {
   return <>{out}</>;
 }
 
+/** Plain text with each "@<name>" of a mentioned person drawn as their chip. */
+function WithMentions({ text, mentions }: { readonly text: string; readonly mentions: ReadonlyArray<MarkdownMention> }) {
+  const out: ReactNode[] = [];
+  let plain = 0;
+  let i = 0;
+  while (i < text.length) {
+    const at = text.indexOf("@", i);
+    if (at < 0) break;
+    // A mention starts a word, as the composer's query does.
+    const starts = at === 0 || /\s|[([{"'“‘]/.test(text[at - 1]!);
+    const hit = starts ? mentions.find((m) => text.startsWith(m.name, at + 1)) : undefined;
+    if (!hit) {
+      i = at + 1;
+      continue;
+    }
+    if (at > plain) out.push(text.slice(plain, at));
+    out.push(<Fragment key={at}>{hit.chip}</Fragment>);
+    plain = i = at + 1 + hit.name.length;
+  }
+  if (plain < text.length) out.push(text.slice(plain));
+  return <>{out}</>;
+}
+
 function Inlines({ nodes, ctx }: { readonly nodes: readonly Inline[]; readonly ctx: RenderCtx }) {
   return (
     <>
@@ -414,7 +455,7 @@ function Inlines({ nodes, ctx }: { readonly nodes: readonly Inline[]; readonly c
 function InlineNode({ node, ctx }: { readonly node: Inline; readonly ctx: RenderCtx }) {
   switch (node.t) {
     case "text":
-      return ctx.variables ? <WithVariables text={node.v} /> : <>{node.v}</>;
+      return ctx.variables ? <WithVariables text={node.v} /> : ctx.mentions ? <WithMentions text={node.v} mentions={ctx.mentions} /> : <>{node.v}</>;
     case "code":
       return <code className={styles["inlineCode"]}>{ctx.variables ? <WithVariables text={node.v} /> : node.v}</code>;
     case "strong":
@@ -438,7 +479,7 @@ function InlineNode({ node, ctx }: { readonly node: Inline; readonly ctx: Render
     case "link":
       return (
         <a href={node.href} className={styles["link"]} target={ctx.linkTarget} rel={ctx.linkTarget === "_blank" ? "noopener noreferrer" : undefined}>
-          <Inlines nodes={node.c} ctx={ctx} />
+          <Inlines nodes={node.c} ctx={{ ...ctx, mentions: undefined }} />
         </a>
       );
     case "image":

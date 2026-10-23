@@ -339,16 +339,23 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const members = session.people.map((m) => ({
     person: people.byId.get(m.person.id) ?? m.person, role: everyone && m.role === "read" ? "chat" as const : m.role, open: m.open,
     invited: !m.accepted, you: m.person.id === you.id,
+    // The owner of record of a session its admins own has left: no access.
+    ...(byAdmins && m.role === "owner" ? { left: org } : {}),
   }));
   const offered = reader ? undefined : mentionables(you.id, session.people, people.all, access);
   const ownerName = owner && !byAdmins ? owner.person.name : `${org}'s admins`;
+  // Not one of its people (an organisation session never joined, or an
+  // admin of one its admins own): nothing of theirs to archive. Renaming
+  // takes an owner or chat row, or an admin while its admins own it.
+  const notIn = you.member === false;
+  const mayRename = !reader && (!notIn || (byAdmins && isOwner));
 
   return (
     <div className="screen sessionScreen" data-testid="session-screen" data-role={you.role}>
       <ScreenHeader
         fillTitle
         title={<SessionTitle title={session.title} untitled={UNTITLED_SESSION} maxLength={200}
-          onRename={reader ? undefined : rename} />}
+          onRename={mayRename ? rename : undefined} />}
         meta={<>
           {everyone ? <SharedMark scope="organisation" org={org} showLabel />
             : shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
@@ -359,10 +366,12 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>
-          <Button size="sm" variant="quiet" disabled={archiving} onClick={() => void archive(!you.archived)}
-            data-testid={you.archived ? "session-unarchive" : "session-archive"}>
-            {you.archived ? "Unarchive" : "Archive"}
-          </Button>
+          {notIn ? null : (
+            <Button size="sm" variant="quiet" disabled={archiving} onClick={() => void archive(!you.archived)}
+              data-testid={you.archived ? "session-unarchive" : "session-archive"}>
+              {you.archived ? "Unarchive" : "Archive"}
+            </Button>
+          )}
           {isOwner || byAdmins ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : null}
         </>}
       />
@@ -398,7 +407,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                   disabledReason={reader ? readOnly : undefined}
                   // A session has no task: the chat composer's own words would say "this task".
                   placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.`
-                    : "Message the brainstorm…"}
+                    : offered ? "Message the brainstorm… (@ to mention someone)" : "Message the brainstorm…"}
                   // Written beside your own open question ("Write to the agent instead"): aside, never the answer.
                   onSubmit={(s) => {
                     setPendingMention(null);

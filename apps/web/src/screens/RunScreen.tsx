@@ -1269,16 +1269,22 @@ export function viewedContext(turn: ViewedTurn, people: People, agent: string, d
   return `${who ? firstName(who) : "Someone"} · ${turn.intent} to ${agent} · ${at}`;
 }
 
-/** The people a session's message mentioned, as chips under it; the reader's own is marked. */
-function MentionChips({ ids, people }: { ids: readonly string[]; people: People }) {
-  return (
-    <span data-testid="mention-chips">
-      {ids.map((id) => {
-        const person = people.byId.get(id) ?? { id, name: people.names.get(id) ?? "Someone" };
-        return <MentionChip key={id} person={person} you={id === people.you} />;
-      })}
-    </span>
-  );
+/**
+ * The people a session's message mentioned: each drawn as its chip in place
+ * of its "@Name" run in the text (`inText`), and any whose name is not in
+ * the text as chips under it (`rest`), so a name is never shown twice. The
+ * reader's own is marked.
+ */
+export function mentionChips(ids: readonly string[], text: string, people: People) {
+  const inText: { name: string; chip: ReactNode }[] = [];
+  const rest: ReactNode[] = [];
+  for (const id of ids) {
+    const person = people.byId.get(id) ?? { id, name: people.names.get(id) ?? "Someone" };
+    const chip = <MentionChip key={id} person={person} you={id === people.you} />;
+    if (text.includes(`@${person.name}`)) inText.push({ name: person.name, chip });
+    else rest.push(chip);
+  }
+  return { inText, rest: rest.length > 0 ? <span data-testid="mention-chips">{rest}</span> : null };
 }
 
 export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
@@ -1390,6 +1396,9 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
       const wait = steer && (turn.intent === "steer" || turn.intent === "message") && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
       // Only where there is a turn to stop, and not twice; never a message in Chat, which starts a turn.
       const interruptible = turn.intent === "steer" && (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
+      const chips = turn.mentions?.length ? mentionChips(turn.mentions, turn.text, people) : null;
+      const source = turn.github ? <GithubSource github={turn.github} reply={turn.conductor} /> : null;
+      const under = source && chips?.rest ? <>{source}{chips.rest}</> : source ?? chips?.rest ?? null;
       return (
         <ChatMessage
           key={turn.id}
@@ -1411,8 +1420,8 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
           person={person}
           name={turn.conductor ? "Conductor" : name ?? "Someone"}
           {...turnImages(turn, shown)}
-          {...(turn.github ? { attachments: <GithubSource github={turn.github} reply={turn.conductor} /> }
-            : turn.mentions?.length ? { attachments: <MentionChips ids={turn.mentions} people={people} /> } : {})}
+          {...(chips?.inText.length ? { mentions: chips.inText } : {})}
+          {...(under ? { attachments: under } : {})}
         />
       );
     }

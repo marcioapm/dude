@@ -18,6 +18,8 @@ import { buildRouter } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
 import { authenticate, createApiKey } from "../src/api/auth.ts";
 import { Config, useConfig } from "../src/config.ts";
+import { ownerLeftNotice } from "../src/api/routes/sessions.ts";
+import { canSee, noteEvent } from "../src/events/visibility.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const ROOT = join(import.meta.dir, "../../..");
@@ -128,12 +130,23 @@ test("removing a person hands their reachable sessions to the admins and archive
   await session("ssn_lea_shared", "private", leaver.personId, [[eli.personId, "chat"]]);
   await session("ssn_lea_alone", "private", leaver.personId);
   await session("ssn_eli", "private", eli.personId, [[leaver.personId, "chat"]]);
+  // Shared only with someone invited and not yet in: an unaccepted invitee
+  // counts as shared, so it goes to the admins rather than being archived.
+  await session("ssn_lea_invited", "private", leaver.personId);
+  await owner`INSERT INTO session_people (session_id, person_id, organization_id, role) VALUES ('ssn_lea_invited', ${gus.personId}, ${ORG}, 'chat')`;
+  // A handover Lea offered (to Gus, not in it yet) is void once she leaves.
+  await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, becomes_owner, handover_keep, invited_by)
+    VALUES ('ssn_lea_org', ${gus.personId}, ${ORG}, 'chat', true, 'chat', ${leaver.personId})`;
+  // The open session's agent is live and parked: it is told, and woken to read it.
+  await owner`INSERT INTO runs (id, organization_id, session_id, attempt, role, kind, status, dude_pause)
+    VALUES ('run_lea_org', ${ORG}, 'ssn_lea_org', 1, 'brainstorm', 'agent', 'paused', 'idle')`;
 
   expect((await call(boss, "DELETE", `/v1/people/${leaver.personId}`)).status).toBe(204);
-  const rows = await owner`SELECT id, owned_by_admins AS "byAdmins" FROM sessions ORDER BY id`;
+  const rows = await owner`SELECT id, owned_by_admins AS "byAdmins" FROM sessions WHERE id LIKE 'ssn_lea%' OR id = 'ssn_eli' ORDER BY id`;
   expect([...rows]).toEqual([
     { id: "ssn_eli", byAdmins: false },
     { id: "ssn_lea_alone", byAdmins: false },
+    { id: "ssn_lea_invited", byAdmins: true },
     { id: "ssn_lea_org", byAdmins: true },
     { id: "ssn_lea_shared", byAdmins: true },
   ]);
@@ -141,12 +154,19 @@ test("removing a person hands their reachable sessions to the admins and archive
     FROM events WHERE event_type = 'session.owner_left' ORDER BY session_id`;
   // Recorded as the admin's request is audited (their key here).
   expect([...left]).toEqual([
+    { id: "ssn_lea_invited", owner: leaver.personId, name: "Lea", actor_id: boss.id },
     { id: "ssn_lea_org", owner: leaver.personId, name: "Lea", actor_id: boss.id },
     { id: "ssn_lea_shared", owner: leaver.personId, name: "Lea", actor_id: boss.id },
   ]);
   const [alone] = await owner`SELECT archived_at IS NOT NULL AS archived FROM session_people
     WHERE session_id = 'ssn_lea_alone' AND person_id = ${leaver.personId}`;
   expect(alone).toEqual({ archived: true });
+  expect([...await owner`SELECT becomes_owner FROM session_people WHERE session_id = 'ssn_lea_org' AND person_id = ${gus.personId}`])
+    .toEqual([{ becomes_owner: false }]);
+  const told = [...await owner`SELECT d.text, r.control FROM directives d JOIN runs r ON r.id = d.run_id WHERE d.run_id = 'run_lea_org'`];
+  expect(told).toEqual([{ text: ownerLeftNotice("Lea"), control: "resume" }]);
+  expect([...await owner`SELECT payload->>'text' AS text FROM events WHERE event_type = 'session.told' AND session_id = 'ssn_lea_org'`])
+    .toEqual([{ text: ownerLeftNotice("Lea") }]);
   // While its admins own it, an admin acts as owner of each; a member not in the private one gets nothing.
   const role = async (session: string, person: string) =>
     (await owner`SELECT session_role(${session}, ${person}) AS r`)[0].r as string | null;
@@ -173,6 +193,37 @@ test("someone not in an organisation session may say they have it open; opening 
   expect((await call(gus, "POST", "/v1/brainstorms/ssn_open/open", { open: false })).status).toBe(200);
   const [closed] = await owner`SELECT open_at IS NULL AS closed FROM session_viewers WHERE session_id = 'ssn_open' AND person_id = ${gus.personId}`;
   expect(closed).toEqual({ closed: true });
+  // Closing it marks nothing seen.
+  await owner`INSERT INTO session_mentions (organization_id, session_id, person_id, by_person, text)
+    VALUES (${ORG}, 'ssn_open', ${gus.personId}, ${eli.personId}, '@Gus again')`;
+  expect((await call(gus, "POST", "/v1/brainstorms/ssn_open/open", { open: false })).status).toBe(200);
+  expect([...await owner`SELECT seen_at IS NULL AS unseen FROM session_mentions WHERE person_id = ${gus.personId} AND text = '@Gus again'`])
+    .toEqual([{ unseen: true }]);
+
+  // A member's heartbeat goes on their own row: their mention is seen, and no viewer row is made.
+  await session("ssn_member", "private", eli.personId, [[gus.personId, "chat"]]);
+  await owner`INSERT INTO session_mentions (organization_id, session_id, person_id, by_person, text)
+    VALUES (${ORG}, 'ssn_member', ${gus.personId}, ${eli.personId}, '@Gus member')`;
+  expect((await call(gus, "POST", "/v1/brainstorms/ssn_member/open", { open: true })).status).toBe(200);
+  expect([...await owner`SELECT seen_at IS NOT NULL AS seen FROM session_mentions WHERE text = '@Gus member'`]).toEqual([{ seen: true }]);
+  expect([...await owner`SELECT open_at IS NOT NULL AS open FROM session_people WHERE session_id = 'ssn_member' AND person_id = ${gus.personId}`])
+    .toEqual([{ open: true }]);
+  expect([...await owner`SELECT 1 FROM session_viewers WHERE session_id = 'ssn_member'`]).toEqual([]);
+});
+
+test("a live stream forgets what it knew of a session the moment it is opened, passed to the admins, or taken over", async () => {
+  for (const [type, id] of [["session.access_changed", "ssn_vis_a"], ["session.owner_left", "ssn_vis_b"], ["session.owner_taken", "ssn_vis_c"]] as const) {
+    await session(id, "private", eli.personId);
+    expect(await canSee(ORG, gus.personId, id)).toBe(false);
+    if (type === "session.access_changed") await owner`UPDATE sessions SET access = 'organisation' WHERE id = ${id}`;
+    else await owner`UPDATE people SET role = 'admin' WHERE id = ${gus.personId}`;
+    if (type !== "session.access_changed") await owner`UPDATE sessions SET owned_by_admins = true WHERE id = ${id}`;
+    // Within the cache's few seconds, only the event makes the new answer visible.
+    expect(await canSee(ORG, gus.personId, id)).toBe(false);
+    noteEvent(type, id);
+    expect({ type, ok: await canSee(ORG, gus.personId, id) }).toEqual({ type, ok: true });
+    await owner`UPDATE people SET role = 'member' WHERE id = ${gus.personId}`;
+  }
 });
 
 test("the ledger shows each person the events session_visible gives them, over private, organisation and admin-owned sessions", async () => {

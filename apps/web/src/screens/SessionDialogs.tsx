@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react";
 import type { NavProject } from "@dude/design-system";
-import { firstName } from "@dude/design-system";
+import { firstName, Icon } from "@dude/design-system";
 import { GeneralAccessRow, PersonAvatar, SESSION_ROLE_WORD } from "@dude/design-system/components";
 import { Button, Callout, Checkbox, ChoiceList, Dialog, Select } from "@dude/design-system/primitives";
 import { sessionTitle, type SessionDetail, type SessionLink, type SessionMemberView } from "@dude/domain";
@@ -142,6 +142,7 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
   const everyone = access === "organisation";
   const members = detail.session.people;
   const departed = byAdmins ? members.find((m) => m.role === "owner") : undefined;
+  const admins = byAdmins ? people.all.filter((p) => p.role === "admin") : [];
   const inIt = new Set(members.map((m) => m.person.id));
   const candidates = people.all.filter((p) => !inIt.has(p.id) && !adding.includes(p.id));
   const shared = members.some((m) => m.role !== "owner");
@@ -177,19 +178,21 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
           </Button>
         ) : null}
       </>}>
-      <GeneralAccessRow org={org} value={access} editable={detail.you.role === "owner"} busy={busy}
-        confirming={confirming} onOpen={() => setConfirming(true)} onCancel={() => setConfirming(false)}
-        onConfirm={() => void act(() => client.openSessionToOrganisation(detail.session.id)).then(() => setConfirming(false))} />
-      {byAdmins ? (
-        <Callout tone="attention" data-testid="admin-owned-callout">
-          <p><b>{departed ? `${departed.person.name}, the owner, left ${org}.` : `Its owner left ${org}.`}</b>{" "}
-            {org}'s admins own it now.</p>
-          {detail.you.admin ? (
-            <Button size="sm" variant="primary" disabled={busy} data-testid="take-ownership"
-              onClick={() => void act(() => client.takeSessionOwnership(detail.session.id))}>Make me owner</Button>
-          ) : null}
-        </Callout>
-      ) : null}
+      <div className="sessionShareAccess">
+        <GeneralAccessRow org={org} value={access} editable={detail.you.role === "owner"} busy={busy}
+          confirming={confirming} onOpen={() => setConfirming(true)} onCancel={() => setConfirming(false)}
+          onConfirm={() => void act(() => client.openSessionToOrganisation(detail.session.id)).then(() => setConfirming(false))} />
+        {byAdmins ? (
+          <Callout tone="attention" data-testid="admin-owned-callout">
+            <p><b>{departed ? `${departed.person.name}, the owner, left ${org}.` : `Its owner left ${org}.`}</b>{" "}
+              {org}'s admins own it now{admins.length > 0 ? `: ${admins.map((a) => firstName(a.name)).join(" and ")}` : ""}.</p>
+            {detail.you.admin ? (
+              <Button size="sm" variant="primary" disabled={busy} data-testid="take-ownership"
+                onClick={() => void act(() => client.takeSessionOwnership(detail.session.id))}>Make me owner</Button>
+            ) : null}
+          </Callout>
+        ) : null}
+      </div>
       <div className="sessionShareAdd">
         <Select<string> size="sm" aria-label="Add people" placeholder="Add people…" value={undefined}
           options={candidates.map((p) => ({ value: p.id, label: p.name }))}
@@ -217,6 +220,13 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
         </Callout>
       ) : null}
       <ul className="sessionShareMembers" data-testid="share-members">
+        {byAdmins ? (
+          <li data-testid="share-admins">
+            <Icon name="building" size={16} />
+            <span>{org}'s admins{detail.you.admin ? <span className="muted"> · you're one</span> : null}</span>
+            <span className="muted">Owner</span>
+          </li>
+        ) : null}
         {members.map((m) => {
           const you = m.person.id === detail.you.id;
           const gone = m === departed;
@@ -226,7 +236,7 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
             <li key={m.person.id} data-person={m.person.id}>
               <PersonAvatar person={m.person} size={24} />
               <span>{m.person.name}{you ? " (you)" : ""}{gone ? ` · left ${org}` : ""}{m.accepted ? "" : m.becomesOwner ? " · invited as owner" : " · invited"}
-                {lifted ? <span className="muted" data-testid="was-read"> · was can read; everyone in {org} can chat</span> : null}</span>
+                {lifted ? <span className="muted sessionShareNote" data-testid="was-read">was can read; everyone in {org} can chat</span> : null}</span>
               {gone ? <span className="muted">No access</span> : m.role === "owner" ? <span className="muted">Owner</span> : detail.you.role !== "owner" ? (
                 <span className="muted">{SESSION_ROLE_WORD[lifted ? "chat" : m.role]}</span>
               ) : (

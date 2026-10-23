@@ -362,8 +362,8 @@ describe("a brainstorm session's page", () => {
   test("a message goes to the session's chat", async () => {
     const placeholder = async (d: SessionDetail) =>
       (await sessionPage(new SessionClient(d))).querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!.placeholder;
-    // A session has no task: its composer says who it writes to, not the task Chat's words.
-    expect(await placeholder(detail("chat"))).toBe("Message the brainstorm…");
+    // A session has no task: its composer says who it writes to, not the task Chat's words, and that @ mentions.
+    expect(await placeholder(detail("chat"))).toBe("Message the brainstorm… (@ to mention someone)");
     expect(await placeholder(detail("owner"))).not.toContain("task");
     const client = new SessionClient(detail("chat"));
     const page = await sessionPage(client);

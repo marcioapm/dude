@@ -11,7 +11,7 @@
  * page's heartbeat), which goes to its members only, never the organisation.
  */
 
-import { EventTypes, harnessSchema, sessionMentionsSchema } from "@dude/domain";
+import { EventTypes, harnessSchema, newId, sessionAccessSchema, sessionMentionsSchema } from "@dude/domain";
 import { z } from "zod";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
@@ -70,8 +70,8 @@ const role = z.object({ role: z.enum(["chat", "read"]) }).strict();
 const handover = z.object({ person: z.string().min(1), keep: z.enum(["chat", "read", "leave"]).default("chat") }).strict();
 const file = z.object({ proposalId: z.string().min(1), items: z.array(z.number().int().min(0)).min(1).max(50) }).strict();
 const open = z.object({ open: z.boolean() }).strict();
-// Only "organisation" is accepted; the orchestrator answers any other with its 409.
-const access = z.object({ access: z.string().min(1) }).strict();
+// Only "organisation" goes through: "private" reaches the orchestrator, whose 409 says it is one way.
+const access = z.object({ access: sessionAccessSchema }).strict();
 
 /** Forward to the orchestrator's session route, as the person. */
 function forward(method: "GET" | "POST" | "PUT", path: (ctx: RequestContext) => string, schema?: z.ZodTypeAny) {
@@ -122,36 +122,77 @@ async function setOpen(ctx: RequestContext): Promise<Response> {
 }
 
 /**
+ * The orchestrator's lock on each session the person owns
+ * (`delivery.LockSession`), in id order. `removePerson` takes these before
+ * the person's row, the order the orchestrator takes them in (the session's
+ * lock, then the person's row as it adds them to a session), so the two
+ * never wait on each other in a circle.
+ */
+export async function lockOwnedSessions(scope: OrgScope, personId: string): Promise<void> {
+  await scope.sql`SELECT pg_advisory_xact_lock(hashtext('session:' || s.session_id))
+    FROM (SELECT session_id FROM session_people WHERE person_id = ${personId} AND role = 'owner' ORDER BY session_id) s`;
+}
+
+/** What a session's live agent is told when its owner left: who answers for the owner now. */
+export function ownerLeftNotice(name: string): string {
+  return `${name} left the organisation. Its admins own this session now: a question for its owner goes to them, until one of them makes themselves its owner.`;
+}
+
+/**
  * Someone is leaving the organisation (`removePerson`, in its transaction):
  * each session they own that anyone else can reach — open to the
  * organisation, or with other people in it or invited — passes to the
- * organisation's admins (`owned_by_admins`, `session.owner_left`); their
- * row stays as its owner of record until an admin takes it over. A private
- * session nobody else is in is archived with them. Returns what passed.
+ * organisation's admins (`owned_by_admins`, `session.owner_left`), its
+ * pending handover is void, and its live agent is told; their row stays as
+ * its owner of record until an admin takes it over. A private session
+ * nobody else is in is archived with them. Under each session's lock, so a
+ * handover or a share in flight is settled first. Returns what passed.
  */
 export async function passOnSessions(scope: OrgScope, ctx: RequestContext, personId: string): Promise<string[]> {
+  await lockOwnedSessions(scope, personId);
   const owned = (await scope.sql`
     SELECT s.id, s.access, p.name,
       EXISTS (SELECT 1 FROM session_people o WHERE o.session_id = s.id AND o.person_id <> ${personId}) AS others
     FROM session_people me JOIN sessions s ON s.id = me.session_id JOIN people p ON p.id = me.person_id
     WHERE me.person_id = ${personId} AND me.role = 'owner'
-    ORDER BY s.id FOR UPDATE OF s`) as Array<{ id: string; access: string; name: string; others: boolean }>;
-  const passed: string[] = [];
-  for (const s of owned) {
-    if (s.access !== "organisation" && !s.others) {
-      await scope.sql`UPDATE session_people SET archived_at = COALESCE(archived_at, now())
-        WHERE session_id = ${s.id} AND person_id = ${personId}`;
-      continue;
-    }
-    await scope.sql`UPDATE sessions SET owned_by_admins = true, updated_at = now() WHERE id = ${s.id}`;
-    const actor = auditActor(ctx.principal);
+    ORDER BY s.id`) as Array<{ id: string; access: string; name: string; others: boolean }>;
+  const alone = owned.filter((s) => s.access !== "organisation" && !s.others).map((s) => s.id);
+  const passed = owned.filter((s) => s.access === "organisation" || s.others);
+  if (alone.length > 0) {
+    await scope.sql`UPDATE session_people SET archived_at = COALESCE(archived_at, now())
+      WHERE session_id = ANY(${scope.sql.array(alone, "TEXT")}) AND person_id = ${personId}`;
+  }
+  if (passed.length === 0) return [];
+  const ids = passed.map((s) => s.id);
+  await scope.sql`UPDATE sessions SET owned_by_admins = true, updated_at = now() WHERE id = ANY(${scope.sql.array(ids, "TEXT")})`;
+  await scope.sql`UPDATE session_people SET becomes_owner = false, handover_keep = NULL WHERE session_id = ANY(${scope.sql.array(ids, "TEXT")}) AND becomes_owner`;
+  const actor = auditActor(ctx.principal);
+  for (const s of passed) {
     await appendInScope(scope, {
       eventType: EventTypes.BrainstormOwnerLeft, organizationId: scope.organizationId, sessionId: s.id,
       actor: { type: actor.kind, id: actor.id }, source: "control-plane", payload: { owner: personId, ownerName: s.name },
     });
-    passed.push(s.id);
   }
-  return passed;
+  // Each live agent gets the notice as dude's directive (the orchestrator's
+  // TellBrainstorm), and a parked one is woken to read it.
+  const live = (await scope.sql`
+    SELECT r.id, r.session_id FROM runs r
+    WHERE r.session_id = ANY(${scope.sql.array(ids, "TEXT")}) AND r.role = 'brainstorm' AND r.kind = 'agent'
+      AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
+    ORDER BY r.session_id FOR NO KEY UPDATE`) as Array<{ id: string; session_id: string }>;
+  for (const run of live) {
+    const text = ownerLeftNotice(passed.find((s) => s.id === run.session_id)!.name);
+    const directiveId = newId("directive");
+    await scope.sql`INSERT INTO directives (id, organization_id, run_id, text, scope)
+      VALUES (${directiveId}, ${scope.organizationId}, ${run.id}, ${text}, 'run')`;
+    await scope.sql`UPDATE runs SET control = 'resume', control_requested_at = now(), control_reason = 'dude told it something'
+      WHERE id = ${run.id} AND status = 'paused' AND (dude_pause IS NULL OR dude_pause = 'idle')`;
+    await appendInScope(scope, {
+      eventType: EventTypes.BrainstormTold, organizationId: scope.organizationId, sessionId: run.session_id, runId: run.id,
+      actor: { type: "system", id: "dude" }, source: "control-plane", payload: { text, directiveId },
+    });
+  }
+  return ids;
 }
 
 /**

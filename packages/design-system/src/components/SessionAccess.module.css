@@ -12,8 +12,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--ds-size-avatar-lg);
+  height: var(--ds-size-avatar-lg);
   border-radius: var(--ds-radius-full);
   background: var(--ds-color-surface);
   color: var(--ds-color-text-secondary);
@@ -137,7 +137,7 @@
 }
 .chipYou {
   box-shadow: inset 0 0 0 1px var(--ds-tone-info-border);
-  font-weight: 600;
+  font-weight: var(--ds-weight-semibold);
 }
 
 /* Under the composer's field: a pending mention's confirm, ringed in the

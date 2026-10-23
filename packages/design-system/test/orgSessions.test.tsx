@@ -11,7 +11,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ChatComposer, mentionQueryAt, nameMatches, type ComposerSubmission } from "../src/components/ChatComposer.tsx";
-import { AdminOwned, SessionRow, SharedMark } from "../src/components/Brainstorm.tsx";
+import { AdminOwned, SessionPeople, SessionRow, SharedMark } from "../src/components/Brainstorm.tsx";
+import { ChatMessage } from "../src/components/ChatMessage.tsx";
 import { GeneralAccessRow, MentionChip, MentionShareConfirm, type MentionItem } from "../src/components/SessionAccess.tsx";
 import { Sidebar, SidebarSessions } from "../src/components/Sidebar.tsx";
 import { Section } from "../src/primitives/Layout.tsx";
@@ -296,5 +297,31 @@ describe("SharedMark for an organisation session", () => {
     const marks = [...el.querySelectorAll('[data-scope="organisation"]')];
     expect(marks.map(accessibleName)).toEqual(["Everyone in Acme, Gus Lindqvist's", "Everyone in Acme, Eli Haddad's"]);
     expect(marks.every((m) => m.querySelector("[data-testid=person-avatar], img, [aria-hidden]"))).toBe(true);
+  });
+});
+
+describe("mentions in a message's text", () => {
+  test("each @Name of a mentioned person is its chip, in place; the longest name wins; code and links stay text", async () => {
+    const chip = (p: { id: string; name: string }) => <MentionChip person={p} />;
+    const ANA = { id: "per_ana", name: "Ana" };
+    const ANA_N = { id: "per_ana_n", name: "Ana Nunes" };
+    const el = await mount(<ChatMessage role="human" content={"@Ana Nunes and @Ana, not `@Ana` nor [@Ana](https://example.com) nor me@Ana"}
+      mentions={[{ name: ANA.name, chip: chip(ANA) }, { name: ANA_N.name, chip: chip(ANA_N) }]} />);
+    const chips = [...el.querySelectorAll("[data-testid=mention-chip]")];
+    expect(chips.map(accessibleName)).toEqual(["Mention: Ana Nunes", "Mention: Ana"]);
+    expect(el.querySelector("p")!.textContent).toContain(", not @Ana nor @Ana nor me@Ana");
+    expect(el.querySelector("code")!.textContent).toBe("@Ana");
+    expect(el.querySelector("a")!.querySelectorAll("[data-testid=mention-chip]").length).toBe(0);
+  });
+});
+
+describe("SessionPeople", () => {
+  test("an owner who left reads Left <org> · No access, never Owner", async () => {
+    const el = await mount(<SessionPeople members={[{ person: GUS, role: "owner", left: "Acme", open: true }, { person: ELI, role: "chat" }]} />);
+    const rows = [...el.querySelectorAll("li")].map((li) => li.textContent);
+    expect(rows[0]).toContain("Left Acme · No access");
+    expect(rows[0]).not.toContain("Owner");
+    expect(rows[0]).not.toContain("here");
+    expect(rows[1]).toContain("Can chat");
   });
 });

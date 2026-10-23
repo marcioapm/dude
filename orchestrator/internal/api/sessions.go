@@ -108,6 +108,31 @@ func lockedWriter(ctx context.Context, tx pgx.Tx, org, sessionID string, p princ
 	return role, delivery.JoinByWriting(ctx, tx, delivery.SessionRef(org, sessionID), p.Person, p.writer().ActorType, p.Actor)
 }
 
+// lockedMemberWriter is writer under the session's lock for one of its
+// people alone: an accepted owner or chat row, or an admin while its admins
+// own it. Anyone else who could chat (an organisation member not in it) gets
+// a 403 and joins nothing: renaming is not writing to the agent.
+func lockedMemberWriter(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) error {
+	if err := delivery.LockSession(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	role, err := writer(ctx, tx, sessionID, person, verb)
+	if err != nil {
+		return err
+	}
+	var in bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_people WHERE session_id = $1 AND person_id = $2
+			AND accepted_at IS NOT NULL AND role IN ('owner', 'chat'))
+		OR EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND owned_by_admins) AND $3`, sessionID, person, role == delivery.SessionOwner).
+		Scan(&in); err != nil {
+		return err
+	}
+	if !in {
+		return fail(http.StatusForbidden, "not_member", "only the session's people who can chat %s", verb)
+	}
+	return nil
+}
+
 // writer refuses a reader: only the owner and members who can chat write
 // to the agent or file its work.
 func writer(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) (string, error) {
@@ -235,7 +260,7 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org strin
 	}
 	id := r.PathValue("id")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if _, err := lockedWriter(r.Context(), tx, org, id, p, "rename it"); err != nil {
+		if err := lockedMemberWriter(r.Context(), tx, id, p.Person, "rename it"); err != nil {
 			return err
 		}
 		_, err := delivery.RenameSession(r.Context(), tx, delivery.SessionRef(org, id), title, p.Person, p.writer().ActorType, p.Actor)
@@ -1930,8 +1955,13 @@ func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		// A handover is the offer of the owner who made it: by now another's,
-		// it hands over nothing and its keep is not applied.
-		handover := becomesOwner && keep != nil && offeredBy != "" && offeredBy == current
+		// it hands over nothing and its keep is not applied. One whose owner
+		// left (its admins own the session) is void too.
+		_, byAdmins, err := delivery.SessionAccess(r.Context(), tx, id)
+		if err != nil {
+			return err
+		}
+		handover := becomesOwner && keep != nil && offeredBy != "" && offeredBy == current && !byAdmins
 		if _, err := tx.Exec(r.Context(), `UPDATE session_people SET accepted_at = now(), becomes_owner = false, handover_keep = NULL
 			WHERE session_id = $1 AND person_id = $2`, id, p.Person); err != nil {
 			return err
@@ -2006,9 +2036,14 @@ func (s *Server) archiveSession(archive bool) handler {
 			if err != nil {
 				return err
 			}
-			// Removed between member() and here: the same answer as any non-member.
+			// No row of theirs: in an organisation session they never joined
+			// (or an admin of one its admins own) there is nothing to archive;
+			// removed between member() and here, the same answer as any non-member.
 			if tag.RowsAffected() == 0 {
-				return fail(http.StatusNotFound, "not_found", "session %s not found", id)
+				if _, err := member(r.Context(), tx, id, p.Person); err != nil {
+					return err
+				}
+				return fail(http.StatusConflict, "not_member", "you are not one of this session's people; there is nothing of yours to archive")
 			}
 			return nil
 		})

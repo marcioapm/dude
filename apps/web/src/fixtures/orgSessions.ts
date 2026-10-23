@@ -7,8 +7,8 @@
  * shapes the API returns (orchestrator/internal/api/sessions.go).
  */
 
-import type { OpenSessionsList, SessionDetail, SessionsList } from "@dude/domain";
-import { PEOPLE, PROJECT, YOU } from "./data.ts";
+import type { OpenSessionsList, PersistedEvent, SessionDetail, SessionsList } from "@dude/domain";
+import { ORG, PEOPLE, PROJECT, YOU } from "./data.ts";
 
 const MIN = 60_000;
 const iso = (ago: number) => new Date(Date.now() - ago).toISOString();
@@ -68,4 +68,22 @@ export function openSessionsList(): OpenSessionsList {
     ],
     joined: 2,
   };
+}
+
+/**
+ * The open session's conversation: Ana's message mentioning Tom (its
+ * `mentions` draw Tom's chip in place of "@Tom Okafor") and the agent's
+ * reply. In the shape the ledger keeps (`chat.message`'s `mentions`).
+ */
+export function orgSessionEvents(): PersistedEvent[] {
+  const ev = (n: number, eventType: string, payload: Record<string, unknown>, actor: PersistedEvent["actor"]): PersistedEvent => ({
+    eventId: `evt_os_${n}`, cursor: 900_000 + n, eventType, occurredAt: iso((20 - n) * MIN), organizationId: ORG.id,
+    projectId: null as unknown as string, taskId: null as unknown as string, runId: "run_csv", sessionId: ORG_SESSION,
+    workflowRunId: null, actor, source: "orchestrator", correlationId: null, causationId: null, payload,
+  });
+  return [
+    ev(1, "chat.message", { text: "The October export times out at 30 s. @Tom Okafor can you check how many rows per meter October has?",
+      mentions: ["u_tom"] }, { type: "human", id: "u_ana" }),
+    ev(2, "agent.message", { text: "I'll read the export query while Tom looks: the meter join is the likely cost." }, { type: "agent", id: "brainstorm" }),
+  ];
 }

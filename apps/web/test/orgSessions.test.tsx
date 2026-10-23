@@ -140,6 +140,28 @@ describe("General access in the Share dialog", () => {
     expect(client.opened).toEqual([]);
   });
 
+  test("the owner's confirm opens it to everyone, and the row turns read-only", async () => {
+    const client = new OrgClient(detail("owner"));
+    const p = await page(client);
+    const dialog = await openShare(p);
+    await act(async () => void dialog.querySelector("[data-testid=general-access-select]")!.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await click(await until(() => [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) => o.textContent?.includes("Everyone in")), "Everyone"));
+    await click(await until(() => document.querySelector("[data-testid=general-access-open]"), "the confirm's Open"));
+    expect(client.opened).toEqual([SESSION]);
+    await until(() => document.querySelector('[data-testid=general-access][data-access="organisation"]'), "the row, open");
+  });
+
+  test("a chat member of a private session has no Share; an admin of one its admins own may change its access", async () => {
+    const p = await page(new OrgClient(detail("chat")));
+    expect(p.querySelectorAll("[data-testid=share-open]").length).toBe(0);
+    await act(async () => mounted.splice(0).forEach((u) => void u()));
+    const admin = await page(new OrgClient(detail("owner", { ownedByAdmins: true,
+      people: [{ person: person("u_sam"), role: "owner", accepted: true, becomesOwner: false, open: false }] }, { member: false, admin: true })));
+    const dialog = await openShare(admin);
+    expect(dialog.querySelectorAll("[data-testid=general-access-select]").length).toBe(1);
+  });
+
   test("open to everyone, the row is read-only, Can read is not offered, and a reader shows as can chat", async () => {
     const client = new OrgClient(detail("owner", { access: "organisation" }));
     const p = await page(client);
@@ -149,7 +171,10 @@ describe("General access in the Share dialog", () => {
     expect(row.querySelectorAll("button").length).toBe(0);
     expect(row.textContent).toContain("This can't be undone.");
     const tom = dialog.querySelector('[data-person="u_tom"]')!;
-    expect(tom.querySelector("[data-testid=was-read]")!.textContent).toContain("was can read; everyone in");
+    const note = tom.querySelector("[data-testid=was-read]")!;
+    expect(note.textContent).toBe("was can read; everyone in the organisation can chat");
+    // On its own line under the name: a block of its own, not a run of the name.
+    expect(note.classList.contains("sessionShareNote")).toBe(true);
     await act(async () => void tom.querySelector("button[role=combobox]")!.dispatchEvent(
       new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
     const options = await until(() => {
@@ -165,6 +190,14 @@ describe("General access in the Share dialog", () => {
     expect(accessibleName(mark)).toMatch(/^Everyone in /);
     expect(p.querySelectorAll("[data-testid=share-open]").length).toBe(0);
     expect(p.querySelector("[data-testid=session-everyone-note]")!.textContent).toContain("who can chat");
+    expect(composer(p).getAttribute("placeholder")).toBe("Message the brainstorm… (@ to mention someone)");
+  });
+
+  test("someone in an organisation session they never joined may write, but not rename or archive it", async () => {
+    const p = await page(new OrgClient(detail("chat", { access: "organisation" }, { member: false })));
+    expect(p.querySelectorAll("[data-testid=session-archive]").length).toBe(0);
+    expect(p.querySelector("[data-testid=session-title]")!.tagName).toBe("SPAN");
+    expect(composer(p).disabled).toBe(false);
   });
 });
 
@@ -176,8 +209,15 @@ describe("a session its admins own", () => {
     const client = new OrgClient(d);
     const p = await page(client);
     expect(p.querySelectorAll("[data-testid=admin-owned]").length).toBe(2);
+    // The departed owner is not shown as Owner in the rail.
+    const rail = p.querySelector("[data-testid=session-people]")!;
+    expect(rail.querySelector('[data-left="true"]')!.textContent).toContain("Left the organisation · No access");
+    expect(rail.textContent).not.toContain("Owner");
+    // Not one of its people: nothing of theirs to archive.
+    expect(p.querySelectorAll("[data-testid=session-archive]").length).toBe(0);
     const dialog = await openShare(p);
     expect(dialog.querySelector('[data-person="u_sam"]')!.textContent).toContain("No access");
+    expect(dialog.querySelector("[data-testid=share-admins]")!.textContent).toBe("the organisation's admins · you're oneOwner");
     expect(dialog.querySelectorAll("[data-testid=make-owner]").length).toBe(0);
     await click(dialog.querySelector("[data-testid=take-ownership]")!);
     expect(client.taken).toEqual([SESSION]);
@@ -259,14 +299,42 @@ describe("mentions in the composer", () => {
     expect(client.sent).toEqual([{ text: "@Lin Zhao" }]);
   });
 
-  test("a sent message shows a chip per mention, the reader's own marked", async () => {
-    const msg = ev("chat.message", { text: "@Márcio Martins and @Lin Zhao", mentions: [YOU, "u_lin"] }, { type: "human", id: "u_ana" });
+  test("a sent message draws each mention as its chip in place of the name, never twice; the reader's own is marked", async () => {
+    const msg = ev("chat.message", { text: "@Márcio Martins and @Lin Zhao, look", mentions: [YOU, "u_lin"] }, { type: "human", id: "u_ana" });
     const p = await page(new OrgClient(detail("chat", { access: "organisation" }), [msg]));
     const chips = await until(() => {
       const c = [...p.querySelectorAll("[data-testid=mention-chip]")];
       return c.length === 2 ? c : null;
     }, "the chips");
     expect(chips.map(accessibleName)).toEqual(["Mention: Márcio Martins (you)", "Mention: Lin Zhao"]);
+    const turn = p.querySelector("[data-testid=human-turn]")!;
+    // In the sentence, not under it, and the written name is gone.
+    expect(turn.querySelectorAll("[data-testid=mention-chips]").length).toBe(0);
+    expect(turn.textContent).not.toContain("@Lin Zhao");
+    expect(turn.textContent).toContain("@Márcio and LZ@Lin, look");
+    expect(chips.every((c) => c.closest("p") !== null)).toBe(true);
+  });
+
+  test("a message from a pull request keeps its source and its chips", async () => {
+    const msg = ev("chat.message", { text: "@Lin Zhao see the thread", mentions: ["u_lin"],
+      github: { login: "octo", url: "https://github.com/acme/web/pull/1#c1", kind: "comment" } }, { type: "human", id: "u_ana" });
+    const p = await page(new OrgClient(detail("chat", { access: "organisation" }), [msg]));
+    await until(() => p.querySelector("[data-testid=mention-chip]"), "the chip");
+    expect(p.querySelectorAll("[data-testid=mention-chip]").length).toBe(1);
+  });
+
+  test("the fixtures' open session carries Ana's mention of Tom, drawn as a chip in the sentence", async () => {
+    localStorage.setItem(RUN_KEY, "org-sessions");
+    const client = new FixtureClient("a");
+    const { container, unmount } = await mount(
+      <TooltipProvider><PeopleProvider client={client}><ToastProvider>
+        <SessionScreen client={client} sessionId="ssn_csv" projects={[]} onBack={() => {}} onChanged={() => {}} onArchived={() => {}} />
+      </ToastProvider></PeopleProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    const chip = await until(() => container.querySelector("[data-testid=mention-chip]"), "Tom's chip");
+    expect(accessibleName(chip)).toBe("Mention: Tom Okafor");
+    expect(chip.closest("[data-testid=human-turn]")!.textContent).not.toContain("@Tom Okafor");
   });
 
   test("who the picker offers: the session's people first, then the rest; outside ones only in a private session", () => {

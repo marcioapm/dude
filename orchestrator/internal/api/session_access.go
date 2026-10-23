@@ -45,9 +45,10 @@ func (s *Server) setSessionAccess(w http.ResponseWriter, r *http.Request, org st
 }
 
 // takeSessionOwnership is an admin making themselves the owner of a session
-// its admins own (its owner left the organisation): the flag clears and the
-// owner before stays as they were, outside the organisation. 409 for a
-// session its admins do not own; 404 for anyone who is not an admin.
+// its admins own (its owner left the organisation): the flag clears, the
+// departed owner's row goes, and the agent is told who owns it now. 409 for
+// a session its admins do not own; 403 for someone with a role who is not
+// an admin; 404 for someone with none.
 func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -72,14 +73,24 @@ func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, or
 		if role != delivery.SessionOwner {
 			return fail(http.StatusForbidden, "not_admin", "only an organisation admin can take over a session its admins own")
 		}
+		// The owner row is the departed owner's; one still in the
+		// organisation is never removed here.
 		var from string
-		if err := tx.QueryRow(r.Context(), `SELECT person_id FROM session_people WHERE session_id = $1 AND role = 'owner'`, id).
-			Scan(&from); err != nil && !db.IsNotFound(err) {
+		var gone bool
+		if err := tx.QueryRow(r.Context(), `SELECT sp.person_id, p.removed_at IS NOT NULL OR p.organization_id <> sp.organization_id
+			FROM session_people sp JOIN people p ON p.id = sp.person_id WHERE sp.session_id = $1 AND sp.role = 'owner'`, id).
+			Scan(&from, &gone); err != nil && !db.IsNotFound(err) {
 			return err
 		}
-		// The owner before left the organisation: their row goes, and the
-		// admin's own (if any) becomes the owner.
+		if from != "" && !gone {
+			return fail(http.StatusConflict, "owner_active", "this session's owner is still in the organisation")
+		}
 		if _, err := tx.Exec(r.Context(), `DELETE FROM session_people WHERE session_id = $1 AND role = 'owner'`, id); err != nil {
+			return err
+		}
+		// A handover the departed owner offered is void with them.
+		if _, err := tx.Exec(r.Context(), `UPDATE session_people SET becomes_owner = false, handover_keep = NULL
+			WHERE session_id = $1 AND becomes_owner AND person_id <> $2`, id, p.Person); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(r.Context(), `INSERT INTO session_people (session_id, person_id, organization_id, role, invited_by, accepted_at)
@@ -95,8 +106,21 @@ func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, or
 		if err != nil {
 			return err
 		}
-		return delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionOwnerTaken, p.writer().ActorType, p.Actor,
-			map[string]any{"from": db.Nullable(from), "to": p.Person, "toName": name})
+		ref := delivery.SessionRef(org, id)
+		if err := delivery.SessionEvent(r.Context(), tx, ref, delivery.EvSessionOwnerTaken, p.writer().ActorType, p.Actor,
+			map[string]any{"from": db.Nullable(from), "to": p.Person, "toName": name}); err != nil {
+			return err
+		}
+		fromName := ""
+		if from != "" {
+			if fromName, err = delivery.PersonName(r.Context(), tx, from); err != nil {
+				return err
+			}
+		}
+		return delivery.TellBrainstorm(r.Context(), tx, org, id, sessionOwnerTold.Render(struct {
+			To, From   string
+			Read, Left bool
+		}{name, fromName, false, true}))
 	})
 	if err != nil {
 		return err

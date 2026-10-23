@@ -1759,3 +1759,16 @@ body {
   color: var(--ds-color-text-primary);
   text-decoration: underline;
 }
+
+/* The Share dialog: General access and its callouts, spaced from the people
+   below; a member's note on its own line under their name. */
+.sessionShareAccess {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  margin-bottom: var(--ds-space-12);
+}
+.sessionShareNote {
+  display: block;
+  font-size: var(--ds-text-sm);
+}

@@ -565,6 +565,8 @@ export interface SessionMember {
   /** Has the session open now. */
   readonly open?: boolean | undefined;
   readonly you?: boolean | undefined;
+  /** Left the organisation (an owner of record whose session its admins own): "Left <org> · No access" in place of the role. */
+  readonly left?: string | undefined;
 }
 
 /** Who is in the session, owner first; a breathing dot for those who have it open now. */
@@ -572,12 +574,13 @@ export function SessionPeople({ members }: { readonly members: ReadonlyArray<Ses
   return (
     <ul className={styles["people"]} data-testid="session-people">
       {members.map((m) => (
-        <li key={m.person.id ?? m.person.name} className={styles["member"]} data-open={m.open ? "true" : undefined}>
+        <li key={m.person.id ?? m.person.name} className={styles["member"]} data-open={m.open ? "true" : undefined}
+          data-left={m.left ? "true" : undefined}>
           <PersonAvatar person={{ ...m.person, online: m.open ?? false }} size={24} />
           <b>{m.person.name}{m.you ? <span className={styles["muted"]}> · you</span> : null}</b>
           <span className={styles["muted"]}>
-            {m.invited ? "Invited" : SESSION_ROLE_WORD[m.role]}
-            {m.open ? <span className={styles["openWord"]}> · here</span> : null}
+            {m.left ? `Left ${m.left} · No access` : m.invited ? "Invited" : SESSION_ROLE_WORD[m.role]}
+            {m.open && !m.left ? <span className={styles["openWord"]}> · here</span> : null}
           </span>
         </li>
       ))}

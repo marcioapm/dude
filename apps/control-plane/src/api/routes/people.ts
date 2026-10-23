@@ -24,7 +24,7 @@ import type { PublicContext, RequestContext, Router } from "../router.ts";
 import { getNavigation } from "./navigation.ts";
 import { attentionItems, waitingSplit, type NavProject } from "../../../../../packages/design-system/src/util/navModel.ts";
 import { endAutoStart } from "./relations.ts";
-import { passOnSessions } from "./sessions.ts";
+import { lockOwnedSessions, passOnSessions } from "./sessions.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
 export function ownerJson(alias = "tasks"): string {
@@ -494,6 +494,7 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await requireAdmin(scope, ctx);
     if (id === ctx.principal.personId) return "yourself";
+    await lockOwnedSessions(scope, id);
     const rows = (await scope.sql`
       SELECT role FROM people WHERE id = ${id} AND removed_at IS NULL FOR UPDATE`) as Array<{ role: string }>;
     if (!rows[0]) return "missing";
