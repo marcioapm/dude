@@ -1015,7 +1015,8 @@ def test_project_settings_manage_repositories_and_delivery(
 
     # Security joins correctness on every delivery.
     page.locator("[data-settings-nav='delivery']").click()
-    page.get_by_role("checkbox", name="security").click()
+    # Two rows list the reviewer categories (every delivery, every round): pick the first one's.
+    page.get_by_role("group", name="Reviewers every delivery runs").get_by_role("checkbox", name="security").click()
     page.get_by_test_id("delivery-save").click()
     expect(toast(page, "Delivery saved")).to_be_visible()
 

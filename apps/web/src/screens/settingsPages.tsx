@@ -594,6 +594,8 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
       <SettingsHeader title="Delivery" description="How a task goes from Deliver to a pull request." />
       <SettingsSection title="Review">
         <SettingRow
+          role="group"
+          aria-label="Reviewers every delivery runs"
           label="Reviewers every delivery runs"
           help="Others join when a change touches their area."
           source={<Source scope={scope} setting={d.requiredReviewers} reset={() => void scope.patch({ delivery: { requiredReviewers: null } }, "Reviewers reset")} />}
@@ -604,6 +606,8 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
           ))}
         </SettingRow>
         <SettingRow
+          role="group"
+          aria-label="Reviewers every round runs"
           label="Reviewers every round runs"
           help="A re-review after a fix runs these, the reviewers of the findings it judges, and the reviewers its own change picks."
           source={<Source scope={scope} setting={d.alwaysReviewers} reset={() => void scope.patch({ delivery: { alwaysReviewers: null } }, "Reviewers reset")} />}
