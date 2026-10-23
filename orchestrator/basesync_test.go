@@ -229,9 +229,9 @@ func TestBeforePRConflictingBaseIsResolvedReviewedAndTested(t *testing.T) {
 // (web) beside one whose pull request is open and approved (target): the
 // integration fixer also changes target, and target's pull request moves
 // only once that change is reviewed and tested, by its promotion. web's
-// pull request opens at the checked head too. With target's pull request
-// closed first, nothing is left to keep the merge from: no candidate, and
-// web's pull request still opens at a reviewed and tested head.
+// pull request opens at the checked head too. With target's pull request,
+// the task's only one, closed first, the delivery ends aborted: web's pull
+// request never opens and nothing integrates.
 func TestBeforePRIntegrationBesideAnOpenPullRequestIsCheckedOnACandidate(t *testing.T) {
 	t.Run("open", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, false) })
 	t.Run("closed", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, true) })
@@ -292,17 +292,26 @@ func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 	w.gh.Review(1, "ana", "APPROVED")
 	// web's base moves under it, conflicting: GitHub cannot merge it in.
 	w.commitFileIn(w.web.Repo, "main", "FIX.md", "base intent\n", "Another task's change")
-	// With target closed, no pull request is open while the fixer works:
-	// it publishes to web's task branch, and web's pull request opens at
-	// what was checked there (checkedAt below).
-	checkTarget, checkWeb := func() {}, func() {}
 	if closed {
+		// The task's only pull request closed without merging: the loop is
+		// over wherever the delivery stands (delivery.endable), so web's
+		// opening never comes and nothing integrates.
 		w.gh.Close(1)
-		w.sync()
-	} else {
-		checkTarget = w.prShowsOnlyChecked(t, task, "target", branch, true)
-		checkWeb = w.prShowsOnlyChecked(t, task, "web", branch, true)
+		w.until("the delivery to end", func() bool { w.sync(); return w.taskStatus(task) == "aborted" })
+		for range 3 {
+			w.sync()
+			w.pump()
+		}
+		if n := len(w.web.Pulls()); n != 0 {
+			t.Errorf("%d web pull requests opened after the task's pull request closed", n)
+		}
+		if n := w.count(integrationRuns, task); n != 0 {
+			t.Errorf("%d integration Runs after the task's pull request closed", n)
+		}
+		return
 	}
+	checkTarget := w.prShowsOnlyChecked(t, task, "target", branch, true)
+	checkWeb := w.prShowsOnlyChecked(t, task, "web", branch, true)
 	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed and tested; web is new."}`)
 	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
 		t.Fatalf("answer: %d %v", status, out)
@@ -313,10 +322,6 @@ func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 		w.sync()
 		opened := len(w.web.Pulls()) == 1 && w.count(integrationCompleted, task) == 1
 		if r := w.escalationReason(task); r != "" {
-			// target closed and web open: a person decides what is left.
-			if closed && r == "pull_request_closed" && opened {
-				return true
-			}
 			t.Fatalf("escalated %s\n%s", r, w.describeRuns())
 		}
 		if w.decisionAt(task) == delivery.PointReviewed {
@@ -326,17 +331,13 @@ func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 	})
 	checkTarget()
 	checkWeb()
-	want := 1
-	if closed {
-		want = 0
-	}
-	if n := w.count(integrationRuns+` AND branch LIKE '%-candidate'`, task); n != want {
-		t.Errorf("integration Runs on the candidate %d, want %d\n%s", n, want, w.describeRuns())
+	if n := w.count(integrationRuns+` AND branch LIKE '%-candidate'`, task); n != 1 {
+		t.Errorf("integration Runs on the candidate %d, want 1\n%s", n, w.describeRuns())
 	}
 	// Every Run that publishes from the integration on goes to the candidate.
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('implement', 'fix', 'simplify')
 		AND created_at >= (SELECT min(created_at) FROM runs WHERE task_id = $1 AND pr_feedback::text LIKE '%Base integration%')
-		AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task); !closed && n != 0 {
+		AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task); n != 0 {
 		t.Errorf("%d publishing Runs of the integration's loop off the candidate", n)
 	}
 	head := w.web.SHA(w.web.Pull(1).Head)
