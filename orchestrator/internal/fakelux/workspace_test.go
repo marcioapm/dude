@@ -114,3 +114,17 @@ func TestAServerCommandWritesInTheCheckoutAndInTheHostsDirectories(t *testing.T)
 		}
 	}
 }
+
+// An init script's commands get the same rewrite as an exec's arguments: a
+// leading /workspace is the Run's, an embedded one and the caller's own
+// directories are left alone, and a here-document's body stays data.
+func TestAnInitScriptReadsOnlyALeadingWorkspaceOutsideTheHostsDirectories(t *testing.T) {
+	logs := "/workspace/repos/dude/.taskdocs/logs"
+	script := "printf x > " + logs + "/out; cat /srv/workspace/x > /workspace/out\n" +
+		"cat <<EOF > /workspace/f\n/workspace/data\nEOF\n"
+	want := "printf x > " + logs + "/out; cat /srv/workspace/x > /tmp/run/out\n" +
+		"cat <<EOF > /tmp/run/f\n/workspace/data\nEOF\n"
+	if got := inWorkspaceScript(script, "/tmp/run", []string{logs}); got != want {
+		t.Fatalf("inWorkspaceScript:\n got %q\nwant %q", got, want)
+	}
+}
