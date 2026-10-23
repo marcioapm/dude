@@ -35,6 +35,10 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 		case c.auth == "Bearer bad-key":
 			w.WriteHeader(401)
 			io.WriteString(w, `{"error":"unauthorized"}`)
+		case r.URL.Path == "/v1/tasks/wi_12/feedback" && r.Method == "GET":
+			io.WriteString(w, `{"feedback":[{"id":"fb_mine","status":"draft"},{"id":"fb_sent","status":"open"},{"id":"fb_mine2","status":"draft"}],"blocking":1}`)
+		case r.URL.Path == "/v1/tasks/wi_12/feedback/drafts":
+			io.WriteString(w, `{"id":"fb_new","status":"draft"}`)
 		case r.URL.Path == "/v1/me":
 			io.WriteString(w, `{"organization":{"id":"org_1","slug":"acme","name":"Acme"},"person":{"id":"per_1","name":"Ana","role":"admin","lastSeenAt":"x"}}`)
 		case r.URL.Path == "/v1/projects" && r.Method == "GET":

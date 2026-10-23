@@ -243,6 +243,7 @@ var moreCommands = map[string]command{
 		}},
 	"decider": {"TASK WHO", "who takes a task's delivery decisions: policy or conductor", func(fs *flag.FlagSet) doer {
 		openPR := fs.Bool("open-pr", false, "with conductor: it may open the pull request too")
+		draft := fs.Bool("draft", false, "the pull request opens as a draft")
 		return func(c *cli, a []string) (any, error) {
 			if err := oneOf("WHO", a[1], "policy", "conductor"); err != nil {
 				return nil, err
@@ -250,6 +251,9 @@ var moreCommands = map[string]command{
 			body := obj{"decider": a[1]}
 			if *openPR {
 				body["openPullRequest"] = true
+			}
+			if *draft {
+				body["draft"] = true
 			}
 			return c.onTask("POST", a[0], "/decider", body)
 		}

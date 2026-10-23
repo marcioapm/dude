@@ -56,28 +56,43 @@ Projects and epics
   repo-add P --name N --url URL [--branch main]
   epic-create P --title T [--description D]
   epic-update EPIC [--title T] [--description D] [--state planned|active|done|none] [--position N]
-  epic-delete EPIC | epic-metrics EPIC | peers EPIC | threads EPIC
+  epic-delete EPIC | epic-archive EPIC [--ended-only] | epic-unarchive EPIC
+  epic-metrics EPIC | peers EPIC | threads EPIC
   notes EPIC | note EPIC TEXT [--replaces N] | note-retire EPIC N
 
 Tasks
   create P --title T --goal G [--criterion C]... [--repo NAME[:read]]... [--epic ID]
            [--blocked-by T]... [--blocks T]... [--related T]... [--start | --talk]
+           [--from-pr N | --from-branch B [--base B]] [--mode continue|review]
   update TASK [--title T] [--goal G] [--criterion C]... [--no-criteria]
               [--epic ID|none] [--repo R]... [--owner PERSON]
   start TASK [--override --note N] | talk TASK [--override --note N]
   auto-start TASK [--how deliver|talk] | no-auto-start TASK
   relate TASK --blocks T | --blocked-by T | --related T [--why W]
   unrelate TASK blocks|blocked_by|related T
-  done TASK
+  done TASK | stop TASK [--restart [--decider policy|conductor]] [--note N]
+  close TASK wont_do|duplicate|cant_reproduce [--duplicate-of T] [--close-pr] [--remove-relations]
+  reopen TASK | archive TASK [--resolution R] | unarchive TASK
   assign TASK PERSON...         the first is the owner
   retry TASK | recover TASK [resume|retry|restart] [--note N] [--override]
-  decider TASK policy|conductor [--open-pr]
+  decider TASK policy|conductor [--open-pr] [--draft]
   reset-machine TASK ROLE [--note N] | preview TASK [--stop]
 
 Reviews and pull requests
   resolve FINDING resolved|accepted|open [--note N]
-  merge PR [--method M] | update-branch PR | rerun-checks PR | reviewers PR LOGIN...
+  merge PR [--method M] | update-branch PR | rerun-checks PR | resolve-conflicts PR
+  reviewers PR LOGIN...
   repo-decide REQUEST approve|decline [--note N]
+  review-questions TASK | review-answer QUESTION TEXT | review-withdraw QUESTION [--reason R]
+  verification TASK
+
+Feedback on a task's work
+  feedback TASK [--attempt N]
+  feedback-draft TASK TEXT [--path FILE --lines N[-M] [--side new|old] [--run RUN]]
+  feedback-submit TASK [DRAFT,…]     your drafts (default: all of them) to its agents
+  feedback-send TASK TEXT            one general item, drafted and sent
+  feedback-reply ITEM TEXT | feedback-resolve ITEM [--note N] | feedback-reopen ITEM [TEXT]
+  feedback-delete DRAFT
 
 Talking to the agents
   chat TASK TEXT [--aside]
@@ -98,6 +113,10 @@ Memory
   memories [--project P] [--text T] [--archived] | memory ID
   memory-add --title T --content C [--kind fact|procedure|note] [--project P]
   memory-archive ID | memory-restore ID
+
+dude itself
+  guide [PAGE]                       dude's guide
+  judgements [--asker A] [--limit N] [--before ID] | judgement ID
 
 Anything else
   api METHOD PATH [JSON | -]
@@ -732,6 +751,7 @@ var commands = map[string]command{
 			epic := fs.String("epic", "", "epic id")
 			start := fs.Bool("start", false, "start delivery right away")
 			talk := fs.Bool("talk", false, "start its conductor to plan it first; nothing is built yet")
+			from := addSourceFlags(fs)
 			var criteria, repos, blockedBy, blocks, related many
 			fs.Var(&criteria, "criterion", "an acceptance criterion; repeatable")
 			fs.Var(&repos, "repo", "a repository it works on, NAME or NAME:read; repeatable (default: the project's only one)")
@@ -761,6 +781,22 @@ var commands = map[string]command{
 				}
 				body := obj{"projectId": pid, "title": *title, "goal": g,
 					"acceptanceCriteria": append([]string{}, criteria...), "repositories": rs}
+				if *from.pr != "" || *from.branch != "" {
+					if len(rs) != 1 {
+						return nil, errors.New("create: --from-pr and --from-branch need exactly one --repo, the repository they are in")
+					}
+				}
+				repoID := ""
+				if len(rs) == 1 {
+					repoID, _ = rs[0]["id"].(string)
+				}
+				src, err := from.body(repoID)
+				if err != nil {
+					return nil, err
+				}
+				if src != nil {
+					body["source"] = src
+				}
 				if *epic != "" {
 					body["epicId"] = *epic
 				}

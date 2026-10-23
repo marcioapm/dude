@@ -173,6 +173,7 @@ used while nothing is logged in. `dude login` replaces it.
 | `epic-create PROJECT --title T [--description D]` | A new epic |
 | `epic-update EPIC [--title] [--description] [--state planned\|active\|done\|none] [--position N]` | Changes an epic |
 | `epic-delete EPIC` | Deletes an epic; its tasks stay in the project |
+| `epic-archive EPIC [--ended-only]` / `epic-unarchive EPIC` | Archives an epic with its tasks (`--ended-only`: only its ended ones), or brings it back |
 | `epic-metrics EPIC` | An epic's cost and time |
 | `peers EPIC` | What each task on it is doing |
 | `threads EPIC` | Conversations between its agents |
@@ -185,6 +186,7 @@ used while nothing is logged in. `dude login` replaces it.
 | Command | Does |
 |---|---|
 | `create PROJECT --title T --goal G [--criterion C]... [--repo NAME[:read]]... [--epic ID] [--blocked-by T]... [--blocks T]... [--related T]... [--start \| --talk]` | Records a task. The goal needs 16+ characters. `--repo` is needed when the project has more than one repository. |
+| `create … --repo NAME --from-pr N [--mode continue\|review]` / `--from-branch B [--base B]` | A task that takes over existing work in that repository: a pull request (number or URL) or a branch. `review` only reviews it. |
 | `update TASK [--title] [--goal] [--criterion C]... [--no-criteria] [--epic ID\|none] [--repo R]... [--owner PERSON]` | Changes a task. `--criterion` and `--repo` replace all. |
 | `start TASK [--override --note N]` | Delivery: agents implement, review, and open a PR |
 | `talk TASK [--override --note N]` | Its conductor plans it with you in Chat; nothing is built yet |
@@ -192,12 +194,16 @@ used while nothing is logged in. `dude login` replaces it.
 | `relate TASK --blocks T \| --blocked-by T \| --related T [--why W]` | Relates two tasks |
 | `unrelate TASK blocks\|blocked_by\|related T` | Removes a relation |
 | `assign TASK PERSON...` | Who is on it; the first is the owner |
-| `decider TASK policy\|conductor [--open-pr]` | Who takes its delivery decisions |
+| `decider TASK policy\|conductor [--open-pr] [--draft]` | Who takes its delivery decisions; `--draft` opens the pull request as a draft |
 | `retry TASK` | Retries a task whose conductor failed |
 | `recover TASK [resume\|retry\|restart] [--note N] [--override]` | A stopped task: without an action, the ways out; with one, takes it |
 | `reset-machine TASK ROLE [--note N]` | Throws away its agent machine for ROLE (e.g. `implementer`) |
 | `preview TASK [--stop]` | Starts or stops its preview environment |
 | `done TASK` | Marks finished work with nothing to merge done |
+| `stop TASK [--restart [--decider policy\|conductor]] [--note N]` | Stops all of its work where it stands; `--restart` starts its next attempt |
+| `close TASK wont_do\|duplicate\|cant_reproduce [--duplicate-of T] [--close-pr] [--remove-relations] [--note N]` | Ends it without doing it |
+| `reopen TASK` | Reopens a closed task |
+| `archive TASK [--resolution R] [--duplicate-of T] [--note N]` / `unarchive TASK` | Archives it (one not ended needs `--resolution`, and is closed with it), or brings it back |
 
 ### Talking to the agents
 
@@ -219,8 +225,31 @@ used while nothing is logged in. `dude login` replaces it.
 | `merge PR [--method merge\|squash\|rebase]` | Merges (default: the organisation's method) |
 | `update-branch PR` | Brings its branch up to date with its base |
 | `rerun-checks PR` | Reruns its failed checks |
+| `resolve-conflicts PR` | Has an agent resolve its merge conflicts |
 | `reviewers PR LOGIN...` | Requests reviews |
 | `repo-decide REQUEST approve\|decline [--note N]` | Settles an agent's request for a repository |
+| `review-questions TASK` | Questions reviewers asked the task's owner; they hold delivery until settled |
+| `review-answer QUESTION TEXT` | Answers one (the task's owner) |
+| `review-withdraw QUESTION [--reason R]` | Withdraws one unanswered (the task's owner) |
+| `verification TASK` | How its work was verified, criterion by criterion |
+
+### Feedback on a task's work
+
+Feedback is your own review of what the agents built. Items start as
+drafts, which only you see. Submitting sends them to the task's agents in
+one batch. Open items block the pull request and dude's merge until they
+are resolved.
+
+| Command | Does |
+|---|---|
+| `feedback TASK [--attempt N]` | Everyone's submitted items, your drafts, and how many block |
+| `feedback-draft TASK TEXT` | A draft about the work in general |
+| `feedback-draft TASK TEXT --path FILE --lines N[-M] [--side new\|old] [--run RUN]` | A draft on lines of a run's diff (default: the task's newest run, the new side) |
+| `feedback-submit TASK [DRAFT,…]` | Sends drafts: the ones named, or all of yours |
+| `feedback-send TASK TEXT` | Drafts one general item and sends it at once |
+| `feedback-reply ITEM TEXT` | Replies on an item |
+| `feedback-resolve ITEM [--note N]` / `feedback-reopen ITEM [TEXT]` | Resolves an item, or reopens it, saying why |
+| `feedback-delete DRAFT` | Deletes one of your drafts |
 
 ### Brainstorms
 
@@ -246,6 +275,14 @@ A brainstorm is an agent to think something through with; it writes no code.
 | `memory ID` | One in full |
 | `memory-add --title T --content C [--kind fact\|procedure\|note] [--project P]` | Remembers something |
 | `memory-archive ID`, `memory-restore ID` | Archives or restores |
+
+### dude itself
+
+| Command | Does |
+|---|---|
+| `guide [PAGE]` | dude's guide: its pages, or one in full (the same text agents search). `dude --help` is this CLI's help. |
+| `judgements [--asker A] [--limit N] [--before ID]` | The judgement calls dude's models made lately; `--before` pages |
+| `judgement ID` | One in full |
 
 ### Anything else
 
@@ -282,6 +319,23 @@ dude questions WEB-41                     # what it asks
 dude answer q_… "Use the existing queue" --choice 1
 dude findings WEB-41 --status open
 dude prs WEB-41 | jq -r '.[0].url'
+```
+
+Review what it built before it merges:
+
+```sh
+dude diff WEB-41 | jq -r '.files[].path'
+dude feedback-draft WEB-41 "This retries 4xx too; only 5xx" --path services/webhooks/send.go --lines 40-52
+dude feedback-draft WEB-41 "Add a test for the give-up path"
+dude feedback-submit WEB-41               # both, to its agents, as one batch
+dude feedback WEB-41                      # their state; "blocking" until resolved
+```
+
+Take over a half-done branch:
+
+```sh
+dude create WEB --repo web --from-branch ana/webhook-retries --base main \
+  --title "Finish webhook retries" --goal "…" --start
 ```
 
 Split work under an epic, in order:
