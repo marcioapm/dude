@@ -51,6 +51,8 @@ loops (`cmd/dude-orchestrator/main.go`):
 | `phase-sync` | Drives each phase Run on lux: submit, follow its output into the ledger, deliver directives, pause, resume, cancel, and when the agent's turn ends, push, fast-forward the branch, record findings, stop. |
 | `phase-notifier` | Turns a finished phase Run into a `phase.finished` signal for its workflow. |
 | `webhooks` | Acts on stored GitHub deliveries: syncs the pull request each is about. |
+| `automations` | Fires due schedules, matches stored deliveries against event automations, starts queued runs, follows running ones (an agent's turn, a command's exit, a Server's POSTs and idle stop), expires kept sessions. |
+| `automations-retention` | Hourly: deletes deliveries after 30 days, empties automation runs' payloads at 30 days and logs at 90. |
 | `previews` | Drives branch previews on lux: creates a wakeable preview's lux servers, wakes it (resume with a sync, or submit and attach) when lux's feed says someone opened it, stops it when every server is idle, syncs a running one when its branch moves, reaps unused ones, deletes the servers and cancels the Run of an ended one. Previews from before lux#41 keep the old park-after-idle path. |
 | `lux-feed` (goroutine) | Follows lux's tenant event feed (`GET /v1/events`) from the cursor in `lux_feed`, recording wakes, idleness and gone servers of wakeable previews (`servers.Feed`). |
 | `pr-reconciler` | Re-reads open pull requests not seen for 15 minutes — the backstop for webhooks GitHub never sent. |
@@ -628,6 +630,87 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   use the people's minute read is the heartbeat; background polling stops
   while hidden (`useVisibleInterval`), not every event-driven request.
 
+### Automations
+
+Work nobody started by hand (migration 180; `orchestrator/internal/automations`,
+the API `apps/control-plane/src/api/routes/automations.ts`, the pages
+`apps/web/src/screens/AutomationsSettings.tsx`). An automation belongs to
+the organisation (`project_id` NULL) or a project, and is one of four kinds:
+an **agent**, a **command** that runs and exits, a **server** that answers
+events, or a **webhook** (one signed POST). New ones start off, owned by
+their creator.
+
+- **Triggers.** `{kind: schedule, cron, tz}` — five-field cron in an IANA
+  zone (`ParseCron`/`Next`: no dependency; a minute a spring-forward skips
+  never fires, one a fall-back repeats fires once) — or `{kind: github,
+  event, actions[], filters{branch,label,paths,author}}`. The event is any
+  GitHub event name, so an App permission added later needs no code. Values
+  in a filter are OR'd, filters AND'd; `!login` excludes an author; paths
+  read the pull request's files from GitHub and are checked last (`Match`).
+  An event dude has no code for still matches on event, action, repository
+  and author. The event picker lists what the organisation is subscribed to
+  (`/v1/automations/subscriptions`: the App's `events` from `GET /app`, a
+  PAT's repository webhook's, kept an hour; else the events seen, saying so).
+- **Repositories.** A project automation takes events from its project's
+  repositories and checks out all, none or some of them. An organisation's
+  `repo_filter` (all / only / except, `*` within a segment) is evaluated at
+  match time, so a repository added later is covered at once; on a schedule
+  it decides what each run checks out. Projects cannot opt out: a project's
+  list shows the organisation's that reach it as "Also running here".
+- **Every GitHub delivery is stored** (`receiveWebhook`); the pull request
+  sync marks those that cannot change a pull request done in one statement
+  (`ProcessDeliveries`), and the automations loop reads each delivery once
+  (`webhook_deliveries.automations_at`).
+- **Kinds.** An agent is its own (harness, tier, time limit, machine,
+  image, prompt) or one of dude's roles that run without a task — Tester,
+  Reviewer (`pull_request*` events only), Investigator — resolved for the
+  automation's scope as a task's would be (`ResolveRole`, `Sizes.ForRole`,
+  `RoleImage`), then the automation's overrides; the role's later changes
+  reach every value not overridden. Its prompt is the role's, then the
+  automation's text as the task brief. `{{event.name}}`, `{{event.action}}`,
+  `{{event.delivery_id}}`, `{{event.payload}}`, `{{pr.number|title|url}}`,
+  `{{repository}}`, `{{branch}}`, `{{sender}}` and `{{schedule.time}}` are
+  substituted (`Substitute`). Its checkouts use the dude App's tokens and
+  bot. A command is `sh -c` in a generic lux Run; the event is at
+  `$DUDE_EVENT_PATH` with `DUDE_EVENT_NAME`, `DUDE_EVENT_ACTION` and
+  `DUDE_DELIVERY_ID`. An automation's lux Run is not a dude Run (`runs`): it
+  has no task or session, so the loop follows it from
+  `automation_runs.lux_run_id`.
+- **Sessions.** Ephemeral (a fresh Run, cancelled at the end) or Resumable:
+  one session per automation (`automation_sessions`), stopped and kept at
+  the end of a run and resumed by the next firing, until `expiry_days`
+  (1–30) pass without a run — whether or not the automation is on. "Start
+  fresh now" lets it go.
+- **Concurrency** (`Arrive`): queue (default), merge (the waiting run gets
+  every payload, as a list), skip (a skipped run row with the reason),
+  cancel and restart, send to the running agent (a resumable agent), or run
+  in parallel up to N (ephemeral). Run now on a schedule queues behind a
+  live run. A test run (a past delivery or a written test event) is always
+  a run of its own, with a fresh ephemeral session, untouched by
+  concurrency; it is a real run.
+- **Server POST contract.** On an event dude starts (or resumes) the
+  container with the command as a lux server, waits for it to be healthy
+  (GET its health path, else the port; at most 60 s), and POSTs each event
+  to `<path>` with `Content-Type: application/json`, `X-Dude-Automation`,
+  `X-Dude-Run`, `X-GitHub-Event`, `X-GitHub-Delivery` and, with a secret,
+  `X-Dude-Signature-256`. Events arriving while it is up go to the same
+  container. A 5xx or no answer within 30 s is tried once more; a 4xx is
+  recorded; one `automation_run_requests` row per POST. With nothing in
+  flight and no request for 30 s it is stopped and the run ends (`idle`).
+- **Webhook signing.** `X-Dude-Signature-256: sha256=` and the hex
+  HMAC-SHA256 of the body with the automation's secret, as GitHub signs;
+  one run row per POST, retried once on a 5xx or no answer. The API never
+  returns the secret, only its last four characters.
+- **Ownership.** The creator owns it; its owner and the organisation's
+  admins transfer it to a current member, who need not be able to edit it.
+  Org admins edit organisation automations, a project's editors its own;
+  everyone reads; the owner and editors run it by hand. When the owner is
+  removed (`removePerson`), the organisation's admins hold it together
+  (`owner_id` NULL, `owner_left_at` set): it stays on and its page says so.
+  A failed run records `automation.failed` naming the owner, or every admin.
+- **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90
+  (`automations.Retain`, hourly).
+
 ## Decisions already made
 
 These were settled deliberately. Change them on purpose, not by accident.
@@ -875,5 +958,7 @@ In rough priority order.
 | Change the scripted agent | `orchestrator/internal/fakeagent` |
 | Add an event type | `packages/domain/src/events/types.ts` and the Go constants that write it |
 | Change the sidebar/board data | `apps/control-plane/src/api/routes/navigation.ts` |
+| Change what an automation matches, when it fires, or how it runs | `orchestrator/internal/automations/` (`match.go`, `cron.go`, `concurrency.go`, `runner.go`); its spec, `orchestrator/internal/phases/automation.go` |
+| Change automations' API or who may change them | `apps/control-plane/src/api/routes/automations.ts`, rules in `packages/domain/src/automations.ts` |
 | Change a screen | `apps/web/src/screens/` |
 | Change a component | `packages/design-system/src/components/` |
