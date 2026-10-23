@@ -111,6 +111,8 @@ export interface SidebarRailSessions {
   readonly current?: boolean | undefined;
   /** Your latest few, named in the Sessions tooltip. */
   readonly recent?: ReadonlyArray<string> | undefined;
+  /** The organisation sessions you joined and are active in, counted in the tooltip ("2 open to everyone you joined"). */
+  readonly organisationCount?: number | undefined;
 }
 
 /** Where a `collapsible` sidebar becomes a drawer. Kept in step with Sidebar.module.css. */
@@ -336,8 +338,16 @@ export function Sidebar({
                 <Icon name="plus" size={16} />
               </SidebarRailItem>
               <SidebarRailItem label="Sessions" current={railSessions.current} onClick={railSessions.onOpenList} data-testid="rail-sessions"
-                tip={railSessions.recent?.length ? (
-                  <span className={styles["railTip"]}><b>Sessions</b>{railSessions.recent.slice(0, 4).map((t, i) => <span key={i} className={styles["railTipMuted"]}>{t}</span>)}</span>
+                tip={railSessions.recent?.length || railSessions.organisationCount ? (
+                  <span className={styles["railTip"]}>
+                    <b>Sessions</b>
+                    {(railSessions.recent ?? []).slice(0, 4).map((t, i) => <span key={i} className={styles["railTipMuted"]}>{t}</span>)}
+                    {railSessions.organisationCount ? (
+                      <span className={styles["railTipMuted"]} data-testid="rail-sessions-organisation">
+                        {railSessions.organisationCount} open to everyone you joined
+                      </span>
+                    ) : null}
+                  </span>
                 ) : undefined}>
                 <Icon name="brainstorm" size={16} />
               </SidebarRailItem>
@@ -516,11 +526,11 @@ export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNe
       {!isFolded && recent.map((s) => (
         <SidebarLink key={s.id} icon="brainstorm" current={selected === s.id} onClick={() => onSelect(s.id)} data-session={s.id}
           trailing={s.access === "organisation" ? (
-            <span className={styles["sessionShared"]} aria-label="open to everyone">
+            <span className={styles["sessionShared"]} role="img" aria-label="open to everyone">
               <Icon name="building" size={12} />
             </span>
           ) : s.shared ? (
-            <span className={styles["sessionShared"]} aria-label={s.owner ? `shared, ${s.owner.name}'s` : "shared"}>
+            <span className={styles["sessionShared"]} role="img" aria-label={s.owner ? `shared, ${s.owner.name}'s` : "shared"}>
               <Icon name="shared" size={12} />
               {s.owner ? <PersonAvatar person={s.owner} size={16} /> : null}
             </span>

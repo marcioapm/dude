@@ -812,6 +812,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **`SharedMark scope="organisation"`** is the building glyph and "Everyone
   in <org>" in the info ink, a `role=img` named with those words;
   `showLabel` writes them beside the glyph, as the session header does.
+  With `owner` it adds the owner's face after the glyph and names it
+  ("Everyone in Acme, Gus's"), as the Open to everyone list's rows do
+  (`SessionRow access="organisation" shared={{ owner }}`).
   **`AdminOwned`** marks a session whose owner left the organisation: the
   building glyph and "Owner left <org> — owned by <org>'s admins" in the
   attention ink, in the header meta and on top of the rail's People.
@@ -2141,7 +2144,7 @@ once; an item's `descriptionMono` and `descriptionWraps` set its second
 line in mono or let a sentence wrap; a `kind: "note"` is a muted line that
 is not an item, for what the menu cannot list, and the menu's description
 for a screen reader, whose menu mode reads items alone), Skeleton/SkeletonLines/Spinner, EmptyState,
-ScrollArea, Section (`count`, and `limit` for "3 of 10"), FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
+ScrollArea, Section (`count`, and `limit` for "3 of 10"; `note`, muted words beside the label and out of its capitals), FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 
 `src/components/` — the factory vocabulary:
@@ -2290,7 +2293,9 @@ MarkdownCheatsheet.
   controlled or uncontrolled. `collapsed` / `onCollapsedChange` fold it to
   the rail (a chevron in the header collapses it, `[` in the app); the rail
   takes `railMark` (home, `onHome`, `homeSelected`), `railSessions` (New
-  session and Sessions, so the sidebar still knows nothing of sessions) and
+  session and Sessions, so the sidebar still knows nothing of sessions;
+  `organisationCount` adds "2 open to everyone you joined" to the Sessions
+  tooltip) and
   `railFooter` (the band's `SidebarRailItem`s). `projectCountWords(counts)`
   is a project's `projectCounts` in words.
 - **SidebarRailItem** — one square of the rail, named, its words in a

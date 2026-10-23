@@ -18,7 +18,7 @@ import { SessionScreen } from "../src/screens/SessionScreen.tsx";
 import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { OpenSessionsScreen } from "../src/screens/OpenSessionsScreen.tsx";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { App } from "../src/App.tsx";
+import { App, mentionIsYours } from "../src/App.tsx";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import { mentionables } from "../src/mentions.ts";
 import { RUN_KEY } from "../src/fixtures/scenario.ts";
@@ -306,21 +306,51 @@ describe("Waiting on you", () => {
 
 describe("Open to everyone", () => {
   const LIST: OpenSessionsList = { joined: 1, sessions: [
-    { id: "ssn_a", title: "Joined one", owner: person("u_ana"), joined: true, people: 2, projects: [], runStatus: "running", lastActivityAt: at(1), ownedByAdmins: false },
-    { id: "ssn_b", title: "Not yet", owner: person("u_tom"), joined: false, people: 1, projects: [], runStatus: null, lastActivityAt: at(2), ownedByAdmins: false },
-    { id: "ssn_c", title: "Left behind", owner: null, joined: false, people: 1, projects: [], runStatus: null, lastActivityAt: at(3), ownedByAdmins: true },
+    { id: "ssn_a", title: "Joined one", owner: person("u_ana"), joined: true, people: 2, projects: [], runStatus: "running", lastActivityAt: at(1), ownedByAdmins: false, archivedByOwner: false },
+    { id: "ssn_b", title: "Not yet", owner: person("u_tom"), joined: false, people: 1, projects: [], runStatus: null, lastActivityAt: at(2), ownedByAdmins: false, archivedByOwner: false },
+    { id: "ssn_c", title: "Left behind", owner: null, joined: false, people: 1, projects: [], runStatus: null, lastActivityAt: at(3), ownedByAdmins: true, archivedByOwner: false },
+    { id: "ssn_d", title: "Put away", owner: person("u_tom"), joined: false, people: 1, projects: [], runStatus: null, lastActivityAt: at(4), ownedByAdmins: false, archivedByOwner: true },
   ] };
+  class ListClient extends FixtureClient {
+    reads = 0;
+    override openSessions(): Promise<OpenSessionsList> {
+      this.reads += 1;
+      return Promise.resolve(LIST);
+    }
+  }
 
-  test("its list groups Joined · active and Not joined, each row opening its session", async () => {
+  test("its list reads the open sessions when it opens, groups Joined · active and Not joined, each row with its owner's face, opening its session", async () => {
     const opened: string[] = [];
-    const { container, unmount } = await mount(<OpenSessionsScreen list={LIST} org="Acme" onOpen={(id) => opened.push(id)} />);
+    const client = new ListClient("a");
+    const { container, unmount } = await mount(<TooltipProvider><OpenSessionsScreen client={client} org="Acme" onOpen={(id) => opened.push(id)} /></TooltipProvider>);
     mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=open-joined]"), "the list");
+    expect(client.reads).toBe(1);
     const ids = (sel: string) => [...container.querySelectorAll(`${sel} [data-testid=open-session-row]`)].map((r) => r.getAttribute("data-session"));
     expect(ids("[data-testid=open-joined]")).toEqual(["ssn_a"]);
     expect(ids("[data-testid=open-not-joined]")).toEqual(["ssn_b", "ssn_c"]);
     expect(container.querySelector('[data-session="ssn_c"]')!.textContent).toContain("Owner left Acme · owned by Acme's admins");
+    // The owner's face beside the organisation mark; none for a session its admins own.
+    expect(accessibleName(container.querySelector('[data-session="ssn_b"] [data-scope="organisation"]')!)).toBe("Everyone in Acme, Tom Okafor's");
+    expect(accessibleName(container.querySelector('[data-session="ssn_c"] [data-scope="organisation"]')!)).toBe("Everyone in Acme");
+    // The heading's count and its words sit outside the label.
+    const heading = container.querySelector("[data-testid=open-joined] h2")!;
+    expect(heading.textContent).toBe("Joined · active1");
+    expect(container.querySelector("[data-testid=open-joined]")!.textContent).toContain("the sidebar's count");
     await click(container.querySelector('[data-session="ssn_b"] button')!);
     expect(opened).toEqual(["ssn_b"]);
+  });
+
+  test("Active · N counts the active ones; Archived by owner lists those their owner archived", async () => {
+    const { container, unmount } = await mount(<TooltipProvider><OpenSessionsScreen client={new ListClient("a")} org="Acme" onOpen={() => {}} /></TooltipProvider>);
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-testid=open-joined]"), "the list");
+    const tabs = [...container.querySelectorAll<HTMLElement>("[data-testid=open-sessions-shown] [role=radio], [data-testid=open-sessions-shown] button")];
+    expect(tabs.map((t) => t.textContent)).toEqual(["Active · 3", "Archived by owner"]);
+    expect(container.querySelectorAll('[data-session="ssn_d"]').length).toBe(0);
+    await click(tabs[1]!);
+    const archived = await until(() => container.querySelector("[data-testid=open-archived]"), "Archived by owner");
+    expect([...archived.querySelectorAll("[data-testid=open-session-row]")].map((r) => r.getAttribute("data-session"))).toEqual(["ssn_d"]);
   });
 
   test("its URL is #/sessions/open, apart from a session's", () => {
@@ -329,9 +359,16 @@ describe("Open to everyone", () => {
     expect(parsePlace("#/sessions/ssn_x")).toEqual({ view: "brainstorm", id: "ssn_x" });
   });
 
-  test("the sidebar's Open to everyone row counts the joined ones and opens the list (fixtures)", async () => {
+  test("the sidebar's Open to everyone row counts the joined ones from the Sessions read alone, and opens the list (fixtures)", async () => {
     localStorage.setItem(RUN_KEY, "org-sessions");
-    const client = new FixtureClient("a");
+    let openReads = 0;
+    class Counting extends FixtureClient {
+      override openSessions(): Promise<OpenSessionsList> {
+        openReads += 1;
+        return super.openSessions();
+      }
+    }
+    const client = new Counting("a");
     window.history.replaceState(null, "", "#/sessions");
     const { container, unmount } = await mount(
       <TooltipProvider><ToastProvider><PeopleProvider client={client}>
@@ -344,10 +381,83 @@ describe("Open to everyone", () => {
     });
     const link = await until(() => container.querySelector<HTMLElement>("[data-testid=sidebar-open-to-everyone]"), "the sidebar link");
     expect(accessibleName(link)).toBe("Open to everyone, 2 joined");
+    await settle();
+    expect(openReads).toBe(0);
     await click(link);
-    await until(() => container.querySelector("[data-testid=open-sessions]"), "the list");
+    await until(() => container.querySelector("[data-testid=open-not-joined] [data-testid=open-session-row]"), "the list");
+    expect(openReads).toBe(1);
     expect(container.querySelectorAll("[data-testid=open-not-joined] [data-testid=open-session-row]").length).toBe(1);
     // Sessions stays yours: the list of those you are in.
     expect(window.location.hash).toContain("sessions/open");
+  });
+
+  test("with nothing open to everyone the sidebar still offers the row, at 0", async () => {
+    class Empty extends FixtureClient {
+      override sessions(): Promise<SessionsList> {
+        return Promise.resolve({ sessions: [], invitations: [], questions: [], mentions: [], organisation: { count: 0, joined: 0 } });
+      }
+    }
+    const client = new Empty("a");
+    window.history.replaceState(null, "", "#/sessions");
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(async () => {
+      await unmount();
+      window.history.replaceState(null, "", " ");
+    });
+    const link = await until(() => container.querySelector<HTMLElement>("[data-testid=sidebar-open-to-everyone]"), "the sidebar link");
+    expect(accessibleName(link)).toBe("Open to everyone, 0 joined");
+  });
+
+  test("a burst of a session's events reads the Sessions list once; a mention of someone else, never", async () => {
+    let reads = 0;
+    class Counting extends FixtureClient {
+      override sessions(): Promise<SessionsList> {
+        reads += 1;
+        return Promise.resolve({ sessions: [], invitations: [], questions: [], mentions: [], organisation: { count: 1, joined: 0 } });
+      }
+    }
+    const client = new Counting("a");
+    window.history.replaceState(null, "", "#/sessions");
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <App client={client} onSignOut={() => {}} onKeyRefused={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(async () => {
+      await unmount();
+      window.history.replaceState(null, "", " ");
+    });
+    await until(() => container.querySelector("[data-testid=sidebar-open-to-everyone]"), "the sidebar");
+    await settle(500);
+    const { emit } = await import("../src/fixtures/client.ts");
+    const event = (eventType: string, payload: Record<string, unknown>) => act(async () => emit({ eventType, occurredAt: new Date().toISOString(),
+      organizationId: "org_1", projectId: null as unknown as string, taskId: null as unknown as string, runId: RUN, sessionId: SESSION,
+      workflowRunId: null, actor: { type: "system", id: "dude" }, source: "orchestrator", correlationId: null, causationId: null, payload }));
+    const before = reads;
+    for (const type of ["run.created", "question.asked", "run.paused", "question.answered", "run.completed"]) {
+      await event(type, {});
+      await settle(5);
+    }
+    await settle(500);
+    expect(reads - before).toBe(1);
+    const burst = reads;
+    await event("session.mentioned", { person: "u_ana" });
+    await settle(500);
+    expect(reads).toBe(burst);
+    await event("session.mentioned", { person: YOU });
+    await settle(500);
+    expect(reads).toBe(burst + 1);
+  });
+
+  test("a mention reloads the lists only for the person mentioned", () => {
+    const mention = { eventType: "session.mentioned", payload: { person: YOU } };
+    expect(mentionIsYours(mention, YOU)).toBe(true);
+    expect(mentionIsYours(mention, "u_ana")).toBe(false);
+    expect(mentionIsYours(mention, null)).toBe(false);
+    expect(mentionIsYours({ eventType: "question.asked", payload: {} }, "u_ana")).toBe(true);
   });
 });

@@ -17,7 +17,7 @@ import { boardScope, type BoardCard, type BoardFilter, type NavProject, type Nav
 import { Board, Breadcrumb, OrgSwitcher, ProfileMenu, ScreenHeader, Segmented, Sidebar, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
-import { sessionTitle, type OpenSessionsList, type SessionsList } from "@dude/domain";
+import { sessionTitle, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { installActivity } from "./activity.ts";
@@ -135,6 +135,12 @@ const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.RunPaused, EventTypes.RunResumed,
   EventTypes.BrainstormAccessChanged, EventTypes.BrainstormOwnerLeft, EventTypes.BrainstormOwnerTaken, EventTypes.BrainstormMentioned,
 ]);
+
+/** A mention changes only the mentioned person's lists; every other event of SESSION_LIST_EVENTS is anyone's. */
+export function mentionIsYours(e: { eventType: string; payload?: unknown }, you: string | null | undefined): boolean {
+  if (e.eventType !== EventTypes.BrainstormMentioned) return true;
+  return !!you && (e.payload as { person?: unknown } | undefined)?.person === you;
+}
 
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
@@ -280,13 +286,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // sidebar's list and the inbox's lines. Re-read when a session's event
   // reaches you (the stream gives you only your sessions').
   const [sessionsList, setSessionsList] = useState<SessionsList | null>(null);
-  // The sessions open to the whole organisation: the sidebar's Open to everyone count and its list.
-  const [openList, setOpenList] = useState<OpenSessionsList | null>(null);
   // Only the latest read is kept: an older one answering late would bring back a row just archived.
   const sessionsRead = useRef(0);
   const loadSessions = useCallback(async () => {
     const read = ++sessionsRead.current;
-    void client.openSessions().then((open) => read === sessionsRead.current && setOpenList(open), () => undefined);
     try {
       const list = await client.sessions();
       if (read === sessionsRead.current) setSessionsList(list);
@@ -297,8 +300,18 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // An invitation is not on your stream until you accept it: read again
   // each minute while the page is shown, and once on showing it again.
   useVisibleInterval(() => void loadSessions(), 60_000);
-  const reloadSessions = useRef(loadSessions);
-  reloadSessions.current = loadSessions;
+  // A burst of a session's events (a turn starting, asking, pausing) reads the list once.
+  const sessionsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const latestLoadSessions = useRef(loadSessions);
+  latestLoadSessions.current = loadSessions;
+  const reloadSessions = useRef(() => {
+    if (sessionsTimer.current !== undefined) return;
+    sessionsTimer.current = setTimeout(() => {
+      sessionsTimer.current = undefined;
+      void latestLoadSessions.current();
+    }, 400);
+  });
+  useEffect(() => () => clearTimeout(sessionsTimer.current), []);
 
   // Someone seen is presence, and an agent's words, tools, plan and diff
   // change nothing the tree shows: no reload for either.
@@ -308,7 +321,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       // A tier added, edited or removed, or the Brainstorm setting changed: the model pickers read them again.
       if (e.eventType === EventTypes.SettingsUpdated) forgetModelOptions(client);
       if (e.sessionId?.startsWith("ssn_") || e.eventType.startsWith("session.")) {
-        if (SESSION_LIST_EVENTS.has(e.eventType)) void reloadSessions.current();
+        if (SESSION_LIST_EVENTS.has(e.eventType) && mentionIsYours(e, people.you)) reloadSessions.current();
         return true;
       }
       return QUIET_EVENTS.has(e.eventType);
@@ -476,7 +489,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "sessions") {
     main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
   } else if (place?.view === "openSessions") {
-    main = <OpenSessionsScreen list={openList} org={account?.current.name ?? "the organisation"} onOpen={openSession} />;
+    main = <OpenSessionsScreen client={client} org={account?.current.name ?? "the organisation"} onOpen={openSession} />;
   } else if (place?.view === "brainstorm") {
     flush = true;
     main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
@@ -730,6 +743,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           onOpenList: () => go({ view: "sessions" }),
           current: place?.view === "sessions" || place?.view === "brainstorm",
           recent: (sessionsList?.sessions ?? []).map(sessionTitle),
+          organisationCount: sessionsList?.organisation?.joined,
         }}
         railFooter={
           <>
@@ -762,7 +776,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           <SidebarSessions
             sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: sessionTitle(s), shared: s.shared,
               lastActivityAt: s.lastActivityAt, owner: s.role === "owner" ? null : s.owner, access: s.access }))}
-            organisation={openList && openList.sessions.length > 0 ? { count: openList.joined, current: place?.view === "openSessions",
+            organisation={sessionsList?.organisation ? { count: sessionsList.organisation.joined, current: place?.view === "openSessions",
               onOpen: () => go({ view: "openSessions" }) } : undefined}
             limit={3}
             folded={sessionsFolded}

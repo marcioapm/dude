@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
@@ -7,6 +7,7 @@ import { GeneralAccessRow, MentionChip, MentionMenu, MentionShareConfirm, type M
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
+import { ChatComposer } from "../../components/ChatComposer.tsx";
 import { ScreenHeader, Segmented } from "../../components/ScreenHeader.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Button } from "../../primitives/Button.tsx";
@@ -29,6 +30,33 @@ const MENTION_ITEMS: MentionItem[] = [
   { person: P["tom"]!, detail: "Not in it yet · can open it and chat" },
   { person: P["lin"]!, detail: "Not in it yet · can open it and chat" },
 ];
+
+/**
+ * A live ChatComposer with mentionables: type "@" to open the menu above the
+ * field; in the private one, picking someone outside it shows the share
+ * confirm in its `below` slot, inside the composer frame. What it would
+ * send is written under it.
+ */
+function MentionComposer({ access, width }: { readonly access: "organisation" | "private"; readonly width?: number }) {
+  const [pending, setPending] = useState<MentionItem | null>(null);
+  const [sent, setSent] = useState<string>("");
+  const submitRef = useRef<((extra?: { readonly shareWith?: ReadonlyArray<string> }) => void) | null>(null);
+  const items = access === "organisation" ? MENTION_ITEMS : [MENTION_ITEMS[0]!, ...MENTION_ITEMS.slice(1).map((m) => ({ ...m, outside: true }))];
+  return (
+    <div style={{ width: width ?? "100%", display: "flex", flexDirection: "column", gap: 8 }} data-testid={`g-mention-composer-${access}`}>
+      <ChatComposer mode="chat" placeholder="Message the brainstorm… (@ to mention someone)" mentionables={items}
+        mentionHeading={access === "organisation" ? "Mention someone in Acme · they're notified" : undefined}
+        onMention={(m) => m.outside && setPending(m)} submitRef={submitRef}
+        below={pending ? (
+          <MentionShareConfirm person={pending.person} owner ownerName="Márcio Martins"
+            onShare={() => { submitRef.current?.({ shareWith: [pending.person.id ?? pending.person.name] }); setPending(null); }}
+            onPlain={() => { submitRef.current?.(); setPending(null); }} onCancel={() => setPending(null)} />
+        ) : undefined}
+        onSubmit={(s) => { setSent(JSON.stringify(s)); return true; }} />
+      {sent ? <Label>sent: {sent}</Label> : null}
+    </div>
+  );
+}
 
 /** The card as Ana sees it: Márcio's edit stays for him; one item filed already. */
 const ITEMS: ProposalCardItem[] = [
@@ -215,7 +243,7 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
               shared={{ owner: P["marcio"] }} onOpen={() => undefined} />
             <SessionRow title="Q4 cleanup ideas" summary="Nothing filed yet" state="Parked" age="3 days ago" projects={[]} onOpen={() => undefined} />
             <SessionRow title="Usage CSV export times out for October" summary="Nothing filed yet" state="Talking" age="19 min"
-              projects={[{ key: "AB", name: "abs", repositories: 2 }]} access="organisation" org="Acme"
+              projects={[{ key: "AB", name: "abs", repositories: 2 }]} access="organisation" org="Acme" shared={{ owner: P["ana"] }}
               origin="Started from a channel thread" onOpen={() => undefined} />
           </ul>
           <SharedMark />
@@ -262,9 +290,13 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-mentions" title="MentionMenu / MentionChip / MentionShareConfirm"
-        note="@ in a session's composer: the menu with a query and with none, a private session's menu with outside people (locked, in the attention ink), a message with two chips (one you), the share confirm for the owner and for anyone else at 390px, and a mention's Waiting on you row.">
+        note="@ in a session's composer: a live ChatComposer with mentionables (type @ — the menu opens above the field; in the private one a pick of someone outside it shows the share confirm in the composer's below slot, at full width and at 390px), the menu with a query and with none, a private session's menu with outside people (locked, in the attention ink), a message with two chips (one you), the share confirm for the owner and for anyone else at 390px, and a mention's Waiting on you row.">
         <Panes mode={mode}>
           <Col style={{ width: 460 }}>
+            <Label>ChatComposer, organisation session: type @</Label>
+            <MentionComposer access="organisation" />
+            <Label>ChatComposer, private session, 390px: @ a name outside it</Label>
+            <MentionComposer access="private" width={390} />
             <MentionMenu id="g-menu-q" query="g" active={0} onPick={() => undefined}
               heading="Mention someone in Acme · they're notified" items={[MENTION_ITEMS[1]!]} />
             <MentionMenu id="g-menu" query="" active={1} onPick={() => undefined} items={MENTION_ITEMS}

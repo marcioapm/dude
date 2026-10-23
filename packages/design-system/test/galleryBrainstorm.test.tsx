@@ -119,6 +119,28 @@ test("PublishedFiles: each file by its own name and kind, a version mark when pu
   expect(capped!.textContent).toContain("1 more");
 });
 
+test("bs-mentions has a live composer: @ opens the menu, and a private session's outside pick shows the share confirm inside the composer", async () => {
+  const el = await mount();
+  const pane = el.querySelector("#bs-mentions [data-theme]")!;
+  const type = async (area: HTMLTextAreaElement, value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, value);
+    area.setSelectionRange(value.length, value.length);
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const org = pane.querySelector<HTMLElement>("[data-testid=g-mention-composer-organisation]")!;
+  const orgArea = org.querySelector("textarea")!;
+  expect(orgArea.getAttribute("role")).toBe("combobox");
+  await type(orgArea, "@t");
+  expect([...org.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual([expect.stringContaining("Tom")]);
+
+  const priv = pane.querySelector<HTMLElement>("[data-testid=g-mention-composer-private]")!;
+  const area = priv.querySelector("textarea")!;
+  await type(area, "@lin");
+  await act(async () => void area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  const confirm = priv.querySelector("form [data-testid=mention-share-confirm]");
+  expect(confirm?.getAttribute("data-owner")).toBe("true");
+});
+
 // `awaiting_input` is the vocabulary's needs-you state ("Needs you", solid).
 test("each frame shows the brainstorm's face beside the conductor's and a needs-you mark", async () => {
   const el = await mount();

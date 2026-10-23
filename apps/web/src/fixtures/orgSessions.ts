@@ -52,17 +52,19 @@ export function orgSessionsList(): SessionsList {
     invitations: [], questions: [],
     mentions: [{ id: "1", sessionId: "ssn_retry", title: "Thoughts on the export retry policy", by: ref("u_ana"),
       text: "@Márcio Martins can you check how many rows per meter October has?", createdAt: iso(2 * MIN), access: "organisation", member: false }],
+    organisation: { count: 4, joined: 2 },
   };
 }
 
 export function openSessionsList(): OpenSessionsList {
-  const open = (id: string, title: string, owner: string, joined: boolean, ownedByAdmins = false, runStatus = "completed") =>
-    ({ id, title, owner: ref(owner), joined, people: 3, projects, runStatus, lastActivityAt: iso(19 * MIN), ownedByAdmins });
+  const open = (id: string, title: string, owner: string, joined: boolean, ownedByAdmins = false, runStatus = "completed", archivedByOwner = false) =>
+    ({ id, title, owner: ref(owner), joined, people: 3, projects, runStatus, lastActivityAt: iso(19 * MIN), ownedByAdmins, archivedByOwner });
   return {
     sessions: [
       open(ORG_SESSION, "Usage CSV export times out for October", YOU, true, false, "running"),
       open(ADMIN_OWNED_SESSION, "Support macros cleanup", "u_sam", true, true),
       open("ssn_retry", "Thoughts on the export retry policy", "u_ana", false),
+      open("ssn_onboarding", "Onboarding checklist for support", "u_tom", false, false, "completed", true),
     ],
     joined: 2,
   };

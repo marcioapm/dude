@@ -455,8 +455,9 @@ function ProposedNotes({ notes }: { readonly notes: ReadonlyArray<string> }) {
  * Who else can open the session, read without colour: the shared glyph and
  * the owner's face when it is not yours (`scope` "people", the default), or
  * the building glyph for one open to the whole organisation (`scope`
- * "organisation", "Everyone in <org>"). `showLabel` writes the words beside
- * the glyph, as the session's header does; otherwise they are its name.
+ * "organisation", "Everyone in <org>"), with its owner's face when given.
+ * `showLabel` writes the words beside the glyph, as the session's header
+ * does; otherwise they are its name.
  */
 export function SharedMark({ owner, label, scope = "people", org, showLabel }: {
   readonly owner?: Person | undefined;
@@ -467,11 +468,13 @@ export function SharedMark({ owner, label, scope = "people", org, showLabel }: {
 }) {
   if (scope === "organisation") {
     const words = label ?? (org ? `Everyone in ${org}` : "Everyone in the organisation");
+    const named = owner ? `${words}, ${owner.name}'s` : words;
     return (
-      <span className={cx(styles["shared"], styles["sharedOrg"])} title={showLabel ? undefined : words} role="img" aria-label={words}
+      <span className={cx(styles["shared"], styles["sharedOrg"])} title={showLabel ? undefined : named} role="img" aria-label={named}
         data-scope="organisation">
         <Icon name="building" size={12} />
         {showLabel ? <span aria-hidden>{words}</span> : null}
+        {owner ? <PersonAvatar person={owner} size={16} aria-hidden title="" /> : null}
       </span>
     );
   }
@@ -509,7 +512,7 @@ export interface SessionRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   readonly state: ReactNode;
   readonly age?: ReactNode;
   readonly shared?: { readonly owner?: Person | undefined } | undefined;
-  /** Open to the organisation: its mark in place of the shared one. */
+  /** Open to the organisation: its mark in place of the shared one, with `shared.owner`'s face when given. */
   readonly access?: "private" | "organisation" | undefined;
   readonly org?: string | undefined;
   /** A line under the summary saying where it came from. */
@@ -526,7 +529,7 @@ export function SessionRow({ title, summary, projects, state, age, shared, acces
       <button type="button" className={styles["rowOpen"]} onClick={onOpen}>
         <span className={styles["rowTitle"]}>
           {title}
-          {access === "organisation" ? <SharedMark scope="organisation" org={org} />
+          {access === "organisation" ? <SharedMark scope="organisation" org={org} owner={shared?.owner} />
             : shared ? <SharedMark owner={shared.owner} /> : null}
         </span>
         <span className={styles["muted"]}>{summary}</span>

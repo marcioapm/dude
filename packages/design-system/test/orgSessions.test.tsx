@@ -13,7 +13,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { ChatComposer, mentionQueryAt, nameMatches, type ComposerSubmission } from "../src/components/ChatComposer.tsx";
 import { AdminOwned, SessionRow, SharedMark } from "../src/components/Brainstorm.tsx";
 import { GeneralAccessRow, MentionChip, MentionShareConfirm, type MentionItem } from "../src/components/SessionAccess.tsx";
-import { SidebarSessions } from "../src/components/Sidebar.tsx";
+import { Sidebar, SidebarSessions } from "../src/components/Sidebar.tsx";
+import { Section } from "../src/primitives/Layout.tsx";
+import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
 import { accessibleName, byRole } from "./queries.ts";
 
 let root: Root | null = null;
@@ -250,9 +252,49 @@ describe("SidebarSessions' Open to everyone row", () => {
   });
 
   test("an organisation session in the list carries the building mark", async () => {
-    const el = await mount(<SidebarSessions sessions={[{ id: "s1", title: "Billing", access: "organisation", shared: true }]}
+    const el = await mount(<SidebarSessions sessions={[{ id: "s1", title: "Billing", access: "organisation", shared: true },
+      { id: "s2", title: "Pricing", shared: true }]}
       onSelect={() => {}} onNew={() => {}} />);
-    expect(el.querySelectorAll('[aria-label="open to everyone"]').length).toBe(1);
-    expect(el.querySelectorAll('[aria-label="shared"]').length).toBe(0);
+    expect(el.querySelectorAll('[role="img"][aria-label="open to everyone"]').length).toBe(1);
+    expect(el.querySelectorAll('[role="img"][aria-label="shared"]').length).toBe(1);
+    expect(el.querySelectorAll('[data-session="s1"] [aria-label="shared"]').length).toBe(0);
+  });
+
+  test("the rail's Sessions tooltip counts the organisation sessions you joined", async () => {
+    const el = await mount(<TooltipProvider><Sidebar projects={[]} title="dude" collapsed onCollapsedChange={() => {}}
+      railSessions={{ onNew: () => {}, onOpenList: () => {}, recent: ["Billing"], organisationCount: 2 }} /></TooltipProvider>);
+    await act(async () => byRole(el, "button", "Sessions").focus());
+    const tip = await (async () => {
+      for (let i = 0; i < 20; i++) {
+        const t = document.querySelector("[data-testid=rail-sessions-organisation]");
+        if (t) return t;
+        await act(async () => await new Promise((r) => setTimeout(r, 10)));
+      }
+      return null;
+    })();
+    expect(tip?.textContent).toBe("2 open to everyone you joined");
+  });
+});
+
+describe("Section's note", () => {
+  test("sits beside the label, out of its heading and its capitals", async () => {
+    const el = await mount(<Section title="Joined · active" count={2} note="the sidebar's count"><p>rows</p></Section>);
+    const heading = el.querySelector("h2")!;
+    expect(heading.textContent).toBe("Joined · active2");
+    expect(heading.classList.contains("ds-label")).toBe(true);
+    const note = [...el.querySelectorAll("span")].find((s) => s.textContent === "the sidebar's count")!;
+    expect(heading.contains(note)).toBe(false);
+  });
+});
+
+describe("SharedMark for an organisation session", () => {
+  test("carries the owner's face when given, named with it", async () => {
+    const el = await mount(<>
+      <SharedMark scope="organisation" org="Acme" owner={GUS} />
+      <ul><SessionRow title="CSV" summary="x" projects={[]} state="Talking" onOpen={() => {}} access="organisation" org="Acme" shared={{ owner: ELI }} /></ul>
+    </>);
+    const marks = [...el.querySelectorAll('[data-scope="organisation"]')];
+    expect(marks.map(accessibleName)).toEqual(["Everyone in Acme, Gus Lindqvist's", "Everyone in Acme, Eli Haddad's"]);
+    expect(marks.every((m) => m.querySelector("[data-testid=person-avatar], img, [aria-hidden]"))).toBe(true);
   });
 });
