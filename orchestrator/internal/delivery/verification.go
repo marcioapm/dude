@@ -1021,12 +1021,12 @@ type prCriterion struct {
 func latestVerification(ctx context.Context, tx pgx.Tx, st *State) (*prVerification, error) {
 	rows, err := tx.Query(ctx, `SELECT v.text, v.status, COALESCE(v.decision, ''), COALESCE(p.name, ''),
 			COALESCE(v.decision_note, ''), v.carried_from IS NOT NULL, v.heads,
-			(SELECT e.payload->'heads' FROM events e WHERE e.task_id = v.task_id AND e.event_type = $3
+			(SELECT e.payload->'heads' FROM events e WHERE e.task_id = v.task_id AND e.event_type = 'test.skipped'
 			   AND e.payload->>'fromRunId' = v.run_id ORDER BY e.cursor DESC LIMIT 1)
 		FROM acceptance_verdicts v LEFT JOIN people p ON p.id = v.decided_by
 		WHERE v.run_id = (SELECT r.id FROM runs r JOIN acceptance_verdicts av ON av.run_id = r.id
 			WHERE r.task_id = $1 AND ($2 = 0 OR r.attempt = $2) ORDER BY av.created_at DESC, r.created_at DESC LIMIT 1)
-		ORDER BY v.criterion`, st.TaskID, st.Attempt, EvTestSkipped)
+		ORDER BY v.criterion`, st.TaskID, st.Attempt)
 	if err != nil {
 		return nil, err
 	}
