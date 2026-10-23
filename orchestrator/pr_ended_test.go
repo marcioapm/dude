@@ -291,10 +291,8 @@ func TestOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork(t *testing.T) {
 // Two repositories: target's pull request closes while web's fixer works.
 // One closed beside one open is not an end the fixer's step acts on: the
 // fixer goes on and its fix lands on web's pull request, and the person is
-// asked once (pull_request_closed), as on main. Web closing while they are
-// asked ends the task (aborted) and withdraws the question. (A person who
-// chooses wait is asked again by the close's terminal pr.feedback: main
-// does the same, and this branch leaves it unchanged.)
+// asked once (pull_request_closed). Web closing while they are asked ends
+// the task (aborted) and withdraws the question.
 func TestAMixedEndWhileASiblingsFixerWorksLetsTheFixLand(t *testing.T) {
 	w := newWorld(t)
 	scripted := w.lux.Decide

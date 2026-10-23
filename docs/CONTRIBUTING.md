@@ -423,7 +423,8 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   are aborted, a pending conductor decision dropped and an escalation
   withdrawn (`task.decided` by the system), and a finished fix is dropped
   rather than opened or promoted. One closed beside one still open is the
-  pull request wait's to ask a person about; the step at work goes on.
+  pull request wait's to ask a person about (or, held by a reviewer's
+  question, that hold's); the step at work goes on.
   dude's own closes (Start over, Close) reach no live
   delivery: the syncer signals only the one on the pull request's branch.
   Under the conductor, ready to merge (or no longer) is dude's
