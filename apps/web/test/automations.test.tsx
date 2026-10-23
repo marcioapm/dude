@@ -12,7 +12,7 @@ import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, PROJECT } from "../src/fixtures/data.ts";
-import { AutomationPage, AutomationsList, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
+import { AutomationPage, AutomationsList, NewAutomationDialog, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -110,6 +110,39 @@ describe("a project's list", () => {
     for (const r of rows(c).filter((x) => here.contains(x))) {
       expect((r.querySelector<HTMLButtonElement>("[data-testid=automation-enabled]")!).disabled).toBe(true);
     }
+  });
+});
+
+describe("the New automation dialog", () => {
+  test("names both triggers and all four kinds, and creates what was chosen", async () => {
+    const client = new FixtureClient("a");
+    const asked: unknown[] = [];
+    const create = client.createAutomation.bind(client);
+    client.createAutomation = async (input) => {
+      asked.push(input);
+      return create(input);
+    };
+    await show(<NewAutomationDialog client={client} projectId={null} onClose={() => undefined} onCreated={() => undefined} />);
+    const kinds = await until(() => document.body.querySelector<HTMLElement>("[role=radiogroup][aria-label='What runs']"), "the kinds");
+    const radios = [...kinds.querySelectorAll<HTMLElement>("[role=radio]")];
+    expect(radios.map((r) => r.querySelector("span > span")?.textContent)).toEqual(["Agent", "Command", "Server", "Webhook only"]);
+    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false", "false"]);
+    const triggers = document.body.querySelector<HTMLElement>("[role=group][aria-label='When it runs']")!;
+    const triggerButtons = () => [...triggers.querySelectorAll<HTMLButtonElement>("button")];
+    expect(triggerButtons().map((b) => b.textContent)).toEqual(["Schedule", "GitHub event"]);
+    expect(triggerButtons().map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
+    // A server answers events: Schedule cannot be chosen, and says why.
+    await click(radios[2]!);
+    expect(radios[2]!.getAttribute("aria-checked")).toBe("true");
+    expect(triggerButtons()[0]!.disabled).toBe(true);
+    expect(triggerButtons()[1]!.getAttribute("aria-pressed")).toBe("true");
+    expect(document.body.textContent).toContain("A server answers GitHub events.");
+    await click(radios[1]!);
+    await click(triggerButtons()[1]!);
+    await typeInto(document.body.querySelector<HTMLInputElement>("input")!, "Push echo");
+    await click(document.body.querySelector("[data-testid=create-automation]")!);
+    await until(() => (asked.length ? asked : null), "the create");
+    expect(asked[0]).toMatchObject({ name: "Push echo", kind: "command", preset: null, trigger: "github", projectId: null });
   });
 });
 

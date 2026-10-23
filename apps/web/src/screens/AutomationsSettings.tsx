@@ -45,8 +45,10 @@ import {
   Button,
   Callout,
   Checkbox,
+  ChoiceList,
   Dialog,
   EmptyState,
+  Fieldset,
   FormStack,
   IconButton,
   Input,
@@ -66,6 +68,7 @@ import {
   THead,
   Tr,
   Textarea,
+  type ChoiceOption,
 } from "@dude/design-system/primitives";
 import {
   AUTOMATION_PROMPT_VARIABLES,
@@ -310,7 +313,12 @@ function AutomationTable({ rows, orgName, onOpen, onToggle, showScope }: {
 // New automation
 // ---------------------------------------------------------------------------
 
-type What = "agent" | `agent:${PresetRole}` | "command" | "server" | "webhook";
+const NEW_KINDS: ReadonlyArray<ChoiceOption<AutomationKind>> = [
+  { value: "agent", label: "Agent", icon: "agent", description: "A coding agent with a prompt." },
+  { value: "command", label: "Command", icon: "terminal", description: "A command that runs in a container and exits." },
+  { value: "server", label: "Server", icon: "globe", description: "A server that answers GitHub events." },
+  { value: "webhook", label: "Webhook only", icon: "send", description: "No machine: a signed POST to a URL you give." },
+];
 
 export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {
   client: ApiClient;
@@ -319,10 +327,11 @@ export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {
   onCreated: (a: Automation) => void;
 }) {
   const [name, setName] = useState("");
-  const [what, setWhat] = useState<What>("agent");
+  const [kind, setKind] = useState<AutomationKind>("agent");
+  const [agentAs, setAgentAs] = useState<"own" | PresetRole>("own");
   const [when, setWhen] = useState<"schedule" | "github">("schedule");
   const { busy, problem, save } = useSave();
-  const [kind, preset] = what.split(":") as [AutomationKind, PresetRole | undefined];
+  const preset = kind === "agent" && agentAs !== "own" ? agentAs : undefined;
   const eventsOnly = kind === "server" || preset === "reviewer";
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   return (
@@ -336,16 +345,20 @@ export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {
       </>}>
       <FormStack>
         <Input label="Name" value={name} autoFocus maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="Nightly QA pass" />
-        <Select<What> label="What runs" value={what} onValueChange={setWhat} options={[
-          { label: "Agent", options: [{ value: "agent", label: "Its own agent" },
-            ...PRESET_ROLES.map((r) => ({ value: `agent:${r}` as What, label: PRESET_ROLE_LABEL[r] }))] },
-          { label: "Other", options: [{ value: "command", label: "Command", meta: "runs and exits" },
-            { value: "server", label: "Server", meta: "answers events" }, { value: "webhook", label: "Webhook only", meta: "a signed POST" }] },
-        ]} />
-        <SettingRow label="When it runs" help={eventsOnly ? (kind === "server" ? "A server answers GitHub events." : REVIEWER_NEEDS_PULL_REQUEST) : undefined}>
+        <Fieldset legend="What runs">
+          <ChoiceList<AutomationKind> label="What runs" value={kind} onChange={setKind} options={NEW_KINDS} data-testid="new-automation-kind" />
+        </Fieldset>
+        {kind === "agent" ? (
+          <Select<"own" | PresetRole> label="Agent" value={agentAs} onValueChange={setAgentAs}
+            options={[{ value: "own", label: "Its own agent" }, ...PRESET_ROLES.map((r) => ({ value: r, label: PRESET_ROLE_LABEL[r] }))]} />
+        ) : null}
+        {/* A Fieldset stretches the Segmented's track to the dialog's width, as the label above it is. */}
+        <Fieldset legend="When it runs"
+          hint={eventsOnly ? (kind === "server" ? "A server answers GitHub events." : REVIEWER_NEEDS_PULL_REQUEST) : undefined}>
           <Segmented<"schedule" | "github"> label="When it runs" value={eventsOnly ? "github" : when} onChange={setWhen}
+            data-testid="new-automation-trigger"
             options={[{ value: "schedule", label: "Schedule", disabled: eventsOnly }, { value: "github", label: "GitHub event" }]} />
-        </SettingRow>
+        </Fieldset>
         <SettingsNote>It starts off, owned by you. Its settings open next.</SettingsNote>
       </FormStack>
     </Dialog>
