@@ -295,17 +295,25 @@ func (r *laterRound) cachedPaths() []int {
 	return n
 }
 
-// The round-delta cache keeps paths only where a review round's choice
-// reads them: the review key of a round within MaxResumeDeltaLines.
-func TestTheRoundDeltaCacheKeepsPathsOnlyForAReviewChoice(t *testing.T) {
+// The round-delta cache keeps paths only where a reader needs them: a
+// review round's choice within MaxResumeDeltaLines, and the test step's
+// skip of a change that descends and is all non-product.
+func TestTheRoundDeltaCacheKeepsPathsOnlyForTheirReaders(t *testing.T) {
 	for _, c := range []struct {
 		name  string
+		path  string
 		phase string
 		lines int
 		want  int
-	}{{"review", PhaseReview, 4, 1}, {"large review", PhaseReview, MaxResumeDeltaLines + 1, 0}, {"fix", PhaseFix, 4, 0}, {"test", PhaseTest, 4, 0}} {
+	}{
+		{"review", "web/src/Button.tsx", PhaseReview, 4, 1},
+		{"large review", "web/src/Button.tsx", PhaseReview, MaxResumeDeltaLines + 1, 0},
+		{"fix", "web/src/Button.tsx", PhaseFix, 4, 0},
+		{"test of a product change", "web/src/Button.tsx", PhaseTest, 4, 0},
+		{"test of a non-product change", ".github/workflows/ci.yml", PhaseTest, 4, 1},
+	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := newLaterRound(t, "web/src/Button.tsx")
+			r := newLaterRound(t, c.path)
 			r.files[0]["additions"], r.files[0]["deletions"] = c.lines, 0
 			change, err := r.steps.roundChange(r.ctx, r.sc("review"), r.st, c.phase, map[string]string{"repo": "aaa"})
 			if err != nil || !change.Measured || change.Lines != c.lines {

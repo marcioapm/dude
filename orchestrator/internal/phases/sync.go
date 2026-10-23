@@ -1400,6 +1400,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var findings []delivery.Finding
 	var lastFix []delivery.FixRange
 	var writerChecks string
+	var retestsAfresh bool
 	var questions []delivery.EarlierQuestion
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
@@ -1550,6 +1551,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			if writerChecks, err = delivery.WriterChecksTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
 				return err
 			}
+			if retestsAfresh, err = delivery.RetestsAfreshTx(ctx, tx, r.ID); err != nil {
+				return err
+			}
 		}
 		// A review after a fix is told that fix's commits, to answer
 		// caused_by_fix by.
@@ -1641,7 +1645,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
-		WriterChecks: writerChecks, Questions: questions,
+		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of

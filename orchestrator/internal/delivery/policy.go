@@ -39,11 +39,12 @@ type Policy struct {
 	// Run on every review round, a later round whose own change is
 	// non-product included.
 	AlwaysReviewers []string `json:"alwaysReviewers"`
-	// Globs of paths that are not the product (CI, docs): a later round
-	// whose own change touches only these runs no required reviewer
-	// beyond AlwaysReviewers and the reviewers of its findings. Matched
-	// against in-repo paths only; to make a whole repository non-product,
-	// list its paths.
+	// Globs of paths that are not the product (CI, docs). A later review
+	// round whose own change touches only these runs no required reviewer
+	// beyond AlwaysReviewers and the reviewers of its findings; a change
+	// of these alone since a passing test round starts no tester
+	// (carryForward). Matched against in-repo paths only; to make a whole
+	// repository non-product, list its paths.
 	NonProductPaths []string `json:"nonProductPaths"`
 	// Review → fix cycles before escalating to a person. The bound exists
 	// because a loop that cannot converge will spend a budget finding that out.

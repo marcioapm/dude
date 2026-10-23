@@ -15,9 +15,12 @@ import (
 
 // RoundChange is what changed since a previous round (Store.RoundDelta).
 // Not Measured: there was no forge to ask, or it refused or cut the
-// comparison short.
+// comparison short. Descends: measured, and every previous checkout is an
+// ancestor of its head now, so the previous round's verdicts may rest on
+// it (carryForward).
 type RoundChange struct {
 	Measured bool     `json:"measured"`
+	Descends bool     `json:"descends,omitempty"`
 	Lines    int      `json:"lines"`
 	Paths    []string `json:"paths,omitempty"`
 }
@@ -76,8 +79,9 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 // roundChange is what changed from the checkouts from to the state's
 // heads (Store.RoundDelta), measured once per round: the durable cache
 // survives artifact-collection waits and step retries, and equal
-// checkouts share a measurement across categories and with the review
-// step's choice of reviewers.
+// checkouts share a measurement across categories, with the review
+// step's choice of reviewers, and between the test step's skip
+// (carryForward) and its tester's Continue.
 func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *State, phase string, from map[string]string) (RoundChange, error) {
 	// Keyed by the identity's sha256, not the JSON, to keep the state small.
 	identity, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, st.Candidate, from, st.Heads})
@@ -112,10 +116,13 @@ func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *St
 	if change, err = w.s.RoundDelta(ctx, sc.OrganizationID, st.TaskID, gh, from, st.Heads); err != nil {
 		return RoundChange{}, err
 	}
-	// Only a review round's choice of reviewers reads the paths, and not
-	// past MaxResumeDeltaLines; the cache is rewritten with the state at
-	// every step transition.
-	if phase != PhaseReview || change.Lines > MaxResumeDeltaLines {
+	// Two readers keep the paths, and only these: a review round's choice
+	// of reviewers, up to MaxResumeDeltaLines; and the test step's skip, of
+	// a change that descends and is all non-product. The cache is rewritten
+	// with the state at every step transition.
+	keepForReview := phase == PhaseReview && change.Lines <= MaxResumeDeltaLines
+	keepForSkip := phase == PhaseTest && change.Descends && NonProduct(st.Policy, change.Paths)
+	if !keepForReview && !keepForSkip {
 		change.Paths = nil
 	}
 	raw, _ := json.Marshal(change)

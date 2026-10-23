@@ -1497,6 +1497,14 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         out.push({ ...base, who: <DudeMark size={32} />, text: <>The <b>{doer(e.runId)}</b>'s checks {outcome}</>, quote, open: session(e.runId) });
         break;
       }
+      case EventTypes.TestSkipped: {
+        const paths = Array.isArray(p.paths) ? p.paths.map(String) : [];
+        const n = Array.isArray(p.criteria) ? p.criteria.length : 0;
+        out.push({ ...base, kind: "work", who: <DudeMark size={32} />,
+          text: <><b>{dude}</b> did not run the tester again: the change since the last test touches only paths no criterion depends on. Its {plural(n, "verdict")} stand.</>,
+          quote: paths.join("\n") || undefined, open: typeof p.fromRunId === "string" ? session(p.fromRunId) : undefined });
+        break;
+      }
       case "run.steered":
         out.push({ ...base, who: p.by === "conductor" ? <AgentAvatar role="conductor" size="lg" /> : face,
           text: <>{p.by === "conductor" ? <b>The conductor</b> : person} steered the {doer(e.runId)}</>, quote: String(p.text ?? "") });
