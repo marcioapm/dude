@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import type { NavProject } from "@dude/design-system";
 import { firstName } from "@dude/design-system";
-import { PersonAvatar, SESSION_ROLE_WORD } from "@dude/design-system/components";
+import { GeneralAccessRow, PersonAvatar, SESSION_ROLE_WORD } from "@dude/design-system/components";
 import { Button, Callout, Checkbox, ChoiceList, Dialog, Select } from "@dude/design-system/primitives";
 import { sessionTitle, type SessionDetail, type SessionLink, type SessionMemberView } from "@dude/domain";
 import type { ApiClient, Repository } from "../api/client.ts";
@@ -107,12 +107,18 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave }: 
 }
 
 /**
- * Who is in a session and what each can do; adding people. Before the
- * first share the dialog says the new people see everything said so far.
+ * Who is in a session and what each can do; adding people; who may open it
+ * without being added (General access, one way). Before the first share the
+ * dialog says the new people see everything said so far. In a session open
+ * to the organisation everyone can chat, so "Can read" is not offered and a
+ * reader shows as Can chat. While its admins own it (its owner left), an
+ * admin may make themselves its owner.
  */
-export function ShareDialog({ client, detail, open, onClose, onChanged, onMakeOwner }: {
+export function ShareDialog({ client, detail, org, open, onClose, onChanged, onMakeOwner }: {
   client: ApiClient;
   detail: SessionDetail;
+  /** The organisation's name: "Everyone in <org>". */
+  org: string;
   open: boolean;
   onClose: () => void;
   onChanged: () => void;
@@ -123,16 +129,24 @@ export function ShareDialog({ client, detail, open, onClose, onChanged, onMakeOw
   const [role, setRole] = useState<"chat" | "read">("chat");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   useEffect(() => {
     if (open) {
       setAdding([]);
       setProblem(null);
+      setConfirming(false);
     }
   }, [open]);
+  const access = detail.session.access ?? "private";
+  const byAdmins = detail.session.ownedByAdmins === true;
+  const everyone = access === "organisation";
   const members = detail.session.people;
+  const departed = byAdmins ? members.find((m) => m.role === "owner") : undefined;
   const inIt = new Set(members.map((m) => m.person.id));
   const candidates = people.all.filter((p) => !inIt.has(p.id) && !adding.includes(p.id));
   const shared = members.some((m) => m.role !== "owner");
+  const roles = everyone ? MEMBER_ROLES.filter((r) => r.value === "chat") : MEMBER_ROLES;
+  const addAs = everyone ? "chat" : role;
   const act = async (what: () => Promise<unknown>) => {
     setBusy(true);
     setProblem(null);
@@ -150,24 +164,38 @@ export function ShareDialog({ client, detail, open, onClose, onChanged, onMakeOw
   const names = adding.map((id) => firstName(people.names.get(id) ?? "someone"));
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()} size="md" title={`Share “${sessionTitle(detail.session)}”`}
-      description="People you add see this conversation and its linked projects' checkouts. They can't see your other sessions."
+      description={byAdmins ? `Its owner left ${org}, so ${org}'s admins own it. Any admin can share it, or take it as their own.`
+        : "People you add see this conversation and its linked projects' checkouts. They can't see your other sessions."}
       footerProblem={problem}
       footerStart={<span className="muted">They're told in their inbox. Nothing is posted anywhere else.</span>}
       footer={<>
         <Button variant="quiet" onClick={onClose}>{adding.length > 0 ? "Cancel" : "Done"}</Button>
         {adding.length > 0 ? (
-          <Button variant="primary" disabled={busy} data-testid="share-send" onClick={() => void act(() => client.inviteToSession(detail.session.id, adding, role))
+          <Button variant="primary" disabled={busy} data-testid="share-send" onClick={() => void act(() => client.inviteToSession(detail.session.id, adding, addAs))
             .then((ok) => ok && setAdding([]))}>
             Share with {adding.length}
           </Button>
         ) : null}
       </>}>
+      <GeneralAccessRow org={org} value={access} editable={detail.you.role === "owner"} busy={busy}
+        confirming={confirming} onOpen={() => setConfirming(true)} onCancel={() => setConfirming(false)}
+        onConfirm={() => void act(() => client.openSessionToOrganisation(detail.session.id)).then(() => setConfirming(false))} />
+      {byAdmins ? (
+        <Callout tone="attention" data-testid="admin-owned-callout">
+          <p><b>{departed ? `${departed.person.name}, the owner, left ${org}.` : `Its owner left ${org}.`}</b>{" "}
+            {org}'s admins own it now.</p>
+          {detail.you.admin ? (
+            <Button size="sm" variant="primary" disabled={busy} data-testid="take-ownership"
+              onClick={() => void act(() => client.takeSessionOwnership(detail.session.id))}>Make me owner</Button>
+          ) : null}
+        </Callout>
+      ) : null}
       <div className="sessionShareAdd">
         <Select<string> size="sm" aria-label="Add people" placeholder="Add people…" value={undefined}
           options={candidates.map((p) => ({ value: p.id, label: p.name }))}
           onValueChange={(id) => setAdding((a) => [...a, id])} data-testid="share-add" />
-        <Select<"chat" | "read"> size="sm" aria-label="What they can do" value={role} onValueChange={setRole}
-          options={[
+        <Select<"chat" | "read"> size="sm" aria-label="What they can do" value={addAs} onValueChange={setRole} data-testid="share-role"
+          options={everyone ? [{ value: "chat", label: SESSION_ROLE_WORD.chat, description: `Everyone in ${org} can chat` }] : [
             { value: "chat", label: SESSION_ROLE_WORD.chat, description: "Write to the agent and file work as themselves" },
             { value: "read", label: SESSION_ROLE_WORD.read, description: "See the conversation; write nothing" },
           ]} />
@@ -191,16 +219,22 @@ export function ShareDialog({ client, detail, open, onClose, onChanged, onMakeOw
       <ul className="sessionShareMembers" data-testid="share-members">
         {members.map((m) => {
           const you = m.person.id === detail.you.id;
+          const gone = m === departed;
+          // A reader in an organisation session can chat, as everyone in it can.
+          const lifted = everyone && m.role === "read";
           return (
             <li key={m.person.id} data-person={m.person.id}>
               <PersonAvatar person={m.person} size={24} />
-              <span>{m.person.name}{you ? " (you)" : ""}{m.accepted ? "" : m.becomesOwner ? " · invited as owner" : " · invited"}</span>
-              {m.role === "owner" ? <span className="muted">Owner</span> : (
+              <span>{m.person.name}{you ? " (you)" : ""}{gone ? ` · left ${org}` : ""}{m.accepted ? "" : m.becomesOwner ? " · invited as owner" : " · invited"}
+                {lifted ? <span className="muted" data-testid="was-read"> · was can read; everyone in {org} can chat</span> : null}</span>
+              {gone ? <span className="muted">No access</span> : m.role === "owner" ? <span className="muted">Owner</span> : detail.you.role !== "owner" ? (
+                <span className="muted">{SESSION_ROLE_WORD[lifted ? "chat" : m.role]}</span>
+              ) : (
                 <>
-                  <Select<"chat" | "read"> size="sm" aria-label={`What ${m.person.name} can do`} value={m.role as "chat" | "read"} disabled={busy}
+                  <Select<"chat" | "read"> size="sm" aria-label={`What ${m.person.name} can do`} value={lifted ? "chat" : m.role as "chat" | "read"} disabled={busy}
                     onValueChange={(r) => void act(() => client.setSessionRole(detail.session.id, m.person.id, r))}
-                    options={MEMBER_ROLES} />
-                  {m.accepted ? (
+                    options={roles} />
+                  {m.accepted && !byAdmins ? (
                     <Button size="sm" variant="quiet" disabled={busy} onClick={() => onMakeOwner(m)} data-testid="make-owner">Make owner…</Button>
                   ) : null}
                   <Button size="sm" variant="quiet" disabled={busy} data-testid="remove-member"

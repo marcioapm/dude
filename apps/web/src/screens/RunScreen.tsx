@@ -42,6 +42,7 @@ import {
   AttachDropZone,
   CanRunContainersBadge,
   ImageViewer,
+  MentionChip,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, IconButton, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, shownRunStatus, waitsForContainerHost } from "@dude/domain";
@@ -1268,6 +1269,18 @@ export function viewedContext(turn: ViewedTurn, people: People, agent: string, d
   return `${who ? firstName(who) : "Someone"} · ${turn.intent} to ${agent} · ${at}`;
 }
 
+/** The people a session's message mentioned, as chips under it; the reader's own is marked. */
+function MentionChips({ ids, people }: { ids: readonly string[]; people: People }) {
+  return (
+    <span data-testid="mention-chips">
+      {ids.map((id) => {
+        const person = people.byId.get(id) ?? { id, name: people.names.get(id) ?? "Someone" };
+        return <MentionChip key={id} person={person} you={id === people.you} />;
+      })}
+    </span>
+  );
+}
+
 export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
   decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages,
   toolNote?: (turn: ToolTurn) => ReactNode, ask?: AskActions, peer?: PeerContext, now?: number) {
@@ -1398,7 +1411,8 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
           person={person}
           name={turn.conductor ? "Conductor" : name ?? "Someone"}
           {...turnImages(turn, shown)}
-          {...(turn.github ? { attachments: <GithubSource github={turn.github} reply={turn.conductor} /> } : {})}
+          {...(turn.github ? { attachments: <GithubSource github={turn.github} reply={turn.conductor} /> }
+            : turn.mentions?.length ? { attachments: <MentionChips ids={turn.mentions} people={people} /> } : {})}
         />
       );
     }

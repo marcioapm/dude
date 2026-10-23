@@ -17,7 +17,7 @@ import { boardScope, type BoardCard, type BoardFilter, type NavProject, type Nav
 import { Board, Breadcrumb, OrgSwitcher, ProfileMenu, ScreenHeader, Segmented, Sidebar, SidebarRailItem, SidebarSessions, SidebarToggle, SIDEBAR_DRAWER_QUERY, PersonAvatar, type BoardCardStartFocus, type BreadcrumbItem, type PrChipPullRequest } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, IconButton, RowMenu, Spinner, isBareKey, useToast } from "@dude/design-system/primitives";
 import { Icon } from "@dude/design-system";
-import { sessionTitle, type SessionsList } from "@dude/domain";
+import { sessionTitle, type OpenSessionsList, type SessionsList } from "@dude/domain";
 import { ApiError, type ApiClient, type PullRequest } from "./api/client.ts";
 import { usePeople } from "./people.tsx";
 import { installActivity } from "./activity.ts";
@@ -43,6 +43,7 @@ import type { EpicView } from "./place.ts";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
 import { SessionsScreen } from "./screens/SessionsScreen.tsx";
+import { OpenSessionsScreen } from "./screens/OpenSessionsScreen.tsx";
 import { WelcomeScreen } from "./screens/WelcomeScreen.tsx";
 import { forgetModelOptions } from "./sessionModel.ts";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
@@ -132,6 +133,7 @@ const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormRenamed,
   EventTypes.QuestionAsked, EventTypes.QuestionAnswered, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
   EventTypes.RunPaused, EventTypes.RunResumed,
+  EventTypes.BrainstormAccessChanged, EventTypes.BrainstormOwnerLeft, EventTypes.BrainstormOwnerTaken, EventTypes.BrainstormMentioned,
 ]);
 
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
@@ -278,10 +280,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // sidebar's list and the inbox's lines. Re-read when a session's event
   // reaches you (the stream gives you only your sessions').
   const [sessionsList, setSessionsList] = useState<SessionsList | null>(null);
+  // The sessions open to the whole organisation: the sidebar's Open to everyone count and its list.
+  const [openList, setOpenList] = useState<OpenSessionsList | null>(null);
   // Only the latest read is kept: an older one answering late would bring back a row just archived.
   const sessionsRead = useRef(0);
   const loadSessions = useCallback(async () => {
     const read = ++sessionsRead.current;
+    void client.openSessions().then((open) => read === sessionsRead.current && setOpenList(open), () => undefined);
     try {
       const list = await client.sessions();
       if (read === sessionsRead.current) setSessionsList(list);
@@ -470,6 +475,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       onSection={(page, section) => go({ view: "help", page, section })} />;
   } else if (place?.view === "sessions") {
     main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
+  } else if (place?.view === "openSessions") {
+    main = <OpenSessionsScreen list={openList} org={account?.current.name ?? "the organisation"} onOpen={openSession} />;
   } else if (place?.view === "brainstorm") {
     flush = true;
     main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
@@ -750,11 +757,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
         onWaitingSelect={() => go({ view: "inbox" })}
         waitingSelected={place?.view === "inbox"}
-        waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0)}
+        waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0) + (sessionsList?.mentions?.length ?? 0)}
         sessions={
           <SidebarSessions
             sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: sessionTitle(s), shared: s.shared,
-              lastActivityAt: s.lastActivityAt, owner: s.role === "owner" ? null : s.owner }))}
+              lastActivityAt: s.lastActivityAt, owner: s.role === "owner" ? null : s.owner, access: s.access }))}
+            organisation={openList && openList.sessions.length > 0 ? { count: openList.joined, current: place?.view === "openSessions",
+              onOpen: () => go({ view: "openSessions" }) } : undefined}
             limit={3}
             folded={sessionsFolded}
             onFoldedChange={(folded) => {
@@ -880,6 +889,8 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
       return "Sessions";
     case "brainstorm":
       return "A session";
+    case "openSessions":
+      return "Open to everyone";
     case "projectSettings":
       return [projects?.find((p) => p.id === place.projectId)?.name, "Settings"].filter(Boolean).join(" · ");
     case "tree": {
