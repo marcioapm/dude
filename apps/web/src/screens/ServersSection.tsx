@@ -2,8 +2,9 @@
  * The servers a task or a run has, as one section: the run they live on
  * (the agent's, or a branch preview's), a notice when the run moved host,
  * a preview's stages, the list with each server's log folding open under
- * it, and Preview opening the page in a new tab. It is the task's Servers
- * tab: a session has no servers panel of its own.
+ * it, and Preview opening the page in a new tab, or in the task's preview
+ * window with the comment tool when comments can be made on it. It is the
+ * task's Servers tab: a session has no servers panel of its own.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -37,6 +38,7 @@ import type { LogLine } from "@dude/design-system/components";
 import type { ApiClient } from "../api/client.ts";
 import { runIsLive, type ServersState } from "../hooks/useServers.ts";
 import { usePeople } from "../people.tsx";
+import { commentingLinkLabel } from "../previewComment.ts";
 import { AddServerDialog } from "./AddServerDialog.tsx";
 import { WaitingForHost } from "../waiting.tsx";
 
@@ -45,8 +47,15 @@ export interface ServersSectionProps {
   servers: ServersState;
   /** The task, for Preview branch (its branch is what a preview checks out). */
   taskId?: string | undefined;
-  /** Beside a server's Preview: Comment, or why commenting is off. */
-  comment?: ((server: string) => ReactNode) | undefined;
+  /** Commenting on the preview: each server's link opener while comments can be made on it, and the note under the list. */
+  commenting?: ServersCommenting | undefined;
+}
+
+export interface ServersCommenting {
+  /** A server's links' `onOpen`: undefined leaves them plain links to a new tab. */
+  readonly linkFor: (server: string) => ((url: string) => boolean) | undefined;
+  /** Under the list: that the links open the comment tool, or why commenting is off. */
+  readonly note: ReactNode;
 }
 
 /** The run status as StatusMark says it: a preview's own word until its servers are up; a word the vocabulary lacks, as it came. */
@@ -58,7 +67,7 @@ function runMark(run: ServersRun & { waitingReason?: string | null }) {
   return <StatusMark status={known ? (run.state as RunStatus) : "running"} size="sm" label={known ? undefined : run.state} />;
 }
 
-export const ServersSection = memo(function ServersSection({ client, servers, taskId, comment }: ServersSectionProps) {
+export const ServersSection = memo(function ServersSection({ client, servers, taskId, commenting }: ServersSectionProps) {
   const { data, problem, busy } = servers;
   const people = usePeople();
   const now = useNow(Boolean(data && anyMoving(data.servers)), 30_000);
@@ -174,6 +183,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
       <ServersPanel
         data-testid="servers-panel"
         data-run={run.kind}
+        note={commenting?.note}
       >
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {wakeable && run.error ? <Callout tone="attention" data-testid="preview-error">{run.error}</Callout> : null}
@@ -205,7 +215,8 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
                 error={s.error}
                 url={s.url}
                 busy={rowBusy}
-                besidePreview={comment?.(s.name)}
+                onOpen={commenting?.linkFor(s.name)}
+                openLabel={commentingLinkLabel(s.name)}
                 onStart={live && s.command ? () => void servers.start(s.name) : undefined}
                 onStop={live ? () => void servers.stop(s.name) : undefined}
                 onRestart={live && s.command ? () => void servers.restart(s.name) : undefined}

@@ -2,7 +2,8 @@
  * The task overview's servers, beside the pull request: one row per
  * server with its state and URL, so a ready one is a click away; with no
  * run, the way to a branch preview. Preview opens a ready server in a new
- * tab.
+ * tab, or in the task's preview window with the comment tool when comments
+ * can be made on it.
  */
 
 import type { ReactNode } from "react";
@@ -11,11 +12,14 @@ import { anyMoving, describeServer, formatTimestamp, useNow } from "@dude/design
 import { Button } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
 import { runIsLive, type ServersState } from "../hooks/useServers.ts";
+import { commentingLinkLabel } from "../previewComment.ts";
 
-export function ServersAside({ client, taskId, servers, onAll, comment }: {
+export function ServersAside({ client, taskId, servers, onAll, linkFor, commentingOff }: {
   client: ApiClient; taskId: string; servers: ServersState; onAll: () => void;
-  /** Comment on preview, or why commenting is off. */
-  comment?: ReactNode;
+  /** A server's links' `onOpen` while comments can be made on it. */
+  linkFor?: ((server: string) => ((url: string) => boolean) | undefined) | undefined;
+  /** Why the preview's links open it without the comment tool. */
+  commentingOff?: ReactNode;
 }) {
   const data = servers.data!;
   // The clock the words are told by: ticking while something is moving.
@@ -49,7 +53,7 @@ export function ServersAside({ client, taskId, servers, onAll, comment }: {
         <>
           <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onAll} data-testid="servers-all">All servers</Button>
           {live && run.terminalUrl ? <TerminalLink href={run.terminalUrl}>Terminal</TerminalLink> : null}
-          {comment}
+          {commentingOff}
         </>
       }
     >
@@ -58,7 +62,7 @@ export function ServersAside({ client, taskId, servers, onAll, comment }: {
         return (
           <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail}
             onStart={live && s.command ? () => void servers.start(s.name) : undefined}
-            onRestart={live && s.command ? () => void servers.restart(s.name) : undefined} />
+            onRestart={live && s.command ? () => void servers.restart(s.name) : undefined} onOpen={linkFor?.(s.name)} openLabel={commentingLinkLabel(s.name)} />
         );
       })}
     </ServersSummary>

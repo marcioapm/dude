@@ -235,8 +235,8 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   onStopped?: (() => void) | undefined;
   /** A preview item's picture, read through the API (an <img> can't send the key). */
   picture?: ((attachmentId: string) => string | undefined) | undefined;
-  /** Commenting on the branch preview: Show on preview, and the tab's way in. */
-  preview?: { show: (item: FeedbackItem) => void; canShow: (item: FeedbackItem) => boolean; wayIn: ReactNode } | undefined;
+  /** Commenting on the branch preview: Show on preview, a card's Page link, and the tab's way in. */
+  preview?: { show: (item: FeedbackItem) => void; canShow: (item: FeedbackItem) => boolean; openPage: (url: string) => boolean; wayIn: ReactNode } | undefined;
 }) {
   const [filter, setFilter] = useState<"needs" | "all">("needs");
   const d = fb.onDiff;
@@ -257,6 +257,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
       <FeedbackCard key={i.id} item={cardItem(i, d.people, d.runs)} thread={threadOf(i, d.people, d.runs)} readOnly={readOnly && i.status !== "draft"}
         className={fb.highlight === i.id ? "feedbackHighlight" : undefined}
         imageUrl={a.kind === "preview" && a.attachmentId ? picture?.(a.attachmentId) : undefined}
+        onOpenPage={a.kind === "preview" && preview && !earlier ? preview.openPage : undefined}
         onJump={jump}
         onReply={(b) => d.reply(i.id, b)} onResolve={() => d.resolve(i.id)} onReopen={() => d.reopen(i.id)}
         onSaveDraft={(b) => d.saveDraft(i, b, null)} onDelete={() => d.deleteDraft(i.id)} maxLength={FEEDBACK_LIMITS.body}
