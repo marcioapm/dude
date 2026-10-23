@@ -283,6 +283,9 @@ test("opened with no opener it says to open the preview from dude, and never off
   page(CART, false);
   boot();
   expect(tid("ov-no-opener")!.textContent).toContain("Open this preview from dude to comment");
+  // Any of the task's links in dude opens it with the comment tool: there is no Comment button to press.
+  expect(tid("ov-no-opener")!.textContent).toContain("Open the preview from any of the task's links in dude");
+  expect(tid("ov-no-opener")!.textContent).not.toContain("press Comment");
   expect(count('[data-testid="ov-comment"]')).toBe(0);
   expect(count('[data-testid="ov-save"]')).toBe(0);
 });

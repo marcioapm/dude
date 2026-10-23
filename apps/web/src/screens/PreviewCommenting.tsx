@@ -1,9 +1,10 @@
 /**
  * Commenting on the branch preview, on the task page: the hook that holds
- * the task's commenting window (PreviewCommenting), its ways in — Comment
- * on a server's row, Comment on preview in the Overview's servers, the
- * Feedback tab's line — what each says when commenting is off, the notice
- * while a window is open, and Restart for a server that needs one.
+ * the task's commenting window (PreviewCommenting), its ways in — every
+ * link dude shows to a commentable server (its URL and Preview on the
+ * Servers tab and the Overview, a feedback card's Page) and the Feedback
+ * tab's line — what is said when commenting is off, the notice while a
+ * window is open, and Restart for a server that needs one.
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -14,7 +15,7 @@ import type { ApiClient } from "../api/client.ts";
 import type { ServersState } from "../hooks/useServers.ts";
 import type { People } from "../people.tsx";
 import {
-  COMMENTING_UNAVAILABLE, PreviewCommenting, commentingOffer, previewOrigins, showable,
+  COMMENTING_UNAVAILABLE, PreviewCommenting, commentingOffer, previewOrigins, serverOf, showable,
   type CommentingOffer, type CommentingView,
 } from "../previewComment.ts";
 import type { TaskFeedbackController } from "./FeedbackSection.tsx";
@@ -24,6 +25,14 @@ export interface PreviewCommentingControl {
   readonly view: CommentingView;
   /** Opens a server's page with the overlay, in the task's window. */
   readonly open: (server: { name: string; url: string }) => void;
+  /**
+   * A link's `onOpen` for server `name`: present only while comments can be
+   * made on it, opening its URL in the task's window (true when it did).
+   * Absent, the link opens the server in a new tab as any link does.
+   */
+  readonly linkFor: (name: string) => ((url: string) => boolean) | undefined;
+  /** A feedback card's Page link: opens the page in the task's window when it is on a commentable server; false otherwise. */
+  readonly openPage: (url: string) => boolean;
   /** Show on preview: the item's page, marked. */
   readonly show: (item: FeedbackItem) => void;
   /** Whether Show on preview can work for the item now. */
@@ -78,6 +87,12 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
   return useMemo(() => ({
     offer, view,
     open: (s: { name: string; url: string }) => void commenting.comment(s.url, s.name),
+    linkFor: (name: string) => offer.kind === "available" && offer.servers.some((s) => s.name === name)
+      ? (url: string) => commenting.open(url, name) : undefined,
+    openPage: (url: string) => {
+      const s = serverOf(offer, url);
+      return s !== null && commenting.open(url, s.name);
+    },
     show: (item: FeedbackItem) => void commenting.show(item),
     canShow: (item: FeedbackItem) => item.anchor.kind === "preview" && showable(offer, item.anchor.url),
     focus: () => commenting.focus(),
@@ -113,7 +128,7 @@ export function usePictures(client: ApiClient): (attachmentId: string) => string
   };
 }
 
-/** Why there is no Comment, where the button would be. */
+/** Why a preview's links open it without the comment tool. */
 export function CommentingUnavailable({ reason }: { reason: "public_url" | "lux" }) {
   const words = COMMENTING_UNAVAILABLE[reason];
   const why = reason === "public_url"
@@ -128,27 +143,19 @@ export function CommentingUnavailable({ reason }: { reason: "public_url" | "lux"
   );
 }
 
-/** Comment beside Preview on a server's row: only a ready server with the overlay. */
-export function CommentOnServer({ control, name }: { control: PreviewCommentingControl; name: string }): ReactNode {
-  const { offer } = control;
-  if (offer.kind === "unavailable") return <CommentingUnavailable reason={offer.reason} />;
-  if (offer.kind !== "available") return null;
-  const s = offer.servers.find((x) => x.name === name);
-  if (!s) return null;
-  return (
-    <Tooltip content="Opens the preview with dude's comment tool: pick an element, say what should change. What you save lands in your drafts here.">
-      <Button size="sm" variant="secondary" leadingIcon="comments" onClick={() => control.open(s)} data-testid="comment-on-server" data-server={name}>Comment</Button>
-    </Tooltip>
-  );
-}
-
-/** "Comment on preview", for the Overview's servers: the first ready server with the overlay. */
-export function CommentOnPreview({ control }: { control: PreviewCommentingControl }): ReactNode {
+/**
+ * Under the Servers tab's list: that the preview's links open it with the
+ * comment tool, or why they don't. Nothing for a run commenting is not about.
+ */
+export function CommentingNote({ control }: { control: PreviewCommentingControl }): ReactNode {
   const { offer } = control;
   if (offer.kind === "unavailable") return <CommentingUnavailable reason={offer.reason} />;
   if (offer.kind !== "available" || offer.servers.length === 0) return null;
-  const s = offer.servers[0]!;
-  return <Button size="sm" variant="secondary" leadingIcon="comments" onClick={() => control.open(s)} data-testid="comment-on-preview">Comment on preview</Button>;
+  return (
+    <span data-testid="commenting-links">
+      A server's link here opens the preview with dude's comment tool: pick an element, say what should change, and it lands in your drafts. A modified click opens a plain tab.
+    </span>
+  );
 }
 
 /** The Feedback tab's way in, drawn as its general line is. */

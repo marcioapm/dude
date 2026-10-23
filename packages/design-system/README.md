@@ -2336,7 +2336,12 @@ MarkdownCheatsheet.
   it as `server:<name>`. Preview opens the server's URL in a new tab:
   there is no in-app frame (a preview's sign-in cookie would not reach a
   cross-site iframe). `safeServerUrl` keeps anything but an `https://` URL
-  out of an `href`.
+  out of an `href`. `ServerRow.onOpen(url)` optionally opens the URL the
+  application's way: it handles plain left clicks on the URL, its open icon
+  and Preview when it returns true; false leaves the link's default intact.
+  Modified clicks and middle-click remain the browser's. All remain real
+  `<a href>` links. The former `besidePreview` slot is removed: Preview and
+  the URL now share the same opener rather than offering a separate Comment.
 - **ServersRunLine / ServersPanel** — the run the servers live on as a
   line, and the panel: the task's Servers tab (a container: under 560px,
   a phone, its rows stack). An agent session has no servers panel; its servers
@@ -2351,7 +2356,10 @@ MarkdownCheatsheet.
   `aria-current="step"`. Elapsed is optional: only supply it with an
   authoritative stage timestamp, never the Run's original start.
 - **ServersSummary** — the overview aside's block, in PullRequestPanel's
-  grammar.
+  grammar. `ServersSummaryRow.onOpen(url)` has the same contract as
+  `ServerRow.onOpen`: plain left clicks on the URL and eye Preview call it;
+  true handles the click, false leaves it to the link. Without it, links
+  open in a new tab as before.
 - **ServerRecipeTable / ServerRecipeDialog / EnvVarRows / HostChips** —
   project settings: the definitions, the editor with validation in words,
   and a preview's egress allowlist as chips. `HostChips readOnly` lists
@@ -2754,6 +2762,13 @@ comments when opened there, never on the standalone Run page.
   `"unchanged"` shows the original excerpt (`FeedbackExcerpt`) with the
   words that say why it is not on lines. `readOnly` has no actions.
   A refused action keeps what was written and shows the API's words.
+  Preview anchors render `FeedbackPreview`: Page, element, component and
+  optional `imageUrl`. `FeedbackPreview.onOpen(url)` (passed through as
+  `FeedbackCard.onOpenPage`) handles a plain left click on Page when it
+  returns true; false leaves it to the real link. Modified clicks remain
+  the browser's. The app uses this to open the item's exact page with
+  commenting when its origin belongs to a commentable preview server;
+  `onJump` remains the separate Show on preview action.
 - **`CommentEditor`**: ⌘/Ctrl+Enter saves, Escape cancels, "Private draft
   until you submit"; `full` turns the field off and says why.
 - **`DraftsTray`** sits at the foot of a task's pages (`position: sticky`)

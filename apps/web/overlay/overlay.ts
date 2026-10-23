@@ -1056,8 +1056,8 @@ export class Overlay {
     return this.#h("div", { class: "panel", "data-testid": "ov-no-opener" },
       this.#h("div", { class: "ph" }, this.#h("b", {}, closed ? "dude's tab was closed" : "Open this preview from dude to comment")),
       this.#h("p", { class: "pp" }, closed
-        ? "Your saved drafts are kept in dude. To pick more, open the task again and press Comment on preview: this window is reused."
-        : "Comments on a preview are made from its task, so dude knows who you are and which task they belong to. On the task's Servers tab, press Comment."),
+        ? "Your saved drafts are kept in dude. To pick more, open the task again and open the preview from any of its links there: this window is reused."
+        : "Comments on a preview are made from its task, so dude knows who you are and which task they belong to. Open the preview from any of the task's links in dude (its Servers tab, its Overview, a comment's page) and the comment tool starts."),
       this.#h("div", { class: "pf" },
         this.#h("a", { class: "btn primary", href: this.#opts.dudeOrigin, target: "_blank", rel: "noopener", "data-k": "open-dude" }, this.#g("link", 12), "Open dude"),
         this.#h("button", { type: "button", "data-k": "hide", onclick: () => { this.#collapsed = true; this.#session("hidden", "1"); this.#render(); this.#focusKey("pill"); } }, "Hide for this tab")));

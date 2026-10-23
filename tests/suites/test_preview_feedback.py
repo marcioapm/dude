@@ -122,7 +122,7 @@ def _shoot(page: Page, name: str) -> None:
 
 def _open_comment(ctx, page: Page) -> Page:
     """Comment on the Servers tab, and the preview window it opens, connected to dude."""
-    comment = page.get_by_test_id("comment-on-server").first
+    comment = page.get_by_test_id("server-url").first
     expect(comment).to_be_visible(timeout=20_000)
     with ctx.expect_page() as opened:
         comment.click()

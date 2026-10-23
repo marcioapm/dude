@@ -95,9 +95,14 @@ export function previewOrigins(data: TaskServers | null): ReadonlySet<string> {
 
 /** Whether Show on preview can work for a page: it is on one of the servers comments can be made on now. */
 export function showable(offer: CommentingOffer, url: string): boolean {
-  if (offer.kind !== "available") return false;
+  return serverOf(offer, url) !== null;
+}
+
+/** The server comments can be made on now whose origin `url` is at, or null. */
+export function serverOf(offer: CommentingOffer, url: string): CommentableServer | null {
+  if (offer.kind !== "available") return null;
   const origin = originOf(url);
-  return origin !== null && offer.servers.some((s) => originOf(s.url) === origin);
+  return origin === null ? null : offer.servers.find((s) => originOf(s.url) === origin) ?? null;
 }
 
 export type Checked =
@@ -322,7 +327,7 @@ export class PreviewCommenting {
   }
 
   /**
-   * Comment (or Comment on preview) on `server`: the window brought forward
+   * The Feedback tab's way in (or the closed notice's Comment on preview) on `server`: the window brought forward
    * when it is already open on that server, so the page and a half-written
    * comment stay; opened at `url` otherwise.
    */
