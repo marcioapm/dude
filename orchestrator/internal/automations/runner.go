@@ -151,16 +151,24 @@ type Payload struct {
 
 // Sweep is one pass of the loop. Returns how much it did, so the loop runs
 // again at once while there is more.
+// A failing step is logged and the next one still runs: one organisation's
+// trouble must not stop the others' runs.
 func (r *Runner) Sweep(ctx context.Context) (int, error) {
 	n := 0
-	for _, step := range []func(context.Context) (int, error){r.fireSchedules, r.matchDeliveries, r.startQueued, r.followRunning, r.expireSessions} {
-		did, err := step(ctx)
+	var errs []error
+	for _, step := range []struct {
+		name string
+		do   func(context.Context) (int, error)
+	}{{"schedules", r.fireSchedules}, {"deliveries", r.matchDeliveries}, {"start", r.startQueued},
+		{"follow", r.followRunning}, {"expiry", r.expireSessions}} {
+		did, err := step.do(ctx)
 		n += did
 		if err != nil {
-			return n, err
+			r.Log.Warn("an automations step failed", "step", step.name, "error", err)
+			errs = append(errs, fmt.Errorf("%s: %w", step.name, err))
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +266,7 @@ func (r *Runner) fireSchedules(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	n := 0
+	var errs []error
 	for _, a := range due {
 		cron, err := ParseCron(a.Trigger.Cron)
 		loc, lerr := time.LoadLocation(a.Trigger.TZ)
@@ -276,62 +285,124 @@ func (r *Runner) fireSchedules(ctx context.Context) (int, error) {
 			_, err := tx.Exec(ctx, `UPDATE automations SET next_run_at = $2 WHERE id = $1`, a.ID, cron.Next(now, loc))
 			return err
 		}); err != nil {
-			return n, err
+			errs = append(errs, fmt.Errorf("automation %s: %w", a.ID, err))
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
+}
+
+// MatchAttempts is how many passes a delivery whose matching fails is tried
+// before the automations it could not be matched to get a skipped run.
+const MatchAttempts = 5
+
+// matchBackoff is the wait before a failed delivery's next try: 30 s,
+// doubling, at most 10 minutes.
+func matchBackoff(attempts int) time.Duration {
+	d := 30 * time.Second << min(attempts, 5)
+	return min(d, 10*time.Minute)
+}
+
+type pendingDelivery struct {
+	ID, Org, Event string
+	Payload        json.RawMessage
+	Attempts       int
+	Pending        []string
 }
 
 // matchDeliveries reads stored deliveries the matcher has not, and fires
-// every enabled event automation they match.
+// every enabled event automation they match. Each delivery is its own
+// transaction; one that fails is backed off, never blocking the rest.
 func (r *Runner) matchDeliveries(ctx context.Context) (int, error) {
-	type delivery struct {
-		ID, Org, Event string
-		Payload        json.RawMessage
-	}
-	var batch []delivery
+	var batch []pendingDelivery
 	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, event, payload FROM webhook_deliveries
-			WHERE automations_at IS NULL ORDER BY received_at LIMIT 50`)
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, event, payload, automations_attempts, automations_pending
+			FROM webhook_deliveries WHERE automations_at IS NULL AND (automations_next_at IS NULL OR automations_next_at <= $1)
+			ORDER BY received_at LIMIT 50`, r.now())
 		if err != nil {
 			return err
 		}
-		batch, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery])
+		batch, err = pgx.CollectRows(rows, pgx.RowToStructByPos[pendingDelivery])
 		return err
 	}); err != nil {
 		return 0, err
 	}
+	var errs []error
 	for _, d := range batch {
-		if err := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
-			rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
-				WHERE a.enabled AND a.trigger->>'kind' = 'github' AND a.trigger->>'event' = $1`, d.Event)
-			if err != nil {
+		if err := r.matchDelivery(ctx, d); err != nil {
+			// A database error: the whole delivery is tried again later.
+			r.Log.Warn("matching a delivery failed", "delivery", d.ID, "attempt", d.Attempts+1, "error", err)
+			last := d.Attempts+1 >= MatchAttempts
+			if berr := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_attempts = automations_attempts + 1,
+					automations_next_at = $2, automations_at = CASE WHEN $3 THEN now() END WHERE id = $1`,
+					d.ID, r.now().Add(matchBackoff(d.Attempts)), last)
 				return err
+			}); berr != nil {
+				errs = append(errs, fmt.Errorf("delivery %s: %w", d.ID, berr))
 			}
-			list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Automation, error) { return scanAutomation(row) })
-			if err != nil {
-				return err
-			}
-			ev := ReadEvent(d.Event, d.Payload)
-			for _, a := range list {
-				v, err := r.Evaluate(ctx, tx, a, ev)
-				if err != nil {
-					return err
-				}
-				if !v.Matches {
-					continue
-				}
-				if _, err := Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: d.ID, Event: d.Event, Action: ev.Action, Body: d.Payload}}, "", nil); err != nil {
-					return err
-				}
-			}
-			_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_at = now() WHERE id = $1`, d.ID)
-			return err
-		}); err != nil {
-			return 0, err
 		}
 	}
-	return len(batch), nil
+	return len(batch), errors.Join(errs...)
+}
+
+// matchDelivery evaluates one delivery against its organisation's enabled
+// automations on its event (on a retry, only those still pending) and
+// fires the matching ones. An automation it cannot be evaluated against
+// is kept pending for the next try, or after the last gets a skipped run.
+func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
+	return r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
+			WHERE a.enabled AND a.trigger->>'kind' = 'github' AND a.trigger->>'event' = $1
+			  AND ($2::text[] IS NULL OR a.id = ANY($2)) ORDER BY a.id`, d.Event, d.Pending)
+		if err != nil {
+			return err
+		}
+		list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Automation, error) { return scanAutomation(row) })
+		if err != nil {
+			return err
+		}
+		ev := ReadEvent(d.Event, d.Payload)
+		payloads := []Payload{{DeliveryID: d.ID, Event: d.Event, Action: ev.Action, Body: d.Payload}}
+		last := d.Attempts+1 >= MatchAttempts
+		var pending []string
+		for _, a := range list {
+			v, err := r.Evaluate(ctx, tx, a, ev)
+			if err != nil {
+				r.Log.Warn("an automation could not be matched to a delivery", "automation", a.ID, "delivery", d.ID,
+					"attempt", d.Attempts+1, "error", err)
+				if !last {
+					pending = append(pending, a.ID)
+					continue
+				}
+				if _, err := recordSkipped(ctx, tx, a, SourceEvent, payloads, "it could not be matched: "+err.Error()); err != nil {
+					return err
+				}
+				continue
+			}
+			if !v.Matches {
+				continue
+			}
+			if _, err := Fire(ctx, tx, a, SourceEvent, payloads, "", nil); err != nil {
+				return err
+			}
+		}
+		if len(pending) > 0 {
+			_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_attempts = automations_attempts + 1,
+				automations_next_at = $2, automations_pending = $3 WHERE id = $1`, d.ID, r.now().Add(matchBackoff(d.Attempts)), pending)
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_at = now(), automations_pending = NULL WHERE id = $1`, d.ID)
+		return err
+	})
+}
+
+// recordSkipped records a firing that did not run, with its reason.
+func recordSkipped(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads []Payload, reason string) (string, error) {
+	raw, _ := json.Marshal(nonNil(payloads))
+	id := ids.New(ids.AutomationRun)
+	_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads, ended_at)
+		VALUES ($1, $2, $3, 'skipped', left($4, 2000), $5, $6, now())`, id, a.Org, a.ID, reason, source, raw)
+	return id, err
 }
 
 // Evaluate matches an event against an automation, its project's
@@ -581,7 +652,8 @@ func (r *Runner) followRunning(ctx context.Context) (int, error) {
 			a, err = Load(ctx, tx, run.AutomationID)
 			return err
 		}); err != nil {
-			return n, err
+			r.Log.Warn("following an automation run failed", "run", run.ID, "error", err)
+			continue
 		}
 		var err error
 		var acted bool
@@ -1026,12 +1098,13 @@ func (r *Runner) expireSessions(ctx context.Context) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
+	var errs []error
 	for _, k := range list {
 		if err := StartFresh(ctx, r.DB, r.Lux, k.Org, k.AutomationID); err != nil {
-			return 0, err
+			errs = append(errs, fmt.Errorf("automation %s: %w", k.AutomationID, err))
 		}
 	}
-	return len(list), nil
+	return len(list), errors.Join(errs...)
 }
 
 // StartFresh lets go of an automation's kept session: its lux Run is

@@ -204,6 +204,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON automation_sessions TO dude_sweeper;
 ALTER TABLE webhook_deliveries ADD COLUMN automations_at timestamptz DEFAULT now();
 ALTER TABLE webhook_deliveries ALTER COLUMN automations_at DROP DEFAULT;
 CREATE INDEX webhook_deliveries_automations_idx ON webhook_deliveries (received_at) WHERE automations_at IS NULL;
+-- A delivery whose matching failed (GitHub unreadable for a paths filter, a
+-- database error) is tried again after automations_next_at, against only the
+-- automations it could not be matched to (automations_pending; NULL: all).
+-- After a few tries each of those gets a skipped run saying why.
+ALTER TABLE webhook_deliveries ADD COLUMN automations_attempts integer NOT NULL DEFAULT 0,
+  ADD COLUMN automations_next_at timestamptz, ADD COLUMN automations_pending text[];
 -- Past deliveries of one event (Run now), and the events seen (the picker's fallback).
 CREATE INDEX webhook_deliveries_event_idx ON webhook_deliveries (organization_id, event, received_at DESC);
 -- The retention sweep deletes deliveries after 30 days.

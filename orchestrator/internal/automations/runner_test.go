@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,7 @@ type harness struct {
 	fake    *fakelux.Server
 	lux     *lux.HTTPClient
 	runner  *Runner
+	skew    atomic.Int64
 }
 
 func newHarness(t *testing.T) *harness {
@@ -55,8 +57,12 @@ func newHarness(t *testing.T) *harness {
 	h.lux = lux.New(srv.URL, "k")
 	h.runner = &Runner{DB: app, Lux: h.lux, Agent: phases.AgentConfig{DefaultImage: "agent:1"},
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Idle: 150 * time.Millisecond}
+	h.runner.Now = func() time.Time { return time.Now().Add(time.Duration(h.skew.Load())) }
 	return h
 }
+
+// advance moves the runner's clock on by d.
+func (h *harness) advance(d time.Duration) { h.skew.Add(int64(d)) }
 
 // automation adds an enabled automation of the project's, owned by Ana.
 func (h *harness) automation(id, kind string, trigger, extra map[string]any) {
