@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -65,6 +66,47 @@ func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A CI-only change after a pass still starts a tester when the conductor
+// directed this test, when the round is an integration's, or when a fix of
+// a failed test is due: each is a test someone asked for, not a round to
+// carry. Driven through the test step, so the step's own guard is tested.
+func TestATesterIsNotSkippedWhenTheTestWasAskedFor(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		set  func(*State)
+	}{
+		{"none (the skip happens)", func(*State) {}},
+		{"a conductor-directed test", func(st *State) { st.Directed = &Directed{Phase: PhaseTest, By: "run_conductor"} }},
+		{"an integration round", func(st *State) { st.Integration = &Integration{Repo: "repo", Number: 1} }},
+		{"a fix of a failed test due", func(st *State) { st.RetestDue = true }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc, _ := newSkipFixture(t, map[string]string{".github/workflows/ci.yml": "on: [push]"}, VerdictPass, false, "")
+			st.Policy.Test = true
+			c.set(st)
+			sc.Step, sc.State = "test", mustJSON(t, st)
+			res, err := f.steps.test(f.ctx, sc)
+			var skips int
+			if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM events WHERE task_id = 'wi_c' AND event_type = $1`, EvTestSkipped).Scan(&skips); err != nil {
+				t.Fatal(err)
+			}
+			skipped := err == nil && res.Next == "testVerdict"
+			if want := strings.HasPrefix(c.name, "none"); skipped != want || (skips == 1) != want {
+				t.Fatalf("next %q (%v), %d skips; want skipped %v", res.Next, err, skips, want)
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 // newSkipFixture is a task whose test round run_c judged its one criterion
