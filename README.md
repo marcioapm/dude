@@ -248,6 +248,12 @@ network, no containers and no token. `--lux` runs the same flows against a
 real lux (the latest `run_tests.py --serve` in lux's repository, or
 `DUDE_TEST_LUX_ENV`), so a drift between the stand-in and lux shows up.
 
+The browser suites run in the system's Google Chrome (Playwright's `chrome`
+channel), as CI does. Where Google ships no Chrome, such as Linux arm64, set
+`DUDE_TEST_BROWSER_CHANNEL=` (empty) to run Playwright's bundled Chromium
+instead (`uv run playwright install chromium` once); any other value names a
+Playwright channel.
+
 ## Releases
 
 `VERSION=vX.Y.Z bun run dist` (`scripts/dist.sh`, needs Go, Bun ≥ 1.4 and GNU
