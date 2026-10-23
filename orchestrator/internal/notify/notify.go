@@ -31,7 +31,7 @@ import (
 // parameter: it is the predicate of the partial index events_asks_idx
 // (migration 026), which the planner uses only when the query says the
 // same.
-const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled')"
+const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled', 'session.mentioned')"
 
 // Notifier sends Web Push for new asks.
 type Notifier struct {
@@ -142,7 +142,12 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		// accepted owner or member who can chat); else nobody's.
 		rows, err := tx.Query(ctx, `SELECT e.cursor, e.organization_id, o.slug, e.event_type, COALESCE(e.run_id, ''),
 				COALESCE(e.task_id, ''), COALESCE(p.key_prefix || '-' || w.number, ''), COALESCE(r.role::text, ''),
-				COALESCE(CASE WHEN e.session_id IS NOT NULL THEN (
+				COALESCE(CASE WHEN e.event_type = 'session.mentioned' THEN (
+					-- A mention: the person mentioned, while it is unseen and they may open the session.
+					SELECT m.person_id FROM session_mentions m WHERE m.session_id = e.session_id
+					  AND m.person_id = e.payload->>'person' AND m.seen_at IS NULL
+					  AND session_role(e.session_id, m.person_id) IS NOT NULL LIMIT 1)
+					WHEN e.session_id IS NOT NULL THEN (
 					SELECT x.person FROM (SELECT COALESCE(q.to_person,
 						(SELECT sp.person_id FROM session_people sp WHERE sp.session_id = e.session_id AND sp.role = 'owner')) AS person
 						FROM questions q WHERE q.id = e.payload->>'questionId' AND q.status = 'open') x
@@ -329,11 +334,19 @@ func messageFor(a ask) (Message, bool) {
 	}
 	msg := Message{Tag: "run:" + a.RunID, URL: link(a, "run/"+a.RunID)}
 	if a.Session != "" {
+		msg.Tag, msg.URL = "session:"+a.Session, link(a, "sessions/"+a.Session)
+		if a.Type == delivery.EvSessionMentioned {
+			title := str("title")
+			if title == "" {
+				title = delivery.UntitledSession
+			}
+			msg.Title, msg.Body = fmt.Sprintf("%s mentioned you in %s", str("byName"), title), str("text")
+			return msg, a.Owner != ""
+		}
 		// Only a question reaches a member; the session's page has the rest.
 		if a.Type != delivery.EvQuestionAsked {
 			return msg, false
 		}
-		msg.Tag, msg.URL = "session:"+a.Session, link(a, "sessions/"+a.Session)
 		msg.Title, msg.Body = "The brainstorm asks you", str("prompt")
 		if n, headers := askHeaders(p); n > 1 {
 			msg.Title, msg.Body = fmt.Sprintf("The brainstorm asks you %d questions", n), headers

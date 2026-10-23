@@ -1,13 +1,14 @@
 /**
- * Who may see a brainstorm session's events: its accepted members, and no
- * one else in the organisation — admins included. The ledger's reads
+ * Who may see a brainstorm session's events: whoever session_role gives a
+ * role — its accepted members, every active member of the organisation in
+ * one open to it, and its admins while they own it. The ledger's reads
  * filter in SQL (session_visible); the live bus hands every event of the
  * organisation to every stream, so each stream asks here before it sends
  * one that names a session.
  *
  * Answers are kept a few seconds per person and session, and forgotten for
- * a session the moment its membership changes (its session.* events), so
- * someone removed stops receiving at once.
+ * a session the moment its membership or access changes (its session.*
+ * events), so someone removed stops receiving at once.
  */
 
 import { withOrg } from "../db/client.ts";
@@ -19,10 +20,11 @@ const KEEP_MS = 5_000;
 
 const answers = new Map<string, { ok: boolean; at: number }>();
 
-/** Membership changes: what makes a cached answer about a session stale. */
+/** Membership and access changes: what makes a cached answer about a session stale. */
 const MEMBERSHIP_EVENTS = new Set([
   "session.shared", "session.joined", "session.declined", "session.role_changed",
   "session.member_removed", "session.owner_changed",
+  "session.access_changed", "session.owner_left", "session.owner_taken",
 ]);
 
 export function forgetSession(sessionId: string): void {

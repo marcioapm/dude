@@ -1,0 +1,176 @@
+/**
+ * Organisation sessions on the backend's side: the new session routes
+ * forward as the person, a mention's fields reach the orchestrator, a
+ * person removed from the organisation passes their sessions on (to its
+ * admins when someone else can reach them, archived with them when nobody
+ * can), and someone who is not one of an organisation session's people may
+ * say they have it open, which marks their mentions in it seen.
+ *
+ * Against a database of its own, migrated as a release is, and a stand-in
+ * orchestrator. Requires DATABASE_URL.
+ */
+
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { SQL } from "bun";
+import { join } from "node:path";
+import { closePool, setPool } from "../src/db/client.ts";
+import { buildRouter } from "../src/index.ts";
+import type { Router } from "../src/api/router.ts";
+import { authenticate, createApiKey } from "../src/api/auth.ts";
+import { Config, useConfig } from "../src/config.ts";
+
+const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
+const ROOT = join(import.meta.dir, "../../..");
+const NAME = `dude_org_sessions_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
+const ORG = "org_os";
+
+function databaseUrl(user: string): string {
+  const url = new URL(OWNER_URL);
+  if (user === "app") {
+    url.username = "dude_app";
+    url.password = "dude_app";
+  }
+  url.pathname = `/${NAME}`;
+  return url.toString();
+}
+
+type Key = { key: string; id: string; personId: string };
+let admin: SQL;
+let owner: SQL;
+let app: SQL;
+let router: Router;
+let orchestrator: ReturnType<typeof Bun.serve>;
+let boss: Key, leaver: Key, eli: Key, gus: Key;
+const forwarded: Array<{ method: string; path: string; body: unknown; person: string | null }> = [];
+
+beforeAll(async () => {
+  admin = new SQL(OWNER_URL);
+  await admin.unsafe(`CREATE DATABASE "${NAME}"`);
+  const migrate = Bun.spawnSync(["bun", "run", "apps/control-plane/src/db/migrate.ts"], {
+    cwd: ROOT, env: { ...process.env, DATABASE_URL: databaseUrl("owner") },
+  });
+  if (migrate.exitCode !== 0) throw new Error(`migrate: ${migrate.stderr.toString()}`);
+  owner = new SQL(databaseUrl("owner"));
+  await owner`INSERT INTO organizations (id, name, slug) VALUES (${ORG}, 'Acme', 'acme')`;
+  app = new SQL(databaseUrl("app"));
+  setPool(app);
+  boss = await createApiKey({ organizationId: ORG, name: "Boss" });
+  leaver = await createApiKey({ organizationId: ORG, name: "Lea" });
+  eli = await createApiKey({ organizationId: ORG, name: "Eli" });
+  gus = await createApiKey({ organizationId: ORG, name: "Gus" });
+  await owner`UPDATE people SET role = 'admin' WHERE id = ${boss.personId}`;
+
+  orchestrator = Bun.serve({ port: 0, async fetch(request) {
+    const url = new URL(request.url);
+    forwarded.push({ method: request.method, path: url.pathname, body: await request.json().catch(() => null),
+      person: request.headers.get("x-dude-person") });
+    return Response.json({ ok: true });
+  } });
+  useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestrator.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
+  router = buildRouter("", async (credential) => credential === null ? null : authenticate(credential));
+});
+
+afterAll(async () => {
+  orchestrator?.stop(true);
+  useConfig(null);
+  await closePool(app);
+  await owner?.end();
+  await admin?.unsafe(`DROP DATABASE IF EXISTS "${NAME}" WITH (FORCE)`);
+  await admin?.end();
+});
+
+async function call(who: Key, method: string, path: string, body?: unknown): Promise<Response> {
+  return router.handle(new Request(`http://dude.test${path}`, {
+    method, headers: { authorization: `Bearer ${who.key}`, "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+}
+
+async function session(id: string, access: "private" | "organisation", ownerId: string, others: Array<[string, string]> = []) {
+  await owner.begin(async (tx) => {
+    await tx`INSERT INTO sessions (id, organization_id, title, access) VALUES (${id}, ${ORG}, ${id}, ${access})`;
+    await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      VALUES (${id}, ${ownerId}, ${ORG}, 'owner', now())`;
+    for (const [person, role] of others) {
+      await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+        VALUES (${id}, ${person}, ${ORG}, ${role}, now())`;
+    }
+  });
+}
+
+test("the open list, access and take-ownership forward as the person; a message's mentions and shareWith travel, a bad one never does", async () => {
+  forwarded.length = 0;
+  const ok = [
+    ["GET", "/v1/brainstorms/open", undefined, "/internal/sessions/open"],
+    ["PUT", "/v1/brainstorms/ssn_x/access", { access: "organisation" }, "/internal/sessions/ssn_x/access"],
+    ["POST", "/v1/brainstorms/ssn_x/take-ownership", undefined, "/internal/sessions/ssn_x/take-ownership"],
+    ["POST", "/v1/brainstorms/ssn_x/chat", { text: "@Gus look", mentions: [gus.personId], shareWith: [gus.personId] },
+      "/internal/sessions/ssn_x/chat"],
+  ] as const;
+  for (const [method, path, body] of ok) expect((await call(eli, method, path, body)).status).toBe(200);
+  expect(forwarded.map((f) => [f.method, f.path])).toEqual(ok.map(([m, , , to]) => [m, to]));
+  expect(forwarded.every((f) => f.person === eli.personId)).toBe(true);
+  expect(forwarded[1]!.body).toEqual({ access: "organisation" });
+  expect(forwarded[3]!.body).toEqual({ text: "@Gus look", mentions: [gus.personId], shareWith: [gus.personId] });
+
+  forwarded.length = 0;
+  for (const body of [
+    { text: "x", mentions: [""] },
+    { text: "x", mentions: Array.from({ length: 21 }, (_, i) => `per_${i}`) },
+    { text: "x", mentions: "per_a" },
+  ]) expect((await call(eli, "POST", "/v1/brainstorms/ssn_x/chat", body)).status).toBe(400);
+  expect((await call(eli, "PUT", "/v1/brainstorms/ssn_x/access", {})).status).toBe(400);
+  expect(forwarded).toEqual([]);
+});
+
+test("removing a person hands their reachable sessions to the admins and archives the ones nobody else is in", async () => {
+  await session("ssn_lea_org", "organisation", leaver.personId);
+  await session("ssn_lea_shared", "private", leaver.personId, [[eli.personId, "chat"]]);
+  await session("ssn_lea_alone", "private", leaver.personId);
+  await session("ssn_eli", "private", eli.personId, [[leaver.personId, "chat"]]);
+
+  expect((await call(boss, "DELETE", `/v1/people/${leaver.personId}`)).status).toBe(204);
+  const rows = await owner`SELECT id, owned_by_admins AS "byAdmins" FROM sessions ORDER BY id`;
+  expect([...rows]).toEqual([
+    { id: "ssn_eli", byAdmins: false },
+    { id: "ssn_lea_alone", byAdmins: false },
+    { id: "ssn_lea_org", byAdmins: true },
+    { id: "ssn_lea_shared", byAdmins: true },
+  ]);
+  const left = await owner`SELECT session_id AS id, payload->>'owner' AS owner, payload->>'ownerName' AS name, actor_id
+    FROM events WHERE event_type = 'session.owner_left' ORDER BY session_id`;
+  // Recorded as the admin's request is audited (their key here).
+  expect([...left]).toEqual([
+    { id: "ssn_lea_org", owner: leaver.personId, name: "Lea", actor_id: boss.id },
+    { id: "ssn_lea_shared", owner: leaver.personId, name: "Lea", actor_id: boss.id },
+  ]);
+  const [alone] = await owner`SELECT archived_at IS NOT NULL AS archived FROM session_people
+    WHERE session_id = 'ssn_lea_alone' AND person_id = ${leaver.personId}`;
+  expect(alone).toEqual({ archived: true });
+  // While its admins own it, an admin acts as owner of each; a member not in the private one gets nothing.
+  const role = async (session: string, person: string) =>
+    (await owner`SELECT session_role(${session}, ${person}) AS r`)[0].r as string | null;
+  expect(await role("ssn_lea_org", boss.personId)).toBe("owner");
+  expect(await role("ssn_lea_shared", boss.personId)).toBe("owner");
+  expect(await role("ssn_lea_shared", gus.personId)).toBe(null);
+  expect(await role("ssn_lea_alone", boss.personId)).toBe(null);
+  // A session someone else owns is untouched by the leaver's departure.
+  expect(await role("ssn_eli", boss.personId)).toBe(null);
+});
+
+test("someone not in an organisation session may say they have it open; opening marks their mentions in it seen", async () => {
+  await session("ssn_open", "organisation", eli.personId);
+  await session("ssn_closed", "private", eli.personId);
+  await owner`INSERT INTO session_mentions (organization_id, session_id, person_id, by_person, text)
+    VALUES (${ORG}, 'ssn_open', ${gus.personId}, ${eli.personId}, '@Gus')`;
+  expect((await call(gus, "POST", "/v1/brainstorms/ssn_closed/open", { open: true })).status).toBe(404);
+  expect((await call(gus, "POST", "/v1/brainstorms/ssn_open/open", { open: true })).status).toBe(200);
+  const [viewer] = await owner`SELECT open_at IS NOT NULL AS open FROM session_viewers WHERE session_id = 'ssn_open' AND person_id = ${gus.personId}`;
+  expect(viewer).toEqual({ open: true });
+  expect([...await owner`SELECT seen_at IS NOT NULL AS seen FROM session_mentions WHERE person_id = ${gus.personId}`]).toEqual([{ seen: true }]);
+  // Not one of its people: opening it adds no membership.
+  expect([...await owner`SELECT 1 FROM session_people WHERE session_id = 'ssn_open' AND person_id = ${gus.personId}`]).toEqual([]);
+  expect((await call(gus, "POST", "/v1/brainstorms/ssn_open/open", { open: false })).status).toBe(200);
+  const [closed] = await owner`SELECT open_at IS NULL AS closed FROM session_viewers WHERE session_id = 'ssn_open' AND person_id = ${gus.personId}`;
+  expect(closed).toEqual({ closed: true });
+});

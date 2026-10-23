@@ -11,10 +11,12 @@
  * page's heartbeat), which goes to its members only, never the organisation.
  */
 
-import { harnessSchema } from "@dude/domain";
+import { EventTypes, harnessSchema, sessionMentionsSchema } from "@dude/domain";
 import { z } from "zod";
-import { withOrg } from "../../db/client.ts";
+import { withOrg, type OrgScope } from "../../db/client.ts";
+import { appendInScope } from "../../events/ledger.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { auditActor } from "../auth.ts";
 import { json, notFound, parseBody } from "../http.ts";
 import { agentMachines } from "./machines.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -35,7 +37,8 @@ const sessionMessage = z.object({
   text: z.string().trim().refine(withinChatBytes, `at most ${CHAT_MESSAGE_MAX_BYTES} bytes in UTF-8`),
   aside: z.boolean().optional(),
   attachmentIds: z.array(z.string().min(1)).max(6).optional(),
-}).strict().refine((m) => m.text.trim().length > 0 || (m.attachmentIds?.length ?? 0) > 0, "text or an image is required");
+}).merge(sessionMentionsSchema).strict()
+  .refine((m) => m.text.trim().length > 0 || (m.attachmentIds?.length ?? 0) > 0, "text or an image is required");
 // The question's form: one answer per question (picks and/or own words), a
 // note; the orchestrator checks them against what was asked. A task's Chat
 // takes them too.
@@ -67,9 +70,11 @@ const role = z.object({ role: z.enum(["chat", "read"]) }).strict();
 const handover = z.object({ person: z.string().min(1), keep: z.enum(["chat", "read", "leave"]).default("chat") }).strict();
 const file = z.object({ proposalId: z.string().min(1), items: z.array(z.number().int().min(0)).min(1).max(50) }).strict();
 const open = z.object({ open: z.boolean() }).strict();
+// Only "organisation" is accepted; the orchestrator answers any other with its 409.
+const access = z.object({ access: z.string().min(1) }).strict();
 
 /** Forward to the orchestrator's session route, as the person. */
-function forward(method: "GET" | "POST", path: (ctx: RequestContext) => string, schema?: z.ZodTypeAny) {
+function forward(method: "GET" | "POST" | "PUT", path: (ctx: RequestContext) => string, schema?: z.ZodTypeAny) {
   return async (ctx: RequestContext): Promise<Response> => {
     const body = schema ? JSON.stringify(await parseBody(ctx.request, schema)) : "{}";
     return orchestrator(ctx.principal.organizationId, method, path(ctx), body, ctx.principal);
@@ -79,22 +84,34 @@ function forward(method: "GET" | "POST", path: (ctx: RequestContext) => string, 
 const at = (suffix = "") => (ctx: RequestContext) => `/internal/sessions/${encodeURIComponent(ctx.params.id!)}${suffix}`;
 
 /**
- * A member's page says it has the session open (every minute or so) or
- * closed it: recorded on their membership and announced live to the
- * session's members only. Anyone else is told it does not exist.
+ * A page says it has the session open (every minute or so) or closed it:
+ * recorded on the person's membership, or for someone in an organisation
+ * session who is not one of its people on `session_viewers`, and announced
+ * live to those who can see the session only. Opening it marks the
+ * mentions of the person in it seen. Anyone who cannot see it is told it
+ * does not exist.
  */
 async function setOpen(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, open);
   const id = ctx.params.id!;
   const { organizationId, personId } = ctx.principal;
   const ok = await withOrg(organizationId, async ({ sql }) => {
+    const [seen] = (await sql`SELECT session_role(${id}, ${personId}) IS NOT NULL AS ok`) as Array<{ ok: boolean }>;
+    if (!seen?.ok) return false;
     const rows = (await sql`
       UPDATE session_people SET open_at = CASE WHEN ${input.open} THEN now() END
       WHERE session_id = ${id} AND person_id = ${personId} AND accepted_at IS NOT NULL
       RETURNING 1`) as unknown[];
-    if (rows.length === 0) return false;
+    if (rows.length === 0) {
+      await sql`INSERT INTO session_viewers (session_id, person_id, organization_id, open_at)
+        VALUES (${id}, ${personId}, ${organizationId}, CASE WHEN ${input.open} THEN now() END)
+        ON CONFLICT (session_id, person_id) DO UPDATE SET open_at = EXCLUDED.open_at`;
+    }
+    if (input.open) {
+      await sql`UPDATE session_mentions SET seen_at = now() WHERE session_id = ${id} AND person_id = ${personId} AND seen_at IS NULL`;
+    }
     // Heard by every backend's live stream (events/listen.ts), on commit;
-    // each stream sends it only to the session's members.
+    // each stream sends it only to those who can see the session.
     await sql`SELECT pg_notify('dude_events', ${JSON.stringify({
       organizationId, sessionOpen: { sessionId: id, personId, open: input.open },
     })})`;
@@ -102,6 +119,39 @@ async function setOpen(ctx: RequestContext): Promise<Response> {
   });
   if (!ok) throw notFound(`session ${id} not found`);
   return json({ open: input.open });
+}
+
+/**
+ * Someone is leaving the organisation (`removePerson`, in its transaction):
+ * each session they own that anyone else can reach — open to the
+ * organisation, or with other people in it or invited — passes to the
+ * organisation's admins (`owned_by_admins`, `session.owner_left`); their
+ * row stays as its owner of record until an admin takes it over. A private
+ * session nobody else is in is archived with them. Returns what passed.
+ */
+export async function passOnSessions(scope: OrgScope, ctx: RequestContext, personId: string): Promise<string[]> {
+  const owned = (await scope.sql`
+    SELECT s.id, s.access, p.name,
+      EXISTS (SELECT 1 FROM session_people o WHERE o.session_id = s.id AND o.person_id <> ${personId}) AS others
+    FROM session_people me JOIN sessions s ON s.id = me.session_id JOIN people p ON p.id = me.person_id
+    WHERE me.person_id = ${personId} AND me.role = 'owner'
+    ORDER BY s.id FOR UPDATE OF s`) as Array<{ id: string; access: string; name: string; others: boolean }>;
+  const passed: string[] = [];
+  for (const s of owned) {
+    if (s.access !== "organisation" && !s.others) {
+      await scope.sql`UPDATE session_people SET archived_at = COALESCE(archived_at, now())
+        WHERE session_id = ${s.id} AND person_id = ${personId}`;
+      continue;
+    }
+    await scope.sql`UPDATE sessions SET owned_by_admins = true, updated_at = now() WHERE id = ${s.id}`;
+    const actor = auditActor(ctx.principal);
+    await appendInScope(scope, {
+      eventType: EventTypes.BrainstormOwnerLeft, organizationId: scope.organizationId, sessionId: s.id,
+      actor: { type: actor.kind, id: actor.id }, source: "control-plane", payload: { owner: personId, ownerName: s.name },
+    });
+    passed.push(s.id);
+  }
+  return passed;
 }
 
 /**
@@ -121,7 +171,11 @@ export function registerSessionRoutes(router: Router): void {
   router.get("/v1/brainstorms", forward("GET", (ctx) =>
     ctx.url.searchParams.get("archived") === "1" ? "/internal/sessions?archived=1" : "/internal/sessions"));
   router.post("/v1/brainstorms", forward("POST", () => "/internal/sessions", create));
+  // Every session open to the organisation, each with `joined`, and the joined count. Before :id.
+  router.get("/v1/brainstorms/open", forward("GET", () => "/internal/sessions/open"));
   router.get("/v1/brainstorms/:id", getBrainstorm);
+  router.put("/v1/brainstorms/:id/access", forward("PUT", at("/access"), access));
+  router.post("/v1/brainstorms/:id/take-ownership", forward("POST", at("/take-ownership")));
   router.post("/v1/brainstorms/:id/title", forward("POST", at("/title"), rename));
   router.post("/v1/brainstorms/:id/chat", forward("POST", at("/chat"), sessionMessage));
   // Try again on an agent that did not start: a fresh one with the message it was started for.

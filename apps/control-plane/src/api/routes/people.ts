@@ -24,6 +24,7 @@ import type { PublicContext, RequestContext, Router } from "../router.ts";
 import { getNavigation } from "./navigation.ts";
 import { attentionItems, waitingSplit, type NavProject } from "../../../../../packages/design-system/src/util/navModel.ts";
 import { endAutoStart } from "./relations.ts";
+import { passOnSessions } from "./sessions.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
 export function ownerJson(alias = "tasks"): string {
@@ -485,7 +486,8 @@ async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: strin
 /**
  * Remove someone: every key of theirs stops working at once and they
  * leave the organization's lists. Their row stays, so what they did keeps
- * their name; their tasks pass on (see `passOnTasks`).
+ * their name; their tasks pass on (see `passOnTasks`), and their sessions
+ * others can reach pass to the admins (`passOnSessions`).
  */
 export async function removePerson(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
@@ -509,6 +511,7 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
     await scope.sql`DELETE FROM push_subscriptions WHERE person_id = ${id}`;
     await passOnTasks(scope, ctx, id);
+    await passOnSessions(scope, ctx, id);
     await recordAs(scope, ctx, EventTypes.PersonRemoved, { personId: id });
     return "removed";
   });

@@ -31,7 +31,8 @@ CREATE INDEX sessions_org_access_idx ON sessions (organization_id) WHERE access 
 
 -- The role a person has in a session. Every reader of a session checks it
 -- (the orchestrator's routes, the ledger's visibility, artifacts, locate),
--- so the organisation rules live here once:
+-- so the organisation rules live here once. Nobody who is not an active
+-- member of the session's organisation has one, whatever rows they left:
 --   * an active admin is the owner while the session is owned by admins;
 --   * an accepted member has their role, `read` lifted to `chat` in an
 --     organisation session;
@@ -40,9 +41,10 @@ CREATE INDEX sessions_org_access_idx ON sessions (organization_id) WHERE access 
 CREATE OR REPLACE FUNCTION session_role(p_session text, p_person text) RETURNS text
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
   SELECT CASE
+    WHEN me.id IS NULL THEN NULL
     WHEN s.owned_by_admins AND me.role = 'admin' THEN 'owner'
     WHEN sp.role IS NOT NULL THEN CASE WHEN s.access = 'organisation' AND sp.role = 'read' THEN 'chat' ELSE sp.role END
-    WHEN s.access = 'organisation' AND me.id IS NOT NULL THEN 'chat'
+    WHEN s.access = 'organisation' THEN 'chat'
   END
   FROM sessions s
   LEFT JOIN session_people sp ON sp.session_id = s.id AND sp.person_id = p_person AND sp.accepted_at IS NOT NULL
@@ -75,6 +77,22 @@ CREATE POLICY tenant_isolation ON session_mentions
 GRANT SELECT, INSERT, UPDATE ON session_mentions TO dude_app;
 -- The push loop reads whether a mention is still unseen.
 GRANT SELECT ON session_mentions TO dude_sweeper;
+
+-- When someone who is not one of an organisation session's people last had
+-- it open (the web's heartbeat; members keep theirs on session_people), so
+-- a mention of them while they are looking sends no push.
+CREATE TABLE session_viewers (
+  session_id      text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  person_id       text NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  open_at         timestamptz,
+  PRIMARY KEY (session_id, person_id)
+);
+ALTER TABLE session_viewers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE session_viewers FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON session_viewers
+  USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
+GRANT SELECT, INSERT, UPDATE, DELETE ON session_viewers TO dude_app;
 
 -- The notifier also tells a person they were mentioned (session.mentioned).
 DROP INDEX IF EXISTS events_asks_idx;

@@ -1077,13 +1077,14 @@ test("181 keeps existing sessions private, opens them one way only, and lets the
     await sql`UPDATE people SET removed_at = now() WHERE id = 'per_gone'`;
     await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_s', 'org_s', 'Billing')`;
     await sql`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
-      VALUES ('ssn_s', 'per_own', 'org_s', 'owner', now()), ('ssn_s', 'per_rd', 'org_s', 'read', now())`;
+      VALUES ('ssn_s', 'per_own', 'org_s', 'owner', now()), ('ssn_s', 'per_rd', 'org_s', 'read', now()),
+        ('ssn_s', 'per_gone', 'org_s', 'chat', now())`;
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["181_org_sessions.sql"]);
     expect([...await sql`SELECT access, owned_by_admins FROM sessions`]).toEqual([{ access: "private", owned_by_admins: false }]);
     const roles = async () => Object.fromEntries((await sql`SELECT p.id, session_role('ssn_s', p.id) AS role FROM people p ORDER BY p.id`)
       .map((r: { id: string; role: string | null }) => [r.id, r.role]));
-    // Private: only its accepted members, an admin included in nothing.
+    // Private: only its accepted, active members (a removed one's row gives nothing); an admin is not one.
     expect(await roles()).toEqual({ per_adm: null, per_far: null, per_gone: null, per_mem: null, per_own: "owner", per_rd: "read" });
 
     await sql`UPDATE sessions SET access = 'organisation' WHERE id = 'ssn_s'`;
