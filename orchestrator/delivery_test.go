@@ -3876,6 +3876,43 @@ func TestAFixerIsToldAnActionsJobsFailureLog(t *testing.T) {
 	})
 }
 
+// (a) JERV-1's check: a Node 20 deprecation warning, the exit code's
+// failure and a runner-label notice. The fixer's check carries the job
+// log's end, failure line included, and neither warning nor notice.
+func TestAFixerOfAJobWithWarningsIsToldItsLog(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+	})
+	w.gh.SetJobLog(77, "2026-10-23T09:12:01.123Z ruff check .\n"+
+		"2026-10-23T09:12:02.123Z app/backup.py:14:5: F841 Local variable `rows` is assigned to but never used\n"+
+		"2026-10-23T09:12:03.123Z ##[error]Process completed with exit code 1.\n"+
+		"2026-10-23T09:12:04.123Z Post job cleanup.\n", downloads.URL)
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	var feedback []forge.ActionableFeedback
+	var raw []byte
+	_ = w.owner.QueryRow(context.Background(), `SELECT pr_feedback FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, wi).Scan(&raw)
+	if err := json.Unmarshal(raw, &feedback); err != nil || len(feedback) != 1 || len(feedback[0].Checks) != 1 {
+		t.Fatalf("pr_feedback %s: %v", raw, err)
+	}
+	c := feedback[0].Checks[0]
+	if !strings.Contains(c.Log, "F841 Local variable `rows`") || !strings.HasSuffix(c.Log, "##[error]Process completed with exit code 1.") {
+		t.Errorf("the check's log is not the job log's end: %+v", c)
+	}
+	for _, noise := range []string{"Node.js 20", "ubuntu-latest", "warning", "notice", "Post job cleanup"} {
+		if strings.Contains(c.Log, noise) {
+			t.Errorf("the check's log holds %q:\n%s", noise, c.Log)
+		}
+	}
+}
+
 // An approved pull request with a thread left unresolved is not ready.
 func TestUnresolvedThreadsHoldReadinessBack(t *testing.T) {
 	w := newWorld(t)

@@ -27,6 +27,17 @@ func ActionsJob() CheckRun {
 		Message: "Process completed with exit code 1."}}}
 }
 
+// NoisyActionsJob is an Actions job that failed by its exit code as GitHub
+// reports most jobs now: a deprecation warning and a runner-label notice
+// beside the exit code's failure (JERV-1, 2026-10-23).
+func NoisyActionsJob() CheckRun {
+	return CheckRun{App: "github-actions", Annotations: []Annotation{
+		{Path: ".github", Line: 2, Level: "warning", Message: "Node.js 20 is deprecated. The following actions are running on Node.js 20 and may not work as expected: actions/checkout@v4."},
+		{Path: ".github", Line: 243, Level: "failure", Message: "Process completed with exit code 1."},
+		{Path: ".github", Line: 1, Level: "notice", Message: "The ubuntu-latest label will migrate to Ubuntu 26.04 in the coming weeks."},
+	}}
+}
+
 // SetJobLog gives job id a log, served from downloads (LogDownloads' URL);
 // "" takes the log away, as GitHub does once it expires (410).
 func (s *Server) SetJobLog(id int64, log, downloads string) {

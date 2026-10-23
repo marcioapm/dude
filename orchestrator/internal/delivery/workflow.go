@@ -2137,8 +2137,8 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 				continue
 			}
 			// Best effort: the check's name and link are enough to start.
-			if log, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, checkLogLimit); err == nil {
-				st.PRFeedback[i].Checks[j].Log = log
+			if read, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, checkLogLimit); err == nil {
+				st.PRFeedback[i].Checks[j].Log = read.Text
 			}
 		}
 	}

@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -65,10 +66,11 @@ func logWorld(t *testing.T, log string) (*fakegithub.Server, *GitHub) {
 // codes or the cleanup after it. The download host never sees the token.
 func TestAnActionsJobsFailureIsTheEndOfItsLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(200))
-	out, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
 	if err != nil {
 		t.Fatal(err)
 	}
+	out := read.Text
 	if !strings.HasSuffix(out, "E       AssertionError: 3 != 2\ntests/test_backup.py:57: AssertionError\n"+
 		"=========================== short test summary info ============================\n"+
 		"FAILED tests/test_backup.py::BackupTest::test_backup_counts - AssertionError: 3 != 2\n"+
@@ -96,11 +98,11 @@ func TestAnActionsJobsFailureIsTheEndOfItsLog(t *testing.T) {
 // The limit is the caller's: a smaller one keeps less of the same end.
 func TestALogTailKeepsTheCallersLimit(t *testing.T) {
 	_, gh := logWorld(t, jobLog(10))
-	out, err := gh.CheckOutput(context.Background(), "acme/target", 77, 200)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) > 200+len("…\n") || !strings.HasSuffix(out, "##[error]Process completed with exit code 1.") {
+	if out := read.Text; len(out) > 200+len("…\n") || !strings.HasSuffix(out, "##[error]Process completed with exit code 1.") {
 		t.Errorf("%d bytes:\n%s", len(out), out)
 	}
 }
@@ -155,22 +157,45 @@ type readerFunc func([]byte) (int, error)
 func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
 
 // A log GitHub will not give — no permission, or gone — leaves what the
-// check run said; a failure that may pass is still an error.
+// check run said and why, in dude's words; a failure that may pass is
+// still an error, with the check run's words and its reason beside it.
 func TestALogGitHubWillNotGiveFallsBackToTheCheckRun(t *testing.T) {
-	for _, status := range []int{http.StatusForbidden, http.StatusNotFound, http.StatusGone} {
+	for status, why := range map[int]string{http.StatusForbidden: "GitHub refused: no Actions: Read permission",
+		http.StatusNotFound: "GitHub has no log for this job", http.StatusGone: "the log has expired"} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			fake, gh := logWorld(t, jobLog(5))
 			fake.Set(func(s *fakegithub.Server) { s.LogStatus = status })
-			out, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
-			if err != nil || out != ".github:442: failure: Process completed with exit code 1." {
-				t.Errorf("%q, %v", out, err)
+			read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+			if err != nil || read.Text != ".github:442: failure: Process completed with exit code 1." || read.Unread != why ||
+				read.Source != "check_run" {
+				t.Errorf("%+v, %v", read, err)
 			}
 		})
 	}
 	fake, gh := logWorld(t, jobLog(5))
 	fake.Set(func(s *fakegithub.Server) { s.LogStatus = http.StatusBadGateway })
-	if _, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000); !Transient(err) {
-		t.Errorf("a 502 reading the log: %v, want transient", err)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	if !Transient(err) || read.Unread != "GitHub was unavailable" || read.Text != ".github:442: failure: Process completed with exit code 1." {
+		t.Errorf("a 502 reading the log: %+v, %v; want transient, with the check run's words and why", read, err)
+	}
+	// An expired log the fake serves as GitHub does (410, no LogStatus).
+	fake.SetJobLog(77, "", "")
+	fake.Set(func(s *fakegithub.Server) { s.LogStatus = 0 })
+	if read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000); err != nil || read.Unread != "the log has expired" {
+		t.Errorf("an expired log: %+v, %v", read, err)
+	}
+}
+
+// The reason a log was not read comes from the status alone: what GitHub
+// wrote (here, a body echoing the token) never reaches it.
+func TestAnUnreadReasonCarriesNothingGitHubWrote(t *testing.T) {
+	token := "ghp_secret_" + t.Name()
+	for _, err := range []error{&Error{Status: 403, Message: "Resource not accessible by " + token},
+		&Error{Status: 401, Message: "Bad credentials " + token}, &Error{Status: 418, Message: token},
+		&Error{Status: 503, Message: token}, &Unreachable{Err: errors.New("dial " + token)}} {
+		if why := UnreadReason(err); why == "" || strings.Contains(why, token) || strings.Contains(why, "ghp_") {
+			t.Errorf("%v: %q", err, why)
+		}
 	}
 }
 
@@ -188,38 +213,70 @@ func TestAnExitOnlyCheckOutputUsesTheActionsLog(t *testing.T) {
 				run.Text = "Process completed with exit code 127."
 			}
 			fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = run })
-			out, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
-			if err != nil || !strings.Contains(out, "AssertionError: 3 != 2") {
-				t.Fatalf("exit-only %s: %q, %v", field, out, err)
+			read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+			if err != nil || !strings.Contains(read.Text, "AssertionError: 3 != 2") {
+				t.Fatalf("exit-only %s: %q, %v", field, read.Text, err)
 			}
 		})
 	}
 }
 
-// A check that is not an Actions job, or an Actions job whose check run
-// says why, gives what its check run says; its log is not read.
-func TestACheckThatSaysWhyIsReadAsBefore(t *testing.T) {
+// (a) JERV-1: GitHub's deprecation warning and runner-label notice beside
+// the exit code's failure. The fixer is given the log's end, failure line
+// included, and neither the warning nor the notice.
+func TestAnActionsJobWithWarningsAndNoticesGivesItsLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
-	for name, run := range map[string]fakegithub.CheckRun{
-		"another app": {App: "circleci", Annotations: []fakegithub.Annotation{{Path: ".circleci", Line: 1, Level: "failure",
-			Message: "Process completed with exit code 1."}}},
-		"an Actions job that says why": {App: "github-actions", Title: "1 test failed", Summary: "test_backup_counts: 3 != 2"},
-	} {
-		fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = run })
-		out, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
-		if err != nil || strings.Contains(out, "FAILURES") {
-			t.Errorf("%s: %q, %v", name, out, err)
+	fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = fakegithub.NoisyActionsJob() })
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	if err != nil || read.Source != "log" || read.Unread != "" {
+		t.Fatalf("%+v, %v", read, err)
+	}
+	if !strings.Contains(read.Text, "E       AssertionError: 3 != 2") ||
+		!strings.HasSuffix(read.Text, "##[error]Process completed with exit code 1.") {
+		t.Errorf("not the log's end:\n%s", read.Text)
+	}
+	for _, noise := range []string{"Node.js 20", "deprecated", "ubuntu-latest", "warning", "notice"} {
+		if strings.Contains(read.Text, noise) {
+			t.Errorf("holds %q:\n%s", noise, read.Text)
 		}
+	}
+}
+
+// An Actions job whose check run says why gives its words first, then
+// its log's end; a failure annotation stays, a warning goes.
+func TestAnActionsJobThatSaysWhyGivesItsWordsThenItsLog(t *testing.T) {
+	fake, gh := logWorld(t, jobLog(5))
+	fake.Set(func(s *fakegithub.Server) {
+		s.CheckRuns[77] = fakegithub.CheckRun{App: "github-actions", Title: "1 test failed", Annotations: []fakegithub.Annotation{
+			{Path: "tests/test_backup.py", Line: 57, Level: "failure", Message: "AssertionError: 3 != 2"},
+			{Path: ".github", Line: 2, Level: "warning", Message: "Node.js 20 is deprecated"}}}
+	})
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(read.Text, "1 test failed\ntests/test_backup.py:57: failure: AssertionError: 3 != 2\n") ||
+		!strings.HasSuffix(read.Text, "##[error]Process completed with exit code 1.") || strings.Contains(read.Text, "Node.js") {
+		t.Errorf("%s", read.Text)
+	}
+}
+
+// (b) A check that is not an Actions job gives what its check run says,
+// every annotation level included; no log is read.
+func TestACheckOfAnotherAppIsReadAsBefore(t *testing.T) {
+	fake, gh := logWorld(t, jobLog(5))
+	fake.Set(func(s *fakegithub.Server) {
+		s.CheckRuns[77] = fakegithub.CheckRun{App: "circleci", Title: "lint", Annotations: []fakegithub.Annotation{
+			{Path: ".circleci", Line: 1, Level: "failure", Message: "Process completed with exit code 1."},
+			{Path: "main.go", Line: 3, Level: "warning", Message: "unused variable"}}}
+	})
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	if err != nil || read.Source != "check_run" || read.Actions || read.Unread != "" ||
+		read.Text != "lint\n.circleci:1: failure: Process completed with exit code 1.\nmain.go:3: warning: unused variable" {
+		t.Errorf("%+v, %v", read, err)
 	}
 	if auth := fake.DownloadAuthorization(); len(auth) != 0 {
 		t.Errorf("a log was read: %v", auth)
-	}
-	fake.Set(func(s *fakegithub.Server) {
-		s.CheckRuns[77] = fakegithub.CheckRun{App: "github-actions", Title: "1 test failed", Summary: "test_backup_counts: 3 != 2"}
-	})
-	out, _ := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
-	if out != "1 test failed\ntest_backup_counts: 3 != 2" {
-		t.Errorf("an Actions job that says why: %q", out)
 	}
 }
 
@@ -237,5 +294,29 @@ func TestAnAgentReadsACheckLog(t *testing.T) {
 	if read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16<<10); err != nil || read.Source != "check_run" ||
 		read.Actions || read.Text != "lint failed" {
 		t.Errorf("%+v, %v", read, err)
+	}
+}
+
+// (g) github_check_log's read of the JERV-1 shape is the log.
+func TestAnAgentReadsTheLogOfAJobWithWarnings(t *testing.T) {
+	fake, gh := logWorld(t, jobLog(5))
+	fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = fakegithub.NoisyActionsJob() })
+	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16<<10)
+	if err != nil || read.Source != "log" || !strings.Contains(read.Text, "AssertionError: 3 != 2") || strings.Contains(read.Text, "Node.js") {
+		t.Fatalf("%+v, %v", read, err)
+	}
+}
+
+// Cut keeps a check run's words first, at most half the limit, and the end
+// of the log in the rest.
+func TestACutKeepsTheWordsThenTheLogsEnd(t *testing.T) {
+	r := CheckLogRead{Said: strings.Repeat("said line\n", 100) + "last said", Tail: strings.Repeat("log line\n", 500) + "##[error]boom"}
+	out := r.Cut(1000)
+	if len(out) > 1000+len("…\n") || !strings.HasPrefix(out, "said line\n") || !strings.HasSuffix(out, "##[error]boom") ||
+		!strings.Contains(out, "said line\n…\n…\nlog line") {
+		t.Errorf("%d bytes:\n%s", len(out), out)
+	}
+	if got := (CheckLogRead{Said: "a", Tail: "b"}).Cut(100); got != "a\nb" {
+		t.Errorf("%q", got)
 	}
 }

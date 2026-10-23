@@ -89,12 +89,16 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 			}
 			downloads := httptest.NewServer(w.gh.LogDownloads())
 			t.Cleanup(downloads.Close)
-			w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()} })
+			// JERV-1's shape: GitHub's warning and notice beside the exit
+			// code's failure. The read is the log, not those annotations.
+			w.gh.Set(func(s *fakegithub.Server) {
+				s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+			})
 			w.gh.SetJobLog(77, log, downloads.URL)
 			out := read("github_check_log", `{"repo":"acme/target","checkId":77}`)
 			text, ok := quoted(field(out, "log").(string))
 			if !ok || !strings.Contains(text, "AssertionError: 3 != 2") || strings.Contains(text, "Post job cleanup") ||
-				len(text) > 16<<10 || field(out, "source") != "log" {
+				strings.Contains(text, "Node.js 20") || len(text) > 16<<10 || field(out, "source") != "log" {
 				t.Fatalf("log result: %v", out)
 			}
 			var payload string
