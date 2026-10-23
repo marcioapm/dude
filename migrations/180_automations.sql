@@ -90,6 +90,12 @@ CREATE TABLE automation_runs (
   -- no task or session, which every reader of runs assumes; it is followed
   -- here, by the orchestrator's automations loop.
   lux_run_id           text,
+  -- Where reading its output got to (lux's cursor), and whether its agent
+  -- was seen at work: idle after busy is its turn done.
+  lux_cursor           text,
+  busy_seen            boolean NOT NULL DEFAULT false,
+  -- How many of payloads a Server run has POSTed to its container.
+  posted               integer NOT NULL DEFAULT 0,
   -- The agent's role (a preset's) or 'agent', and the model it asked for.
   role                 text,
   model                text,

@@ -1663,6 +1663,15 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	run.cond = sync.NewCond(&s.mu)
 	if generic(spec) {
 		run.behavior = Behaviour{}
+		if runsToEnd(spec) {
+			// A command that runs and exits (an automation's): its workload
+			// is the command, and the Run ends with it.
+			w, _ := spec["workload"].(map[string]any)
+			for _, a := range w["command"].([]any) {
+				arg, _ := a.(string)
+				run.behavior.Command = append(run.behavior.Command, arg)
+			}
+		}
 	} else {
 		run.behavior = s.Decide(spec)
 		run.behavior.withChecks(spec)
@@ -1767,6 +1776,9 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		return
 	}
 	if generic(spec) {
+		if runsToEnd(spec) {
+			s.setState(run, "succeeded")
+		}
 		// No agent: the workload (sleep infinity) runs until stopped.
 		return
 	}
@@ -2517,6 +2529,17 @@ func (s *Server) view(run *Run) map[string]any {
 func generic(spec map[string]any) bool {
 	w, _ := spec["workload"].(map[string]any)
 	return w["adapter"] == "generic"
+}
+
+// runsToEnd: a generic workload that ends when its command exits, as lux
+// ends every generic Run. The fake plays that only for an automation's
+// command (label dude.kind=automation): its other generic Runs' tests
+// submit `true` as a stand-in for a server's sleep infinity.
+func runsToEnd(spec map[string]any) bool {
+	labels, _ := spec["labels"].(map[string]any)
+	w, _ := spec["workload"].(map[string]any)
+	cmd, _ := w["command"].([]any)
+	return generic(spec) && labels["dude.kind"] == "automation" && len(cmd) > 0 && !(len(cmd) == 2 && cmd[0] == "sleep")
 }
 
 func (s *Server) downloadArtifact(w http.ResponseWriter, r *http.Request) {

@@ -193,6 +193,8 @@ func run(log *slog.Logger) error {
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
 		FactoryLogins: set.FactoryLogins}
 	store.SyncPullRequest = pullRequests.Sync
+	automationRunner := &automations.Runner{DB: database, Lux: luxClient, Forges: forges, Agent: agent,
+		Registry: registryLogin, Log: log}
 
 	embedder, notifier := memoryAndPush(set, database, log)
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
@@ -238,6 +240,9 @@ func run(log *slog.Logger) error {
 		// loop only looks for the ones due.
 		{"lux-cost", 15 * time.Second, (&phases.Costs{DB: database, Lux: luxClient, Log: log, Every: set.LuxCostEvery}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
+		// Automations: schedules due, deliveries matched, runs started and
+		// followed, Server containers fed and stopped, kept sessions expired.
+		{"automations", time.Second, automationRunner.Sweep},
 		// GitHub's deliveries after 30 days, automation runs' payloads at 30
 		// and logs at 90 (counting nothing: a backlog is not a reason to spin).
 		{"automations-retention", time.Hour, func(ctx context.Context) (int, error) {
@@ -290,7 +295,7 @@ func run(log *slog.Logger) error {
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: set.Token, Log: log,
 			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Servers: serverService,
 			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick,
-			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}, AgentEgress: agent.Egress}).Handler(),
+			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}, AgentEgress: agent.Egress, Automations: automationRunner}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	// dude's tools for agents, on a listener of their own: agents reach it

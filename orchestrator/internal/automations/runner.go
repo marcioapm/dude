@@ -1,0 +1,1471 @@
+package automations
+
+// The automations loop: schedules due, deliveries to match, queued runs to
+// start, live runs to follow, Server containers to feed and stop, kept
+// sessions to expire. Each pass does a bounded amount of each.
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/images"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/phases"
+	"github.com/marciomartins/dude/orchestrator/internal/registry"
+)
+
+// Server-kind and webhook bounds (Q3, Q16).
+const (
+	ServerIdle      = 30 * time.Second
+	ServerHealthMax = 60 * time.Second
+	RequestTimeout  = 30 * time.Second
+)
+
+// EventPath is where a command's or server's container finds the event(s).
+const EventPath = "/workspace/.dude/event.json"
+
+// Runner carries automations out.
+type Runner struct {
+	DB     *db.DB
+	Lux    lux.Client
+	Forges Forges
+	Agent  phases.AgentConfig
+	// The registry library images are pulled from; nil for none.
+	Registry registry.Provider
+	Log      *slog.Logger
+	// HTTP posts to Server containers and webhook URLs.
+	HTTP *http.Client
+	// ServerURL is where a Server run's container answers, from its lux
+	// Run and server; nil asks lux for the server's url.
+	ServerURL func(ctx context.Context, luxRunID string, port int) (string, error)
+	Now       func() time.Time
+	// Idle overrides ServerIdle (tests).
+	Idle time.Duration
+}
+
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+func (r *Runner) idle() time.Duration {
+	if r.Idle > 0 {
+		return r.Idle
+	}
+	return ServerIdle
+}
+
+func (r *Runner) client() *http.Client {
+	if r.HTTP != nil {
+		return r.HTTP
+	}
+	return &http.Client{Timeout: RequestTimeout}
+}
+
+// Automation is one automation as the runner reads it.
+type Automation struct {
+	ID, Org, ProjectID, Name, Kind string
+	Enabled                        bool
+	OwnerID                        string
+	OwnerHeld                      bool
+	Trigger                        Trigger
+	SessionMode                    string
+	ExpiryDays                     int
+	Concurrency                    string
+	ParallelMax                    int
+	Repos                          json.RawMessage
+	RepoFilter                     *RepoFilter
+	Agent                          json.RawMessage
+	MachineSizeID, ImageID         string
+	SetupScript, Command           string
+	Server                         json.RawMessage
+	Webhook                        json.RawMessage
+	WebhookSecret                  string
+	Secrets                        []string
+	NotifyOnFailure                bool
+	NextRunAt                      *time.Time
+}
+
+func (a Automation) policy() Policy {
+	return Policy{Kind: a.Kind, Concurrency: a.Concurrency, SessionMode: a.SessionMode, ParallelMax: a.ParallelMax}
+}
+
+const automationColumns = `a.id, a.organization_id, COALESCE(a.project_id, ''), a.name, a.kind, a.enabled,
+	COALESCE(a.owner_id, ''), a.owner_left_at IS NOT NULL, a.trigger, a.session_mode, COALESCE(a.expiry_days, 0),
+	a.concurrency, a.parallel_max, a.repos, a.repo_filter, COALESCE(a.agent, 'null'), COALESCE(a.machine_size_id, ''),
+	COALESCE(a.image_id, ''), COALESCE(a.setup_script, ''), COALESCE(a.command, ''), COALESCE(a.server, 'null'),
+	COALESCE(a.webhook, 'null'), COALESCE(a.webhook_secret, ''), a.secrets, a.notify_on_failure, a.next_run_at`
+
+func scanAutomation(row pgx.Row) (Automation, error) {
+	var a Automation
+	var trigger, filter []byte
+	err := row.Scan(&a.ID, &a.Org, &a.ProjectID, &a.Name, &a.Kind, &a.Enabled, &a.OwnerID, &a.OwnerHeld, &trigger,
+		&a.SessionMode, &a.ExpiryDays, &a.Concurrency, &a.ParallelMax, &a.Repos, &filter, &a.Agent, &a.MachineSizeID,
+		&a.ImageID, &a.SetupScript, &a.Command, &a.Server, &a.Webhook, &a.WebhookSecret, &a.Secrets, &a.NotifyOnFailure, &a.NextRunAt)
+	if err != nil {
+		return a, err
+	}
+	_ = json.Unmarshal(trigger, &a.Trigger)
+	if len(filter) > 0 && string(filter) != "null" {
+		a.RepoFilter = &RepoFilter{}
+		_ = json.Unmarshal(filter, a.RepoFilter)
+	}
+	return a, nil
+}
+
+// Load reads one automation in its organisation.
+func Load(ctx context.Context, tx pgx.Tx, id string) (Automation, error) {
+	return scanAutomation(tx.QueryRow(ctx, `SELECT `+automationColumns+` FROM automations a WHERE a.id = $1`, id))
+}
+
+// Payload is one event a run was given.
+type Payload struct {
+	DeliveryID string          `json:"deliveryId"`
+	Event      string          `json:"event"`
+	Action     string          `json:"action"`
+	Body       json.RawMessage `json:"body"`
+}
+
+// Sweep is one pass of the loop. Returns how much it did, so the loop runs
+// again at once while there is more.
+func (r *Runner) Sweep(ctx context.Context) (int, error) {
+	n := 0
+	for _, step := range []func(context.Context) (int, error){r.fireSchedules, r.matchDeliveries, r.startQueued, r.followRunning, r.expireSessions} {
+		did, err := step(ctx)
+		n += did
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// ---------------------------------------------------------------------------
+// Firing
+// ---------------------------------------------------------------------------
+
+// Fire records one firing of an automation and decides what it does
+// (Arrive), in the automation's transaction: a queued, merged, skipped or
+// sent run row. A run to start is left queued for startQueued. Returns the
+// run that holds the firing.
+func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads []Payload, startedBy string, scheduledFor *time.Time) (string, error) {
+	// One firing at a time per automation: two deliveries arriving together
+	// must see each other's run.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM automations WHERE id = $1 FOR UPDATE`, a.ID); err != nil {
+		return "", err
+	}
+	live, err := liveOf(ctx, tx, a.ID)
+	if err != nil {
+		return "", err
+	}
+	d := Arrive(a.policy(), source, live)
+	raw, _ := json.Marshal(nonNil(payloads))
+	switch d.Action {
+	case MergeInto, SendInto:
+		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw); err != nil {
+			return "", err
+		}
+		return d.Into, nil
+	case Skip:
+		id := ids.New(ids.AutomationRun)
+		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
+			started_by, scheduled_for, ended_at) VALUES ($1, $2, $3, 'skipped', $4, $5, $6, NULLIF($7, ''), $8, now())`,
+			id, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
+		return id, err
+	case CancelAndStart:
+		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
+			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'`, a.ID); err != nil {
+			return "", err
+		}
+	}
+	id := ids.New(ids.AutomationRun)
+	reason := ""
+	if d.Action == Queue {
+		reason = "waiting for the run before it"
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
+		started_by, scheduled_for) VALUES ($1, $2, $3, 'queued', NULLIF($4, ''), $5, $6, NULLIF($7, ''), $8)`,
+		id, a.Org, a.ID, reason, source, raw, startedBy, scheduledFor)
+	return id, err
+}
+
+func nonNil(p []Payload) []Payload {
+	if p == nil {
+		return []Payload{}
+	}
+	return p
+}
+
+// liveOf is what the automation has running and waiting, test runs aside
+// (they share nothing with the rest, Q21).
+func liveOf(ctx context.Context, tx pgx.Tx, automationID string) (Live, error) {
+	rows, err := tx.Query(ctx, `SELECT id, status FROM automation_runs
+		WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test' ORDER BY created_at, id`, automationID)
+	if err != nil {
+		return Live{}, err
+	}
+	var live Live
+	var id, status string
+	_, err = pgx.ForEachRow(rows, []any{&id, &status}, func() error {
+		if status == "running" {
+			live.Running = append(live.Running, id)
+		} else {
+			live.Queued = id
+		}
+		return nil
+	})
+	return live, err
+}
+
+// fireSchedules fires every enabled schedule whose time has come, and sets
+// the next time of any that has none.
+func (r *Runner) fireSchedules(ctx context.Context) (int, error) {
+	now := r.now()
+	var due []Automation
+	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
+			WHERE a.enabled AND a.trigger->>'kind' = 'schedule' AND (a.next_run_at IS NULL OR a.next_run_at <= $1)
+			ORDER BY a.next_run_at NULLS FIRST LIMIT 50`, now)
+		if err != nil {
+			return err
+		}
+		due, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Automation, error) { return scanAutomation(row) })
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, a := range due {
+		cron, err := ParseCron(a.Trigger.Cron)
+		loc, lerr := time.LoadLocation(a.Trigger.TZ)
+		if err != nil || lerr != nil {
+			r.Log.Warn("automation schedule unreadable", "automation", a.ID, "cron", a.Trigger.Cron, "tz", a.Trigger.TZ)
+			continue
+		}
+		if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+			if a.NextRunAt != nil {
+				at := *a.NextRunAt
+				if _, err := Fire(ctx, tx, a, SourceSchedule, nil, "", &at); err != nil {
+					return err
+				}
+				n++
+			}
+			_, err := tx.Exec(ctx, `UPDATE automations SET next_run_at = $2 WHERE id = $1`, a.ID, cron.Next(now, loc))
+			return err
+		}); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// matchDeliveries reads stored deliveries the matcher has not, and fires
+// every enabled event automation they match.
+func (r *Runner) matchDeliveries(ctx context.Context) (int, error) {
+	type delivery struct {
+		ID, Org, Event string
+		Payload        json.RawMessage
+	}
+	var batch []delivery
+	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, event, payload FROM webhook_deliveries
+			WHERE automations_at IS NULL ORDER BY received_at LIMIT 50`)
+		if err != nil {
+			return err
+		}
+		batch, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	for _, d := range batch {
+		if err := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+			rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
+				WHERE a.enabled AND a.trigger->>'kind' = 'github' AND a.trigger->>'event' = $1`, d.Event)
+			if err != nil {
+				return err
+			}
+			list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Automation, error) { return scanAutomation(row) })
+			if err != nil {
+				return err
+			}
+			ev := ReadEvent(d.Event, d.Payload)
+			for _, a := range list {
+				v, err := r.Evaluate(ctx, tx, a, ev)
+				if err != nil {
+					return err
+				}
+				if !v.Matches {
+					continue
+				}
+				if _, err := Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: d.ID, Event: d.Event, Action: ev.Action, Body: d.Payload}}, "", nil); err != nil {
+					return err
+				}
+			}
+			_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_at = now() WHERE id = $1`, d.ID)
+			return err
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return len(batch), nil
+}
+
+// Evaluate matches an event against an automation, its project's
+// repositories included; paths read the pull request's files from GitHub.
+func (r *Runner) Evaluate(ctx context.Context, tx pgx.Tx, a Automation, ev Event) (Verdict, error) {
+	var repos []string
+	if a.ProjectID != "" {
+		rows, err := tx.Query(ctx, `SELECT url FROM repositories WHERE project_id = $1`, a.ProjectID)
+		if err != nil {
+			return Verdict{}, err
+		}
+		urls, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return Verdict{}, err
+		}
+		repos = []string{}
+		for _, u := range urls {
+			if slug := slugOf(u); slug != "" {
+				repos = append(repos, slug)
+			}
+		}
+	}
+	files := func() ([]string, error) {
+		if r.Forges == nil {
+			return nil, errors.New("no GitHub to read the pull request's files from")
+		}
+		gh, err := r.Forges.For(ctx, a.Org)
+		if err != nil || gh == nil {
+			return nil, cmpErr(err, "no GitHub to read the pull request's files from")
+		}
+		return gh.PullFiles(ctx, ev.Repository, ev.PullNumber, 3000)
+	}
+	return Match(a.Trigger, a.RepoFilter, repos, ev, files)
+}
+
+func cmpErr(err error, msg string) error {
+	if err != nil {
+		return err
+	}
+	return errors.New(msg)
+}
+
+// ---------------------------------------------------------------------------
+// Starting
+// ---------------------------------------------------------------------------
+
+// startQueued starts the oldest queued run of each automation that has room.
+func (r *Runner) startQueued(ctx context.Context) (int, error) {
+	type queued struct{ ID, Org, AutomationID, Source string }
+	var list []queued
+	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT q.id, q.organization_id, q.automation_id, q.source FROM automation_runs q
+			WHERE q.status = 'queued' AND NOT EXISTS (SELECT 1 FROM automation_runs o WHERE o.automation_id = q.automation_id
+			  AND o.status = 'queued' AND o.source <> 'test' AND q.source <> 'test' AND (o.created_at, o.id) < (q.created_at, q.id))
+			ORDER BY q.created_at LIMIT 20`)
+		if err != nil {
+			return err
+		}
+		list, err = pgx.CollectRows(rows, pgx.RowToStructByPos[queued])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, q := range list {
+		started, err := r.start(ctx, q.Org, q.ID)
+		if err != nil {
+			r.Log.Warn("automation run did not start", "run", q.ID, "error", err)
+			continue
+		}
+		if started {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// start submits one queued run, or leaves it queued while its automation
+// has no room. A run that cannot start fails, saying why.
+func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
+	var a Automation
+	var run struct {
+		Source   string
+		Payloads []Payload
+		At       *time.Time
+		Running  int
+		Kept     string
+	}
+	if err := r.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var automationID string
+		if err := tx.QueryRow(ctx, `SELECT automation_id, source, payloads, scheduled_for FROM automation_runs WHERE id = $1 AND status = 'queued'`, runID).
+			Scan(&automationID, &run.Source, &run.Payloads, &run.At); err != nil {
+			return err
+		}
+		var err error
+		if a, err = Load(ctx, tx, automationID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE automation_id = $1 AND status = 'running' AND source <> 'test'`,
+			a.ID).Scan(&run.Running); err != nil {
+			return err
+		}
+		err = tx.QueryRow(ctx, `SELECT lux_run_id FROM automation_sessions WHERE automation_id = $1`, a.ID).Scan(&run.Kept)
+		if db.IsNotFound(err) {
+			err = nil
+		}
+		return err
+	}); err != nil {
+		if db.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if run.Source != SourceTest && !CanStartQueued(a.policy(), run.Running) {
+		return false, nil
+	}
+	// A test run's session is its own: fresh and ephemeral, the kept one untouched (Q21).
+	resumable := a.SessionMode == "resumable" && run.Source != SourceTest && a.Kind != "webhook"
+	if a.Kind == "webhook" {
+		return true, r.postWebhook(ctx, a, runID, run.Payloads)
+	}
+	var luxRunID, session string
+	var err error
+	if resumable && run.Kept != "" {
+		luxRunID, err = r.resume(ctx, a, run.Kept, runID, run.Payloads, run.At)
+		session = "resumed"
+		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
+			// Still stopping after the last run: tried again next pass.
+			return false, nil
+		}
+		if err != nil {
+			// The kept container is gone: the run starts fresh.
+			r.Log.Info("kept automation session could not be resumed; starting fresh", "automation", a.ID, "error", err)
+			r.forgetSession(ctx, a)
+			luxRunID, session = "", ""
+		}
+	}
+	if luxRunID == "" {
+		spec, why, err := r.spec(ctx, a, runID, run.Payloads, run.At)
+		if err != nil {
+			return false, err
+		}
+		if why != "" {
+			return true, r.finish(ctx, a, runID, "failed", why, nil)
+		}
+		created, err := r.Lux.Submit(ctx, spec, "automation-run-"+runID)
+		if err != nil {
+			if le, ok := lux.AsError(err); ok && !le.Retryable() {
+				return true, r.finish(ctx, a, runID, "failed", "lux refused the run: "+le.Message, nil)
+			}
+			return false, err
+		}
+		luxRunID = created.ID
+		session = "ephemeral"
+		if resumable {
+			session = "new"
+		}
+	}
+	return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		if resumable {
+			if _, err := tx.Exec(ctx, `INSERT INTO automation_sessions (automation_id, organization_id, lux_run_id, last_run_at)
+				VALUES ($1, $2, $3, now()) ON CONFLICT (automation_id) DO UPDATE SET lux_run_id = EXCLUDED.lux_run_id, last_run_at = now()`,
+				a.ID, a.Org, luxRunID); err != nil {
+				return err
+			}
+		}
+		// A resumed session's output is read on from where its last run left
+		// it: what it said before is not this run's.
+		_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', reason = NULL, lux_run_id = $2, session = $3,
+			started_at = now(), container_started_at = CASE WHEN $4 = 'server' THEN now() END, last_request_at = now(),
+			lux_cursor = CASE WHEN $3 = 'resumed' THEN (SELECT p.lux_cursor FROM automation_runs p WHERE p.lux_run_id = $2 AND p.id <> $1
+				ORDER BY p.created_at DESC LIMIT 1) END
+			WHERE id = $1`, runID, luxRunID, session, a.Kind)
+		return err
+	})
+}
+
+// resume takes the kept session up again with this firing's instructions.
+func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, error) {
+	in := lux.ResumeInput{RequestID: "automation-" + runID}
+	if a.Kind == "agent" {
+		prompt, _, err := r.prompt(ctx, a, payloads, at)
+		if err != nil {
+			return "", err
+		}
+		in.Input = prompt
+	}
+	if r.Forges != nil {
+		gh, err := r.Forges.For(ctx, a.Org)
+		if err != nil {
+			return "", err
+		}
+		if gh != nil {
+			got, err := r.Lux.Get(ctx, kept)
+			if err != nil {
+				return "", err
+			}
+			if in.Secrets, err = phases.ResumeCredentials(ctx, gh, got.Spec, nil); err != nil {
+				return "", err
+			}
+		}
+	}
+	if _, err := r.Lux.Resume(ctx, kept, in); err != nil {
+		return "", err
+	}
+	return kept, nil
+}
+
+func (r *Runner) forgetSession(ctx context.Context, a Automation) {
+	_ = r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1`, a.ID)
+		return err
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Following
+// ---------------------------------------------------------------------------
+
+// followRunning reads where each running run's lux Run is: a command's
+// exit, an agent's turn ending, a Server's queue of events and idle time.
+func (r *Runner) followRunning(ctx context.Context) (int, error) {
+	type running struct{ ID, Org, AutomationID, LuxRunID, Source string }
+	var list []running
+	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.automation_id, COALESCE(r.lux_run_id, ''), r.source
+			FROM automation_runs r WHERE r.status = 'running' ORDER BY r.started_at LIMIT 50`)
+		if err != nil {
+			return err
+		}
+		list, err = pgx.CollectRows(rows, pgx.RowToStructByPos[running])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, run := range list {
+		var a Automation
+		if err := r.DB.InOrg(ctx, run.Org, func(tx pgx.Tx) (err error) {
+			a, err = Load(ctx, tx, run.AutomationID)
+			return err
+		}); err != nil {
+			return n, err
+		}
+		var err error
+		var acted bool
+		switch a.Kind {
+		case "server":
+			acted, err = r.followServer(ctx, a, run.ID, run.LuxRunID, run.Source)
+		default:
+			acted, err = r.followRun(ctx, a, run.ID, run.LuxRunID, run.Source)
+		}
+		if err != nil {
+			r.Log.Warn("following an automation run failed", "run", run.ID, "error", err)
+			continue
+		}
+		if acted {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// followRun ends a command's run when its lux Run ends, and an agent's
+// when its turn ends (busy then idle on its output): a resumable agent's
+// Run is stopped and kept, an ephemeral one's cancelled.
+func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, source string) (bool, error) {
+	got, err := r.Lux.Get(ctx, luxRunID)
+	if err != nil {
+		if le, ok := lux.AsError(err); ok && le.Status == http.StatusNotFound {
+			return true, r.finish(ctx, a, runID, "failed", "its container is gone", nil)
+		}
+		return false, err
+	}
+	var cursor string
+	var busy bool
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen FROM automation_runs WHERE id = $1`, runID).Scan(&cursor, &busy)
+	}); err != nil {
+		return false, err
+	}
+	turnDone, log, newCursor, failed, err := r.readOutput(ctx, luxRunID, cursor, busy)
+	if err != nil {
+		return false, err
+	}
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, busy_seen = busy_seen OR $3,
+			log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1`, runID, newCursor, turnDone.busy, log)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	cost := r.cost(ctx, luxRunID)
+	keep := a.SessionMode == "resumable" && source != SourceTest
+	switch {
+	case got.State == "succeeded":
+		return true, r.finish(ctx, a, runID, "succeeded", "", cost)
+	case lux.Terminal(got.State):
+		return true, r.finish(ctx, a, runID, "failed", cmpStr(got.StateReason, "its container ended: "+got.State), cost)
+	case a.Kind == "agent" && failed != "":
+		r.stopOrCancel(ctx, luxRunID, keep)
+		return true, r.finish(ctx, a, runID, "failed", failed, cost)
+	case a.Kind == "agent" && turnDone.done:
+		r.stopOrCancel(ctx, luxRunID, keep)
+		return true, r.finish(ctx, a, runID, "succeeded", "", cost)
+	}
+	return false, nil
+}
+
+func cmpStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func (r *Runner) stopOrCancel(ctx context.Context, luxRunID string, keep bool) {
+	var err error
+	if keep {
+		err = r.Lux.Stop(ctx, luxRunID)
+	} else {
+		err = r.Lux.Cancel(ctx, luxRunID)
+	}
+	if err != nil {
+		r.Log.Warn("stopping an automation's lux Run failed", "lux_run", luxRunID, "error", err)
+	}
+}
+
+type turnState struct{ busy, done bool }
+
+// readOutput reads a Run's records since cursor without waiting for more:
+// the text the workload printed, and whether its agent went busy, then idle.
+func (r *Runner) readOutput(ctx context.Context, luxRunID, cursor string, busy bool) (turnState, string, string, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	state := turnState{busy: busy}
+	var log strings.Builder
+	failed := ""
+	err := r.Lux.Output(ctx, luxRunID, cursor, 0, func(f lux.Frame) error {
+		if f.Kind != "record" {
+			return nil
+		}
+		if f.Cursor != "" {
+			cursor = f.Cursor
+		}
+		if f.Event == nil {
+			log.WriteString(f.Data)
+			return nil
+		}
+		var d map[string]any
+		_ = json.Unmarshal(f.Event.Data, &d)
+		switch f.Event.Type {
+		case "lux.activity":
+			switch d["activity"] {
+			case "busy":
+				state.busy = true
+			case "idle":
+				if state.busy {
+					state.done = true
+					cancel()
+				}
+			}
+		case "acp.agent_message_chunk":
+			if c, ok := d["content"].(map[string]any); ok {
+				if t, ok := c["text"].(string); ok {
+					log.WriteString(t)
+				}
+			}
+		case "acp.turn_end", "turn_end":
+			if e, _ := d["error"].(string); e != "" {
+				failed = "the agent's turn failed: " + e
+			}
+		}
+		return nil
+	})
+	if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+		return state, log.String(), cursor, failed, err
+	}
+	return state, log.String(), cursor, failed, nil
+}
+
+// cost is what lux has priced the Run at so far, nil when unknown.
+func (r *Runner) cost(ctx context.Context, luxRunID string) *float64 {
+	c, err := r.Lux.Cost(ctx, luxRunID)
+	if err != nil {
+		return nil
+	}
+	total, known := 0.0, false
+	for _, t := range c.Totals {
+		if v, err := strconv.ParseFloat(t.Amount, 64); err == nil && t.Currency == "USD" {
+			total, known = total+v, true
+		}
+	}
+	if !known {
+		return nil
+	}
+	return &total
+}
+
+// finish ends a run and, on a failure, tells its owner (or, held, every
+// admin) when the automation says to. A queued run behind it starts next pass.
+func (r *Runner) finish(ctx context.Context, a Automation, runID, status, reason string, cost *float64) error {
+	return r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET status = $2, reason = NULLIF($3, ''), cost_usd = COALESCE($4, cost_usd),
+			ended_at = now(), container_stopped_at = CASE WHEN container_started_at IS NOT NULL THEN COALESCE(container_stopped_at, now()) END
+			WHERE id = $1 AND status IN ('queued', 'running')`, runID, status, reason, cost)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE automation_sessions SET last_run_at = now() WHERE automation_id = $1`, a.ID); err != nil {
+			return err
+		}
+		if status != "failed" || !a.NotifyOnFailure {
+			return nil
+		}
+		return notifyFailure(ctx, tx, a, runID, reason)
+	})
+}
+
+// EvAutomationFailed is the ledger's word for a failed automation run: the
+// notifier tells its owner, or every admin when the owner left.
+const EvAutomationFailed = "automation.failed"
+
+func notifyFailure(ctx context.Context, tx pgx.Tx, a Automation, runID, reason string) error {
+	var to []string
+	if a.OwnerID != "" {
+		to = []string{a.OwnerID}
+	} else {
+		rows, err := tx.Query(ctx, `SELECT id FROM people WHERE role = 'admin' AND removed_at IS NULL ORDER BY id`)
+		if err != nil {
+			return err
+		}
+		if to, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+			return err
+		}
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvAutomationFailed, OrganizationID: a.Org, ProjectID: a.ProjectID,
+		ActorType: ledger.ActorSystem, ActorID: "dude", Source: "orchestrator",
+		Payload: map[string]any{"automationId": a.ID, "name": a.Name, "runId": runID, "reason": reason, "to": to}})
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// Server runs
+// ---------------------------------------------------------------------------
+
+// followServer feeds a Server run's container: once its server is healthy,
+// each payload not yet POSTed is, one request row each; when nothing is in
+// flight and none came for the idle time, the container is stopped (kept
+// for a resumable automation) and the run ends.
+func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID, source string) (bool, error) {
+	var cfg struct {
+		Port   int     `json:"port"`
+		Path   string  `json:"path"`
+		Health *string `json:"health"`
+	}
+	_ = json.Unmarshal(a.Server, &cfg)
+	var payloads []Payload
+	var posted int
+	var started, last time.Time
+	var failedReq bool
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT payloads, posted, started_at, last_request_at,
+			EXISTS (SELECT 1 FROM automation_run_requests q WHERE q.run_id = r.id AND (q.http_status IS NULL OR q.http_status >= 400)
+			  AND NOT EXISTS (SELECT 1 FROM automation_run_requests q2 WHERE q2.run_id = r.id AND q2.delivery_id = q.delivery_id AND q2.try > q.try
+			    AND q2.http_status BETWEEN 200 AND 299) AND (q.try = 2 OR q.http_status BETWEEN 400 AND 499))
+			FROM automation_runs r WHERE id = $1`, runID).Scan(&payloads, &posted, &started, &last, &failedReq)
+	}); err != nil {
+		return false, err
+	}
+	keep := a.SessionMode == "resumable" && source != SourceTest
+	if got, err := r.Lux.Get(ctx, luxRunID); err == nil && lux.Terminal(got.State) {
+		return true, r.endServer(ctx, a, runID, "failed", "error", "its container ended: "+cmpStr(got.StateReason, got.State))
+	}
+	base, err := r.serverURL(ctx, luxRunID, cfg.Port)
+	if err != nil || !r.healthy(ctx, base, cfg.Health) {
+		if r.now().Sub(started) > ServerHealthMax {
+			r.stopOrCancel(ctx, luxRunID, keep)
+			return true, r.endServer(ctx, a, runID, "failed", "error", "its server was not healthy within 60 seconds")
+		}
+		return false, nil
+	}
+	if posted < len(payloads) {
+		for i := posted; i < len(payloads); i++ {
+			r.postOnce(ctx, a, runID, base+cfg.Path, payloads[i], true)
+		}
+		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, len(payloads))
+			return err
+		})
+	}
+	if r.now().Sub(last) < r.idle() {
+		return false, nil
+	}
+	r.stopOrCancel(ctx, luxRunID, keep)
+	status := "succeeded"
+	reason := ""
+	if failedReq {
+		status, reason = "failed", "a POST to the server failed"
+	}
+	return true, r.endServer(ctx, a, runID, status, "idle", reason)
+}
+
+func (r *Runner) endServer(ctx context.Context, a Automation, runID, status, stop, reason string) error {
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE automation_runs SET stop_reason = $2, container_stopped_at = now() WHERE id = $1`, runID, stop)
+		return err
+	}); err != nil {
+		return err
+	}
+	return r.finish(ctx, a, runID, status, reason, nil)
+}
+
+func (r *Runner) serverURL(ctx context.Context, luxRunID string, port int) (string, error) {
+	if r.ServerURL != nil {
+		return r.ServerURL(ctx, luxRunID, port)
+	}
+	servers, err := r.Lux.Servers(ctx, luxRunID)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range servers {
+		if s.Name == "automation" && s.State == lux.ServerReady {
+			var v struct {
+				URL string `json:"url"`
+			}
+			_ = json.Unmarshal(s.Raw, &v)
+			if v.URL != "" {
+				return strings.TrimRight(v.URL, "/"), nil
+			}
+		}
+	}
+	return "", errors.New("the server is not ready")
+}
+
+func (r *Runner) healthy(ctx context.Context, base string, health *string) bool {
+	if health == nil || *health == "" {
+		u := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
+		conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", hostPort(u, base))
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", base+*health, nil)
+	res, err := r.client().Do(req)
+	if err != nil {
+		return false
+	}
+	res.Body.Close()
+	return res.StatusCode < 400
+}
+
+func hostPort(hostPath, base string) string {
+	host, _, _ := strings.Cut(hostPath, "/")
+	if strings.Contains(host, ":") {
+		return host
+	}
+	if strings.HasPrefix(base, "https://") {
+		return host + ":443"
+	}
+	return host + ":80"
+}
+
+// postOnce POSTs one payload with dude's headers and records the answer;
+// a 5xx or no answer is tried once more (retry), a 4xx is not.
+func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, p Payload, retry bool) bool {
+	body := []byte(p.Body)
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+	for try := 1; try <= 2; try++ {
+		status, ms, excerpt, err := r.post(ctx, a, runID, url, p, body)
+		_ = r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+			var code any
+			if status > 0 {
+				code = status
+			}
+			var msg any
+			if err != nil {
+				msg = err.Error()
+			}
+			_, e := tx.Exec(ctx, `INSERT INTO automation_run_requests (id, organization_id, run_id, delivery_id, try, http_status, ms, error, response_excerpt)
+				VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''))`,
+				ids.New(ids.AutomationRequest), a.Org, runID, p.DeliveryID, try, code, ms, msg, excerpt)
+			return e
+		})
+		if err == nil && status < 500 {
+			return status < 300
+		}
+		if !retry {
+			return false
+		}
+	}
+	return false
+}
+
+func (r *Runner) post(ctx context.Context, a Automation, runID, url string, p Payload, body []byte) (int, int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return 0, 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Dude-Automation", a.ID)
+	req.Header.Set("X-Dude-Run", runID)
+	if p.Event != "" {
+		req.Header.Set("X-GitHub-Event", p.Event)
+	}
+	if p.DeliveryID != "" {
+		req.Header.Set("X-GitHub-Delivery", p.DeliveryID)
+	}
+	if a.WebhookSecret != "" {
+		req.Header.Set("X-Dude-Signature-256", Sign(a.WebhookSecret, body))
+	}
+	began := time.Now()
+	res, err := r.client().Do(req)
+	ms := int(time.Since(began).Milliseconds())
+	if err != nil {
+		return 0, ms, "", err
+	}
+	defer res.Body.Close()
+	excerpt, _ := io.ReadAll(io.LimitReader(res.Body, 500))
+	return res.StatusCode, ms, string(excerpt), nil
+}
+
+// Sign is the X-Dude-Signature-256 of a body: GitHub's scheme, HMAC-SHA256
+// with the automation's secret, hex, after "sha256=".
+func Sign(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// postWebhook is a Webhook-only run: one signed POST of its payload (or, on
+// a schedule, the schedule's time), retried once on a 5xx or no answer.
+func (r *Runner) postWebhook(ctx context.Context, a Automation, runID string, payloads []Payload) error {
+	var cfg struct {
+		URL string `json:"url"`
+	}
+	_ = json.Unmarshal(a.Webhook, &cfg)
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', started_at = now(), session = 'ephemeral' WHERE id = $1`, runID)
+		return err
+	}); err != nil {
+		return err
+	}
+	p := Payload{}
+	if len(payloads) > 0 {
+		p = payloads[0]
+	}
+	if len(payloads) > 1 {
+		// A merged run's events, as a list.
+		p.Body, _ = json.Marshal(payloads)
+	}
+	if len(p.Body) == 0 {
+		p.Body, _ = json.Marshal(map[string]any{"automation": a.ID, "schedule": map[string]any{"time": r.now().UTC().Format(time.RFC3339)}})
+	}
+	if r.postOnce(ctx, a, runID, cfg.URL, p, true) {
+		return r.finish(ctx, a, runID, "succeeded", "", nil)
+	}
+	return r.finish(ctx, a, runID, "failed", "the webhook did not answer 2xx", nil)
+}
+
+// ---------------------------------------------------------------------------
+// Sessions
+// ---------------------------------------------------------------------------
+
+// expireSessions cleans up kept sessions not run for their expiry days,
+// whether or not the automation is on (Q10).
+func (r *Runner) expireSessions(ctx context.Context) (int, error) {
+	type kept struct{ AutomationID, Org, LuxRunID string }
+	var list []kept
+	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT s.automation_id, s.organization_id, s.lux_run_id FROM automation_sessions s
+			JOIN automations a ON a.id = s.automation_id
+			WHERE s.last_run_at < $1::timestamptz - make_interval(days => COALESCE(a.expiry_days, 0))
+			  AND NOT EXISTS (SELECT 1 FROM automation_runs r WHERE r.automation_id = s.automation_id AND r.status = 'running' AND r.source <> 'test')
+			LIMIT 20`, r.now())
+		if err != nil {
+			return err
+		}
+		list, err = pgx.CollectRows(rows, pgx.RowToStructByPos[kept])
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	for _, k := range list {
+		if err := StartFresh(ctx, r.DB, r.Lux, k.Org, k.AutomationID); err != nil {
+			return 0, err
+		}
+	}
+	return len(list), nil
+}
+
+// StartFresh lets go of an automation's kept session: its lux Run is
+// cancelled and the next firing starts a new one.
+func StartFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) error {
+	var luxRunID string
+	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1 RETURNING lux_run_id`, automationID).Scan(&luxRunID)
+	})
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := c.Cancel(ctx, luxRunID); err != nil {
+		if le, ok := lux.AsError(err); !ok || le.Status != http.StatusNotFound {
+			return err
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// What a run is told and given
+// ---------------------------------------------------------------------------
+
+type ownAgent struct {
+	Harness          string `json:"harness"`
+	TierID           string `json:"tierId"`
+	TimeLimitMinutes int    `json:"timeLimitMinutes"`
+	MachineSizeID    string `json:"machineSizeId"`
+	ImageID          string `json:"imageId"`
+	Prompt           string `json:"prompt"`
+}
+
+type agentSettings struct {
+	Own    *ownAgent `json:"own"`
+	Preset *struct {
+		Role      string   `json:"role"`
+		Overrides ownAgent `json:"overrides"`
+	} `json:"preset"`
+	Brief string `json:"brief"`
+}
+
+// prompt is what the agent is told this firing, variables substituted:
+// its own prompt, or its role's prompt then the brief (Q6, Q15).
+func (r *Runner) prompt(ctx context.Context, a Automation, payloads []Payload, at *time.Time) (string, string, error) {
+	var s agentSettings
+	_ = json.Unmarshal(a.Agent, &s)
+	vars := Variables(payloads, at, a.Trigger.TZ)
+	if s.Own != nil {
+		return Substitute(s.Own.Prompt, vars), "agent", nil
+	}
+	if s.Preset == nil {
+		return "", "", errors.New("the automation has no agent")
+	}
+	role := s.Preset.Role
+	var orgPrompt, projectPrompt, mode *string
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT
+			(SELECT body FROM prompt_versions WHERE role = $1 AND project_id IS NULL ORDER BY created_at DESC, id DESC LIMIT 1),
+			(SELECT body FROM prompt_versions WHERE role = $1 AND project_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1),
+			(SELECT mode FROM prompt_versions WHERE role = $1 AND project_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1)`,
+			role, a.ProjectID).Scan(&orgPrompt, &projectPrompt, &mode)
+	}); err != nil {
+		return "", "", err
+	}
+	in := delivery.InstructionsInput{}
+	in.OrgPrompt = orgPrompt
+	if projectPrompt != nil && mode != nil {
+		in.ProjectPrompt, in.ProjectPromptMode = *projectPrompt, *mode
+	}
+	rolePrompt := delivery.Instructions(role, "", in)
+	brief := Substitute(s.Brief, vars)
+	return rolePrompt + "\n\n# Your task\n\nYou were started by an automation, " + strconv.Quote(a.Name) +
+		", not for a task: there is no pull request to open. You may create dude tasks and comment on GitHub as dude.\n\n" + brief, role, nil
+}
+
+// Variables are a firing's {{…}} values.
+func Variables(payloads []Payload, at *time.Time, tz string) map[string]string {
+	vars := map[string]string{}
+	if at != nil {
+		t := *at
+		if loc, err := time.LoadLocation(tz); err == nil {
+			t = t.In(loc)
+		}
+		vars["schedule.time"] = t.Format("2006-01-02 15:04 MST")
+	}
+	if len(payloads) == 0 {
+		return vars
+	}
+	p := payloads[len(payloads)-1]
+	ev := ReadEvent(p.Event, p.Body)
+	vars["event.name"], vars["event.action"], vars["event.delivery_id"] = p.Event, ev.Action, p.DeliveryID
+	vars["event.payload"] = string(p.Body)
+	if len(payloads) > 1 {
+		all, _ := json.Marshal(payloads)
+		vars["event.payload"] = string(all)
+	}
+	vars["repository"], vars["branch"], vars["sender"] = ev.Repository, ev.Branch, ev.Sender
+	var pr struct {
+		PullRequest *struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+		} `json:"pull_request"`
+	}
+	_ = json.Unmarshal(p.Body, &pr)
+	if pr.PullRequest != nil {
+		vars["pr.number"], vars["pr.title"], vars["pr.url"] = strconv.Itoa(pr.PullRequest.Number), pr.PullRequest.Title, pr.PullRequest.HTMLURL
+	}
+	return vars
+}
+
+// Substitute replaces {{ name }} with its value; an unknown name is left as written.
+func Substitute(text string, vars map[string]string) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(text, "{{")
+		if i < 0 {
+			b.WriteString(text)
+			return b.String()
+		}
+		j := strings.Index(text[i:], "}}")
+		if j < 0 {
+			b.WriteString(text)
+			return b.String()
+		}
+		name := strings.TrimSpace(text[i+2 : i+j])
+		b.WriteString(text[:i])
+		if v, ok := vars[name]; ok {
+			b.WriteString(v)
+		} else {
+			b.WriteString(text[i : i+j+2])
+		}
+		text = text[i+j+2:]
+	}
+}
+
+// eventEnv is a command's or server's DUDE_* environment.
+func eventEnv(payloads []Payload, a Automation, runID string) map[string]string {
+	env := map[string]string{"DUDE_AUTOMATION": a.ID, "DUDE_AUTOMATION_RUN": runID, "DUDE_OUTPUT_DIR": "/workspace/.dude/output"}
+	if len(payloads) > 0 {
+		p := payloads[len(payloads)-1]
+		env["DUDE_EVENT_PATH"], env["DUDE_EVENT_NAME"], env["DUDE_EVENT_ACTION"], env["DUDE_DELIVERY_ID"] = EventPath, p.Event, p.Action, p.DeliveryID
+	}
+	return env
+}
+
+// spec builds a run's lux spec; why is the reason it cannot run, in words.
+func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads []Payload, at *time.Time) (lux.Spec, string, error) {
+	in := phases.AutomationSpecInput{OrganizationID: a.Org, AutomationID: a.ID, RunID: runID, Kind: a.Kind}
+	var settings agentSettings
+	_ = json.Unmarshal(a.Agent, &settings)
+	var imageID, sizeID, tierID, harness string
+	var timeLimit int
+	why := ""
+	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		var projectModels, orgModels json.RawMessage = []byte("{}"), nil
+		if err := tx.QueryRow(ctx, `SELECT default_agent_models FROM organizations WHERE id = $1`, a.Org).Scan(&orgModels); err != nil {
+			return err
+		}
+		if a.ProjectID != "" {
+			if err := tx.QueryRow(ctx, `SELECT agent_models FROM projects WHERE id = $1`, a.ProjectID).Scan(&projectModels); err != nil {
+				return err
+			}
+		}
+		imageID, sizeID = a.ImageID, a.MachineSizeID
+		if a.Kind == "agent" {
+			own := settings.Own
+			role := "agent"
+			if settings.Preset != nil {
+				role = settings.Preset.Role
+				// The role's settings for this scope, as a task would get them;
+				// then what the automation overrides (Q6, Q15).
+				rs := delivery.ResolveRole(role, projectModels, orgModels)
+				tierID, timeLimit, harness = rs.Tier, rs.TimeLimit(), rs.HarnessName()
+				sizes, err := delivery.LoadSizes(ctx, tx)
+				if err != nil {
+					return err
+				}
+				if m, ok := sizes.ForRole(role, nil, projectModels, orgModels); ok {
+					sizeID = m.SizeID
+				}
+				imageID = images.RoleImage(role, projectModels, orgModels, func(string) bool { return true })
+				own = &settings.Preset.Overrides
+			}
+			if own != nil {
+				tierID, harness = cmpStr(own.TierID, tierID), cmpStr(own.Harness, harness)
+				sizeID, imageID = cmpStr(own.MachineSizeID, sizeID), cmpStr(own.ImageID, imageID)
+				if own.TimeLimitMinutes > 0 {
+					timeLimit = own.TimeLimitMinutes
+				}
+			}
+			tier, reason, err := delivery.TierFor(ctx, tx, role, delivery.RoleSettings{Tier: tierID})
+			if err != nil {
+				return err
+			}
+			if reason != "" {
+				why = strings.Replace(reason, "The "+delivery.RoleName(role), "The automation's agent", 1)
+				return nil
+			}
+			in.Role, in.Harness, in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = role, cmpStr(harness, delivery.HarnessOpenCode), tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
+			if timeLimit > 0 {
+				in.Timeout = strconv.Itoa(timeLimit) + "m"
+			}
+		}
+		sizes, err := delivery.LoadSizes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if m, ok := sizes.ForPreview(sizeID); ok {
+			in.Machine = &m
+		}
+		var site images.Site
+		site.Role, site.Fallback = imageID, r.Agent.DefaultImage
+		if a.ProjectID != "" {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(runtime_image_id, ''), COALESCE(runtime_image, '') FROM projects WHERE id = $1`,
+				a.ProjectID).Scan(&site.RuntimeID, &site.RuntimeTyped); err != nil {
+				return err
+			}
+		}
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(default_image_id, '') FROM organizations WHERE id = $1`, a.Org).Scan(&site.DefaultID); err != nil {
+			return err
+		}
+		id, ref := site.Pick()
+		var got *images.RunImage
+		if id != "" {
+			out, err := images.Resolve(ctx, tx, id, r.Agent.Layer, "")
+			if err != nil {
+				return err
+			}
+			if out.Fail != "" || out.WaitBuild != "" {
+				why = cmpStr(out.Fail, "its image is still being built")
+				return nil
+			}
+			ref, got = out.Ref, out.Image
+		}
+		in.Image, in.Nested = ref, site.Containers(got, r.Agent.NestedContainers)
+		if in.Repos, err = automationRepos(ctx, tx, a, payloads); err != nil {
+			return err
+		}
+		for i := range in.Repos {
+			if in.Repos[i].Setup == "" {
+				in.Repos[i].Setup = a.SetupScript
+			}
+		}
+		if in.Secrets, err = projectSecrets(ctx, tx, a); err != nil {
+			return err
+		}
+		var orgEgress, projectEgress []string
+		_ = tx.QueryRow(ctx, `SELECT COALESCE(agent_egress, '{}') FROM organizations WHERE id = $1`, a.Org).Scan(&orgEgress)
+		if a.ProjectID != "" {
+			_ = tx.QueryRow(ctx, `SELECT COALESCE(agent_egress, '{}') FROM projects WHERE id = $1`, a.ProjectID).Scan(&projectEgress)
+		}
+		in.Egress = append(orgEgress, projectEgress...)
+		return nil
+	})
+	if err != nil || why != "" {
+		return lux.Spec{}, why, err
+	}
+	switch a.Kind {
+	case "agent":
+		prompt, _, err := r.prompt(ctx, a, payloads, at)
+		if err != nil {
+			return lux.Spec{}, "", err
+		}
+		in.Prompt = prompt
+	case "command":
+		in.Command = a.Command
+	case "server":
+		var cfg struct {
+			Command string `json:"command"`
+			Port    int    `json:"port"`
+		}
+		_ = json.Unmarshal(a.Server, &cfg)
+		in.Command, in.Port = cfg.Command, cfg.Port
+	}
+	if a.Kind != "agent" {
+		in.Env = eventEnv(payloads, a, runID)
+		if len(payloads) > 0 {
+			body := []byte(payloads[len(payloads)-1].Body)
+			if len(payloads) > 1 {
+				body, _ = json.Marshal(payloads)
+			}
+			in.Files = map[string]string{EventPath: string(body)}
+		}
+	}
+	var gh *forge.GitHub
+	if r.Forges != nil {
+		if gh, err = r.Forges.For(ctx, a.Org); err != nil {
+			return lux.Spec{}, "", err
+		}
+	}
+	spec, err := phases.AutomationSpec(ctx, r.Agent, r.Registry, gh, in)
+	return spec, "", err
+}
+
+// automationRepos are what a run checks out: a project automation's
+// repositories (all, none or the ones named); an organisation's on a
+// schedule, every project's its filter covers; on an event, the event's
+// repository when one of the organisation's.
+func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Payload) ([]phases.AutomationRepo, error) {
+	type repo struct{ ID, Name, URL, Branch, Setup string }
+	rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, COALESCE(setup_script, '') FROM repositories
+		WHERE ($1 = '' OR project_id = $1) ORDER BY project_id, name`, a.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := pgx.CollectRows(rows, pgx.RowToStructByPos[repo])
+	if err != nil {
+		return nil, err
+	}
+	var picked []repo
+	var named []string
+	switch {
+	case a.ProjectID != "":
+		var which any
+		_ = json.Unmarshal(a.Repos, &which)
+		switch v := which.(type) {
+		case string:
+			if v == "all" {
+				picked = all
+			}
+		case []any:
+			for _, x := range v {
+				if s, ok := x.(string); ok {
+					named = append(named, s)
+				}
+			}
+			for _, r := range all {
+				if contains(named, r.ID) {
+					picked = append(picked, r)
+				}
+			}
+		}
+	case len(payloads) > 0:
+		ev := ReadEvent(payloads[len(payloads)-1].Event, payloads[len(payloads)-1].Body)
+		for _, r := range all {
+			if strings.EqualFold(slugOf(r.URL), ev.Repository) {
+				picked = append(picked, r)
+				break
+			}
+		}
+	default:
+		for _, r := range all {
+			if RepoAllowed(a.RepoFilter, slugOf(r.URL)) {
+				picked = append(picked, r)
+			}
+		}
+	}
+	out := make([]phases.AutomationRepo, 0, len(picked))
+	seen := map[string]bool{}
+	for _, r := range picked {
+		if seen[lux.SpecName(r.Name)] {
+			continue
+		}
+		seen[lux.SpecName(r.Name)] = true
+		out = append(out, phases.AutomationRepo{Name: r.Name, URL: r.URL, Ref: r.Branch, Setup: r.Setup})
+	}
+	return out, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// projectSecrets are the chosen secrets' values, as env. An organisation
+// automation has none to choose from (secrets are a project's).
+func projectSecrets(ctx context.Context, tx pgx.Tx, a Automation) ([]lux.Secret, error) {
+	if a.ProjectID == "" || len(a.Secrets) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2) ORDER BY name`, a.ProjectID, a.Secrets)
+	if err != nil {
+		return nil, err
+	}
+	var out []lux.Secret
+	var name, value string
+	_, err = pgx.ForEachRow(rows, []any{&name, &value}, func() error {
+		out = append(out, lux.Secret{Name: name, Value: value, As: "env"})
+		return nil
+	})
+	return out, err
+}
+
+func slugOf(url string) string { return forge.SlugFromURL(url) }
+
+// RunNow fires an automation on a person's word: on a schedule, nothing
+// (it queues behind a live run, Q7); with a past delivery, that delivery;
+// with a written test event, the event (always its own run, Q21). Refused
+// with the filter's name when the event would not match.
+func (r *Runner) RunNow(ctx context.Context, org, automationID, person string, deliveryID string, test *Payload) (string, Verdict, error) {
+	var runID string
+	var verdict Verdict
+	err := r.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		a, err := Load(ctx, tx, automationID)
+		if err != nil {
+			return err
+		}
+		if a.Trigger.Kind == "schedule" {
+			if deliveryID != "" || test != nil {
+				return fmt.Errorf("%w: a scheduled automation runs on no event", ErrBadRequest)
+			}
+			now := r.now()
+			runID, err = Fire(ctx, tx, a, SourceRunNow, nil, person, &now)
+			verdict = Verdict{Matches: true}
+			return err
+		}
+		var p Payload
+		switch {
+		case test != nil:
+			p = *test
+		case deliveryID != "":
+			if err := tx.QueryRow(ctx, `SELECT id, event, payload FROM webhook_deliveries WHERE id = $1`, deliveryID).Scan(&p.DeliveryID, &p.Event, &p.Body); err != nil {
+				if db.IsNotFound(err) {
+					return fmt.Errorf("%w: no stored delivery %s", ErrNotFound, deliveryID)
+				}
+				return err
+			}
+		default:
+			return fmt.Errorf("%w: an event automation runs on a past delivery or a test event", ErrBadRequest)
+		}
+		ev := ReadEvent(p.Event, p.Body)
+		p.Action = ev.Action
+		if verdict, err = r.Evaluate(ctx, tx, a, ev); err != nil || !verdict.Matches {
+			return err
+		}
+		runID, err = Fire(ctx, tx, a, SourceTest, []Payload{p}, person, nil)
+		return err
+	})
+	return runID, verdict, err
+}
+
+// Refusals RunNow's callers answer with a 400 or 404.
+var (
+	ErrBadRequest = errors.New("bad request")
+	ErrNotFound   = errors.New("not found")
+)

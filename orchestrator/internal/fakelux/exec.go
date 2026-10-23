@@ -349,6 +349,23 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 	defer close(command.done)
 	cmd := exec.CommandContext(ctx, args[0], s.inWorkspace(run, args[1:])...)
 	cmd.Dir = dir
+	if runsToEnd(spec) {
+		// The workload's environment, as lux's shim gives it: the spec's env
+		// and env secrets over the process's, and its file secrets placed.
+		cmd.Env = os.Environ()
+		for k, v := range s.processEnv(run, &server{}) {
+			cmd.Env = append(cmd.Env, k+"="+strings.ReplaceAll(v, workspaceRoot, run.workspace))
+		}
+		var typed lux.Spec
+		_ = json.Unmarshal(run.Spec, &typed)
+		for _, sec := range typed.Secrets {
+			if sec.As == "file" && strings.HasPrefix(sec.Path, workspaceRoot+"/") {
+				path := strings.Replace(sec.Path, workspaceRoot, run.workspace, 1)
+				_ = os.MkdirAll(filepath.Dir(path), 0o700)
+				_ = os.WriteFile(path, []byte(run.secretValues[sec.Name]), 0o600)
+			}
+		}
+	}
 	// Kill the shell and its children together; bound pipe draining even if
 	// a descendant escapes the process group while retaining stdout/stderr.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
