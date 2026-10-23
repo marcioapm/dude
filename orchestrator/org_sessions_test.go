@@ -177,7 +177,9 @@ func TestOrgSessionOpenListCountsTheJoined(t *testing.T) {
 	if _, ok := mine[notJoined]; ok {
 		t.Errorf("a not-joined organisation session is in Ana's Sessions")
 	}
-	// The sidebar's numbers ride on Sessions: three open, one joined and active.
+	// The sidebar's numbers ride on Sessions: three open, one joined and
+	// active; Ana's private session is not one of them.
+	s.join(private, s.ana, "chat")
 	if got := s.ok(s.ana, "GET", "/internal/sessions", nil)["organisation"]; got == nil ||
 		got.(map[string]any)["count"] != float64(3) || got.(map[string]any)["joined"] != float64(1) {
 		t.Errorf("Ana's organisation summary %v, want count 3 joined 1", got)
