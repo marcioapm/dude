@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -61,6 +62,36 @@ func TestEnvKeyNeedsNoLogin(t *testing.T) {
 	base, key, err := resolve("")
 	if err != nil || base != "https://dude.example" || key != "from-env" {
 		t.Fatalf("%q %q %v", base, key, err)
+	}
+}
+
+func TestEnvURLCannotRedirectStoredKey(t *testing.T) {
+	for _, file := range []bool{false, true} {
+		t.Run(fmt.Sprint(file), func(t *testing.T) {
+			isolate(t, file)
+			if _, err := login("acme", "https://stored.example", "stored-key", false); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("DUDE_URL", "https://other.example")
+			base, key, err := resolve("")
+			if err == nil || base != "" || key != "" {
+				t.Fatalf("redirected stored key: %q %q %v", base, key, err)
+			}
+			for _, part := range []string{"https://other.example", "https://stored.example", "DUDE_API_KEY", "unset DUDE_URL"} {
+				if !strings.Contains(err.Error(), part) {
+					t.Fatalf("missing %q: %v", part, err)
+				}
+			}
+			t.Setenv("DUDE_URL", "https://stored.example/")
+			if _, key, err := resolve(""); err != nil || key != "stored-key" {
+				t.Fatalf("same URL: %q %v", key, err)
+			}
+			t.Setenv("DUDE_API_KEY", "env-key")
+			t.Setenv("DUDE_URL", "https://ci.example/")
+			if base, key, err := resolve(""); err != nil || base != "https://ci.example" || key != "env-key" {
+				t.Fatalf("CI override: %q %q %v", base, key, err)
+			}
+		})
 	}
 }
 

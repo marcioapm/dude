@@ -193,6 +193,9 @@ func resolve(flagOrg string) (base, key string, err error) {
 		if envKey != "" {
 			return strings.TrimRight(base, "/"), envKey, nil
 		}
+		if envURL != "" && strings.TrimRight(envURL, "/") != strings.TrimRight(p.URL, "/") {
+			return "", "", fmt.Errorf("DUDE_URL %q differs from %s's stored URL %q: set DUDE_API_KEY too, or unset DUDE_URL", envURL, slug, p.URL)
+		}
 		if p.Key != "" {
 			return base, p.Key, nil
 		}

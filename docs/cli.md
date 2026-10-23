@@ -104,6 +104,10 @@ printed, and never passed on a command line, not even to `security` or
 `DUDE_URL` names the server; it defaults to the logged-in organisation's,
 else `https://dude.absmartly.dev`.
 
+With a stored profile, changing `DUDE_URL`
+requires `DUDE_API_KEY` too: otherwise the CLI refuses to send the stored
+key to a different URL. Unset `DUDE_URL` to use the profile's server.
+
 ```sh
 DUDE_URL=https://dude.acme.dev DUDE_API_KEY=$KEY dude list WEB --status review
 ```
