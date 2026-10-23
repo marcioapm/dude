@@ -445,9 +445,20 @@ func (r *Runner) matchDeliveries(ctx context.Context) (int, error) {
 			if berr := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
 				if last {
 					// Dropped after its last try: each automation it was
-					// still to be matched against says so in its Runs.
-					if err := skipUnmatched(ctx, tx, d, "it could not be matched: "+err.Error()); err != nil {
-						return err
+					// still to be matched against says so in its Runs. Under
+					// a savepoint: the fault that failed the match may refuse
+					// these too, and the delivery is marked read regardless.
+					sp, spErr := tx.Begin(ctx)
+					if spErr != nil {
+						return spErr
+					}
+					if serr := skipUnmatched(ctx, sp, d, "it could not be matched: "+err.Error()); serr != nil {
+						r.Log.Warn("recording a dropped delivery's skipped runs failed", "delivery", d.ID, "error", serr)
+						if rerr := sp.Rollback(ctx); rerr != nil {
+							return rerr
+						}
+					} else if cerr := sp.Commit(ctx); cerr != nil {
+						return cerr
 					}
 				}
 				_, err := tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_attempts = automations_attempts + 1,

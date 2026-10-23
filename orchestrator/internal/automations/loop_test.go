@@ -741,3 +741,29 @@ func TestAutomationDeliveryDroppedAfterItsLastTryLeavesASkippedRun(t *testing.T)
 		t.Fatalf("marked %v runs %+v", marked, r)
 	}
 }
+
+// A delivery whose skipped runs are refused too, by the same fault that
+// failed its match, is still marked read after MatchAttempts: never retried
+// on every pass.
+func TestAutomationDeliveryDroppedEvenWhenItsSkippedRunsFail(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_drop2", "command", map[string]any{"kind": "github", "event": "push"}, map[string]any{"command": "echo pushed"})
+	exec(t, h.owner, `CREATE FUNCTION refuse_drop2() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'refused for the test'; END $$`)
+	exec(t, h.owner, `CREATE TRIGGER refuse_drop2 BEFORE INSERT ON automation_runs FOR EACH ROW
+		WHEN (NEW.payloads @> '[{"deliveryId": "d-drop2"}]') EXECUTE FUNCTION refuse_drop2()`)
+	h.deliver("d-drop2", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	for i := 0; i < MatchAttempts; i++ {
+		_, _ = h.runner.Sweep(context.Background())
+		h.advance(11 * time.Minute)
+	}
+	var marked bool
+	var attempts int
+	if err := h.owner.QueryRow(context.Background(), `SELECT automations_at IS NOT NULL, automations_attempts
+		FROM webhook_deliveries WHERE id = 'd-drop2'`).Scan(&marked, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.runs("aut_drop2"); !marked || attempts != MatchAttempts || len(r) != 0 {
+		t.Fatalf("after %d sweeps: marked %v attempts %d runs %+v", MatchAttempts, marked, attempts, r)
+	}
+}
