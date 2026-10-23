@@ -444,44 +444,35 @@ func TestBotsAndTheFactoryItselfAreNotFeedback(t *testing.T) {
 }
 
 // A reviewer posting as a person keeps a status comment on the pull request
-// ("Review in progress") while it works; on a dogfood task that woke a fixer that
-// had nothing to do. Its review, or a line comment, still counts.
+// while it works; that woke a fixer with nothing to do. Its review, or a line
+// comment, still counts, and so does a plain request from the same account.
 func TestAToolsStatusCommentIsNotARequest(t *testing.T) {
-	status := comment("<!-- reviewbot:review-status -->\n**Review in progress**\n\nAn automated review is running against the exact head below.")
+	status := comment("<!-- reviewbot:review-status -->\n**Review in progress**")
 	status.Author = "review-service"
-	if IsActionableComment(status, nil) {
-		t.Error("a tool's status comment was treated as a request")
-	}
 	if s := Classify(prior, open, []Feedback{status}, nil); s != nil {
 		t.Errorf("a status comment produced a signal: %+v", s)
 	}
-	for _, kind := range []string{KindReview, KindLineComment, KindChangesRequested} {
-		f := status
-		f.Kind = kind
-		f.Body = "<!-- reviewbot:review -->\nPlease rename `foo` to `bar`."
-		if !IsActionableComment(f, nil) {
-			t.Errorf("a %s that opens with a marker was filtered out", kind)
-		}
-	}
-	// However the tool spaces it.
-	for _, body := range []string{"\n<!-- reviewbot:review-status -->\nReview in progress",
-		"  <!-- reviewbot:review-status -->\r\nReview in progress\r\n", "<!-- reviewbot:review-status -->"} {
+	for _, body := range []string{status.Body, "\n<!-- x -->\nReview in progress", "  <!-- x -->\r\nReview in progress\r\n", "<!-- x -->"} {
 		f := status
 		f.Body = body
 		if IsActionableComment(f, nil) {
 			t.Errorf("status comment %q was treated as a request", body)
 		}
 	}
-	// A person quoting a marker mid-comment is still asking.
-	if !IsActionableComment(comment("Why does the <!-- preview --> comment say failed?"), nil) {
-		t.Error("a question mentioning a marker was filtered out")
+	for _, kind := range []string{KindReview, KindLineComment, KindChangesRequested} {
+		f := status
+		f.Kind = kind
+		if !IsActionableComment(f, nil) {
+			t.Errorf("a %s that opens with a marker was filtered out", kind)
+		}
 	}
-	// The same author asking in plain words is still asking, beside its
-	// status comment: the signal carries the request alone.
+	if !IsActionableComment(comment("Why does the <!-- preview --> comment say failed?"), nil) {
+		t.Error("a question mentioning a marker mid-comment was filtered out")
+	}
 	ask := comment("Please rename `foo` to `bar`.")
-	ask.ID, ask.Author = "ask", status.Author
+	ask.Author = status.Author
 	s := Classify(prior, open, []Feedback{status, ask}, nil)
-	if s == nil || s.Kind != "actionable" || len(s.Feedback) != 1 || s.Feedback[0].ID != "ask" {
+	if s == nil || s.Kind != "actionable" || len(s.Feedback) != 1 || s.Feedback[0].ID != ask.ID {
 		t.Errorf("a request beside a status comment: %+v", s)
 	}
 }
