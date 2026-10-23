@@ -150,6 +150,28 @@ test("a tab named something else (by a page script, a link's target) is named an
   expect(window.name).toBe((session as { dudeWindow: string }).dudeWindow);
 });
 
+test("a tab whose name the browser won't set sends sessions without a window name, still valid by the protocol", () => {
+  const own = Object.getOwnPropertyDescriptor(window, "name");
+  const setters: Array<[string, (v: string) => void]> = [["ignores writes", () => {}], ["throws", () => { throw new Error("refused"); }]];
+  try {
+    for (const [what, set] of setters) {
+      Object.defineProperty(window, "name", { configurable: true, get: () => "", set });
+      c.dispose();
+      popup.postMessage.mockClear();
+      boot();
+      c.open(`${WEB}/cart`, "web");
+      post({ type: "hello", v: 1, url: `${WEB}/cart` });
+      const session = told().find((m) => m.type === "session");
+      expect([what, session?.type]).toEqual([what, "session"]);
+      expect([what, session && "dudeWindow" in session]).toEqual([what, false]);
+      expect([what, overlaySessionSchema.safeParse(session).success]).toEqual([what, true]);
+    }
+  } finally {
+    if (own) Object.defineProperty(window, "name", own);
+    else delete (window as { name?: string }).name;
+  }
+});
+
 test("a message from an origin that is not one of this task's previews is ignored", async () => {
   c.open(`${WEB}/cart`, "web");
   post({ type: "draft", v: 1, nonce: "n", body: "x", anchor: anchor({ url: "https://evil.example.test/cart" }) }, "https://evil.example.test");

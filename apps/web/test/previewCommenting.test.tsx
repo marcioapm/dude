@@ -239,6 +239,7 @@ test("a card's Page link on a page commenting can't reach stays a plain link", a
   const cases: Array<[string, RunServer[], string]> = [
     ["commenting off", [web({ commenting: { available: false, reason: "public_url" } })], `${WEB}/cart`],
     ["an earlier preview's hostname", [web()], "https://web-old-1.preview.example.test/cart"],
+    ["a server not ready yet", [web({ state: "starting", serverState: "starting" })], `${WEB}/cart`],
   ];
   for (const [what, servers, url] of cases) {
     const open = stubOpen();
