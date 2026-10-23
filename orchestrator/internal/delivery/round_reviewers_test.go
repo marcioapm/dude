@@ -172,6 +172,21 @@ func TestALaterRoundsReviewersFollowItsOwnChangeNotTheWholeTasks(t *testing.T) {
 	}
 }
 
+// A rename out of migrations into docs: the old path is product and a
+// migration, so the round runs database by its paths and the required
+// reviewers, though the new path alone is non-product.
+func TestALaterRoundCountsARenamesOldPath(t *testing.T) {
+	r := newLaterRound(t).firstRound()
+	r.files = []map[string]any{{"filename": "docs/old_schema.md", "previous_filename": "migrations/031_x.sql", "status": "renamed", "additions": 0, "deletions": 0}}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "database", "performance"}) {
+		t.Fatalf("reviewers %v", got)
+	}
+	if !slices.Equal(why["database"], []string{ReasonPaths}) || !slices.Equal(why["tests"], []string{ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+}
+
 func TestALargeLaterRoundRunsTheFirstRoundsReviewers(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.files[0]["additions"] = MaxResumeDeltaLines
