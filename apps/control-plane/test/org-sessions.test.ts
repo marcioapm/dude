@@ -174,3 +174,47 @@ test("someone not in an organisation session may say they have it open; opening 
   const [closed] = await owner`SELECT open_at IS NULL AS closed FROM session_viewers WHERE session_id = 'ssn_open' AND person_id = ${gus.personId}`;
   expect(closed).toEqual({ closed: true });
 });
+
+test("the ledger shows each person the events session_visible gives them, over private, organisation and admin-owned sessions", async () => {
+  // A world of its own: an organisation with a member, a reader, an admin,
+  // a removed person and an outsider, and every kind of session.
+  const org = "org_lv";
+  await owner`INSERT INTO organizations (id, name, slug) VALUES (${org}, 'Acme', 'acme-lv'), ('org_lv_far', 'Far', 'far-lv')`;
+  await owner`INSERT INTO people (id, organization_id, name, role) VALUES
+    ('per_lv_own', ${org}, 'Own', 'member'), ('per_lv_rd', ${org}, 'Reader', 'member'), ('per_lv_mem', ${org}, 'Mem', 'member'),
+    ('per_lv_adm', ${org}, 'Adm', 'admin'), ('per_lv_gone', ${org}, 'Gone', 'admin'), ('per_lv_far', 'org_lv_far', 'Far', 'member')`;
+  await owner`UPDATE people SET removed_at = now() WHERE id = 'per_lv_gone'`;
+  await owner`INSERT INTO sessions (id, organization_id, title, access, owned_by_admins) VALUES
+    ('ssn_lv_priv', ${org}, 'P', 'private', false), ('ssn_lv_org', ${org}, 'O', 'organisation', false),
+    ('ssn_lv_adm', ${org}, 'A', 'private', true), ('ssn_lv_far', 'org_lv_far', 'F', 'organisation', false)`;
+  await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at) VALUES
+    ('ssn_lv_priv', 'per_lv_own', ${org}, 'owner', now()), ('ssn_lv_priv', 'per_lv_rd', ${org}, 'read', now()),
+    ('ssn_lv_priv', 'per_lv_gone', ${org}, 'chat', now()),
+    ('ssn_lv_org', 'per_lv_own', ${org}, 'owner', now()),
+    ('ssn_lv_adm', 'per_lv_gone', ${org}, 'owner', now()), ('ssn_lv_adm', 'per_lv_rd', ${org}, 'read', now()),
+    ('ssn_lv_far', 'per_lv_far', 'org_lv_far', 'owner', now())`;
+  await owner`INSERT INTO session_people (session_id, person_id, organization_id, role) VALUES ('ssn_lv_priv', 'per_lv_mem', ${org}, 'chat')`;
+  let n = 0;
+  for (const session of ["ssn_lv_priv", "ssn_lv_org", "ssn_lv_adm", "ssn_lv_nosuch", null]) {
+    for (let i = 0; i < 3; i++) {
+      await owner`INSERT INTO events (id, organization_id, event_type, session_id, actor_type, actor_id, source, payload)
+        VALUES (${`evt_lv_${n++}`}, ${org}, 'chat.message', ${session}, 'human', 'x', 'test', '{}')`;
+    }
+  }
+  const { query } = await import("../src/events/ledger.ts");
+  for (const person of ["per_lv_own", "per_lv_rd", "per_lv_mem", "per_lv_adm", "per_lv_gone", "per_lv_far"]) {
+    const want = [...await owner`SELECT id, session_id FROM events WHERE organization_id = ${org} AND session_visible(session_id, ${person})
+      ORDER BY cursor`] as Array<{ id: string; session_id: string | null }>;
+    for (const sessionId of [undefined, "ssn_lv_priv", "ssn_lv_org", "ssn_lv_adm"]) {
+      const got = (await query(org, { viewer: person, limit: 1000, sessionId })).map((e) => e.eventId);
+      const expected = want.filter((r) => !sessionId || r.session_id === sessionId).map((r) => r.id);
+      expect({ person, sessionId, got }).toEqual({ person, sessionId, got: expected });
+    }
+  }
+  // The world is mixed enough to tell: each person sees a different set.
+  const counts = new Map<string, number>();
+  for (const person of ["per_lv_own", "per_lv_rd", "per_lv_mem", "per_lv_adm", "per_lv_gone"]) {
+    counts.set(person, (await query(org, { viewer: person, limit: 1000 })).length);
+  }
+  expect(Object.fromEntries(counts)).toEqual({ per_lv_own: 12, per_lv_rd: 15, per_lv_mem: 9, per_lv_adm: 12, per_lv_gone: 6 });
+});

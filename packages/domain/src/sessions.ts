@@ -88,11 +88,19 @@ export interface OpenSessionSummary {
   runStatus: string | null;
   lastActivityAt: string;
   ownedByAdmins: boolean;
+  /** Its owner archived it: listed under "Archived by owner", not Active. */
+  archivedByOwner: boolean;
 }
 
 export interface OpenSessionsList {
   sessions: OpenSessionSummary[];
   /** The sidebar's count: the active organisation sessions you have joined. */
+  joined: number;
+}
+
+/** The sidebar's Open to everyone row: how many sessions are open to the organisation, and how many of them you joined (active). */
+export interface OpenSessionsCount {
+  count: number;
   joined: number;
 }
 
@@ -141,6 +149,8 @@ export interface SessionsList {
   questions: SessionQuestionLine[];
   /** Absent from an older orchestrator. */
   mentions?: SessionMentionLine[];
+  /** Absent from an older orchestrator. */
+  organisation?: OpenSessionsCount;
 }
 
 export interface SessionMemberView {

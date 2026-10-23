@@ -107,9 +107,10 @@ func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, or
 
 // listOpenSessions is every session open to the organisation, each saying
 // whether the caller joined it (is one of its accepted people and has not
-// archived it: an active one of theirs), joined first, and how many they
-// joined: the sidebar's "Open to everyone" count. Never a word of the
-// conversation.
+// archived it: an active one of theirs), joined first, whether its owner
+// archived it (the screen's "Archived by owner"), and how many they joined.
+// Never a word of the conversation. Only the Open to everyone screen reads
+// it; the sidebar's count comes with listSessions.
 func (s *Server) listOpenSessions(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -123,6 +124,8 @@ func (s *Server) listOpenSessions(w http.ResponseWriter, r *http.Request, org st
 			SELECT s.id, s.title, s.owned_by_admins AS "ownedByAdmins",
 				(SELECT person_ref(o) FROM session_people so JOIN people o ON o.id = so.person_id
 				 WHERE so.session_id = s.id AND so.role = 'owner') AS owner,
+				EXISTS (SELECT 1 FROM session_people so WHERE so.session_id = s.id AND so.role = 'owner'
+				  AND so.archived_at IS NOT NULL) AS "archivedByOwner",
 				EXISTS (SELECT 1 FROM session_people me WHERE me.session_id = s.id AND me.person_id = $1
 				  AND me.accepted_at IS NOT NULL AND me.archived_at IS NULL) AS joined,
 				(SELECT count(*) FROM session_people sp JOIN people pp ON pp.id = sp.person_id

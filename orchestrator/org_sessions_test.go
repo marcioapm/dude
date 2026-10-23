@@ -177,6 +177,52 @@ func TestOrgSessionOpenListCountsTheJoined(t *testing.T) {
 	if _, ok := mine[notJoined]; ok {
 		t.Errorf("a not-joined organisation session is in Ana's Sessions")
 	}
+	// The sidebar's numbers ride on Sessions: three open, one joined and active.
+	if got := s.ok(s.ana, "GET", "/internal/sessions", nil)["organisation"]; got == nil ||
+		got.(map[string]any)["count"] != float64(3) || got.(map[string]any)["joined"] != float64(1) {
+		t.Errorf("Ana's organisation summary %v, want count 3 joined 1", got)
+	}
+	// Its owner archives one: it is archived by owner for everyone, and still listed.
+	s.ok(s.marcio, "POST", "/internal/sessions/"+notJoined+"/archive", nil)
+	byOwner := map[string]bool{}
+	for _, row := range s.ok(s.ana, "GET", "/internal/sessions/open", nil)["sessions"].([]any) {
+		m := row.(map[string]any)
+		byOwner[m["id"].(string)] = m["archivedByOwner"].(bool)
+	}
+	if len(byOwner) != 3 || !byOwner[notJoined] || byOwner[joined] || byOwner[archived] {
+		t.Errorf("archived by owner %v, want only %s", byOwner, notJoined)
+	}
+}
+
+// The Sessions list is the caller's own sessions and, for an admin, those
+// its admins own; never another's private session, nor an admin-owned one
+// for a member, nor one of another organisation.
+func TestOrgSessionListIsYoursAndTheAdminOwned(t *testing.T) {
+	s := newSessionWorld(t)
+	mine := s.session()
+	s.join(mine, s.ana, "chat")
+	theirs := s.session()
+	adminOwned := s.session()
+	s.join(adminOwned, s.joao, "chat")
+	mustExec(t, s.owner, `UPDATE sessions SET owned_by_admins = true WHERE id = $1`, adminOwned)
+	for who, want := range map[string][]string{
+		s.ana:   {mine},
+		s.admin: {adminOwned},
+		s.joao:  {adminOwned},
+	} {
+		got := s.listed(who, false)
+		if len(got) != len(want) {
+			t.Errorf("%s lists %v, want %v", who, got, want)
+		}
+		for _, id := range want {
+			if _, ok := got[id]; !ok {
+				t.Errorf("%s does not list %s", who, id)
+			}
+		}
+		if _, ok := got[theirs]; ok {
+			t.Errorf("%s lists a private session they are not in", who)
+		}
+	}
 }
 
 // ownerLeaves marks Márcio removed from the organisation and his session

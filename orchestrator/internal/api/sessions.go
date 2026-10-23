@@ -379,13 +379,14 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 		return err
 	}
 	archived := r.URL.Query().Get("archived") == "1"
-	var sessions, invitations, questions, mentions json.RawMessage
+	var sessions, invitations, questions, mentions, organisation json.RawMessage
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// Yours: those you accepted, and, for an admin, those its admins own
 		// (their owner left). An organisation session you never joined is
-		// listed by listOpenSessions instead.
+		// listed by listOpenSessions instead. Driven from those candidates,
+		// so the cost is your sessions', not the organisation's.
 		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."lastActivityAt" DESC), '[]') FROM (
-			SELECT s.id, s.title, session_role(s.id, $1) AS role, s.created_at AS "createdAt", COALESCE(me.archived_at IS NOT NULL, false) AS archived,
+			SELECT s.id, s.title, s.role, s.created_at AS "createdAt", COALESCE(me.archived_at IS NOT NULL, false) AS archived,
 				(SELECT person_ref(o) FROM session_people so JOIN people o ON o.id = so.person_id
 				 WHERE so.session_id = s.id AND so.role = 'owner') AS owner,
 				(SELECT count(*) FROM session_people sp WHERE sp.session_id = s.id AND sp.accepted_at IS NOT NULL) > 1 AS shared,
@@ -395,11 +396,20 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 				(SELECT r.dude_pause FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1) AS "dudePause",
 				(SELECT count(*) FROM session_filings f WHERE f.session_id = s.id) AS filed,
 				COALESCE((SELECT max(e.occurred_at) FROM events e WHERE e.session_id = s.id), s.created_at) AS "lastActivityAt"
-			FROM sessions s LEFT JOIN session_people me ON me.session_id = s.id AND me.person_id = $1 AND me.accepted_at IS NOT NULL
-			WHERE (me.person_id IS NOT NULL OR (s.owned_by_admins AND session_role(s.id, $1) = 'owner'))
-			  AND session_role(s.id, $1) IS NOT NULL
+			FROM (SELECT c.*, session_role(c.id, $1) AS role FROM sessions c
+				WHERE c.id IN (SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL
+				               UNION ALL SELECT id FROM sessions WHERE owned_by_admins)) s
+			LEFT JOIN session_people me ON me.session_id = s.id AND me.person_id = $1 AND me.accepted_at IS NOT NULL
+			WHERE s.role IS NOT NULL AND (me.person_id IS NOT NULL OR (s.owned_by_admins AND s.role = 'owner'))
 			  AND ($2 OR me.archived_at IS NULL)) x`,
 			p.Person, archived).Scan(&sessions); err != nil {
+			return err
+		}
+		// The sidebar's Open to everyone row: no list, only its numbers.
+		if err := tx.QueryRow(r.Context(), `SELECT json_build_object('count', count(*),
+				'joined', count(*) FILTER (WHERE EXISTS (SELECT 1 FROM session_people me WHERE me.session_id = s.id
+				  AND me.person_id = $1 AND me.accepted_at IS NOT NULL AND me.archived_at IS NULL)))
+			FROM sessions s WHERE s.access = 'organisation'`, p.Person).Scan(&organisation); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."invitedAt" DESC), '[]') FROM (
@@ -439,7 +449,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 	if err != nil {
 		return err
 	}
-	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions, "mentions": mentions})
+	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions, "mentions": mentions, "organisation": organisation})
 	return nil
 }
 

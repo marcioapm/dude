@@ -174,18 +174,25 @@ const MAX_LIMIT = 1000;
  */
 export async function query(organizationId: string, q: EventQuery = {}): Promise<PersistedEvent[]> {
   const limit = Math.min(Math.max(q.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const viewer = q.viewer ?? null;
+  const sessionId = q.sessionId ?? null;
 
   return withOrg(organizationId, async (scope) => {
+    // session_visible, with the sessions the viewer may read computed once
+    // per query (one session_role per session, not per event).
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(EVENT_COLUMNS)} FROM events
       WHERE (${q.after ?? null}::bigint IS NULL OR cursor > ${q.after ?? null}::bigint)
-        AND (${q.sessionId ?? null}::text IS NULL OR session_id = ${q.sessionId ?? null})
+        AND (${sessionId}::text IS NULL OR session_id = ${sessionId})
         AND (${q.runId ?? null}::text IS NULL OR run_id = ${q.runId ?? null})
         AND (${q.taskId ?? null}::text IS NULL OR task_id = ${q.taskId ?? null})
         AND (${q.projectId ?? null}::text IS NULL OR project_id = ${q.projectId ?? null})
         AND (${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[] IS NULL
              OR event_type = ANY(${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[]))
-        AND (${q.viewer ?? null}::text IS NULL OR session_visible(session_id, ${q.viewer ?? null}))
+        AND (${viewer}::text IS NULL OR session_id IS NULL
+             OR session_id IN (SELECT s.id FROM sessions s WHERE (${sessionId}::text IS NULL OR s.id = ${sessionId})
+                                 AND session_role(s.id, ${viewer}) IS NOT NULL)
+             OR NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = events.session_id))
       ORDER BY cursor ASC
       LIMIT ${limit}`) as EventRow[];
     return rows.map(toPersisted);

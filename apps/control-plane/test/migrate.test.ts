@@ -1116,7 +1116,7 @@ test("190 keeps existing sessions private, opens them one way only, and lets the
       ('ssn_adm_priv', 'per_adm', 'org_s', 'chat', now()),
       ('ssn_far', 'per_far', 'org_t', 'owner', now())`;
     await sql`INSERT INTO session_people (session_id, person_id, organization_id, role) VALUES ('ssn_priv', 'per_mem', 'org_s', 'chat')`;
-    const differ = await sql`SELECT s.id AS session, p.id AS person, session_role(s.id, p.id) AS got, (SELECT CASE
+    const differ = async () => [...await sql`SELECT s.id AS session, p.id AS person, session_role(s.id, p.id) AS got, (SELECT CASE
         WHEN me.id IS NULL THEN NULL
         WHEN x.owned_by_admins AND me.role = 'admin' THEN 'owner'
         WHEN sp.role IS NOT NULL THEN CASE WHEN x.access = 'organisation' AND sp.role = 'read' THEN 'chat' ELSE sp.role END
@@ -1125,10 +1125,23 @@ test("190 keeps existing sessions private, opens them one way only, and lets the
       LEFT JOIN session_people sp ON sp.session_id = x.id AND sp.person_id = p.id AND sp.accepted_at IS NOT NULL
       LEFT JOIN people me ON me.id = p.id AND me.organization_id = x.organization_id AND me.removed_at IS NULL
       WHERE x.id = s.id) AS want
-      FROM sessions s CROSS JOIN people p`;
-    expect(differ.length).toBe(30);
-    expect([...differ].filter((r: { got: string | null; want: string | null }) => r.got !== r.want)).toEqual([]);
-    expect(new Set([...differ].map((r: { got: string | null }) => r.got))).toEqual(new Set(["owner", "chat", "read", null]));
+      FROM sessions s CROSS JOIN people p`] as Array<{ session: string; person: string; got: string | null; want: string | null }>;
+    const all = await differ();
+    expect(all.length).toBe(30);
+    expect(all.filter((r) => r.got !== r.want)).toEqual([]);
+    expect(new Set(all.map((r) => r.got))).toEqual(new Set(["owner", "chat", "read", null]));
+    // The owner of the open session removed, the admin made a member, then
+    // the removed person back: the answer follows people at once.
+    await sql`UPDATE people SET removed_at = now() WHERE id = 'per_mem'`;
+    await sql`UPDATE people SET role = 'member' WHERE id = 'per_adm'`;
+    expect((await differ()).filter((r) => r.got !== r.want)).toEqual([]);
+    expect((await sql`SELECT session_role('ssn_org', 'per_mem') AS r`)[0].r).toBe(null);
+    expect((await sql`SELECT session_role('ssn_adm_priv', 'per_adm') AS r`)[0].r).toBe("chat");
+    await sql`UPDATE people SET removed_at = NULL WHERE id = 'per_mem'`;
+    await sql`UPDATE people SET role = 'admin' WHERE id = 'per_adm'`;
+    expect((await differ()).filter((r) => r.got !== r.want)).toEqual([]);
+    expect((await sql`SELECT session_role('ssn_org', 'per_mem') AS r`)[0].r).toBe("owner");
+    expect((await sql`SELECT session_role('ssn_adm_priv', 'per_adm') AS r`)[0].r).toBe("owner");
 
     // The notifier's mention sweep has its own partial index, built concurrently.
     expect([...await sql`SELECT i.indisvalid AS valid FROM pg_index i WHERE i.indexrelid = to_regclass('events_session_mentioned_idx')`])
