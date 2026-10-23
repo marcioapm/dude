@@ -348,6 +348,55 @@ describe("runs", () => {
   });
 });
 
+describe("delete and duplicate", () => {
+  test("Duplicate copies the settings off, as '<name> (copy)', owned by the caller, with no runs or history; members get 403", async () => {
+    const { body: a } = await create("ana", { name: "Label PRs", projectId: WEB });
+    const settings = { name: "Label PRs", kind: "agent", trigger: { kind: "github", event: "pull_request", actions: ["opened"], filters: {} },
+      agent: { own: { prompt: "Label {{pr.title}}." } }, concurrency: "skip" };
+    expect((await call("ana", "PUT", `/v1/automations/${a.id}`, settings)).status).toBe(200);
+    await call("ana", "PUT", `/v1/automations/${a.id}/enabled`, { enabled: true });
+    // Bo owns it, but members do not edit a project's automations.
+    await call("ana", "PUT", `/v1/automations/${a.id}/owner`, { personId: people.bo });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_dup', ${ORG}, ${a.id}, 'succeeded', 'event')`;
+
+    expect((await call("bo", "POST", `/v1/automations/${a.id}/duplicate`)).status).toBe(403);
+    const res = await call("ana", "POST", `/v1/automations/${a.id}/duplicate`);
+    expect(res.status).toBe(201);
+    const copy = await body(res);
+    expect(copy).toMatchObject({ name: "Label PRs (copy)", enabled: false, projectId: WEB, owner: { id: people.ana }, concurrency: "skip",
+      trigger: { event: "pull_request", actions: ["opened"] }, agent: { own: { prompt: "Label {{pr.title}}." } }, lastRun: null });
+    expect(copy.id).not.toBe(a.id);
+    expect((await body(await call("ana", "GET", `/v1/automations/${copy.id}/runs`))).total).toBe(0);
+    expect((await body(await call("ana", "GET", `/v1/automations/${copy.id}/prompt-history`))).versions).toEqual([]);
+  });
+
+  test("a duplicated webhook gets a signing secret of its own", async () => {
+    const { body: a } = await create("ana", { name: "Notify", kind: "webhook", trigger: "github" });
+    const copy = await body(await call("ana", "POST", `/v1/automations/${a.id}/duplicate`));
+    const [x, y] = await owner`SELECT id, webhook_secret FROM automations WHERE id IN (${a.id}, ${copy.id}) ORDER BY id = ${a.id} DESC` as Array<{ webhook_secret: string }>;
+    expect(x!.webhook_secret).toStartWith("whsec_");
+    expect(y!.webhook_secret).toStartWith("whsec_");
+    expect(x!.webhook_secret).not.toBe(y!.webhook_secret);
+  });
+
+  test("Delete removes it with its runs; a kept session is ended first through the orchestrator; members get 403", async () => {
+    const { body: a } = await create("ana", { name: "Kept" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_del', ${ORG}, ${a.id}, 'failed', 'event')`;
+    await owner`INSERT INTO automation_sessions (automation_id, organization_id, lux_run_id) VALUES (${a.id}, ${ORG}, 'lux_kept')`;
+    expect((await call("bo", "DELETE", `/v1/automations/${a.id}`)).status).toBe(403);
+    asked.length = 0;
+    expect((await call("ana", "DELETE", `/v1/automations/${a.id}`)).status).toBe(204);
+    expect(asked.map((q) => [q.method, q.path, q.person ?? ""])).toEqual([["POST", `/internal/automations/${a.id}/start-fresh`, people.ana!]]);
+    expect((await call("ana", "GET", `/v1/automations/${a.id}`)).status).toBe(404);
+    expect([...await owner`SELECT count(*)::int AS n FROM automation_runs WHERE id = 'arn_del'`]).toEqual([{ n: 0 }]);
+    // Without a kept session, nothing is asked of the orchestrator.
+    const { body: b } = await create("ana", { name: "Ephemeral" });
+    asked.length = 0;
+    expect((await call("ana", "DELETE", `/v1/automations/${b.id}`)).status).toBe(204);
+    expect(asked).toEqual([]);
+  });
+});
+
 describe("prompt history", () => {
   const settingsWith = (prompt: string) => ({ name: "Triage", kind: "agent", trigger: { kind: "github", event: "pull_request", actions: [], filters: {} },
     agent: { own: { prompt } } });

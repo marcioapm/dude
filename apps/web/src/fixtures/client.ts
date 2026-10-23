@@ -1055,6 +1055,9 @@ export class FixtureClient extends ApiClient {
   override restoreAutomationPrompt(id: string, versionId: string): ReturnType<ApiClient["restoreAutomationPrompt"]> {
     return this.#auto(() => this.#automations.restorePrompt(id, versionId));
   }
+  override duplicateAutomation(id: string): ReturnType<ApiClient["duplicateAutomation"]> {
+    return this.#auto(() => this.#automations.duplicate(id));
+  }
   /** An automation as the fixture backend holds it now, read synchronously (tests). */
   fixtureAutomation(id: string) {
     return this.#automations.one(id);

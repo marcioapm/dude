@@ -1402,6 +1402,10 @@ export class ApiClient {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/prompt-history/restore`, { versionId });
   }
 
+  duplicateAutomation(id: string): Promise<Automation> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/duplicate`);
+  }
+
   // -- judgements: the organisation's judgement tier and its calls -----------
 
   judgementSettings(): Promise<JudgementSettings> {

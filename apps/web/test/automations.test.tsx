@@ -199,6 +199,58 @@ describe("an automation's page", () => {
   });
 });
 
+describe("the header's ⋯ menu", () => {
+  const openMenu = async (c: HTMLElement) => {
+    const more = await until(() => c.querySelector<HTMLElement>("[data-testid=automation-more]"), "the ⋯ button");
+    await act(async () => void more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    return until(() => {
+      const items = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")];
+      return items.length ? items : null;
+    }, "the menu");
+  };
+
+  test("Delete names the runs that go and the kept session it ends, then goes back to the list", async () => {
+    const client = new FixtureClient("a");
+    let back = 0;
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_audit" }}
+      onPlace={() => undefined} onBack={() => { back++; }} />);
+    const items = await openMenu(c);
+    expect(items.map((i) => i.textContent)).toEqual(["Duplicate", "Delete…"]);
+    await click(items.find((i) => i.textContent === "Delete…")!);
+    const says = await until(() => {
+      const el = document.querySelector<HTMLElement>("[data-testid=delete-consequences]");
+      return el && !el.textContent?.includes("Reading") ? el : null;
+    }, "what goes");
+    expect(says.textContent).toContain("Its one run goes with it: history, log and payload.");
+    expect(says.textContent).toContain("Its kept session is ended");
+    await click(document.querySelector<HTMLElement>("[data-testid=delete-confirm]")!);
+    await until(() => (back === 1 ? true : null), "back to the list");
+    expect((await client.automations()).automations.some((a) => a.id === "aut_audit")).toBe(false);
+  });
+
+  test("Duplicate opens the copy: off, '<name> (copy)', owned by the caller", async () => {
+    const client = new FixtureClient("a");
+    const places: AutomationsPlace[] = [];
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={(p) => places.push(p)} onBack={() => undefined} />);
+    const items = await openMenu(c);
+    await click(items.find((i) => i.textContent === "Duplicate")!);
+    await until(() => (places.length ? places : null), "the copy opened");
+    const copy = await client.automation(places[0]!.id!);
+    expect(copy).toMatchObject({ name: "Nightly QA pass (copy)", enabled: false, owner: { id: "u_marcio" }, projectId: PROJECT.id,
+      agent: { preset: { role: "qa_browser", overrides: { timeLimitMinutes: 120 } }, brief: "Walk the sign-in and checkout flows." } });
+  });
+
+  test("someone who cannot edit it sees both disabled", async () => {
+    const client = new FixtureClient("a");
+    (await client.automation("aut_qa")).canEdit = false;
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const items = await openMenu(c);
+    for (const i of items) expect(i.getAttribute("aria-disabled") ?? i.getAttribute("data-disabled")).not.toBeNull();
+  });
+});
+
 describe("Run now on an event", () => {
   test("a written event: valid JSON and a matching one run; the excluded author disables Run; broken JSON says where", async () => {
     const client = new FixtureClient("a");

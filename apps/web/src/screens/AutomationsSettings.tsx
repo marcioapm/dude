@@ -39,8 +39,10 @@ import {
   Dialog,
   EmptyState,
   FormStack,
+  IconButton,
   Input,
   NumberInput,
+  RowMenu,
   Select,
   Spinner,
   Table,
@@ -335,6 +337,8 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
   const [problem, setProblem] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [transferring, setTransferring] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const duplicate = useSave();
   const id = place.id!;
   const load = useCallback(() => {
     client.automation(id).then((x) => { setA(x); setProblem(null); }, (e: unknown) => setProblem(errorText(e)));
@@ -359,6 +363,14 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
               Run now
             </Button>
           ) : null}
+          <RowMenu label={`More for ${a.name}`} align="end"
+            trigger={<IconButton icon="more" label={`More for ${a.name}`} data-testid="automation-more" />}
+            items={[
+              { id: "duplicate", label: "Duplicate", icon: "copy", disabled: !a.canEdit,
+                onSelect: () => void duplicate.save(async () => onPlace({ id: (await client.duplicateAutomation(a.id)).id }), undefined, "Duplicated: it starts off") },
+              { kind: "separator" },
+              { id: "delete", label: "Delete…", icon: "archive", tone: "danger", disabled: !a.canEdit, onSelect: () => setDeleting(true) },
+            ]} />
         </>} />
       {a.ownerLeftAt ? (
         <Callout tone="attention" data-testid="owner-left">
@@ -367,7 +379,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
           {a.canTransfer ? <TextButton onClick={() => setTransferring(true)} data-testid="owner-left-transfer">Transfer…</TextButton> : null}
         </Callout>
       ) : null}
-      {problem || runNow.problem ? <Callout tone="danger">{problem ?? runNow.problem}</Callout> : null}
+      {problem || runNow.problem || duplicate.problem ? <Callout tone="danger">{problem ?? runNow.problem ?? duplicate.problem}</Callout> : null}
       <Segmented<"settings" | "runs"> label="Automation" tabs="automation" value={tab} onChange={(t) => onPlace({ id: a.id, tab: t })}
         options={[{ value: "settings", label: "Settings" }, { value: "runs", label: "Runs" }]} />
       {tab === "settings" ? (
@@ -381,6 +393,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
         onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
       {transferring ? <TransferDialog client={client} a={a} orgName={orgName} people={people} onClose={() => setTransferring(false)}
         onDone={(x) => { setTransferring(false); setA(x); }} /> : null}
+      {deleting ? <DeleteDialog client={client} a={a} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); onBack(); }} /> : null}
     </div>
   );
 }
@@ -1007,6 +1020,33 @@ function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a:
           </>
         )}
         <SettingsNote>A test run starts its own run, with a fresh session, whatever is running. It is a real run: it can comment and create tasks.</SettingsNote>
+      </FormStack>
+    </Dialog>
+  );
+}
+
+/**
+ * Delete, confirmed: says how many runs' history goes with it and, for a
+ * kept session, that its container is ended.
+ */
+function DeleteDialog({ client, a, onClose, onDeleted }: { client: ApiClient; a: Automation; onClose: () => void; onDeleted: () => void }) {
+  const [runs, setRuns] = useState<AutomationRunsResponse | null>(null);
+  const { busy, problem, save } = useSave();
+  useEffect(() => { client.automationRuns(a.id).then(setRuns, () => setRuns(null)); }, [client, a.id]);
+  const n = runs?.total ?? 0;
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title={`Delete ${a.name}?`} size="sm" footerProblem={problem}
+      footer={<>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button variant="danger" solid disabled={busy} data-testid="delete-confirm"
+          onClick={() => void save(() => client.deleteAutomation(a.id), onDeleted, "Automation deleted")}>Delete</Button>
+      </>}>
+      <FormStack>
+        <p data-testid="delete-consequences">
+          {!runs ? "Reading its runs…" : n === 0 ? "It has no runs." : n === 1 ? "Its one run goes with it: history, log and payload." : `Its ${n} runs go with it: their history, logs and payloads.`}
+          {runs?.session ? " Its kept session is ended: the container it resumes is stopped and its disk is gone." : ""}
+          {" "}This cannot be undone. Turning it off keeps everything.
+        </p>
       </FormStack>
     </Dialog>
   );

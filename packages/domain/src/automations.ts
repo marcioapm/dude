@@ -495,9 +495,10 @@ export type EventVerdict = { matches: true } | { matches: false; filter: FilterN
 export interface AutomationRunsResponse {
   runs: AutomationRun[];
   session: { since: string; lastRunAt: string; resumes: number; expiresAt: string | null } | null;
+  /** Every run it has, whatever the list's filter and limit. */
+  total: number;
 }
 
-/** A stored delivery Run now offers: the event's last 30 days. */
 /** One saved version of an agent automation's prompt or brief; newest first in a list. */
 export interface AutomationPromptVersion {
   id: string;
@@ -512,6 +513,7 @@ export interface AutomationPromptVersion {
 
 export const restorePromptSchema = z.object({ versionId: z.string().min(1).max(100) }).strict();
 
+/** A stored delivery Run now offers: the event's last 30 days. */
 export interface PastDelivery {
   id: string;
   event: string;

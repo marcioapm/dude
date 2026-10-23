@@ -60,6 +60,11 @@ const RUNS: Record<string, AutomationRun[]> = {
     { id: "arn_t0", automationId: "aut_triage", status: "skipped", reason: "a run was still going (Concurrency: skip)", source: "event", session: null,
       runId: null, startedBy: null, costUsd: null, createdAt: iso(14 * MIN), startedAt: null, endedAt: iso(14 * MIN), event: "pull_request", action: "opened", payloadCount: 1 },
   ],
+  aut_audit: [
+    { id: "arn_a1", automationId: "aut_audit", status: "failed", reason: "the agent's turn failed: the registry did not answer", source: "schedule",
+      session: "resumed", runId: null, startedBy: null, costUsd: 0.84, createdAt: iso(21 * 60 * MIN), startedAt: iso(21 * 60 * MIN),
+      endedAt: iso(21 * 60 * MIN - 6 * MIN), event: null, action: null, payloadCount: 0 },
+  ],
 };
 
 const DELIVERIES: PastDelivery[] = [
@@ -162,6 +167,14 @@ export class FixtureAutomations {
     return a;
   }
 
+  duplicate(id: string): Automation {
+    const a = this.one(id);
+    const copy = { ...structuredClone(a), id: `aut_fx_${this.list.length + 1}`, name: `${a.name} (copy)`, enabled: false,
+      owner: person("u_marcio"), ownerLeftAt: null, lastRun: null, nextRunAt: null, createdAt: new Date().toISOString() };
+    this.list.push(copy);
+    return copy;
+  }
+
   transfer(id: string, personId: string): Automation {
     const a = this.one(id);
     a.owner = person(personId);
@@ -181,7 +194,7 @@ export class FixtureAutomations {
 
   runsOf(id: string): AutomationRunsResponse {
     const a = this.one(id);
-    return { runs: this.runs[id] ?? [], session: a.sessionMode === "resumable"
+    return { runs: this.runs[id] ?? [], total: (this.runs[id] ?? []).length, session: a.sessionMode === "resumable"
       ? { since: iso(6 * 24 * 60 * MIN), lastRunAt: iso(21 * 60 * MIN), resumes: 5, expiresAt: iso(-6 * 24 * 60 * MIN) } : null };
   }
 

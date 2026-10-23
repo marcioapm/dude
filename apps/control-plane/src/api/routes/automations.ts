@@ -285,15 +285,52 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
   return json(await shape(ctx, row));
 }
 
+/**
+ * Delete an automation and its runs' history. A kept session's container is
+ * let go first (the orchestrator's Start fresh cancels its lux Run): the
+ * session row goes with the automation, and nothing would end it after.
+ */
 async function deleteAutomation(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
+  const current = await withOrg(ctx.principal.organizationId, (scope) => readOne(scope, id));
+  await requireEditor(ctx, current.projectId);
+  const [kept] = await withOrg(ctx.principal.organizationId, ({ sql }) => sql`SELECT 1 FROM automation_sessions WHERE automation_id = ${id}`);
+  if (kept) {
+    const res = await forward(ctx, "POST", `/internal/automations/${encodeURIComponent(id)}/start-fresh`);
+    if (!res.ok) throw new HttpError(502, "its kept session could not be ended; nothing was deleted", "session_not_ended");
+  }
   await withOrg(ctx.principal.organizationId, async (scope) => {
-    const current = await readOne(scope, id);
-    await requireEditor(ctx, current.projectId);
     await scope.sql`DELETE FROM automations WHERE id = ${id}`;
     await record(scope, ctx, current, { deleted: true });
   });
   return noContent();
+}
+
+/**
+ * Copy an automation's settings into a new one: off, "<name> (copy)", owned
+ * by whoever copied it, with no runs, no kept session and no prompt history.
+ * A webhook gets a signing secret of its own.
+ */
+async function duplicateAutomation(ctx: RequestContext): Promise<Response> {
+  const id = ctx.params.id!;
+  const copy = newId("automation");
+  const row = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const a = await readOne(scope, id);
+    await requireEditor(ctx, a.projectId);
+    const name = `${a.name.slice(0, 120 - " (copy)".length)} (copy)`;
+    const secret = a.kind === "webhook" ? newSigningSecret() : null;
+    await scope.sql`
+      INSERT INTO automations (id, organization_id, project_id, name, description, kind, enabled, owner_id, trigger, session_mode,
+        expiry_days, concurrency, parallel_max, repos, repo_filter, agent, machine_size_id, image_id, setup_script, command, server,
+        webhook, webhook_secret, webhook_hint, secrets, notify_on_failure, created_by, updated_by)
+      SELECT ${copy}, organization_id, project_id, ${name}, description, kind, false, ${ctx.principal.personId}, trigger, session_mode,
+        expiry_days, concurrency, parallel_max, repos, repo_filter, agent, machine_size_id, image_id, setup_script, command, server,
+        webhook, ${secret}, ${secret ? secretHint(secret) : null}, secrets, notify_on_failure, ${ctx.principal.personId}, ${ctx.principal.personId}
+      FROM automations WHERE id = ${id}`;
+    await record(scope, ctx, { id: copy, name, projectId: a.projectId }, { created: true, duplicateOf: id });
+    return readOne(scope, copy);
+  });
+  return json(await shape(ctx, row), 201);
 }
 
 async function setEnabled(ctx: RequestContext): Promise<Response> {
@@ -394,8 +431,10 @@ async function listRuns(ctx: RequestContext): Promise<Response> {
     const [kept] = (await scope.sql`SELECT created_at AS "since", last_run_at AS "lastRunAt",
         (SELECT count(*)::int FROM automation_runs r WHERE r.automation_id = s.automation_id AND r.session = 'resumed') AS resumes
       FROM automation_sessions s WHERE s.automation_id = ${a.id}`) as Array<{ since: Date; lastRunAt: Date; resumes: number }>;
+    const [{ total }] = (await scope.sql`SELECT count(*)::int AS total FROM automation_runs WHERE automation_id = ${a.id}`) as [{ total: number }];
     return {
       runs: runs.map(runOut),
+      total,
       session: kept ? { since: iso(kept.since), lastRunAt: iso(kept.lastRunAt), resumes: kept.resumes,
         expiresAt: a.expiryDays ? new Date(kept.lastRunAt.getTime() + a.expiryDays * 86_400_000).toISOString() : null } : null,
     };
@@ -552,6 +591,7 @@ export function registerAutomationRoutes(router: Router): void {
   router.get("/v1/automations/:id", getAutomation);
   router.put("/v1/automations/:id", putAutomation);
   router.delete("/v1/automations/:id", deleteAutomation);
+  router.post("/v1/automations/:id/duplicate", duplicateAutomation);
   router.put("/v1/automations/:id/enabled", setEnabled);
   router.put("/v1/automations/:id/owner", transferOwner);
   router.put("/v1/automations/:id/webhook-secret", setWebhookSecret);
