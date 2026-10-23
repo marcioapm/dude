@@ -110,6 +110,12 @@ func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *St
 	if change, err = w.s.RoundDelta(ctx, sc.OrganizationID, st.TaskID, gh, from, st.Heads); err != nil {
 		return RoundChange{}, err
 	}
+	// Only a review round's choice of reviewers reads the paths, and not
+	// past MaxResumeDeltaLines; the cache is rewritten with the state at
+	// every step transition.
+	if phase != PhaseReview || change.Lines > MaxResumeDeltaLines {
+		change.Paths = nil
+	}
 	raw, _ := json.Marshal(change)
 	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{roundDelta}', COALESCE(state->'roundDelta', '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)) WHERE id = $1`, sc.WorkflowRunID, cacheKey, raw)

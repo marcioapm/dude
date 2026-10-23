@@ -251,6 +251,44 @@ func TestAReplayedReviewStepKeepsItsRoundsReviewers(t *testing.T) {
 	}
 }
 
+// cachedPaths is how many paths each roundDelta entry the workflow row holds.
+func (r *laterRound) cachedPaths() []int {
+	r.t.Helper()
+	rows, err := r.owner.Query(r.ctx, `SELECT COALESCE(jsonb_array_length(v->'paths'), 0) FROM workflow_runs, jsonb_each(state->'roundDelta') e(k, v)
+		WHERE id = 'wfr_rr' ORDER BY 1`)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	n, err := pgx.CollectRows(rows, pgx.RowTo[int])
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return n
+}
+
+// The round-delta cache keeps paths only where a review round's choice
+// reads them: the review key of a round within MaxResumeDeltaLines.
+func TestTheRoundDeltaCacheKeepsPathsOnlyForAReviewChoice(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		phase string
+		lines int
+		want  int
+	}{{"review", PhaseReview, 4, 1}, {"large review", PhaseReview, MaxResumeDeltaLines + 1, 0}, {"fix", PhaseFix, 4, 0}, {"test", PhaseTest, 4, 0}} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLaterRound(t, "web/src/Button.tsx")
+			r.files[0]["additions"], r.files[0]["deletions"] = c.lines, 0
+			change, err := r.steps.roundChange(r.ctx, r.sc("review"), r.st, c.phase, map[string]string{"repo": "aaa"})
+			if err != nil || !change.Measured || change.Lines != c.lines {
+				t.Fatalf("change %+v: %v", change, err)
+			}
+			if got := r.cachedPaths(); !slices.Equal(got, []int{c.want}) {
+				t.Errorf("cached paths %v, want [%d]", got, c.want)
+			}
+		})
+	}
+}
+
 func TestALargeLaterRoundRunsTheFirstRoundsReviewers(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.files[0]["additions"] = MaxResumeDeltaLines
