@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { DudeToOverlay, OverlayPin, OverlayTheme, OverlayToDude } from "@dude/domain/previewOverlayProtocol";
+import { OVERLAY_LIMITS } from "@dude/domain/previewOverlayProtocol";
 import { Overlay } from "../overlay.ts";
 import { PictureError } from "../picture.ts";
 
@@ -282,6 +283,9 @@ test("opened with no opener it says to open the preview from dude, and never off
   page(CART, false);
   boot();
   expect(tid("ov-no-opener")!.textContent).toContain("Open this preview from dude to comment");
+  // Any of the task's links in dude opens it with the comment tool: there is no Comment button to press.
+  expect(tid("ov-no-opener")!.textContent).toContain("Open the preview from any of the task's links in dude");
+  expect(tid("ov-no-opener")!.textContent).not.toContain("press Comment");
   expect(count('[data-testid="ov-comment"]')).toBe(0);
   expect(count('[data-testid="ov-save"]')).toBe(0);
 });
@@ -697,7 +701,7 @@ function osScheme(start: "light" | "dark" | "none") {
 }
 
 const drawn = () => q("[data-overlay]")!.getAttribute("data-theme");
-const themed = (theme?: OverlayTheme): DudeToOverlay => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, ...(theme ? { theme } : {}) });
+const themed = (theme?: OverlayTheme): Extract<DudeToOverlay, { type: "session" }> => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, ...(theme ? { theme } : {}) });
 
 test("before dude answers it follows the OS's colour scheme, live, and dark when the OS says neither", () => {
   const os = osScheme("light");
@@ -756,4 +760,92 @@ test("a theme from another origin or another window is not heard", () => {
   fromDude(themed("light"), "https://evil.example.test");
   fromDude(themed("light"), DUDE, { postMessage() {} });
   expect(drawn()).toBe("dark");
+});
+
+/** The overlay saves a draft from `session` and Go to dude is pressed on its saved toast. */
+async function atGoToDude(session: DudeToOverlay) {
+  boot();
+  fromDude(session);
+  tid("ov-comment")!.click();
+  const pay = sized(win.document.querySelector("button.pay")!);
+  hover(pay);
+  pay.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
+  const field = q("textarea") as HTMLTextAreaElement;
+  field.value = "Make it green";
+  field.dispatchEvent(new win.Event("input", { bubbles: true }));
+  await tick();
+  tid("ov-save")!.click();
+  const draft = sent().find((m) => m.type === "draft") as Extract<OverlayToDude, { type: "draft" }>;
+  fromDude({ type: "saved", v: 1, nonce: draft.nonce, id: "fbk_1", drafts: 1, picture: "attached" });
+  tid("ov-go-dude")!.click();
+}
+
+/** Counts the opener's focus() calls. */
+function countFocus(): () => number {
+  let focused = 0;
+  opener!.focus = () => { focused++; };
+  return () => focused;
+}
+
+/** window.open finding dude's tab (the opener) by name; returns the [url, name] it was called with. */
+function openFindsOpener(): Array<[string, string]> {
+  const opens: Array<[string, string]> = [];
+  win.open = (url: string, name: string) => { opens.push([url, name]); return opener; };
+  return opens;
+}
+
+test("Go to dude looks up dude's tab by the window name its session gave, not the opener's focus()", async () => {
+  const opens = openFindsOpener();
+  const focused = countFocus();
+  await atGoToDude({ ...themed(), dudeWindow: "dude-tab-abc123" });
+  expect(opens).toEqual([["", "dude-tab-abc123"]]);
+  expect(focused()).toBe(0);
+});
+
+test("from a session with no window name (an older dude), Go to dude falls back to the opener's focus()", async () => {
+  const opens = openFindsOpener();
+  const focused = countFocus();
+  await atGoToDude(themed());
+  expect(opens).toEqual([]);
+  expect(focused()).toBe(1);
+});
+
+test("a name that finds no window opens a blank one: it is closed again and the opener's focus() is tried", async () => {
+  let closed = 0;
+  const focused = countFocus();
+  win.open = () => ({ location: { href: "about:blank" }, close: () => { closed++; } });
+  await atGoToDude({ ...themed(), dudeWindow: "dude-tab-gone" });
+  expect([closed, focused()]).toEqual([1, 1]);
+});
+
+test("a name held by another origin's window, not the opener, leaves that window open and tries the opener's focus()", async () => {
+  let closed = 0;
+  const focused = countFocus();
+  win.open = () => ({ get location(): never { throw new Error("cross-origin"); }, close: () => { closed++; } });
+  await atGoToDude({ ...themed(), dudeWindow: "dude-tab-taken" });
+  expect([closed, focused()]).toEqual([0, 1]);
+});
+
+test("a pin's Open in dude tells dude which item and brings dude's tab forward by its window name", () => {
+  const opens = openFindsOpener();
+  const focused = countFocus();
+  boot();
+  fromDude({ ...themed(), pins: [{ id: "fbk_9", n: 1, status: "draft", author: "Márcio", mine: true, body: "Green", selector: "button.pay", when: "drafted now", replies: [] }], dudeWindow: "dude-tab-abc123" });
+  fromDude({ type: "highlight", v: 1, itemId: "fbk_9" });
+  q('[data-testid="ov-popover"] [data-k="open-in-dude"]')!.click();
+  expect(sent()).toContainEqual({ type: "open", v: 1, itemId: "fbk_9" });
+  expect(opens).toEqual([["", "dude-tab-abc123"]]);
+  expect(focused()).toBe(0);
+});
+
+test("a session whose window name is not one dude gives is refused whole, before any state changes", () => {
+  osScheme("light");
+  boot();
+  for (const dudeWindow of ["_blank", "dude tab", "x".repeat(OVERLAY_LIMITS.windowName + 1), 7]) {
+    fromDude({ ...themed("dark"), dudeWindow } as never);
+    expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+    expect(drawn()).toBe("light");
+  }
+  fromDude({ ...themed("dark"), dudeWindow: "dude-tab-ok" });
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });

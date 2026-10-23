@@ -211,7 +211,7 @@ export function ServersSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
 
-      <Block id="sv-row" title="ServerRow / ServerList" note="One row per server: mono name and port, the state and what it means, the URL to copy or open, and the actions its state allows. Its log folds open under it as server:<name>. A recipe row shows what a preview would start.">
+      <Block id="sv-row" title="ServerRow / ServerList" note="One row per server: mono name and port, the state and what it means, the URL to copy or open, and the actions its state allows. Its log folds open under it as server:<name>. A recipe row shows what a preview would start. Optional onOpen(url) takes a plain left click on the URL, open icon and Preview when it returns true; modified clicks stay ordinary links. openLabel is the open icon's name and title, and Preview's title, while onOpen handles them. ServersSummaryRow has both for its URL and eye Preview.">
         <Panes mode={mode}>
           <Col>
             <States items={ROW_STATES.map(([k, s, openLogs]) => [k, <ServerList key={k} style={{ flex: 1 }}><RowDemo server={s} openLogs={openLogs} /></ServerList>])} />

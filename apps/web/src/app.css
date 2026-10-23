@@ -605,6 +605,18 @@ body {
     min-height: 560px;
   }
 }
+/* Where the page scrolls, the tabs grow with their content instead of
+   shrinking to the window (Tabs' `fill`): the drafts tray after them then
+   follows the last card and sticks to the scroll area's foot while more is
+   below, never drawn over the middle of the page. */
+.taskScreen:not(.fixed) > .taskTabs {
+  flex: 1 0 auto;
+}
+@media (max-height: 639px) {
+  .taskScreen > .taskTabs {
+    flex: 1 0 auto;
+  }
+}
 .taskTop {
   display: flex;
   align-items: center;
