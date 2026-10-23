@@ -27,11 +27,12 @@ export interface PreviewCommentingControl {
   readonly open: (server: { name: string; url: string }) => void;
   /**
    * A link's `onOpen` for server `name`: present only while comments can be
-   * made on it, opening its URL in the task's window (true when it did).
+   * made on it, opening its URL in the task's window, or bringing that
+   * window forward when it is already open on the server (true when it did).
    * Absent, the link opens the server in a new tab as any link does.
    */
   readonly linkFor: (name: string) => ((url: string) => boolean) | undefined;
-  /** A feedback card's Page link: opens the page in the task's window when it is on a commentable server; false otherwise. */
+  /** A feedback card's Page link on a commentable server: the task's window brought forward when already on that page, else navigated there; false otherwise. */
   readonly openPage: (url: string) => boolean;
   /** Show on preview: the item's page, marked. */
   readonly show: (item: FeedbackItem) => void;
@@ -88,10 +89,10 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
     offer, view,
     open: (s: { name: string; url: string }) => void commenting.comment(s.url, s.name),
     linkFor: (name: string) => offer.kind === "available" && offer.servers.some((s) => s.name === name)
-      ? (url: string) => commenting.open(url, name) : undefined,
+      ? (url: string) => commenting.comment(url, name) : undefined,
     openPage: (url: string) => {
       const s = serverOf(offer, url);
-      return s !== null && commenting.open(url, s.name);
+      return s !== null && commenting.visit(url, s.name);
     },
     show: (item: FeedbackItem) => void commenting.show(item),
     canShow: (item: FeedbackItem) => item.anchor.kind === "preview" && showable(offer, item.anchor.url),

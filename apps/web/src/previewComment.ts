@@ -341,6 +341,20 @@ export class PreviewCommenting {
     return this.open(url, server);
   }
 
+  /**
+   * A feedback card's Page link: the window brought forward when it is
+   * already on that page (origin and path), so a half-written comment stays;
+   * navigated to `url` otherwise.
+   */
+  visit(url: string, server: string): boolean {
+    if ((this.#state === "open" || this.#state === "waiting") && this.#win && !this.#win.closed
+      && this.#url !== null && overlayPage(url) !== null && overlayPage(this.#url) === overlayPage(url)) {
+      this.focus();
+      return true;
+    }
+    return this.open(url, server);
+  }
+
   /** Brings the window forward, if it is still open. */
   focus(): void {
     try {

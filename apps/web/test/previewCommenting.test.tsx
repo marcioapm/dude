@@ -68,12 +68,21 @@ async function page(client: FixtureClient, tab: "servers" | "feedback" | "overvi
 function stubOpen() {
   const dude: Array<[string, string]> = [];
   const browser: string[] = [];
+  // One window for the task's name, as a browser gives back the same named window.
+  const win = { postMessage() {}, closed: false, focused: 0, focus() { win.focused++; } };
   (window as unknown as { open: unknown }).open = (url: string, name?: string) => {
     if (name === `dude-preview-${TASK_ID}`) dude.push([url, name]);
     else browser.push(url);
-    return { postMessage() {}, closed: false, focus() {} };
+    return win;
   };
-  return { dude, browser };
+  return { dude, browser, win };
+}
+
+/** The overlay in the task's window saying hello from `url`. */
+async function hello(win: object, url: string) {
+  await act(async () => {
+    window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 1, url }, origin: WEB, source: win as unknown as MessageEventSource }));
+  });
 }
 
 /** A click as a person's, with the modifiers given: whether the link's default (the browser opening it) went ahead. */
@@ -118,6 +127,35 @@ test("a modified click on a server's link is the browser's: dude opens nothing",
   // A middle click (auxclick in a browser) never reaches onClick; one dispatched as a click with button 1 is the browser's too.
   expect(await press(link, { button: 1 })).toBe(true);
   expect(open.dude).toEqual([]);
+});
+
+test("a second click on a server's link brings the open window forward instead of reloading it", async () => {
+  const open = stubOpen();
+  const c = await page(new PreviewClient([web()]), "servers");
+  const link = await until(() => c.querySelector('[data-testid="server-preview"]'), "Preview");
+  expect(await press(link)).toBe(false);
+  await hello(open.win, `${WEB}/checkout`);
+  await until(() => c.querySelector('[data-testid="commenting-notice"][data-state="open"]'), "the open notice");
+  const focused = open.win.focused;
+  for (const sel of LINKS.servers) expect([sel, await press(c.querySelector(sel)!)]).toEqual([sel, false]);
+  expect([open.dude, open.browser]).toEqual([[[WEB, `dude-preview-${TASK_ID}`]], []]);
+  expect(open.win.focused).toBe(focused + LINKS.servers.length);
+});
+
+test("a card's Page link brings the window forward when it is on that page, and navigates it to another", async () => {
+  const client = new PreviewClient([web()]);
+  client.feedbackItems.push(previewDraft("fbk_a", `${WEB}/cart?step=2`), previewDraft("fbk_b", `${WEB}/checkout`));
+  const open = stubOpen();
+  const c = await page(client, "feedback");
+  const pageLink = (id: string) => c.querySelector(`[data-id="${id}"] [data-testid="fb-preview-page"]`)!;
+  await until(() => c.querySelector('[data-id="fbk_b"] [data-testid="fb-preview-page"]'), "the Page links");
+  expect(await press(pageLink("fbk_a"))).toBe(false);
+  await hello(open.win, `${WEB}/cart?step=2`);
+  const focused = open.win.focused;
+  expect(await press(pageLink("fbk_a"))).toBe(false);
+  expect([open.dude.length, open.win.focused]).toEqual([1, focused + 1]);
+  expect(await press(pageLink("fbk_b"))).toBe(false);
+  expect([open.dude, open.browser]).toEqual([[[`${WEB}/cart?step=2`, `dude-preview-${TASK_ID}`], [`${WEB}/checkout`, `dude-preview-${TASK_ID}`]], []]);
 });
 
 test("there is no Comment button: the Servers tab says its links open the comment tool", async () => {
