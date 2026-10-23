@@ -291,14 +291,14 @@ function AutomationTable({ rows, orgName, onOpen, onToggle, showScope }: {
                 {showScope ? <ScopeChip org={orgName} project={a.projectName} projectId={a.projectId} /> : null}
               </span>
             </Td>
-            <Td><span className="automationKind" data-stack="true"><KindMark kind={a.kind} role={roleOf(a)} /><SessionMark mode={a.sessionMode} expiryDays={a.expiryDays} /></span></Td>
+            <Td wrap><span className="automationKind" data-stack="true"><KindMark kind={a.kind} role={roleOf(a)} /><SessionMark mode={a.sessionMode} expiryDays={a.expiryDays} /></span></Td>
             <Td wrap><TriggerSummary trigger={a.trigger} /></Td>
             <Td hideWhenNarrow><OwnerMark owner={a.owner} left={Boolean(a.ownerLeftAt)} org={orgName} avatarOnly /></Td>
-            <Td hideWhenNarrow muted>{a.lastRun
+            <Td hideWhenNarrow muted fit>{a.lastRun
               ? <span className="automationLastRun"><StatusMark status={RUN_MARK[a.lastRun.status]} size="sm" iconOnly label={RUN_WORD[a.lastRun.status]} />
                 {a.lastRun.status === "succeeded" ? "" : `${RUN_WORD[a.lastRun.status]} `}{ago(a.lastRun.at)}</span>
               : "Never"}</Td>
-            <Td hideWhenNarrow muted>{nextRun(a)}</Td>
+            <Td hideWhenNarrow muted fit>{nextRun(a)}</Td>
           </Tr>
         ))}
       </TBody>
@@ -544,7 +544,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
             </SettingRow>
             )}
             <SettingRow label="While a run is going" help="What a new event does. A test run always starts its own." data-testid="automation-concurrency">
-              <Select<string> label="Concurrency" value={form.concurrency} disabled={ro} onValueChange={(c) => set("concurrency", c as AutomationInput["concurrency"])}
+              <Select<string> aria-label="Concurrency" value={form.concurrency} disabled={ro} onValueChange={(c) => set("concurrency", c as AutomationInput["concurrency"])}
                 options={CONCURRENCY.map((c) => ({ value: c, label: CONCURRENCY_LABEL[c],
                   disabled: (c === "send" && !(a.kind === "agent" && form.sessionMode === "resumable")) || (c === "parallel" && form.sessionMode !== "ephemeral") }))} />
               {form.concurrency === "parallel" ? (
@@ -701,7 +701,7 @@ function ProjectReposRow({ client, projectId, ro, value, onChange }: {
         onChange={(m) => onChange(m === "none" ? "none" : "all")}
         options={[{ value: "none", label: "None" }, { value: "some", label: "Some" }]} />
       {value !== "none" && repos ? (
-        <div role="group" aria-label="Repositories checked out">
+        <div role="group" aria-label="Repositories checked out" className="automationActions">
           {repos.map((r) => <Checkbox key={r.id} label={r.name} checked={chosen.includes(r.id)} disabled={ro}
             onCheckedChange={(on) => pick(on ? [...chosen, r.id] : chosen.filter((x) => x !== r.id))} />)}
         </div>
