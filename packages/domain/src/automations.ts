@@ -346,6 +346,7 @@ export function automationProblem(a: AutomationInput, scope: AutomationScope): {
   if (a.sessionMode === "resumable" && a.expiryDays === null) return { path: "expiryDays", message: "a resumable session expires after 1 to 30 days without a run" };
   if (a.sessionMode === "ephemeral" && a.expiryDays !== null) return { path: "expiryDays", message: "only a resumable session expires" };
   if (a.kind === "webhook" && a.sessionMode !== "ephemeral") return { path: "sessionMode", message: "a webhook keeps no session" };
+  if (a.kind === "command" && a.sessionMode !== "ephemeral") return { path: "sessionMode", message: "a command runs to its end; it keeps no session to resume" };
   if (a.concurrency === "send" && !(a.kind === "agent" && a.sessionMode === "resumable")) return { path: "concurrency", message: "only a resumable agent is sent events while it runs" };
   if (a.concurrency === "parallel" && a.sessionMode !== "ephemeral") return { path: "concurrency", message: "a resumable automation has one session; it cannot run in parallel" };
   if (a.kind === "server" && a.trigger.kind !== "github") return { path: "trigger", message: "a server answers GitHub events; it has no schedule" };

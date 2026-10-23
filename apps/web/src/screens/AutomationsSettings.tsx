@@ -468,6 +468,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
 
         {a.kind === "webhook" ? null : (
           <SettingsSection title="Session">
+            {a.kind === "command" ? null : (
             <SettingRow label="Session" help="Resumable keeps one session, resumed by every run, until it goes unused for its expiry.">
               <Segmented<"ephemeral" | "resumable"> label="Session" value={form.sessionMode} disabled={ro}
                 onChange={(m) => setForm((f) => ({ ...f, sessionMode: m, expiryDays: m === "resumable" ? f.expiryDays ?? 7 : null,
@@ -478,6 +479,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
                   onValueChange={(n) => set("expiryDays", n ?? 7)} />
               ) : null}
             </SettingRow>
+            )}
             <SettingRow label="While a run is going" help="What a new event does. A test run always starts its own." data-testid="automation-concurrency">
               <Select<string> label="Concurrency" value={form.concurrency} disabled={ro} onValueChange={(c) => set("concurrency", c as AutomationInput["concurrency"])}
                 options={CONCURRENCY.map((c) => ({ value: c, label: CONCURRENCY_LABEL[c],

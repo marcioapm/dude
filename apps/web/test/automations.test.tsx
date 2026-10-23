@@ -280,6 +280,19 @@ describe("secrets and webhook wording", () => {
     expect(c.textContent).not.toContain("3 times");
     expect(c.textContent).not.toContain("10 minutes");
   });
+
+  test("a command offers no resumable session; an agent does", async () => {
+    const command = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_cost" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    await until(() => command.querySelector("[data-testid=owner-row]"), "the command's page");
+    expect(command.querySelectorAll("[role=group][aria-label=Session]").length).toBe(0);
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const agent = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    await until(() => agent.querySelector("[data-testid=owner-row]"), "the agent's page");
+    expect(agent.querySelectorAll("[role=group][aria-label=Session]").length).toBe(1);
+  });
 });
 
 describe("Run now on an event", () => {

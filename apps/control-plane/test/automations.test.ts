@@ -167,7 +167,11 @@ describe("changing", () => {
     expect(JSON.stringify(await body(filtered))).toContain("only an organisation automation filters them");
     const long = await call("ana", "PUT", `/v1/automations/${a.id}`, { ...base, sessionMode: "resumable", expiryDays: 31 });
     expect(long.status).toBe(400);
-    const ok = await call("ana", "PUT", `/v1/automations/${a.id}`, { ...base, sessionMode: "resumable", expiryDays: 30, repos: ["repo_w"] });
+    // A command runs to its end: there is no session of it to resume.
+    const resumable = await call("ana", "PUT", `/v1/automations/${a.id}`, { ...base, sessionMode: "resumable", expiryDays: 30 });
+    expect(resumable.status).toBe(400);
+    expect(JSON.stringify(await body(resumable))).toContain("a command runs to its end; it keeps no session to resume");
+    const ok = await call("ana", "PUT", `/v1/automations/${a.id}`, { ...base, repos: ["repo_w"] });
     expect(ok.status).toBe(200);
     const otherProjects = await call("ana", "PUT", `/v1/automations/${a.id}`, { ...base, repos: ["repo_s"] });
     expect(otherProjects.status).toBe(400);

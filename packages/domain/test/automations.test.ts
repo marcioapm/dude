@@ -31,6 +31,18 @@ describe("an automation's session", () => {
     expect(issuesOf(org.safeParse({ ...base, expiryDays: 5 }))).toEqual(["expiryDays: only a resumable session expires"]);
   });
 
+  test("only an agent or a server keeps a session to resume", () => {
+    const org = automationInputSchema("organization");
+    const event = { kind: "github", event: "push" };
+    const resumable = { sessionMode: "resumable", expiryDays: 7 };
+    expect(issuesOf(org.safeParse({ name: "Build", kind: "command", trigger: base.trigger, command: "make", ...resumable })))
+      .toEqual(["sessionMode: a command runs to its end; it keeps no session to resume"]);
+    expect(issuesOf(org.safeParse({ name: "Hook", kind: "webhook", trigger: base.trigger, webhook: { url: "https://example.com/hook" }, ...resumable })))
+      .toEqual(["sessionMode: a webhook keeps no session"]);
+    expect(org.safeParse({ name: "Serve", kind: "server", trigger: event, server: { command: "bun run serve", port: 8080 }, ...resumable }).success).toBe(true);
+    expect(org.safeParse({ ...base, ...resumable }).success).toBe(true);
+  });
+
   test("send to the running agent needs a resumable agent; parallel needs ephemeral", () => {
     const org = automationInputSchema("organization");
     expect(issuesOf(org.safeParse({ ...base, concurrency: "send" }))).toEqual(["concurrency: only a resumable agent is sent events while it runs"]);

@@ -1107,6 +1107,20 @@ test("180 adds automations: expiry 1..30 on resumable only, repo filter on org o
     expect(await add({ kind: "server" })).toContain("automations_server_events");
     expect(await add({ concurrency: "send" })).toContain("automations_send_resumable_agent");
     expect(await add({ concurrency: "send", session_mode: "resumable", expiry_days: 3 })).toBe("inserted");
+    // Only an agent's or a server's session is kept and resumed.
+    const onEvent = { kind: "github", event: "push", actions: [], filters: {} };
+    expect(await add({ kind: "command", session_mode: "resumable", expiry_days: 3 })).toContain("automations_resumable_kinds");
+    expect(await add({ kind: "webhook", session_mode: "resumable", expiry_days: 3 })).toContain("automations_resumable_kinds");
+    expect(await add({ kind: "server", trigger: onEvent, session_mode: "resumable", expiry_days: 3 })).toBe("inserted");
+    expect(await add({ kind: "command" })).toBe("inserted");
+
+    // An automation run's tool calls are redacted with its automation's project secrets.
+    await sql`INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ('org_au', 'prj_au', 'KEY', 'v-secret', 'cret'),
+      ('org_au', 'prj_au', 'OTHER', 'v-other', 'ther')`;
+    await sql`INSERT INTO automations (id, organization_id, project_id, name, kind, trigger, secrets)
+      VALUES ('aut_sec', 'org_au', 'prj_au', 'S', 'agent', '{"kind":"schedule","cron":"0 3 * * *","tz":"UTC"}', '{KEY}')`;
+    await sql`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_sec', 'org_au', 'aut_sec', 'running', 'schedule')`;
+    expect([...await sql`SELECT name, value FROM automation_run_secret_values('arn_sec')`]).toEqual([{ name: "KEY", value: "v-secret" }]);
 
     // A run of a deleted automation goes with it.
     await sql`INSERT INTO automation_runs (id, organization_id, automation_id, status, source, mcp_token_hash, tools_scope)
@@ -1120,7 +1134,7 @@ test("180 adds automations: expiry 1..30 on resumable only, repo filter on org o
     expect(await sql`INSERT INTO automation_prompt_versions (id, organization_id, automation_id, number, body)
       VALUES ('apv_2', 'org_au', 'aut_1', 1, 'again')`.then(() => "inserted", (e: Error) => e.message)).toContain("automation_prompt_versions_automation_id_number_key");
     await sql`DELETE FROM automations WHERE id = 'aut_1'`;
-    expect([...await sql`SELECT count(*)::int AS n FROM automation_runs`]).toEqual([{ n: 0 }]);
+    expect([...await sql`SELECT count(*)::int AS n FROM automation_runs WHERE automation_id = 'aut_1'`]).toEqual([{ n: 0 }]);
     expect([...await sql`SELECT count(*)::int AS n FROM automation_prompt_versions`]).toEqual([{ n: 0 }]);
   } finally {
     await sql.end();

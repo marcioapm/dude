@@ -55,7 +55,9 @@ CREATE TABLE automations (
   UNIQUE (organization_id, id),
   CONSTRAINT automations_repo_filter_org_only CHECK (project_id IS NULL OR repo_filter IS NULL),
   CONSTRAINT automations_expiry_resumable CHECK ((session_mode = 'resumable') = (expiry_days IS NOT NULL)),
-  CONSTRAINT automations_webhook_ephemeral CHECK (kind <> 'webhook' OR session_mode = 'ephemeral'),
+  -- A command runs to its end and a webhook is one POST: only an agent's or
+  -- a server's session can be kept and resumed.
+  CONSTRAINT automations_resumable_kinds CHECK (session_mode = 'ephemeral' OR kind IN ('agent', 'server')),
   CONSTRAINT automations_send_resumable_agent CHECK (concurrency <> 'send' OR (kind = 'agent' AND session_mode = 'resumable')),
   CONSTRAINT automations_parallel_ephemeral CHECK (concurrency <> 'parallel' OR session_mode = 'ephemeral'),
   CONSTRAINT automations_server_events CHECK (kind <> 'server' OR trigger->>'kind' = 'github'),
