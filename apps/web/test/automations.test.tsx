@@ -66,7 +66,7 @@ describe("the organisation's list", () => {
     expect(next("aut_qa")).toMatch(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}$/);
     const bar = c.querySelector<HTMLElement>("[data-testid=filter-bar]")!;
     expect(bar.querySelectorAll("label").length).toBe(0);
-    expect(bar.querySelector("[role=searchbox], input[type=search]")?.getAttribute("aria-label") ?? bar.querySelector("input")?.getAttribute("aria-label")).toBe("Search automations");
+    expect(bar.querySelector("input[type=search]")?.getAttribute("aria-label")).toBe("Search automations");
     expect([...bar.querySelectorAll("button[role=combobox]")].map((b) => b.textContent)).toEqual(["All scopes", "All triggers", "All kinds", "On and off", "Anyone's"]);
   });
 
@@ -106,7 +106,8 @@ describe("a project's list", () => {
 });
 
 describe("an automation's page", () => {
-  test("a DS breadcrumb back to the list, underline tabs, and sections spaced by the settings form", async () => {
+  // The settings form's section spacing and widths are layout, measured in a browser, not here.
+  test("a DS breadcrumb back to the list, underline tabs, and the Settings tab's form", async () => {
     const back: string[] = [];
     const places: AutomationsPlace[] = [];
     const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage", tab: "runs", runId: "arn_x" }}
@@ -121,8 +122,7 @@ describe("an automation's page", () => {
     mounted = [];
     const s = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
       onPlace={() => undefined} onBack={() => undefined} />);
-    const form = await until(() => s.querySelector("form"), "the settings form");
-    expect(form.classList.contains("settingsForm")).toBe(true);
+    await until(() => s.querySelector("form"), "the settings form");
   });
 
   test("a pull_request trigger ticks its known actions; the filters are one row of fields", async () => {
@@ -141,8 +141,9 @@ describe("an automation's page", () => {
     const filters = c.querySelector<HTMLElement>("[data-testid=event-filters]")!;
     expect(filters.querySelectorAll("section").length).toBe(0);
     for (const name of ["Branch", "Label", "Paths", "Author"]) expect(filters.textContent).toContain(name);
-    // The Event row's own label names it; its select carries no second "Event" label.
-    expect([...c.querySelectorAll("label, [class*=label]")].filter((l) => l.textContent === "Event").length).toBe(0);
+    // The Event row's own label names it; its select is named by aria-label, with no second "Event" label.
+    expect(c.querySelectorAll("button[role=combobox][aria-label=Event]").length).toBe(1);
+    expect([...c.querySelectorAll("label")].filter((l) => l.textContent === "Event").length).toBe(0);
     await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
     await until(() => (sent.length ? sent : null), "the save");
     expect((sent[0] as { actions: string[] }).actions).toEqual(["opened", "reopened", "synchronize"]);
@@ -243,7 +244,7 @@ describe("an automation's page", () => {
     const agent = await until(() => c.querySelector<HTMLElement>("[data-testid=agent-source]"), "the agent section");
     const labels = [...agent.querySelectorAll("[aria-label]")].map((e) => e.getAttribute("aria-label"));
     for (const name of ["Harness", "Model", "Time limit", "Machine", "Image"]) expect(labels).toContain(name);
-    expect(c.querySelectorAll("[data-testid=setup-script]").length + c.querySelectorAll("[aria-label='Setup script']").length).toBeGreaterThan(0);
+    expect(c.querySelectorAll("[aria-label='Setup script']").length).toBe(1);
     expect(c.querySelector("[data-testid=size-meter]")?.textContent).toBe("0 B of 64 KB");
     await click(c.querySelector<HTMLElement>("[data-testid=try-it]")!);
     const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the test dialog");
