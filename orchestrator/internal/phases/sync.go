@@ -861,7 +861,9 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return s.whilePaused(ctx, r)
 	case r.Control == "abort":
 		return true, s.end(ctx, r)
-	case r.TimedOut && r.Control == "none":
+	case r.TimedOut:
+		// Whatever pause is pending: a paused spent lux Run would be
+		// stopped again at its resume.
 		return true, s.replayTimedOut(ctx, r)
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)

@@ -24,6 +24,8 @@ func timeLimitWorld(t *testing.T, how string, pending bool) *harnessWorld {
 	}{
 		{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, status, ended_at)
 			VALUES ('run_p'||$1, $1, 'prj_'||$1, 'wi_'||$1, 1, 'test', 'qa_browser', 'completed', now())`, nil},
+		{`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+			VALUES ('ev_p'||$1, $1, 'agent.message', 'run_p'||$1, 'wi_'||$1, 'agent', 'run_p'||$1, 'test', '{"text":"Tested it"}')`, nil},
 		{`UPDATE runs SET phase = 'test', role = 'qa_browser', continues_run_id = 'run_p'||$1, continues_how = $2 WHERE id = 'run_'||$1`,
 			[]any{how}},
 		{`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
@@ -119,6 +121,34 @@ func TestAHeldRoundTheDeliveryNoLongerWaitsOnFails(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND continues_how = 'replay'`, w.run.TaskID); n != 0 {
 		t.Errorf("%d replays made, want none", n)
+	}
+}
+
+// A pause asked for just before lux timed out a resumed round (an idle or
+// a person's park) does not keep it from its replay: pausing the spent lux
+// Run would only have its resume stopped again at once.
+func TestAHeldRoundWithAPausePendingIsReplayedNotPaused(t *testing.T) {
+	w := timeLimitWorld(t, "resume", true)
+	// What pausing would ask of lux.
+	w.s.Lux = &eventsLux{}
+	if _, err := w.owner.Exec(context.Background(), `UPDATE runs SET control = 'pause_graceful', control_requested_at = now() WHERE id = $1`,
+		w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.luxState("stopping")
+	w.feed(processExited)
+	w.luxState("failed")
+	if _, err := w.s.advance(context.Background(), w.swept()); err != nil {
+		t.Fatal(err)
+	}
+	var status, replacedBy, how, continues string
+	if err := w.owner.QueryRow(context.Background(), `SELECT r.status::text, COALESCE(r.replaced_by, ''),
+			COALESCE(n.continues_how, ''), COALESCE(n.continues_run_id, '')
+		FROM runs r LEFT JOIN runs n ON n.id = r.replaced_by WHERE r.id = $1`, w.run.ID).Scan(&status, &replacedBy, &how, &continues); err != nil {
+		t.Fatal(err)
+	}
+	if status != "aborted" || replacedBy == "" || how != "replay" || continues != "run_p"+w.run.Org {
+		t.Fatalf("status %s, replaced by %q (%s of %q); want aborted, replaced by a replay of run_p%s", status, replacedBy, how, continues, w.run.Org)
 	}
 }
 
