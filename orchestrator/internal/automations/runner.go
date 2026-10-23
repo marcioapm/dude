@@ -437,6 +437,13 @@ func (r *Runner) matchDeliveries(ctx context.Context) (int, error) {
 			r.Log.Warn("matching a delivery failed", "delivery", d.ID, "attempt", d.Attempts+1, "error", err)
 			last := d.Attempts+1 >= MatchAttempts
 			if berr := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+				if last {
+					// Dropped after its last try: each automation it was
+					// still to be matched against says so in its Runs.
+					if err := skipUnmatched(ctx, tx, d, "it could not be matched: "+err.Error()); err != nil {
+						return err
+					}
+				}
 				_, err := tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_attempts = automations_attempts + 1,
 					automations_next_at = $2, automations_at = CASE WHEN $3 THEN now() END WHERE id = $1`,
 					d.ID, r.now().Add(matchBackoff(d.Attempts)), last)
@@ -447,6 +454,30 @@ func (r *Runner) matchDeliveries(ctx context.Context) (int, error) {
 		}
 	}
 	return len(batch), errors.Join(errs...)
+}
+
+// skipUnmatched records a skipped run for each enabled automation on d's
+// event that d was still to be matched against (all of them on its first
+// try, those pending after).
+func skipUnmatched(ctx context.Context, tx pgx.Tx, d pendingDelivery, reason string) error {
+	rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
+		WHERE a.enabled AND a.trigger->>'kind' = 'github' AND a.trigger->>'event' = $1
+		  AND ($2::text[] IS NULL OR a.id = ANY($2)) ORDER BY a.id`, d.Event, d.Pending)
+	if err != nil {
+		return err
+	}
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Automation, error) { return scanAutomation(row) })
+	if err != nil {
+		return err
+	}
+	ev := ReadEvent(d.Event, d.Payload)
+	payloads := []Payload{{DeliveryID: d.ID, Event: d.Event, Action: ev.Action, Body: d.Payload}}
+	for _, a := range list {
+		if _, err := recordSkipped(ctx, tx, a, SourceEvent, payloads, reason); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // matchDelivery evaluates one delivery against its organisation's enabled

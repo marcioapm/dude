@@ -614,3 +614,36 @@ func TestAutomationLoopGoesOnPastADeliveryItCannotMatch(t *testing.T) {
 		t.Errorf("push log %q", h.runs("aut_push")[0].Log)
 	}
 }
+
+// A delivery whose whole match fails with a database error on every try is
+// marked read after MatchAttempts, and each automation it was for gets a
+// skipped run saying why: the dropped event shows in its Runs.
+func TestAutomationDeliveryDroppedAfterItsLastTryLeavesASkippedRun(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_drop", "command", map[string]any{"kind": "github", "event": "push"}, map[string]any{"command": "echo pushed"})
+	// The database refuses this delivery's queued run, failing its whole match.
+	exec(t, h.owner, `CREATE FUNCTION refuse_drop() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'refused for the test'; END $$`)
+	exec(t, h.owner, `CREATE TRIGGER refuse_drop BEFORE INSERT ON automation_runs FOR EACH ROW
+		WHEN (NEW.status <> 'skipped' AND NEW.payloads @> '[{"deliveryId": "d-drop"}]') EXECUTE FUNCTION refuse_drop()`)
+	h.deliver("d-drop", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	for i := 0; i < MatchAttempts; i++ {
+		_, _ = h.runner.Sweep(context.Background())
+		if i == 0 {
+			if r := h.runs("aut_drop"); len(r) != 0 {
+				t.Fatalf("after the first try: %+v", r)
+			}
+		}
+		h.advance(11 * time.Minute)
+	}
+	var marked bool
+	if err := h.owner.QueryRow(context.Background(), `SELECT automations_at IS NOT NULL FROM webhook_deliveries WHERE id = 'd-drop'`).
+		Scan(&marked); err != nil {
+		t.Fatal(err)
+	}
+	r := h.runs("aut_drop")
+	if !marked || len(r) != 1 || r[0].Status != "skipped" || r[0].Payloads != 1 ||
+		!strings.HasPrefix(r[0].Reason, "it could not be matched: ") || !strings.Contains(r[0].Reason, "refused for the test") {
+		t.Fatalf("marked %v runs %+v", marked, r)
+	}
+}
