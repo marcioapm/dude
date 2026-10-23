@@ -576,9 +576,15 @@ func (r *Runner) startQueued(ctx context.Context) (int, error) {
 			WHERE status = 'running' AND session IS NULL AND started_at < $1`, r.now().Add(-StartingMax)); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT q.id, q.organization_id, q.automation_id, q.source FROM automation_runs q
+		// Heads whose automation has no room are left out here (start
+		// re-checks under the lock): read first, a page of them would hold
+		// back every other automation's queued run.
+		rows, err := tx.Query(ctx, `SELECT q.id, q.organization_id, q.automation_id, q.source
+			FROM automation_runs q JOIN automations a ON a.id = q.automation_id
 			WHERE q.status = 'queued' AND NOT EXISTS (SELECT 1 FROM automation_runs o WHERE o.automation_id = q.automation_id
 			  AND o.status = 'queued' AND o.source <> 'test' AND q.source <> 'test' AND (o.created_at, o.id) < (q.created_at, q.id))
+			  AND (q.source = 'test' OR (SELECT count(*) FROM automation_runs l WHERE l.automation_id = q.automation_id
+			    AND l.status = 'running' AND l.source <> 'test') < CASE WHEN a.concurrency = 'parallel' THEN a.parallel_max ELSE 1 END)
 			ORDER BY q.created_at LIMIT 20`)
 		if err != nil {
 			return err

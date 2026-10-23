@@ -183,6 +183,46 @@ func TestAutomationWebhookDoesNotWaitForFollowers(t *testing.T) {
 	once.Do(func() { close(stuck.held) })
 }
 
+// Twenty automations whose queued run waits behind their own live run hold
+// back no other automation: an unrelated run starts at once.
+func TestAutomationQueueHeadsWithoutRoomBlockNothing(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	const blocked = 20
+	for i := range blocked {
+		h.automation(fmt.Sprintf("aut_blocked_%02d", i), "command", map[string]any{"kind": "github", "event": "push"},
+			map[string]any{"command": g.hold("echo done"), "concurrency": "queue"})
+	}
+	count := func(status string) int {
+		var n int
+		if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM automation_runs
+			WHERE automation_id LIKE 'aut_blocked_%' AND status = $1`, status).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	h.deliver("blocked-1", "push", push)
+	h.until("twenty runs are running", func() bool { return count("running") == blocked })
+	h.deliver("blocked-2", "push", push)
+	h.until("twenty runs are queued behind them", func() bool { return count("queued") == blocked })
+	h.automation("aut_unblocked", "command", map[string]any{"kind": "github", "event": "issues"}, map[string]any{"command": g.hold("echo other")})
+	h.deliver("unblocked-1", "issues", map[string]any{"action": "opened", "repository": map[string]any{"full_name": "acme/web"}})
+	// One pass matches and starts it; three leave room for a slow host.
+	for range 3 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := h.runs("aut_unblocked"); len(r) != 1 || r[0].Status != "running" {
+		t.Fatalf("after three passes the unrelated run is %+v", r)
+	}
+	if n := count("queued"); n != blocked {
+		t.Errorf("queued runs %d, want %d: %+v", n, blocked, h.runs("aut_blocked_00"))
+	}
+}
+
 // submitHook is lux with a hook run inside Submit, before lux answers.
 type submitHook struct {
 	lux.Client
