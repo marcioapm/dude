@@ -37,6 +37,7 @@ type harness struct {
 	lux     *lux.HTTPClient
 	runner  *Runner
 	skew    atomic.Int64
+	frozen  atomic.Int64
 }
 
 func newHarness(t *testing.T) *harness {
@@ -57,14 +58,28 @@ func newHarness(t *testing.T) *harness {
 	h.lux = lux.New(srv.URL, "k")
 	h.runner = &Runner{DB: app, Lux: h.lux, Agent: phases.AgentConfig{DefaultImage: "agent:1"},
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Idle: 150 * time.Millisecond}
-	h.runner.Now = func() time.Time { return time.Now().Add(time.Duration(h.skew.Load())) }
+	h.runner.Now = func() time.Time {
+		if f := h.frozen.Load(); f != 0 {
+			return time.Unix(0, f)
+		}
+		return time.Now().Add(time.Duration(h.skew.Load()))
+	}
 	// Background follows and POSTs end before the database and fake go.
 	t.Cleanup(h.runner.Wait)
 	return h
 }
 
 // advance moves the runner's clock on by d.
-func (h *harness) advance(d time.Duration) { h.skew.Add(int64(d)) }
+func (h *harness) advance(d time.Duration) {
+	if f := h.frozen.Load(); f != 0 {
+		h.frozen.Store(f + int64(d))
+		return
+	}
+	h.skew.Add(int64(d))
+}
+
+// at stops the runner's clock at t.
+func (h *harness) at(t time.Time) { h.frozen.Store(t.UnixNano()) }
 
 // automation adds an enabled automation of the project's, owned by Ana.
 func (h *harness) automation(id, kind string, trigger, extra map[string]any) {
@@ -196,6 +211,43 @@ func TestAutomationIssuesStableScopedToken(t *testing.T) {
 	var runs int
 	if err := h.owner.QueryRow(ctx, `SELECT count(*) FROM runs`).Scan(&runs); err != nil || runs != 0 {
 		t.Fatalf("task runs: %d %v", runs, err)
+	}
+
+	// An organisation automation's filter limits the token's repositories:
+	// a second project's acme/docs is outside it, and an event from there
+	// names no project for create_task.
+	exec(t, h.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1 || '_docs', $2, 'docs', 'docs', 'DOC')`, h.project, h.org)
+	exec(t, h.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ($1 || '_docs_r', $2, $1 || '_docs', 'docs', 'https://github.com/acme/docs.git')`, h.project, h.org)
+	exec(t, h.owner, `UPDATE automations SET repo_filter = '{"mode":"except","repos":["acme/docs"]}' WHERE id = 'aut_token'`)
+	scoped := func(repo string) agenttools.AutomationScope {
+		t.Helper()
+		b, _ := json.Marshal(prBody("opened", repo, "ana"))
+		p := []Payload{{Event: "pull_request", Body: b}}
+		var a Automation
+		var fired Fired
+		if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) (err error) {
+			if a, err = Load(ctx, tx, "aut_token"); err != nil {
+				return err
+			}
+			fired, err = Fire(ctx, tx, a, SourceTest, p, "", nil)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.runner.toolsToken(ctx, a, fired.Run, p); err != nil {
+			t.Fatal(err)
+		}
+		var s agenttools.AutomationScope
+		if err := h.owner.QueryRow(ctx, `SELECT tools_scope FROM automation_runs WHERE id=$1`, fired.Run).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if s := scoped("acme/web"); len(s.Repos) != 1 || s.Repos[0] != "acme/web" || s.ProjectID != h.project {
+		t.Errorf("filtered scope from acme/web: %+v", s)
+	}
+	if s := scoped("acme/docs"); len(s.Repos) != 1 || s.Repos[0] != "acme/web" || s.ProjectID != "" {
+		t.Errorf("filtered scope from acme/docs: %+v", s)
 	}
 }
 
@@ -334,14 +386,41 @@ func TestAutomationAgentOnAnEventKeepsAndResumesItsSession(t *testing.T) {
 		t.Errorf("a skipped test event: %+v %v", v, err)
 	}
 
-	// After its expiry without a run, the kept session is cleaned up, whether on or off (Q10).
+	// After its expiry days without a run, the kept session is cleaned up,
+	// whether on or off (Q10, I5); the runner's clock decides.
 	exec(t, h.owner, `UPDATE automations SET enabled = false WHERE id = 'aut_triage'`)
-	exec(t, h.owner, `UPDATE automation_sessions SET last_run_at = now() - interval '8 days'`)
-	h.until("the kept session expires", func() bool {
+	var last time.Time
+	if err := h.owner.QueryRow(context.Background(), `SELECT last_run_at FROM automation_sessions WHERE automation_id = 'aut_triage'`).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	sessions := func() int {
 		var n int
 		_ = h.owner.QueryRow(context.Background(), `SELECT count(*) FROM automation_sessions`).Scan(&n)
-		return n == 0
-	})
+		return n
+	}
+	h.at(last.Add(6*24*time.Hour + 23*time.Hour))
+	for range 2 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sessions() != 1 || h.luxState(first.LuxRunID) != "stopped" {
+		t.Fatalf("at 6 days 23 hours: %d sessions, lux %s", sessions(), h.luxState(first.LuxRunID))
+	}
+	// A running (non-test) run holds the session past its expiry; this one is
+	// still starting (no session yet), so nothing follows it meanwhile.
+	exec(t, h.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_hold', $1, 'aut_triage', 'running', 'event')`, h.org)
+	h.advance(time.Hour + time.Minute)
+	for range 2 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sessions() != 1 {
+		t.Fatal("a session expired under a running run")
+	}
+	exec(t, h.owner, `UPDATE automation_runs SET status = 'succeeded', ended_at = now() WHERE id = 'arn_hold'`)
+	h.until("the kept session expires at 7 days and a minute", func() bool { return sessions() == 0 })
 	h.until("its container is ended", func() bool { return lux.Terminated(h.luxState(first.LuxRunID)) })
 }
 
@@ -402,7 +481,9 @@ func TestAutomationCommandOnASchedule(t *testing.T) {
 	}
 
 	// Run now on a schedule while a run is live queues behind it (Q7).
-	h.automation("aut_slow", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"}, map[string]any{"command": "sleep 1"})
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	h.automation("aut_slow", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"}, map[string]any{"command": g.hold("echo done")})
 	first, _, err := h.runner.RunNow(context.Background(), h.org, "aut_slow", h.person, "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -423,12 +504,19 @@ func TestAutomationCommandGetsTheEvent(t *testing.T) {
 	h.automation("aut_cmd", "command", map[string]any{"kind": "github", "event": "push"},
 		map[string]any{"command": `echo "$DUDE_EVENT_NAME $DUDE_DELIVERY_ID"; cat "$DUDE_EVENT_PATH"`})
 	h.deliver("d-push", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	// From a repository outside the project: matched, read, and no run.
+	h.deliver("d-other", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "other/web"}})
 	h.until("the run ends", func() bool {
 		r := h.runs("aut_cmd")
 		return len(r) == 1 && r[0].Status != "running" && r[0].Status != "queued"
 	})
-	if r := h.runs("aut_cmd")[0]; r.Status != "succeeded" {
-		t.Fatalf("run: %+v", r)
+	h.until("both deliveries are read", func() bool {
+		var n int
+		_ = h.owner.QueryRow(context.Background(), `SELECT count(*) FROM webhook_deliveries WHERE automations_at IS NOT NULL`).Scan(&n)
+		return n == 2
+	})
+	if r := h.runs("aut_cmd"); len(r) != 1 || r[0].Status != "succeeded" {
+		t.Fatalf("runs: %+v", r)
 	}
 	log := h.runs("aut_cmd")[0].Log
 	if !strings.Contains(log, "push d-push") || !strings.Contains(log, `"refs/heads/main"`) {
@@ -459,12 +547,38 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		w.WriteHeader(202)
 	}))
 	t.Cleanup(srv.Close)
+	h.runner.Idle = 0 // ServerIdle, on the runner's clock
+	if ServerIdle != 30*time.Second {
+		t.Fatalf("ServerIdle %v, the decision says 30 s (Q3, Q16)", ServerIdle)
+	}
 	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return srv.URL, nil }
 	h.automation("aut_srv", "server", map[string]any{"kind": "github", "event": "pull_request"},
 		map[string]any{"server": map[string]any{"command": "bun run serve", "port": 8080, "path": "/events", "health": nil}})
 	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("the first POST", func() bool { mu.Lock(); defer mu.Unlock(); return len(got) == 1 })
+	// The clock stands still: nothing idles out before d-2 reaches the same container.
 	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "ana"))
+	h.until("both POSTed, the second after a retry", func() bool {
+		var posted int
+		_ = h.owner.QueryRow(context.Background(), `SELECT posted FROM automation_runs WHERE automation_id = 'aut_srv'`).Scan(&posted)
+		return posted == 2
+	})
+	h.runner.Wait()
+	var last time.Time
+	if err := h.owner.QueryRow(context.Background(), `SELECT last_request_at FROM automation_runs WHERE automation_id = 'aut_srv'`).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	h.at(last.Add(29 * time.Second))
+	for range 3 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h.runner.Wait()
+	}
+	if r := h.runs("aut_srv"); len(r) != 1 || r[0].Status != "running" || lux.Terminated(h.luxState(r[0].LuxRunID)) || h.luxState(r[0].LuxRunID) == "stopping" {
+		t.Fatalf("29 s after the last answer: %+v", r)
+	}
+	h.advance(time.Second)
 	h.until("the run ends idle", func() bool { r := h.runs("aut_srv"); return len(r) == 1 && r[0].Status != "running" })
 	r := h.runs("aut_srv")[0]
 	if r.Status != "succeeded" || r.StopReason != "idle" || r.Payloads != 2 {
@@ -530,13 +644,15 @@ func TestSignIsHMACSHA256OfTheBody(t *testing.T) {
 }
 
 // Skip records a skipped run with its reason; merge hands the waiting run
-// every payload, as a list (Q2).
+// every payload, as a list (Q2), in its event file.
 func TestAutomationConcurrencyRows(t *testing.T) {
 	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
 	h.automation("aut_skip", "command", map[string]any{"kind": "github", "event": "push"},
-		map[string]any{"command": "sleep 4", "concurrency": "skip"})
+		map[string]any{"command": g.hold("echo done"), "concurrency": "skip"})
 	h.automation("aut_merge", "command", map[string]any{"kind": "github", "event": "push"},
-		map[string]any{"command": "sleep 4", "concurrency": "merge"})
+		map[string]any{"command": g.hold(`cat "$DUDE_EVENT_PATH"`), "concurrency": "merge"})
 	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
 	h.deliver("p-1", "push", push)
 	h.until("both running", func() bool {
@@ -552,7 +668,15 @@ func TestAutomationConcurrencyRows(t *testing.T) {
 	}
 	merge := h.runs("aut_merge")
 	if len(merge) != 2 || merge[1].Payloads != 2 {
-		t.Errorf("merge: %+v", merge)
+		t.Fatalf("merge: %+v", merge)
+	}
+	// The merged run's event file is the list of both payloads.
+	g.release(t)
+	h.until("the merged run ends", func() bool { r := h.runs("aut_merge"); return r[1].Status == "succeeded" })
+	log := h.runs("aut_merge")[1].Log
+	var list []Payload
+	if err := json.Unmarshal([]byte(strings.TrimSpace(log)), &list); err != nil || len(list) != 2 || list[0].DeliveryID != "p-2" || list[1].DeliveryID != "p-3" {
+		t.Errorf("merged run's event file %q: %v", log, err)
 	}
 }
 
