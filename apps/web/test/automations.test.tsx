@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, click, mount, until } from "./dom.ts";
+import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, PROJECT } from "../src/fixtures/data.ts";
 import { AutomationPage, AutomationsList, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
@@ -412,23 +412,43 @@ describe("Run now on an event", () => {
     const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
     const write = [...dialog.querySelectorAll<HTMLButtonElement>("[data-testid=test-mode] button")].find((b) => b.textContent === "Write a test event")!;
     await click(write);
-    const editor = await until(() => dialog.querySelector<HTMLTextAreaElement>("[data-testid=test-editor]"), "the editor");
+    const content = await until(() => dialog.querySelector<HTMLElement>("[data-testid=test-editor] .cm-content"), "the loaded editor");
+    const editorText = () => [...content.querySelectorAll(".cm-line")].map((l) => l.textContent).join("\n");
+    // Replace the editor's text as typing would: its lines rewritten in the DOM, read back by CodeMirror.
+    const setEditor = async (text: string) => {
+      await act(async () => {
+        content.replaceChildren(...text.split("\n").map((l) => {
+          const div = document.createElement("div");
+          div.className = "cm-line";
+          div.textContent = l;
+          return div;
+        }));
+      });
+      await settle(120);
+    };
     const run = () => dialog.querySelector<HTMLButtonElement>("[data-testid=test-run]")!;
     const checks = () => dialog.querySelector("[data-testid=test-checks]")!.textContent ?? "";
     await until(() => (checks().includes("it matches.") ? true : null), "it matches");
-    expect(checks()).toContain("Valid JSON.");
+    expect(checks()).toContain("✓ Valid JSON.");
     expect(run().disabled).toBe(false);
+    expect(dialog.querySelectorAll("[data-testid=test-editor]").length).toBe(1);
+    expect(dialog.textContent).toContain("The trigger's event.");
+    expect(dialog.textContent).toContain("Made up; starts with test-.");
 
-    const skipped = { ...JSON.parse(editor.value), sender: { login: "dependabot[bot]" } };
-    await typeInto(editor, JSON.stringify(skipped, null, 2));
+    const skipped = { ...JSON.parse(editorText()), sender: { login: "dependabot[bot]" } };
+    await setEditor(JSON.stringify(skipped, null, 2));
     await until(() => (checks().includes("Author") ? true : null), "skipped because of Author");
     expect(checks()).toContain("It would be skipped because of Author: it is by dependabot[bot], who is excluded");
     expect(run().disabled).toBe(true);
 
-    await typeInto(editor, '{\n  "action": "opened"\n  "sender": {}\n}');
-    await until(() => (checks().startsWith("Not valid JSON") ? true : null), "invalid");
+    await setEditor('{\n  "action": "opened"\n  "sender": {}\n}');
+    await until(() => (checks().includes("Not valid JSON") ? true : null), "invalid");
     expect(checks()).toContain("Filters are checked once the JSON is valid.");
     expect(run().disabled).toBe(true);
+
+    await setEditor("[1]");
+    await until(() => (checks().includes("must be a JSON object") ? true : null), "not an object");
+    expect(checks()).toContain("× The body must be a JSON object.");
   });
 });
 

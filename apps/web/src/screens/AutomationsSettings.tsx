@@ -1238,23 +1238,37 @@ function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a:
           )
         ) : (
           <>
-            <Input label="X-GitHub-Event" value={trigger.event} readOnly mono />
-            <Select<string> label="Action" value={action ?? ""} onValueChange={(v) => {
-              setAction(v || null);
-              const parsed = checkJson(text);
-              if (parsed.ok && parsed.value && typeof parsed.value === "object") setText(JSON.stringify({ ...(parsed.value as object), action: v }, null, 2));
-            }} options={(trigger.actions.length ? trigger.actions : ["opened", "closed", "edited", "synchronize", "created", "completed", "submitted"]).map((x) => ({ value: x, label: x }))} />
-            <Input label="X-GitHub-Delivery" value={deliveryId} mono onChange={(e) => setDeliveryId(e.target.value)} />
-            <Textarea aria-label="Event body" className="ds-mono" rows={14} value={text} onChange={(e) => setText(e.target.value)} data-testid="test-editor" />
-            <TextButton onClick={() => setText(JSON.stringify(testTemplate(trigger.event, action), null, 2))} data-testid="reset-template">Reset to template</TextButton>
-            <span data-testid="test-checks" role="status">
-              {json.ok ? (objectBody ? "Valid JSON." : "The body must be a JSON object.") : `Not valid JSON, line ${json.line}, column ${json.column}: ${json.message}`}
-              {" "}
-              {!objectBody ? "Filters are checked once the JSON is valid."
-                : !verdict ? "Checking the filters…"
-                : verdict.matches ? <>Filters are checked against this event: <b>it matches.</b></>
-                : <><b>It would be skipped because of {FILTER_LABEL[verdict.filter]}</b>: {verdict.because}</>}
-            </span>
+            <SettingFields>
+              <SettingField label="X-GitHub-Event"><Input aria-label="X-GitHub-Event" hint="The trigger's event." value={trigger.event} readOnly mono /></SettingField>
+              <SettingField label="Action">
+                <Select<string> aria-label="Action" value={action ?? ""} onValueChange={(v) => {
+                  setAction(v || null);
+                  const parsed = checkJson(text);
+                  if (parsed.ok && parsed.value && typeof parsed.value === "object") setText(JSON.stringify({ ...(parsed.value as object), action: v }, null, 2));
+                }} options={(trigger.actions.length ? trigger.actions : EVENT_ACTIONS[trigger.event] ?? ["opened", "closed", "edited", "created", "completed"]).map((x) => ({ value: x, label: x }))} />
+                <small className="automationHint">The trigger's actions.</small>
+              </SettingField>
+              <SettingField label="X-GitHub-Delivery"><Input aria-label="X-GitHub-Delivery" hint="Made up; starts with test-." value={deliveryId} mono onChange={(e) => setDeliveryId(e.target.value)} /></SettingField>
+            </SettingFields>
+            <CodeEditor aria-label="Event body" language="plain" value={text} onChange={setText} data-testid="test-editor" minLines={10} maxLines={20}
+              diagnostics={json.ok ? (objectBody ? [] : [{ severity: "error", line: 1, from: 0, to: 1, message: "The body must be a JSON object." }])
+                : [{ severity: "error", line: json.line, from: Math.max(0, json.column - 1), to: json.column, message: json.message }]}
+              header={<span className="ds-mono">json · body of {trigger.event}</span>}
+              footer={<span className="automationEditorFoot">
+                <span>{text.split("\n").length} lines</span>
+                <TextButton onClick={() => setText(JSON.stringify(testTemplate(trigger.event, action), null, 2))} data-testid="reset-template">Reset to template</TextButton>
+              </span>} />
+            <ul className="automationChecks" data-testid="test-checks" role="status">
+              <li data-ok={json.ok && objectBody ? "true" : "false"}>
+                {json.ok ? (objectBody ? "✓ Valid JSON." : "× The body must be a JSON object.") : `× Not valid JSON, line ${json.line}, column ${json.column}: ${json.message}`}
+              </li>
+              <li data-ok={verdict?.matches ? "true" : "false"}>
+                {!objectBody ? "Filters are checked once the JSON is valid."
+                  : !verdict ? "Checking the filters…"
+                  : verdict.matches ? <>✓ Filters are checked against this event: <b>it matches.</b></>
+                  : <>⊘ <b>It would be skipped because of {FILTER_LABEL[verdict.filter]}</b>: {verdict.because}</>}
+              </li>
+            </ul>
           </>
         )}
         <SettingsNote>A test run starts its own run, with a fresh session, whatever is running. It is a real run: it can comment and create tasks.</SettingsNote>
