@@ -223,7 +223,7 @@ func TestACarriedCriterionKeepsOnlyThePreviousRoundsPass(t *testing.T) {
 			if c.want.Evidence != nil && !slices.Equal(got.Evidence, c.want.Evidence) {
 				t.Errorf("evidence = %v, want %v", got.Evidence, c.want.Evidence)
 			}
-			if got.Observed != strings.TrimSpace(why) && c.name == "a pass" {
+			if c.name == "a pass" && got.Observed != why {
 				t.Errorf("observed = %q, want the tester's reason", got.Observed)
 			}
 		})
