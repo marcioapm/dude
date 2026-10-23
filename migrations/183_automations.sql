@@ -131,6 +131,9 @@ CREATE TABLE automation_runs (
 );
 CREATE INDEX automation_runs_automation_idx ON automation_runs (automation_id, created_at DESC);
 CREATE INDEX automation_runs_open_idx ON automation_runs (created_at) WHERE status IN ('queued', 'running');
+-- startQueued's per-automation head and room checks: one automation's open
+-- runs, never its whole history.
+CREATE INDEX automation_runs_automation_open_idx ON automation_runs (automation_id, created_at) WHERE status IN ('queued', 'running');
 CREATE UNIQUE INDEX automation_runs_token_idx ON automation_runs (mcp_token_hash) WHERE mcp_token_hash IS NOT NULL;
 -- A resumed run reads on from the cursor its kept lux Run's last run left.
 CREATE INDEX automation_runs_lux_run_idx ON automation_runs (lux_run_id, created_at DESC) WHERE lux_run_id IS NOT NULL;
