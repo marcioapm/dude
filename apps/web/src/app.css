@@ -566,6 +566,14 @@ body {
   gap: var(--ds-space-4) var(--ds-space-12);
   flex: 1;
 }
+.automationNext {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
 .automationCount {
   margin: 0;
   font-size: var(--ds-text-sm);

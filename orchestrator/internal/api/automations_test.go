@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/automations"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -106,5 +107,25 @@ func TestAutomationRunNowAndEvaluateRefusals(t *testing.T) {
 		if status, out := call(off, path, `{"body":{}}`); status != 503 || errOf(out) != "unavailable: automations are not running here" {
 			t.Errorf("%s with no runner: %d %v", path, status, out)
 		}
+	}
+
+	// A schedule's next three times, as the scheduler computes them, in its zone.
+	status, out := call(s, "/internal/automations/schedule/next", `{"cron":"0 3 * * *","tz":"Europe/Lisbon"}`)
+	times, _ := out["times"].([]any)
+	if status != 200 || len(times) != 3 {
+		t.Fatalf("next: %d %v", status, out)
+	}
+	lisbon, _ := time.LoadLocation("Europe/Lisbon")
+	var prev time.Time
+	for _, raw := range times {
+		at, err := time.Parse(time.RFC3339, raw.(string))
+		if err != nil || at.In(lisbon).Hour() != 3 || at.In(lisbon).Minute() != 0 || !at.After(prev) {
+			t.Errorf("next time %v %v", raw, err)
+		}
+		prev = at
+	}
+	if status, out := call(s, "/internal/automations/schedule/next", `{"cron":"0 3 * *","tz":"UTC"}`); status != 400 ||
+		errOf(out) != "bad_request: a schedule is five fields: minute hour day-of-month month day-of-week" {
+		t.Errorf("a bad cron: %d %v", status, out)
 	}
 }

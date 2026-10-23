@@ -235,25 +235,19 @@
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
-.field,
-.select {
-  height: var(--ds-size-control-md);
-  padding: 0 var(--ds-space-8);
-  background: var(--ds-color-field-bg);
-  border: 1px solid var(--ds-color-border);
-  border-radius: var(--ds-radius-control);
-  color: var(--ds-color-text-primary);
+.time {
+  inline-size: calc(var(--ds-size-control-md) * 2.5);
+}
+.advanced {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ds-color-accent);
   font: inherit;
-  font-size: var(--ds-text-sm);
+  cursor: pointer;
 }
-.field:focus-visible,
-.select:focus-visible {
-  outline: none;
-  border-color: var(--ds-color-accent);
-  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
-}
-.field[aria-invalid="true"] {
-  border-color: var(--ds-tone-danger-border);
+.advanced:disabled {
+  color: inherit;
 }
 .problem {
   font-size: var(--ds-text-sm);

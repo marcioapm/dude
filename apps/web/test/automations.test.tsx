@@ -148,6 +148,20 @@ describe("an automation's page", () => {
     expect((sent[0] as { actions: string[] }).actions).toEqual(["opened", "reopened", "synchronize"]);
   });
 
+  test("a schedule shows its next three runs, from the orchestrator, in its zone", async () => {
+    const client = new FixtureClient("a");
+    const asked: Array<[string, string]> = [];
+    const next = client.scheduleNext.bind(client);
+    client.scheduleNext = (cron, tz) => { asked.push([cron, tz]); return next(cron, tz); };
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const list = await until(() => c.querySelector<HTMLElement>("[data-testid=schedule-next] ol[aria-label='Next runs']"), "the next runs");
+    expect(asked).toEqual([["0 3 * * *", "Europe/Lisbon"]]);
+    const items = [...list.querySelectorAll("li")].map((li) => li.textContent);
+    expect(items.length).toBe(3);
+    for (const t of items) expect(t).toMatch(/^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, 03:00$/);
+  });
+
   test("an owner who left: the attention callout, Transfer, and the admins as owner", async () => {
     const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_cost" }}
       onPlace={() => undefined} onBack={() => undefined} />);

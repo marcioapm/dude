@@ -585,6 +585,11 @@ export function registerAutomationRoutes(router: Router): void {
   router.get("/v1/automations", listOrg);
   router.post("/v1/automations", createAutomation);
   router.get("/v1/automations/repositories", orgRepositories);
+  // A schedule's next three times: the orchestrator's scheduler computes them.
+  router.post("/v1/automations/schedule/next", async (ctx) => {
+    const input = await parseBody(ctx.request, z.object({ cron: z.string().min(1).max(200), tz: z.string().min(1).max(64) }).strict());
+    return forward(ctx, "POST", "/internal/automations/schedule/next", JSON.stringify(input));
+  });
   // The GitHub events this organisation is subscribed to: the orchestrator reads GitHub.
   router.get("/v1/automations/subscriptions", (ctx) =>
     orchestrator(ctx.principal.organizationId, "GET", "/internal/automations/subscriptions", undefined, ctx.principal));

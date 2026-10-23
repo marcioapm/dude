@@ -158,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /internal/automations/{id}/runs", s.auth(s.automationRunNow))
 	mux.Handle("POST /internal/automations/{id}/test-event/evaluate", s.auth(s.evaluateTestEvent))
 	mux.Handle("POST /internal/automations/{id}/start-fresh", s.auth(s.automationStartFresh))
+	mux.Handle("POST /internal/automations/schedule/next", s.auth(s.scheduleNext))
 	return mux
 }
 

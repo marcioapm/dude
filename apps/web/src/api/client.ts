@@ -1366,6 +1366,11 @@ export class ApiClient {
     return this.#request("GET", "/v1/automations/repositories");
   }
 
+  /** A schedule's next three times, as the orchestrator's scheduler computes them. */
+  scheduleNext(cron: string, tz: string): Promise<{ times: string[] }> {
+    return this.#request("POST", "/v1/automations/schedule/next", { cron, tz });
+  }
+
   eventSubscriptions(): Promise<EventSubscriptions> {
     return this.#request("GET", "/v1/automations/subscriptions");
   }

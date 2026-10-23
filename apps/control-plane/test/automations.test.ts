@@ -349,6 +349,13 @@ describe("runs", () => {
 
     const verdict = await body(await call("bo", "POST", `/v1/automations/${a.id}/test-event/evaluate`, { body: { sender: { login: "dependabot[bot]" } } }));
     expect(verdict).toEqual({ matches: false, filter: "author", because: "it is by dependabot[bot], who is excluded" });
+
+    // A schedule's next times are the orchestrator's; a body that is not {cron, tz} never reaches it.
+    asked.length = 0;
+    expect((await call("bo", "POST", "/v1/automations/schedule/next", { cron: "0 3 * * *", tz: "UTC" })).status).toBe(202);
+    expect(asked.map((q) => [q.path, q.body])).toEqual([["/internal/automations/schedule/next", JSON.stringify({ cron: "0 3 * * *", tz: "UTC" })]]);
+    expect((await call("bo", "POST", "/v1/automations/schedule/next", { cron: "0 3 * * *" })).status).toBe(400);
+    expect(asked.length).toBe(1);
     expect((await call("bo", "POST", `/v1/automations/${a.id}/start-fresh`)).status).toBe(204);
 
     const subs = await body(await call("bo", "GET", "/v1/automations/subscriptions"));

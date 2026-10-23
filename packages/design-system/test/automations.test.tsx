@@ -15,10 +15,12 @@ import {
   describeCron,
   KindMark,
   ListSwitch,
+  NextRuns,
   OwnerMark,
   RepoFilterField,
   repoFilterCount,
   repoGlob,
+  SchedulePicker,
   scheduleOf,
   TriggerSummary,
 } from "../src/components/Automations.tsx";
@@ -147,5 +149,48 @@ describe("marks", () => {
     const pressed = [...el.querySelectorAll('button[aria-pressed="true"]')] as HTMLButtonElement[];
     expect(pressed.map((b) => b.textContent)).toEqual(["Wed"]);
     expect(pressed[0]!.disabled).toBe(true);
+  });
+});
+
+describe("SchedulePicker and NextRuns", () => {
+  async function typeTime(input: HTMLInputElement, text: string) {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  test("a daily schedule's time is 24-hour text; a full time changes the cron; the cron line and Advanced are under it", async () => {
+    const changes: Array<{ cron: string; tz: string }> = [];
+    const el = await mount(<SchedulePicker cron="0 3 * * *" tz="Europe/Lisbon" zones={["UTC", "Europe/Lisbon"]} zoneSource="Acme's"
+      onChange={(c) => changes.push(c)} />);
+    const time = el.querySelector<HTMLInputElement>("input[aria-label=Time]")!;
+    expect(time.value).toBe("03:00");
+    expect(time.type).not.toBe("time");
+    await typeTime(time, "1");
+    expect(changes).toEqual([]);
+    await typeTime(time, "15:30");
+    expect(changes).toEqual([{ cron: "30 15 * * *", tz: "Europe/Lisbon" }]);
+    const asCron = el.querySelector("[data-testid=schedule-as-cron]")!;
+    expect(asCron.textContent).toBe("As cron 0 3 * * * · Advanced: write a cron expression");
+    expect(el.querySelectorAll("select").length).toBe(0);
+    await act(async () => [...asCron.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Advanced"))!.click());
+    expect(el.querySelector<HTMLInputElement>("[data-testid=schedule-cron]")?.value).toBe("0 3 * * *");
+  });
+
+  test("minutes and hourly modes use the DS controls and say the change", async () => {
+    const changes: string[] = [];
+    const el = await mount(<SchedulePicker cron="7 * * * *" tz="UTC" zones={["UTC"]} onChange={(c) => changes.push(c.cron)} />);
+    expect(el.querySelector<HTMLInputElement>("input[aria-label='At minute']")?.value).toBe("7");
+    const minutes = [...el.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Minutes")!;
+    await act(async () => minutes.click());
+    expect(changes.at(-1)).toBe("*/15 * * * *");
+  });
+
+  test("next runs read as a day and a time in the zone, or say that none comes", async () => {
+    const el = await mount(<NextRuns tz="Europe/Lisbon" times={[new Date("2026-10-24T02:00:00Z"), new Date("2026-10-25T03:00:00Z")]} />);
+    expect([...el.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["Sat 24 Oct, 03:00", "Sun 25 Oct, 03:00"]);
+    const none = await mount(<NextRuns tz="UTC" times={[]} />);
+    expect(none.textContent).toBe("Never runs: no date matches.");
   });
 });

@@ -5,7 +5,7 @@
  */
 
 import type { Automation, AutomationInput, AutomationPromptVersion, AutomationRun, AutomationRunDetail, AutomationRunsResponse, EventSubscriptions, EventVerdict, NewAutomation, PastDelivery, RunNow } from "@dude/domain";
-import { automationDefaults, repoFilterAllows } from "@dude/domain";
+import { automationDefaults, parseCron, repoFilterAllows } from "@dude/domain";
 import { ORG, PEOPLE, PROJECT } from "./data.ts";
 
 const promptOf = (agent: Automation["agent"]): string | null => (!agent ? null : "own" in agent ? agent.own.prompt : agent.brief);
@@ -180,6 +180,28 @@ export class FixtureAutomations {
     a.owner = person(personId);
     a.ownerLeftAt = null;
     return a;
+  }
+
+  /** A schedule's next three times, minute by minute in its zone (the orchestrator's answer, slowly). */
+  scheduleNext(cron: string, tz: string): { times: string[] } {
+    const p = parseCron(cron);
+    if (!p.ok) throw new Error(p.message);
+    const s = p.spec;
+    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric",
+      hour: "numeric", minute: "numeric", weekday: "short" });
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const times: string[] = [];
+    let t = Math.ceil(Date.now() / MIN) * MIN;
+    for (let i = 0; i < 60 * 24 * 400 && times.length < 3; i++, t += MIN) {
+      const parts = Object.fromEntries(fmt.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+      const dom = s.days.includes(Number(parts["day"]));
+      const dow = s.weekdays.includes(days.indexOf(parts["weekday"]!));
+      const day = s.dayOr ? dom || dow : dom && dow;
+      if (s.minutes.includes(Number(parts["minute"])) && s.hours.includes(Number(parts["hour"])) && s.months.includes(Number(parts["month"])) && day) {
+        times.push(new Date(t).toISOString());
+      }
+    }
+    return { times };
   }
 
   repositories() {

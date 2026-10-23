@@ -15,6 +15,7 @@ import {
   KindMark,
   ListSwitch,
   MarkdownDocument,
+  NextRuns,
   OwnerMark,
   PromptHistory,
   RepoFilterField,
@@ -505,7 +506,9 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           </SettingRow>
           {trigger.kind === "schedule" ? (
             <SettingRow label="Schedule">
-              <SchedulePicker cron={trigger.cron} tz={trigger.tz} zones={zones} disabled={ro} onChange={(s) => set("trigger", { kind: "schedule", ...s })} />
+              <SchedulePicker cron={trigger.cron} tz={trigger.tz} zones={zones} disabled={ro} zoneSource={`${orgName}'s`}
+                next={<ScheduleNext client={client} cron={trigger.cron} tz={trigger.tz} />}
+                onChange={(s) => set("trigger", { kind: "schedule", ...s })} />
             </SettingRow>
           ) : (
             <EventTrigger trigger={trigger} subs={subs} disabled={ro} onChange={(t) => set("trigger", t)} />
@@ -668,6 +671,18 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
       )}
     </form>
   );
+}
+
+/** A schedule's next three runs, as the orchestrator's scheduler computes them. */
+function ScheduleNext({ client, cron, tz }: { client: ApiClient; cron: string; tz: string }) {
+  const [times, setTimes] = useState<Date[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    setTimes(null);
+    client.scheduleNext(cron, tz).then((r) => { if (live) setTimes(r.times.map((t) => new Date(t))); }, () => { if (live) setTimes(null); });
+    return () => { live = false; };
+  }, [client, cron, tz]);
+  return times ? <span className="automationNext" data-testid="schedule-next">Next: <NextRuns times={times} tz={tz} /></span> : null;
 }
 
 /** A project automation's checkouts: none, or the repositories ticked (every one is "all"). */

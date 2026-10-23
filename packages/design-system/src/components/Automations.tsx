@@ -3,6 +3,9 @@ import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { PersonAvatar } from "./PersonAvatar.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
+import { Input } from "../primitives/Input.tsx";
+import { NumberInput } from "../primitives/NumberInput.tsx";
+import { Select } from "../primitives/Select.tsx";
 import type { Person } from "../util/viewTypes.ts";
 import styles from "./Automations.module.css";
 
@@ -342,9 +345,10 @@ export function DayToggles({ days, onChange, disabled }: { readonly days: readon
 /**
  * A schedule: Minutes, Hourly, Daily, Weekly or a cron line, in a time
  * zone, with its next three runs. `next` is the app's (the orchestrator's
- * parser decides; the picker only shows).
+ * parser decides; the picker only shows). The time is 24-hour text; the
+ * line under it says the schedule as cron, and Advanced opens the cron line.
  */
-export function SchedulePicker({ cron, tz, onChange, zones, next, problem, disabled }: {
+export function SchedulePicker({ cron, tz, onChange, zones, next, problem, disabled, zoneSource }: {
   readonly cron: string;
   readonly tz: string;
   readonly onChange: (next: { cron: string; tz: string }) => void;
@@ -352,13 +356,21 @@ export function SchedulePicker({ cron, tz, onChange, zones, next, problem, disab
   readonly next?: ReactNode;
   readonly problem?: string | null | undefined;
   readonly disabled?: boolean | undefined;
+  /** Whose time zone it starts from ("Example's"), said beside the zone. */
+  readonly zoneSource?: string | undefined;
 }) {
   const read = scheduleOf(cron);
   const [mode, setMode] = useState<ScheduleMode>(read.mode);
   const v = read;
   const set = (m: Exclude<ScheduleMode, "cron">, over: Partial<typeof v>) => onChange({ cron: cronOf(m, { ...v, ...over }), tz });
   const timeValue = `${String(v.hour).padStart(2, "0")}:${String(v.minute).padStart(2, "0")}`;
-  const fromTime = (t: string) => { const [h, m] = t.split(":").map(Number); return { hour: h ?? 0, minute: m ?? 0 }; };
+  const [timeText, setTimeText] = useState(timeValue);
+  const [lastTime, setLastTime] = useState(timeValue);
+  if (lastTime !== timeValue) {
+    setLastTime(timeValue);
+    setTimeText(timeValue);
+  }
+  const time = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(timeText.trim());
   return (
     <div className={styles["schedule"]} data-testid="schedule-picker">
       <Segmented<ScheduleMode> label="Repeats" size="sm" value={mode} disabled={disabled}
@@ -366,31 +378,44 @@ export function SchedulePicker({ cron, tz, onChange, zones, next, problem, disab
         options={[{ value: "minutes", label: "Minutes" }, { value: "hourly", label: "Hourly" }, { value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }, { value: "cron", label: "cron" }]} />
       <div className={styles["scheduleLine"]}>
         {mode === "minutes" ? (
-          <label className={styles["inline"]}>Every
-            <select className={styles["select"]} value={v.every} disabled={disabled} onChange={(e) => set("minutes", { every: Number(e.target.value) })}>
-              {[5, 10, 15, 20, 30].map((n) => <option key={n} value={n}>{n}</option>)}
-            </select> minutes</label>
+          <span className={styles["inline"]}>Every
+            <Select<string> aria-label="Every how many minutes" size="sm" value={String(v.every)} disabled={disabled}
+              options={[5, 10, 15, 20, 30].map((n) => ({ value: String(n), label: String(n) }))}
+              onValueChange={(n) => set("minutes", { every: Number(n) })} /> minutes</span>
         ) : mode === "hourly" ? (
-          <label className={styles["inline"]}>At minute
-            <input className={styles["field"]} type="number" min={0} max={59} value={v.minute} disabled={disabled} onChange={(e) => set("hourly", { minute: Math.min(59, Math.max(0, Number(e.target.value))) })} />
-          </label>
+          <span className={styles["inline"]}>At minute
+            <NumberInput step={1} aria-label="At minute" min={0} max={59} value={v.minute} disabled={disabled}
+              onValueChange={(n) => set("hourly", { minute: Math.min(59, Math.max(0, n ?? 0)) })} />
+          </span>
         ) : mode === "cron" ? (
-          <input className={cx(styles["field"], "ds-mono")} aria-label="cron" data-testid="schedule-cron" value={cron} disabled={disabled}
+          <Input aria-label="cron" data-testid="schedule-cron" mono value={cron} disabled={disabled}
             aria-invalid={problem ? true : undefined} onChange={(e) => onChange({ cron: e.target.value, tz })} />
         ) : (
           <>
             {mode === "weekly" ? <DayToggles days={v.days} disabled={disabled} onChange={(days) => set("weekly", { days })} /> : null}
-            <label className={styles["inline"]}>at
-              <input className={styles["field"]} type="time" value={timeValue} disabled={disabled} onChange={(e) => set(mode, fromTime(e.target.value))} />
-            </label>
+            <span className={styles["inline"]}>at
+              <Input aria-label="Time" mono inputMode="numeric" placeholder="HH:MM" value={timeText} disabled={disabled}
+                className={styles["time"]} aria-invalid={time ? undefined : true}
+                onChange={(e) => {
+                  setTimeText(e.target.value);
+                  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(e.target.value.trim());
+                  if (m) set(mode, { hour: Number(m[1]), minute: Number(m[2]) });
+                }} />
+            </span>
           </>
         )}
-        <label className={styles["inline"]}>in
-          <select className={styles["select"]} aria-label="Time zone" value={tz} disabled={disabled} onChange={(e) => onChange({ cron, tz: e.target.value })}>
-            {(zones.includes(tz) ? zones : [tz, ...zones]).map((z) => <option key={z} value={z}>{z}</option>)}
-          </select>
-        </label>
+        <span className={styles["inline"]}>in
+          <Select<string> aria-label="Time zone" size="sm" value={tz} disabled={disabled}
+            options={(zones.includes(tz) ? zones : [tz, ...zones]).map((z) => ({ value: z, label: z, meta: z === tz && zoneSource ? zoneSource : undefined }))}
+            onValueChange={(z) => onChange({ cron, tz: z })} />
+        </span>
       </div>
+      {mode === "cron" ? null : (
+        <span className={styles["muted"]} data-testid="schedule-as-cron">
+          As cron <code className="ds-mono">{cron}</code> ·{" "}
+          <button type="button" className={styles["advanced"]} disabled={disabled} onClick={() => setMode("cron")}>Advanced: write a cron expression</button>
+        </span>
+      )}
       {problem ? <span className={styles["problem"]} role="alert">{problem}</span> : null}
       {next}
     </div>

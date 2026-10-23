@@ -113,6 +113,38 @@ func (s *Server) evaluateTestEvent(w http.ResponseWriter, r *http.Request, org s
 	return nil
 }
 
+// scheduleNext is a schedule's next three times, as the scheduler computes
+// them (its cron, in its zone, DST included), for the schedule picker.
+func (s *Server) scheduleNext(w http.ResponseWriter, r *http.Request, _ string) error {
+	var body struct {
+		Cron string `json:"cron"`
+		TZ   string `json:"tz"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	cron, err := automations.ParseCron(body.Cron)
+	if err != nil {
+		return fail(http.StatusBadRequest, "bad_request", "%s", err.Error())
+	}
+	loc, err := time.LoadLocation(body.TZ)
+	if err != nil {
+		return fail(http.StatusBadRequest, "bad_request", "no time zone %q", body.TZ)
+	}
+	times := []time.Time{}
+	at := time.Now()
+	for range 3 {
+		next := cron.Next(at, loc)
+		if next.IsZero() {
+			break
+		}
+		times = append(times, next.UTC())
+		at = next
+	}
+	write(w, http.StatusOK, map[string]any{"times": times})
+	return nil
+}
+
 // startFresh lets go of a resumable automation's kept session now.
 func (s *Server) automationStartFresh(w http.ResponseWriter, r *http.Request, org string) error {
 	if err := automations.StartFresh(r.Context(), s.DB, s.Lux, org, r.PathValue("id")); err != nil {

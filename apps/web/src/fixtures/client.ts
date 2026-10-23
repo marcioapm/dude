@@ -1028,6 +1028,9 @@ export class FixtureClient extends ApiClient {
   override automationRepositories(): ReturnType<ApiClient["automationRepositories"]> {
     return this.#auto(() => this.#automations.repositories());
   }
+  override scheduleNext(cron: string, tz: string): ReturnType<ApiClient["scheduleNext"]> {
+    return this.#auto(() => this.#automations.scheduleNext(cron, tz));
+  }
   override eventSubscriptions(): ReturnType<ApiClient["eventSubscriptions"]> {
     return this.#auto(() => this.#automations.subscriptions());
   }
