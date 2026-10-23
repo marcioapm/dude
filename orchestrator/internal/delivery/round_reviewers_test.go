@@ -422,6 +422,22 @@ func TestAlwaysReviewersAndNonProductPathsAreValidated(t *testing.T) {
 	if _, err := ResolvePolicy(json.RawMessage(`{"nonProductPaths":[""]}`)); err == nil {
 		t.Error("an empty non-product glob was accepted")
 	}
+	// As packages/domain's deliveryPolicySchema: trimmed, at most 200
+	// characters each and 50 globs, and no null for either list.
+	for name, raw := range map[string]string{
+		"blank":            `{"nonProductPaths":["  "]}`,
+		"201 characters":   `{"nonProductPaths":["` + strings.Repeat("a", 201) + `"]}`,
+		"51 globs":         `{"nonProductPaths":[` + strings.Repeat(`"a/**",`, 50) + `"b/**"]}`,
+		"null always":      `{"alwaysReviewers":null}`,
+		"null non-product": `{"nonProductPaths":null}`,
+	} {
+		if _, err := ResolvePolicy(json.RawMessage(raw)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if p, err := ResolvePolicy(json.RawMessage(`{"nonProductPaths":[" infra/** ","` + strings.Repeat("a", 200) + `"]}`)); err != nil || p.NonProductPaths[0] != "infra/**" {
+		t.Errorf("a padded glob and one of 200 characters: %v %v", p.NonProductPaths, err)
+	}
 	p, err := ResolvePolicy(json.RawMessage(`{"alwaysReviewers":["security"]}`), json.RawMessage(`{"nonProductPaths":["infra/**"]}`))
 	if err != nil || !slices.Equal(p.AlwaysReviewers, []string{"security"}) || !slices.Equal(p.NonProductPaths, []string{"infra/**"}) {
 		t.Fatalf("layers: %+v %v", p, err)

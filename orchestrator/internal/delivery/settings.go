@@ -152,8 +152,12 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return p, fmt.Errorf("delivery policy layer %d: %w", i, err)
 		}
+		if err := refuseNullReviewerKeys(raw); err != nil {
+			return p, fmt.Errorf("delivery policy layer %d: %w", i, err)
+		}
 	}
-	return p, p.checkReviewerKeys()
+	err := p.checkReviewerKeys()
+	return p, err
 }
 
 // Prompts are the prompts one Run is told with: the organization's (nil

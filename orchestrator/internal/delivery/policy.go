@@ -13,12 +13,15 @@
 package delivery
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf16"
 )
 
 type ReviewerRule struct {
@@ -271,16 +274,50 @@ func eachFor(categories []string, reason string) map[string][]string {
 	return why
 }
 
-// checkReviewerKeys refuses an always-run reviewer that is not in the
-// catalogue, or an empty non-product glob.
-func (p Policy) checkReviewerKeys() error {
+// The bounds packages/domain's deliveryPolicySchema puts on nonProductPaths.
+const (
+	maxNonProductPaths = 50
+	maxNonProductGlob  = 200
+)
+
+// checkReviewerKeys refuses what deliveryPolicySchema refuses: an
+// always-run reviewer not in the catalogue, more than maxNonProductPaths
+// globs, or one blank or longer than maxNonProductGlob UTF-16 units once
+// trimmed. It trims each glob, as the schema stores it.
+func (p *Policy) checkReviewerKeys() error {
 	for _, c := range p.AlwaysReviewers {
 		if !slices.Contains(reviewerOrder, c) {
 			return fmt.Errorf("alwaysReviewers: "+rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
 		}
 	}
-	if slices.Contains(p.NonProductPaths, "") {
-		return errors.New("nonProductPaths: a glob is empty")
+	if len(p.NonProductPaths) > maxNonProductPaths {
+		return fmt.Errorf("nonProductPaths: %d globs, at most %d", len(p.NonProductPaths), maxNonProductPaths)
+	}
+	for i, g := range p.NonProductPaths {
+		g = strings.TrimSpace(g)
+		switch {
+		case g == "":
+			return errors.New("nonProductPaths: a glob is empty")
+		case len(utf16.Encode([]rune(g))) > maxNonProductGlob:
+			return fmt.Errorf("nonProductPaths: a glob is over %d characters", maxNonProductGlob)
+		}
+		p.NonProductPaths[i] = g
+	}
+	return nil
+}
+
+// refuseNullReviewerKeys refuses a policy layer naming alwaysReviewers or
+// nonProductPaths as null, which json.Unmarshal would read as an empty
+// list: the stored schema has no null (a settings reset removes the key).
+func refuseNullReviewerKeys(raw json.RawMessage) error {
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) != nil {
+		return nil
+	}
+	for _, k := range []string{"alwaysReviewers", "nonProductPaths"} {
+		if v, ok := keys[k]; ok && string(bytes.TrimSpace(v)) == "null" {
+			return fmt.Errorf("%s: null is not a list; leave it out for the inherited value", k)
+		}
 	}
 	return nil
 }
