@@ -191,27 +191,12 @@ func newSkipFixture(t *testing.T, files map[string]string, previous string, dive
 // product fix, keeps the acceptance: the round raises no new finding for
 // it, and the gate passes.
 func TestACarriedAcceptanceOfAFailureKeepsTheGatePassing(t *testing.T) {
-	app, owner := dbtest.Open(t)
-	org := dbtest.Org(t, owner)
-	ctx := context.Background()
-	exec := func(sql string, args ...any) {
-		t.Helper()
-		if _, err := owner.Exec(ctx, sql, append([]any{org}, args...)...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', $1, 'P', 'p', 'P')`)
-	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
-		VALUES ('wi_a', $1, 'prj_a', 1, 'Greet', 'greet', '["it greets", "it says goodbye"]', 'running')`)
-	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at)
-		VALUES ('run_a1', $1, 'prj_a', 'wi_a', 1, 'completed', 'test', 'qa_browser', 'agent', now() - interval '1 hour')`)
-	exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
-		VALUES ('ev_a1', $1, 'agent.message', 'run_a1', 'wi_a', 'agent', 'run_a1', 'test', jsonb_build_object('text', $2::text))`,
-		"```yaml\ncriterion: 1\nstatus: pass\nevidence: greet.webm\nobserved: It greets.\n"+
-			"---\ncriterion: 2\nstatus: fail\nobserved: It says bye, not goodbye.\n```\n")
-	exec(`INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
+	d := newTestRounds(t, "a", `["it greets", "it says goodbye"]`)
+	ctx, org, s, owner := d.ctx, d.org, d.s, d.owner
+	d.testRun("run_a1", "", "```yaml\ncriterion: 1\nstatus: pass\nevidence: greet.webm\nobserved: It greets.\n"+
+		"---\ncriterion: 2\nstatus: fail\nobserved: It says bye, not goodbye.\n```\n")
+	d.exec(`INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
 		VALUES ('art_a1', $1, 'run_a1', 'published', 'greet.webm', 'k', 'x')`)
-	s := &Store{DB: app}
 	st := &State{TaskID: "wi_a", ProjectID: "prj_a", Attempt: 1, TestRunID: "run_a1", Policy: DefaultPolicy()}
 	if _, err := s.RecordVerdict(ctx, org, st, "run_a1"); err != nil {
 		t.Fatal(err)
@@ -226,18 +211,13 @@ func TestACarriedAcceptanceOfAFailureKeepsTheGatePassing(t *testing.T) {
 		t.Fatalf("round 1 gate = %+v, want criterion 2 failing", g)
 	}
 	e := &Escalation{Reason: ReasonTestFailedCriteria, Detail: map[string]any{"runId": "run_a1", "findingIds": g.Findings}}
-	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error { return SettleVerdictTx(ctx, tx, e, "accept", "", "Bye is fine.") }); err != nil {
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error { return SettleVerdictTx(ctx, tx, e, "accept", "", "Bye is fine.") }); err != nil {
 		t.Fatal(err)
 	}
 	// Round 2 resumes the tester after a product fix: it retests 1 and carries 2.
-	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at,
-			continues_run_id, continues_how)
-		VALUES ('run_a2', $1, 'prj_a', 'wi_a', 1, 'completed', 'test', 'qa_browser', 'agent', now(), 'run_a1', 'resume')`)
-	exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
-		VALUES ('ev_a2', $1, 'agent.message', 'run_a2', 'wi_a', 'agent', 'run_a2', 'test', jsonb_build_object('text', $2::text))`,
-		"```yaml\ncriterion: 1\nstatus: pass\nevidence: greet2.webm\nobserved: It greets.\n"+
-			"---\ncriterion: 2\nstatus: carried\nfrom_round: run_a1\nobserved: The fix changed the greeting only.\n```\n")
-	exec(`INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
+	d.testRun("run_a2", "resume", "```yaml\ncriterion: 1\nstatus: pass\nevidence: greet2.webm\nobserved: It greets.\n"+
+		"---\ncriterion: 2\nstatus: carried\nfrom_round: run_a1\nobserved: The fix changed the greeting only.\n```\n")
+	d.exec(`INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
 		VALUES ('art_a2', $1, 'run_a2', 'published', 'greet2.webm', 'k2', 'x')`)
 	st = &State{TaskID: "wi_a", ProjectID: "prj_a", Attempt: 1, TestRunID: "run_a2", Policy: DefaultPolicy(), CarryFrom: "run_a1"}
 	if _, err := s.RecordVerdict(ctx, org, st, "run_a2"); err != nil {
@@ -257,6 +237,49 @@ func TestACarriedAcceptanceOfAFailureKeepsTheGatePassing(t *testing.T) {
 	}
 	if g := judgeGate(st.Policy, in); g.Outcome != "pass" {
 		t.Errorf("round 2 gate = %+v, want pass", g)
+	}
+}
+
+// testRounds is task wi_<key> of project prj_<key>, with criteria, in a
+// database of its own; exec runs as the owner with the organization as $1.
+type testRounds struct {
+	t     *testing.T
+	ctx   context.Context
+	org   string
+	key   string
+	s     *Store
+	owner *pgx.Conn
+}
+
+func newTestRounds(t *testing.T, key, criteria string) *testRounds {
+	app, owner := dbtest.Open(t)
+	d := &testRounds{t: t, ctx: context.Background(), org: dbtest.Org(t, owner), key: key, s: &Store{DB: app}, owner: owner}
+	d.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$2, $1, 'P', 'p', 'P')`, key)
+	d.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
+		VALUES ('wi_'||$2, $1, 'prj_'||$2, 1, 'Greet', 'greet', $3::jsonb, 'running')`, key, criteria)
+	return d
+}
+
+func (d *testRounds) exec(sql string, args ...any) {
+	d.t.Helper()
+	if _, err := d.owner.Exec(d.ctx, sql, append([]any{d.org}, args...)...); err != nil {
+		d.t.Fatal(err)
+	}
+}
+
+// testRun is a finished test Run of attempt 1 that replied reply ("" for
+// no reply); how, when set, is how it continues the task's first test Run,
+// <key>1.
+func (d *testRounds) testRun(id, how, reply string) {
+	d.t.Helper()
+	d.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at,
+			continues_run_id, continues_how)
+		VALUES ($2, $1, 'prj_'||$3, 'wi_'||$3, 1, 'completed', 'test', 'qa_browser', 'agent', now(),
+			CASE WHEN $4 <> '' THEN 'run_'||$3||'1' END, NULLIF($4, ''))`, id, d.key, how)
+	if reply != "" {
+		d.exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+			VALUES ('ev_'||$2, $1, 'agent.message', $2, 'wi_'||$3, 'agent', $2, 'test', jsonb_build_object('text', $4::text))`,
+			id, d.key, reply)
 	}
 }
 
@@ -331,28 +354,16 @@ func TestATestRoundComparesEachChangedRepositoryOnce(t *testing.T) {
 // change, or a replay), or resumed one its heads do not descend from,
 // carries nothing.
 func TestACarriedVerdictIsRecordedFromThePreviousRound(t *testing.T) {
-	app, owner := dbtest.Open(t)
-	org := dbtest.Org(t, owner)
-	ctx := context.Background()
-	exec := func(sql string, args ...any) {
-		t.Helper()
-		if _, err := owner.Exec(ctx, sql, append([]any{org}, args...)...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_k', $1, 'P', 'p', 'P')`)
-	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
-		VALUES ('wi_k', $1, 'prj_k', 1, 'Greet', 'greet', '["it greets", "it says goodbye", "it waves"]', 'running')`)
-	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at)
-		VALUES ('run_k1', $1, 'prj_k', 'wi_k', 1, 'completed', 'test', 'qa_browser', 'agent', now() - interval '1 hour')`)
-	exec(`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence, observed)
+	d := newTestRounds(t, "k", `["it greets", "it says goodbye", "it waves"]`)
+	ctx, org, s, owner := d.ctx, d.org, d.s, d.owner
+	d.testRun("run_k1", "", "")
+	d.exec(`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence, observed)
 		VALUES ($1, 'wi_k', 'run_k1', 1, 'it greets', 'pass', '{greet.webm}', 'It greets.'),
 		       ($1, 'wi_k', 'run_k1', 2, 'it says goodbye', 'fail', '{bye.png}', 'No goodbye.'),
 		       ($1, 'wi_k', 'run_k1', 3, 'it waves', 'pass', '{wave.png}', 'It waves.')`)
 	reply := "```yaml\ncriterion: 1\nstatus: carried\nfrom_round: run_k1\nobserved: Only CI changed.\n" +
 		"---\ncriterion: 2\nstatus: carried\nfrom_round: run_k1\nobserved: Only CI changed.\n" +
 		"---\ncriterion: 3\nstatus: carried\nfrom_round: run_other\nobserved: Only CI changed.\n```\n"
-	s := &Store{DB: app}
 	nothing := []string{"1 blocked  ", "2 blocked  ", "3 blocked  "}
 	afresh := "Carried, but this round tests every criterion afresh: nothing carries into it."
 	for _, c := range []struct {
@@ -372,12 +383,7 @@ func TestACarriedVerdictIsRecordedFromThePreviousRound(t *testing.T) {
 		{"run_k5", "resume", "", nothing,
 			"Carried, but this round's commits do not descend from those run_k1 tested: nothing it judged carries."},
 	} {
-		exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at,
-				continues_run_id, continues_how)
-			VALUES ($2, $1, 'prj_k', 'wi_k', 1, 'completed', 'test', 'qa_browser', 'agent', now(),
-				CASE WHEN $3 <> '' THEN 'run_k1' END, NULLIF($3, ''))`, c.run, c.how)
-		exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
-			VALUES ('ev_'||$2, $1, 'agent.message', $2, 'wi_k', 'agent', $2, 'test', jsonb_build_object('text', $3::text))`, c.run, reply)
+		d.testRun(c.run, c.how, reply)
 		st := &State{TaskID: "wi_k", ProjectID: "prj_k", Attempt: 1, TestRunID: c.run, Policy: DefaultPolicy(), CarryFrom: c.from}
 		if _, err := s.RecordVerdict(ctx, org, st, c.run); err != nil {
 			t.Fatal(err)
