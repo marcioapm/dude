@@ -429,7 +429,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     if (!rows[0]) return null;
     const runs = await scope.sql`
       SELECT ${runSelect(scope.sql)} FROM runs WHERE task_id = ${id}
-      ORDER BY attempt DESC`;
+      ORDER BY attempt DESC, created_at DESC, id DESC`;
     return { ...rows[0], id, runs };
   });
 

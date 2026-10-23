@@ -7,7 +7,7 @@
 // DUDE_URL override it. Output is indented JSON.
 //
 // TASK is a key (ABS-12) or an id (wi_…). RUN is a run id (run_…), or a TASK
-// for its newest run. A text argument of - reads stdin.
+// for its newest agent run in the latest attempt. A text argument of - reads stdin.
 package main
 
 import (
@@ -33,7 +33,8 @@ const defaultURL = "https://dude.absmartly.dev"
 const usage = `dude — drive a dude server from any shell. Output is JSON.
 
 TASK is a key (ABS-12) or id (wi_…); RUN is a run id (run_…) or a TASK, meaning
-its newest run. A text argument of - reads stdin. dude COMMAND --help for options.
+its newest agent run in the latest attempt, not a preview. A text argument of -
+reads stdin. dude COMMAND --help for options.
 
 Signing in (a key is made in dude: Your settings → Keys)
   login URL [--file]            log in to the key's organisation on the dude at URL;
@@ -356,11 +357,12 @@ func (c *cli) runID(ref string) (string, error) {
 }
 
 func taskRunID(t obj, ref string) (string, error) {
-	runs := list(t, "runs")
-	if len(runs) == 0 {
-		return "", fmt.Errorf("%s has no runs", ref)
+	for _, run := range list(t, "runs") {
+		if str(run, "kind") == "agent" {
+			return str(run, "id"), nil
+		}
 	}
-	return str(runs[0], "id"), nil
+	return "", fmt.Errorf("%s has no agent runs", ref)
 }
 
 // brief is a task without the bulky parts: people as names.

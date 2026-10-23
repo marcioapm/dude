@@ -116,7 +116,9 @@ used while nothing is logged in. `dude login` replaces it.
 
 - **PROJECT**: a key (`WEB`), slug, name or id.
 - **TASK**: a key (`WEB-12`) or id (`wi_…`).
-- **RUN**: a run id (`run_…`), or a TASK, meaning its newest run.
+- **RUN**: a run id (`run_…`), or a TASK, meaning its newest agent run in
+  the latest attempt (not a preview). Runs are ordered by attempt, creation
+  time, then id, all descending.
 - **EPIC**, **FINDING**, **PR**, **QUESTION**, **REQUEST**: ids, from the
   commands that list them (`epics`, `findings`, `prs`, `questions`,
   `repo-requests`).

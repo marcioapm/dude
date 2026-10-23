@@ -86,6 +86,25 @@ test("an archived task is found by its key", async () => {
   expect(await get("WEB-9")).toEqual({ status: 200, id: "wi_a9" });
 });
 
+test("runs are newest attempt first, then newest creation, then descending id", async () => {
+  for (const [id, attempt, created] of [
+    ["run_z", 1, "2026-06-03"],
+    ["run_old", 2, "2026-06-01"],
+    ["run_a", 2, "2026-06-02"],
+    ["run_b", 2, "2026-06-02"],
+  ] as const) {
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, created_at)
+      VALUES (${id}, 'org_a', 'prj_a', 'wi_a7', ${attempt}, ${created}::timestamptz)`;
+  }
+  const res = await router.handle(new Request("http://dude.test/v1/tasks/WEB-7", {
+    headers: { authorization: `Bearer ${ana.key}` },
+  }));
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { runs: Array<{ id: string; kind: string; createdAt: string }> };
+  expect(body.runs.map((run) => run.id)).toEqual(["run_b", "run_a", "run_old", "run_z"]);
+  expect(body.runs.every((run) => run.kind === "agent" && !!run.createdAt)).toBe(true);
+});
+
 test("an unknown key, and another organisation's task, are not found", async () => {
   for (const ref of ["WEB-8", "API-3", "wi_b3"]) {
     expect({ ref, status: (await get(ref)).status }).toEqual({ ref, status: 404 });

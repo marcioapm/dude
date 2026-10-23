@@ -52,7 +52,7 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 		case (r.URL.Path == "/v1/tasks/wi_12" || strings.EqualFold(r.URL.Path, "/v1/tasks/abs-12")) && r.Method == "GET":
 			io.WriteString(w, `{"id":"wi_12","key":"ABS-12","title":"T","status":"running","projectId":"prj_1",
 				"owner":{"id":"usr_1","name":"Ana"},"bulky":"x",
-				"runs":[{"id":"run_new","status":"running","extra":1},{"id":"run_old"}]}`)
+				"runs":[{"id":"run_preview","kind":"preview","attempt":2},{"id":"run_new","kind":"agent","attempt":2,"status":"running","extra":1},{"id":"run_old","kind":"agent","attempt":2}]}`)
 		case r.URL.Path == "/v1/nope":
 			w.WriteHeader(404)
 			io.WriteString(w, `{"error":"no route for GET /v1/nope"}`)
@@ -115,7 +115,7 @@ func TestShowResolvesKeyAndBriefs(t *testing.T) {
 		t.Fatalf("brief: %v", got)
 	}
 	runs := got["runs"].([]any)
-	if r := runs[0].(map[string]any); r["extra"] != nil || r["id"] != "run_new" {
+	if r := runs[0].(map[string]any); r["extra"] != nil || r["id"] != "run_preview" {
 		t.Fatalf("runs: %v", runs)
 	}
 	if a := (*calls)[0].auth; a != "Bearer k3y" {

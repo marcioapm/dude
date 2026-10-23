@@ -127,7 +127,7 @@ var lifecycleCommands = map[string]command{
 			path := fs.String("path", "", "a file in the run's diff")
 			lines := fs.String("lines", "", "with --path: N or N-M")
 			side := fs.String("side", "new", "with --path: new or old, the diff's side the lines are on")
-			run := fs.String("run", "", "with --path: the RUN whose diff (default: the task's newest)")
+			run := fs.String("run", "", "with --path: the RUN whose diff (default: the newest agent run in the latest attempt)")
 			return func(c *cli, a []string) (any, error) {
 				t, err := c.text(a[1])
 				if err != nil {
