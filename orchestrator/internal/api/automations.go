@@ -61,8 +61,10 @@ func (s *Server) automationRunNow(w http.ResponseWriter, r *http.Request, org st
 	switch {
 	case errors.Is(err, automations.ErrBadRequest):
 		return fail(http.StatusBadRequest, "bad_request", "%s", err.Error())
-	case errors.Is(err, automations.ErrNotFound), db.IsNotFound(err):
+	case errors.Is(err, automations.ErrNotFound):
 		return fail(http.StatusNotFound, "not_found", "%s", err.Error())
+	case db.IsNotFound(err):
+		return fail(http.StatusNotFound, "not_found", "no automation %s", r.PathValue("id"))
 	case err != nil:
 		return err
 	case !verdict.Matches:
