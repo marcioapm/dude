@@ -4,7 +4,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-4);
-  min-width: 0;
+  /* Its inline size is a container's: with no floor it collapses to its
+     padding in a shrinking flex row (a SettingRow's control). Room for the
+     − and + and a few digits. */
+  min-inline-size: calc(var(--ds-size-control-md) * 4);
   container-type: inline-size;
 }
 
