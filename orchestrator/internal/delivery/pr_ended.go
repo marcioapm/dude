@@ -16,7 +16,7 @@ import (
 // step it is at once a pull request exists. Every step that parks while the
 // delivery has one also waits on pr.ended (awaitEnded), and a step woken by
 // it first ends the loop when the recorded states say it is over (endable).
-// awaitPullRequest reads the end from pr.feedback, as before.
+// awaitPullRequest reads the end from pr.feedback.
 
 // endable wraps a delivery step: woken by pr.ended, it ends the loop
 // (endedBeforeOpening) instead of running, when none is open any more.

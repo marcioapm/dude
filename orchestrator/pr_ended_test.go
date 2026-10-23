@@ -22,6 +22,32 @@ func (w *world) afterEnd() {
 	}
 }
 
+// runningFixers counts the task's pull request fixers at work.
+const runningFixers = `SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`
+
+// hangFixers keeps every pull request fixer at work until its turn is ended.
+func (w *world) hangFixers() {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			b.Hang = true
+		}
+		return b
+	}
+}
+
+// runningFixerLuxID is the lux run of the task's pull request fixer at work.
+func (w *world) runningFixerLuxID(task string) string {
+	w.t.Helper()
+	var luxID string
+	if err := w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND status = 'running'`, task).Scan(&luxID); err != nil {
+		w.t.Fatal(err)
+	}
+	return luxID
+}
+
 // deliveryStatus is the task's newest delivery's status, step and last error.
 func (w *world) deliveryStatus(task string) (status, step, lastErr string) {
 	_ = w.owner.QueryRow(context.Background(), `SELECT status::text, step, COALESCE(last_error, '') FROM workflow_runs
@@ -145,20 +171,10 @@ func TestAMergeWhileAnEscalationWaitsOnAPersonFinishesTheTask(t *testing.T) {
 // for the fix and no step failing.
 func TestAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
 	w := newWorld(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
-			b.Hang = true
-		}
-		return b
-	}
+	w.hangFixers()
 	task := w.reviewing()
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
-	w.until("the fixer at work", func() bool {
-		w.sync()
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, task) == 1
-	})
+	w.until("the fixer at work", func() bool { w.sync(); return w.count(runningFixers, task) == 1 })
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'candidate'`, task); n != 1 {
 		t.Fatalf("the fix is not on a candidate")
 	}
@@ -184,25 +200,11 @@ func TestAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
 // opened for it, no GitHub call fails, and the task is done.
 func TestAFixFinishingAfterAnUnsignalledMergeOpensNothing(t *testing.T) {
 	w := newWorld(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
-			b.Hang = true
-		}
-		return b
-	}
+	w.hangFixers()
 	task := w.reviewing()
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
-	w.until("the fixer at work", func() bool {
-		w.sync()
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, task) == 1
-	})
-	var luxID string
-	if err := w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'fix'
-		AND status = 'running'`, task).Scan(&luxID); err != nil {
-		t.Fatal(err)
-	}
+	w.until("the fixer at work", func() bool { w.sync(); return w.count(runningFixers, task) == 1 })
+	luxID := w.runningFixerLuxID(task)
 	// Merged on GitHub and in dude's record, the workflow never told.
 	w.gh.Merge(1)
 	mustExec(t, w.owner, `UPDATE pull_requests SET state = 'merged', merged_at = now() WHERE task_id = $1`, task)
@@ -259,21 +261,13 @@ func TestACandidateCheckedAcrossAnUnsignalledMergeIsNotPromoted(t *testing.T) {
 // merges, it is.
 func TestOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork(t *testing.T) {
 	w := newWorld(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
-			b.Hang = true
-		}
-		return b
-	}
+	w.hangFixers()
 	task := w.prOpen(w.task(), prAt{web: true})
 	w.web.Comment(1, "alice", "Please fix the page title.")
-	fixer := `SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`
-	w.until("web's fixer at work", func() bool { w.sync(); return w.count(fixer, task) == 1 })
+	w.until("web's fixer at work", func() bool { w.sync(); return w.count(runningFixers, task) == 1 })
 	w.gh.Merge(1)
 	w.afterEnd()
-	if n := w.count(fixer, task); n != 1 {
+	if n := w.count(runningFixers, task); n != 1 {
 		t.Fatalf("target's merge stopped web's fixer\n%s", w.describeRuns())
 	}
 	if s := w.taskStatus(task); s == "done" {
@@ -313,16 +307,11 @@ func TestAMixedEndWhileASiblingsFixerWorksLetsTheFixLand(t *testing.T) {
 	webHead := func() string { return w.web.SHA(w.web.Pull(1).Head) }
 	webBefore := webHead()
 	w.web.Comment(1, "alice", "Please fix the page title.")
-	fixer := `SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`
-	w.until("web's fixer at work", func() bool { w.sync(); return w.count(fixer, task) == 1 })
-	var luxID string
-	if err := w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'fix'
-		AND status = 'running'`, task).Scan(&luxID); err != nil {
-		t.Fatal(err)
-	}
+	w.until("web's fixer at work", func() bool { w.sync(); return w.count(runningFixers, task) == 1 })
+	luxID := w.runningFixerLuxID(task)
 	w.gh.Close(1)
 	w.afterEnd()
-	if n := w.count(fixer, task); n != 1 {
+	if n := w.count(runningFixers, task); n != 1 {
 		t.Fatalf("target's close stopped web's fixer\n%s", w.describeRuns())
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'aborted'`, task); n != 0 {

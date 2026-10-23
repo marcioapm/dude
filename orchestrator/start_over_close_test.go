@@ -126,10 +126,12 @@ func TestStartingOverClosesAttemptOnesPullRequestWithoutEndingTheTask(t *testing
 				}
 				task := p.at(w, &hang)
 				ana := w.ownedBy(task, "Ana")
-				since := w.lastCursor(task)
+				var since int64
 				// Attempt 2 under Deliver, so it opens its pull request unasked.
 				if via == "stop" {
 					w.stop(ana, task, map[string]any{"andRestart": true, "decider": "policy"})
+					// Stop's own aborted move is the person's, before the start over.
+					since = int64(w.count(`SELECT max(cursor) FROM events WHERE task_id = $1 AND event_type = 'task.stopped'`, task))
 				} else {
 					w.stop(ana, task, map[string]any{})
 					since = w.lastCursor(task)
@@ -137,10 +139,6 @@ func TestStartingOverClosesAttemptOnesPullRequestWithoutEndingTheTask(t *testing
 						map[string]any{"action": "restart", "decider": "policy"}); status != 200 {
 						t.Fatalf("restart: %d %v", status, body)
 					}
-				}
-				if via == "stop" {
-					// Stop's own aborted move is the person's, before the start over.
-					since = int64(w.count(`SELECT max(cursor) FROM events WHERE task_id = $1 AND event_type = 'task.stopped'`, task))
 				}
 				w.assertStartedOverCleanly(task, since)
 			})
