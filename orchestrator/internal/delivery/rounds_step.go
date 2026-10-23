@@ -32,9 +32,11 @@ func (c RoundChange) deltaLines() int {
 }
 
 // ReviewChoice is the reviewers the policy chose for one review round,
-// named by the round's creation key, and why each runs.
+// named by the round's creation key, at the heads it was measured to, and
+// why each runs.
 type ReviewChoice struct {
 	Round      string              `json:"round"`
+	Heads      map[string]string   `json:"heads"`
 	Categories []string            `json:"categories"`
 	Reasons    map[string][]string `json:"reasons"`
 }

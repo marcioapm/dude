@@ -777,9 +777,10 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// A check that the simplifier changed no behaviour: the policy's
 		// required reviewers, whatever paths it touched.
 		categories, reasons = st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired)
-	case st.ReviewChoice != nil && st.ReviewChoice.Round == runKey(""):
+	case st.ReviewChoice != nil && st.ReviewChoice.Round == runKey("") && maps.Equal(st.ReviewChoice.Heads, st.Heads):
 		// A replay: a Run of this round that completed since would make
-		// the round's change start at its own checkouts.
+		// the round's change start at its own checkouts. Heads that moved
+		// since (refreshPRWaitHeads) are a change the choice never saw.
 		categories, reasons = st.ReviewChoice.Categories, st.ReviewChoice.Reasons
 	default:
 		if categories, reasons, err = w.roundReviewers(ctx, sc, st, slices.Collect(maps.Keys(attempted))); err != nil {
@@ -790,7 +791,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 				return workflow.Result{}, err
 			}
 		}
-		st.ReviewChoice = &ReviewChoice{Round: runKey(""), Categories: db.NonNil(categories), Reasons: reasons}
+		st.ReviewChoice = &ReviewChoice{Round: runKey(""), Heads: maps.Clone(st.Heads), Categories: db.NonNil(categories), Reasons: reasons}
 		if err := w.keepReviewChoice(ctx, sc, *st.ReviewChoice); err != nil {
 			return workflow.Result{}, err
 		}

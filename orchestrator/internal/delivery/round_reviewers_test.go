@@ -289,6 +289,34 @@ func TestTheRoundDeltaCacheKeepsPathsOnlyForAReviewChoice(t *testing.T) {
 	}
 }
 
+// A replay whose heads moved since the round was chosen (a person's push,
+// read by refreshPRWaitHeads) chooses again: the stored choice never saw
+// that change.
+func TestAReplayAtMovedHeadsChoosesItsRoundAgain(t *testing.T) {
+	r := newLaterRound(t).firstRound()
+	modified := func(name string) []map[string]any {
+		return []map[string]any{{"filename": name, "status": "modified", "additions": 3, "deletions": 1}}
+	}
+	r.bySlug = map[string][]map[string]any{"acme/repo": modified(".github/workflows/x.yml")}
+	if first, _, _ := r.review(); !slices.Equal(first, []string{"correctness"}) {
+		t.Fatalf("round at bbb %v", first)
+	}
+	var raw []byte
+	if err := r.owner.QueryRow(r.ctx, `SELECT state FROM workflow_runs WHERE id = 'wfr_rr'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	r.st = &State{}
+	if err := json.Unmarshal(raw, r.st); err != nil || r.st.ReviewChoice == nil {
+		t.Fatalf("no stored choice: %v", err)
+	}
+	r.st.Heads = map[string]string{"repo": "ccc"}
+	r.bySlug["acme/repo"] = modified("web/src/Button.tsx")
+	again, why, _ := r.review()
+	if !slices.Equal(again, []string{"correctness", "tests", "frontend", "performance"}) || !slices.Equal(why["frontend"], []string{ReasonPaths}) {
+		t.Fatalf("replay at moved heads %v %v, want the round chosen again", again, why)
+	}
+}
+
 func TestALargeLaterRoundRunsTheFirstRoundsReviewers(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.files[0]["additions"] = MaxResumeDeltaLines
