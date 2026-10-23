@@ -615,7 +615,7 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
         </SettingRow>
         <SettingRow
           label="Not product"
-          help="Paths, comma-separated, whose change alone does not bring back the reviewers every delivery runs: a re-review of a CI or docs fix. The default **/*.md counts every Markdown file; replace it if your project ships Markdown as behaviour (prompt templates, help content)."
+          help="Paths, comma-separated, whose change alone does not bring back the reviewers every delivery runs: a re-review of a CI or docs fix. They are in-repo paths; to make a whole repository non-product, list its paths. The default **/*.md counts every Markdown file; replace it if your project ships Markdown as behaviour (prompt templates, help content)."
           htmlFor="delivery-nonProductPaths"
           source={<Source scope={scope} setting={d.nonProductPaths} reset={() => void scope.patch({ delivery: { nonProductPaths: null } }, "Paths reset")} />}
         >

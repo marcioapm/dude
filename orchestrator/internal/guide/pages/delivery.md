@@ -40,7 +40,7 @@ A later round (a re-review after a fix, or the review of a pull request's fix or
 - the **reviewers every round runs** (`alwaysReviewers`, by default **Correctness**), even when the round changed only CI or docs;
 - the reviewer of each finding it judges;
 - each conditional reviewer whose paths the round's own change touches;
-- the required reviewers, unless the round changed only **non-product** paths (`nonProductPaths`, by default `.github/**`, `docs/**` and `**/*.md`).
+- the required reviewers, unless the round changed only **non-product** paths (`nonProductPaths`, by default `.github/**`, `docs/**` and `**/*.md`). These are paths inside a repository: `docs/**` matches a `docs` folder, not a repository named `docs`. To make a whole repository non-product, list its paths.
 
 A round that changed more than 300 lines, or one GitHub cannot measure, runs the first round's reviewers again. A reviewer the conductor or a person names, and a retry of failed reviewers, run as asked. The round's `run.created` event lists why each reviewer ran: `always`, `finding`, `paths`, `required`, `first_round`, `large_round`, `directed` or `retry`. With no reviewer every round runs, a CI-only round with no finding to judge runs no reviewer and the loop goes on as from a clear round. On a pull request's fix being checked, or on a commit the conductor made before the pull request, such a round runs the required reviewers instead (reason `required`): those heads need a completed review before they go on.
 

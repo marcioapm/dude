@@ -41,7 +41,9 @@ type Policy struct {
 	AlwaysReviewers []string `json:"alwaysReviewers"`
 	// Globs of paths that are not the product (CI, docs): a later round
 	// whose own change touches only these runs no required reviewer
-	// beyond AlwaysReviewers and the reviewers of its findings.
+	// beyond AlwaysReviewers and the reviewers of its findings. Matched
+	// against in-repo paths only; to make a whole repository non-product,
+	// list its paths.
 	NonProductPaths []string `json:"nonProductPaths"`
 	// Review → fix cycles before escalating to a person. The bound exists
 	// because a loop that cannot converge will spend a budget finding that out.
@@ -199,6 +201,14 @@ func matchesAny(globs []string, path string) bool {
 	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, path) || MatchesGlob(g, inRepo) })
 }
 
+// nonProduct matches a <repo>/<path> against NonProductPaths by its path
+// in the repository alone: "docs/**" must not make every file of a
+// repository named docs non-product.
+func nonProduct(globs []string, path string) bool {
+	_, inRepo, _ := strings.Cut(path, "/")
+	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, inRepo) })
+}
+
 func inReviewerOrder(categories []string) []string {
 	var out []string
 	for _, c := range reviewerOrder {
@@ -258,7 +268,7 @@ func RoundReviewers(p Policy, r ReviewRound) ([]string, map[string][]string) {
 	default:
 		add(r.Attempted, ReasonFinding)
 		add(pathReviewers(p, r.Change.Paths), ReasonPaths)
-		if slices.ContainsFunc(r.Change.Paths, func(path string) bool { return !matchesAny(p.NonProductPaths, path) }) {
+		if slices.ContainsFunc(r.Change.Paths, func(path string) bool { return !nonProduct(p.NonProductPaths, path) }) {
 			add(p.RequiredReviewers, ReasonRequired)
 		}
 	}

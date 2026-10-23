@@ -421,7 +421,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   changed since the previous review round's checkouts (`Store.RoundDelta`,
   one GitHub compare per repository, cached in `roundDelta` and shared with
   the resumption's line count), and `requiredReviewers` when one of those
-  paths is outside `nonProductPaths`. Unmeasurable (no forge, refused,
+  paths is outside `nonProductPaths` (matched against the in-repo path
+  only, unlike conditional rules, so `docs/**` does not cover a repository
+  named `docs`). Unmeasurable (no forge, refused,
   truncated) or over `MaxResumeDeltaLines`: the first round's
   `ReviewersFor`. A retry, a directed review and the simplifier's range keep
   their own categories. The round's `run.created` carries `reasons`; a

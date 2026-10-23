@@ -340,6 +340,23 @@ func TestADeliverPolicyWithANullReviewerListIsRefused(t *testing.T) {
 	}
 }
 
+// nonProductPaths name paths in a repository, not repositories: a product
+// change in a repository named docs is not matched by "docs/**".
+func TestARepositoryNamedLikeANonProductGlobIsProduct(t *testing.T) {
+	r := newLaterRound(t, "src/components/Search.tsx")
+	r.exec(`UPDATE repositories SET name = 'docs' WHERE organization_id = $1 AND id = 'repo_rr'`)
+	r.firstRound()
+	r.exec(`UPDATE runs SET base_refs = '{"docs":"aaa"}' WHERE organization_id = $1 AND id = 'run_rr1'`)
+	r.st.Heads = map[string]string{"docs": "bbb"}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "frontend", "performance"}) {
+		t.Fatalf("reviewers %v, want the required ones and frontend", got)
+	}
+	if !slices.Equal(why["tests"], []string{ReasonRequired}) || !slices.Equal(why["correctness"], []string{ReasonAlways, ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+}
+
 func TestALargeLaterRoundRunsTheFirstRoundsReviewers(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.files[0]["additions"] = MaxResumeDeltaLines
