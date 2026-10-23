@@ -89,6 +89,18 @@ func main() {
 	}
 }
 
+// deliveryStore is the delivery store the workflow runs on, with what it
+// takes from the agent configuration: whether the dude CLI is served in
+// containers, and the time limit a next round weighs its predecessor's lux
+// Run against (zero, with a warning, for one that is not a Go duration).
+func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) *delivery.Store {
+	if agent.TimeLimit() <= 0 {
+		log.Warn("agent.timeout is not a Go duration: next rounds resume their predecessor's lux Run whatever time it has left",
+			"timeout", agent.Timeout)
+	}
+	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: agent.TimeLimit()}
+}
+
 func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -133,11 +145,7 @@ func run(log *slog.Logger) error {
 	// Test fixtures serve HTTP API and git daemon on distinct gateway ports.
 	forges := forge.Resolver{DB: database, TestGitHost: os.Getenv("DUDE_TEST_GITHUB_GIT_HOST")}
 	runtime := workflow.New(database, fmt.Sprintf("orchestrator-%s-%d", host, os.Getpid()), log)
-	if agent.TimeLimit() <= 0 {
-		log.Warn("agent.timeout is not a Go duration: next rounds resume their predecessor's lux Run whatever time it has left",
-			"timeout", agent.Timeout)
-	}
-	store := &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: agent.TimeLimit()}
+	store := deliveryStore(database, agent, log)
 	runtime.Register(delivery.Workflow(store, forges))
 
 	signalWorkflow := func(ctx context.Context, org, wf, name string, payload any, key string) error {
