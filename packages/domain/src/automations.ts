@@ -214,6 +214,25 @@ export const PRESET_ROLE_LABEL: Record<PresetRole, string> = {
 };
 export const REVIEWER_NEEDS_PULL_REQUEST = "Reviews a pull request: pull_request events only.";
 
+/**
+ * The actions GitHub sends for its common events, for the trigger's
+ * checkboxes. An event not listed here (or one GitHub adds actions to)
+ * takes actions as free text: the trigger model accepts any (I1).
+ */
+export const EVENT_ACTIONS: Readonly<Record<string, readonly string[]>> = {
+  pull_request: ["opened", "synchronize", "reopened", "closed", "edited", "ready_for_review", "converted_to_draft",
+    "labeled", "unlabeled", "assigned", "unassigned", "review_requested", "review_request_removed"],
+  pull_request_review: ["submitted", "edited", "dismissed"],
+  pull_request_review_comment: ["created", "edited", "deleted"],
+  issues: ["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "assigned", "unassigned", "transferred", "deleted"],
+  issue_comment: ["created", "edited", "deleted"],
+  release: ["published", "created", "released", "prereleased", "edited", "unpublished", "deleted"],
+  check_run: ["created", "completed", "rerequested", "requested_action"],
+  check_suite: ["completed", "requested", "rerequested"],
+  workflow_run: ["requested", "in_progress", "completed"],
+  discussion: ["created", "edited", "answered", "closed", "reopened", "deleted"],
+};
+
 /** What an automation's agent runs on; a preset overrides only what it names. */
 const agentRuntimeSchema = z.object({
   harness: harnessSchema.optional(),

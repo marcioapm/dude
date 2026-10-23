@@ -545,6 +545,38 @@ body {
   gap: var(--ds-space-8);
   min-width: 0;
 }
+/* In the list: a name wraps rather than clips; kind sits over session. */
+.automationName > button {
+  white-space: normal;
+  text-align: start;
+}
+.automationKind[data-stack="true"] {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ds-space-2);
+}
+.automationLastRun {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.automationActions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--ds-size-control-md) * 5), 1fr));
+  gap: var(--ds-space-4) var(--ds-space-12);
+  flex: 1;
+}
+.automationCount {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.automationRunHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: 0;
+}
 .automationSave {
   display: flex;
   flex-direction: column;

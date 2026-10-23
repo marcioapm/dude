@@ -32,6 +32,7 @@ import {
   SettingsSection,
   SettingSource,
   SizeMeter,
+  StatusMark,
   Switch,
   TextButton,
   TriggerSummary,
@@ -50,6 +51,7 @@ import {
   Input,
   NumberInput,
   RowMenu,
+  SearchField,
   Select,
   Spinner,
   Tab,
@@ -71,6 +73,7 @@ import {
   ORG_AUTOMATION_SECRETS,
   CONCURRENCY,
   CONCURRENCY_LABEL,
+  EVENT_ACTIONS,
   FILTER_LABEL,
   HARNESSES,
   HARNESS_LABEL,
@@ -136,6 +139,22 @@ function RunStatus({ status }: { status: AutomationRun["status"] }) {
   return <Badge tone={RUN_TONE[status]} size="sm" dot>{RUN_WORD[status]}</Badge>;
 }
 
+/** The list's glyph for a run's status, in the status vocabulary's shapes. */
+const RUN_MARK: Record<AutomationRun["status"], "pending" | "running" | "completed" | "failed" | "aborted"> = {
+  queued: "pending", running: "running", succeeded: "completed", failed: "failed", skipped: "aborted", cancelled: "aborted",
+};
+
+const NEXT_RUN = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+
+/** "Sat 24 Oct 02:00" for a schedule that is on; "On event" or "Off" otherwise. */
+export function nextRun(a: Pick<Automation, "enabled" | "trigger" | "nextRunAt">): string {
+  if (!a.enabled) return "Off";
+  if (a.trigger.kind === "github") return "On event";
+  if (!a.nextRunAt) return "—";
+  const parts = Object.fromEntries(NEXT_RUN.formatToParts(new Date(a.nextRunAt)).map((p) => [p.type, p.value]));
+  return `${parts["weekday"]} ${parts["day"]} ${parts["month"]} ${parts["hour"]}:${parts["minute"]}`;
+}
+
 // ---------------------------------------------------------------------------
 // The list
 // ---------------------------------------------------------------------------
@@ -183,13 +202,17 @@ export function AutomationsList({ client, orgName, projectId, canCreate, onOpen,
   };
   const set = (k: keyof Filters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }));
   const kinds = useMemo(() => [
-    { value: ANY, label: "Any kind" },
-    { value: "agent", label: "Agent" },
-    { value: "agent:own", label: "Agent (its own)" },
-    ...PRESET_ROLES.map((r) => ({ value: `agent:${r}`, label: `Agent (${PRESET_ROLE_LABEL[r]})` })),
-    { value: "command", label: "Command" },
-    { value: "server", label: "Server" },
-    { value: "webhook", label: "Webhook only" },
+    { label: "Any", options: [{ value: ANY, label: "All kinds" }] },
+    { label: "Agent", options: [
+      { value: "agent", label: "Any agent" },
+      { value: "agent:own", label: "Its own agent" },
+      ...PRESET_ROLES.map((r) => ({ value: `agent:${r}`, label: PRESET_ROLE_LABEL[r] })),
+    ] },
+    { label: "Runs a program", options: [
+      { value: "command", label: "Command" },
+      { value: "server", label: "Server" },
+      { value: "webhook", label: "Webhook only" },
+    ] },
   ], []);
   return (
     <div className="settingsPage" data-testid="automations">
@@ -200,15 +223,15 @@ export function AutomationsList({ client, orgName, projectId, canCreate, onOpen,
         actions={canCreate ? <Button variant="primary" leadingIcon="plus" onClick={() => setCreating(true)} data-testid="new-automation">New automation</Button> : null} />
       {projectId ? null : (
         <div className="automationFilters" data-testid="filter-bar">
-          <Input aria-label="Search automations" placeholder="Search" value={filters.q} onChange={(e) => set("q")(e.target.value)} />
-          <Select<string> label="Scope" size="sm" value={filters.scope} onValueChange={set("scope")}
-            options={[{ value: ANY, label: "Anywhere" }, { value: "organization", label: orgName }, { value: "project", label: "Projects" }]} />
-          <Select<string> label="Trigger" size="sm" value={filters.trigger} onValueChange={set("trigger")}
-            options={[{ value: ANY, label: "Any trigger" }, { value: "schedule", label: "Schedule" }, { value: "github", label: "GitHub event" }]} />
-          <Select<string> label="Kind" size="sm" value={filters.kind} onValueChange={set("kind")} options={kinds} />
-          <Select<string> label="On or off" size="sm" value={filters.enabled} onValueChange={set("enabled")}
+          <SearchField label="Search automations" placeholder="Search automations" value={filters.q} onValueChange={set("q")} />
+          <Select<string> aria-label="Scope" size="sm" value={filters.scope} onValueChange={set("scope")}
+            options={[{ value: ANY, label: "All scopes" }, { value: "organization", label: orgName }, { value: "project", label: "Projects" }]} />
+          <Select<string> aria-label="Trigger" size="sm" value={filters.trigger} onValueChange={set("trigger")}
+            options={[{ value: ANY, label: "All triggers" }, { value: "schedule", label: "Schedule" }, { value: "github", label: "GitHub event" }]} />
+          <Select<string> aria-label="Kind" size="sm" value={filters.kind} onValueChange={set("kind")} options={kinds} />
+          <Select<string> aria-label="On or off" size="sm" value={filters.enabled} onValueChange={set("enabled")}
             options={[{ value: ANY, label: "On and off" }, { value: "true", label: "On" }, { value: "false", label: "Off" }]} />
-          <Select<string> label="Owner" size="sm" value={filters.owner} onValueChange={set("owner")} data-testid="owner-filter"
+          <Select<string> aria-label="Owner" size="sm" value={filters.owner} onValueChange={set("owner")} data-testid="owner-filter"
             options={[{ value: ANY, label: "Anyone's" }, { value: "mine", label: "Mine" }]} />
         </div>
       )}
@@ -217,7 +240,10 @@ export function AutomationsList({ client, orgName, projectId, canCreate, onOpen,
         <EmptyState data-testid="automations-empty" title="No automations yet"
           description="An automation runs an agent, a command, a server or a webhook on a schedule or when GitHub tells dude something happened." />
       ) : (
-        <AutomationTable rows={list} orgName={orgName} onOpen={onOpen} onToggle={toggle} showScope={!projectId} />
+        <>
+          <p className="automationCount" data-testid="automations-count">{list.length === 1 ? "1 automation" : `${list.length} automations`}</p>
+          <AutomationTable rows={list} orgName={orgName} onOpen={onOpen} onToggle={toggle} showScope={!projectId} />
+        </>
       )}
       {projectId && here.length > 0 ? (
         <SettingsSection title={`Also running here, from ${orgName}`} data-testid="also-running">
@@ -258,17 +284,20 @@ function AutomationTable({ rows, orgName, onOpen, onToggle, showScope }: {
               <ListSwitch checked={a.enabled} label={a.name} disabled={!onToggle || !a.canEdit} testId="automation-enabled"
                 onCheckedChange={(on) => onToggle?.(a, on)} />
             </Td>
-            <Td>
+            <Td wrap>
               <span className="automationName">
                 <TextButton onClick={(e) => { e.stopPropagation(); onOpen(a.id); }}>{a.name}</TextButton>
                 {showScope ? <ScopeChip org={orgName} project={a.projectName} /> : null}
               </span>
             </Td>
-            <Td><span className="automationKind"><KindMark kind={a.kind} role={roleOf(a)} /><SessionMark mode={a.sessionMode} expiryDays={a.expiryDays} /></span></Td>
-            <Td><TriggerSummary trigger={a.trigger} /></Td>
+            <Td><span className="automationKind" data-stack="true"><KindMark kind={a.kind} role={roleOf(a)} /><SessionMark mode={a.sessionMode} expiryDays={a.expiryDays} /></span></Td>
+            <Td wrap><TriggerSummary trigger={a.trigger} /></Td>
             <Td hideWhenNarrow><OwnerMark owner={a.owner} left={Boolean(a.ownerLeftAt)} org={orgName} avatarOnly /></Td>
-            <Td hideWhenNarrow muted>{a.lastRun ? <span>{RUN_WORD[a.lastRun.status]} · {ago(a.lastRun.at)}</span> : "Never"}</Td>
-            <Td hideWhenNarrow muted>{a.trigger.kind === "schedule" && a.enabled && a.nextRunAt ? formatTimestamp(a.nextRunAt, "datetime") : "—"}</Td>
+            <Td hideWhenNarrow muted>{a.lastRun
+              ? <span className="automationLastRun"><StatusMark status={RUN_MARK[a.lastRun.status]} size="sm" iconOnly label={RUN_WORD[a.lastRun.status]} />
+                {a.lastRun.status === "succeeded" ? "" : `${RUN_WORD[a.lastRun.status]} `}{ago(a.lastRun.at)}</span>
+              : "Never"}</Td>
+            <Td hideWhenNarrow muted>{nextRun(a)}</Td>
           </Tr>
         ))}
       </TBody>
@@ -937,26 +966,38 @@ function EventTrigger({ trigger, subs, disabled, onChange }: {
   const events = subs ? [...new Set([...subs.events, trigger.event])] : [trigger.event];
   const filters = trigger.filters;
   const setFilter = (k: keyof typeof filters, v: string[]) => onChange({ ...trigger, filters: { ...filters, [k]: v } });
+  const known = EVENT_ACTIONS[trigger.event];
   return (
     <>
       <SettingRow label="Event" help={subs ? (subs.source === "seen"
         ? "GitHub did not say what it sends dude: these are the events that have arrived."
         : "The events this organisation's GitHub sends dude.") : undefined}>
-        <Select<string> label="Event" value={trigger.event} disabled={disabled} options={events.map((e) => ({ value: e, label: e }))}
+        <Select<string> aria-label="Event" value={trigger.event} disabled={disabled} options={events.map((e) => ({ value: e, label: e }))}
           onValueChange={(event) => onChange({ ...trigger, event, actions: [] })} />
         {subs?.settingsUrl ? <a href={subs.settingsUrl} target="_blank" rel="noreferrer">Add events in the App's permissions</a> : null}
       </SettingRow>
-      <SettingRow label="Actions" help="None means every action.">
-        <ChipsInput label="Actions" values={trigger.actions} disabled={disabled} placeholder="opened, synchronize"
-          onChange={(actions) => onChange({ ...trigger, actions })} />
+      <SettingRow label="Actions" help="None ticked means every action.">
+        {known ? (
+          <div role="group" aria-label="Actions" className="automationActions" data-testid="event-actions">
+            {[...new Set([...known, ...trigger.actions])].map((act) => (
+              <Checkbox key={act} label={act} checked={trigger.actions.includes(act)} disabled={disabled}
+                onCheckedChange={(on) => onChange({ ...trigger, actions: on ? [...trigger.actions, act] : trigger.actions.filter((x) => x !== act) })} />
+            ))}
+          </div>
+        ) : (
+          <ChipsInput label="Actions" values={trigger.actions} disabled={disabled} placeholder="opened, synchronize"
+            onChange={(actions) => onChange({ ...trigger, actions })} />
+        )}
       </SettingRow>
-      <SettingsSection title="Filters" data-testid="event-filters">
-        <SettingRow label="Branch" help="Globs; any one of them."><ChipsInput label="Branch" values={filters.branch} disabled={disabled} onChange={(v) => setFilter("branch", v)} /></SettingRow>
-        <SettingRow label="Label"><ChipsInput label="Label" values={filters.label} disabled={disabled} onChange={(v) => setFilter("label", v)} /></SettingRow>
-        <SettingRow label="Paths" help="Globs, pull request events only: dude reads the pull request's files when it runs.">
-          <ChipsInput label="Paths" values={filters.paths} disabled={disabled} onChange={(v) => setFilter("paths", v)} /></SettingRow>
-        <SettingRow label="Author" help="!login leaves someone out."><ChipsInput label="Author" values={filters.author} disabled={disabled} onChange={(v) => setFilter("author", v)} /></SettingRow>
-      </SettingsSection>
+      <SettingRow label="Filters" block help="Values in one filter are any of them; filters all hold." data-testid="event-filters">
+        <SettingFields>
+          <SettingField label="Branch"><ChipsInput label="Branch" values={filters.branch} disabled={disabled} placeholder="main, release/*" onChange={(v) => setFilter("branch", v)} /></SettingField>
+          <SettingField label="Label"><ChipsInput label="Label" values={filters.label} disabled={disabled} onChange={(v) => setFilter("label", v)} /></SettingField>
+          <SettingField label="Paths"><ChipsInput label="Paths" values={filters.paths} disabled={disabled} placeholder="src/**" onChange={(v) => setFilter("paths", v)} /></SettingField>
+          <SettingField label="Author"><ChipsInput label="Author" values={filters.author} disabled={disabled} placeholder="!dependabot[bot]" onChange={(v) => setFilter("author", v)} /></SettingField>
+        </SettingFields>
+        <SettingsNote>Branch and paths are globs; paths read a pull request's files when it runs; !login leaves someone out.</SettingsNote>
+      </SettingRow>
     </>
   );
 }

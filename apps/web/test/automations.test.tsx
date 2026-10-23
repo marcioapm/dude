@@ -56,6 +56,20 @@ describe("places", () => {
 });
 
 describe("the organisation's list", () => {
+  test("the count, next run as a day and time / On event / Off, and the filters as words with no labels", async () => {
+    const c = await show(<AutomationsList client={new FixtureClient("a")} orgName="Example" projectId={null} canCreate onOpen={() => undefined} />);
+    await until(() => (rows(c).length ? rows(c) : null), "the rows");
+    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("6 automations");
+    const next = (id: string) => rows(c).find((r) => r.getAttribute("data-id") === id)!.querySelectorAll("td")[6]!.textContent;
+    expect(next("aut_triage")).toBe("On event");
+    expect(next("aut_changelog")).toBe("Off");
+    expect(next("aut_qa")).toMatch(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}$/);
+    const bar = c.querySelector<HTMLElement>("[data-testid=filter-bar]")!;
+    expect(bar.querySelectorAll("label").length).toBe(0);
+    expect(bar.querySelector("[role=searchbox], input[type=search]")?.getAttribute("aria-label") ?? bar.querySelector("input")?.getAttribute("aria-label")).toBe("Search automations");
+    expect([...bar.querySelectorAll("button[role=combobox]")].map((b) => b.textContent)).toEqual(["All scopes", "All triggers", "All kinds", "On and off", "Anyone's"]);
+  });
+
   test("lists every automation with its owner's name for screen readers; the switch turns one off without opening it", async () => {
     const client = new FixtureClient("a");
     const opened: string[] = [];
@@ -109,6 +123,29 @@ describe("an automation's page", () => {
       onPlace={() => undefined} onBack={() => undefined} />);
     const form = await until(() => s.querySelector("form"), "the settings form");
     expect(form.classList.contains("settingsForm")).toBe(true);
+  });
+
+  test("a pull_request trigger ticks its known actions; the filters are one row of fields", async () => {
+    const client = new FixtureClient("a");
+    const sent: unknown[] = [];
+    const update = client.updateAutomation.bind(client);
+    client.updateAutomation = (id, input) => { sent.push(input.trigger); return update(id, input); };
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const actions = await until(() => c.querySelector<HTMLElement>("[role=group][aria-label=Actions]"), "the actions");
+    const box = (name: string) => [...actions.querySelectorAll<HTMLElement>("[role=checkbox]")].find((b) => b.closest("label")?.textContent === name
+      || b.getAttribute("aria-label") === name || b.parentElement?.textContent === name)!;
+    expect(box("opened").getAttribute("aria-checked")).toBe("true");
+    expect(box("synchronize").getAttribute("aria-checked")).toBe("false");
+    await click(box("synchronize"));
+    const filters = c.querySelector<HTMLElement>("[data-testid=event-filters]")!;
+    expect(filters.querySelectorAll("section").length).toBe(0);
+    for (const name of ["Branch", "Label", "Paths", "Author"]) expect(filters.textContent).toContain(name);
+    // The Event row's own label names it; its select carries no second "Event" label.
+    expect([...c.querySelectorAll("label, [class*=label]")].filter((l) => l.textContent === "Event").length).toBe(0);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => (sent.length ? sent : null), "the save");
+    expect((sent[0] as { actions: string[] }).actions).toEqual(["opened", "reopened", "synchronize"]);
   });
 
   test("an owner who left: the attention callout, Transfer, and the admins as owner", async () => {
