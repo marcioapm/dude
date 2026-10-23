@@ -777,7 +777,7 @@ func notifyFailure(ctx context.Context, tx pgx.Tx, a Automation, runID, reason s
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvAutomationFailed, OrganizationID: a.Org, ProjectID: a.ProjectID,
 		ActorType: ledger.ActorSystem, ActorID: "dude", Source: "orchestrator",
-		Payload: map[string]any{"automationId": a.ID, "name": a.Name, "runId": runID, "reason": reason, "to": to}})
+		Payload: map[string]any{"automationId": a.ID, "projectId": a.ProjectID, "name": a.Name, "runId": runID, "reason": reason, "to": to}})
 	return err
 }
 

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,7 @@ import (
 // parameter: it is the predicate of the partial index events_asks_idx
 // (migration 026), which the planner uses only when the query says the
 // same.
-const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled')"
+const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled', 'automation.failed')"
 
 // Notifier sends Web Push for new asks.
 type Notifier struct {
@@ -207,8 +208,15 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 			continue
 		}
 		body, _ := json.Marshal(msg)
+		// A failed automation run names whom to tell: its owner, or every
+		// admin while its owner has left (automations.notifyFailure).
+		to := recipients(a)
 		for _, s := range subs[a.Org] {
-			if (a.Owner != "" || a.Session != "") && s.Person != a.Owner {
+			if to != nil {
+				if !slices.Contains(to, s.Person) {
+					continue
+				}
+			} else if (a.Owner != "" || a.Session != "") && s.Person != a.Owner {
 				continue
 			}
 			wg.Add(1)
@@ -317,12 +325,43 @@ func link(a ask, path string) string {
 	return "#/o/" + url.PathEscape(a.Slug) + "/" + path
 }
 
+// recipients are the people an automation.failed event names in `to`; nil
+// for every other ask, whose recipient is its task's or session's. A failure
+// naming nobody reaches nobody (an empty, non-nil list).
+func recipients(a ask) []string {
+	if a.Type != EvAutomationFailed {
+		return nil
+	}
+	var p struct {
+		To []string `json:"to"`
+	}
+	_ = json.Unmarshal(a.Payload, &p)
+	if p.To == nil {
+		return []string{}
+	}
+	return p.To
+}
+
+// EvAutomationFailed is automations.EvAutomationFailed, named here so the
+// notifier does not import the runner.
+const EvAutomationFailed = "automation.failed"
+
 // messageFor says what an ask's notification reads, and whether it gets
 // one at all.
 func messageFor(a ask) (Message, bool) {
 	var p map[string]any
 	_ = json.Unmarshal(a.Payload, &p)
 	str := func(k string) string { v, _ := p[k].(string); return v }
+	if a.Type == EvAutomationFailed {
+		// The run's page: under the organisation's settings, or its project's.
+		where := "org/settings/automations/"
+		if project := str("projectId"); project != "" {
+			where = "project/" + url.PathEscape(project) + "/settings/automations/"
+		}
+		id, run := str("automationId"), str("runId")
+		return Message{Tag: "automation:" + id, URL: link(a, where+url.PathEscape(id)+"/runs/"+url.PathEscape(run)),
+			Title: str("name") + " failed", Body: str("reason")}, true
+	}
 	who := a.Task
 	if label := delivery.RoleLabel[a.Role]; label != "" {
 		who = strings.TrimSpace(who + " · " + label)

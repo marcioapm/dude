@@ -374,6 +374,24 @@ func TestAutomationCommandOnASchedule(t *testing.T) {
 		t.Errorf("failure told %v %v, want the owner", to, err)
 	}
 
+	// Held after its owner left: every current admin is told.
+	other := h.org + "_bo"
+	exec(t, h.owner, `INSERT INTO people (id, organization_id, name, role) VALUES ($1, $2, 'Bo', 'admin'), ($1 || '_gone', $2, 'Gone', 'admin'),
+		($1 || '_member', $2, 'Member', 'member')`, other, h.org)
+	exec(t, h.owner, `UPDATE people SET removed_at = now() WHERE id = $1 || '_gone'`, other)
+	h.automation("aut_held", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"},
+		map[string]any{"command": "exit 4"})
+	exec(t, h.owner, `UPDATE automations SET owner_id = NULL, owner_left_at = now(), next_run_at = now() - interval '1 minute' WHERE id = 'aut_held'`)
+	h.until("the held run fails", func() bool {
+		r := h.runs("aut_held")
+		return len(r) == 1 && r[0].Status == "failed"
+	})
+	if err := h.owner.QueryRow(context.Background(), `SELECT ARRAY(SELECT jsonb_array_elements_text(payload->'to') ORDER BY 1) FROM events
+		WHERE event_type = 'automation.failed' AND payload->>'automationId' = 'aut_held'`).Scan(&to); err != nil ||
+		strings.Join(to, ",") != strings.Join([]string{h.person, other}, ",") && strings.Join(to, ",") != strings.Join([]string{other, h.person}, ",") {
+		t.Errorf("a held automation's failure told %v %v, want every current admin", to, err)
+	}
+
 	// Run now on a schedule while a run is live queues behind it (Q7).
 	h.automation("aut_slow", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"}, map[string]any{"command": "sleep 1"})
 	first, _, err := h.runner.RunNow(context.Background(), h.org, "aut_slow", h.person, "", nil)
