@@ -139,6 +139,50 @@ func TestAutomationNewestLiveRunIsFollowed(t *testing.T) {
 	}
 }
 
+// stuckGet is lux whose Get never answers until released: a follower that
+// holds its worker for as long as the test says.
+type stuckGet struct {
+	lux.Client
+	held chan struct{}
+}
+
+func (s *stuckGet) Get(ctx context.Context, id string) (lux.Run, error) {
+	select {
+	case <-s.held:
+	case <-ctx.Done():
+		return lux.Run{}, ctx.Err()
+	}
+	return s.Client.Get(ctx, id)
+}
+
+// A webhook is POSTed while every follower worker is held by a live run.
+func TestAutomationWebhookDoesNotWaitForFollowers(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Workers = 1
+	stuck := &stuckGet{Client: h.lux, held: make(chan struct{})}
+	h.runner.Lux = stuck
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(stuck.held) }) })
+	var posts atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(hook.Close)
+	h.automation("aut_held", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Work"}}})
+	h.deliver("held-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the agent is live", func() bool { r := h.runs("aut_held"); return len(r) == 1 && r[0].Session != "" })
+	h.automation("aut_held_hook", "webhook", map[string]any{"kind": "github", "event": "issues"},
+		map[string]any{"webhook": map[string]any{"url": hook.URL}})
+	h.deliver("held-hook", "issues", map[string]any{"action": "opened", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the webhook is POSTed", func() bool { r := h.runs("aut_held_hook"); return len(r) == 1 && r[0].Status == "succeeded" })
+	if n := posts.Load(); n != 1 {
+		t.Errorf("webhook POSTs %d", n)
+	}
+	once.Do(func() { close(stuck.held) })
+}
+
 // submitHook is lux with a hook run inside Submit, before lux answers.
 type submitHook struct {
 	lux.Client
