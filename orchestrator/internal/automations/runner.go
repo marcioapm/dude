@@ -473,22 +473,31 @@ func (r *Runner) matchDeliveries(ctx context.Context) (int, error) {
 	return len(batch), errors.Join(errs...)
 }
 
-// skipUnmatched records a skipped run for each enabled automation on d's
-// event that d was still to be matched against (all of them on its first
-// try, those pending after).
-func skipUnmatched(ctx context.Context, tx pgx.Tx, d pendingDelivery, reason string) error {
+// pendingAutomations reads the enabled automations on d's event that d is
+// still to be matched against (all of them on its first try, those pending
+// after), and the payload a run of theirs carries.
+func pendingAutomations(ctx context.Context, tx pgx.Tx, d pendingDelivery) ([]Automation, Event, []Payload, error) {
 	rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
 		WHERE a.enabled AND a.trigger->>'kind' = 'github' AND a.trigger->>'event' = $1
 		  AND ($2::text[] IS NULL OR a.id = ANY($2)) ORDER BY a.id`, d.Event, d.Pending)
 	if err != nil {
-		return err
+		return nil, Event{}, nil, err
 	}
 	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Automation, error) { return scanAutomation(row) })
 	if err != nil {
-		return err
+		return nil, Event{}, nil, err
 	}
 	ev := ReadEvent(d.Event, d.Payload)
-	payloads := []Payload{{DeliveryID: d.ID, Event: d.Event, Action: ev.Action, Body: d.Payload}}
+	return list, ev, []Payload{{DeliveryID: d.ID, Event: d.Event, Action: ev.Action, Body: d.Payload}}, nil
+}
+
+// skipUnmatched records a skipped run for each automation d was still to be
+// matched against.
+func skipUnmatched(ctx context.Context, tx pgx.Tx, d pendingDelivery, reason string) error {
+	list, _, payloads, err := pendingAutomations(ctx, tx, d)
+	if err != nil {
+		return err
+	}
 	for _, a := range list {
 		if _, err := recordSkipped(ctx, tx, a, SourceEvent, payloads, reason); err != nil {
 			return err
@@ -505,18 +514,10 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 	var cancelled []Cancelled
 	err := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
 		cancelled = nil
-		rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
-			WHERE a.enabled AND a.trigger->>'kind' = 'github' AND a.trigger->>'event' = $1
-			  AND ($2::text[] IS NULL OR a.id = ANY($2)) ORDER BY a.id`, d.Event, d.Pending)
+		list, ev, payloads, err := pendingAutomations(ctx, tx, d)
 		if err != nil {
 			return err
 		}
-		list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Automation, error) { return scanAutomation(row) })
-		if err != nil {
-			return err
-		}
-		ev := ReadEvent(d.Event, d.Payload)
-		payloads := []Payload{{DeliveryID: d.ID, Event: d.Event, Action: ev.Action, Body: d.Payload}}
 		last := d.Attempts+1 >= MatchAttempts
 		var pending []string
 		for _, a := range list {
