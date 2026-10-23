@@ -258,3 +258,52 @@ func TestOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork(t *testing.T) {
 	w.afterEnd()
 	w.assertEnded(task, "done")
 }
+
+// Two repositories: target's pull request closes while web's fixer works.
+// The person is asked once (pull_request_closed); choosing to wait leaves
+// the delivery waiting on web's pull request, not asked the same question
+// again by the close's terminal pr.feedback. Web closing too ends it.
+func TestWaitingAfterAMixedEndOutsideThePullRequestWaitAsksOnce(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			b.Hang = true
+		}
+		return b
+	}
+	task := w.prOpen(w.task(), prAt{web: true})
+	w.web.Comment(1, "alice", "Please fix the page title.")
+	w.until("web's fixer at work", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, task) == 1
+	})
+	w.gh.Close(1)
+	w.until("the person asked", func() bool { w.sync(); return w.taskStatus(task) == "awaiting_input" })
+	if r := w.escalationReason(task); r != "pull_request_closed" {
+		t.Fatalf("escalated %q", r)
+	}
+	if code, body := w.decide(w.person("owner"), task, "wait", ""); code != 200 {
+		t.Fatalf("wait: %d %v", code, body)
+	}
+	w.afterEnd()
+	asked := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+		AND payload->>'reason' = 'pull_request_closed'`
+	if n := w.count(asked, task); n != 1 {
+		t.Fatalf("asked %d times about the close, want once; task %s", n, w.taskStatus(task))
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'escalation'`, task); n != 0 {
+		t.Errorf("an escalation is still open: %s", w.str(`SELECT state->>'escalation' FROM workflow_runs WHERE task_id = $1`, task))
+	}
+	if st, step, _ := w.deliveryStatus(task); st != "waiting" || step != "awaitPullRequest" {
+		t.Fatalf("delivery %s at %s, want waiting on web's pull request", st, step)
+	}
+	w.web.Close(1)
+	w.until("the task to end", func() bool { w.sync(); return w.taskStatus(task) == "aborted" })
+	w.afterEnd()
+	w.assertEnded(task, "aborted")
+	if n := w.count(asked, task); n != 1 {
+		t.Errorf("asked %d times about the closes, want once", n)
+	}
+}

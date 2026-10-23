@@ -161,6 +161,9 @@ func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State,
 		if _, err := StopPhaseRunsTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID, "", why, false); err != nil {
 			return err
 		}
+		if err := consumeEndedTx(ctx, tx, sc.WorkflowRunID, states); err != nil {
+			return err
+		}
 		if st.Decision != nil {
 			// Not yet told, the conductor is not asked for a decision nobody waits on.
 			if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now()
@@ -189,6 +192,31 @@ func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State,
 		res.State = st
 	}
 	return res, finished, err
+}
+
+// consumeEndedTx retires the terminal pr.feedback signals, still waiting
+// for awaitPullRequest, of the pull requests ended in states: endLoop has
+// handled those ends, and awaitPullRequest reading them again would ask a
+// person who chose to wait the same question. A terminal signal of a pull
+// request still open in states (an end after they were read) is kept. No
+// step endLoop runs in awaits pr.feedback, so none is in its own batch.
+func consumeEndedTx(ctx context.Context, tx pgx.Tx, workflowRunID string, states []PullRequestState) error {
+	var repos []string
+	var numbers []int
+	for _, p := range states {
+		if p.State == forge.StateMerged || p.State == forge.StateClosed {
+			repos, numbers = append(repos, p.Repo), append(numbers, p.Number)
+		}
+	}
+	if len(repos) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `UPDATE workflow_signals s SET consumed_at = now()
+		WHERE s.workflow_run_id = $1 AND s.name = $2 AND s.consumed_at IS NULL AND s.payload->>'kind' = 'terminal'
+		  AND EXISTS (SELECT 1 FROM unnest($3::text[], $4::int[]) e(repo, number)
+		              WHERE e.repo = s.payload->>'repo' AND e.number = (s.payload->>'number')::int)`,
+		workflowRunID, SignalPRFeedback, repos, numbers)
+	return err
 }
 
 // withdrawEscalationTx records that the escalation waits on nobody now, as
