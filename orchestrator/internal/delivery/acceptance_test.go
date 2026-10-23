@@ -173,19 +173,25 @@ func TestACarriedCriterionKeepsOnlyThePreviousRoundsPass(t *testing.T) {
 		return fmt.Sprintf("criterion: %d\nstatus: carried\nfrom_round: %s\nobserved: %s\n---\n", n, from, observed)
 	}
 	why := "The change touches only the CI workflow."
+	noReason := "Carried without a reason why the change cannot affect it."
 	cases := []struct {
 		name, reply string
 		carry       *Carry
 		criterion   int
 		want        CriterionVerdict
 	}{
+		// No `observed` line at all, and one that is only blanks: an empty
+		// `observed:` would be read as a block scalar and swallow the next field.
+		{"no reason", "criterion: 1\nstatus: carried\nfrom_round: run_prev\n", prev, 1,
+			CriterionVerdict{Status: VerdictBlocked, Problem: noReason}},
+		{"a blank reason", "criterion: 1\nstatus: carried\nobserved: \"   \"\nfrom_round: run_prev\n", prev, 1,
+			CriterionVerdict{Status: VerdictBlocked, Problem: noReason}},
 		{"a pass", reply(1, "run_prev", why), prev, 1,
 			CriterionVerdict{Status: VerdictPass, Evidence: []string{"greet.webm"}, CarriedFrom: "run_prev"}},
 		{"a waiver", reply(3, "run_prev", why), prev, 3,
 			CriterionVerdict{Status: VerdictBlocked, Decision: "waived", Evidence: []string{}, CarriedFrom: "run_prev"}},
 		{"another run", reply(1, "run_older", why), prev, 1, CriterionVerdict{Status: VerdictBlocked}},
 		{"a failure", reply(2, "run_prev", why), prev, 2, CriterionVerdict{Status: VerdictBlocked}},
-		{"no reason", reply(1, "run_prev", ""), prev, 1, CriterionVerdict{Status: VerdictBlocked}},
 		{"a fresh round", reply(1, "run_prev", why), nil, 1, CriterionVerdict{Status: VerdictBlocked}},
 		{"history that does not descend", reply(1, "run_prev", why),
 			&Carry{RunID: "run_prev", Verdicts: prev.Verdicts}, 1, CriterionVerdict{Status: VerdictBlocked}},
@@ -198,6 +204,9 @@ func TestACarriedCriterionKeepsOnlyThePreviousRoundsPass(t *testing.T) {
 			}
 			if c.want.Status == VerdictBlocked && c.want.Decision == "" && got.Problem == "" {
 				t.Error("a refused carry does not say why")
+			}
+			if c.want.Problem != "" && got.Problem != c.want.Problem {
+				t.Errorf("problem = %q, want %q", got.Problem, c.want.Problem)
 			}
 			if c.want.Evidence != nil && !slices.Equal(got.Evidence, c.want.Evidence) {
 				t.Errorf("evidence = %v, want %v", got.Evidence, c.want.Evidence)
