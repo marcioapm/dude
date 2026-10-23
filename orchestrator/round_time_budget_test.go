@@ -76,14 +76,16 @@ func TestAResumedRoundLuxTimedOutIsReplayedOnceThenTryAgainStartsFresh(t *testin
 			AND continues_how = 'resume' AND lux_state = 'running' AND lux_run_id IS NOT NULL`, wi).Scan(&retest, &luxID)
 		return luxID != ""
 	})
-	w.lux.Timeout(luxID)
 	var replay testRow
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("test rows: %+v", w.testRows(wi))
 		}
 	})
+	// lux's state events trail: the fake's Run may not be running yet when
+	// dude has it so, and Timeout stops only a running one.
 	w.until("the re-test replayed in its slot", func() bool {
+		w.lux.Timeout(luxID)
 		rows := w.testRows(wi)
 		if len(rows) < 3 {
 			return false
@@ -104,8 +106,10 @@ func TestAResumedRoundLuxTimedOutIsReplayedOnceThenTryAgainStartsFresh(t *testin
 		t.Fatalf("escalated for %q, want the round replayed with nobody asked", got)
 	}
 
-	w.lux.Timeout(replayLux)
-	w.until("the delivery to stop for a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+	w.until("the delivery to stop for a person", func() bool {
+		w.lux.Timeout(replayLux)
+		return w.taskStatus(wi) == "awaiting_input"
+	})
 	if got := w.escalationReason(wi); got != "test_failed" {
 		t.Fatalf("escalated for %q, want test_failed", got)
 	}
