@@ -68,12 +68,14 @@ func (c *Carry) runID() string {
 }
 
 // NonProduct says paths, each <repo>/<path in repo>, are all among the
-// policy's NonProductPaths, matched as ReviewersFor matches a rule: by
-// either form. No paths is not a non-product change: nothing is known.
+// policy's NonProductPaths, each glob matched against the path in its
+// repository only: "docs/**" is a docs/ directory, never every file of a
+// repository named docs. No paths is not a non-product change: nothing is
+// known.
 func NonProduct(p Policy, paths []string) bool {
 	return len(paths) > 0 && !slices.ContainsFunc(paths, func(path string) bool {
 		_, inRepo, _ := strings.Cut(path, "/")
-		return !slices.ContainsFunc(p.NonProductPaths, func(g string) bool { return MatchesGlob(g, path) || MatchesGlob(g, inRepo) })
+		return !slices.ContainsFunc(p.NonProductPaths, func(g string) bool { return MatchesGlob(g, inRepo) })
 	})
 }
 

@@ -71,8 +71,8 @@ type Policy struct {
 	ResumeRounds bool `json:"resumeRounds"`
 	// Paths no criterion's behaviour depends on: a change of these alone
 	// since a passing test round starts no tester (carryForward). Globs as
-	// MatchesGlob reads them, against a path in its repository or with the
-	// repository's name.
+	// MatchesGlob reads them, against a path in its repository only: no
+	// glob names a whole repository.
 	NonProductPaths []string `json:"nonProductPaths"`
 }
 
