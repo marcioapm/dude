@@ -382,9 +382,9 @@ func TestSignIsHMACSHA256OfTheBody(t *testing.T) {
 func TestAutomationConcurrencyRows(t *testing.T) {
 	h := newHarness(t)
 	h.automation("aut_skip", "command", map[string]any{"kind": "github", "event": "push"},
-		map[string]any{"command": "sleep 1", "concurrency": "skip"})
+		map[string]any{"command": "sleep 4", "concurrency": "skip"})
 	h.automation("aut_merge", "command", map[string]any{"kind": "github", "event": "push"},
-		map[string]any{"command": "sleep 1", "concurrency": "merge"})
+		map[string]any{"command": "sleep 4", "concurrency": "merge"})
 	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
 	h.deliver("p-1", "push", push)
 	h.until("both running", func() bool {
