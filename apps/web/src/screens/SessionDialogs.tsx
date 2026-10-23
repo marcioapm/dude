@@ -148,6 +148,8 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
   const shared = members.some((m) => m.role !== "owner");
   const roles = everyone ? MEMBER_ROLES.filter((r) => r.value === "chat") : MEMBER_ROLES;
   const addAs = everyone ? "chat" : role;
+  // Only whoever acts as owner shares (the server refuses anyone else).
+  const mayShare = detail.you.role === "owner";
   const act = async (what: () => Promise<unknown>) => {
     setBusy(true);
     setProblem(null);
@@ -171,7 +173,7 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
       footerStart={<span className="muted">They're told in their inbox. Nothing is posted anywhere else.</span>}
       footer={<>
         <Button variant="quiet" onClick={onClose}>{adding.length > 0 ? "Cancel" : "Done"}</Button>
-        {adding.length > 0 ? (
+        {adding.length > 0 && mayShare ? (
           <Button variant="primary" disabled={busy} data-testid="share-send" onClick={() => void act(() => client.inviteToSession(detail.session.id, adding, addAs))
             .then((ok) => ok && setAdding([]))}>
             Share with {adding.length}
@@ -193,7 +195,7 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
           </Callout>
         ) : null}
       </div>
-      <div className="sessionShareAdd">
+      {mayShare ? <div className="sessionShareAdd">
         <Select<string> size="sm" aria-label="Add people" placeholder="Add people…" value={undefined}
           options={candidates.map((p) => ({ value: p.id, label: p.name }))}
           onValueChange={(id) => setAdding((a) => [...a, id])} data-testid="share-add" />
@@ -202,7 +204,7 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
             { value: "chat", label: SESSION_ROLE_WORD.chat, description: "Write to the agent and file work as themselves" },
             { value: "read", label: SESSION_ROLE_WORD.read, description: "See the conversation; write nothing" },
           ]} />
-      </div>
+      </div> : null}
       {adding.length > 0 ? (
         <ul className="sessionShareNew" data-testid="share-adding">
           {adding.map((id) => (
@@ -240,7 +242,7 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
               {gone ? <span className="muted">No access</span> : m.role === "owner" ? <span className="muted">Owner</span> : detail.you.role !== "owner" ? (
                 <span className="muted">{SESSION_ROLE_WORD[lifted ? "chat" : m.role]}</span>
               ) : (
-                <>
+                <span className="sessionShareActions">
                   <Select<"chat" | "read"> size="sm" aria-label={`What ${m.person.name} can do`} value={lifted ? "chat" : m.role as "chat" | "read"} disabled={busy}
                     onValueChange={(r) => void act(() => client.setSessionRole(detail.session.id, m.person.id, r))}
                     options={roles} />
@@ -249,7 +251,7 @@ export function ShareDialog({ client, detail, org, open, onClose, onChanged, onM
                   ) : null}
                   <Button size="sm" variant="quiet" disabled={busy} data-testid="remove-member"
                     onClick={() => void act(() => client.removeFromSession(detail.session.id, m.person.id))}>Remove</Button>
-                </>
+                </span>
               )}
             </li>
           );

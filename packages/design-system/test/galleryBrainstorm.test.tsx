@@ -174,3 +174,12 @@ test("the rail's Model: the owner's chip, chosen and read only, each with when a
     expect(pane.querySelector("[data-testid=rail-model]")!.textContent).toContain("Applies from your next message: a fresh agent takes over with the conversation so far.");
   }
 });
+
+test("bs-access shows the rail of a session whose owner left: Left Acme · No access, never Owner", async () => {
+  const el = await mount();
+  for (const pane of el.querySelectorAll("#bs-access [data-theme][data-density]")) {
+    const left = pane.querySelector('[data-testid=session-people] [data-left="true"]')!;
+    expect(left.textContent).toContain("Left Acme · No access");
+    expect(left.textContent).not.toContain("Owner");
+  }
+});

@@ -199,6 +199,15 @@ describe("General access in the Share dialog", () => {
     expect(p.querySelector("[data-testid=session-title]")!.tagName).toBe("SPAN");
     expect(composer(p).disabled).toBe(false);
   });
+
+  test("a reader lifted to chat in an organisation session may write but not rename: the server's mayRename decides", async () => {
+    const p = await page(new OrgClient(detail("chat", { access: "organisation" }, { member: true, mayRename: false })));
+    expect(p.querySelector("[data-testid=session-title]")!.tagName).toBe("SPAN");
+    expect(composer(p).disabled).toBe(false);
+    await act(async () => mounted.splice(0).forEach((u) => void u()));
+    const member = await page(new OrgClient(detail("chat", { access: "organisation" }, { member: true, mayRename: true })));
+    expect(member.querySelector("[data-testid=session-title]")!.tagName).not.toBe("SPAN");
+  });
 });
 
 describe("a session its admins own", () => {
@@ -231,6 +240,9 @@ describe("a session its admins own", () => {
     expect(dialog.querySelectorAll("[data-testid=take-ownership]").length).toBe(0);
     // Its access is not theirs to change.
     expect(dialog.querySelectorAll("[data-testid=general-access-select]").length).toBe(0);
+    // Nor whom it is shared with: no Add people, no Share with N.
+    expect(dialog.querySelectorAll("[data-testid=share-add]").length).toBe(0);
+    expect(dialog.querySelectorAll("[data-testid=share-send]").length).toBe(0);
     expect(dialog.querySelector("[data-testid=admin-owned-callout]")!.textContent).toContain("admins own it now");
   });
 });

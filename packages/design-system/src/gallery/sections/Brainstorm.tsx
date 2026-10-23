@@ -287,6 +287,11 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
               <SharedMark label="Shared with 4" showLabel />
               <AdminOwned org="Acme" />
             </Row>
+            <Label>the rail of a session its admins own: its owner left</Label>
+            <SessionPeople members={[
+              { person: P["lin"]!, role: "owner", left: "Acme" },
+              { person: P["ana"]!, role: "chat", open: true },
+            ]} />
           </Col>
         </Panes>
       </Block>

@@ -429,7 +429,9 @@ function WithMentions({ text, mentions }: { readonly text: string; readonly ment
     if (at < 0) break;
     // A mention starts a word, as the composer's query does.
     const starts = at === 0 || /\s|[([{"'“‘]/.test(text[at - 1]!);
-    const hit = starts ? mentions.find((m) => text.startsWith(m.name, at + 1)) : undefined;
+    // ...and ends one: "@Anabel" is not a mention of Ana.
+    const ends = (m: MarkdownMention) => !/[\p{L}\p{N}]/u.test(text[at + 1 + m.name.length] ?? "");
+    const hit = starts ? mentions.find((m) => text.startsWith(m.name, at + 1) && ends(m)) : undefined;
     if (!hit) {
       i = at + 1;
       continue;

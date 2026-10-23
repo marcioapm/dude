@@ -347,9 +347,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const ownerName = owner && !byAdmins ? owner.person.name : `${org}'s admins`;
   // Not one of its people (an organisation session never joined, or an
   // admin of one its admins own): nothing of theirs to archive. Renaming
-  // takes an owner or chat row, or an admin while its admins own it.
+  // follows the server's word when it gives one (a reader lifted to chat
+  // may not); else an owner or chat row, or an admin while its admins own it.
   const notIn = you.member === false;
-  const mayRename = !reader && (!notIn || (byAdmins && isOwner));
+  const mayRename = you.mayRename ?? (!reader && (!notIn || (byAdmins && isOwner)));
 
   return (
     <div className="screen sessionScreen" data-testid="session-screen" data-role={you.role}>

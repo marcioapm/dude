@@ -233,3 +233,33 @@ func TestOrgSessionTakeOwnershipVoidsAPendingHandover(t *testing.T) {
 		t.Errorf("João after accepting: %d %q member=%v", status, role, member)
 	}
 }
+
+// The session's detail says whether the caller may rename it, by the rule
+// the rename route applies: a read row lifted to chat in an organisation
+// session may not, nor someone who never joined; the owner, a chat member
+// and an admin of an admin-owned session may.
+func TestOrgSessionDetailSaysWhoMayRename(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.openToOrg()
+	s.join(id, s.ana, "chat")
+	may := func(who string) bool {
+		status, out := s.as(who, "GET", "/internal/sessions/"+id, nil)
+		if status != 200 {
+			t.Fatalf("%s reading it: %d", who, status)
+		}
+		return out["you"].(map[string]any)["mayRename"].(bool)
+	}
+	for who, want := range map[string]bool{s.marcio: true, s.ana: true, s.joao: false, s.outsider: false} {
+		if got := may(who); got != want {
+			t.Errorf("%s may rename: %v, want %v", who, got, want)
+		}
+		status, _ := s.as(who, "POST", "/internal/sessions/"+id+"/title", map[string]any{"title": "Renamed"})
+		if (status == 200) != want {
+			t.Errorf("%s renaming: %d, the detail said %v", who, status, want)
+		}
+	}
+	s.ownerLeaves(id)
+	if !may(s.admin) {
+		t.Errorf("an admin of an admin-owned session may not rename it")
+	}
+}

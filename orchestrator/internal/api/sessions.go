@@ -121,17 +121,25 @@ func lockedMemberWriter(ctx context.Context, tx pgx.Tx, sessionID, person, verb 
 	if err != nil {
 		return err
 	}
-	var in bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_people WHERE session_id = $1 AND person_id = $2
-			AND accepted_at IS NOT NULL AND role IN ('owner', 'chat'))
-		OR EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND owned_by_admins) AND $3`, sessionID, person, role == delivery.SessionOwner).
-		Scan(&in); err != nil {
+	in, err := memberWriter(ctx, tx, sessionID, person, role)
+	if err != nil {
 		return err
 	}
 	if !in {
 		return fail(http.StatusForbidden, "not_member", "only the session's people who can chat %s", verb)
 	}
 	return nil
+}
+
+// memberWriter is lockedMemberWriter's rule for someone whose role is role:
+// an accepted owner or chat row, or the owner role while its admins own it.
+func memberWriter(ctx context.Context, tx pgx.Tx, sessionID, person, role string) (bool, error) {
+	var in bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_people WHERE session_id = $1 AND person_id = $2
+			AND accepted_at IS NOT NULL AND role IN ('owner', 'chat'))
+		OR EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND owned_by_admins) AND $3`, sessionID, person, role == delivery.SessionOwner).
+		Scan(&in)
+	return in, err
 }
 
 // writer refuses a reader: only the owner and members who can chat write
@@ -550,8 +558,16 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 		if err != nil {
 			return err
 		}
+		// Rename's own rule (lockedMemberWriter): a read row lifted to chat does not rename.
+		mayRename := false
+		if role != delivery.SessionRead {
+			if mayRename, err = memberWriter(r.Context(), tx, id, p.Person, role); err != nil {
+				return err
+			}
+		}
 		out = map[string]any{"session": session,
-			"you":       map[string]any{"id": p.Person, "role": role, "archived": archived, "member": isMember, "admin": admin},
+			"you": map[string]any{"id": p.Person, "role": role, "archived": archived, "member": isMember, "admin": admin,
+				"mayRename": mayRename},
 			"proposals": proposals, "question": question, "model": model}
 		return nil
 	})

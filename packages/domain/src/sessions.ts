@@ -253,8 +253,8 @@ export interface SessionDetail {
     access?: SessionAccess;
     ownedByAdmins?: boolean;
   };
-  /** `role` is what you may do (an organisation session lifts `read` to `chat`); `member` is false when you are not one of its people yet. */
-  you: { id: string; role: SessionRole; archived: boolean; member?: boolean; admin?: boolean };
+  /** `role` is what you may do (an organisation session lifts `read` to `chat`); `member` is false when you are not one of its people yet; `mayRename` is the rename route's own rule (a lifted reader may not). */
+  you: { id: string; role: SessionRole; archived: boolean; member?: boolean; admin?: boolean; mayRename?: boolean };
   proposals: Proposal[] | null;
   question: { id: string; prompt: string; options: string[]; items?: AskItem[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
   /** The model its agent runs on; absent from an older orchestrator. */

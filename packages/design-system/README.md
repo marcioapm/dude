@@ -783,7 +783,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **The rail** is `SessionRail` with a `SessionRailBlock` per part:
   `SessionPeople` (owner first, each with their role in words — Owner, Can
   chat, Can read, Invited; a member with `left: <org>`, the owner of record
-  of a session its admins own, reads "Left <org> · No access"), `LinkedProjects` (each project and its
+  of a session its admins own, reads "Left <org> · No access"; gallery `bs-access`), `LinkedProjects` (each project and its
   repositories, read only; "No project linked yet" when none), **Model**
   (`ModelPicker`; read only but for the owner), **Files**
   and `Capabilities` (what it can and cannot do, each line a check or a
@@ -2150,7 +2150,7 @@ once; an item's `descriptionMono` and `descriptionWraps` set its second
 line in mono or let a sentence wrap; a `kind: "note"` is a muted line that
 is not an item, for what the menu cannot list, and the menu's description
 for a screen reader, whose menu mode reads items alone), Skeleton/SkeletonLines/Spinner, EmptyState,
-ScrollArea, Section (`count`, and `limit` for "3 of 10"; `note`, muted words beside the label and out of its capitals), FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
+ScrollArea, Section (`count`, and `limit` for "3 of 10"; `note`, muted words beside the label and out of its capitals, gallery `pe-note`), FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 
 `src/components/` — the factory vocabulary:

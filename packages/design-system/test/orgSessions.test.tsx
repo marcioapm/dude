@@ -296,7 +296,10 @@ describe("SharedMark for an organisation session", () => {
     </>);
     const marks = [...el.querySelectorAll('[data-scope="organisation"]')];
     expect(marks.map(accessibleName)).toEqual(["Everyone in Acme, Gus Lindqvist's", "Everyone in Acme, Eli Haddad's"]);
-    expect(marks.every((m) => m.querySelector("[data-testid=person-avatar], img, [aria-hidden]"))).toBe(true);
+    // The face itself, by its initials, in each mark; none without an owner.
+    expect(marks.map((m) => m.querySelector("[data-identity]")?.textContent)).toEqual(["GL", "EH"]);
+    const bare = await mount(<SharedMark scope="organisation" org="Acme" />);
+    expect(bare.querySelectorAll("[data-identity]").length).toBe(0);
   });
 });
 
@@ -312,6 +315,14 @@ describe("mentions in a message's text", () => {
     expect(el.querySelector("p")!.textContent).toContain(", not @Ana nor @Ana nor me@Ana");
     expect(el.querySelector("code")!.textContent).toBe("@Ana");
     expect(el.querySelector("a")!.querySelectorAll("[data-testid=mention-chip]").length).toBe(0);
+  });
+
+  test("a name must end where the mention does: @Anabel is not Ana, @Ana. and @Ana's are", async () => {
+    const ANA = { id: "per_ana", name: "Ana" };
+    const el = await mount(<ChatMessage role="human" content={"@Anabel, @Ana2 and @Ana. Then @Ana's"}
+      mentions={[{ name: ANA.name, chip: <MentionChip person={ANA} /> }]} />);
+    expect(el.querySelectorAll("[data-testid=mention-chip]").length).toBe(2);
+    expect(el.querySelector("p")!.textContent).toContain("@Anabel, @Ana2 and");
   });
 });
 
