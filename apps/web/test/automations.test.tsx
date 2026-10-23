@@ -251,6 +251,37 @@ describe("the header's ⋯ menu", () => {
   });
 });
 
+describe("secrets and webhook wording", () => {
+  test("an organisation automation explains project secrets instead of offering a picker", async () => {
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    await until(() => c.querySelector("[data-testid=owner-row]"), "the page");
+    expect(c.textContent).toContain("secrets belong to a project");
+    expect(c.querySelector("[role=group][aria-label='Project secrets']")).toBeNull();
+  });
+
+  test("a project automation chooses its project's secrets and saves those names", async () => {
+    const client = new FixtureClient("a");
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const group = await until(() => c.querySelector<HTMLElement>("[role=group][aria-label='Project secrets']"), "the secrets");
+    expect(group.textContent).toContain("DATABASE_SEED_URL");
+    await click(group.querySelector<HTMLElement>("[role=checkbox]")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_qa").secrets.length === 1 ? true : null, "saved");
+    expect((await client.automation("aut_qa")).secrets).toEqual(["DATABASE_SEED_URL"]);
+  });
+
+  test("a webhook says retried once, on 5xx or no answer in 30 seconds", async () => {
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_release" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    await until(() => c.querySelector("[data-testid=owner-row]"), "the page");
+    expect(c.textContent).toContain("A 5xx or no answer within 30 s is retried once");
+    expect(c.textContent).not.toContain("3 times");
+    expect(c.textContent).not.toContain("10 minutes");
+  });
+});
+
 describe("Run now on an event", () => {
   test("a written event: valid JSON and a matching one run; the excluded author disables Run; broken JSON says where", async () => {
     const client = new FixtureClient("a");

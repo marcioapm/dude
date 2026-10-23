@@ -328,6 +328,13 @@ const baseSchema = z.object({
 
 export type AutomationInput = z.infer<typeof baseSchema>;
 
+/** Why an organisation automation names no secrets: they are each project's own. */
+export const ORG_AUTOMATION_SECRETS =
+  "secrets belong to a project, so an organisation automation is given none; make it a project's automation to use that project's secrets";
+
+/** What a Webhook or Server automation does when a POST gets a 5xx or no answer. */
+export const AUTOMATION_POST_RETRY = "A 5xx or no answer within 30 s is retried once; then the run fails and its owner is told.";
+
 /**
  * Why an automation cannot be saved as it is in this scope, as the field it
  * is about and a sentence; null when it can. The database checks the same
@@ -335,6 +342,7 @@ export type AutomationInput = z.infer<typeof baseSchema>;
  */
 export function automationProblem(a: AutomationInput, scope: AutomationScope): { path: string; message: string } | null {
   if (scope === "project" && a.repoFilter) return { path: "repoFilter", message: "a project automation covers the project's repositories; only an organisation automation filters them" };
+  if (scope === "organization" && a.secrets.length > 0) return { path: "secrets", message: ORG_AUTOMATION_SECRETS };
   if (a.sessionMode === "resumable" && a.expiryDays === null) return { path: "expiryDays", message: "a resumable session expires after 1 to 30 days without a run" };
   if (a.sessionMode === "ephemeral" && a.expiryDays !== null) return { path: "expiryDays", message: "only a resumable session expires" };
   if (a.kind === "webhook" && a.sessionMode !== "ephemeral") return { path: "sessionMode", message: "a webhook keeps no session" };

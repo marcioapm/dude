@@ -397,6 +397,20 @@ describe("delete and duplicate", () => {
   });
 });
 
+describe("secrets scope", () => {
+  test("an organisation automation refuses secret names; a project automation accepts them", async () => {
+    const settings = { name: "Secrets", kind: "command", trigger: { kind: "schedule", cron: "0 3 * * *", tz: "UTC" },
+      command: "run-report", secrets: ["ACME_TOKEN"] };
+    const { body: org } = await create("ana", { name: "Secrets", kind: "command", trigger: "schedule" });
+    const denied = await call("ana", "PUT", `/v1/automations/${org.id}`, settings);
+    expect(denied.status).toBe(400);
+    const { body: project } = await create("ana", { name: "Secrets", kind: "command", trigger: "schedule", projectId: WEB });
+    const saved = await call("ana", "PUT", `/v1/automations/${project.id}`, settings);
+    expect(saved.status).toBe(200);
+    expect((await body(saved)).secrets).toEqual(["ACME_TOKEN"]);
+  });
+});
+
 describe("prompt history", () => {
   const settingsWith = (prompt: string) => ({ name: "Triage", kind: "agent", trigger: { kind: "github", event: "pull_request", actions: [], filters: {} },
     agent: { own: { prompt } } });

@@ -36,6 +36,7 @@ import {
   Badge,
   Button,
   Callout,
+  Checkbox,
   Dialog,
   EmptyState,
   FormStack,
@@ -55,6 +56,8 @@ import {
 } from "@dude/design-system/primitives";
 import {
   AUTOMATION_PROMPT_VARIABLES,
+  AUTOMATION_POST_RETRY,
+  ORG_AUTOMATION_SECRETS,
   CONCURRENCY,
   CONCURRENCY_LABEL,
   FILTER_LABEL,
@@ -551,9 +554,12 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
             <SettingRow label="Signing secret" help="X-Dude-Signature-256: sha256= and the HMAC-SHA256 of the body, as GitHub signs.">
               <span className="ds-mono" data-testid="endpoint-preview">{a.webhookSecretHint ? `••••${a.webhookSecretHint}` : "None"}</span>
             </SettingRow>
+            <SettingsNote>{AUTOMATION_POST_RETRY}</SettingsNote>
           </SettingsSection>
         ) : null}
 
+        {a.kind !== "webhook" ? <AutomationSecrets client={client} projectId={a.projectId} ro={ro} chosen={form.secrets}
+          onChange={(names) => set("secrets", names)} /> : null}
         <SettingsSection title="Notifications">
           <SettingRow label="When a run fails" help={a.ownerLeftAt ? `Every one of ${orgName}'s admins is told.` : "Its owner is told."}>
             <Switch checked={form.notifyOnFailure} label={form.notifyOnFailure ? "Notify" : "Don't notify"} disabled={ro} onCheckedChange={(v) => set("notifyOnFailure", v)} />
@@ -576,6 +582,29 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
         </div>
       )}
     </form>
+  );
+}
+
+function AutomationSecrets({ client, projectId, ro, chosen, onChange }: {
+  client: ApiClient; projectId: string | null; ro: boolean; chosen: string[]; onChange: (names: string[]) => void;
+}) {
+  const [names, setNames] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (projectId) client.projectSecrets(projectId).then((r) => setNames(r.secrets.map((s) => s.name)), () => setNames([]));
+  }, [client, projectId]);
+  return (
+    <SettingsSection title="Secrets">
+      {!projectId ? <SettingsNote>{ORG_AUTOMATION_SECRETS}</SettingsNote> : (
+        <SettingRow label="Project secrets" help="Only those chosen here are given to each run, as environment variables.">
+          {names === null ? <Spinner label="Loading secrets…" /> : names.length === 0 ? <span>No project secrets.</span> : (
+            <div role="group" aria-label="Project secrets">
+              {names.map((name) => <Checkbox key={name} label={name} checked={chosen.includes(name)} disabled={ro}
+                onCheckedChange={(checked) => onChange(checked ? [...chosen, name] : chosen.filter((s) => s !== name))} />)}
+            </div>
+          )}
+        </SettingRow>
+      )}
+    </SettingsSection>
   );
 }
 

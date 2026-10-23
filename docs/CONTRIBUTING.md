@@ -676,6 +676,44 @@ their creator.
   `DUDE_DELIVERY_ID`. An automation's lux Run is not a dude Run (`runs`): it
   has no task or session, so the loop follows it from
   `automation_runs.lux_run_id`.
+- **Preset overrides.** Harness, tier, time limit without progress, machine
+  and image each show the role's resolved value, "From <role> · <org|project>",
+  and "Override for this automation". An override shows "Overridden",
+  what the role's value is and Reset (back to following it). Each field is
+  independent; `spec()` applies `agent.preset.overrides` after the role's settings.
+- **Agent tools.** A run gets exactly `create_task`, `github_search`,
+  `github_issue`, `github_pull_request`, `github_check_log` and `github_comment`.
+  The runner issues a stable per-run tools token (`RunToken`, retried starts
+  use the same one) into the MCP service and CLI's `DUDE_TOOLS_AUTH` secret;
+  its hash and scope live on `automation_runs`. The tool server's sibling
+  `lookup_automation_by_mcp_token` answers without a `runs` row; a finished
+  run's token is dead. Reads and comments are restricted to the covered
+  repositories (project's, or the organisation filter's). `github_comment`
+  uses `forge.GitHub.Comment` as the App, on the triggering issue/PR by default
+  or a given repo/number. `create_task` files in the automation's project,
+  or, for an organisation automation, the project owning the triggering
+  repository; with none (for example on a schedule), it refuses clearly.
+  The task's `created_by_automation_run_id` and `task.created` event name
+  the automation run, automation and owner it acts for.
+- **Prompt editor and history.** Own prompt and preset brief both use
+  `MarkdownDocument`, `{{ }}` inserting `AUTOMATION_PROMPT_VARIABLES`.
+  `automation_prompt_versions` (migration 180, the `prompt_versions` pattern)
+  keeps every changed save's text, who and when; the first change also keeps
+  what it had before. `GET /v1/automations/:id/prompt-history` lists newest
+  first; `POST …/prompt-history/restore {versionId}` (editors) saves an old
+  version again as the newest. The role pages' `PromptHistory` shows diff,
+  whole text and Restore. A read-only viewer reads without Edit/Restore.
+- **Delete and Duplicate.** The header's ⋯ menu: Duplicate copies the settings
+  off, named "<name> (copy)", owned by the caller, with no runs, kept session
+  or prompt history; a webhook copy gets its own signing secret.
+  Delete confirms how many runs' history/logs/payloads go with it and whether
+  a kept session is ended; the API calls the orchestrator's Start fresh to
+  cancel its kept lux Run before deleting the row (and refuses to delete
+  if that fails). Both actions require the scope's editor permission.
+- **Secrets.** Chosen project secrets are given to each run as environment
+  variables. Organisation automations choose none: secrets belong to each
+  project, and a project automation is needed to use its secrets. The org
+  page says so instead of showing a picker; the API rejects names there.
 - **Sessions.** Ephemeral (a fresh Run, cancelled at the end) or Resumable:
   one session per automation (`automation_sessions`), stopped and kept at
   the end of a run and resumed by the next firing, until `expiry_days`
@@ -707,7 +745,11 @@ their creator.
   everyone reads; the owner and editors run it by hand. When the owner is
   removed (`removePerson`), the organisation's admins hold it together
   (`owner_id` NULL, `owner_left_at` set): it stays on and its page says so.
-  A failed run records `automation.failed` naming the owner, or every admin.
+  A failed run records `automation.failed` naming the owner, or every current
+  admin while held. The Web Push notifier includes it in `asks` (and the
+  `events_asks_idx` predicate, migration 180); recipients come from the
+  payload's `to`. The message names the automation and reason, linking to
+  that run under its organisation's or project's settings.
 - **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90
   (`automations.Retain`, hourly).
 
