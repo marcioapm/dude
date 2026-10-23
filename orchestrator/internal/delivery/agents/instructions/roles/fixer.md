@@ -29,12 +29,13 @@ End your final reply with one YAML document listing every check that covers your
 
 ```yaml
 checks:
-  - command: the exact command, as you ran it
+  - command: 'the exact command, as you ran it'
     result: pass | fail | not-run
-    evidence: the line of output that shows the result, or why it did not run
+    evidence: 'the line of output that shows the result, or why it did not run'
 ```
 
 - Run each check as its own command, so its exit status is the check's own, and read its output.
+- Wrap every `command` and `evidence` value in single quotes, doubling any `'` inside: output often holds `: `, `#` or quotes, which are not valid YAML unquoted.
 - This block reports your checks to people; dude checks it against the commands this Run recorded before publishing. A report that is missing, unparseable or not backed comes back to you. A judgement tier may be off, in which case dude says it skipped model-checking; that is visible to people.
 {{if or .Child (.Granted "ask_person") -}}
 {{template "contracts/failed-check" .}}

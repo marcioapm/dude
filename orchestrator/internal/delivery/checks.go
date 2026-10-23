@@ -2,6 +2,8 @@ package delivery
 
 import (
 	"context"
+	"errors"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -32,6 +34,29 @@ type Check struct {
 // earlier valid report when the last one is malformed. A report of no
 // checks is valid input for the model's missing-check question.
 func ParseChecks(reply string) ([]Check, bool) {
+	block, ok := checksBlock(reply)
+	if !ok {
+		return nil, false
+	}
+	var doc checksDoc
+	if yaml.Unmarshal([]byte(block), &doc) != nil || doc.Checks == nil {
+		return nil, false
+	}
+	for _, c := range doc.Checks {
+		if strings.TrimSpace(c.Command) == "" || (c.Result != CheckPass && c.Result != CheckFail && c.Result != CheckNotRun) {
+			return nil, false
+		}
+	}
+	return doc.Checks, true
+}
+
+type checksDoc struct {
+	Checks []Check `yaml:"checks"`
+}
+
+// checksBlock is the last checks document of a reply: from its last line
+// starting "checks:" to the next fence or document end.
+func checksBlock(reply string) (string, bool) {
 	lines := strings.Split(reply, "\n")
 	start := -1
 	for i, line := range lines {
@@ -40,7 +65,7 @@ func ParseChecks(reply string) ([]Check, bool) {
 		}
 	}
 	if start < 0 {
-		return nil, false
+		return "", false
 	}
 	end := len(lines)
 	for i := start + 1; i < len(lines); i++ {
@@ -50,18 +75,46 @@ func ParseChecks(reply string) ([]Check, bool) {
 			break
 		}
 	}
-	var doc struct {
-		Checks []Check `yaml:"checks"`
+	return strings.Join(lines[start:end], "\n"), true
+}
+
+// yamlLinePrefix is yaml.v3's "line N: " position, which counts from the
+// block, not the reply, and is often not where the fault is.
+var yamlLinePrefix = regexp.MustCompile(`(?m)^\s*line \d+: `)
+
+// ChecksYAMLError is why the last checks block does not decode; zero when
+// there is no block or it decodes. Shape marks well-formed YAML of the
+// wrong shape, which quoting does not fix.
+type ChecksYAMLError struct {
+	Syntax string
+	Shape  bool
+}
+
+func ChecksYAMLErrorOf(reply string) ChecksYAMLError {
+	block, ok := checksBlock(reply)
+	if !ok {
+		return ChecksYAMLError{}
 	}
-	if yaml.Unmarshal([]byte(strings.Join(lines[start:end], "\n")), &doc) != nil || doc.Checks == nil {
-		return nil, false
+	var doc checksDoc
+	err := yaml.Unmarshal([]byte(block), &doc)
+	if err == nil {
+		return ChecksYAMLError{}
 	}
-	for _, c := range doc.Checks {
-		if strings.TrimSpace(c.Command) == "" || (c.Result != CheckPass && c.Result != CheckFail && c.Result != CheckNotRun) {
-			return nil, false
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		return ChecksYAMLError{Shape: true}
+	}
+	var parts []string
+	for _, line := range strings.Split(strings.TrimPrefix(err.Error(), "yaml: "), "\n") {
+		if line = strings.Join(strings.Fields(yamlLinePrefix.ReplaceAllString(line, "")), " "); line != "" {
+			parts = append(parts, line)
 		}
 	}
-	return doc.Checks, true
+	msg := strings.Join(parts, "; ")
+	if utf8.RuneCountInString(msg) > 300 {
+		msg = string([]rune(msg)[:300]) + "…"
+	}
+	return ChecksYAMLError{Syntax: msg}
 }
 
 // LatestTurnTx is the cursor of the Run's latest ended turn (its newest

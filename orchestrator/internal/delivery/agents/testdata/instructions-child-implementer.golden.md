@@ -103,12 +103,13 @@ End your final reply with one YAML document listing every check that covers your
 
 ```yaml
 checks:
-  - command: the exact command, as you ran it
+  - command: 'the exact command, as you ran it'
     result: pass | fail | not-run
-    evidence: the line of output that shows the result, or why it did not run
+    evidence: 'the line of output that shows the result, or why it did not run'
 ```
 
 - Run each check as its own command, so its exit status is the check's own, and read its output.
+- Wrap every `command` and `evidence` value in single quotes, doubling any `'` inside: output often holds `: `, `#` or quotes, which are not valid YAML unquoted.
 - This block reports your checks to people; dude checks it against the commands this Run recorded before publishing. A report that is missing, unparseable or not backed comes back to you. A judgement tier may be off, in which case dude says it skipped model-checking; that is visible to people.
 - A failed check or one that will not run is a problem to solve before you finish (see How you work). If you cannot solve it, report it here as `fail` or `not-run`, and say in your final reply what you ran, the exact error, and what you tried. Never list a check as `pass` that you did not see pass.
 
