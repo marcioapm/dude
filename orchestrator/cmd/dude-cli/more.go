@@ -57,14 +57,21 @@ var filterCommands = map[string]command{
 // taskOrRun resolves an optional TASK and an optional --run.
 func (c *cli) taskOrRun(task, run string) (string, string, error) {
 	var taskID, runID string
+	var resolved obj
 	var err error
 	if task != "" {
-		if taskID, err = c.taskID(task); err != nil {
+		if resolved, err = c.task(task); err != nil {
 			return "", "", err
 		}
+		taskID = str(resolved, "id")
 	}
 	if run != "" {
-		if runID, err = c.runID(run); err != nil {
+		if run == task {
+			runID, err = taskRunID(resolved, task)
+		} else {
+			runID, err = c.runID(run)
+		}
+		if err != nil {
 			return "", "", err
 		}
 	}

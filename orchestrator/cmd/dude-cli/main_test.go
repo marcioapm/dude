@@ -49,7 +49,7 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 			io.WriteString(w, `{"tasks":[{"id":"wi_12","key":"ABS-12","title":"T","status":"running"}]}`)
 		case r.URL.Path == "/v1/tasks" && r.Method == "POST":
 			io.WriteString(w, `{"id":"wi_13","key":"ABS-13","title":"New","status":"received","projectId":"prj_1"}`)
-		case r.URL.Path == "/v1/tasks/wi_12" && r.Method == "GET":
+		case (r.URL.Path == "/v1/tasks/wi_12" || strings.EqualFold(r.URL.Path, "/v1/tasks/abs-12")) && r.Method == "GET":
 			io.WriteString(w, `{"id":"wi_12","key":"ABS-12","title":"T","status":"running","projectId":"prj_1",
 				"owner":{"id":"usr_1","name":"Ana"},"bulky":"x",
 				"runs":[{"id":"run_new","status":"running","extra":1},{"id":"run_old"}]}`)
@@ -78,6 +78,28 @@ func runCLI(t *testing.T, srv *httptest.Server, stdin string, args ...string) (s
 }
 
 func last(calls []call) call { return calls[len(calls)-1] }
+
+func TestTaskRefsUseOneLookup(t *testing.T) {
+	for _, args := range [][]string{
+		{"show", "abs-12"},
+		{"show", "wi_12"},
+		{"chat", "ABS-12", "hello"},
+		{"feedback-draft", "ABS-12", "hello", "--path", "a.go", "--lines", "1"},
+		{"findings", "ABS-12", "--run", "ABS-12"},
+	} {
+		srv, calls := fakeDude(t)
+		if _, err := runCLI(t, srv, "", args...); err != nil {
+			t.Fatal(err)
+		}
+		want := 2
+		if args[0] == "show" {
+			want = 1
+		}
+		if len(*calls) != want || (*calls)[0].path != "/v1/tasks/"+args[1] {
+			t.Fatalf("%v: calls %+v", args, *calls)
+		}
+	}
+}
 
 func TestShowResolvesKeyAndBriefs(t *testing.T) {
 	srv, calls := fakeDude(t)

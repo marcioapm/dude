@@ -133,6 +133,10 @@ var lifecycleCommands = map[string]command{
 				if err != nil {
 					return nil, err
 				}
+				task, err := c.task(a[0])
+				if err != nil {
+					return nil, err
+				}
 				anchor := obj{"kind": "general"}
 				if *path != "" {
 					if *lines == "" {
@@ -145,11 +149,12 @@ var lifecycleCommands = map[string]command{
 					if err := oneOf("--side", *side, "new", "old"); err != nil {
 						return nil, err
 					}
-					ref := *run
-					if ref == "" {
-						ref = a[0]
+					var runID string
+					if *run == "" || *run == a[0] {
+						runID, err = taskRunID(task, a[0])
+					} else {
+						runID, err = c.runID(*run)
 					}
-					runID, err := c.runID(ref)
 					if err != nil {
 						return nil, err
 					}
@@ -157,7 +162,7 @@ var lifecycleCommands = map[string]command{
 				} else if *lines != "" || *run != "" {
 					return nil, errors.New("feedback-draft: --lines and --run go with --path")
 				}
-				return c.onTask("POST", a[0], "/feedback/drafts", obj{"body": t, "anchor": anchor})
+				return c.post("/v1/tasks/"+esc(str(task, "id"))+"/feedback/drafts", obj{"body": t, "anchor": anchor})
 			}
 		}},
 	"feedback-submit": {"TASK DRAFT?", "send drafts to the task's agents: the ones named, or all of yours",

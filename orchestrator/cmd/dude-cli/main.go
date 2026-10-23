@@ -332,29 +332,10 @@ func (c *cli) tasks(projectID, status string) ([]obj, error) {
 
 // task is a task by key (ABS-12) or id, with its runs.
 func (c *cli) task(ref string) (obj, error) {
-	if strings.HasPrefix(ref, "wi_") || !strings.Contains(ref, "-") {
-		return c.getObj("/v1/tasks/" + url.PathEscape(ref))
-	}
-	pid, err := c.projectID(ref[:strings.LastIndex(ref, "-")])
-	if err != nil {
-		return nil, err
-	}
-	ts, err := c.tasks(pid, "")
-	if err != nil {
-		return nil, err
-	}
-	for _, t := range ts {
-		if strings.EqualFold(str(t, "key"), ref) {
-			return c.getObj("/v1/tasks/" + url.PathEscape(str(t, "id")))
-		}
-	}
-	return nil, fmt.Errorf("no task %s", ref)
+	return c.getObj("/v1/tasks/" + url.PathEscape(ref))
 }
 
 func (c *cli) taskID(ref string) (string, error) {
-	if strings.HasPrefix(ref, "wi_") {
-		return ref, nil
-	}
 	t, err := c.task(ref)
 	if err != nil {
 		return "", err
@@ -371,6 +352,10 @@ func (c *cli) runID(ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return taskRunID(t, ref)
+}
+
+func taskRunID(t obj, ref string) (string, error) {
 	runs := list(t, "runs")
 	if len(runs) == 0 {
 		return "", fmt.Errorf("%s has no runs", ref)
