@@ -22,13 +22,15 @@ import (
 // a migration, whose first review round ended at aaa; its heads are now
 // bbb, and GitHub compares aaa...bbb as files.
 type laterRound struct {
-	t        *testing.T
-	ctx      context.Context
-	org      string
-	owner    *pgx.Conn
-	exec     func(q string, args ...any)
-	steps    *steps
-	files    []map[string]any
+	t     *testing.T
+	ctx   context.Context
+	org   string
+	owner *pgx.Conn
+	exec  func(q string, args ...any)
+	steps *steps
+	files []map[string]any
+	// Compare files by repository slug, for a task of several repositories.
+	bySlug   map[string][]map[string]any
 	status   int
 	compares int
 	st       *State
@@ -59,10 +61,15 @@ func newLaterRound(t *testing.T, files ...string) *laterRound {
 	r.exec(`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
 		VALUES ('wfr_rr', $1, 'task.delivery', 'rr', 'running', 'review', $2, 'wi_rr')`, raw)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.compares++
+		// /repos/<owner>/<name>/compare/...
+		if parts := strings.Split(req.URL.Path, "/"); r.bySlug != nil && len(parts) > 3 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": r.bySlug[parts[2]+"/"+parts[3]]})
+			return
+		}
 		if !strings.Contains(req.URL.Path, "/compare/aaa...bbb") {
 			t.Errorf("unexpected request %s", req.URL.Path)
 		}
-		r.compares++
 		w.WriteHeader(r.status)
 		_ = json.NewEncoder(w).Encode(map[string]any{"files": r.files})
 	}))
@@ -184,6 +191,30 @@ func TestALaterRoundCountsARenamesOldPath(t *testing.T) {
 	}
 	if !slices.Equal(why["database"], []string{ReasonPaths}) || !slices.Equal(why["tests"], []string{ReasonRequired}) {
 		t.Errorf("why %v", why)
+	}
+}
+
+// Two repositories, one changed only CI and the other a .tsx file: the
+// round's change is both repositories', so frontend and the required
+// reviewers run.
+func TestALaterRoundsChangeSpansEveryRepository(t *testing.T) {
+	r := newLaterRound(t).firstRound()
+	r.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ('repo_rr_web', $1, 'prj_rr', 'web', 'https://github.com/acme/web.git', 'main')`)
+	r.exec(`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_rr', 'repo_rr_web', $1)`)
+	r.exec(`UPDATE runs SET base_refs = '{"repo":"aaa","web":"ccc"}' WHERE organization_id = $1 AND id = 'run_rr1'`)
+	r.st.Heads = map[string]string{"repo": "bbb", "web": "ddd"}
+	modified := func(name string) []map[string]any {
+		return []map[string]any{{"filename": name, "status": "modified", "additions": 3, "deletions": 1}}
+	}
+	// Repositories are compared in name order: the product change is in the
+	// first one read, the CI-only one last.
+	r.bySlug = map[string][]map[string]any{"acme/repo": modified("src/App.tsx"), "acme/web": modified(".github/x.yml")}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "frontend", "performance"}) {
+		t.Fatalf("reviewers %v", got)
+	}
+	if !slices.Equal(why["frontend"], []string{ReasonPaths}) || r.compares != 2 {
+		t.Errorf("why %v, %d compares", why, r.compares)
 	}
 }
 
