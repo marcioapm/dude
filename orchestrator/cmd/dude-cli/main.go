@@ -48,7 +48,7 @@ Reading
   show TASK | raw TASK | relations TASK | prs TASK | metrics TASK
   findings [TASK] [--run RUN] [--status open] | questions [TASK] [--run RUN]
   run RUN | diff RUN | directives RUN | session ID
-  events TASK [--run RUN] | artifacts TASK | servers TASK
+  events TASK [--run RUN] [--after N] [--limit N] | artifacts TASK | servers TASK
   repo-requests [TASK]
   brainstorms [--archived] | brainstorm-show ID
 
@@ -73,7 +73,7 @@ Tasks
   unrelate TASK blocks|blocked_by|related T
   done TASK | stop TASK [--restart [--decider policy|conductor]] [--note N]
   close TASK wont_do|duplicate|cant_reproduce [--duplicate-of T] [--close-pr] [--remove-relations]
-  reopen TASK | archive TASK [--resolution R] | unarchive TASK
+  reopen TASK | archive TASK [--resolution R] [--duplicate-of T] [--note N] | unarchive TASK
   assign TASK PERSON...         the first is the owner
   retry TASK | recover TASK [resume|retry|restart] [--note N] [--override]
   decider TASK policy|conductor [--open-pr] [--draft]
@@ -485,6 +485,9 @@ func (c *cli) run(args []string) error {
 	do := cmd.flags(fs)
 	pos, err := parse(fs, args[1:])
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	min, max := 0, 0
@@ -677,7 +680,7 @@ var commands = map[string]command{
 	})},
 
 	// Projects and epics
-	"project-create": {"", "a new project (organization admins)", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"project-create": {"", "a new project (organisation admins)", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
 		name := fs.String("name", "", "its name (required)")
 		slug := fs.String("slug", "", "lowercase-with-dashes (required)")
 		key := fs.String("key", "", "task key prefix, e.g. WEB (default: from the slug)")

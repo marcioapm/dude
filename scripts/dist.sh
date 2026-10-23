@@ -21,6 +21,7 @@
 #   dude-cli_<version>_{darwin,linux}_{arm64,amd64}.tar.gz
 #     bin/dude                 the people's CLI (cmd/dude-cli), Go, static:
 #                              drives a dude server over its public API
+#     share/dude/third-party/  go-toml's licence
 #
 # Unpacking a tarball into a prefix gives that layout under it.
 # The bun binaries link glibc dynamically; the Go ones link nothing.
@@ -112,13 +113,15 @@ for os in darwin linux; do
   for arch in arm64 amd64; do
     echo "building dude-cli for $os/$arch"
     work="$DIST/work-cli-$os-$arch"
-    mkdir -p "$work/bin"
+    mkdir -p "$work/bin" "$work/share/dude/third-party"
     (cd "$ROOT/orchestrator" && CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
       go build -trimpath -ldflags "$GO_LDFLAGS" -o "$work/bin/dude" ./cmd/dude-cli)
     cp "$ROOT/LICENSE" "$work/LICENSE"
+    cp "$(cd "$ROOT/orchestrator" && go list -m -f '{{.Dir}}' github.com/pelletier/go-toml/v2)/LICENSE" \
+      "$work/share/dude/third-party/go-toml-LICENSE"
     chmod 0755 "$work/bin/dude"
-    chmod 0644 "$work/LICENSE"
-    "$TAR" "${TAR_REPRO_FLAGS[@]}" -C "$work" -cf - LICENSE bin | gzip -9n > "$DIST/dude-cli_${VERSION}_${os}_${arch}.tar.gz"
+    chmod 0644 "$work/LICENSE" "$work/share/dude/third-party/go-toml-LICENSE"
+    "$TAR" "${TAR_REPRO_FLAGS[@]}" -C "$work" -cf - LICENSE bin share | gzip -9n > "$DIST/dude-cli_${VERSION}_${os}_${arch}.tar.gz"
     rm -rf "$work"
   done
 done

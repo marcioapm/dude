@@ -161,7 +161,7 @@ used while nothing is logged in. `dude login` replaces it.
 | `findings [TASK] [--run RUN] [--status open]` | Review findings |
 | `questions [TASK] [--run RUN]` | Agents' questions; with neither argument, every open one |
 | `metrics TASK` | Cost and time |
-| `events TASK [--run RUN]` | Event history |
+| `events TASK [--run RUN] [--after N] [--limit N]` | Event history; pass `nextCursor` as `--after` for the next page |
 | `artifacts TASK` | Files its agents published |
 | `servers TASK` | Its dev servers and preview |
 | `repo-requests [TASK]` | Agents' requests for another repository |

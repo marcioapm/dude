@@ -236,6 +236,14 @@ func TestAPIBodyFromStdin(t *testing.T) {
 	}
 }
 
+func TestCommandHelpSucceeds(t *testing.T) {
+	srv, calls := fakeDude(t)
+	out, err := runCLI(t, srv, "", "events", "--help")
+	if err != nil || !strings.Contains(out, "nextCursor") || len(*calls) != 0 {
+		t.Fatalf("help: %q %v %+v", out, err, *calls)
+	}
+}
+
 func TestArgumentCountIsChecked(t *testing.T) {
 	srv, calls := fakeDude(t)
 	if _, err := runCLI(t, srv, "", "show"); err == nil {

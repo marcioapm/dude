@@ -10,12 +10,7 @@ import (
 	"strings"
 )
 
-// The commands beyond the first set: credentials, recovery, epics and their
-// notes, findings, pull requests, repository requests, memory, previews,
-// brainstorm management and people.
-
 type doer = func(c *cli, args []string) (any, error)
-type flagged = func(fs *flag.FlagSet) doer
 
 func init() {
 	for name, cmd := range filterCommands {
@@ -165,7 +160,7 @@ var moreCommands = map[string]command{
 		after, _ := loadCredentials()
 		return obj{"loggedOut": slug, "current": after.Current}, nil
 	})},
-	"orgs": {"", "the organisations you are logged in to; * marks the one commands act in", noFlags(func(c *cli, _ []string) (any, error) {
+	"orgs": {"", "the organisations you are logged in to; current is the one commands act in", noFlags(func(c *cli, _ []string) (any, error) {
 		creds, err := loadCredentials()
 		if err != nil {
 			return nil, err
@@ -199,10 +194,10 @@ var moreCommands = map[string]command{
 		org, _ := me["organization"].(obj)
 		return obj{"person": personOf(me), "organization": pick(org, "slug", "name", "id"), "url": c.base}, nil
 	})},
-	"people": {"", "the organization's people", noFlags(func(c *cli, _ []string) (any, error) {
+	"people": {"", "the organisation's people", noFlags(func(c *cli, _ []string) (any, error) {
 		return c.request("GET", "/v1/people", nil)
 	})},
-	"invite": {"EMAIL...", "invite people to the organization (admins)", func(fs *flag.FlagSet) doer {
+	"invite": {"EMAIL...", "invite people to the organisation (admins)", func(fs *flag.FlagSet) doer {
 		role := fs.String("role", "member", "member or admin")
 		return func(c *cli, a []string) (any, error) {
 			if err := oneOf("--role", *role, "member", "admin"); err != nil {
@@ -278,21 +273,23 @@ var moreCommands = map[string]command{
 		}
 		return c.request("GET", "/v1/artifacts"+query("taskId", id), nil)
 	})},
-	"events": {"TASK", "a task's event history", func(fs *flag.FlagSet) doer {
+	"events": {"TASK", "a task's event history; use nextCursor as --after for the next page", func(fs *flag.FlagSet) doer {
 		run := fs.String("run", "", "a RUN's events instead")
+		after := fs.String("after", "", "events after this cursor (nextCursor from the previous page)")
+		limit := fs.String("limit", "", "at most this many events")
 		return func(c *cli, a []string) (any, error) {
 			if *run != "" {
 				id, err := c.runID(*run)
 				if err != nil {
 					return nil, err
 				}
-				return c.request("GET", "/v1/events"+query("runId", id), nil)
+				return c.request("GET", "/v1/events"+query("runId", id, "after", *after, "limit", *limit), nil)
 			}
 			id, err := c.taskID(a[0])
 			if err != nil {
 				return nil, err
 			}
-			return c.request("GET", "/v1/events"+query("taskId", id), nil)
+			return c.request("GET", "/v1/events"+query("taskId", id, "after", *after, "limit", *limit), nil)
 		}
 	}},
 	"servers": {"TASK", "a task's dev servers and preview", noFlags(func(c *cli, a []string) (any, error) {
@@ -333,7 +330,7 @@ var moreCommands = map[string]command{
 		})
 	}},
 	"merge": {"PR", "merge a pull request (id from prs)", func(fs *flag.FlagSet) doer {
-		method := fs.String("method", "", "merge, squash or rebase (default: the organization's)")
+		method := fs.String("method", "", "merge, squash or rebase (default: the organisation's)")
 		return func(c *cli, a []string) (any, error) {
 			return c.post("/v1/pull-requests/"+esc(a[0])+"/merge", setIf(obj{}, "method", *method))
 		}
@@ -489,7 +486,7 @@ var moreCommands = map[string]command{
 		title := fs.String("title", "", "its title (required)")
 		content := fs.String("content", "", "what to remember (required); - reads stdin")
 		kind := fs.String("kind", "fact", "fact, procedure or note")
-		project := fs.String("project", "", "a PROJECT it belongs to (default: the organization)")
+		project := fs.String("project", "", "a PROJECT it belongs to (default: the organisation)")
 		return func(c *cli, _ []string) (any, error) {
 			if *title == "" || *content == "" {
 				return nil, errors.New("memory-add: --title and --content are required")

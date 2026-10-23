@@ -1,6 +1,6 @@
 /**
  * Your profile and your keys, in your settings: how teammates see you
- * (name, photo), and the keys that act as you (scripts, the HTTP API).
+ * (name, photo), and the keys that act as you (the dude CLI, scripts, the HTTP API).
  *
  * A photo is resized in the browser and uploaded as an image (FacePicker).
  */
@@ -110,7 +110,7 @@ export interface KeyGroup {
 
 /**
  * Your keys, grouped by the organisation each acts in, each group with New
- * key for it. A key made here is shown once, with a request that uses it.
+ * key for it. A key made here is shown once, with the dude login line to use it.
  */
 export function KeysSection({ client, groups }: {
   /** Reads your keys across organisations: the credential naming none. */

@@ -69,7 +69,7 @@ function KeyDemo() {
     <>
       <Button onClick={() => setOpen(true)}>Show a new key</Button>
       {open ? <KeyShownOnce title="Key “Laptop” for Acme" secret="dude_sk_N7wq2c4ZkLr0sYb1pFhT8eXuAm5dJgVo" onClose={() => setOpen(false)}
-        usage={"curl -H \"authorization: Bearer dude_sk_N7wq2c4ZkLr0sYb1pFhT8eXuAm5dJgVo\" https://dude.acme.dev/v1/me\n# acts as you in Acme; its answer names the organisation and your role"} /> : null}
+        usage={"dude login https://dude.acme.dev\n# paste the key when asked: the dude CLI then acts as you in Acme"} /> : null}
     </>
   );
 }

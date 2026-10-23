@@ -10,11 +10,6 @@ import (
 	"strings"
 )
 
-// The commands for what the API gained after the first two sets: feedback
-// on a task's work, reviewers' questions, verification, closing, archiving
-// and stopping work, pull request conflicts, tasks started from existing
-// work, dude's guide, and judgement calls.
-
 func init() {
 	for name, cmd := range lifecycleCommands {
 		if _, dup := commands[name]; dup {
