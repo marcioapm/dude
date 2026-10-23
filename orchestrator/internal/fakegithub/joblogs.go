@@ -63,7 +63,12 @@ func (s *Server) checkRun(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	s.mu.Lock()
 	run, ok := s.CheckRuns[id]
+	status := s.CheckRunStatus
 	s.mu.Unlock()
+	if status != 0 {
+		fail(w, status, http.StatusText(status))
+		return
+	}
 	if !ok {
 		write(w, 200, map[string]any{"output": map[string]string{"title": "1 test failed",
 			"summary": "TestGreeting: expected hello, got hi", "text": ""}})

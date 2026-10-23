@@ -186,6 +186,33 @@ func TestALogGitHubWillNotGiveFallsBackToTheCheckRun(t *testing.T) {
 	}
 }
 
+// A job log GitHub serves with nothing in it is said to be empty, beside
+// what the check run said.
+func TestAnEmptyJobLogIsSaidToBeEmpty(t *testing.T) {
+	_, gh := logWorld(t, "\uFEFF\n\n")
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	if err != nil || read.Unread != "the log is empty" || read.Source != "check_run" ||
+		read.Text != ".github:442: failure: Process completed with exit code 1." {
+		t.Errorf("%+v, %v", read, err)
+	}
+}
+
+// A check run GitHub will not show is a refusal of the Checks permission,
+// not of Actions: Read, and its log is never asked for.
+func TestARefusedCheckRunSaysTheCheckRunWasRefused(t *testing.T) {
+	fake, gh := logWorld(t, jobLog(5))
+	fake.Set(func(s *fakegithub.Server) { s.CheckRunStatus = http.StatusForbidden })
+	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	var e *Error
+	if !errors.As(err, &e) || e.Status != http.StatusForbidden ||
+		read.Unread != "GitHub refused to show the check run (HTTP 403)" || read.Text != "" {
+		t.Errorf("%+v, %v", read, err)
+	}
+	if got := fake.DownloadAuthorization(); len(got) != 0 {
+		t.Errorf("the log was downloaded after the check run was refused: %q", got)
+	}
+}
+
 // The reason a log was not read comes from the status alone: what GitHub
 // wrote (here, a body echoing the token) never reaches it.
 func TestAnUnreadReasonCarriesNothingGitHubWrote(t *testing.T) {
