@@ -51,6 +51,7 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/sessions/{id}/model", s.auth(s.setSessionModel))
 	mux.Handle("POST /internal/sessions/{id}/archive", s.auth(s.archiveSession(true)))
 	mux.Handle("POST /internal/sessions/{id}/unarchive", s.auth(s.archiveSession(false)))
+	mux.Handle("POST /internal/people/{person}/sessions", s.auth(s.personSessions))
 }
 
 // sessionTitleMax bounds a session's title, as the schema does.
@@ -1842,16 +1843,15 @@ func (s *Server) handOverSession(w http.ResponseWriter, r *http.Request, org str
 		if body.Person == p.Person {
 			return fail(http.StatusBadRequest, "bad_request", "you already own it")
 		}
-		var ok bool
-		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM people WHERE id = $1 AND removed_at IS NULL)`,
-			body.Person).Scan(&ok); err != nil {
+		ok, err := activePerson(r.Context(), tx, body.Person)
+		if err != nil {
 			return err
 		}
 		if !ok {
 			return fail(http.StatusNotFound, "not_found", "%s is not one of this organisation's people", body.Person)
 		}
 		var accepted *bool
-		err := tx.QueryRow(r.Context(), `SELECT accepted_at IS NOT NULL FROM session_people WHERE session_id = $1 AND person_id = $2`,
+		err = tx.QueryRow(r.Context(), `SELECT accepted_at IS NOT NULL FROM session_people WHERE session_id = $1 AND person_id = $2`,
 			id, body.Person).Scan(&accepted)
 		if err != nil && !db.IsNotFound(err) {
 			return err
@@ -1887,6 +1887,11 @@ func (s *Server) handOverSession(w http.ResponseWriter, r *http.Request, org str
 // and tells the agent. A handover offered by the owner before is void: its
 // invitee, if they accept, joins as an ordinary member.
 func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep string, by principal) error {
+	if ok, err := activePerson(ctx, tx, to); err != nil {
+		return err
+	} else if !ok {
+		return fail(http.StatusConflict, "not_active", "%s is no longer one of this organisation's people", to)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE session_people SET becomes_owner = false, handover_keep = NULL
 		WHERE session_id = $1 AND becomes_owner AND person_id <> $2`, sessionID, to); err != nil {
 		return err
@@ -1929,6 +1934,18 @@ func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep st
 
 var sessionOwnerTold = delivery.MustText("notices/told/session-owner")
 
+// activePerson is whether person is still one of the organisation's
+// people, holding their row FOR SHARE for the rest of tx. The backend's
+// removal holds that row FOR UPDATE until it commits and then re-reads the
+// sessions the person owns, so a session made theirs under its lock here
+// is either refused (the removal came first) or seen by that re-read.
+func activePerson(ctx context.Context, tx pgx.Tx, person string) (bool, error) {
+	var ok bool
+	err := tx.QueryRow(ctx, `SELECT count(*) > 0 FROM (SELECT 1 FROM people WHERE id = $1 AND removed_at IS NULL FOR SHARE) x`,
+		person).Scan(&ok)
+	return ok, err
+}
+
 // acceptSession is an invitee joining: they see the whole conversation from
 // now on. A handover's invitation makes them the owner.
 func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org string) error {
@@ -1940,6 +1957,13 @@ func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org strin
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
 			return err
+		}
+		// Before any row of theirs is touched: a removal in flight holds
+		// their row and rewrites their session rows (the standing trigger).
+		if ok, err := activePerson(r.Context(), tx, p.Person); err != nil {
+			return err
+		} else if !ok {
+			return fail(http.StatusForbidden, "invalid_principal", "principal is not an active organization member")
 		}
 		var becomesOwner bool
 		var keep *string

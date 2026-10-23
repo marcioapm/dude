@@ -85,6 +85,11 @@ func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, or
 		if from != "" && !gone {
 			return fail(http.StatusConflict, "owner_active", "this session's owner is still in the organisation")
 		}
+		if ok, err := activePerson(r.Context(), tx, p.Person); err != nil {
+			return err
+		} else if !ok {
+			return fail(http.StatusForbidden, "not_admin", "only an organisation admin can take over a session its admins own")
+		}
 		if _, err := tx.Exec(r.Context(), `DELETE FROM session_people WHERE session_id = $1 AND role = 'owner'`, id); err != nil {
 			return err
 		}
@@ -101,6 +106,12 @@ func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, or
 		}
 		if _, err := tx.Exec(r.Context(), `UPDATE sessions SET owned_by_admins = false, updated_at = now() WHERE id = $1`, id); err != nil {
 			return err
+		}
+		// What was put to the departed owner by name nobody else may answer.
+		if from != "" {
+			if err := delivery.WithdrawQuestionsTo(r.Context(), tx, org, id, from); err != nil {
+				return err
+			}
 		}
 		name, err := delivery.PersonName(r.Context(), tx, p.Person)
 		if err != nil {
@@ -126,6 +137,107 @@ func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, or
 		return err
 	}
 	write(w, http.StatusOK, map[string]any{"id": id})
+	return nil
+}
+
+var (
+	sessionOwnerLeftTold     = delivery.MustText("notices/told/session-owner-left")
+	sessionOwnerReturnedTold = delivery.MustText("notices/told/session-owner-returned")
+)
+
+// personSessions is the backend telling the orchestrator, after it
+// committed, that a person left the organisation ("left") or came back
+// ("returned"), with the sessions that changed hands (`sessions`). Its own
+// call, not a person's: a principal naming one is refused.
+//
+// left: each listed session still owned by its admins with them as owner of
+// record has its live agent told; then every open question put to them by
+// name in any session is withdrawn (delivery.WithdrawQuestionsTo), so no
+// session waits on someone who can no longer answer. returned: each listed
+// session they own again has its agent told. One transaction per session,
+// under its lock; a session that changed since is skipped.
+func (s *Server) personSessions(w http.ResponseWriter, r *http.Request, org string) error {
+	if p := principalOf(r); p.Person != "" {
+		return fail(http.StatusForbidden, "not_system", "only the backend tells the orchestrator who left")
+	}
+	var body struct {
+		Change   string   `json:"change"`
+		Sessions []string `json:"sessions"`
+	}
+	if err := read(r, &body); err != nil {
+		return err
+	}
+	if body.Change != "left" && body.Change != "returned" {
+		return fail(http.StatusBadRequest, "bad_request", "change is left or returned")
+	}
+	person := r.PathValue("person")
+	ctx := r.Context()
+	var removed *bool
+	var name string
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT removed_at IS NOT NULL, name FROM people WHERE id = $1`, person).Scan(&removed, &name)
+	}); err != nil && !db.IsNotFound(err) {
+		return err
+	}
+	if removed == nil {
+		return fail(http.StatusNotFound, "not_found", "person %s not found", person)
+	}
+	if *removed != (body.Change == "left") {
+		return fail(http.StatusConflict, "conflict", "%s is not %s", person, body.Change)
+	}
+	told := []string{}
+	for _, id := range body.Sessions {
+		ok := false
+		err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			if err := delivery.LockSession(ctx, tx, id); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sessions s JOIN session_people sp ON sp.session_id = s.id
+				WHERE s.id = $1 AND sp.person_id = $2 AND sp.role = 'owner' AND s.owned_by_admins = $3)`,
+				id, person, body.Change == "left").Scan(&ok); err != nil || !ok {
+				return err
+			}
+			text := sessionOwnerReturnedTold.Render(name)
+			if body.Change == "left" {
+				text = sessionOwnerLeftTold.Render(name)
+			}
+			return delivery.TellBrainstorm(ctx, tx, org, id, text)
+		})
+		if err != nil {
+			return err
+		}
+		if ok {
+			told = append(told, id)
+		}
+	}
+	withdrawn := []string{}
+	if body.Change == "left" {
+		var asked []string
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			rows, err := tx.Query(ctx, `SELECT DISTINCT r.session_id FROM questions q JOIN runs r ON r.id = q.run_id
+				WHERE q.to_person = $1 AND q.status = 'open' AND r.session_id IS NOT NULL ORDER BY 1`, person)
+			if err != nil {
+				return err
+			}
+			asked, err = pgx.CollectRows(rows, pgx.RowTo[string])
+			return err
+		}); err != nil {
+			return err
+		}
+		for _, id := range asked {
+			if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+				if err := delivery.LockSession(ctx, tx, id); err != nil {
+					return err
+				}
+				return delivery.WithdrawQuestionsTo(ctx, tx, org, id, person)
+			}); err != nil {
+				return err
+			}
+			withdrawn = append(withdrawn, id)
+		}
+	}
+	s.kick()
+	write(w, http.StatusOK, map[string]any{"told": told, "withdrawn": withdrawn})
 	return nil
 }
 

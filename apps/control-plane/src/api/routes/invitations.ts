@@ -5,6 +5,7 @@ import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { HttpError, json, noContent, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { returnSessions, tellPersonSessions } from "./sessions.ts";
 
 const unusable = () => new HttpError(404, "invitation_unusable", "invitation_unusable");
 const mismatch = () => new HttpError(403, "invitation_for_another_email", "invitation_for_another_email");
@@ -90,7 +91,8 @@ export function registerInvitationRoutes(router: Router) {
   router.post("/v1/invitations/:code/accept", async (ctx) => {
     const input = await parseBody(ctx.request, z.object({ name: z.string().trim().min(1).max(100).optional() }).strict());
     const preview = await detail(ctx), access = ctx.principal.access!;
-    return json(await withOrg(preview.organization.id, async (scope) => {
+    let returned: { personId: string; sessions: string[] } | null = null;
+    const accepted = await withOrg(preview.organization.id, async (scope) => {
       await lockPeople(scope);
       const [i] = await scope.sql`SELECT * FROM invitations WHERE code = ${ctx.params.code!} FOR UPDATE`;
       if (!i || i.revoked_at || (!i.accepted_at && new Date(i.expires_at).getTime() <= Date.now())) throw unusable();
@@ -105,6 +107,8 @@ export function registerInvitationRoutes(router: Router) {
           photo_url=${a.photo_url}, photo_key=${a.photo_key}, photo_token=${a.photo_token} WHERE id=${person.id} RETURNING *`;
         else [person] = await scope.sql`INSERT INTO people (id, organization_id, account_id, name, email, role, photo_url, photo_key, photo_token)
           VALUES (${`per_${crypto.randomUUID()}`}, ${scope.organizationId}, ${a.id}, ${a.name}, ${a.email}, ${i.role}, ${a.photo_url}, ${a.photo_key}, ${a.photo_token}) RETURNING *`;
+        // A departed owner's sessions its admins still own are theirs again.
+        returned = { personId: person.id, sessions: await returnSessions(scope, person.id) };
         // The ledger's "joined" entry, attributed to whoever invited them (the operator: system).
         await appendInScope(scope, { eventType: EventTypes.PersonInvited, organizationId: scope.organizationId,
           projectId: null, taskId: null, correlationId: null, source: "control-plane",
@@ -113,7 +117,10 @@ export function registerInvitationRoutes(router: Router) {
       }
       await scope.sql`UPDATE invitations SET accepted_at=COALESCE(accepted_at,now()), accepted_person_id=${person.id} WHERE id=${i.id}`;
       return { person: { id: person.id, role: person.role, name: person.name }, organization: preview.organization };
-    }));
+    });
+    const back = returned as { personId: string; sessions: string[] } | null;
+    if (back && back.sessions.length > 0) await tellPersonSessions(preview.organization.id, back.personId, "returned", back.sessions);
+    return json(accepted);
   });
   const path = "/v1/organization/invitations";
   router.get(path, async (ctx) => json(await withOrg(ctx.principal.organizationId, async (scope) => {

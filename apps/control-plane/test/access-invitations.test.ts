@@ -4,6 +4,7 @@ import { attentionItems, waitingSplit, type NavProject } from "../../../packages
 import { createApiKey } from "../src/api/auth.ts";
 import type { Router } from "../src/api/router.ts";
 import { closePool, setPool } from "../src/db/client.ts";
+import { Config, useConfig } from "../src/config.ts";
 import { Edge, OPERATOR, ORIGIN, cookie, databases, fullRouter, invitation, member, rsaKey, sign, waitFor, type Key } from "./access-harness.ts";
 
 const suffix = Bun.randomUUIDv7("hex").slice(-12);
@@ -181,6 +182,50 @@ describe("accepting", () => {
     const keyed = await router.handle(new Request(`${ORIGIN}/v1/me`, { headers: { authorization: `Bearer ${key.body.key}` } }));
     expect(keyed.status).toBe(401);
     expect((await as(at("eli"), "GET", "/v1/me/keys", undefined, null)).body.keys).toEqual([]);
+  });
+
+  test("an owner who left and is invited back owns their sessions again; one an admin took over stays the admin's", async () => {
+    const told: unknown[] = [];
+    const stand = Bun.serve({ port: 0, async fetch(request) {
+      told.push({ path: new URL(request.url).pathname, body: await request.json().catch(() => null) });
+      return Response.json({ told: [], withdrawn: [] });
+    } });
+    useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${stand.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
+    try {
+      const fay = (await as(at("returner"), "POST", `/v1/invitations/${(await invite([at("returner")])).body.results[0].invitation.code}/accept`, {}, null)).body.person;
+      const gil = await member(owner, acme, at("stayer"));
+      for (const id of [`ssn_back_${suffix}`, `ssn_taken_${suffix}`]) {
+        await owner`INSERT INTO sessions (id, organization_id, title, access) VALUES (${id}, ${acme}, 'S', 'organisation')`;
+        await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at) VALUES
+          (${id}, ${fay.id}, ${acme}, 'owner', now()), (${id}, ${gil}, ${acme}, 'chat', now())`;
+      }
+      expect((await as(at("ana"), "DELETE", `/v1/people/${fay.id}`)).status).toBe(204);
+      // An admin took the second one over: the departed owner's row is gone and the flag cleared.
+      await owner.begin(async (tx) => {
+        await tx`DELETE FROM session_people WHERE session_id = ${`ssn_taken_${suffix}`} AND role = 'owner'`;
+        await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+          VALUES (${`ssn_taken_${suffix}`}, ${adminId}, ${acme}, 'owner', now())`;
+        await tx`UPDATE sessions SET owned_by_admins = false WHERE id = ${`ssn_taken_${suffix}`}`;
+      });
+      told.length = 0;
+      const again = (await invite([at("returner")])).body.results[0].invitation.code;
+      expect((await as(at("returner"), "POST", `/v1/invitations/${again}/accept`, {}, null)).body.person.id).toBe(fay.id);
+      const rows = await owner`SELECT s.id, s.owned_by_admins AS "byAdmins", o.person_id AS owner FROM sessions s
+        JOIN session_people o ON o.session_id = s.id AND o.role = 'owner' WHERE s.id LIKE ${`ssn_%_${suffix}`} ORDER BY s.id`;
+      expect([...rows]).toEqual([
+        { id: `ssn_back_${suffix}`, byAdmins: false, owner: fay.id },
+        { id: `ssn_taken_${suffix}`, byAdmins: false, owner: adminId },
+      ]);
+      expect([...await owner`SELECT session_id, actor_type, actor_id, payload->>'owner' AS owner FROM events
+        WHERE event_type = 'session.owner_returned' AND organization_id = ${acme}`]).toEqual([
+        { session_id: `ssn_back_${suffix}`, actor_type: "system", actor_id: "dude", owner: fay.id },
+      ]);
+      expect((await owner`SELECT session_role(${`ssn_back_${suffix}`}, ${fay.id}) AS r`)[0].r).toBe("owner");
+      expect(told).toEqual([{ path: `/internal/people/${fay.id}/sessions`, body: { change: "returned", sessions: [`ssn_back_${suffix}`] } }]);
+    } finally {
+      useConfig(null);
+      stand.stop(true);
+    }
   });
 });
 

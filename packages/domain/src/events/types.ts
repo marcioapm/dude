@@ -205,6 +205,8 @@ export const EventTypes = {
   BrainstormOwnerLeft: "session.owner_left",
   /** An admin took over an admin-owned session. Payload: `{ from, to, toName }`. */
   BrainstormOwnerTaken: "session.owner_taken",
+  /** The owner who left came back while its admins still owned it: it is theirs again. By the system. Payload: `{ owner }`. */
+  BrainstormOwnerReturned: "session.owner_returned",
   /**
    * A message mentioned someone not looking at the session: the notifier
    * sends them a Web Push. Payload: `{ person, by, byName, title, text }`.

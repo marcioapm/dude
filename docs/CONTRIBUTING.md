@@ -661,11 +661,21 @@ gets `owned_by_admins` (`session.owner_left`); a private one nobody else is in
 is archived with them. While it is set every active admin is `owner` in
 `session_role()` (and may open it); `POST …/take-ownership` makes one of them
 the owner row and clears it (`session.owner_taken`), else 409. Handing it on
-waits until an admin has taken it. `passOnSessions` takes each owned
-session's `session:` advisory lock (`lockOwnedSessions`, before the person's
-row), voids the departed owner's pending handover, and queues the owner-left
-notice as a directive for a live agent (`session.told`); take-ownership tells
-it through `notices/told/session-owner`. Writing a message, answering, filing
+waits until an admin has taken it. `removePerson` takes the `session:`
+advisory lock (`lockOwnedSessions`, before the person's row) of each owned
+session its leaving changes, at most 500 a transaction (the rest pass in
+transactions of their own), and voids the departed owner's pending handover.
+After it commits it calls the orchestrator's `POST
+/internal/people/{person}/sessions` (`left`), which tells each passed
+session's live agent (`notices/told/session-owner-left`) and withdraws every
+open question put to the person by name, in any session. The orchestrator's
+handover, accept and take-ownership hold the new owner's `people` row FOR
+SHARE under the session lock, so a removal either refuses them or sees the
+session as theirs. Take-ownership withdraws what was put to the departed
+owner and tells the agent through `notices/told/session-owner`. An owner
+invited back while its admins still own the session owns it again (the
+invitation's transaction clears `owned_by_admins`, `session.owner_returned`;
+the agent is told through `returned`). Writing a message, answering, filing
 and Try again join an organisation session; renaming takes an owner or chat
 row (or an admin while its admins own it).
 

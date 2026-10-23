@@ -54,6 +54,7 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.MachineRequested, EventTypes.MachineRaised, EventTypes.MachineRefused, EventTypes.MachineReset,
   EventTypes.BrainstormModelApplied,
   EventTypes.BrainstormAccessChanged, EventTypes.BrainstormOwnerLeft, EventTypes.BrainstormOwnerTaken,
+  EventTypes.BrainstormOwnerReturned,
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
@@ -590,6 +591,8 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
       return `${typeof p.ownerName === "string" ? p.ownerName : "Its owner"} left the organisation: its admins own this session now.`;
     case EventTypes.BrainstormOwnerTaken:
       return `${typeof p.toName === "string" ? p.toName : name(p.to)} took this session over as its owner.`;
+    case EventTypes.BrainstormOwnerReturned:
+      return `${name(p.owner)} is back in the organisation and owns this session again.`;
     case EventTypes.BrainstormDeclined:
       return `${name(p.person)} declined.`;
     case EventTypes.BrainstormMemberRemoved:

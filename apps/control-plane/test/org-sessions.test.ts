@@ -13,12 +13,12 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { join } from "node:path";
-import { closePool, setPool } from "../src/db/client.ts";
+import { closePool, setPool, withOrg } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
 import { authenticate, createApiKey } from "../src/api/auth.ts";
 import { Config, useConfig } from "../src/config.ts";
-import { ownerLeftNotice } from "../src/api/routes/sessions.ts";
+import { lockOwnedSessions, PASS_BATCH } from "../src/api/routes/sessions.ts";
 import { canSee, noteEvent } from "../src/events/visibility.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
@@ -145,6 +145,7 @@ test("removing a person hands their reachable sessions to the admins and archive
   await owner`INSERT INTO runs (id, organization_id, session_id, attempt, role, kind, status, dude_pause)
     VALUES ('run_lea_org', ${ORG}, 'ssn_lea_org', 1, 'brainstorm', 'agent', 'paused', 'idle')`;
 
+  forwarded.length = 0;
   expect((await call(boss, "DELETE", `/v1/people/${leaver.personId}`)).status).toBe(204);
   const rows = await owner`SELECT id, owned_by_admins AS "byAdmins" FROM sessions WHERE id LIKE 'ssn_lea%' OR id = 'ssn_eli' ORDER BY id`;
   expect([...rows]).toEqual([
@@ -167,10 +168,13 @@ test("removing a person hands their reachable sessions to the admins and archive
   expect(alone).toEqual({ archived: true });
   expect([...await owner`SELECT becomes_owner FROM session_people WHERE session_id = 'ssn_lea_org' AND person_id = ${gus.personId}`])
     .toEqual([{ becomes_owner: false }]);
-  const told = [...await owner`SELECT d.text, r.control FROM directives d JOIN runs r ON r.id = d.run_id WHERE d.run_id = 'run_lea_org'`];
-  expect(told).toEqual([{ text: ownerLeftNotice("Lea"), control: "resume" }]);
-  expect([...await owner`SELECT payload->>'text' AS text FROM events WHERE event_type = 'session.told' AND session_id = 'ssn_lea_org'`])
-    .toEqual([{ text: ownerLeftNotice("Lea") }]);
+  // The agents are told, and what was put to Lea withdrawn, by the
+  // orchestrator once the removal committed: nothing of the agent's is written here.
+  expect(forwarded.map((f) => [f.method, f.path, f.body, f.person])).toEqual([
+    ["POST", `/internal/people/${leaver.personId}/sessions`,
+      { change: "left", sessions: ["ssn_lea_invited", "ssn_lea_org", "ssn_lea_shared"] }, null],
+  ]);
+  expect([...await owner`SELECT 1 FROM directives WHERE run_id = 'run_lea_org'`]).toEqual([]);
   // While its admins own it, an admin acts as owner of each; a member not in the private one gets nothing.
   const role = async (session: string, person: string) =>
     (await owner`SELECT session_role(${session}, ${person}) AS r`)[0].r as string | null;
@@ -181,6 +185,100 @@ test("removing a person hands their reachable sessions to the admins and archive
   // A session someone else owns is untouched by the leaver's departure.
   expect(await role("ssn_eli", boss.personId)).toBe(null);
 });
+
+// Resolves once a backend of this database waits on a lock of `type` (pg_locks' locktype).
+async function waitsOn(types: string[]): Promise<void> {
+  for (const until = Date.now() + 10_000; Date.now() < until; await Bun.sleep(10)) {
+    const [row] = await admin`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+      WHERE a.datname = ${NAME} AND NOT l.granted AND l.locktype = ANY(string_to_array(${types.join(",")}, ','))`;
+    if (row.n > 0) return;
+  }
+  throw new Error(`no backend waited on a ${types.join("/")} lock`);
+}
+
+async function someone(name: string, role = "member"): Promise<string> {
+  const id = `per_${name.toLowerCase()}_${Bun.randomUUIDv7("hex").slice(-8)}`;
+  await owner`INSERT INTO people (id, organization_id, name, role) VALUES (${id}, ${ORG}, ${name}, ${role})`;
+  return id;
+}
+
+test("a removal waits for the orchestrator's lock on a session the person owns, and passes it once that is released", async () => {
+  const ivy = await someone("Ivy");
+  await session("ssn_ivy_locked", "organisation", ivy);
+  const held = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const holder = owner.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || 'ssn_ivy_locked'))`;
+    held.resolve();
+    await release.promise;
+  });
+  await held.promise;
+  const removal = call(boss, "DELETE", `/v1/people/${ivy}`);
+  await waitsOn(["advisory"]);
+  expect([...await owner`SELECT removed_at IS NULL AS here FROM people WHERE id = ${ivy}`]).toEqual([{ here: true }]);
+  release.resolve();
+  await holder;
+  expect((await removal).status).toBe(204);
+  expect([...await owner`SELECT owned_by_admins AS "byAdmins" FROM sessions WHERE id = 'ssn_ivy_locked'`]).toEqual([{ byAdmins: true }]);
+});
+
+test("a handover to someone accepted while their removal waits on them: the removal passes it on as theirs", async () => {
+  // The orchestrator's acceptSession in its order: the session's lock, the
+  // invitee's row FOR SHARE, the owner swapped; the removal starts meanwhile.
+  const jo = await someone("Jo");
+  const kit = await someone("Kit");
+  await session("ssn_kit", "private", kit, [[eli.personId, "chat"]]);
+  const swapped = Promise.withResolvers<void>();
+  const commit = Promise.withResolvers<void>();
+  const accept = owner.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || 'ssn_kit'))`;
+    await tx`SELECT 1 FROM people WHERE id = ${jo} AND removed_at IS NULL FOR SHARE`;
+    await tx`UPDATE session_people SET role = 'chat' WHERE session_id = 'ssn_kit' AND person_id = ${kit}`;
+    await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at) VALUES ('ssn_kit', ${jo}, ${ORG}, 'owner', now())`;
+    swapped.resolve();
+    await commit.promise;
+  });
+  await swapped.promise;
+  const removal = call(boss, "DELETE", `/v1/people/${jo}`);
+  await waitsOn(["transactionid", "tuple"]);
+  commit.resolve();
+  await accept;
+  expect((await removal).status).toBe(204);
+  const [row] = await owner`SELECT s.owned_by_admins AS "byAdmins", o.person_id AS owner FROM sessions s
+    JOIN session_people o ON o.session_id = s.id AND o.role = 'owner' WHERE s.id = 'ssn_kit'`;
+  expect(row).toEqual({ byAdmins: true, owner: jo });
+});
+
+test("a removal locks only the sessions it changes, at most PASS_BATCH a transaction, and passes on every one", async () => {
+  const many = await someone("Many");
+  const n = PASS_BATCH * 2 + 200;
+  await owner.begin(async (tx) => {
+    await tx`INSERT INTO sessions (id, organization_id, title, access)
+      SELECT 'ssn_many_' || lpad(g::text, 5, '0'), ${ORG}, 'M', CASE WHEN g % 2 = 0 THEN 'organisation' ELSE 'private' END
+      FROM generate_series(1, ${n}) g`;
+    await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at, archived_at)
+      SELECT 'ssn_many_' || lpad(g::text, 5, '0'), ${many}, ${ORG}, 'owner', now(), CASE WHEN g % 4 = 1 THEN now() END
+      FROM generate_series(1, ${n}) g`;
+  });
+  // Private, alone and archived already (every fourth): nothing to change, nothing locked.
+  const archivedAlone = Math.floor((n + 3) / 4);
+  const locks = await withOrg(ORG, async (scope) => {
+    const got = await lockOwnedSessions(scope, many);
+    const [held] = await scope.sql`SELECT count(*)::int AS n FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory'`;
+    const rest = await lockOwnedSessions(scope, many, n, got.ids);
+    return { first: got.ids.length, more: got.more, held: held.n, rest: rest.ids.length };
+  });
+  expect(locks).toEqual({ first: PASS_BATCH, more: true, held: PASS_BATCH, rest: n - archivedAlone - PASS_BATCH });
+
+  expect((await call(boss, "DELETE", `/v1/people/${many}`)).status).toBe(204);
+  const [left] = await owner`SELECT count(*) FILTER (WHERE s.owned_by_admins)::int AS passed,
+      count(*) FILTER (WHERE NOT s.owned_by_admins AND me.archived_at IS NOT NULL)::int AS archived,
+      count(*) FILTER (WHERE NOT s.owned_by_admins AND me.archived_at IS NULL)::int AS untouched
+    FROM sessions s JOIN session_people me ON me.session_id = s.id AND me.person_id = ${many}`;
+  expect(left).toEqual({ passed: n / 2, archived: n / 2, untouched: 0 });
+  const [events] = await owner`SELECT count(*)::int AS n FROM events WHERE event_type = 'session.owner_left' AND payload->>'owner' = ${many}`;
+  expect(events.n).toBe(n / 2);
+}, 60_000);
 
 test("someone not in an organisation session may say they have it open; opening marks their mentions in it seen", async () => {
   await session("ssn_open", "organisation", eli.personId);

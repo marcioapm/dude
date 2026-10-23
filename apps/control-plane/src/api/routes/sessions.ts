@@ -11,7 +11,7 @@
  * page's heartbeat), which goes to its members only, never the organisation.
  */
 
-import { EventTypes, harnessSchema, newId, sessionAccessSchema, sessionMentionsSchema } from "@dude/domain";
+import { EventTypes, harnessSchema, sessionAccessSchema, sessionMentionsSchema } from "@dude/domain";
 import { z } from "zod";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
@@ -121,40 +121,57 @@ async function setOpen(ctx: RequestContext): Promise<Response> {
   return json({ open: input.open });
 }
 
+/** The most sessions one transaction of a removal locks and passes on; the rest follow in transactions of their own. */
+export const PASS_BATCH = 500;
+
 /**
- * The orchestrator's lock on each session the person owns
- * (`delivery.LockSession`), in id order. `removePerson` takes these before
+ * The orchestrator's lock (`delivery.LockSession`) on each session the
+ * person owns that their leaving changes: not yet passed to the admins, and
+ * either reachable by someone else (it passes on) or not archived by them
+ * (it is archived with them). At most `limit`, in id order, skipping
+ * `except`; `more` says others remain. `removePerson` takes these before
  * the person's row, the order the orchestrator takes them in (the session's
- * lock, then the person's row as it adds them to a session), so the two
- * never wait on each other in a circle.
+ * lock, then the person's row), so the two never wait on each other in a
+ * circle. Only these are locked: an advisory lock is an entry in the
+ * cluster's shared lock table, so one per session ever owned could exhaust it.
  */
-export async function lockOwnedSessions(scope: OrgScope, personId: string): Promise<void> {
-  await scope.sql`SELECT pg_advisory_xact_lock(hashtext('session:' || s.session_id))
-    FROM (SELECT session_id FROM session_people WHERE person_id = ${personId} AND role = 'owner' ORDER BY session_id) s`;
-}
-
-/** What a session's live agent is told when its owner left: who answers for the owner now. */
-export function ownerLeftNotice(name: string): string {
-  return `${name} left the organisation. Its admins own this session now: a question for its owner goes to them, until one of them makes themselves its owner.`;
+export async function lockOwnedSessions(scope: OrgScope, personId: string, limit = PASS_BATCH,
+  except: string[] = []): Promise<{ ids: string[]; more: boolean }> {
+  const rows = (await scope.sql`
+    SELECT s.id FROM session_people me JOIN sessions s ON s.id = me.session_id
+    WHERE me.person_id = ${personId} AND me.role = 'owner' AND NOT s.owned_by_admins
+      AND NOT s.id = ANY(${scope.sql.array(except, "TEXT")})
+      AND (me.archived_at IS NULL OR s.access = 'organisation'
+           OR EXISTS (SELECT 1 FROM session_people o WHERE o.session_id = s.id AND o.person_id <> ${personId}))
+    ORDER BY s.id LIMIT ${limit + 1}`) as Array<{ id: string }>;
+  // The one past the limit only tells whether more remain.
+  const ids = rows.slice(0, limit).map((r) => r.id);
+  if (ids.length > 0) {
+    await scope.sql`SELECT pg_advisory_xact_lock(hashtext('session:' || x.id))
+      FROM unnest(${scope.sql.array(ids, "TEXT")}::text[]) WITH ORDINALITY AS x(id, n) ORDER BY x.n`;
+  }
+  return { ids, more: rows.length > limit };
 }
 
 /**
- * Someone is leaving the organisation (`removePerson`, in its transaction):
- * each session they own that anyone else can reach — open to the
- * organisation, or with other people in it or invited — passes to the
- * organisation's admins (`owned_by_admins`, `session.owner_left`), its
- * pending handover is void, and its live agent is told; their row stays as
- * its owner of record until an admin takes it over. A private session
- * nobody else is in is archived with them. Under each session's lock, so a
- * handover or a share in flight is settled first. Returns what passed.
+ * Someone is leaving the organisation (`removePerson`, in its
+ * transactions): of the sessions `locked` (`lockOwnedSessions`), re-read
+ * under those locks, each one they still own that anyone else can reach —
+ * open to the organisation, or with other people in it or invited — passes
+ * to the organisation's admins (`owned_by_admins`, `session.owner_left`)
+ * and its pending handover is void; their row stays as its owner of record
+ * until an admin takes it over. A private session nobody else is in is
+ * archived with them. Returns what passed; its agents are told by the
+ * orchestrator once the removal commits (`tellPersonLeft`).
  */
-export async function passOnSessions(scope: OrgScope, ctx: RequestContext, personId: string): Promise<string[]> {
-  await lockOwnedSessions(scope, personId);
+export async function passOnSessions(scope: OrgScope, ctx: RequestContext, personId: string, locked: string[]): Promise<string[]> {
+  if (locked.length === 0) return [];
   const owned = (await scope.sql`
     SELECT s.id, s.access, p.name,
       EXISTS (SELECT 1 FROM session_people o WHERE o.session_id = s.id AND o.person_id <> ${personId}) AS others
     FROM session_people me JOIN sessions s ON s.id = me.session_id JOIN people p ON p.id = me.person_id
-    WHERE me.person_id = ${personId} AND me.role = 'owner'
+    WHERE me.person_id = ${personId} AND me.role = 'owner' AND NOT s.owned_by_admins
+      AND s.id = ANY(${scope.sql.array(locked, "TEXT")})
     ORDER BY s.id`) as Array<{ id: string; access: string; name: string; others: boolean }>;
   const alone = owned.filter((s) => s.access !== "organisation" && !s.others).map((s) => s.id);
   const passed = owned.filter((s) => s.access === "organisation" || s.others);
@@ -173,26 +190,50 @@ export async function passOnSessions(scope: OrgScope, ctx: RequestContext, perso
       actor: { type: actor.kind, id: actor.id }, source: "control-plane", payload: { owner: personId, ownerName: s.name },
     });
   }
-  // Each live agent gets the notice as dude's directive (the orchestrator's
-  // TellBrainstorm), and a parked one is woken to read it.
-  const live = (await scope.sql`
-    SELECT r.id, r.session_id FROM runs r
-    WHERE r.session_id = ANY(${scope.sql.array(ids, "TEXT")}) AND r.role = 'brainstorm' AND r.kind = 'agent'
-      AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
-    ORDER BY r.session_id FOR NO KEY UPDATE`) as Array<{ id: string; session_id: string }>;
-  for (const run of live) {
-    const text = ownerLeftNotice(passed.find((s) => s.id === run.session_id)!.name);
-    const directiveId = newId("directive");
-    await scope.sql`INSERT INTO directives (id, organization_id, run_id, text, scope)
-      VALUES (${directiveId}, ${scope.organizationId}, ${run.id}, ${text}, 'run')`;
-    await scope.sql`UPDATE runs SET control = 'resume', control_requested_at = now(), control_reason = 'dude told it something'
-      WHERE id = ${run.id} AND status = 'paused' AND (dude_pause IS NULL OR dude_pause = 'idle')`;
+  return ids;
+}
+
+/**
+ * Someone removed from the organisation is back (an invitation accepted,
+ * in its transaction, which holds their row): each session its admins own
+ * with them still its owner of record is theirs again (`owned_by_admins`
+ * cleared, `session.owner_returned` by the system). A session an admin
+ * already took over has another owner row and is not touched. Returns
+ * those, for `tellPersonReturned` once the transaction commits.
+ */
+export async function returnSessions(scope: OrgScope, personId: string): Promise<string[]> {
+  const rows = (await scope.sql`
+    UPDATE sessions s SET owned_by_admins = false, updated_at = now()
+    FROM session_people me
+    WHERE me.session_id = s.id AND me.person_id = ${personId} AND me.role = 'owner' AND s.owned_by_admins
+    RETURNING s.id`) as Array<{ id: string }>;
+  const ids = rows.map((r) => r.id).sort();
+  for (const id of ids) {
     await appendInScope(scope, {
-      eventType: EventTypes.BrainstormTold, organizationId: scope.organizationId, sessionId: run.session_id, runId: run.id,
-      actor: { type: "system", id: "dude" }, source: "control-plane", payload: { text, directiveId },
+      eventType: EventTypes.BrainstormOwnerReturned, organizationId: scope.organizationId, sessionId: id,
+      actor: { type: "system", id: "dude" }, source: "control-plane", payload: { owner: personId },
     });
   }
   return ids;
+}
+
+/**
+ * After a removal or a return commits, the orchestrator tells each changed
+ * session's live agent who owns it (and, for a removal, withdraws every
+ * open question put to the person by name, in any session). Not inside the
+ * transaction: the orchestrator takes each session's lock, which the
+ * removal holds until it commits. Best effort: unreachable, it is logged,
+ * and take-ownership withdraws what was put to the departed owner anyway.
+ */
+export async function tellPersonSessions(organizationId: string, personId: string, change: "left" | "returned",
+  sessions: string[]): Promise<void> {
+  try {
+    const res = await orchestrator(organizationId, "POST", `/internal/people/${encodeURIComponent(personId)}/sessions`,
+      JSON.stringify({ change, sessions }));
+    if (!res.ok) console.error(`sessions: the orchestrator refused ${change} for ${personId}: ${res.status} ${await res.text()}`);
+  } catch (err) {
+    console.error(`sessions: could not tell the orchestrator ${personId} ${change}: ${(err as Error).message}`);
+  }
 }
 
 /**

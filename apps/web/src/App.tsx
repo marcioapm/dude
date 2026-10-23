@@ -134,6 +134,7 @@ const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.QuestionAsked, EventTypes.QuestionAnswered, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
   EventTypes.RunPaused, EventTypes.RunResumed,
   EventTypes.BrainstormAccessChanged, EventTypes.BrainstormOwnerLeft, EventTypes.BrainstormOwnerTaken, EventTypes.BrainstormMentioned,
+  EventTypes.BrainstormOwnerReturned,
 ]);
 
 /** A mention changes only the mentioned person's lists; every other event of SESSION_LIST_EVENTS is anyone's. */

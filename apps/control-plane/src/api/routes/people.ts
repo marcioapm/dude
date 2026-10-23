@@ -24,7 +24,7 @@ import type { PublicContext, RequestContext, Router } from "../router.ts";
 import { getNavigation } from "./navigation.ts";
 import { attentionItems, waitingSplit, type NavProject } from "../../../../../packages/design-system/src/util/navModel.ts";
 import { endAutoStart } from "./relations.ts";
-import { lockOwnedSessions, passOnSessions } from "./sessions.ts";
+import { lockOwnedSessions, PASS_BATCH, passOnSessions, tellPersonSessions } from "./sessions.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
 export function ownerJson(alias = "tasks"): string {
@@ -491,10 +491,12 @@ async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: strin
  */
 export async function removePerson(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
+  const passed: string[] = [];
+  let more = false;
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await requireAdmin(scope, ctx);
     if (id === ctx.principal.personId) return "yourself";
-    await lockOwnedSessions(scope, id);
+    const first = await lockOwnedSessions(scope, id);
     const rows = (await scope.sql`
       SELECT role FROM people WHERE id = ${id} AND removed_at IS NULL FOR UPDATE`) as Array<{ role: string }>;
     if (!rows[0]) return "missing";
@@ -512,13 +514,30 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
     await scope.sql`DELETE FROM push_subscriptions WHERE person_id = ${id}`;
     await passOnTasks(scope, ctx, id);
-    await passOnSessions(scope, ctx, id);
+    // A session made theirs while this waited on their row (a handover
+    // accepted under its lock) is seen now, and locked before it is read;
+    // with more batches to come, they see it.
+    const late = first.more ? { ids: [], more: true } : await lockOwnedSessions(scope, id, PASS_BATCH, first.ids);
+    passed.push(...await passOnSessions(scope, ctx, id, [...first.ids, ...late.ids]));
+    more = first.more || late.more;
     await recordAs(scope, ctx, EventTypes.PersonRemoved, { personId: id });
     return "removed";
   });
   if (out === "yourself") throw conflict("you cannot remove yourself; ask another admin");
   if (out === "missing") throw notFound(`person ${id} not found`);
   if (out === "lastAdmin") throw conflict("the organisation needs an admin; make someone else one first");
+  // Someone owning more sessions than one transaction locks: the rest pass
+  // on in transactions of their own. Removed already, nobody can make
+  // another session theirs (the orchestrator re-checks their row), so each
+  // batch only shrinks what is left.
+  while (more) {
+    more = await withOrg(ctx.principal.organizationId, async (scope) => {
+      const batch = await lockOwnedSessions(scope, id);
+      passed.push(...await passOnSessions(scope, ctx, id, batch.ids));
+      return batch.more;
+    });
+  }
+  await tellPersonSessions(ctx.principal.organizationId, id, "left", passed);
   return noContent();
 }
 

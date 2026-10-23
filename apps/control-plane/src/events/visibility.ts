@@ -24,7 +24,7 @@ const answers = new Map<string, { ok: boolean; at: number }>();
 const MEMBERSHIP_EVENTS = new Set([
   "session.shared", "session.joined", "session.declined", "session.role_changed",
   "session.member_removed", "session.owner_changed",
-  "session.access_changed", "session.owner_left", "session.owner_taken",
+  "session.access_changed", "session.owner_left", "session.owner_taken", "session.owner_returned",
 ]);
 
 export function forgetSession(sessionId: string): void {
