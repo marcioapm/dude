@@ -18,11 +18,13 @@ import {
   newAutomationSchema,
   repoFilterAllows,
   repositoryFullName,
+  restorePromptSchema,
   secretHint,
   transferOwnerSchema,
   webhookSecretSchema,
   type Automation,
   type AutomationInput,
+  type AutomationPromptVersion,
   type AutomationScope,
   type RepoFilter,
 } from "@dude/domain";
@@ -276,6 +278,7 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
         updated_by = ${ctx.principal.personId}, updated_at = now()
       WHERE id = ${id}`;
     await scope.sql`UPDATE automations SET webhook_hint = right(webhook_secret, 4) WHERE id = ${id} AND webhook_hint IS NULL AND webhook_secret IS NOT NULL`;
+    await keepPromptVersion(scope, ctx, id, current.agent, input.agent, null);
     await record(scope, ctx, { id, name: input.name, projectId: current.projectId }, { settings: true });
     return readOne(scope, id);
   });
@@ -434,6 +437,74 @@ async function listDeliveries(ctx: RequestContext): Promise<Response> {
   return json(out);
 }
 
+// ---------------------------------------------------------------------------
+// Prompt history
+// ---------------------------------------------------------------------------
+
+/** An agent's text: its own prompt, or a preset's brief; null for no agent. */
+function promptOf(agent: AutomationInput["agent"] | Row["agent"]): string | null {
+  if (!agent) return null;
+  return "own" in agent ? agent.own.prompt : agent.brief;
+}
+
+/**
+ * Keep the text a save leaves as a new version when it differs from the
+ * last one kept. The first save of an automation with no history keeps the
+ * text it had before too, so its first version is what it was created with.
+ */
+async function keepPromptVersion(scope: OrgScope, ctx: RequestContext, id: string, before: Row["agent"],
+  after: AutomationInput["agent"], restoredFrom: string | null): Promise<void> {
+  const body = promptOf(after);
+  if (body === null) return;
+  const [last] = (await scope.sql`SELECT number, body FROM automation_prompt_versions WHERE automation_id = ${id}
+    ORDER BY number DESC LIMIT 1 FOR UPDATE`) as Array<{ number: number; body: string }>;
+  let number = last?.number ?? 0;
+  const old = promptOf(before);
+  if (!last && old !== null && old !== body) {
+    number += 1;
+    await scope.sql`INSERT INTO automation_prompt_versions (id, organization_id, automation_id, number, body, created_by)
+      VALUES (${newId("automationPromptVersion")}, ${scope.organizationId}, ${id}, ${number}, ${old}, NULL)`;
+  }
+  if ((last ? last.body : old) === body && !restoredFrom) return;
+  await scope.sql`INSERT INTO automation_prompt_versions (id, organization_id, automation_id, number, body, created_by, restored_from)
+    VALUES (${newId("automationPromptVersion")}, ${scope.organizationId}, ${id}, ${number + 1}, ${body}, ${ctx.principal.personId}, ${restoredFrom})`;
+}
+
+async function readPromptHistory(scope: OrgScope, id: string): Promise<AutomationPromptVersion[]> {
+  const rows = (await scope.sql`SELECT v.id, v.number, v.body, v.created_at AS "createdAt",
+      (SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = v.created_by) AS "createdBy",
+      (SELECT r.number FROM automation_prompt_versions r WHERE r.id = v.restored_from) AS "restoredFrom"
+    FROM automation_prompt_versions v WHERE v.automation_id = ${id} ORDER BY v.number DESC`) as Array<Omit<AutomationPromptVersion, "current">>;
+  return rows.map((r, i) => ({ ...r, createdAt: iso(r.createdAt)!, current: i === 0 }));
+}
+
+async function promptHistory(ctx: RequestContext): Promise<Response> {
+  const versions = await withOrg(ctx.principal.organizationId, async (scope) => {
+    await readOne(scope, ctx.params.id!);
+    return readPromptHistory(scope, ctx.params.id!);
+  });
+  return json({ versions });
+}
+
+/** Save an earlier version's text again, as the newest: the history only grows. */
+async function restorePrompt(ctx: RequestContext): Promise<Response> {
+  const id = ctx.params.id!;
+  const { versionId } = await parseBody(ctx.request, restorePromptSchema);
+  const row = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const current = await readOne(scope, id);
+    await requireEditor(ctx, current.projectId);
+    const [v] = (await scope.sql`SELECT body FROM automation_prompt_versions WHERE id = ${versionId} AND automation_id = ${id}`) as Array<{ body: string }>;
+    if (!v) throw notFound(`no version ${versionId} of this automation's prompt`);
+    if (!current.agent) throw badRequest("this automation has no agent prompt");
+    const agent = "own" in current.agent ? { own: { ...current.agent.own, prompt: v.body } } : { ...current.agent, brief: v.body };
+    await scope.sql`UPDATE automations SET agent = ${agent}::jsonb, updated_by = ${ctx.principal.personId}, updated_at = now() WHERE id = ${id}`;
+    await keepPromptVersion(scope, ctx, id, current.agent, agent as AutomationInput["agent"], versionId);
+    await record(scope, ctx, current, { promptRestored: versionId });
+    return readOne(scope, id);
+  });
+  return json(await shape(ctx, row));
+}
+
 /** Who may run an automation by hand: whoever may edit it, and its owner. */
 async function requireRunner(ctx: RequestContext, id: string): Promise<void> {
   const a = await withOrg(ctx.principal.organizationId, (scope) => readOne(scope, id));
@@ -490,5 +561,7 @@ export function registerAutomationRoutes(router: Router): void {
   router.get("/v1/automations/:id/deliveries", listDeliveries);
   router.post("/v1/automations/:id/test-event/evaluate", evaluateTestEvent);
   router.post("/v1/automations/:id/start-fresh", startFresh);
+  router.get("/v1/automations/:id/prompt-history", promptHistory);
+  router.post("/v1/automations/:id/prompt-history/restore", restorePrompt);
   router.get("/v1/projects/:id/automations", listProject);
 }

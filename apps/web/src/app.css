@@ -560,12 +560,6 @@ body {
   margin-bottom: var(--ds-space-12);
   font-size: var(--ds-text-sm);
 }
-.automationHint {
-  display: block;
-  margin-top: var(--ds-space-6);
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-}
 .automationFact {
   margin: 0;
   font-size: var(--ds-text-sm);

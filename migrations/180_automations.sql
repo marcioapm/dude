@@ -134,6 +134,25 @@ GRANT EXECUTE ON FUNCTION lookup_automation_by_mcp_token(text) TO dude_app;
 
 ALTER TABLE tasks ADD COLUMN created_by_automation_run_id text REFERENCES automation_runs(id) ON DELETE SET NULL;
 
+-- Every saved version of an agent automation's prompt (its own agent's) or
+-- brief (a preset's), as prompt_versions keeps a role's: who, when, and the
+-- version a restore brought back. The automation's `agent` holds the current text.
+CREATE TABLE automation_prompt_versions (
+  id              text PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  automation_id   text NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  number          integer NOT NULL CHECK (number >= 1),
+  body            text NOT NULL CHECK (length(body) <= 100000),
+  created_by      text REFERENCES people(id) ON DELETE SET NULL,
+  restored_from   text REFERENCES automation_prompt_versions(id) ON DELETE SET NULL,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (automation_id, number)
+);
+ALTER TABLE automation_prompt_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE automation_prompt_versions FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON automation_prompt_versions USING (organization_id = current_organization_id())
+  WITH CHECK (organization_id = current_organization_id());
+
 -- The kept session of a resumable automation: one per automation, resumed
 -- by every firing until expiry_days pass without a run (Off does not stop
 -- the clock).

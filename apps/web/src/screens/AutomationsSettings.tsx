@@ -12,7 +12,9 @@ import {
   ChipsInput,
   KindMark,
   ListSwitch,
+  MarkdownDocument,
   OwnerMark,
+  PromptHistory,
   RepoFilterField,
   SchedulePicker,
   ScopeChip,
@@ -20,6 +22,7 @@ import {
   SessionMark,
   SettingRow,
   SettingsHeader,
+  SettingsMeta,
   SettingsNote,
   SettingsSection,
   SettingSource,
@@ -63,6 +66,7 @@ import {
   type Automation,
   type AutomationInput,
   type AutomationKind,
+  type AutomationPromptVersion,
   type AutomationRun,
   type AutomationRunDetail,
   type AutomationRunsResponse,
@@ -414,6 +418,13 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
       return ["UTC"];
     }
   }, []);
+  // Saving the prompt or brief saves the automation with it, so each save is a version in its history.
+  const saveText = async (agent: AutomationInput["agent"]) => {
+    const next = { ...form, agent };
+    const wrong = automationProblem(next, scope);
+    if (wrong) throw new Error(wrong.message);
+    onSaved(await client.updateAutomation(a.id, next));
+  };
   return (
     <form onSubmit={(e) => { e.preventDefault(); void save(() => client.updateAutomation(a.id, form).then(onSaved), undefined, "Automation saved"); }}>
       <fieldset disabled={ro} className="plainFieldset">
@@ -483,16 +494,14 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
                   onChange={(overrides) => set("agent", { ...preset, preset: { ...preset.preset, overrides } })} />
                 <SettingRow label="Instructions for this run" block data-testid="role-prompt"
                   help={`${PRESET_ROLE_LABEL[preset.preset.role]} gets its own prompt, as every task gives it, then these instructions as the task brief.`}>
-                  <Textarea aria-label="Task brief" rows={8} disabled={ro} value={preset.brief}
-                    onChange={(e) => set("agent", { ...preset, brief: e.target.value })} />
-                  <VariablesHint />
+                  <PromptEditor client={client} a={a} ro={ro} label="Task brief" text={preset.brief}
+                    onSave={(brief) => saveText({ ...preset, brief })} onRestored={onSaved} />
                 </SettingRow>
               </>
             ) : own ? (
               <SettingRow label="Prompt" block data-testid="automation-prompt">
-                <Textarea aria-label="Prompt" rows={10} disabled={ro} value={own.prompt}
-                  onChange={(e) => set("agent", { own: { ...own, prompt: e.target.value } })} />
-                <VariablesHint />
+                <PromptEditor client={client} a={a} ro={ro} label="Prompt" text={own.prompt}
+                  onSave={(prompt) => saveText({ own: { ...own, prompt } })} onRestored={onSaved} />
               </SettingRow>
             ) : null}
             <SettingsNote>It can create dude tasks and comment on GitHub as the dude App; it opens no pull requests.</SettingsNote>
@@ -658,11 +667,69 @@ function PresetFields({ client, a, orgName, ro, role, overrides, onChange }: {
   );
 }
 
-function VariablesHint() {
+/**
+ * An agent automation's prompt or brief: the role pages' Markdown editor,
+ * with `{{ }}` inserting the automation's variables, and its history —
+ * who saved each version and when, each one readable and restorable.
+ */
+function PromptEditor({ client, a, ro, label, text, onSave, onRestored }: {
+  client: ApiClient;
+  a: Automation;
+  ro: boolean;
+  label: string;
+  text: string;
+  onSave: (text: string) => Promise<void>;
+  onRestored: (a: Automation) => void;
+}) {
+  const [versions, setVersions] = useState<AutomationPromptVersion[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const load = useCallback(() => {
+    client.automationPromptHistory(a.id).then((r) => setVersions(r.versions), (e: unknown) => setProblem(errorText(e)));
+  }, [client, a.id]);
+  useEffect(load, [load, a.updatedAt]);
+  const latest = versions?.[0];
+  const shown = useMemo(() => (versions ?? []).map((v) => ({
+    id: v.id, number: v.number, body: v.body, note: v.restoredFrom ? `Restored version ${v.restoredFrom}` : "",
+    author: v.createdBy, when: formatTimestamp(v.createdAt, "datetime"), current: v.current, sessions: { count: 0, recent: [] },
+  })), [versions]);
+  const meta = (
+    <SettingsMeta>
+      {latest ? `Last changed by ${latest.createdBy?.name ?? "its creator"} · ${formatTimestamp(latest.createdAt, "relative")}` : "Never changed"}
+      {" · "}<TextButton onClick={() => setOpen(true)} data-testid="automation-prompt-history">History</TextButton>
+    </SettingsMeta>
+  );
   return (
-    <small className="automationHint">
-      Variables: {AUTOMATION_PROMPT_VARIABLES.map((v) => <code key={v.name} title={v.description}>{`{{${v.name}}}`} </code>)}
-    </small>
+    <>
+      <MarkdownDocument key={`${a.id}-${a.updatedAt}`} data-testid="automation-prompt-document" breaks label={label} source={text}
+        emptyText="Nothing written yet." meta={meta} variables={AUTOMATION_PROMPT_VARIABLES}
+        onSave={ro ? undefined : async (body) => {
+          setProblem(null);
+          try {
+            await onSave(body);
+          } catch (e) {
+            setProblem(errorText(e));
+            throw e;
+          }
+        }} />
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      {open ? (
+        <Dialog open onOpenChange={(o) => !o && setOpen(false)} size="xl" title={`${a.name} · ${label.toLowerCase()} history`}
+          description={`${versions?.length ?? 0} ${versions?.length === 1 ? "version" : "versions"} · every save is kept`}>
+          <div data-testid="automation-prompt-history-dialog">
+            <PromptHistory versions={shown} emptyText="Never saved: it still has the text it was created with."
+              onRestore={ro ? undefined : async (id) => {
+                try {
+                  onRestored(await client.restoreAutomationPrompt(a.id, id));
+                  load();
+                } catch (e) {
+                  setProblem(errorText(e));
+                }
+              }} />
+          </div>
+        </Dialog>
+      ) : null}
+    </>
   );
 }
 

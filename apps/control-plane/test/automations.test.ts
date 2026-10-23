@@ -347,3 +347,47 @@ describe("runs", () => {
     expect(deliveries[0]).toMatchObject({ action: "opened", repository: "acme/web", sender: "ana" });
   });
 });
+
+describe("prompt history", () => {
+  const settingsWith = (prompt: string) => ({ name: "Triage", kind: "agent", trigger: { kind: "github", event: "pull_request", actions: [], filters: {} },
+    agent: { own: { prompt } } });
+
+  test("each save that changes the prompt is a version, by whom and when; restore saves an old one again as the newest", async () => {
+    const { body: a } = await create("ana", { name: "Triage" });
+    for (const p of ["Label {{pr.title}}.", "Label {{pr.title}} and {{repository}}.", "Label {{pr.title}} and {{repository}}."]) {
+      expect((await call("ana", "PUT", `/v1/automations/${a.id}`, settingsWith(p))).status).toBe(200);
+    }
+    // A member reads it.
+    const { versions } = await body(await call("bo", "GET", `/v1/automations/${a.id}/prompt-history`));
+    // The empty prompt it was created with is the first version; the unchanged third save adds none.
+    expect(versions.map((v: { number: number; body: string }) => [v.number, v.body])).toEqual([
+      [3, "Label {{pr.title}} and {{repository}}."],
+      [2, "Label {{pr.title}}."],
+      [1, ""],
+    ]);
+    expect(versions[0]).toMatchObject({ current: true, createdBy: { id: people.ana, name: "ana" }, restoredFrom: null });
+    expect(versions[2].createdBy).toBeNull();
+    expect(typeof versions[0].createdAt).toBe("string");
+
+    const first = versions[1].id;
+    expect((await call("bo", "POST", `/v1/automations/${a.id}/prompt-history/restore`, { versionId: first })).status).toBe(403);
+    expect((await call("ana", "POST", `/v1/automations/${a.id}/prompt-history/restore`, { versionId: "apv_nope" })).status).toBe(404);
+    const restored = await call("ana", "POST", `/v1/automations/${a.id}/prompt-history/restore`, { versionId: first });
+    expect(restored.status).toBe(200);
+    expect((await body(restored)).agent).toEqual({ own: { prompt: "Label {{pr.title}}." } });
+    const after = (await body(await call("ana", "GET", `/v1/automations/${a.id}/prompt-history`))).versions;
+    expect(after.map((v: { number: number; restoredFrom: number | null; current: boolean }) => [v.number, v.restoredFrom, v.current]))
+      .toEqual([[4, 2, true], [3, null, false], [2, null, false], [1, null, false]]);
+  });
+
+  test("a preset's brief is versioned the same way", async () => {
+    const { body: a } = await create("ana", { name: "QA", preset: "qa_browser", trigger: "schedule" });
+    const preset = (brief: string) => ({ name: "QA", kind: "agent", trigger: { kind: "schedule", cron: "0 3 * * *", tz: "UTC" },
+      agent: { preset: { role: "qa_browser", overrides: {} }, brief } });
+    expect((await call("ana", "PUT", `/v1/automations/${a.id}`, preset("Walk the checkout."))).status).toBe(200);
+    const { versions } = await body(await call("ana", "GET", `/v1/automations/${a.id}/prompt-history`));
+    // The empty brief it was created with, then the saved one.
+    expect(versions.map((v: { number: number; body: string; createdBy: unknown }) => [v.number, v.body, v.createdBy === null]))
+      .toEqual([[2, "Walk the checkout.", false], [1, "", true]]);
+  });
+});

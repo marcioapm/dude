@@ -4,9 +4,11 @@
  * read returns, as a backend would.
  */
 
-import type { Automation, AutomationInput, AutomationRun, AutomationRunDetail, AutomationRunsResponse, EventSubscriptions, EventVerdict, NewAutomation, PastDelivery, RunNow } from "@dude/domain";
+import type { Automation, AutomationInput, AutomationPromptVersion, AutomationRun, AutomationRunDetail, AutomationRunsResponse, EventSubscriptions, EventVerdict, NewAutomation, PastDelivery, RunNow } from "@dude/domain";
 import { automationDefaults, repoFilterAllows } from "@dude/domain";
 import { ORG, PEOPLE, PROJECT } from "./data.ts";
+
+const promptOf = (agent: Automation["agent"]): string | null => (!agent ? null : "own" in agent ? agent.own.prompt : agent.brief);
 
 const MIN = 60_000;
 const iso = (ago: number) => new Date(Date.now() - ago).toISOString();
@@ -106,7 +108,47 @@ export class FixtureAutomations {
 
   update(id: string, input: AutomationInput): Automation {
     const a = this.one(id);
+    const before = promptOf(a.agent);
     Object.assign(a, input, { updatedAt: new Date().toISOString() });
+    this.#keep(id, before, promptOf(a.agent), null);
+    return a;
+  }
+
+  /** Versions of each automation's prompt or brief, newest first, kept as the backend keeps them. */
+  prompts: Record<string, AutomationPromptVersion[]> = {
+    aut_qa: [
+      { id: "apv_qa2", number: 2, body: "Walk the sign-in and checkout flows.", createdBy: { id: "u_ana", name: "Ana" },
+        createdAt: iso(2 * 24 * 60 * MIN), restoredFrom: null, current: true },
+      { id: "apv_qa1", number: 1, body: "Walk the sign-in flow.", createdBy: { id: "u_ana", name: "Ana" },
+        createdAt: iso(9 * 24 * 60 * MIN), restoredFrom: null, current: false },
+    ],
+  };
+
+  #keep(id: string, before: string | null, after: string | null, restoredFrom: number | null): void {
+    if (after === null) return;
+    const list = (this.prompts[id] ??= []);
+    if (list.length === 0 && before !== null && before !== after) {
+      list.unshift({ id: `apv_${id}_1`, number: 1, body: before, createdBy: null, createdAt: new Date().toISOString(), restoredFrom: null, current: false });
+    }
+    if ((list[0]?.body ?? before) === after && restoredFrom === null) return;
+    for (const v of list) v.current = false;
+    const number = (list[0]?.number ?? 0) + 1;
+    list.unshift({ id: `apv_${id}_${number}`, number, body: after, createdBy: { id: "u_marcio", name: "Márcio" },
+      createdAt: new Date().toISOString(), restoredFrom, current: true });
+  }
+
+  promptHistory(id: string): { versions: AutomationPromptVersion[] } {
+    this.one(id);
+    return { versions: (this.prompts[id] ?? []).map((v) => ({ ...v })) };
+  }
+
+  restorePrompt(id: string, versionId: string): Automation {
+    const a = this.one(id);
+    const v = (this.prompts[id] ?? []).find((x) => x.id === versionId);
+    if (!v || !a.agent) throw new Error(`no version ${versionId}`);
+    const before = promptOf(a.agent);
+    a.agent = "own" in a.agent ? { own: { ...a.agent.own, prompt: v.body } } : { ...a.agent, brief: v.body };
+    this.#keep(id, before, v.body, v.number);
     return a;
   }
 

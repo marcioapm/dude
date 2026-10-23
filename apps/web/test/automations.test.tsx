@@ -27,6 +27,9 @@ async function show(node: ReactNode) {
   return container;
 }
 
+/** aut_triage's prompt as the fixture backend holds it now. */
+const promptNow = (client: FixtureClient) => (client.fixtureAutomation("aut_triage").agent as { own: { prompt: string } }).own.prompt;
+
 const rows = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>("[data-testid=automation-row]")];
 const names = (c: HTMLElement) => rows(c).map((r) => r.querySelector(".automationName button")?.textContent);
 
@@ -109,7 +112,10 @@ describe("an automation's page", () => {
     expect(c.querySelector("[data-testid=owner-row]")?.textContent).toContain("Only Example's admins and the owner transfer it.");
     expect(c.querySelectorAll("button[type=submit]").length).toBe(0);
     expect(c.querySelectorAll("[data-testid=run-now]").length).toBe(0);
-    expect(c.querySelector<HTMLTextAreaElement>("textarea[aria-label='Task brief']")!.closest("fieldset")!.disabled).toBe(true);
+    // The brief reads, with no Edit; its history opens, with no Restore.
+    const doc = c.querySelector<HTMLElement>("[data-testid=role-prompt] [data-testid=automation-prompt-document]")!;
+    expect(doc.textContent).toContain("Walk the sign-in and checkout flows.");
+    expect(doc.querySelector("[data-testid=markdown-edit]")).toBeNull();
   });
 
   test("a preset agent shows its role's instructions brief and where its values come from", async () => {
@@ -157,6 +163,39 @@ describe("an automation's page", () => {
     expect(overrides["harness"]).toBeDefined();
     expect(overrides["tierId"]).toBeDefined();
     expect(overrides["machineSizeId"]).toBeDefined();
+  });
+  test("the prompt is the Markdown editor with the automation's variables; a save is a version, and an old one restores", async () => {
+    const client = new FixtureClient("a");
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const doc = await until(() => c.querySelector<HTMLElement>("[data-testid=automation-prompt] [data-testid=automation-prompt-document]"), "the prompt");
+    expect(doc.textContent).toContain("Read {{pr.title}} in {{repository}} and label it.");
+    await click(doc.querySelector<HTMLElement>("[data-testid=markdown-edit]")!);
+    // {{ }} offers the automation's variables.
+    const trigger = doc.querySelector<HTMLElement>("[data-testid=markdown-variable]")!;
+    await act(async () => void trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const items = await until(() => {
+      const found = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")];
+      return found.length ? found : null;
+    }, "the variables");
+    expect(items.map((i) => i.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("{{event.name}}"), expect.stringContaining("{{pr.title}}")]));
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await typeInto(doc.querySelector<HTMLTextAreaElement>("[data-testid=markdown-source]")!, "Label {{pr.title}} from {{sender}}.");
+    await click(doc.querySelector<HTMLElement>("[data-testid=markdown-save]")!);
+    await until(() => (promptNow(client) === "Label {{pr.title}} from {{sender}}." ? true : null), "the save");
+
+    let versions = (await client.automationPromptHistory("aut_triage")).versions;
+    expect(versions.map((v) => [v.number, v.body])).toEqual([[2, "Label {{pr.title}} from {{sender}}."], [1, "Read {{pr.title}} in {{repository}} and label it."]]);
+
+    await click(await until(() => c.querySelector<HTMLElement>("[data-testid=automation-prompt-history]"), "History"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[data-testid=automation-prompt-history-dialog]"), "the history");
+    // Who saved each, and when; the older version, then Restore.
+    expect(dialog.querySelector("[data-version='2']")!.textContent).toContain("Márcio");
+    await click(dialog.querySelector<HTMLElement>("[data-version='1']")!);
+    await click(await until(() => dialog.querySelector<HTMLElement>("[data-testid=prompt-restore]"), "Restore"));
+    await until(() => (promptNow(client) === "Read {{pr.title}} in {{repository}} and label it." ? true : null), "the restore");
+    versions = (await client.automationPromptHistory("aut_triage")).versions;
+    expect(versions[0]).toMatchObject({ number: 3, restoredFrom: 1, current: true });
   });
 });
 

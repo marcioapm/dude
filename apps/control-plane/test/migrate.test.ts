@@ -1115,8 +1115,13 @@ test("180 adds automations: expiry 1..30 on resumable only, repo filter on org o
       .toEqual([{ run_id: 'arn_1', organization_id: 'org_au', automation_id: 'aut_1' }]);
     await sql`UPDATE automation_runs SET status = 'succeeded' WHERE id = 'arn_1'`;
     expect([...await sql`SELECT run_id FROM lookup_automation_by_mcp_token('automation-hash')`]).toEqual([]);
+    // A prompt's versions are numbered once each and go with their automation.
+    await sql`INSERT INTO automation_prompt_versions (id, organization_id, automation_id, number, body) VALUES ('apv_1', 'org_au', 'aut_1', 1, 'v1')`;
+    expect(await sql`INSERT INTO automation_prompt_versions (id, organization_id, automation_id, number, body)
+      VALUES ('apv_2', 'org_au', 'aut_1', 1, 'again')`.then(() => "inserted", (e: Error) => e.message)).toContain("automation_prompt_versions_automation_id_number_key");
     await sql`DELETE FROM automations WHERE id = 'aut_1'`;
     expect([...await sql`SELECT count(*)::int AS n FROM automation_runs`]).toEqual([{ n: 0 }]);
+    expect([...await sql`SELECT count(*)::int AS n FROM automation_prompt_versions`]).toEqual([{ n: 0 }]);
   } finally {
     await sql.end();
   }

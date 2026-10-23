@@ -1049,4 +1049,14 @@ export class FixtureClient extends ApiClient {
   override startAutomationFresh(): Promise<void> {
     return Promise.resolve();
   }
+  override automationPromptHistory(id: string): ReturnType<ApiClient["automationPromptHistory"]> {
+    return this.#auto(() => this.#automations.promptHistory(id));
+  }
+  override restoreAutomationPrompt(id: string, versionId: string): ReturnType<ApiClient["restoreAutomationPrompt"]> {
+    return this.#auto(() => this.#automations.restorePrompt(id, versionId));
+  }
+  /** An automation as the fixture backend holds it now, read synchronously (tests). */
+  fixtureAutomation(id: string) {
+    return this.#automations.one(id);
+  }
 }

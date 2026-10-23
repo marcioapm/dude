@@ -498,6 +498,20 @@ export interface AutomationRunsResponse {
 }
 
 /** A stored delivery Run now offers: the event's last 30 days. */
+/** One saved version of an agent automation's prompt or brief; newest first in a list. */
+export interface AutomationPromptVersion {
+  id: string;
+  number: number;
+  body: string;
+  createdBy: { id: string; name: string } | null;
+  createdAt: string;
+  /** The version a restore brought back. */
+  restoredFrom: number | null;
+  current: boolean;
+}
+
+export const restorePromptSchema = z.object({ versionId: z.string().min(1).max(100) }).strict();
+
 export interface PastDelivery {
   id: string;
   event: string;

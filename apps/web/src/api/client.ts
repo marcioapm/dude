@@ -21,6 +21,7 @@ import type {
   Automation,
   AutomationInput,
   AutomationRunDetail,
+  AutomationPromptVersion,
   AutomationRunsResponse,
   EventSubscriptions,
   EventVerdict,
@@ -1391,6 +1392,14 @@ export class ApiClient {
 
   startAutomationFresh(id: string): Promise<void> {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/start-fresh`);
+  }
+
+  automationPromptHistory(id: string): Promise<{ versions: AutomationPromptVersion[] }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/prompt-history`);
+  }
+
+  restoreAutomationPrompt(id: string, versionId: string): Promise<Automation> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/prompt-history/restore`, { versionId });
   }
 
   // -- judgements: the organisation's judgement tier and its calls -----------
