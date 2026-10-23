@@ -538,12 +538,12 @@ func (c *cli) onTask(method, ref, suffix string, body any) (any, error) {
 	return c.request(method, "/v1/tasks/"+url.PathEscape(id)+suffix, body)
 }
 
-func (c *cli) onRun(ref, suffix string, body any) (any, error) {
+func (c *cli) onRun(method, ref, suffix string, body any) (any, error) {
 	id, err := c.runID(ref)
 	if err != nil {
 		return nil, err
 	}
-	return c.request("POST", "/v1/runs/"+url.PathEscape(id)+suffix, body)
+	return c.request(method, "/v1/runs/"+url.PathEscape(id)+suffix, body)
 }
 
 // itemAnswer is one item's answer: the choices picked and the text, if any.
@@ -581,7 +581,7 @@ func reasonFlags(fs *flag.FlagSet, route string) doer {
 		if *reason != "" {
 			body["reason"] = *reason
 		}
-		return c.onRun(a[0], route, body)
+		return c.onRun("POST", a[0], route, body)
 	}
 }
 
@@ -671,18 +671,10 @@ var commands = map[string]command{
 		return o["pullRequests"], nil
 	})},
 	"run": {"RUN", "one run in full", noFlags(func(c *cli, a []string) (any, error) {
-		id, err := c.runID(a[0])
-		if err != nil {
-			return nil, err
-		}
-		return c.request("GET", "/v1/runs/"+url.PathEscape(id), nil)
+		return c.onRun("GET", a[0], "", nil)
 	})},
 	"diff": {"RUN", "what a run changed", noFlags(func(c *cli, a []string) (any, error) {
-		id, err := c.runID(a[0])
-		if err != nil {
-			return nil, err
-		}
-		return c.request("GET", "/v1/runs/"+url.PathEscape(id)+"/diff", nil)
+		return c.onRun("GET", a[0], "/diff", nil)
 	})},
 
 	// Projects and epics
@@ -1003,7 +995,7 @@ var commands = map[string]command{
 				if *interrupt {
 					body["interrupt"] = true
 				}
-				return c.onRun(a[0], "/steer", body)
+				return c.onRun("POST", a[0], "/steer", body)
 			}
 		}},
 	"pause": {"RUN", "pause a run", func(fs *flag.FlagSet) doer {
@@ -1017,7 +1009,7 @@ var commands = map[string]command{
 			if *reason != "" {
 				body["reason"] = *reason
 			}
-			return c.onRun(a[0], "/pause", body)
+			return c.onRun("POST", a[0], "/pause", body)
 		}
 	}},
 	"resume": {"RUN", "resume a run", func(fs *flag.FlagSet) doer {
@@ -1034,7 +1026,7 @@ var commands = map[string]command{
 				if *tier != "" {
 					body["tier"] = *tier
 				}
-				return c.onRun(a[0], "/restart", body)
+				return c.onRun("POST", a[0], "/restart", body)
 			}
 		}},
 

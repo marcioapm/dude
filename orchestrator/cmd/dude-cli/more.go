@@ -305,14 +305,10 @@ var moreCommands = map[string]command{
 
 	// Runs and sessions
 	"leave": {"RUN", "leave a stalled run as it is", noFlags(func(c *cli, a []string) (any, error) {
-		return c.onRun(a[0], "/leave", nil)
+		return c.onRun("POST", a[0], "/leave", nil)
 	})},
 	"directives": {"RUN", "what people told a run (steers)", noFlags(func(c *cli, a []string) (any, error) {
-		id, err := c.runID(a[0])
-		if err != nil {
-			return nil, err
-		}
-		return c.request("GET", "/v1/runs/"+esc(id)+"/directives", nil)
+		return c.onRun("GET", a[0], "/directives", nil)
 	})},
 	"session": {"ID", "one agent session, with its child sessions", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/sessions/"+esc(a[0]), nil)
