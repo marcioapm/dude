@@ -65,34 +65,47 @@ type Runner struct {
 	// Run and server; nil asks lux for the server's url.
 	ServerURL func(ctx context.Context, luxRunID string, port int) (string, error)
 	Now       func() time.Time
-	// Workers bounds the runs followed and webhooks POSTed at once, off the
-	// sweep; zero is DefaultWorkers.
+	// Workers bounds the runs followed at once, and separately the webhooks
+	// POSTed at once, off the sweep; zero is DefaultWorkers.
 	Workers int
 
 	mu       sync.Mutex
 	inflight map[string]bool
-	slots    chan struct{}
+	pools    map[string]chan struct{}
 	wg       sync.WaitGroup
 }
 
-// DefaultWorkers is how many runs are followed or POSTed for at once.
+// DefaultWorkers is how many runs are followed, and how many webhooks
+// POSTed, at once.
 const DefaultWorkers = 16
 
+// Worker pools: a webhook's one-shot POST never waits for a slot held by a
+// long-lived agent's follower.
+const (
+	poolFollow = "follow"
+	poolPost   = "post"
+)
+
 // dispatch runs fn for key in the background, at most one at a time per key
-// and Workers in all. It says false, running nothing, while key is already
-// in flight or every worker is busy: the next pass tries again.
-func (r *Runner) dispatch(ctx context.Context, key string, fn func(context.Context)) bool {
+// and Workers in all per pool. It says false, running nothing, while key is
+// already in flight or every worker of pool is busy: the next pass tries again.
+func (r *Runner) dispatch(ctx context.Context, pool, key string, fn func(context.Context)) bool {
 	r.mu.Lock()
 	if r.inflight == nil {
 		r.inflight = map[string]bool{}
-		r.slots = make(chan struct{}, cmp.Or(r.Workers, DefaultWorkers))
+		r.pools = map[string]chan struct{}{}
 	}
 	if r.inflight[key] {
 		r.mu.Unlock()
 		return false
 	}
+	slots := r.pools[pool]
+	if slots == nil {
+		slots = make(chan struct{}, cmp.Or(r.Workers, DefaultWorkers))
+		r.pools[pool] = slots
+	}
 	select {
-	case r.slots <- struct{}{}:
+	case slots <- struct{}{}:
 	default:
 		r.mu.Unlock()
 		return false
@@ -104,7 +117,7 @@ func (r *Runner) dispatch(ctx context.Context, key string, fn func(context.Conte
 		defer func() {
 			r.mu.Lock()
 			delete(r.inflight, key)
-			<-r.slots
+			<-slots
 			r.mu.Unlock()
 			r.wg.Done()
 		}()
@@ -805,11 +818,15 @@ func (r *Runner) forgetSession(ctx context.Context, a Automation) {
 // followRunning reads where each running run's lux Run is: a command's
 // exit, an agent's turn ending, a Server's queue of events and idle time.
 func (r *Runner) followRunning(ctx context.Context) (int, error) {
-	type running struct{ ID, Org, AutomationID, LuxRunID, Source string }
+	type running struct{ ID, Org, AutomationID, LuxRunID, Source, Kind string }
 	var list []running
+	// Webhook POSTs first, then the runs followed longest ago (never first):
+	// with more live runs than workers, each gets a turn within a few passes.
 	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.automation_id, COALESCE(r.lux_run_id, ''), r.source
-			FROM automation_runs r WHERE r.status = 'running' AND r.session IS NOT NULL ORDER BY r.started_at LIMIT 50`)
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.automation_id, COALESCE(r.lux_run_id, ''), r.source, a.kind
+			FROM automation_runs r JOIN automations a ON a.id = r.automation_id
+			WHERE r.status = 'running' AND r.session IS NOT NULL
+			ORDER BY a.kind = 'webhook' DESC, r.followed_at NULLS FIRST, r.started_at LIMIT 50`)
 		if err != nil {
 			return err
 		}
@@ -818,12 +835,27 @@ func (r *Runner) followRunning(ctx context.Context) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
+	var followed []string
 	for _, run := range list {
-		r.dispatch(ctx, "follow:"+run.ID, func(ctx context.Context) {
+		pool := poolFollow
+		if run.Kind == "webhook" {
+			pool = poolPost
+		}
+		if r.dispatch(ctx, pool, "follow:"+run.ID, func(ctx context.Context) {
 			if err := r.followOne(ctx, run.ID, run.Org, run.AutomationID, run.LuxRunID, run.Source); err != nil {
 				r.Log.Warn("following an automation run failed", "run", run.ID, "error", err)
 			}
-		})
+		}) {
+			followed = append(followed, run.ID)
+		}
+	}
+	if len(followed) > 0 {
+		if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE automation_runs SET followed_at = now() WHERE id = ANY($1)`, followed)
+			return err
+		}); err != nil {
+			return 0, err
+		}
 	}
 	// Following is in the background: nothing here says to sweep again at once.
 	return 0, nil

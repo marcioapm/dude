@@ -121,6 +121,9 @@ CREATE TABLE automation_runs (
   -- When resuming the kept session was first refused as still busy (409);
   -- after a bound the kept Run is ended and the run starts fresh.
   resume_conflict_since timestamptz,
+  -- When the loop last set a worker to follow it: the least recently
+  -- followed live runs are followed first, so none waits forever.
+  followed_at          timestamptz,
   created_at           timestamptz NOT NULL DEFAULT now(),
   started_at           timestamptz,
   ended_at             timestamptz,

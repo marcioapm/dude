@@ -94,6 +94,51 @@ func TestAutomationSlowWorkStaysOffTheSweep(t *testing.T) {
 	})
 }
 
+// With more live runs than workers, the newest is still followed: a command
+// started after Workers live agents ends, and a webhook is POSTed while
+// every follower is busy.
+func TestAutomationNewestLiveRunIsFollowed(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Workers = 2
+	var posts atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(hook.Close)
+	h.automation("aut_busy_agents", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "parallel", "agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Work"}}})
+	exec(t, h.owner, `UPDATE automations SET parallel_max = 2 WHERE id = 'aut_busy_agents'`)
+	for i := range 2 {
+		h.deliver(fmt.Sprintf("busy-%d", i), "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	}
+	h.until("two live agents", func() bool {
+		live := 0
+		for _, r := range h.runs("aut_busy_agents") {
+			if r.Status == "running" && r.Session != "" {
+				live++
+			}
+		}
+		return live == 2
+	})
+	h.automation("aut_newest", "command", map[string]any{"kind": "github", "event": "issues"}, map[string]any{"command": "echo hi"})
+	h.automation("aut_newest_hook", "webhook", map[string]any{"kind": "github", "event": "issues"},
+		map[string]any{"webhook": map[string]any{"url": hook.URL}})
+	h.deliver("newest-1", "issues", map[string]any{"action": "opened", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the newest command and webhook succeed", func() bool {
+		c, w := h.runs("aut_newest"), h.runs("aut_newest_hook")
+		return len(c) == 1 && c[0].Status == "succeeded" && len(w) == 1 && w[0].Status == "succeeded"
+	})
+	if n := posts.Load(); n != 1 {
+		t.Errorf("webhook POSTs %d", n)
+	}
+	for _, r := range h.runs("aut_busy_agents") {
+		if r.Status != "running" {
+			t.Errorf("a live agent ended: %+v", r)
+		}
+	}
+}
+
 // submitHook is lux with a hook run inside Submit, before lux answers.
 type submitHook struct {
 	lux.Client
