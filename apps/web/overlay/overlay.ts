@@ -15,7 +15,7 @@
  */
 
 import {
-  OVERLAY_LIMITS, OVERLAY_PROTOCOL, OVERLAY_THEMES, overlayPage,
+  OVERLAY_LIMITS, OVERLAY_PROTOCOL, OVERLAY_THEMES, overlayPage, overlayWindowName,
   type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude,
 } from "@dude/domain/previewOverlayProtocol";
 import { CSS } from "./css.ts";
@@ -117,7 +117,7 @@ const asElement = (t: EventTarget | null): Element | null => (t !== null && (t a
 const withoutScheme = (url: string) => url.replace(/^https?:\/\//, "");
 
 // overlaySessionSchema's rules, by hand: the overlay bundles no zod.
-const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme"]);
+const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme", "dudeWindow"]);
 const PIN_KEYS = new Set(["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"]);
 const REPLY_KEYS = new Set(["who", "kind", "body"]);
 const PIN_STATUSES = new Set<unknown>(["draft", "open", "delivered", "resolved", "replied"]);
@@ -155,7 +155,8 @@ function validSession(value: unknown): value is Extract<DudeToOverlay, { type: "
     || !boundedString(value.task, 100) || !boundedString(value.url, 2_048)
     || !Array.isArray(value.pins) || value.pins.length > OVERLAY_LIMITS.pins
     || !wholeNumber(value.drafts, 0) || typeof value.showPins !== "boolean"
-    || (value.theme !== undefined && !OVERLAY_THEMES.includes(value.theme as OverlayTheme))) return false;
+    || (value.theme !== undefined && !OVERLAY_THEMES.includes(value.theme as OverlayTheme))
+    || (value.dudeWindow !== undefined && !overlayWindowName(value.dudeWindow))) return false;
   try {
     const url = new URL(value.url);
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
@@ -207,6 +208,8 @@ export class Overlay {
   #raf = 0;
   // dude's resolved theme once a session names it; until then (or from an older dude) the OS's.
   #dudeTheme: OverlayTheme | null = null;
+  // dude's tab's window name once a session names it: Go to dude looks it up.
+  #dudeWindow: string | null = null;
   #osDark: MediaQueryList | null = null;
   // The shadow tree's layers, made once: a render replaces a layer's children, never the tree.
   readonly #top: HTMLElement;
@@ -345,6 +348,7 @@ export class Overlay {
         this.#drafts = Number(m.drafts) || 0;
         this.#showPins = m.showPins !== false;
         this.#dudeTheme = m.theme ?? null;
+        this.#dudeWindow = m.dudeWindow ?? null;
         this.#applyTheme();
         if (this.#unanswered) {
           // dude's tab is back: the box keeps its words, and Save is for it again.
@@ -851,7 +855,32 @@ export class Overlay {
 
   #openInDude(id: string): void {
     this.#post({ type: "open", v: OVERLAY_PROTOCOL, itemId: id });
-    try { this.#opener()?.focus(); } catch { /* another origin's window may refuse */ }
+    this.#goToDude();
+  }
+
+  /**
+   * Brings dude's tab forward; called inside a click. Chrome ignores a
+   * popup's `opener.focus()`, but `window.open("", name)` with the click's
+   * activation brings forward the window already holding that name, across
+   * origins, without navigating it. Only when that window is the opener:
+   * otherwise (no name from an older dude, or the name no longer the
+   * opener's) the opener's focus(), which some browsers honour.
+   */
+  #goToDude(): void {
+    const opener = this.#opener();
+    if (!opener) return;
+    if (this.#dudeWindow) {
+      try {
+        const found = this.#win.open("", this.#dudeWindow);
+        if (found === opener) return;
+        // No window held the name, so a blank one was opened: this page's own origin, readable, and closed again.
+        // Another window holding the name is another origin's and throws here: it is left alone.
+        if (found && found.location.href === "about:blank") found.close();
+      } catch {
+        // Refused: the opener's focus() below.
+      }
+    }
+    try { opener.focus(); } catch { /* another origin's window may refuse */ }
   }
 
   #beside(r: DOMRect, w: number, h: number): { left: number; top: number } {
@@ -1040,7 +1069,7 @@ export class Overlay {
       this.#h("span", { class: "okc" }, this.#g("check")),
       this.#h("span", { class: "tt" }, this.#h("b", {}, "Saved to your drafts in dude"),
         this.#h("span", { class: "dim" }, `${t.drafts} ${t.drafts === 1 ? "draft" : "drafts"} on ${this.#task} · ${pic} · only you see them until you submit there`)),
-      this.#h("button", { type: "button", "data-k": "go-dude", onclick: () => { try { this.#opener()?.focus(); } catch { /* refused */ } } }, this.#g("link", 12), "Go to dude"));
+      this.#h("button", { type: "button", "data-k": "go-dude", "data-testid": "ov-go-dude", onclick: () => this.#goToDude() }, this.#g("link", 12), "Go to dude"));
   }
 
   #pinsPanel(): HTMLElement {

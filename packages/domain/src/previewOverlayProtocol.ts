@@ -6,8 +6,9 @@
  *
  * The overlay sends: hello and navigated (the page it is on), draft (a
  * comment), prefs (its Show pins switch) and open (Open in dude). dude
- * answers: session (the page's pins, the drafts count), saved or refused
- * (a draft's outcome), highlight (Show on preview) and stop.
+ * answers: session (the page's pins, the drafts count, dude's theme and its
+ * tab's window name), saved or refused (a draft's outcome), highlight (Show
+ * on preview) and stop.
  */
 
 import type { FeedbackPreviewAnchor, FeedbackStatus } from "./feedback.ts";
@@ -34,6 +35,8 @@ export const OVERLAY_LIMITS = {
   replies: 5,
   /** A pin's author, a reply's author and a pin's when, as the overlay shows them. */
   name: 200,
+  /** dude's tab's window name, which the overlay's Go to dude looks up with window.open("", name). */
+  windowName: 100,
   /** Pins sent for one page. */
   pins: 200,
   /** FEEDBACK_LIMITS' own, repeated so the overlay bundles no zod (a test holds them equal). */
@@ -74,11 +77,22 @@ export const OVERLAY_THEMES: ReadonlyArray<OverlayTheme> = ["light", "dark"];
 
 export type DudeToOverlay =
   // `theme` is optional: an overlay or a dude from before it reads or sends none, and the overlay then follows the OS.
-  | { type: "session"; v: 1; task: string; url: string; pins: OverlayPin[]; drafts: number; showPins: boolean; theme?: OverlayTheme }
+  // `dudeWindow` (dude's tab's window name) likewise: without it Go to dude falls back to the opener's focus().
+  | { type: "session"; v: 1; task: string; url: string; pins: OverlayPin[]; drafts: number; showPins: boolean; theme?: OverlayTheme; dudeWindow?: string }
   | { type: "saved"; v: 1; nonce: string; id: string; drafts: number; picture: "attached" | "none" | "failed" }
   | { type: "refused"; v: 1; nonce?: string; reason: string }
   | { type: "highlight"; v: 1; itemId: string }
   | { type: "stop"; v: 1 };
+
+/**
+ * Whether `value` may be sent and taken as `dudeWindow`: 1 to
+ * OVERLAY_LIMITS.windowName letters, digits, `-` and `_`. Names browsers
+ * treat specially (`_blank`, `_self`, `_top`, `_parent`) start with `_` and
+ * are refused, since `window.open("", "_blank")` would open a new tab.
+ */
+export function overlayWindowName(value: unknown): value is string {
+  return typeof value === "string" && value.length <= OVERLAY_LIMITS.windowName && /^[A-Za-z0-9-][A-Za-z0-9_-]*$/.test(value);
+}
 
 /**
  * The page a URL names, as pins are matched to it: origin and path, the

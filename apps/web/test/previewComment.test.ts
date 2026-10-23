@@ -122,6 +122,34 @@ test("the session carries dude's resolved theme, valid by the protocol's schema,
   expect(told().find((m) => m.type === "session")).not.toHaveProperty("theme");
 });
 
+test("the session names this tab's window, valid by the protocol, the same name for the tab's every commenting", () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const session = told().find((m) => m.type === "session");
+  const name = session?.type === "session" ? session.dudeWindow : undefined;
+  expect(name).toMatch(/^dude-tab-[a-z0-9]+$/);
+  expect(window.name).toBe(name!);
+  expect(overlaySessionSchema.safeParse(session).success).toBe(true);
+  // Another task's commenting in the same tab, or the page reloaded, keeps the name an open preview already holds.
+  c.dispose();
+  popup.postMessage.mockClear();
+  boot();
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  expect(told().find((m) => m.type === "session")).toMatchObject({ dudeWindow: name });
+});
+
+test("a tab named something else (by a page script, a link's target) is named anew", () => {
+  window.name = "something-else";
+  c.dispose();
+  boot();
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const session = told().find((m) => m.type === "session");
+  expect(session?.type === "session" && session.dudeWindow).toMatch(/^dude-tab-/);
+  expect(window.name).toBe((session as { dudeWindow: string }).dudeWindow);
+});
+
 test("a message from an origin that is not one of this task's previews is ignored", async () => {
   c.open(`${WEB}/cart`, "web");
   post({ type: "draft", v: 1, nonce: "n", body: "x", anchor: anchor({ url: "https://evil.example.test/cart" }) }, "https://evil.example.test");

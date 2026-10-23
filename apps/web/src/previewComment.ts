@@ -13,7 +13,7 @@
  */
 
 import {
-  FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage,
+  FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage, overlayWindowName,
   type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude, type TaskServers,
 } from "@dude/domain";
 
@@ -25,6 +25,26 @@ export const COMMENTING_UNAVAILABLE: Readonly<Record<"public_url" | "lux", strin
 
 /** How long a window dude opened has to say hello before the notice says the preview is not answering. */
 export const HELLO_WAIT_MS = 10_000;
+
+/**
+ * This tab's window name, which the overlay's Go to dude looks up: the
+ * tab's own when it is already a `dude-tab-…` (window.name outlives a
+ * reload, so a preview opened before it still finds the tab), else a new
+ * one. Chrome ignores a popup's `opener.focus()`; a named lookup inside a
+ * click brings the tab forward. A duplicated tab copies the name, but the
+ * lookup searches only the preview's own browsing context group, where the
+ * copy is not. Null when the browser refuses the name.
+ */
+export function nameTab(win: Pick<Window, "name">): string | null {
+  try {
+    if (win.name.startsWith("dude-tab-") && overlayWindowName(win.name)) return win.name;
+    const name = `dude-tab-${Math.random().toString(36).slice(2, 12)}`;
+    win.name = name;
+    return win.name === name ? name : null;
+  } catch {
+    return null;
+  }
+}
 
 /** A preview server comments can be made on now: ready, at an https URL, with the overlay. */
 export interface CommentableServer {
@@ -219,9 +239,12 @@ export class PreviewCommenting {
   readonly #answered = new Map<string, Extract<DudeToOverlay, { type: "saved" }>>();
   #timers: number[] = [];
   readonly #d: CommentingDeps;
+  // This tab's window name, sent with each session for the overlay's Go to dude.
+  readonly #tab: string | null;
 
   constructor(deps: CommentingDeps) {
     this.#d = deps;
+    this.#tab = nameTab(deps.win);
   }
 
   /** Starts hearing messages; the returned function stops. */
@@ -370,7 +393,7 @@ export class PreviewCommenting {
   #session(url: string): DudeToOverlay {
     const s = this.#d.read();
     return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins(),
-      ...(s.theme ? { theme: s.theme } : {}) };
+      ...(s.theme ? { theme: s.theme } : {}), ...(this.#tab ? { dudeWindow: this.#tab } : {}) };
   }
 
   #showPins(value?: boolean): boolean {

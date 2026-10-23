@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { DudeToOverlay, OverlayPin, OverlayTheme, OverlayToDude } from "@dude/domain/previewOverlayProtocol";
+import { OVERLAY_LIMITS } from "@dude/domain/previewOverlayProtocol";
 import { Overlay } from "../overlay.ts";
 import { PictureError } from "../picture.ts";
 
@@ -697,7 +698,7 @@ function osScheme(start: "light" | "dark" | "none") {
 }
 
 const drawn = () => q("[data-overlay]")!.getAttribute("data-theme");
-const themed = (theme?: OverlayTheme): DudeToOverlay => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, ...(theme ? { theme } : {}) });
+const themed = (theme?: OverlayTheme): Extract<DudeToOverlay, { type: "session" }> => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true, ...(theme ? { theme } : {}) });
 
 test("before dude answers it follows the OS's colour scheme, live, and dark when the OS says neither", () => {
   const os = osScheme("light");
@@ -756,4 +757,74 @@ test("a theme from another origin or another window is not heard", () => {
   fromDude(themed("light"), "https://evil.example.test");
   fromDude(themed("light"), DUDE, { postMessage() {} });
   expect(drawn()).toBe("dark");
+});
+
+/** The overlay saved a draft and shows its toast, Go to dude in it. */
+function savedToast(session: DudeToOverlay) {
+  boot();
+  fromDude(session);
+  tid("ov-comment")!.click();
+  const pay = sized(win.document.querySelector("button.pay")!);
+  hover(pay);
+  pay.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
+  const field = q("textarea") as HTMLTextAreaElement;
+  field.value = "Make it green";
+  field.dispatchEvent(new win.Event("input", { bubbles: true }));
+  return field;
+}
+
+test("Go to dude looks up dude's tab by the window name its session gave, not the opener's focus()", async () => {
+  const opens: Array<[string, string]> = [];
+  let focused = 0;
+  opener!.focus = () => { focused++; };
+  win.open = (url: string, name: string) => { opens.push([url, name]); return opener; };
+  savedToast({ ...themed(), dudeWindow: "dude-tab-abc123" });
+  await tick();
+  tid("ov-save")!.click();
+  const draft = sent().find((m) => m.type === "draft") as Extract<OverlayToDude, { type: "draft" }>;
+  fromDude({ type: "saved", v: 1, nonce: draft.nonce, id: "fbk_1", drafts: 1, picture: "attached" });
+  tid("ov-go-dude")!.click();
+  expect(opens).toEqual([["", "dude-tab-abc123"]]);
+  expect(focused).toBe(0);
+});
+
+test("from a session with no window name (an older dude), Go to dude falls back to the opener's focus()", async () => {
+  const opens: string[] = [];
+  let focused = 0;
+  opener!.focus = () => { focused++; };
+  win.open = (_: string, name: string) => { opens.push(name); return opener; };
+  savedToast(themed());
+  await tick();
+  tid("ov-save")!.click();
+  const draft = sent().find((m) => m.type === "draft") as Extract<OverlayToDude, { type: "draft" }>;
+  fromDude({ type: "saved", v: 1, nonce: draft.nonce, id: "fbk_1", drafts: 1, picture: "attached" });
+  tid("ov-go-dude")!.click();
+  expect(opens).toEqual([]);
+  expect(focused).toBe(1);
+});
+
+test("a name that finds no window opens a blank one: it is closed again and the opener's focus() is tried", async () => {
+  let focused = 0;
+  let closed = 0;
+  opener!.focus = () => { focused++; };
+  win.open = () => ({ location: { href: "about:blank" }, close: () => { closed++; } });
+  savedToast({ ...themed(), dudeWindow: "dude-tab-gone" });
+  await tick();
+  tid("ov-save")!.click();
+  const draft = sent().find((m) => m.type === "draft") as Extract<OverlayToDude, { type: "draft" }>;
+  fromDude({ type: "saved", v: 1, nonce: draft.nonce, id: "fbk_1", drafts: 1, picture: "attached" });
+  tid("ov-go-dude")!.click();
+  expect([closed, focused]).toEqual([1, 1]);
+});
+
+test("a session whose window name is not one dude gives is refused whole, before any state changes", () => {
+  osScheme("light");
+  boot();
+  for (const dudeWindow of ["_blank", "dude tab", "x".repeat(OVERLAY_LIMITS.windowName + 1), 7]) {
+    fromDude({ ...themed("dark"), dudeWindow } as never);
+    expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+    expect(drawn()).toBe("light");
+  }
+  fromDude({ ...themed("dark"), dudeWindow: "dude-tab-ok" });
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });

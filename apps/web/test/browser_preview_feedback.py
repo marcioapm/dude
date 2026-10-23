@@ -343,6 +343,39 @@ class CommentingOnAPreview(unittest.TestCase):
         self.assertEqual(ov_count(pv, "ov-pin"), 0)
         self.assertEqual(self.errors, [])
 
+    def test_go_to_dude_brings_dudes_tab_forward(self):
+        ctx, page = self.context()
+        self.watch(page)
+        comment = page.get_by_test_id("comment-on-server").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        # Playwright emulates focus for every page by default, so each says it has it: off, the browser's own focus is read.
+        for p in (page, pv):
+            ctx.new_cdp_session(p).send("Emulation.setFocusEmulationEnabled", {"enabled": False})
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        pv.bring_to_front()
+        pv.wait_for_function("() => document.hasFocus()")
+        self.assertFalse(page.evaluate("() => document.hasFocus()"))
+        dude_url = page.url
+        ov_click(pv, "ov-comment")
+        pv.hover("button.greet")
+        pv.mouse.click(*self.center(pv, "button.greet"))
+        wait_ov(pv, "ov-comment-box")
+        pv.keyboard.type("Go to dude after this.")
+        pv.keyboard.press("Control+Enter")
+        wait_ov(pv, "ov-saved")
+        pages = len(ctx.pages)
+        ov_click(pv, "ov-go-dude")
+        # dude's tab has the focus now, the preview not; nothing was opened and dude was not navigated.
+        page.wait_for_function("() => document.hasFocus()", timeout=5_000)
+        self.assertFalse(pv.evaluate("() => document.hasFocus()"))
+        self.assertEqual(len(ctx.pages), pages)
+        self.assertEqual(page.url, dude_url)
+        expect(page.get_by_test_id("fb-tray")).to_have_attribute("data-count", "1")
+        self.assertEqual(self.errors, [])
+
     def test_a_preview_opened_directly_says_to_open_it_from_dude(self):
         ctx, page = self.context()
         pv = ctx.new_page()
