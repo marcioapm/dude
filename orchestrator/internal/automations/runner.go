@@ -23,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -532,6 +533,13 @@ func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, p
 				return "", err
 			}
 		}
+	}
+	if a.Kind == "agent" && r.Agent.ToolsURL != "" {
+		token, err := r.toolsToken(ctx, a, runID, payloads)
+		if err != nil {
+			return "", err
+		}
+		in.Secrets = append(in.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + token})
 	}
 	if _, err := r.Lux.Resume(ctx, kept, in); err != nil {
 		return "", err
@@ -1174,6 +1182,60 @@ func eventEnv(payloads []Payload, a Automation, runID string) map[string]string 
 	return env
 }
 
+func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, payloads []Payload) (string, error) {
+	token, hash := agenttools.RunToken(r.Agent.ToolsKey, runID, 0)
+	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		scope := agenttools.AutomationScope{ProjectID: a.ProjectID, OwnerID: a.OwnerID, Repos: []string{}}
+		rows, err := tx.Query(ctx, `SELECT project_id, url FROM repositories WHERE ($1 = '' OR project_id=$1) ORDER BY project_id, id`, a.ProjectID)
+		if err != nil {
+			return err
+		}
+		type coveredRepo struct{ Project, URL string }
+		repos, err := pgx.CollectRows(rows, pgx.RowToStructByPos[coveredRepo])
+		if err != nil {
+			return err
+		}
+		for _, repo := range repos {
+			if slug := slugOf(repo.URL); slug != "" && RepoAllowed(a.RepoFilter, slug) {
+				scope.Repos = append(scope.Repos, slug)
+			}
+		}
+		if len(payloads) > 0 {
+			var event struct {
+				Repository struct {
+					FullName string `json:"full_name"`
+				} `json:"repository"`
+				Number int `json:"number"`
+				Issue  struct {
+					Number int `json:"number"`
+				} `json:"issue"`
+				PullRequest struct {
+					Number int `json:"number"`
+				} `json:"pull_request"`
+			}
+			_ = json.Unmarshal(payloads[len(payloads)-1].Body, &event)
+			scope.EventRepo, scope.EventNumber = event.Repository.FullName, event.Number
+			if event.Issue.Number > 0 {
+				scope.EventNumber = event.Issue.Number
+			}
+			if event.PullRequest.Number > 0 {
+				scope.EventNumber = event.PullRequest.Number
+			}
+			if scope.ProjectID == "" {
+				for _, repo := range repos {
+					if strings.EqualFold(slugOf(repo.URL), scope.EventRepo) && RepoAllowed(a.RepoFilter, scope.EventRepo) {
+						scope.ProjectID = repo.Project
+						break
+					}
+				}
+			}
+		}
+		_, err = tx.Exec(ctx, `UPDATE automation_runs SET mcp_token_hash=$2, tools_scope=$3 WHERE id=$1 AND status IN ('queued', 'running')`, runID, hash, scope)
+		return err
+	})
+	return token, err
+}
+
 // spec builds a run's lux spec; why is the reason it cannot run, in words.
 func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads []Payload, at *time.Time) (lux.Spec, string, error) {
 	in := phases.AutomationSpecInput{OrganizationID: a.Org, AutomationID: a.ID, RunID: runID, Kind: a.Kind}
@@ -1293,6 +1355,11 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 			return lux.Spec{}, "", err
 		}
 		in.Prompt = prompt
+		if r.Agent.ToolsURL != "" {
+			if in.ToolsToken, err = r.toolsToken(ctx, a, runID, payloads); err != nil {
+				return lux.Spec{}, "", err
+			}
+		}
 	case "command":
 		in.Command = a.Command
 	case "server":

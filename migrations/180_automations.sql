@@ -90,6 +90,8 @@ CREATE TABLE automation_runs (
   -- no task or session, which every reader of runs assumes; it is followed
   -- here, by the orchestrator's automations loop.
   lux_run_id           text,
+  mcp_token_hash       text,
+  tools_scope          jsonb NOT NULL DEFAULT '{}'::jsonb,
   -- Where reading its output got to (lux's cursor), and whether its agent
   -- was seen at work: idle after busy is its turn done.
   lux_cursor           text,
@@ -116,6 +118,21 @@ CREATE TABLE automation_runs (
 );
 CREATE INDEX automation_runs_automation_idx ON automation_runs (automation_id, created_at DESC);
 CREATE INDEX automation_runs_open_idx ON automation_runs (created_at) WHERE status IN ('queued', 'running');
+CREATE UNIQUE INDEX automation_runs_token_idx ON automation_runs (mcp_token_hash) WHERE mcp_token_hash IS NOT NULL;
+
+CREATE FUNCTION lookup_automation_by_mcp_token(p_hash text)
+RETURNS TABLE (run_id text, organization_id text, automation_id text, status text, scope jsonb)
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_temp AS $$
+  SELECT r.id, r.organization_id, r.automation_id, r.status, r.tools_scope
+  FROM automation_runs r JOIN automations a ON a.id = r.automation_id
+  WHERE r.mcp_token_hash = p_hash AND a.kind = 'agent'
+    AND r.status IN ('queued', 'running') AND r.ended_at IS NULL
+$$;
+REVOKE ALL ON FUNCTION lookup_automation_by_mcp_token(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION lookup_automation_by_mcp_token(text) TO dude_app;
+
+ALTER TABLE tasks ADD COLUMN created_by_automation_run_id text REFERENCES automation_runs(id) ON DELETE SET NULL;
 
 -- The kept session of a resumable automation: one per automation, resumed
 -- by every firing until expiry_days pass without a run (Off does not stop

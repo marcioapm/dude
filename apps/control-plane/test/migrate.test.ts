@@ -1109,7 +1109,12 @@ test("180 adds automations: expiry 1..30 on resumable only, repo filter on org o
     expect(await add({ concurrency: "send", session_mode: "resumable", expiry_days: 3 })).toBe("inserted");
 
     // A run of a deleted automation goes with it.
-    await sql`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_1', 'org_au', 'aut_1', 'queued', 'schedule')`;
+    await sql`INSERT INTO automation_runs (id, organization_id, automation_id, status, source, mcp_token_hash, tools_scope)
+      VALUES ('arn_1', 'org_au', 'aut_1', 'queued', 'schedule', 'automation-hash', '{"repos":["acme/web"]}')`;
+    expect([...await sql`SELECT run_id, organization_id, automation_id FROM lookup_automation_by_mcp_token('automation-hash')`])
+      .toEqual([{ run_id: 'arn_1', organization_id: 'org_au', automation_id: 'aut_1' }]);
+    await sql`UPDATE automation_runs SET status = 'succeeded' WHERE id = 'arn_1'`;
+    expect([...await sql`SELECT run_id FROM lookup_automation_by_mcp_token('automation-hash')`]).toEqual([]);
     await sql`DELETE FROM automations WHERE id = 'aut_1'`;
     expect([...await sql`SELECT count(*)::int AS n FROM automation_runs`]).toEqual([{ n: 0 }]);
   } finally {

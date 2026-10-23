@@ -3,7 +3,7 @@ package phases
 // An automation's lux Run (internal/automations): an agent, or a container
 // running a command or a server. Built here so it shares the phase Runs'
 // harness workloads, network, checkouts, setup and credentials; it has no
-// task, no session, and none of dude's tools.
+// task or session; agent tools are scoped to the automation firing.
 
 import (
 	"context"
@@ -30,6 +30,7 @@ type AutomationSpecInput struct {
 	Options                                 map[string]any
 	Headers                                 map[string]string
 	Prompt                                  string
+	ToolsToken                              string
 	// A command's or server's shell line, and the server's port.
 	Command string
 	Port    int
@@ -58,7 +59,7 @@ func AutomationSpec(ctx context.Context, c AgentConfig, reg registry.Provider, g
 	if in.Kind == "agent" {
 		si := specInput{RunID: in.RunID, OrganizationID: in.OrganizationID, Role: in.Role, Phase: "automation",
 			Image: in.Image, NestedContainers: in.Nested, Model: in.Model, ModelTier: in.ModelTier, Effort: in.Effort,
-			Options: in.Options, Headers: in.Headers, Harness: in.Harness, Prompt: in.Prompt, Machine: in.Machine, Egress: in.Egress}
+			Options: in.Options, Headers: in.Headers, Harness: in.Harness, Prompt: in.Prompt, ToolsToken: in.ToolsToken, Machine: in.Machine, Egress: in.Egress}
 		for _, r := range in.Repos {
 			si.Repos = append(si.Repos, specRepo{Name: r.Name, URL: r.URL, Ref: r.Ref, ReadOnly: true, Setup: r.Setup})
 		}

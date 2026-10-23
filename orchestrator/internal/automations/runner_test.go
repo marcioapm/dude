@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -132,6 +133,61 @@ func (h *harness) luxState(id string) string {
 		h.t.Fatal(err)
 	}
 	return got.State
+}
+
+func TestAutomationIssuesStableScopedToken(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Agent.ToolsURL = "https://example.com/agent-tools"
+	h.runner.Agent.ToolsKey = []byte("automation-test-key")
+	h.automation("aut_token", "agent", map[string]any{"kind": "github", "event": "pull_request"}, map[string]any{"project_id": nil, "agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Triage"}}})
+	body, _ := json.Marshal(prBody("opened", "acme/web", "ana"))
+	payloads := []Payload{{Event: "pull_request", Body: body}}
+	ctx := context.Background()
+	var a Automation
+	var id string
+	if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) (err error) {
+		a, err = Load(ctx, tx, "aut_token")
+		if err != nil {
+			return err
+		}
+		id, err = Fire(ctx, tx, a, SourceEvent, payloads, "", nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	spec, why, err := h.runner.spec(ctx, a, id, payloads, nil)
+	if err != nil || why != "" {
+		t.Fatalf("spec: %s %v", why, err)
+	}
+	if len(spec.Workload.MCPServers) != 1 {
+		t.Fatalf("MCP servers: %v", spec.Workload.MCPServers)
+	}
+	token, hash := agenttools.RunToken(h.runner.Agent.ToolsKey, id, 0)
+	found := false
+	for _, secret := range spec.Secrets {
+		if secret.Name == "DUDE_TOOLS_AUTH" && secret.Value == "Bearer "+token {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("tools token missing from spec")
+	}
+	retry, err := h.runner.toolsToken(ctx, a, id, payloads)
+	if err != nil || retry != token {
+		t.Fatalf("retry: %v", err)
+	}
+	var stored string
+	var scope agenttools.AutomationScope
+	if err := h.owner.QueryRow(ctx, `SELECT mcp_token_hash,tools_scope FROM automation_runs WHERE id=$1`, id).Scan(&stored, &scope); err != nil {
+		t.Fatal(err)
+	}
+	if stored != hash || scope.ProjectID != h.project || scope.OwnerID != h.person || len(scope.Repos) != 1 || scope.Repos[0] != "acme/web" || scope.EventNumber != 7 {
+		t.Fatalf("scope: %+v hash matches: %v", scope, stored == hash)
+	}
+	var runs int
+	if err := h.owner.QueryRow(ctx, `SELECT count(*) FROM runs`).Scan(&runs); err != nil || runs != 0 {
+		t.Fatalf("task runs: %d %v", runs, err)
+	}
 }
 
 // An agent on a GitHub event, resumable: the first matching delivery
