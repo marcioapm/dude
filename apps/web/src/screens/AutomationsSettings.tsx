@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Breadcrumb,
   ChipsInput,
   KindMark,
   ListSwitch,
@@ -46,7 +47,11 @@ import {
   RowMenu,
   Select,
   Spinner,
+  Tab,
+  TabList,
+  TabPanel,
   Table,
+  Tabs,
   TBody,
   Td,
   Th,
@@ -353,7 +358,14 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
   const canRun = a.canEdit || a.canTransfer;
   return (
     <div className="settingsPage" data-testid="automation-page" data-id={a.id}>
-      <TextButton onClick={onBack} data-testid="automations-back">Automations</TextButton>
+      <Breadcrumb size="sm" data-testid="automation-breadcrumb" items={[
+        { id: "automations", label: "Automations", onSelect: onBack },
+        ...(tab === "runs" && place.runId
+          ? [{ id: "name", label: a.name, onSelect: () => onPlace({ id: a.id }) },
+             { id: "runs", label: "Runs", onSelect: () => onPlace({ id: a.id, tab: "runs" }) },
+             { id: "run", label: "Run", mono: true }]
+          : [{ id: "name", label: a.name }]),
+      ]} />
       <SettingsHeader title={a.name}
         description={<span className="automationKind"><KindMark kind={a.kind} role={roleOf(a)} /><TriggerSummary trigger={a.trigger} /></span>}
         actions={<>
@@ -383,15 +395,19 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
         </Callout>
       ) : null}
       {problem || runNow.problem || duplicate.problem ? <Callout tone="danger">{problem ?? runNow.problem ?? duplicate.problem}</Callout> : null}
-      <Segmented<"settings" | "runs"> label="Automation" tabs="automation" value={tab} onChange={(t) => onPlace({ id: a.id, tab: t })}
-        options={[{ value: "settings", label: "Settings" }, { value: "runs", label: "Runs" }]} />
-      {tab === "settings" ? (
-        <AutomationSettings client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} />
-      ) : place.runId ? (
-        <RunDetail client={client} a={a} runId={place.runId} onBack={() => onPlace({ id: a.id, tab: "runs" })} />
-      ) : (
-        <RunsTab client={client} a={a} onOpenRun={(runId) => onPlace({ id: a.id, tab: "runs", runId })} />
-      )}
+      <Tabs value={tab} onValueChange={(t) => onPlace({ id: a.id, tab: t as "settings" | "runs" })}>
+        <TabList aria-label="Automation">
+          <Tab value="settings">Settings</Tab>
+          <Tab value="runs">Runs</Tab>
+        </TabList>
+        <TabPanel value="settings">
+          <AutomationSettings client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} />
+        </TabPanel>
+        <TabPanel value="runs">
+          {place.runId ? <RunDetail client={client} a={a} runId={place.runId} />
+            : <RunsTab client={client} a={a} onOpenRun={(runId) => onPlace({ id: a.id, tab: "runs", runId })} />}
+        </TabPanel>
+      </Tabs>
       {running ? <RunNowDialog client={client} a={a} onClose={() => setRunning(false)}
         onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
       {transferring ? <TransferDialog client={client} a={a} orgName={orgName} people={people} onClose={() => setTransferring(false)}
@@ -442,7 +458,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
     onSaved(await client.updateAutomation(a.id, next));
   };
   return (
-    <form onSubmit={(e) => { e.preventDefault(); void save(() => client.updateAutomation(a.id, form).then(onSaved), undefined, "Automation saved"); }}>
+    <form className="settingsForm" onSubmit={(e) => { e.preventDefault(); void save(() => client.updateAutomation(a.id, form).then(onSaved), undefined, "Automation saved"); }}>
       <fieldset disabled={ro} className="plainFieldset">
         <SettingsSection title="Trigger">
           <SettingRow label="Runs on">
@@ -860,15 +876,15 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
   );
 }
 
-function RunDetail({ client, a, runId, onBack }: { client: ApiClient; a: Automation; runId: string; onBack: () => void }) {
+function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; runId: string }) {
   const [run, setRun] = useState<AutomationRunDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
   if (!run) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
   return (
     <div data-testid="run-detail">
-      <TextButton onClick={onBack}>Runs</TextButton>
-      <SettingsSection title={<span><RunStatus status={run.status} /> {ago(run.createdAt)}</span>}>
+      <SettingsSection title="Run">
+        <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span></p>
         {run.reason ? <SettingsNote>{run.reason}</SettingsNote> : null}
         {a.kind === "server" && run.containerStartedAt ? (
           <ol className="automationTimeline" data-testid="server-timeline">
@@ -1041,7 +1057,7 @@ function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a:
             <Textarea aria-label="Event body" className="ds-mono" rows={14} value={text} onChange={(e) => setText(e.target.value)} data-testid="test-editor" />
             <TextButton onClick={() => setText(JSON.stringify(testTemplate(trigger.event, action), null, 2))} data-testid="reset-template">Reset to template</TextButton>
             <span data-testid="test-checks" role="status">
-              {json.ok ? (objectBody ? "Valid JSON." : "The body is a JSON object.") : `Not valid JSON, line ${json.line}, column ${json.column}: ${json.message}`}
+              {json.ok ? (objectBody ? "Valid JSON." : "The body must be a JSON object.") : `Not valid JSON, line ${json.line}, column ${json.column}: ${json.message}`}
               {" "}
               {!objectBody ? "Filters are checked once the JSON is valid."
                 : !verdict ? "Checking the filters…"

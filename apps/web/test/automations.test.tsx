@@ -92,6 +92,25 @@ describe("a project's list", () => {
 });
 
 describe("an automation's page", () => {
+  test("a DS breadcrumb back to the list, underline tabs, and sections spaced by the settings form", async () => {
+    const back: string[] = [];
+    const places: AutomationsPlace[] = [];
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage", tab: "runs", runId: "arn_x" }}
+      onPlace={(p) => places.push(p)} onBack={() => back.push("list")} />);
+    const crumbs = await until(() => c.querySelector<HTMLElement>("nav[aria-label=Breadcrumb]"), "the breadcrumb");
+    expect([...crumbs.querySelectorAll("li:not([aria-hidden])")].map((li) => li.textContent)).toEqual(["Automations", "PR triage", "Runs", "Run"]);
+    await click([...crumbs.querySelectorAll("button")].find((b) => b.textContent === "Automations")!);
+    expect(back).toEqual(["list"]);
+    const tabs = [...c.querySelectorAll("[role=tablist][aria-label=Automation] [role=tab]")].map((t) => [t.textContent, t.getAttribute("aria-selected")]);
+    expect(tabs).toEqual([["Settings", "false"], ["Runs", "true"]]);
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const s = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const form = await until(() => s.querySelector("form"), "the settings form");
+    expect(form.classList.contains("settingsForm")).toBe(true);
+  });
+
   test("an owner who left: the attention callout, Transfer, and the admins as owner", async () => {
     const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_cost" }}
       onPlace={() => undefined} onBack={() => undefined} />);
