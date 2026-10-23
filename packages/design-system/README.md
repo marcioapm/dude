@@ -2821,9 +2821,9 @@ densities. No tone of their own: an automation's state is its runs'
 - **KindMark** (`kind`, `role?`): the kind as glyph and word (Agent,
   Command, Server, Webhook only); an agent that is one of dude's roles adds
   "· Tester" in muted text.
-- **ScopeChip** (`org`, `project?`): where an automation lives, a building
-  glyph for the organisation or a folder and the project's name, on the
-  neutral tint at the chip height.
+- **ScopeChip** (`org`, `project?`, `projectId?`): where an automation lives:
+  "Organisation" with a building glyph on the info tint, or the project's
+  `ProjectAvatar` and name on the neutral tint, at the chip height.
 - **OwnerMark** (`owner`, `org`, `avatarOnly?`, `left?`): who owns an
   automation — `PersonAvatar` and name, or only the avatar with the name for
   screen readers (list cells). `left` (or no owner): the organisation's
@@ -2835,18 +2835,21 @@ densities. No tone of their own: an automation's state is its runs'
 - **SessionMark** (`mode`, `expiryDays?`): Ephemeral, or Resumable and its
   expiry in days.
 - **ListSwitch** (`checked`, `onCheckedChange`, `label`): the settings
-  `Switch`'s track and thumb with no words beside it, for a list row. Its
-  accessible name is "<label>: on/off"; a press does not open the row.
+  `Switch`'s track and thumb (its very classes) with no words beside it, for
+  a list row. Its accessible name is "<label>: on/off"; a press does not
+  open the row.
 - **NextRuns** (`times`, `tz`): the next runs as a list of `time`s in the
   schedule's zone; none says it never runs.
 - **DayToggles** (`days`, `onChange`): seven pressed/unpressed buttons,
   Monday first; the last one on cannot be turned off.
 - **SchedulePicker** (`cron`, `tz`, `zones`, `onChange`, `next?`,
-  `problem?`): a `Segmented` Minutes / Hourly / Daily / Weekly / cron, the
-  mode's fields (every N minutes, minute of the hour, time, days, or the
-  cron line in mono), and the time zone. `next` is shown under it (the
-  app's `NextRuns`, from the orchestrator's parser); `problem` is an alert
-  line in danger text, and marks the cron field invalid.
+  `problem?`, `zoneSource?`): a `Segmented` Minutes / Hourly / Daily /
+  Weekly / cron, the mode's fields in the DS `Select`, `NumberInput` and
+  `Input` (every N minutes, minute of the hour, a 24-hour `HH:MM` time, days,
+  or the cron line in mono), and the time zone (`zoneSource` says whose it
+  is). Under it, "As cron … · Advanced: write a cron expression". `next` is
+  shown under that (the app's `NextRuns`, from the orchestrator's parser);
+  `problem` is an alert line in danger text, and marks the cron field invalid.
 - **ChipsInput** (`values`, `onChange`, `label`, `matches?`,
   `suggestions?`): filter values as chips in a field box. Enter or comma
   adds, Backspace in an empty field takes the last back, each chip has a

@@ -364,7 +364,7 @@ describe("secrets and webhook wording", () => {
     const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
       onPlace={() => undefined} onBack={() => undefined} />);
     await until(() => c.querySelector("[data-testid=owner-row]"), "the page");
-    expect(c.textContent).toContain("secrets belong to a project");
+    expect(c.textContent).toContain("Secrets belong to a project, so an organisation automation is given none. Make it a project's automation to use that project's secrets.");
     expect(c.querySelectorAll("[role=group][aria-label='Project secrets']").length).toBe(0);
   });
 

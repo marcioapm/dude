@@ -22,6 +22,7 @@ import {
   repoGlob,
   SchedulePicker,
   scheduleOf,
+  ScopeChip,
   TriggerSummary,
 } from "../src/components/Automations.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
@@ -153,6 +154,15 @@ describe("marks", () => {
 });
 
 describe("SchedulePicker and NextRuns", () => {
+  test("a scope chip says Organisation for the org's, and a project's name beside its avatar", () => {
+    const org = renderToStaticMarkup(<ScopeChip org="Acme" />);
+    expect(org).toContain('data-scope="organization"');
+    expect(org).toContain(">Organisation<");
+    const project = renderToStaticMarkup(<ScopeChip org="Acme" project="web" projectId="prj_web" />);
+    expect(project).toContain('data-scope="project"');
+    expect(project).toContain(">web<");
+    expect(project).toContain('role="img"');
+  });
   async function typeTime(input: HTMLInputElement, text: string) {
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);

@@ -628,6 +628,17 @@ body {
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
+/* A preset's inherited value: read-only, in a dashed field's box. */
+.automationValueBox {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ds-size-control-md);
+  padding: 0 var(--ds-space-8);
+  border: 1px dashed var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
 .automationTimeline {
   display: flex;
   flex-direction: column;

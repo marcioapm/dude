@@ -288,7 +288,7 @@ function AutomationTable({ rows, orgName, onOpen, onToggle, showScope }: {
             <Td wrap>
               <span className="automationName">
                 <TextButton onClick={(e) => { e.stopPropagation(); onOpen(a.id); }}>{a.name}</TextButton>
-                {showScope ? <ScopeChip org={orgName} project={a.projectName} /> : null}
+                {showScope ? <ScopeChip org={orgName} project={a.projectName} projectId={a.projectId} /> : null}
               </span>
             </Td>
             <Td><span className="automationKind" data-stack="true"><KindMark kind={a.kind} role={roleOf(a)} /><SessionMark mode={a.sessionMode} expiryDays={a.expiryDays} /></span></Td>
@@ -895,7 +895,7 @@ function PresetFields({ client, a, orgName, ro, role, overrides, onChange }: {
               : <SettingSource source="organization" from={from} />}>
             {set ? control(k) : (
               <>
-                <span className="automationFact" data-testid={`preset-${k}-value`}>{resolved[k]}</span>
+                <span className="automationValueBox" data-testid={`preset-${k}-value`}>{resolved[k]}</span>
                 {ro || first[k] === undefined ? null : <TextButton data-testid={`preset-${k}-override`} onClick={() => setOne(k, first[k])}>Override for this automation</TextButton>}
               </>
             )}

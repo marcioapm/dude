@@ -349,7 +349,7 @@ export type AutomationInput = z.infer<typeof baseSchema>;
 
 /** Why an organisation automation names no secrets: they are each project's own. */
 export const ORG_AUTOMATION_SECRETS =
-  "secrets belong to a project, so an organisation automation is given none; make it a project's automation to use that project's secrets";
+  "Secrets belong to a project, so an organisation automation is given none. Make it a project's automation to use that project's secrets.";
 
 /** What a Webhook or Server automation does when a POST gets a 5xx or no answer. */
 export const AUTOMATION_POST_RETRY = "A 5xx or no answer within 30 s is retried once; then the run fails and its owner is told.";

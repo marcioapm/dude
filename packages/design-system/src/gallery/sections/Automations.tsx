@@ -80,6 +80,8 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <SessionMark mode="resumable" expiryDays={7} />
             <Label>On / off</Label>
             <SwitchDemo />
+            <ListSwitch checked={false} onCheckedChange={() => undefined} label="Nightly audit" />
+            <ListSwitch checked onCheckedChange={() => undefined} label="Release notes" disabled />
           </Col>
         </Panes>
       </Block>
@@ -99,6 +101,11 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <ScheduleDemo initial="0 3 * * *" />
             <ScheduleDemo initial="30 9 * * 1,3,5" />
             <ScheduleDemo initial="0 */6 1 * *" />
+            <Label>A cron line that does not parse</Label>
+            <SchedulePicker cron="0 3 * *" tz="UTC" zones={ZONES} onChange={() => undefined}
+              problem="a schedule is five fields: minute hour day-of-month month day-of-week" />
+            <Label>No date matches</Label>
+            <NextRuns times={[]} tz="UTC" />
             <Label>Days alone</Label>
             <DaysDemo />
           </Col>
@@ -109,6 +116,9 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
           <Col>
             <SettingRow label="Branch" help="Globs. Any one of them.">
               <ChipsDemo />
+            </SettingRow>
+            <SettingRow label="Author" help="Disabled: read-only to a member.">
+              <ChipsInput label="Author" values={["!dependabot[bot]"]} onChange={() => undefined} disabled />
             </SettingRow>
           </Col>
         </Panes>

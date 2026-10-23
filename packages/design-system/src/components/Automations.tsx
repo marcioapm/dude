@@ -2,12 +2,15 @@ import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } 
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { PersonAvatar } from "./PersonAvatar.tsx";
+import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { Input } from "../primitives/Input.tsx";
 import { NumberInput } from "../primitives/NumberInput.tsx";
 import { Select } from "../primitives/Select.tsx";
 import type { Person } from "../util/viewTypes.ts";
 import styles from "./Automations.module.css";
+// ListSwitch is the settings Switch without its label row: one look, one stylesheet.
+import settingsStyles from "./Settings.module.css";
 
 /*
  * Automations: work nobody started by hand, on a schedule or a GitHub
@@ -37,11 +40,23 @@ export function KindMark({ kind, role }: { readonly kind: AutomationKindName; re
 }
 
 /** Where an automation lives: the organisation (building glyph) or a project, by name. */
-export function ScopeChip({ project, org }: { readonly project?: string | null | undefined; readonly org: string }) {
+export function ScopeChip({ project, projectId, org }: {
+  readonly project?: string | null | undefined;
+  readonly projectId?: string | null | undefined;
+  readonly org: string;
+}) {
+  if (!project) {
+    return (
+      <span className={styles["scope"]} data-scope="organization" title={org}>
+        <Icon name="building" size={12} className={styles["scopeIcon"]} />
+        <span className={styles["scopeName"]}>Organisation</span>
+      </span>
+    );
+  }
   return (
-    <span className={styles["scope"]} data-scope={project ? "project" : "organization"}>
-      <Icon name={project ? "folder" : "building"} size={12} className={styles["scopeIcon"]} />
-      <span className={styles["scopeName"]}>{project ?? org}</span>
+    <span className={styles["scope"]} data-scope="project">
+      <ProjectAvatar project={{ id: projectId ?? project, name: project }} size={16} aria-hidden />
+      <span className={styles["scopeName"]}>{project}</span>
     </span>
   );
 }
@@ -153,9 +168,9 @@ export function ListSwitch({ checked, onCheckedChange, label, disabled, testId }
 }) {
   return (
     <button type="button" role="switch" aria-checked={checked} disabled={disabled} data-testid={testId}
-      aria-label={`${label}: ${checked ? "on" : "off"}`} className={cx(styles["listSwitch"], checked && styles["listSwitchOn"])}
+      aria-label={`${label}: ${checked ? "on" : "off"}`} className={cx(settingsStyles["switch"], checked && settingsStyles["switchOn"])}
       onClick={(e) => { e.stopPropagation(); onCheckedChange(!checked); }}>
-      <span className={styles["listThumb"]} />
+      <span className={settingsStyles["switchThumb"]} />
     </button>
   );
 }
