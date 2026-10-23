@@ -386,3 +386,19 @@ func cleanLogLine(line []byte) string {
 	line = ansiEscape.ReplaceAll(line, nil)
 	return strings.ToValidUTF8(string(line), "\uFFFD")
 }
+
+// CleanLog is text as cleanLogLine leaves each of its lines, without the
+// other control characters (NUL, BEL…) a terminal would not show: what is
+// written into a fixer's workspace as a file.
+func CleanLog(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.Map(func(r rune) rune {
+			if r < 0x20 && r != '\t' || r == 0x7f {
+				return -1
+			}
+			return r
+		}, cleanLogLine([]byte(line)))
+	}
+	return strings.Join(lines, "\n")
+}

@@ -3997,6 +3997,51 @@ func TestAFixerIsToldGitHubWasUnavailableForAJobsLog(t *testing.T) {
 	}
 }
 
+// (e) A fix Run's spec writes the end of its failing check's job log, up
+// to 64 KiB and cleaned, to /workspace/.dude/checks/<repo>-<check>.log; the
+// prompt keeps a 4000-byte excerpt, quoted as external text, and names the
+// file.
+func TestAFixRunsWorkspaceHoldsItsChecksLog(t *testing.T) {
+	var log strings.Builder
+	for i := 0; log.Len() < 200<<10; i++ {
+		fmt.Fprintf(&log, "2026-10-23T09:12:01.123Z \x1b[32mtests/test_%d.py PASSED\x1b[0m\n", i)
+	}
+	log.WriteString("2026-10-23T09:12:02.123Z E       AssertionError: 3 != 2\n" +
+		"2026-10-23T09:12:03.123Z ##[error]Process completed with exit code 1.\n2026-10-23T09:12:04.123Z Post job cleanup.\n")
+	w := newWorld(t)
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), log.String(), nil)
+	if len(c.Log) > 4000+len("…\n") || !strings.HasSuffix(c.Log, "##[error]Process completed with exit code 1.") {
+		t.Errorf("the prompt's excerpt is %d bytes:\n%s", len(c.Log), c.Log)
+	}
+	var spec lux.Spec
+	for _, r := range w.lux.Runs() {
+		var s lux.Spec
+		_ = json.Unmarshal(r.Spec, &s)
+		if s.Labels["dude.phase"] == "fix" && s.Workload.Prompt == prompt {
+			spec = s
+		}
+	}
+	if spec.Init == nil {
+		t.Fatal("the fix's spec has no init")
+	}
+	dir := t.TempDir()
+	if out, err := exec.Command("/bin/sh", "-c", strings.ReplaceAll(spec.Init.Script, "/workspace/", dir+"/")).CombinedOutput(); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, ".dude", "checks", "target-e2e.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > 64<<10 || len(got) < 60<<10 || !strings.HasSuffix(string(got), "E       AssertionError: 3 != 2\n##[error]Process completed with exit code 1.\n") ||
+		!strings.HasPrefix(string(got), "tests/test_") || strings.ContainsAny(string(got), "\x1b") || strings.Contains(string(got), "2026-10-23T") {
+		t.Errorf("the log file is %d bytes, starting %q, ending %q", len(got), got[:min(80, len(got))], got[max(0, len(got)-120):])
+	}
+	if !strings.Contains(prompt, "The last 64 KiB of this job's log is at `/workspace/.dude/checks/target-e2e.log`: read it") ||
+		!strings.Contains(prompt, "⟦external ") || strings.Contains(prompt, "tests/test_0.py") {
+		t.Errorf("the prompt:\n%s", prompt)
+	}
+}
+
 // An approved pull request with a thread left unresolved is not ready.
 func TestUnresolvedThreadsHoldReadinessBack(t *testing.T) {
 	w := newWorld(t)

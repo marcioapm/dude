@@ -1645,7 +1645,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A resume sends no prompt: only a submit's says where it runs.
 		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI && !promptIn.Child)
 	}
-	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if stored == nil {
 		// Pinned to the Run: lux keeps the submitted spec, and its init,
 		// for every placement; a resume sends none.
@@ -1656,7 +1655,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		instructions := instructionsIn.InstructionsInput()
 		instructions.Grants = &grants
 		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructions)
+		// The failing checks' log files go in the init beside the
+		// instruction file, in what room it leaves; the prompt names them.
+		promptIn.PRFeedback, in.CheckLogs = checkLogsInit(workspaceDir, promptIn.PRFeedback, initRoom(s.Agent, in))
 	}
+	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
 		// the machine's paragraph as a phase's does.
