@@ -255,6 +255,25 @@ func TestACarriedCriterionWhoseTextChangedIsBlocked(t *testing.T) {
 	}
 }
 
+// A task without criteria has the tester's derived checks, named by their
+// `check` line: a carry that repeats it keeps the pass, and one that omits
+// it is a check dude cannot match to the one judged, so it is blocked.
+func TestACarriedDerivedCheckNeedsItsCheckLine(t *testing.T) {
+	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
+		1: {Criterion: 1, Text: "The page loads", Status: VerdictPass, Evidence: []string{"load.png"}},
+	}}
+	carry := "criterion: 1\nstatus: carried\nfrom_round: run_prev\nobserved: Only CI changed.\n"
+	got := JudgeAcceptance(nil, ParseAcceptance("check: The page loads\n"+carry), nil, prev)
+	if len(got) != 1 || got[0].Status != VerdictPass || got[0].CarriedFrom != "run_prev" || got[0].Text != "The page loads" {
+		t.Errorf("a derived check carried with its check line = %+v, want the pass from run_prev", got)
+	}
+	got = JudgeAcceptance(nil, ParseAcceptance(carry), nil, prev)
+	if len(got) != 1 || got[0].Status != VerdictBlocked || got[0].CarriedFrom != "" ||
+		got[0].Problem != "Carried, but criterion 1 changed since run_prev judged it: it must be tested again." {
+		t.Errorf("a derived check carried without its check line = %+v, want blocked as changed", got)
+	}
+}
+
 // A not-applicable verdict carries as a pass does, with the reason it was
 // not applicable, not the tester's reason for carrying it.
 func TestACarriedNotApplicableKeepsItsReason(t *testing.T) {

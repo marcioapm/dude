@@ -125,7 +125,7 @@ func TestAResumedTesterIsToldWhatItMayCarry(t *testing.T) {
 			round = input
 		}
 	}
-	for _, want := range []string{"decide which criteria it can affect", "status: carried", "from_round: " + tests[0], "When in doubt, test it again."} {
+	for _, want := range []string{"decide which criteria it can affect", "status: carried", "from_round: " + tests[0], "When in doubt, test it again.", "repeat its `check` line exactly as before"} {
 		if !strings.Contains(round, want) {
 			t.Errorf("the round message lacks %q:\n%s", want, round)
 		}
