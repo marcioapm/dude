@@ -156,7 +156,7 @@ func carryFrom(in PhaseRun, predecessor string) string {
 
 // RetestsAfreshTx says test Run runID starts afresh after an earlier
 // test round of its attempt: it resumed none (a large change, a replay),
-// so it tests every criterion and may carry none (FreshRetest).
+// so it tests every criterion and may carry none (PromptInput.RetestsAfresh).
 func RetestsAfreshTx(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
 	var fresh bool
 	err := tx.QueryRow(ctx, `SELECT r.phase = 'test' AND r.continues_how IS DISTINCT FROM 'resume' AND EXISTS (
