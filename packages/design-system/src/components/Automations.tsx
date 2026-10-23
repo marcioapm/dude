@@ -99,20 +99,13 @@ export function TriggerSummary({ trigger, wrap }: {
     | { readonly kind: "github"; readonly event: string; readonly actions?: readonly string[] | undefined };
   readonly wrap?: boolean | undefined;
 }) {
-  if (trigger.kind === "schedule") {
-    return (
-      <span className={cx(styles["trigger"], wrap && styles["triggerWrap"])}>
-        <Icon name="clock" size={14} className={styles["kindIcon"]} />
-        <span>{describeCron(trigger.cron)}</span>
-        <span className={styles["muted"]}>· {cityOf(trigger.tz)}</span>
-      </span>
-    );
-  }
+  const schedule = trigger.kind === "schedule";
+  const glyph = <Icon name={schedule ? "clock" : "github"} size={14} className={styles["kindIcon"]} />;
+  const first = schedule ? <span>{describeCron(trigger.cron)}</span> : <span className="ds-mono">{trigger.event}</span>;
   return (
     <span className={cx(styles["trigger"], wrap && styles["triggerWrap"])}>
-      <Icon name="github" size={14} className={styles["kindIcon"]} />
-      <span className="ds-mono">{trigger.event}</span>
-      <span className={styles["muted"]}>· {trigger.actions?.length ? trigger.actions.join(", ") : "any action"}</span>
+      {wrap ? <span className={styles["triggerLead"]}>{glyph}{first}</span> : <>{glyph}{first}</>}
+      <span className={styles["muted"]}>· {schedule ? cityOf(trigger.tz) : trigger.actions?.length ? trigger.actions.join(", ") : "any action"}</span>
     </span>
   );
 }

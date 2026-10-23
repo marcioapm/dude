@@ -44,7 +44,11 @@
   display: inline;
   white-space: normal;
 }
-.triggerWrap > .kindIcon {
+/* The glyph and the first word: the line never breaks between them. */
+.triggerLead {
+  white-space: nowrap;
+}
+.triggerLead > .kindIcon {
   display: inline-block;
   vertical-align: -2px;
   margin-inline-end: var(--ds-space-6);
