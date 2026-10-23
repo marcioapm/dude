@@ -229,26 +229,34 @@ func (s *Server) inWorkspace(run *Run, args []string) []string {
 func rewriteWorkspace(text, dir string, hostDirs []string) string {
 	var b strings.Builder
 	for i := 0; i < len(text); {
-		end := i + len(workspaceRoot)
-		if !strings.HasPrefix(text[i:], workspaceRoot) || (i > 0 && isPathByte(text[i-1])) ||
-			(end < len(text) && text[end] != '/' && isPathByte(text[end])) {
+		if !startsWorkspacePath(text, i) {
 			b.WriteByte(text[i])
 			i++
 			continue
 		}
-		pathEnd := end
-		for pathEnd < len(text) && isPathByte(text[pathEnd]) {
-			pathEnd++
+		end := i + len(workspaceRoot)
+		for end < len(text) && isPathByte(text[end]) {
+			end++
 		}
-		path := text[i:pathEnd]
+		path := text[i:end]
 		if inAny(path, hostDirs) {
 			b.WriteString(path)
 		} else {
 			b.WriteString(dir + strings.TrimPrefix(path, workspaceRoot))
 		}
-		i = pathEnd
+		i = end
 	}
 	return b.String()
+}
+
+// startsWorkspacePath says whether a path whose leading segment is
+// /workspace starts at text[i].
+func startsWorkspacePath(text string, i int) bool {
+	if !strings.HasPrefix(text[i:], workspaceRoot) || (i > 0 && isPathByte(text[i-1])) {
+		return false
+	}
+	end := i + len(workspaceRoot)
+	return end == len(text) || text[end] == '/' || !isPathByte(text[end])
 }
 
 // isPathByte says whether c can be inside a path as commands write one: not
