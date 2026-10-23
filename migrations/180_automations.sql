@@ -98,6 +98,9 @@ CREATE TABLE automation_runs (
   busy_seen            boolean NOT NULL DEFAULT false,
   -- How many of payloads a Server run has POSTed to its container.
   posted               integer NOT NULL DEFAULT 0,
+  -- How many of payloads an agent run's agent has been given: those its
+  -- prompt carried, then each one sent to it as input (Concurrency: send).
+  inputs_sent          integer NOT NULL DEFAULT 0,
   -- The agent's role (a preset's) or 'agent', and the model it asked for.
   role                 text,
   model                text,

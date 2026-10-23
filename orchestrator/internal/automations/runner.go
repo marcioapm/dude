@@ -692,10 +692,10 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 		// A resumed session's output is read on from where its last run left
 		// it: what it said before is not this run's.
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', reason = NULLIF($5, ''), lux_run_id = $2, session = $3,
-			started_at = now(), container_started_at = CASE WHEN $4 = 'server' THEN now() END, last_request_at = now(),
+			started_at = now(), container_started_at = CASE WHEN $4 = 'server' THEN now() END, last_request_at = now(), inputs_sent = $6,
 			lux_cursor = CASE WHEN $3 = 'resumed' THEN (SELECT p.lux_cursor FROM automation_runs p WHERE p.lux_run_id = $2 AND p.id <> $1
 				ORDER BY p.created_at DESC LIMIT 1) END
-			WHERE id = $1`, runID, luxRunID, session, a.Kind, startReason)
+			WHERE id = $1`, runID, luxRunID, session, a.Kind, startReason, len(run.Payloads))
 		return err
 	})
 }
@@ -810,8 +810,11 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	}
 	var cursor string
 	var busy bool
+	var payloads []Payload
+	var inputsSent int
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen FROM automation_runs WHERE id = $1`, runID).Scan(&cursor, &busy)
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, payloads, inputs_sent FROM automation_runs WHERE id = $1`, runID).
+			Scan(&cursor, &busy, &payloads, &inputsSent)
 	}); err != nil {
 		return false, err
 	}
@@ -819,12 +822,24 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	if err != nil {
 		return false, err
 	}
+	// Events sent into the run while it works (Concurrency: send): each
+	// reaches its agent as input, and its turn is waited for afresh.
+	sent := 0
+	if a.Kind == "agent" && !lux.Terminal(got.State) && failed == "" && inputsSent < len(payloads) {
+		if sent, err = r.sendInputs(ctx, a, runID, luxRunID, payloads, inputsSent); err != nil {
+			return false, err
+		}
+	}
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, busy_seen = busy_seen OR $3,
-			log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1`, runID, newCursor, turnDone.busy, log)
+			inputs_sent = inputs_sent + $5, log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1`,
+			runID, newCursor, turnDone.busy, log, sent)
 		return err
 	}); err != nil {
 		return false, err
+	}
+	if sent > 0 {
+		return true, nil
 	}
 	cost := func() *float64 { return r.cost(ctx, luxRunID) }
 	keep := a.SessionMode == "resumable" && source != SourceTest
@@ -839,6 +854,24 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 		return true, r.endThenStop(ctx, a, runID, luxRunID, keep, "succeeded", "", cost())
 	}
 	return false, nil
+}
+
+// sendInputs gives a running agent the payloads after the first sent ones,
+// each as the automation's prompt for that event; it says how many went.
+// A request id per payload makes a retry after a lost answer one input.
+func (r *Runner) sendInputs(ctx context.Context, a Automation, runID, luxRunID string, payloads []Payload, sent int) (int, error) {
+	n := 0
+	for i := sent; i < len(payloads); i++ {
+		text, _, err := r.prompt(ctx, a, payloads[i:i+1], nil)
+		if err != nil {
+			return n, err
+		}
+		if err := r.Lux.Input(ctx, luxRunID, lux.InputRequest{Text: text, RequestID: fmt.Sprintf("automation-%s-%d", runID, i)}); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // endThenStop ends a run that is still live and only then stops or cancels

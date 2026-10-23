@@ -600,6 +600,39 @@ func TestAutomationConcurrencyCancel(t *testing.T) {
 	g.release(t)
 }
 
+// Concurrency send: an event arriving while the agent works is given to
+// that agent as input, with the automation's prompt for that event, once.
+func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_send", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "send", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.deliver("s-1", "push", push)
+	h.until("running", func() bool { r := h.runs("aut_send"); return len(r) == 1 && r[0].Status == "running" })
+	run := h.runs("aut_send")[0]
+	h.deliver("s-2", "push", push)
+	requestID := "automation-" + run.ID + "-1"
+	h.until("the second event reaches the agent", func() bool { return len(h.fake.InputBodies(run.LuxRunID, requestID)) > 0 })
+	for range 3 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.runner.Wait()
+	bodies := h.fake.InputBodies(run.LuxRunID, requestID)
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "Look at s-2") || strings.Contains(bodies[0], "s-1") {
+		t.Errorf("input bodies %q", bodies)
+	}
+	if r := h.runs("aut_send"); len(r) != 1 || r[0].Payloads != 2 {
+		t.Errorf("runs %+v", r)
+	}
+	var sent int
+	if err := h.owner.QueryRow(context.Background(), `SELECT inputs_sent FROM automation_runs WHERE id = $1`, run.ID).Scan(&sent); err != nil || sent != 2 {
+		t.Errorf("inputs_sent %d %v", sent, err)
+	}
+}
+
 // A kept session that stays busy (resume answers 409) holds the next run
 // for ResumeConflictMax at most: then the kept Run is ended and the run
 // starts fresh, saying so.
