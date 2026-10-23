@@ -485,3 +485,42 @@ func TestAlwaysReviewersAndNonProductPathsAreValidated(t *testing.T) {
 		t.Errorf("defaults %v %v", d.AlwaysReviewers, d.NonProductPaths)
 	}
 }
+
+// The boundaries of "later round": an integration's review, a new attempt,
+// a previous round that failed, and a pull request's fix on its candidate.
+func TestWhereALaterRoundStarts(t *testing.T) {
+	t.Run("an integration review is a first round", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		r.st.Integration = &Integration{Repo: "repo", Number: 7, RunID: "run_int", MergeSHA: "bbb"}
+		got, why, _ := r.review()
+		if !slices.Equal(got, firstRoundOfWholeTask) || !slices.Equal(why["api"], []string{ReasonFirstRound}) || r.compares != 0 {
+			t.Fatalf("reviewers %v %v, %d compares", got, why, r.compares)
+		}
+	})
+	t.Run("the first round of a new attempt is a first round", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		r.st.Attempt = 2
+		got, _, _ := r.review()
+		if !slices.Equal(got, firstRoundOfWholeTask) || r.compares != 0 {
+			t.Fatalf("reviewers %v, %d compares", got, r.compares)
+		}
+	})
+	t.Run("a failed round is not where the change starts", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		// The handler refuses any compare but aaa...bbb.
+		r.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category, base_refs, ended_at)
+			VALUES ('run_rr_failed', $1, 'prj_rr', 'wi_rr', 1, 'failed', 'review', 'reviewer', 'agent', 'tests', '{"repo":"zzz"}', now() + interval '1 second')`)
+		got, _, _ := r.review()
+		if !slices.Equal(got, []string{"correctness"}) || r.compares != 1 {
+			t.Fatalf("reviewers %v, %d compares", got, r.compares)
+		}
+	})
+	t.Run("a pull request's fix on its candidate is a later round", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+		got, why, _ := r.review()
+		if !slices.Equal(got, []string{"correctness"}) || !slices.Equal(why["correctness"], []string{ReasonAlways}) || r.compares != 1 {
+			t.Fatalf("reviewers %v %v, %d compares", got, why, r.compares)
+		}
+	})
+}
