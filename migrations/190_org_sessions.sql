@@ -1,4 +1,4 @@
--- 181_org_sessions.sql — sessions open to the whole organisation, sessions
+-- 190_org_sessions.sql — sessions open to the whole organisation, sessions
 -- owned by the organisation's admins after their owner left, and
 -- @-mentions in a session.
 --
@@ -28,6 +28,8 @@ CREATE TRIGGER sessions_access_one_way BEFORE UPDATE OF access ON sessions
 
 -- The "Open to everyone" list reads an organisation's open sessions.
 CREATE INDEX sessions_org_access_idx ON sessions (organization_id) WHERE access = 'organisation';
+-- An admin's Sessions list reads the sessions its admins own.
+CREATE INDEX sessions_owned_by_admins_idx ON sessions (organization_id) WHERE owned_by_admins;
 
 -- The role a person has in a session. Every reader of a session checks it
 -- (the orchestrator's routes, the ledger's visibility, artifacts, locate),
@@ -38,18 +40,25 @@ CREATE INDEX sessions_org_access_idx ON sessions (organization_id) WHERE access 
 --     organisation session;
 --   * any other active member of an organisation session's organisation
 --     can chat (writing makes them a member: the orchestrator's sessionChat).
+-- An owner row, or a non-admin's chat row, decides alone (the person's own
+-- row, by primary key); the session row is read only for a reader, an
+-- admin, or someone with no row.
 CREATE OR REPLACE FUNCTION session_role(p_session text, p_person text) RETURNS text
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
   SELECT CASE
     WHEN me.id IS NULL THEN NULL
-    WHEN s.owned_by_admins AND me.role = 'admin' THEN 'owner'
-    WHEN sp.role IS NOT NULL THEN CASE WHEN s.access = 'organisation' AND sp.role = 'read' THEN 'chat' ELSE sp.role END
-    WHEN s.access = 'organisation' THEN 'chat'
+    WHEN sp.role = 'owner' OR (sp.role = 'chat' AND me.role <> 'admin') THEN sp.role
+    ELSE (SELECT CASE
+        WHEN s.owned_by_admins AND me.role = 'admin' THEN 'owner'
+        WHEN sp.role = 'read' AND s.access = 'organisation' THEN 'chat'
+        WHEN sp.role IS NOT NULL THEN sp.role
+        WHEN s.access = 'organisation' THEN 'chat'
+      END FROM sessions s WHERE s.id = p_session AND s.organization_id = me.organization_id)
   END
-  FROM sessions s
-  LEFT JOIN session_people sp ON sp.session_id = s.id AND sp.person_id = p_person AND sp.accepted_at IS NOT NULL
-  LEFT JOIN people me ON me.id = p_person AND me.organization_id = s.organization_id AND me.removed_at IS NULL
-  WHERE s.id = p_session
+  FROM people me
+  LEFT JOIN session_people sp ON sp.session_id = p_session AND sp.person_id = me.id
+    AND sp.organization_id = me.organization_id AND sp.accepted_at IS NOT NULL
+  WHERE me.id = p_person AND me.removed_at IS NULL
 $$;
 
 -- An @-mention of a person in a session's message. It is seen once their
@@ -94,7 +103,12 @@ CREATE POLICY tenant_isolation ON session_viewers
   USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE, DELETE ON session_viewers TO dude_app;
 
--- The notifier also tells a person they were mentioned (session.mentioned).
-DROP INDEX IF EXISTS events_asks_idx;
-CREATE INDEX events_asks_idx ON events (cursor)
-  WHERE event_type IN ('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled', 'session.mentioned');
+-- The notifier's session sweep (a mention; a question to the owner of a
+-- session its admins own, which goes to each admin) keeps a watermark and
+-- a sent set of its own beside the asks' (push_config.after_cursor,
+-- push_sent, migration 024): the asks' watermark is bounded only by asks
+-- not sent yet, so it could pass a mention not sent yet. NULL until the
+-- sweep first moves it: it starts at the asks' watermark.
+ALTER TABLE push_config ADD COLUMN session_after_cursor bigint;
+CREATE TABLE push_session_sent (cursor bigint PRIMARY KEY);
+GRANT SELECT, INSERT, DELETE ON push_session_sent TO dude_sweeper;

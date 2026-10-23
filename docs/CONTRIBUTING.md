@@ -639,7 +639,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 
 ### Organisation sessions, admin-owned sessions and mentions
 
-A brainstorm session's **general access** (`sessions.access`, migration 181)
+A brainstorm session's **general access** (`sessions.access`, migration 190)
 is `private` (its accepted people) or `organisation` (every active member of
 its organisation can open it and chat). The change is one way: `PUT
 /internal/sessions/{id}/access` takes only `organisation` (anything else is
@@ -670,8 +670,12 @@ admits (others are dropped silently) is a `session_mentions` row, listed in
 `GET /internal/sessions`'s `mentions` while unseen and while the person does
 not have the session open; their page's open heartbeat (`setOpen`, which also
 covers non-members through `session_viewers`) marks it seen. A
-`session.mentioned` event, which the notifier pushes, is written only when
-they did not have it open. The agent reads the words as written; `mentions`
+`session.mentioned` event is written only when they did not have it open.
+The notifier pushes it from a sweep of its own (`notify/sessions.go`: its
+own watermark `push_config.session_after_cursor` and sent set
+`push_session_sent`, and index `events_session_mentioned_idx`, migration
+191), which also sends a question put to nobody by name to every active
+admin while the session's admins own it. The agent reads the words as written; `mentions`
 is metadata on the `chat.message`, for the chips.
 
 ## Decisions already made
@@ -921,7 +925,7 @@ In rough priority order.
 | Change the scripted agent | `orchestrator/internal/fakeagent` |
 | Add an event type | `packages/domain/src/events/types.ts` and the Go constants that write it |
 | Change the sidebar/board data | `apps/control-plane/src/api/routes/navigation.ts` |
-| Change who may read or chat in a session | `session_role()` (`migrations/181_org_sessions.sql`), `orchestrator/internal/delivery/session_access.go` |
+| Change who may read or chat in a session | `session_role()` (`migrations/190_org_sessions.sql`), `orchestrator/internal/delivery/session_access.go` |
 | Change what a session mention does | `orchestrator/internal/delivery/session_mentions.go`, `notify.go`'s `asks` |
 | Change a screen | `apps/web/src/screens/` |
 | Change a component | `packages/design-system/src/components/` |

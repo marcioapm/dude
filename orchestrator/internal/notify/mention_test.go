@@ -62,7 +62,8 @@ func TestAMentionReachesOnlyThePersonMentioned(t *testing.T) {
 	if _, _, err := n.Keys(ctx); err != nil {
 		t.Fatal(err)
 	}
-	exec(`UPDATE push_config SET after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events)`)
+	exec(`UPDATE push_config SET after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events),
+		session_after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events)`)
 	exec(`INSERT INTO events (id, organization_id, event_type, session_id, actor_type, actor_id, source, payload) VALUES
 		($1, $2, 'session.mentioned', $3, 'human', $5, 'orchestrator', jsonb_build_object('person', $6::text, 'byName', 'Ana', 'title', 'Q4 cleanup', 'text', '@Gus can you look')),
 		($7, $2, 'session.mentioned', $4, 'human', $5, 'orchestrator', jsonb_build_object('person', $8::text, 'byName', 'Ana', 'title', 'Private notes', 'text', '@Eli'))`,

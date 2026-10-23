@@ -9,7 +9,7 @@ import (
 
 // A session's general access (sessions.access): its people alone, or every
 // active member of its organisation, who may then chat in it. Who has which
-// role under it is session_role (migration 181), which SessionRole reads.
+// role under it is session_role (migration 190), which SessionRole reads.
 const (
 	AccessPrivate      = "private"
 	AccessOrganisation = "organisation"
