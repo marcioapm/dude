@@ -148,7 +148,7 @@ func Retain(ctx context.Context, d *db.DB, now time.Time) (int, error) {
 func RetainUpTo(ctx context.Context, d *db.DB, now time.Time, limit int) (int, error) {
 	n := int64(0)
 	for _, step := range []struct {
-		sql string
+		sql  string
 		args []any
 	}{
 		{`DELETE FROM webhook_deliveries WHERE id IN (SELECT id FROM webhook_deliveries WHERE received_at < $1
