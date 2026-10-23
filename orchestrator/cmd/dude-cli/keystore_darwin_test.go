@@ -20,6 +20,14 @@ func TestMacKeychainAdapter(t *testing.T) {
 	if got, want := readRecorded(t, stdin), `add-generic-password -U -a "ana" -s "host/acme" -l "dude host/acme" -w "secret\"with\\escapes"`; got != want {
 		t.Fatalf("stdin: %q, want %q", got, want)
 	}
+	t.Setenv("STORE_OUT", "k3y\n")
+	if got, err := store.get("host/acme"); err != nil || got != "k3y" {
+		t.Fatalf("get: %q %v", got, err)
+	}
+	if got := readRecorded(t, argv); got != "find-generic-password\n-s\nhost/acme\n-w\n" {
+		t.Fatalf("get argv: %q", got)
+	}
+	t.Setenv("STORE_OUT", "")
 	t.Setenv("STORE_EXIT", "44")
 	if _, err := store.get("host/acme"); !errors.Is(err, errNoKey) {
 		t.Fatalf("missing key: %v", err)

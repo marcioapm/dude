@@ -86,16 +86,21 @@ func TestTaskRefsUseOneLookup(t *testing.T) {
 		{"chat", "ABS-12", "hello"},
 		{"feedback-draft", "ABS-12", "hello", "--path", "a.go", "--lines", "1"},
 		{"findings", "ABS-12", "--run", "ABS-12"},
+		{"feedback-draft", "ABS-12", "hello", "--path", "a.go", "--lines", "1", "--run", "ABS-12"},
+		{"events", "wi_12"},
 	} {
 		srv, calls := fakeDude(t)
 		if _, err := runCLI(t, srv, "", args...); err != nil {
 			t.Fatal(err)
 		}
-		want := 2
-		if args[0] == "show" {
+		want, first := 2, "/v1/tasks/"+args[1]
+		switch args[0] {
+		case "show":
 			want = 1
+		case "events": // an id needs no lookup
+			want, first = 1, "/v1/events?taskId=wi_12"
 		}
-		if len(*calls) != want || (*calls)[0].path != "/v1/tasks/"+args[1] {
+		if len(*calls) != want || (*calls)[0].path != first {
 			t.Fatalf("%v: calls %+v", args, *calls)
 		}
 	}

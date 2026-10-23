@@ -21,6 +21,14 @@ func TestSecretToolAdapter(t *testing.T) {
 	if got := readRecorded(t, stdin); got != key {
 		t.Fatalf("stdin: %q", got)
 	}
+	t.Setenv("STORE_OUT", "k3y\n")
+	if got, err := store.get("host/acme"); err != nil || got != "k3y" {
+		t.Fatalf("get: %q %v", got, err)
+	}
+	if got := readRecorded(t, argv); got != "lookup\nservice\nhost/acme\n" {
+		t.Fatalf("get argv: %q", got)
+	}
+	t.Setenv("STORE_OUT", "")
 	t.Setenv("STORE_EXIT", "44")
 	if _, err := store.get("host/acme"); !errors.Is(err, errNoKey) {
 		t.Fatalf("missing key: %v", err)

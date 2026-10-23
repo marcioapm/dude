@@ -84,9 +84,15 @@ func TestEnvURLCannotRedirectStoredKey(t *testing.T) {
 					t.Fatalf("missing %q: %v", part, err)
 				}
 			}
-			t.Setenv("DUDE_URL", "https://stored.example/")
-			if _, key, err := resolve(""); err != nil || key != "stored-key" {
-				t.Fatalf("same URL: %q %v", key, err)
+			for _, same := range []string{"https://stored.example/", "https://STORED.example", "https://stored.example:443", "stored.example"} {
+				t.Setenv("DUDE_URL", same)
+				if _, key, err := resolve(""); err != nil || key != "stored-key" {
+					t.Fatalf("same URL %q: %q %v", same, key, err)
+				}
+			}
+			t.Setenv("DUDE_URL", "http://stored.example")
+			if _, _, err := resolve(""); err == nil {
+				t.Fatal("http is another server than https")
 			}
 			t.Setenv("DUDE_API_KEY", "env-key")
 			t.Setenv("DUDE_URL", "https://ci.example/")
@@ -165,6 +171,7 @@ func TestReloginKeepsNewKeyAndRemovesOldItem(t *testing.T) {
 		{"port to https", "http://host:8080", "https://host", "host:8080/acme", "host/acme", false},
 		{"scheme only", "http://host", "https://host", "host/acme", "host/acme", false},
 		{"another host", "https://old", "https://new", "old/acme", "new/acme", false},
+		{"host case", "https://Host", "https://host", "host/acme", "host/acme", false},
 		{"to file", "https://host", "https://host", "host/acme", "host/acme", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -407,13 +407,18 @@ async function listTasks(ctx: RequestContext): Promise<Response> {
  * organisation, archived or not; the key match is relations.ts findTask's.
  */
 async function taskIdOf(scope: OrgScope, ref: string): Promise<string | null> {
+  // Two queries, not one OR: an OR across the join can't use either index.
+  const byId = (await scope.sql`
+    SELECT id FROM tasks WHERE organization_id = ${scope.organizationId} AND id = ${ref}`) as Array<{ id: string }>;
+  if (byId[0]) return byId[0].id;
   const m = /^([A-Za-z][A-Za-z0-9]*)-0*([0-9]+)$/.exec(ref.trim());
-  const rows = (await scope.sql`
+  if (!m) return null;
+  const byKey = (await scope.sql`
     SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
-    WHERE t.organization_id = ${scope.organizationId} AND (t.id = ${ref} OR (${m ? m[1]! : null}::text IS NOT NULL
-      AND upper(p.key_prefix) = upper(${m ? m[1]! : ""}) AND t.number = ${m ? Number(m[2]) : 0}))
+    WHERE p.organization_id = ${scope.organizationId} AND upper(p.key_prefix) = upper(${m[1]!})
+      AND t.number = ${Number(m[2])}
     LIMIT 1`) as Array<{ id: string }>;
-  return rows[0]?.id ?? null;
+  return byKey[0]?.id ?? null;
 }
 
 async function getTask(ctx: RequestContext): Promise<Response> {

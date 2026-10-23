@@ -127,7 +127,8 @@ macOS keychain, the Secret Service keyring (secret-tool, on Linux) or the
 Windows Credential Manager; on a machine with none, in the credentials file
 (` + "`~/.config/dude/credentials.toml`" + `, mode 0600), which also lists the
 organisations and their URLs. Commands act in the last one logged in to, or in
---org / DUDE_ORG. DUDE_API_KEY and DUDE_URL override them (default URL ` + defaultURL + `).
+--org / DUDE_ORG. DUDE_API_KEY overrides the stored key; DUDE_URL another
+server needs DUDE_API_KEY too (default URL ` + defaultURL + `).
 `
 
 func main() {
@@ -337,6 +338,9 @@ func (c *cli) task(ref string) (obj, error) {
 }
 
 func (c *cli) taskID(ref string) (string, error) {
+	if strings.HasPrefix(ref, "wi_") {
+		return ref, nil
+	}
 	t, err := c.task(ref)
 	if err != nil {
 		return "", err

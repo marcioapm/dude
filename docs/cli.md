@@ -106,7 +106,9 @@ else `https://dude.absmartly.dev`.
 
 With a stored profile, changing `DUDE_URL`
 requires `DUDE_API_KEY` too: otherwise the CLI refuses to send the stored
-key to a different URL. Unset `DUDE_URL` to use the profile's server.
+key to a different server (the same server in another case, with its
+default port or without `https://` is fine). Unset `DUDE_URL` to use the
+profile's server.
 
 ```sh
 DUDE_URL=https://dude.acme.dev DUDE_API_KEY=$KEY dude list WEB --status review

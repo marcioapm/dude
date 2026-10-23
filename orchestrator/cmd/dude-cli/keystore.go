@@ -74,10 +74,29 @@ func normalURL(raw string) (string, error) {
 	return strings.TrimRight(raw, "/"), nil
 }
 
-// keyID names an organisation's key in the OS store: HOST/SLUG.
+// keyID names an organisation's key in the OS store: HOST/SLUG, the host
+// lower-cased since Windows matches credential names without case.
 func keyID(slug, base string) string {
 	u, _ := url.Parse(base)
-	return u.Host + "/" + slug
+	return strings.ToLower(u.Host) + "/" + slug
+}
+
+// sameServer is whether two server URLs name one server: scheme, host
+// (without case) and port, the default port and a missing scheme as login reads them.
+func sameServer(a, b string) bool {
+	canon := func(raw string) string {
+		n, err := normalURL(raw)
+		if err != nil {
+			return raw
+		}
+		u, _ := url.Parse(n)
+		host := strings.ToLower(u.Hostname())
+		if port := u.Port(); port != "" && !(u.Scheme == "https" && port == "443") && !(u.Scheme == "http" && port == "80") {
+			host += ":" + port
+		}
+		return u.Scheme + "://" + host
+	}
+	return canon(a) == canon(b)
 }
 
 // defaultCredentialsFile is $XDG_CONFIG_HOME/dude/credentials.toml, or
@@ -193,7 +212,7 @@ func resolve(flagOrg string) (base, key string, err error) {
 		if envKey != "" {
 			return strings.TrimRight(base, "/"), envKey, nil
 		}
-		if envURL != "" && strings.TrimRight(envURL, "/") != strings.TrimRight(p.URL, "/") {
+		if envURL != "" && !sameServer(envURL, p.URL) {
 			return "", "", fmt.Errorf("DUDE_URL %q differs from %s's stored URL %q: set DUDE_API_KEY too, or unset DUDE_URL", envURL, slug, p.URL)
 		}
 		if p.Key != "" {
