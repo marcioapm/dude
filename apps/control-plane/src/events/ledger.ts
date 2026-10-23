@@ -178,8 +178,11 @@ export async function query(organizationId: string, q: EventQuery = {}): Promise
   const sessionId = q.sessionId ?? null;
 
   return withOrg(organizationId, async (scope) => {
-    // session_visible, with the sessions the viewer may read computed once
-    // per query (one session_role per session, not per event).
+    // session_visible as one set of the viewer's sessions, each arm on an
+    // index: their accepted rows (session_people_person_idx), the
+    // organisation's open sessions (sessions_org_access_idx) and, for an
+    // admin, those its admins own (sessions_owned_by_admins_idx). The same
+    // answer as session_role(id, viewer) IS NOT NULL, without calling it per session.
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(EVENT_COLUMNS)} FROM events
       WHERE (${q.after ?? null}::bigint IS NULL OR cursor > ${q.after ?? null}::bigint)
@@ -190,8 +193,17 @@ export async function query(organizationId: string, q: EventQuery = {}): Promise
         AND (${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[] IS NULL
              OR event_type = ANY(${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[]))
         AND (${viewer}::text IS NULL OR session_id IS NULL
-             OR session_id IN (SELECT s.id FROM sessions s WHERE (${sessionId}::text IS NULL OR s.id = ${sessionId})
-                                 AND session_role(s.id, ${viewer}) IS NOT NULL)
+             OR session_id IN (
+               SELECT sp.session_id FROM people me
+                 JOIN session_people sp ON sp.person_id = me.id AND sp.accepted_at IS NOT NULL
+                 JOIN sessions s ON s.id = sp.session_id AND s.organization_id = me.organization_id
+               WHERE me.id = ${viewer} AND me.removed_at IS NULL AND (${sessionId}::text IS NULL OR sp.session_id = ${sessionId})
+               UNION ALL
+               SELECT s.id FROM people me JOIN sessions s ON s.organization_id = me.organization_id AND s.access = 'organisation'
+               WHERE me.id = ${viewer} AND me.removed_at IS NULL AND (${sessionId}::text IS NULL OR s.id = ${sessionId})
+               UNION ALL
+               SELECT s.id FROM people me JOIN sessions s ON s.organization_id = me.organization_id AND s.owned_by_admins
+               WHERE me.id = ${viewer} AND me.removed_at IS NULL AND me.role = 'admin' AND (${sessionId}::text IS NULL OR s.id = ${sessionId}))
              OR NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = events.session_id))
       ORDER BY cursor ASC
       LIMIT ${limit}`) as EventRow[];

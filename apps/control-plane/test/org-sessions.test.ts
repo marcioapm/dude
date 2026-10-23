@@ -371,3 +371,46 @@ test("the ledger shows each person the events session_visible gives them, over p
   }
   expect(Object.fromEntries(counts)).toEqual({ per_lv_own: 12, per_lv_rd: 15, per_lv_mem: 9, per_lv_adm: 12, per_lv_gone: 6 });
 });
+
+test("over a few hundred sessions the ledger's set answers as session_visible for whole pages, a run's and a catch-up", async () => {
+  const org = "org_lw";
+  await owner`INSERT INTO organizations (id, name, slug) VALUES (${org}, 'Acme', 'acme-lw')`;
+  const people = Array.from({ length: 12 }, (_, i) => `per_lw_${i}`);
+  // Every fourth an admin, one admin and one member removed.
+  await owner`INSERT INTO people (id, organization_id, name, role)
+    SELECT 'per_lw_' || g, ${org}, 'P' || g, CASE WHEN g % 4 = 0 THEN 'admin' ELSE 'member' END FROM generate_series(0, 11) g`;
+  await owner`UPDATE people SET removed_at = now() WHERE id IN ('per_lw_4', 'per_lw_7')`;
+  // 300 sessions: a third open to the organisation, every seventh admin-owned.
+  await owner`INSERT INTO sessions (id, organization_id, title, access, owned_by_admins)
+    SELECT 'ssn_lw_' || g, ${org}, 'S', CASE WHEN g % 3 = 0 THEN 'organisation' ELSE 'private' END, g % 7 = 0 FROM generate_series(1, 300) g`;
+  // An owner each, and people in some: chat, read, and invitations not accepted.
+  await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+    SELECT 'ssn_lw_' || g, 'per_lw_' || (g % 12), ${org}, 'owner', now() FROM generate_series(1, 300) g`;
+  await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+    SELECT 'ssn_lw_' || g, 'per_lw_' || ((g * 5 + 1) % 12), ${org}, CASE WHEN g % 2 = 0 THEN 'read' ELSE 'chat' END,
+      CASE WHEN g % 5 = 0 THEN NULL ELSE now() END
+    FROM generate_series(1, 300) g WHERE (g * 5 + 1) % 12 <> g % 12`;
+  await owner`INSERT INTO runs (id, organization_id, session_id, attempt, role, kind, status)
+    SELECT 'run_lw_' || g, ${org}, 'ssn_lw_' || g, 1, 'brainstorm', 'agent', 'completed' FROM generate_series(1, 300) g`;
+  await owner`INSERT INTO events (id, organization_id, event_type, session_id, run_id, actor_type, actor_id, source, payload)
+    SELECT 'evt_lw_' || g, ${org}, 'agent.message', CASE WHEN g % 10 = 0 THEN NULL ELSE 'ssn_lw_' || (g % 300 + 1) END,
+      CASE WHEN g % 10 = 0 THEN NULL ELSE 'run_lw_' || (g % 300 + 1) END, 'agent', 'x', 'test', '{}'
+    FROM generate_series(1, 1500) g`;
+  const { query } = await import("../src/events/ledger.ts");
+  const [mid] = await owner`SELECT cursor FROM events WHERE id = 'evt_lw_1200'`;
+  const scopes = [{}, { after: Number(mid.cursor) }, { runId: "run_lw_42" }, { runId: "run_lw_43" }, { sessionId: "ssn_lw_21" }];
+  for (const person of people) {
+    const want = [...await owner`SELECT id, session_id, run_id, cursor FROM events WHERE organization_id = ${org}
+      AND session_visible(session_id, ${person}) ORDER BY cursor`] as Array<{ id: string; session_id: string | null; run_id: string | null; cursor: string }>;
+    for (const scope of scopes as Array<{ after?: number; runId?: string; sessionId?: string }>) {
+      const got = (await query(org, { viewer: person, limit: 1000, ...scope })).map((e) => e.eventId);
+      const expected = want.filter((r) => (!scope.after || Number(r.cursor) > scope.after) && (!scope.runId || r.run_id === scope.runId)
+        && (!scope.sessionId || r.session_id === scope.sessionId)).slice(0, 1000).map((r) => r.id);
+      expect({ person, scope, got }).toEqual({ person, scope, got: expected });
+    }
+  }
+  // Each person sees a different share of it.
+  const sizes = new Set<number>();
+  for (const person of people) sizes.add((await query(org, { viewer: person, limit: 1000 })).length);
+  expect(sizes.size).toBeGreaterThan(4);
+}, 60_000);
