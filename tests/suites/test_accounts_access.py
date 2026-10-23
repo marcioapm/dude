@@ -367,8 +367,9 @@ def test_keys_are_made_per_organisation(page: Page, access, console_errors: list
     page.get_by_test_id("key-create").click()
     secret = page.get_by_test_id("key-secret").input_value()
     expect(page.get_by_test_id("key-usage")).to_have_text(
-        f'curl -H "authorization: Bearer {secret}" {access.url}/v1/me\n'
-        "# acts as you in Northwind; its answer names the organisation and your role")
+        f"dude login {access.url}\n"
+        "# paste the key when asked: the dude CLI then acts as you in Northwind")
+    assert secret not in page.get_by_test_id("key-usage").inner_text()
     page.get_by_test_id("key-done").click()
     expect(group.get_by_test_id("key-row")).to_have_count(1)
     expect(keys.locator(f"[data-testid=key-group][data-org='{initech['slug']}'] [data-testid=key-row]")).to_have_count(0)
