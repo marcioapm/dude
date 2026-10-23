@@ -22,7 +22,7 @@ Each step that writes code (implement, fix, simplify) pushes to a branch of its 
 
 ## Which reviewers run
 
-Every review round runs the **required reviewers**, plus any **conditional reviewer** whose paths the change touches. By default:
+Every first review round of a delivery runs the **required reviewers**, plus any **conditional reviewer** whose paths the change touches. By default:
 
 - Required: **Correctness**, **Tests** and **Performance**.
 - **Security** joins when a changed path matches `**/auth/**`, `**/payments/**` or `**/*credential*`.
@@ -34,6 +34,17 @@ Every review round runs the **required reviewers**, plus any **conditional revie
 Change the required reviewers in **Settings → Delivery → Reviewers every delivery runs**. At least one must be chosen.
 
 A re-review checks every open finding a fixer already tried. The reviewer of the finding's category judges it; those judged fixed are resolved. That is what lets the loop finish.
+
+A later round (a re-review after a fix, or the review of a pull request's fix or a test's fix) is picked from what changed since the previous review round, not from everything the task has changed. It runs:
+
+- the **reviewers every round runs** (`alwaysReviewers`, by default **Correctness**), even when the round changed only CI or docs;
+- the reviewer of each finding it judges;
+- each conditional reviewer whose paths the round's own change touches;
+- the required reviewers, unless the round changed only **non-product** paths (`nonProductPaths`, by default `.github/**`, `docs/**` and `**/*.md`).
+
+A round that changed more than 300 lines, or one GitHub cannot measure, runs the first round's reviewers again. A reviewer the conductor or a person names, and a retry of failed reviewers, run as asked. The round's `run.created` event lists why each reviewer ran: `always`, `finding`, `paths`, `required`, `first_round`, `large_round`, `directed` or `retry`. With no reviewer every round runs, a CI-only round with no finding to judge runs no reviewer and the loop goes on as from a clear round.
+
+Change both under **Settings → Delivery → Reviewers every round runs** and **Not product**.
 
 ## Which findings block
 

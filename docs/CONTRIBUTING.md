@@ -414,6 +414,18 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   round has none, to the policy's required reviewer the round has, else its
   first. Those it judges fixed are resolved (`phases.RecordFindings`). That
   rule is what lets the loop converge.
+- **A later review round's reviewers come from its own change**
+  (`RoundReviewers`, `steps.roundReviewers`): after the attempt's first
+  completed review round, a round runs `alwaysReviewers`, the categories of
+  its attempted findings, the conditional rules matched against the paths
+  changed since the previous review round's checkouts (`Store.RoundDelta`,
+  one GitHub compare per repository, cached in `roundDelta` and shared with
+  the resumption's line count), and `requiredReviewers` when one of those
+  paths is outside `nonProductPaths`. Unmeasurable (no forge, refused,
+  truncated) or over `MaxResumeDeltaLines`: the first round's
+  `ReviewersFor`. A retry, a directed review and the simplifier's range keep
+  their own categories. The round's `run.created` carries `reasons`; a
+  round with no reviewer goes straight to `awaitReview`.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
