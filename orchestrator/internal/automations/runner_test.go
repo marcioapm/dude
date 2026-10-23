@@ -58,6 +58,8 @@ func newHarness(t *testing.T) *harness {
 	h.runner = &Runner{DB: app, Lux: h.lux, Agent: phases.AgentConfig{DefaultImage: "agent:1"},
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Idle: 150 * time.Millisecond}
 	h.runner.Now = func() time.Time { return time.Now().Add(time.Duration(h.skew.Load())) }
+	// Background follows and POSTs end before the database and fake go.
+	t.Cleanup(h.runner.Wait)
 	return h
 }
 

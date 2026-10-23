@@ -6,6 +6,7 @@ package automations
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -19,6 +20,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,7 +64,56 @@ type Runner struct {
 	Now       func() time.Time
 	// Idle overrides ServerIdle (tests).
 	Idle time.Duration
+	// Workers bounds the runs followed and webhooks POSTed at once, off the
+	// sweep; zero is DefaultWorkers.
+	Workers int
+
+	mu       sync.Mutex
+	inflight map[string]bool
+	slots    chan struct{}
+	wg       sync.WaitGroup
 }
+
+// DefaultWorkers is how many runs are followed or POSTed for at once.
+const DefaultWorkers = 16
+
+// dispatch runs fn for key in the background, at most one at a time per key
+// and Workers in all. It says false, running nothing, while key is already
+// in flight or every worker is busy: the next pass tries again.
+func (r *Runner) dispatch(ctx context.Context, key string, fn func(context.Context)) bool {
+	r.mu.Lock()
+	if r.inflight == nil {
+		r.inflight = map[string]bool{}
+		r.slots = make(chan struct{}, cmp.Or(r.Workers, DefaultWorkers))
+	}
+	if r.inflight[key] {
+		r.mu.Unlock()
+		return false
+	}
+	select {
+	case r.slots <- struct{}{}:
+	default:
+		r.mu.Unlock()
+		return false
+	}
+	r.inflight[key] = true
+	r.wg.Add(1)
+	r.mu.Unlock()
+	go func() {
+		defer func() {
+			r.mu.Lock()
+			delete(r.inflight, key)
+			<-r.slots
+			r.mu.Unlock()
+			r.wg.Done()
+		}()
+		fn(ctx)
+	}()
+	return true
+}
+
+// Wait returns when the background work dispatch started has ended.
+func (r *Runner) Wait() { r.wg.Wait() }
 
 func (r *Runner) now() time.Time {
 	if r.Now != nil {
@@ -522,7 +573,13 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 	// A test run's session is its own: fresh and ephemeral, the kept one untouched (Q21).
 	resumable := a.SessionMode == "resumable" && run.Source != SourceTest && a.Kind != "webhook"
 	if a.Kind == "webhook" {
-		return true, r.postWebhook(ctx, a, runID, run.Payloads)
+		// Claimed here; its POST is sent off the sweep, as followRunning
+		// finds it running.
+		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', started_at = now(), session = 'ephemeral'
+				WHERE id = $1 AND status = 'queued'`, runID)
+			return err
+		})
 	}
 	var luxRunID, session string
 	var err error
@@ -645,33 +702,36 @@ func (r *Runner) followRunning(ctx context.Context) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
-	n := 0
 	for _, run := range list {
-		var a Automation
-		if err := r.DB.InOrg(ctx, run.Org, func(tx pgx.Tx) (err error) {
-			a, err = Load(ctx, tx, run.AutomationID)
-			return err
-		}); err != nil {
-			r.Log.Warn("following an automation run failed", "run", run.ID, "error", err)
-			continue
-		}
-		var err error
-		var acted bool
-		switch a.Kind {
-		case "server":
-			acted, err = r.followServer(ctx, a, run.ID, run.LuxRunID, run.Source)
-		default:
-			acted, err = r.followRun(ctx, a, run.ID, run.LuxRunID, run.Source)
-		}
-		if err != nil {
-			r.Log.Warn("following an automation run failed", "run", run.ID, "error", err)
-			continue
-		}
-		if acted {
-			n++
-		}
+		r.dispatch(ctx, "follow:"+run.ID, func(ctx context.Context) {
+			if err := r.followOne(ctx, run.ID, run.Org, run.AutomationID, run.LuxRunID, run.Source); err != nil {
+				r.Log.Warn("following an automation run failed", "run", run.ID, "error", err)
+			}
+		})
 	}
-	return n, nil
+	// Following is in the background: nothing here says to sweep again at once.
+	return 0, nil
+}
+
+// followOne reads where one running run is and acts on it.
+func (r *Runner) followOne(ctx context.Context, runID, org, automationID, luxRunID, source string) error {
+	var a Automation
+	if err := r.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		a, err = Load(ctx, tx, automationID)
+		return err
+	}); err != nil {
+		return err
+	}
+	var err error
+	switch a.Kind {
+	case "server":
+		_, err = r.followServer(ctx, a, runID, luxRunID, source)
+	case "webhook":
+		err = r.postWebhook(ctx, a, runID)
+	default:
+		_, err = r.followRun(ctx, a, runID, luxRunID, source)
+	}
+	return err
 }
 
 // followRun ends a command's run when its lux Run ends, and an agent's
@@ -703,19 +763,19 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	}); err != nil {
 		return false, err
 	}
-	cost := r.cost(ctx, luxRunID)
+	cost := func() *float64 { return r.cost(ctx, luxRunID) }
 	keep := a.SessionMode == "resumable" && source != SourceTest
 	switch {
 	case got.State == "succeeded":
-		return true, r.finish(ctx, a, runID, "succeeded", "", cost)
+		return true, r.finish(ctx, a, runID, "succeeded", "", cost())
 	case lux.Terminal(got.State):
-		return true, r.finish(ctx, a, runID, "failed", cmpStr(got.StateReason, "its container ended: "+got.State), cost)
+		return true, r.finish(ctx, a, runID, "failed", cmpStr(got.StateReason, "its container ended: "+got.State), cost())
 	case a.Kind == "agent" && failed != "":
 		r.stopOrCancel(ctx, luxRunID, keep)
-		return true, r.finish(ctx, a, runID, "failed", failed, cost)
+		return true, r.finish(ctx, a, runID, "failed", failed, cost())
 	case a.Kind == "agent" && turnDone.done:
 		r.stopOrCancel(ctx, luxRunID, keep)
-		return true, r.finish(ctx, a, runID, "succeeded", "", cost)
+		return true, r.finish(ctx, a, runID, "succeeded", "", cost())
 	}
 	return false, nil
 }
@@ -1046,25 +1106,26 @@ func Sign(secret string, body []byte) string {
 }
 
 // postWebhook is a Webhook-only run: one signed POST of its payload (or, on
-// a schedule, the schedule's time), retried once on a 5xx or no answer.
-func (r *Runner) postWebhook(ctx context.Context, a Automation, runID string, payloads []Payload) error {
+// a schedule, the schedule's time), retried once on a 5xx or no answer. It
+// runs off the sweep, for a run start has claimed (running).
+func (r *Runner) postWebhook(ctx context.Context, a Automation, runID string) error {
 	var cfg struct {
 		URL string `json:"url"`
 	}
 	_ = json.Unmarshal(a.Webhook, &cfg)
+	var payloads []Payload
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', started_at = now(), session = 'ephemeral' WHERE id = $1`, runID)
-		return err
+		return tx.QueryRow(ctx, `SELECT payloads FROM automation_runs WHERE id = $1 AND status = 'running'`, runID).Scan(&payloads)
 	}); err != nil {
+		if db.IsNotFound(err) {
+			return nil
+		}
 		return err
 	}
+	// Arrive starts a run per webhook firing (Q13): one payload at most.
 	p := Payload{}
 	if len(payloads) > 0 {
 		p = payloads[0]
-	}
-	if len(payloads) > 1 {
-		// A merged run's events, as a list.
-		p.Body, _ = json.Marshal(payloads)
 	}
 	if len(p.Body) == 0 {
 		p.Body, _ = json.Marshal(map[string]any{"automation": a.ID, "schedule": map[string]any{"time": r.now().UTC().Format(time.RFC3339)}})

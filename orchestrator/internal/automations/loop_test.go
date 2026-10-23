@@ -2,10 +2,97 @@ package automations
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// gate is a file a test's commands wait on: a command made by hold runs
+// until release creates it.
+type gate string
+
+func newGate(t *testing.T) gate { return gate(filepath.Join(t.TempDir(), "go")) }
+
+func (g gate) hold(then string) string {
+	return fmt.Sprintf("while [ ! -e %s ]; do sleep 0.05; done; %s", string(g), then)
+}
+
+func (g gate) release(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(string(g), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A webhook endpoint that does not answer and live runs whose output is
+// still open cost the sweep nothing: in the same pass, an unrelated
+// automation's delivery is matched and its run started.
+func TestAutomationSlowWorkStaysOffTheSweep(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	answer := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(answer) }) }
+	t.Cleanup(release)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-answer:
+		case <-time.After(20 * time.Second):
+		}
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(hook.Close)
+	h.automation("aut_live", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo done"), "concurrency": "parallel"})
+	exec(t, h.owner, `UPDATE automations SET parallel_max = 4 WHERE id = 'aut_live'`)
+	h.automation("aut_slowhook", "webhook", map[string]any{"kind": "github", "event": "release"},
+		map[string]any{"webhook": map[string]any{"url": hook.URL}})
+	for i := range 4 {
+		h.deliver(fmt.Sprintf("p-%d", i), "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	}
+	h.deliver("rel-1", "release", map[string]any{"action": "published", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("four live runs and the webhook POSTing", func() bool {
+		live, hk := 0, h.runs("aut_slowhook")
+		for _, r := range h.runs("aut_live") {
+			if r.Status == "running" {
+				live++
+			}
+		}
+		return live == 4 && len(hk) == 1 && hk[0].Status == "running"
+	})
+
+	h.automation("aut_other", "command", map[string]any{"kind": "github", "event": "issues"}, map[string]any{"command": "echo other"})
+	h.deliver("i-1", "issues", map[string]any{"action": "opened", "repository": map[string]any{"full_name": "acme/web"}})
+	began := time.Now()
+	if _, err := h.runner.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(began)
+	if r := h.runs("aut_other"); len(r) != 1 || r[0].Status != "running" {
+		t.Fatalf("after one pass the unrelated run is %+v", r)
+	}
+	if took > time.Second {
+		t.Errorf("one pass took %v with a silent webhook and four live runs", took)
+	}
+	release()
+	g.release(t)
+	h.until("everything ends", func() bool {
+		for _, id := range []string{"aut_live", "aut_slowhook", "aut_other"} {
+			for _, r := range h.runs(id) {
+				if r.Status != "succeeded" {
+					return false
+				}
+			}
+		}
+		return true
+	})
+}
 
 // A delivery an automation cannot be matched to (a paths filter with no
 // GitHub to read the pull request's files from) holds up nothing: a later
