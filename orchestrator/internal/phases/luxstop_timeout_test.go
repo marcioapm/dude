@@ -116,8 +116,17 @@ func TestAHeldRoundTheDeliveryNoLongerWaitsOnFails(t *testing.T) {
 	if status != "failed" || keep || timedOut || failed != 1 {
 		t.Fatalf("status %s, keep %v, held %v, %d run.failed; want failed once, not kept, not held", status, keep, timedOut, failed)
 	}
-	if p := w.failedWith(); p["luxStop"] != "timeout" {
-		t.Errorf("run.failed %v, want luxStop timeout", p)
+	// As the Run would have failed had it not been held: lux's reason, then
+	// the agent's failure, and the agent's own error.
+	if p := w.failedWith(); p["luxStop"] != "timeout" || p["agentError"] != "session/prompt: process exited (137)" {
+		t.Errorf("run.failed %v, want luxStop timeout and the agent's error", p)
+	}
+	var errText string
+	if err := w.owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, w.run.ID).Scan(&errText); err != nil {
+		t.Fatal(err)
+	}
+	if want := "lux stopped the Run at its time limit: 4h of running; the agent's turn failed: session/prompt: process exited (137)"; errText != want {
+		t.Errorf("error %q, want %q", errText, want)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND continues_how = 'replay'`, w.run.TaskID); n != 0 {
 		t.Errorf("%d replays made, want none", n)

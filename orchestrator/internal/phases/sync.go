@@ -289,7 +289,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
 	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
 	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
-	r.retry_failures, r.retry_due_at, COALESCE(r.source_kind, ''), COALESCE((r.harness_state->>'timedOut')::boolean, false)`
+	r.retry_failures, r.retry_due_at, COALESCE(r.source_kind, ''), (r.harness_state ? 'timedOut')`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
