@@ -158,17 +158,29 @@ func TestJudgeAcceptanceWithoutCriteriaTakesTheDerivedChecks(t *testing.T) {
 	}
 }
 
+// carryFromPrev is a round that resumed run_prev, its heads descending
+// from that round's checkouts, which recorded verdicts.
+func carryFromPrev(verdicts ...CriterionVerdict) *Carry {
+	c := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{}}
+	for _, v := range verdicts {
+		c.Verdicts[v.Criterion] = v
+	}
+	return c
+}
+
+// carryOfOne is a tester's carry of criterion 1 from run_prev, with its reason.
+const carryOfOne = "criterion: 1\nstatus: carried\nfrom_round: run_prev\nobserved: Only CI changed.\n"
+
 // A carried criterion is what dude says it is: the previous round's pass,
 // with its evidence and where it came from, only when the reply names that
 // round, gives a reason, and the round passed it; blocked otherwise. A
 // fresh pass still needs a file this Run published.
 func TestACarriedCriterionKeepsOnlyThePreviousRoundsPass(t *testing.T) {
 	criteria := []string{"it greets", "it says goodbye", "it waves"}
-	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
-		1: {Criterion: 1, Text: "it greets", Status: VerdictPass, Evidence: []string{"greet.webm"}},
-		2: {Criterion: 2, Text: "it says goodbye", Status: VerdictFail, Evidence: []string{"bye.png"}},
-		3: {Criterion: 3, Text: "it waves", Status: VerdictBlocked, Decision: "waived"},
-	}}
+	prev := carryFromPrev(
+		CriterionVerdict{Criterion: 1, Text: "it greets", Status: VerdictPass, Evidence: []string{"greet.webm"}},
+		CriterionVerdict{Criterion: 2, Text: "it says goodbye", Status: VerdictFail, Evidence: []string{"bye.png"}},
+		CriterionVerdict{Criterion: 3, Text: "it waves", Status: VerdictBlocked, Decision: "waived"})
 	reply := func(n int, from, observed string) string {
 		return fmt.Sprintf("criterion: %d\nstatus: carried\nfrom_round: %s\nobserved: %s\n---\n", n, from, observed)
 	}
@@ -228,17 +240,14 @@ func TestACarriedCriterionKeepsOnlyThePreviousRoundsPass(t *testing.T) {
 // edited since, or a derived check that now reads differently, is blocked
 // and must be tested again.
 func TestACarriedCriterionWhoseTextChangedIsBlocked(t *testing.T) {
-	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
-		1: {Criterion: 1, Text: "it greets", Status: VerdictPass, Evidence: []string{"greet.webm"}},
-	}}
-	carry := "criterion: 1\nstatus: carried\nfrom_round: run_prev\nobserved: Only CI changed.\n"
+	prev := carryFromPrev(CriterionVerdict{Criterion: 1, Text: "it greets", Status: VerdictPass, Evidence: []string{"greet.webm"}})
 	for _, c := range []struct {
 		name     string
 		criteria []string
 		reply    string
 	}{
-		{"an edited criterion", []string{"it greets by name"}, carry},
-		{"a derived check that changed", nil, "check: The page says goodbye\n" + carry},
+		{"an edited criterion", []string{"it greets by name"}, carryOfOne},
+		{"a derived check that changed", nil, "check: The page says goodbye\n" + carryOfOne},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := JudgeAcceptance(c.criteria, ParseAcceptance(c.reply), nil, prev)
@@ -248,26 +257,18 @@ func TestACarriedCriterionWhoseTextChangedIsBlocked(t *testing.T) {
 			}
 		})
 	}
-	// The same carry of an unchanged derived check keeps its pass.
-	got := JudgeAcceptance(nil, ParseAcceptance("check: it greets\n"+carry), nil, prev)
-	if got[0].Status != VerdictPass || got[0].CarriedFrom != "run_prev" {
-		t.Errorf("an unchanged derived check carried = %+v, want the pass", got[0])
-	}
 }
 
 // A task without criteria has the tester's derived checks, named by their
 // `check` line: a carry that repeats it keeps the pass, and one that omits
 // it is a check dude cannot match to the one judged, so it is blocked.
 func TestACarriedDerivedCheckNeedsItsCheckLine(t *testing.T) {
-	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
-		1: {Criterion: 1, Text: "The page loads", Status: VerdictPass, Evidence: []string{"load.png"}},
-	}}
-	carry := "criterion: 1\nstatus: carried\nfrom_round: run_prev\nobserved: Only CI changed.\n"
-	got := JudgeAcceptance(nil, ParseAcceptance("check: The page loads\n"+carry), nil, prev)
+	prev := carryFromPrev(CriterionVerdict{Criterion: 1, Text: "The page loads", Status: VerdictPass, Evidence: []string{"load.png"}})
+	got := JudgeAcceptance(nil, ParseAcceptance("check: The page loads\n"+carryOfOne), nil, prev)
 	if len(got) != 1 || got[0].Status != VerdictPass || got[0].CarriedFrom != "run_prev" || got[0].Text != "The page loads" {
 		t.Errorf("a derived check carried with its check line = %+v, want the pass from run_prev", got)
 	}
-	got = JudgeAcceptance(nil, ParseAcceptance(carry), nil, prev)
+	got = JudgeAcceptance(nil, ParseAcceptance(carryOfOne), nil, prev)
 	if len(got) != 1 || got[0].Status != VerdictBlocked || got[0].CarriedFrom != "" ||
 		got[0].Problem != "Carried, but criterion 1 changed since run_prev judged it: it must be tested again." {
 		t.Errorf("a derived check carried without its check line = %+v, want blocked as changed", got)
@@ -277,12 +278,9 @@ func TestACarriedDerivedCheckNeedsItsCheckLine(t *testing.T) {
 // A not-applicable verdict carries as a pass does, with the reason it was
 // not applicable, not the tester's reason for carrying it.
 func TestACarriedNotApplicableKeepsItsReason(t *testing.T) {
-	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
-		1: {Criterion: 1, Text: "it works offline", Status: VerdictNotApplicable, Evidence: []string{},
-			Observed: "The app has no offline mode in this build."},
-	}}
-	got := JudgeAcceptance([]string{"it works offline"},
-		ParseAcceptance("criterion: 1\nstatus: carried\nfrom_round: run_prev\nobserved: Only CI changed.\n"), nil, prev)[0]
+	prev := carryFromPrev(CriterionVerdict{Criterion: 1, Text: "it works offline", Status: VerdictNotApplicable, Evidence: []string{},
+		Observed: "The app has no offline mode in this build."})
+	got := JudgeAcceptance([]string{"it works offline"}, ParseAcceptance(carryOfOne), nil, prev)[0]
 	if got.Status != VerdictNotApplicable || got.CarriedFrom != "run_prev" || got.Observed != prev.Verdicts[1].Observed {
 		t.Errorf("carried not-applicable = %+v, want not-applicable from run_prev with its reason", got)
 	}
