@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -88,6 +90,79 @@ func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
 				t.Errorf("%d skip events, gate on %q; want %d and the previous round", events, st.TestRunID, want)
 			}
 		})
+	}
+}
+
+// A failed criterion a person accepted, carried by the next round after a
+// product fix, keeps the acceptance: the round raises no new finding for
+// it, and the gate passes.
+func TestACarriedAcceptanceOfAFailureKeepsTheGatePassing(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, append([]any{org}, args...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', $1, 'P', 'p', 'P')`)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
+		VALUES ('wi_a', $1, 'prj_a', 1, 'Greet', 'greet', '["it greets", "it says goodbye"]', 'running')`)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at)
+		VALUES ('run_a1', $1, 'prj_a', 'wi_a', 1, 'completed', 'test', 'qa_browser', 'agent', now() - interval '1 hour')`)
+	exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_a1', $1, 'agent.message', 'run_a1', 'wi_a', 'agent', 'run_a1', 'test', jsonb_build_object('text', $2::text))`,
+		"```yaml\ncriterion: 1\nstatus: pass\nevidence: greet.webm\nobserved: It greets.\n"+
+			"---\ncriterion: 2\nstatus: fail\nobserved: It says bye, not goodbye.\n```\n")
+	exec(`INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
+		VALUES ('art_a1', $1, 'run_a1', 'published', 'greet.webm', 'k', 'x')`)
+	s := &Store{DB: app}
+	st := &State{TaskID: "wi_a", ProjectID: "prj_a", Attempt: 1, TestRunID: "run_a1", Policy: DefaultPolicy()}
+	if _, err := s.RecordVerdict(ctx, org, st, "run_a1"); err != nil {
+		t.Fatal(err)
+	}
+	// Round 1 fails criterion 2, dude raises its finding, and the person accepts it.
+	in, err := s.gateInput(ctx, org, st, "run_a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := judgeGate(st.Policy, in)
+	if g.Outcome != "fail" || !slices.Equal(g.Criteria, []int{2}) {
+		t.Fatalf("round 1 gate = %+v, want criterion 2 failing", g)
+	}
+	e := &Escalation{Reason: ReasonTestFailedCriteria, Detail: map[string]any{"runId": "run_a1", "findingIds": g.Findings}}
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error { return SettleVerdictTx(ctx, tx, e, "accept", "", "Bye is fine.") }); err != nil {
+		t.Fatal(err)
+	}
+	// Round 2 resumes the tester after a product fix: it retests 1 and carries 2.
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at,
+			continues_run_id, continues_how)
+		VALUES ('run_a2', $1, 'prj_a', 'wi_a', 1, 'completed', 'test', 'qa_browser', 'agent', now(), 'run_a1', 'resume')`)
+	exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_a2', $1, 'agent.message', 'run_a2', 'wi_a', 'agent', 'run_a2', 'test', jsonb_build_object('text', $2::text))`,
+		"```yaml\ncriterion: 1\nstatus: pass\nevidence: greet2.webm\nobserved: It greets.\n"+
+			"---\ncriterion: 2\nstatus: carried\nfrom_round: run_a1\nobserved: The fix changed the greeting only.\n```\n")
+	exec(`INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
+		VALUES ('art_a2', $1, 'run_a2', 'published', 'greet2.webm', 'k2', 'x')`)
+	st = &State{TaskID: "wi_a", ProjectID: "prj_a", Attempt: 1, TestRunID: "run_a2", Policy: DefaultPolicy(), CarryFrom: "run_a1"}
+	if _, err := s.RecordVerdict(ctx, org, st, "run_a2"); err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	if err := owner.QueryRow(ctx, `SELECT status || ' ' || COALESCE(decision, '') || ' ' || COALESCE(carried_from, '')
+		FROM acceptance_verdicts WHERE run_id = 'run_a2' AND criterion = 2`).Scan(&line); err != nil || line != "fail accepted run_a1" {
+		t.Fatalf("carried criterion 2 = %q (%v), want fail accepted run_a1", line, err)
+	}
+	var raised int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM review_findings WHERE run_id = 'run_a2'`).Scan(&raised); err != nil || raised != 0 {
+		t.Errorf("round 2 raised %d findings (%v), want none", raised, err)
+	}
+	if in, err = s.gateInput(ctx, org, st, "run_a2"); err != nil {
+		t.Fatal(err)
+	}
+	if g := judgeGate(st.Policy, in); g.Outcome != "pass" {
+		t.Errorf("round 2 gate = %+v, want pass", g)
 	}
 }
 

@@ -225,7 +225,10 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 			severity = st.Policy.BlockingSeverities[0]
 		}
 		for _, v := range verdicts {
-			if v.Status != VerdictFail {
+			// A carried failure keeps the person's acceptance, which settles
+			// it as it did in the round they decided (judgeGate skips it too).
+			// Only a carry sets Decision on a verdict judged here.
+			if v.Status != VerdictFail || v.Decision != "" {
 				continue
 			}
 			// One dude raised for this criterion at an earlier test, still
