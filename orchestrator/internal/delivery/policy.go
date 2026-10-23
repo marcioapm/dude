@@ -186,25 +186,22 @@ func ReviewersFor(p Policy, changedPaths []string) []string {
 func pathReviewers(p Policy, paths []string) []string {
 	var out []string
 	for _, rule := range p.ConditionalReviewers {
-		if len(rule.WhenPathsMatch) == 0 || slices.ContainsFunc(paths, func(path string) bool { return matchesAny(rule.WhenPathsMatch, path) }) {
+		if len(rule.WhenPathsMatch) == 0 || slices.ContainsFunc(paths, func(path string) bool { return matchesRepoOrPath(rule.WhenPathsMatch, path) }) {
 			out = append(out, rule.Category)
 		}
 	}
 	return out
 }
 
-// matchesAny: a path is <repo>/<path in repo>, and a glob may name either,
-// so "migrations/**" matches api/migrations/x.sql, and "web/**" matches
-// everything in web.
-func matchesAny(globs []string, path string) bool {
-	_, inRepo, _ := strings.Cut(path, "/")
-	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, path) || MatchesGlob(g, inRepo) })
+// Both matchers take a <repo>/<path in repo>. A conditional rule's glob may
+// name either form, so "migrations/**" matches api/migrations/x.sql and
+// "web/**" everything in web; a NonProductPaths glob names the in-repo path
+// only, so "docs/**" does not cover a repository named docs.
+func matchesRepoOrPath(globs []string, path string) bool {
+	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, path) }) || matchesPathInRepo(globs, path)
 }
 
-// nonProduct matches a <repo>/<path> against NonProductPaths by its path
-// in the repository alone: "docs/**" must not make every file of a
-// repository named docs non-product.
-func nonProduct(globs []string, path string) bool {
+func matchesPathInRepo(globs []string, path string) bool {
 	_, inRepo, _ := strings.Cut(path, "/")
 	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, inRepo) })
 }
@@ -235,21 +232,20 @@ const (
 type ReviewRound struct {
 	// The task's changed paths, <repo>/<path>.
 	Whole []string
-	// Later: a review round of the attempt completed before this one, and
-	// Change is what changed since it.
-	Later  bool
+	// What changed since the attempt's previous completed review round;
+	// not Measured on a first round.
 	Change RoundChange
 	// The categories of the open findings a fix attempted.
 	Attempted []string
 }
 
 // RoundReviewers picks a review round's reviewers, in reviewerOrder, and
-// why each runs. The first round of an attempt, one whose own change could
-// not be measured, and one over MaxResumeDeltaLines run the whole change's
-// reviewers (ReviewersFor). A later round runs AlwaysReviewers, the
+// why each runs. A round whose own change is not measured (a first round,
+// or one GitHub could not compare) or is over MaxResumeDeltaLines runs the
+// whole change's reviewers (ReviewersFor). A later round runs the
 // reviewers of the findings it judges, the conditional reviewers its own
 // change's paths match, and RequiredReviewers when that change touches a
-// path outside NonProductPaths.
+// path outside NonProductPaths. Every round runs AlwaysReviewers.
 func RoundReviewers(p Policy, r ReviewRound) ([]string, map[string][]string) {
 	why := map[string][]string{}
 	add := func(categories []string, reason string) {
@@ -261,14 +257,14 @@ func RoundReviewers(p Policy, r ReviewRound) ([]string, map[string][]string) {
 	}
 	add(p.AlwaysReviewers, ReasonAlways)
 	switch {
-	case !r.Later || !r.Change.Measured:
+	case !r.Change.Measured:
 		add(ReviewersFor(p, r.Whole), ReasonFirstRound)
 	case r.Change.Lines > MaxResumeDeltaLines:
 		add(ReviewersFor(p, r.Whole), ReasonLargeRound)
 	default:
 		add(r.Attempted, ReasonFinding)
 		add(pathReviewers(p, r.Change.Paths), ReasonPaths)
-		if slices.ContainsFunc(r.Change.Paths, func(path string) bool { return !nonProduct(p.NonProductPaths, path) }) {
+		if slices.ContainsFunc(r.Change.Paths, func(path string) bool { return !matchesPathInRepo(p.NonProductPaths, path) }) {
 			add(p.RequiredReviewers, ReasonRequired)
 		}
 	}

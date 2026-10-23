@@ -40,17 +40,23 @@ type laterRound struct {
 // The whole task's paths, which pick every conditional reviewer.
 var wholeTask = []string{"repo/src/api/routes/work.ts", "repo/web/src/App.tsx", "repo/migrations/031_x.sql", "repo/src/auth/login.ts"}
 
+// modified is a compare's files: each name modified by 4 lines.
+func modified(names ...string) []map[string]any {
+	var files []map[string]any
+	for _, name := range names {
+		files = append(files, map[string]any{"filename": name, "status": "modified", "additions": 3, "deletions": 1})
+	}
+	return files
+}
+
 func newLaterRound(t *testing.T, files ...string) *laterRound {
 	app, owner := dbtest.Open(t)
-	r := &laterRound{t: t, ctx: context.Background(), org: dbtest.Org(t, owner), owner: owner, status: 200}
+	r := &laterRound{t: t, ctx: context.Background(), org: dbtest.Org(t, owner), owner: owner, status: 200, files: modified(files...)}
 	r.exec = func(q string, args ...any) {
 		t.Helper()
 		if _, err := owner.Exec(r.ctx, q, append([]any{r.org}, args...)...); err != nil {
 			t.Fatal(err)
 		}
-	}
-	for _, name := range files {
-		r.files = append(r.files, map[string]any{"filename": name, "status": "modified", "additions": 3, "deletions": 1})
 	}
 	r.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_rr', $1, 'P', 'p', 'P')`)
 	r.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_rr', $1, 'prj_rr', 1, 'T', 'g', 'running')`)
@@ -102,6 +108,40 @@ func (r *laterRound) sc(step string) workflow.StepContext {
 	return workflow.StepContext{WorkflowRunID: "wfr_rr", OrganizationID: r.org, Step: step, State: raw}
 }
 
+// reload reads the state the workflow row holds, as a replay of a step does.
+func (r *laterRound) reload() {
+	r.t.Helper()
+	var raw []byte
+	if err := r.owner.QueryRow(r.ctx, `SELECT state FROM workflow_runs WHERE id = 'wfr_rr'`).Scan(&raw); err != nil {
+		r.t.Fatal(err)
+	}
+	r.st = &State{}
+	if err := json.Unmarshal(raw, r.st); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// policy layers raw over the defaults, as a project's settings do.
+func (r *laterRound) policy(raw string) {
+	r.t.Helper()
+	p, err := ResolvePolicy(nil, json.RawMessage(raw))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.st.Policy = p
+}
+
+// onCandidate puts the round on a pull request's candidate cut at aaa.
+func (r *laterRound) onCandidate() {
+	r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+}
+
+// completeRound marks every Run the test's review steps made completed at
+// the heads they started from.
+func (r *laterRound) completeRound() {
+	r.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE organization_id = $1 AND task_id = 'wi_rr' AND id <> 'run_rr1'`)
+}
+
 // review runs the review step and returns the round's reviewers and why
 // each runs, as its run.created records them, and the step's result.
 func (r *laterRound) review() ([]string, map[string][]string, workflow.Result) {
@@ -122,13 +162,12 @@ func (r *laterRound) review() ([]string, map[string][]string, workflow.Result) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		r.t.Fatal(err)
 	}
-	var made []string
 	rows, err := r.owner.Query(r.ctx, `SELECT category FROM runs WHERE task_id = 'wi_rr' AND id <> 'run_rr1'
 		AND creation_key LIKE '%:review:' || $1::int || ':%' ORDER BY category`, r.st.Iteration)
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	made, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	made, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -205,9 +244,6 @@ func TestALaterRoundsChangeSpansEveryRepository(t *testing.T) {
 	r.exec(`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_rr', 'repo_rr_web', $1)`)
 	r.exec(`UPDATE runs SET base_refs = '{"repo":"aaa","web":"ccc"}' WHERE organization_id = $1 AND id = 'run_rr1'`)
 	r.st.Heads = map[string]string{"repo": "bbb", "web": "ddd"}
-	modified := func(name string) []map[string]any {
-		return []map[string]any{{"filename": name, "status": "modified", "additions": 3, "deletions": 1}}
-	}
 	// Repositories are compared in name order: the product change is in the
 	// first one read, the CI-only one last.
 	r.bySlug = map[string][]map[string]any{"acme/repo": modified("src/App.tsx"), "acme/web": modified(".github/x.yml")}
@@ -228,15 +264,7 @@ func TestAReplayedReviewStepKeepsItsRoundsReviewers(t *testing.T) {
 	first, _, _ := r.review()
 	r.exec(`UPDATE runs SET status = 'completed', ended_at = now() + interval '1 second'
 		WHERE organization_id = $1 AND task_id = 'wi_rr' AND category = 'tests' AND id <> 'run_rr1'`)
-	// A replay reads the state the workflow row holds.
-	var raw []byte
-	if err := r.owner.QueryRow(r.ctx, `SELECT state FROM workflow_runs WHERE id = 'wfr_rr'`).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	r.st = &State{}
-	if err := json.Unmarshal(raw, r.st); err != nil {
-		t.Fatal(err)
-	}
+	r.reload()
 	again, why, _ := r.review()
 	if !slices.Equal(again, first) || !slices.Equal(again, []string{"correctness", "tests", "frontend", "performance"}) {
 		t.Fatalf("replayed round %v, first run %v", again, first)
@@ -294,24 +322,16 @@ func TestTheRoundDeltaCacheKeepsPathsOnlyForAReviewChoice(t *testing.T) {
 // read by refreshPRWaitHeads) chooses again: the stored choice never saw
 // that change.
 func TestAReplayAtMovedHeadsChoosesItsRoundAgain(t *testing.T) {
-	r := newLaterRound(t).firstRound()
-	modified := func(name string) []map[string]any {
-		return []map[string]any{{"filename": name, "status": "modified", "additions": 3, "deletions": 1}}
-	}
-	r.bySlug = map[string][]map[string]any{"acme/repo": modified(".github/workflows/x.yml")}
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	if first, _, _ := r.review(); !slices.Equal(first, []string{"correctness"}) {
 		t.Fatalf("round at bbb %v", first)
 	}
-	var raw []byte
-	if err := r.owner.QueryRow(r.ctx, `SELECT state FROM workflow_runs WHERE id = 'wfr_rr'`).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	r.st = &State{}
-	if err := json.Unmarshal(raw, r.st); err != nil || r.st.ReviewChoice == nil {
-		t.Fatalf("no stored choice: %v", err)
+	r.reload()
+	if r.st.ReviewChoice == nil {
+		t.Fatal("no stored choice")
 	}
 	r.st.Heads = map[string]string{"repo": "ccc"}
-	r.bySlug["acme/repo"] = modified("web/src/Button.tsx")
+	r.bySlug = map[string][]map[string]any{"acme/repo": modified("web/src/Button.tsx")}
 	again, why, _ := r.review()
 	if !slices.Equal(again, []string{"correctness", "tests", "frontend", "performance"}) || !slices.Equal(why["frontend"], []string{ReasonPaths}) {
 		t.Fatalf("replay at moved heads %v %v, want the round chosen again", again, why)
@@ -409,11 +429,7 @@ func TestTheFirstRoundOfAnAttemptRunsTheWholeChangesReviewers(t *testing.T) {
 // reviewer, and the loop goes on as from a clear round.
 func TestALaterRoundWithNoReviewerGoesOnClear(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
-	p, err := ResolvePolicy(nil, json.RawMessage(`{"alwaysReviewers":[]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.st.Policy = p
+	r.policy(`{"alwaysReviewers":[]}`)
 	got, _, res := r.review()
 	if len(got) != 0 || res.Next != "awaitReview" || len(res.AwaitSignals) != 0 {
 		t.Fatalf("reviewers %v, result %+v; want none, straight to awaitReview", got, res)
@@ -428,29 +444,13 @@ func TestALaterRoundWithNoReviewerGoesOnClear(t *testing.T) {
 	}
 }
 
-// policy layers raw over the defaults, as a project's settings do.
-func (r *laterRound) policy(raw string) {
-	r.t.Helper()
-	p, err := ResolvePolicy(nil, json.RawMessage(raw))
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	r.st.Policy = p
-}
-
-// completeRound marks every Run the test's review steps made completed at
-// the heads they started from.
-func (r *laterRound) completeRound() {
-	r.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE organization_id = $1 AND task_id = 'wi_rr' AND id <> 'run_rr1'`)
-}
-
 // A pull request's CI-only fix on its candidate, in a project that runs no
 // reviewer always: promotion waits on a completed review at the candidate's
 // head, so the round runs the required reviewers rather than none.
 func TestAnEmptyRoundOnACandidateRunsTheRequiredReviewers(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.policy(`{"alwaysReviewers":[]}`)
-	r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+	r.onCandidate()
 	res, err := r.steps.promoteCandidate(r.ctx, r.sc("promoteCandidate"))
 	if err != nil || res.Next != "review" {
 		t.Fatalf("promoteCandidate on an unreviewed head went to %q: %v", res.Next, err)
@@ -473,7 +473,7 @@ func TestAnEmptyRoundOnACandidateRunsTheRequiredReviewers(t *testing.T) {
 func TestAnEmptyGateBoundRoundWithNoRequiredReviewerRunsTheFirstRounds(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.policy(`{"alwaysReviewers":[],"requiredReviewers":[]}`)
-	r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+	r.onCandidate()
 	got, why, _ := r.review()
 	if !slices.Equal(got, []string{"security", "database", "api", "frontend"}) || !slices.Equal(why["api"], []string{ReasonFirstRound}) {
 		t.Fatalf("reviewers %v %v", got, why)
@@ -589,7 +589,7 @@ func TestWhereALaterRoundStarts(t *testing.T) {
 	})
 	t.Run("a pull request's fix on its candidate is a later round", func(t *testing.T) {
 		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
-		r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+		r.onCandidate()
 		got, why, _ := r.review()
 		if !slices.Equal(got, []string{"correctness"}) || !slices.Equal(why["correctness"], []string{ReasonAlways}) || r.compares != 1 {
 			t.Fatalf("reviewers %v %v, %d compares", got, why, r.compares)

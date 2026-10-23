@@ -138,9 +138,8 @@ type State struct {
 	// test, even at the pull request wait or with the policy's tester off.
 	// Cleared once that test's Run is created.
 	RetestDue bool `json:"retestDue,omitempty"`
-	// The policy's choice of the review round being created (roundChoice):
-	// a replay of the step creates the same round, though one of its Runs
-	// completed meanwhile and moved where the round's change starts.
+	// The policy's choice for the review round being created, which a
+	// replay of the step at the same round and heads reuses.
 	ReviewChoice *ReviewChoice `json:"reviewChoice,omitempty"`
 
 	// A person started it past its open blockers (Start anyway): the
@@ -830,10 +829,8 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	st.ReviewRunIDs = runIDs
 	if len(runIDs) == 0 {
-		// No reviewer is warranted (no always-run reviewer, and a change
-		// to non-product paths only, with no finding to judge) and no gate
-		// waits on a review of these heads: the round is complete and
-		// clear of new findings.
+		// No reviewer is warranted and no gate waits (gateReviewers): the
+		// round is complete and clear of new findings.
 		st.PendingRunIDs = nil
 		return workflow.Result{Next: "awaitReview", State: st}, nil
 	}
@@ -851,7 +848,7 @@ func (w *steps) roundReviewers(ctx context.Context, sc workflow.StepContext, st 
 		if err != nil {
 			return nil, nil, err
 		}
-		if r.Later = from != nil; r.Later {
+		if from != nil {
 			if r.Change, err = w.roundChange(ctx, sc, st, PhaseReview, from); err != nil {
 				return nil, nil, err
 			}

@@ -423,16 +423,15 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   the resumption's line count), and `requiredReviewers` when one of those
   paths is outside `nonProductPaths` (matched against the in-repo path
   only, unlike conditional rules, so `docs/**` does not cover a repository
-  named `docs`). Unmeasurable (no forge, refused,
-  truncated) or over `MaxResumeDeltaLines`: the first round's
-  `ReviewersFor`. A retry, a directed review and the simplifier's range keep
-  their own categories. The round's `run.created` carries `reasons`; a
-  round with no reviewer goes straight to `awaitReview`, unless a gate
-  waits on a completed review at its heads (`st.Candidate`, or an
-  untested conductor head): then `requiredReviewers` run, else the first
-  round's (`steps.gateReviewers`). The choice is kept in the Owned
-  `reviewChoice` for the round's creation key, so a replayed step creates
-  the same round.
+  named `docs`). Unmeasurable (no forge, refused, truncated) or over
+  `MaxResumeDeltaLines`: the first round's `ReviewersFor`. A retry, a
+  directed review and the simplifier's range keep their own categories.
+  The round's `run.created` carries `reasons`; a round with no reviewer
+  goes straight to `awaitReview`, unless a gate waits on a completed review
+  at its heads (`st.Candidate`, or an untested conductor head): then
+  `requiredReviewers` run, else the first round's (`steps.gateReviewers`).
+  The choice is kept in the Owned `reviewChoice` with the round's creation
+  key and heads, so a replayed step at those heads creates the same round.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
