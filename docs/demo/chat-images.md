@@ -38,7 +38,7 @@ docker run --rm --network host --entrypoint sh minio/mc -c \
 ```
 
 (versitygw works the same, as the test suite uses it:
-`versity/versitygw:v1.7.0 --port :9000 posix /tmp` with
+`docker.io/versity/versitygw:v1.7.0 --port :9000 posix /tmp` with
 `ROOT_ACCESS_KEY`/`ROOT_SECRET_KEY`, and a bucket made with any S3 client.)
 
 The S3 settings, used by **both** processes from now on:

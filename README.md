@@ -86,7 +86,9 @@ Photos, and the images people send agents, are kept in S3 (`DUDE_S3_*`, see
 images from it too, so set the same variables on both processes. To try
 images with a real agent, see [`docs/demo/chat-images.md`](docs/demo/chat-images.md).
 The test suite and the demo start their own S3, a versitygw container
-(`dude-e2e-s3`, port 59200), and make a bucket per run.
+(`dude-e2e-s3`, port 59200; its image is `DUDE_TEST_S3_IMAGE`, by default
+the fully qualified `docker.io/versity/versitygw:v1.7.0`, so podman pulls it
+as Docker does), and make a bucket per run.
 
 Migrations run as the owner role. Everything else connects as `dude_app`,
 which has neither `SUPERUSER` nor `BYPASSRLS`, so the row-level security that
