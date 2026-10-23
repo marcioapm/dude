@@ -268,7 +268,7 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
     await scope.sql`
       UPDATE automations SET name = ${input.name}, description = ${input.description}, kind = ${input.kind},
         trigger = ${input.trigger}::jsonb, session_mode = ${input.sessionMode}, expiry_days = ${input.expiryDays},
-        concurrency = ${input.concurrency}, parallel_max = ${input.parallelMax}, repos = ${JSON.stringify(input.repos)}::jsonb,
+        concurrency = ${input.concurrency}, parallel_max = ${input.parallelMax}, repos = ${input.repos}::jsonb,
         repo_filter = ${input.repoFilter}::jsonb, agent = ${input.agent}::jsonb, machine_size_id = ${input.machineSizeId},
         image_id = ${input.imageId}, setup_script = ${input.setupScript}, command = ${input.command},
         server = ${input.server}::jsonb, webhook = ${input.webhook}::jsonb,

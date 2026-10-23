@@ -177,6 +177,19 @@ describe("changing", () => {
     expect(otherProjects.status).toBe(400);
   });
 
+  test("the repositories a project automation checks out are stored and read back as given", async () => {
+    const { body: a } = await create("ana", { name: "Checkout", kind: "command", trigger: "schedule", projectId: WEB });
+    const base = { name: "Checkout", kind: "command", trigger: { kind: "schedule", cron: "0 * * * *", tz: "UTC" }, command: "true" };
+    for (const [repos, type] of [["all", "string"], ["none", "string"], [["repo_w"], "array"]] as const) {
+      expect((await call("ana", "PUT", `/v1/automations/${a.id}`, { ...base, repos })).status).toBe(200);
+      expect((await body(await call("ana", "GET", `/v1/automations/${a.id}`))).repos).toEqual(repos);
+      const [stored] = await owner`SELECT jsonb_typeof(repos) AS type, repos FROM automations WHERE id = ${a.id}`;
+      expect(stored).toEqual({ type, repos });
+    }
+    // The lists below count the project's automations.
+    expect((await call("ana", "DELETE", `/v1/automations/${a.id}`)).status).toBeLessThan(300);
+  });
+
   test("the Reviewer preset is refused on anything but a pull_request event (Q6)", async () => {
     const { body: a } = await create("ana", { name: "Review", preset: "reviewer" });
     const reviewer = { name: "Review", kind: "agent", agent: { preset: { role: "reviewer", overrides: {} }, brief: "" } };
