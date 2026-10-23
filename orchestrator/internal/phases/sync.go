@@ -231,6 +231,9 @@ type phaseRun struct {
 	// due (nil for none), as the sweep read them (migration 139).
 	RetryFailures int
 	RetryDueAt    *time.Time
+	// lux stopped it, a resumed round, at its time limit
+	// (replayAtTimeLimit): it is replayed in its slot.
+	TimedOut bool
 }
 
 // conductor says whether r is its task's conductor: no phase, never
@@ -286,7 +289,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
 	r.keep, COALESCE(r.kept_until <= now(), false), r.finishes, COALESCE(r.image_build_id, ''), ` + delivery.MoveUnsettled + `,
 	r.harness_state->'brokenTurn', COALESCE(extract(epoch FROM now() - (r.harness_state->'brokenTurn'->>'at')::timestamptz)::float8, 0),
-	r.retry_failures, r.retry_due_at, COALESCE(r.source_kind, '')`
+	r.retry_failures, r.retry_due_at, COALESCE(r.source_kind, ''), COALESCE((r.harness_state->>'timedOut')::boolean, false)`
 
 // runFrom is what runColumns reads from: the Run, whether it has anything
 // open for a person (ask.open, delivery.OpenAsk: asked once per row, read
@@ -485,7 +488,7 @@ func scan(row pgx.Row) (phaseRun, error) {
 		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
 		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs,
-		&r.RetryFailures, &r.RetryDueAt, &r.SourceKind)
+		&r.RetryFailures, &r.RetryDueAt, &r.SourceKind, &r.TimedOut)
 	if err != nil {
 		return r, err
 	}
@@ -858,6 +861,8 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return s.whilePaused(ctx, r)
 	case r.Control == "abort":
 		return true, s.end(ctx, r)
+	case r.TimedOut && r.Control == "none":
+		return true, s.replayTimedOut(ctx, r)
 	case r.Control == "pause_hard" || r.Control == "pause_graceful":
 		return true, s.pause(ctx, r)
 	case r.Status == statusRunning && r.Control == "none" && s.brokenOverdue(r):

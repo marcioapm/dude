@@ -626,6 +626,9 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	var setup *SetupFailure
 	switch {
 	case stop != nil:
+		if replay, err := t.replayAtTimeLimit(ctx, tx, s, *stop); replay || err != nil {
+			return err
+		}
 		why = luxStopWords(*stop, s.timeout())
 		agentErr := ""
 		if broken != nil {
