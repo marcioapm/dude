@@ -177,6 +177,54 @@ func TestAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
 	}
 }
 
+// The ABS-28 shape: the pull request is merged as dude records it, with no
+// pr.ended ever sent (a merge from before v0.1.23), and then a pull request
+// fixer finishes with commits. Its fix reaches nothing: no pull request is
+// opened for it, no GitHub call fails, and the task is done.
+func TestAFixFinishingAfterAnUnsignalledMergeOpensNothing(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			b.Hang = true
+		}
+		return b
+	}
+	task := w.reviewing()
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("the fixer at work", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, task) == 1
+	})
+	var luxID string
+	if err := w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND status = 'running'`, task).Scan(&luxID); err != nil {
+		t.Fatal(err)
+	}
+	// Merged on GitHub and in dude's record, the workflow never told.
+	w.gh.Merge(1)
+	mustExec(t, w.owner, `UPDATE pull_requests SET state = 'merged', merged_at = now() WHERE task_id = $1`, task)
+	w.lux.EndTurn(luxID)
+	w.until("the task to finish", func() bool { w.pump(); return w.taskStatus(task) == "done" })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'
+		AND pr_feedback <> '[]'::jsonb AND heads <> '{}'::jsonb`, task); n != 1 {
+		t.Fatalf("the pull request fixer did not finish with commits\n%s", w.describeRuns())
+	}
+	w.afterEnd()
+	w.assertEnded(task, "done")
+	if n := len(w.gh.Pulls()); n != 1 {
+		t.Errorf("%d pull requests, want the merged one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND attempt > 0`, task); n != 0 {
+		t.Errorf("a step failed: %s", w.str(`SELECT COALESCE(last_error, '') FROM workflow_runs WHERE task_id = $1`, task))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND created_at >
+		(SELECT max(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix')`, task); n != 0 {
+		t.Errorf("%d reviews of a fix no pull request can show", n)
+	}
+}
+
 // Two repositories: one pull request merges while a fixer works for the
 // other. The fixer goes on and the task is not done; once the second
 // merges, it is.

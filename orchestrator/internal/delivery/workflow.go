@@ -2164,6 +2164,11 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if pending := settle(st, sc); len(pending) > 0 {
 		return park("awaitPRFix", st, pending), nil
 	}
+	// No pull request left open for the fix to reach, signalled or not: it
+	// is dropped, and nothing is opened for it (endedBeforeOpening).
+	if res, ended, err := w.endedBeforeOpening(ctx, sc, st); ended || err != nil {
+		return res, err
+	}
 	runID := st.PendingRunIDs[0]
 	out, err := w.s.PhaseOutcome(ctx, sc.OrganizationID, runID)
 	if err != nil {
@@ -2245,6 +2250,10 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	c := st.Candidate
 	if c == nil {
 		return waitForPR(st), nil
+	}
+	// Nor to a pull request no longer open.
+	if res, ended, err := w.endedBeforeOpening(ctx, sc, st); ended || err != nil {
+		return res, err
 	}
 	// Never unreviewed at the pull request: a head a conductor's simplifier
 	// or fix left after the last review goes back to one.
