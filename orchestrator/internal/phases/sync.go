@@ -1569,6 +1569,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 				return err
 			}
 		}
+		// A fix Run's checks' log tails, kept apart from pr_feedback
+		// (runs.check_logs): read only on submit, for its init.
+		if stored == nil && r.Phase == delivery.PhaseFix {
+			var checkLogs map[string]string
+			if err := tx.QueryRow(ctx, `SELECT check_logs FROM runs WHERE id = $1`, r.ID).Scan(&checkLogs); err != nil {
+				return fmt.Errorf("load the check logs: %w", err)
+			}
+			feedback = delivery.WithCheckLogs(feedback, checkLogs)
+		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
@@ -1651,7 +1660,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A resume sends no prompt: only a submit's says where it runs.
 		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI && !promptIn.Child)
 	}
-	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if stored == nil {
 		// Pinned to the Run: lux keeps the submitted spec, and its init,
 		// for every placement; a resume sends none.
@@ -1662,7 +1670,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		instructions := instructionsIn.InstructionsInput()
 		instructions.Grants = &grants
 		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructions)
+		// The failing checks' log files go in the init beside the
+		// instruction file, in what room it leaves; the prompt names them.
+		promptIn.PRFeedback, in.CheckLogs = checkLogsInit(workspaceDir, promptIn.PRFeedback, initRoom(s.Agent, in))
 	}
+	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
 		// the machine's paragraph as a phase's does.

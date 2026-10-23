@@ -573,11 +573,29 @@ func FixRoundMessage(from, to map[string]string, contract bool, in PromptInput) 
 	if contract {
 		c = fixContract
 	}
+	in.PRFeedback = resumedChecks(in.PRFeedback)
 	return render(fixRoundTmpl, struct {
 		Ranges   []roundRange
 		Contract string
 		Sections []string
 	}{roundRanges(from, to), c, fixSections(in)})
+}
+
+// resumedChecks is a copy of feedback whose checks are marked Resumed: a
+// resumed Run's init does not run again, so this round's logs get no file
+// and any under its workspace are an earlier round's. A check with an
+// excerpt is NoFile, for the prompt to say the excerpt is all there is.
+func resumedChecks(feedback []forge.ActionableFeedback) []forge.ActionableFeedback {
+	out := slices.Clone(feedback)
+	for i := range out {
+		out[i].Checks = slices.Clone(out[i].Checks)
+		for j := range out[i].Checks {
+			c := &out[i].Checks[j]
+			c.Resumed, c.NoFile = true, c.Log != ""
+			c.Path, c.FileKiB, c.FileCut = "", 0, false
+		}
+	}
+	return out
 }
 
 type roundRange struct {

@@ -281,6 +281,7 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		return "", fmt.Errorf("task %s: %w", in.TaskID, err)
 	}
 	feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
+	checkLogs, _ := json.Marshal(CheckLogsOf(in.PRFeedback))
 	bases, _ := json.Marshal(nonNilMap(in.BaseRefs))
 	var reviewRange []byte
 	if in.ReviewRange != nil && len(in.ReviewRange.Base) > 0 {
@@ -296,14 +297,14 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
 		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override,
-		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how)
+		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how, check_logs)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23)`,
+		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23, $24::jsonb)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
 		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
-		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how); err != nil {
+		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how, checkLogs); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {
