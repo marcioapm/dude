@@ -805,10 +805,23 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   what it filed in a line, the projects it reads as chips, its state and
   age in words. **`SharedMark`** marks one someone else is in too: the
   shared glyph, and the owner's face when it is not yours, so it reads
-  without colour.
+  without colour. An organisation session shows the organisation mark in
+  place of the shared one (`access="organisation"`, `org`); `origin` adds a
+  line under its summary saying where it came from. Under 600px its chips
+  go under the text and the state spans both rows.
+- **`SharedMark scope="organisation"`** is the building glyph and "Everyone
+  in <org>" in the info ink, a `role=img` named with those words;
+  `showLabel` writes them beside the glyph, as the session header does.
+  **`AdminOwned`** marks a session whose owner left the organisation: the
+  building glyph and "Owner left <org> — owned by <org>'s admins" in the
+  attention ink, in the header meta and on top of the rail's People.
 - **`SidebarSessions`** sits above Projects in the sidebar: only the
   sessions you are in, the latest three by last activity, each with the
-  bulb glyph and the `SharedMark`'s parts. Its heading folds the list
+  bulb glyph and the `SharedMark`'s parts (the building glyph for one open
+  to the organisation). With `organisation`, a last row "Open to
+  everyone" — the building glyph and a muted count of the active
+  organisation sessions you have joined — opens their own list; it is a
+  place, not a session, and stays when the list is folded. Its heading folds the list
   (the app remembers it), opens the whole list, and has a "+" for a new
   session, as the Projects heading has for a project. The app passes it as `Sidebar`'s `sessions`
   slot, so the sidebar draws it in place and knows nothing of sessions.
@@ -818,8 +831,33 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   icon="archive"` "Archived". The list's header has a `Segmented size="toolbar"`
   of **Yours | Archived**; the sidebar never lists an archived session.
 - **`Sidebar waitingExtra`** adds what waits on you outside the tree —
-  session invitations and brainstorm questions put to you — to the
-  "Waiting on you" count, so one number answers "what needs me".
+  session invitations, brainstorm questions put to you, and @-mentions of
+  you in a session — to the "Waiting on you" count, so one number answers
+  "what needs me". A mention's `WaitingRow` has the mentioner's face, "<First>
+  mentioned you in **<session>**: “…”", the access mark and "you're not in it
+  yet" when you were never added, and Open.
+- **General access is one way.** `GeneralAccessRow` sits above a session's
+  people in the Share dialog: who may open it without being added. On a
+  private session the owner gets a `Select` whose Everyone option says
+  "Can't be undone"; choosing it shows the confirm (`Callout` attention,
+  `oneWay(org)`, "Open to everyone in <org>" / "Keep it private"). Once
+  `organisation`, the row is read-only for everyone, the owner included,
+  with "Every active member of <org> can open it and chat, without being
+  added. This can't be undone." and "Can chat".
+- **@-mentions.** `MentionMenu` is the listbox under the composer when "@"
+  starts a word: face, name, and what mentioning them means ("In this
+  session · can chat", "Not in it yet · can open it and chat", or, in a
+  private session, a locked "Not in this session" in the attention ink for
+  an `outside` person), with the keys under it. The composer keeps focus
+  (`aria-activedescendant`); a pointer press picks without taking it.
+  `MentionChip` is a mention in a sent message: the face and "@First" on the
+  info wash, named "Mention: <name>"; `you` when it is the reader.
+  `MentionShareConfirm` sits under the composer (its `below` slot) after a
+  pick of someone who can't open a private session: the owner gets **Share
+  and send**, **Send without sharing** (the name stays as text; nobody is
+  notified) and Cancel; anyone else is told who can share it and gets **Send
+  as plain text** and Cancel. A `role=group` named for the person, ringed in
+  the attention border, `shadow-1` in light.
 - **A session's name never leaves it.** The tab title and the presence
   word teammates see beside your face are the fixed "A session", never its
   title — named or "Untitled session" — because a private session's name must
@@ -1773,8 +1811,9 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   16px grid and 1.75 at 20px and up.
 - Every agent role has its own glyph (`ROLE_ICON` in `AgentAvatar`), the
   brainstorm's a bulb (`brainstorm`), also on each brainstorm session in a
-  list. `shared` (two people) marks a brainstorm session someone else is in
-  too (`SharedMark`, `SidebarSessions`). `pin` is an epic note's and
+  list. `shared` (two people) marks a brainstorm session shared with named
+  people, `building` one open to the whole organisation (`SharedMark`,
+  `SidebarSessions`, `AdminOwned`). `pin` is an epic note's and
   nothing else's (`EpicNote`, `EpicNoteNotice`, `EpicNoteRow`, a proposal's
   notes).
 
@@ -2198,7 +2237,13 @@ MarkdownCheatsheet.
   `variant="stage"` is for the page's one thing (the welcome): raised
   (`shadow-2`), a 72px field (52 compact) in `text-prose`, and no inset of
   its own, since its host is the frame. A host never restyles a composer
-  from outside.
+  from outside. With `mentionables`, "@" at the start of a word opens
+  `MentionMenu` (the field becomes a `combobox`); ↑/↓ move, Enter or Tab
+  pick, Escape closes; a pick writes "@Name " and the submission's
+  `mentions` lists the people still named in it, for the server to notify.
+  Enter picks while the menu is open, and sends otherwise. An `outside`
+  pick is written but not mentioned; `onMention` tells the caller, which
+  shows its confirm in `below`, and `submitRef` sends with `shareWith`.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
   what it came to. Heads a task's Chat.
 - **ChatRunLine** — a Run the conductor started, one line in its Chat on
@@ -2500,14 +2545,19 @@ sessions*):
 - **PublishedFiles** — the rail's Files: what the session's agent
   published, each with its `description` under the name when it has one,
   each opening in `FileViewer`.
-- **SessionRow / SharedMark** — a brainstorm session in the list, and the
-  marker for one someone else is in too.
+- **SessionRow / SharedMark** — a brainstorm session in the list, its
+  origin, and the marker for one shared with people or open to the
+  organisation. **AdminOwned** — the owner-left mark.
+- **GeneralAccessRow** — the Share dialog's one-way General access row.
+- **MentionMenu / MentionChip / MentionShareConfirm** — @-mentions in a
+  session: the composer's picker, the sent chip, and the private session's
+  share confirm.
 - **SidebarSessions** — your latest brainstorm sessions above the
   projects, in `Sidebar`'s `sessions` slot: `limit` (3) by `lastActivityAt`,
   newest first; the heading is a fold chevron (`folded` / `onFoldedChange`,
   for the app to keep), Sessions (`onOpenList`) and a "+" `IconButton`
   "New session" (`onNew`); `waitingExtra` counts their invitations and
-  questions in Waiting on you.
+  questions in Waiting on you. `organisation` adds the Open to everyone row.
 - **Welcome** — the first screen's stage: `mark` (the app's face; the
   design system has none), `greeting`, `line`, `composer` (a `ChatComposer
   variant="stage"`), `starters`, `footer`. **WelcomeNote** is the first-time

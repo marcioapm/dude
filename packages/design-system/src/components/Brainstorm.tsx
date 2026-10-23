@@ -452,14 +452,50 @@ function ProposedNotes({ notes }: { readonly notes: ReadonlyArray<string> }) {
 }
 
 /**
- * A session someone else is in too: the shared glyph, and the owner's face
- * when it is not yours. Read without colour: the glyph and the face.
+ * Who else can open the session, read without colour: the shared glyph and
+ * the owner's face when it is not yours (`scope` "people", the default), or
+ * the building glyph for one open to the whole organisation (`scope`
+ * "organisation", "Everyone in <org>"). `showLabel` writes the words beside
+ * the glyph, as the session's header does; otherwise they are its name.
  */
-export function SharedMark({ owner, label = "Shared" }: { readonly owner?: Person | undefined; readonly label?: string }) {
+export function SharedMark({ owner, label, scope = "people", org, showLabel }: {
+  readonly owner?: Person | undefined;
+  readonly label?: string | undefined;
+  readonly scope?: "people" | "organisation" | undefined;
+  readonly org?: string | undefined;
+  readonly showLabel?: boolean | undefined;
+}) {
+  if (scope === "organisation") {
+    const words = label ?? (org ? `Everyone in ${org}` : "Everyone in the organisation");
+    return (
+      <span className={cx(styles["shared"], styles["sharedOrg"])} title={showLabel ? undefined : words} role="img" aria-label={words}
+        data-scope="organisation">
+        <Icon name="building" size={12} />
+        {showLabel ? <span aria-hidden>{words}</span> : null}
+      </span>
+    );
+  }
+  const words = label ?? "Shared";
   return (
-    <span className={styles["shared"]} title={owner ? `${label} · ${owner.name}'s` : label} aria-label={owner ? `${label}, ${owner.name}'s` : label}>
+    <span className={styles["shared"]} title={owner ? `${words} · ${owner.name}'s` : words} aria-label={owner ? `${words}, ${owner.name}'s` : words}>
       <Icon name="shared" size={12} />
+      {showLabel ? <span aria-hidden>{words}</span> : null}
       {owner ? <PersonAvatar person={owner} size={16} /> : null}
+    </span>
+  );
+}
+
+/**
+ * On a session whose owner left the organisation: the building glyph and
+ * "Owner left <org> — owned by <org>'s admins" in the attention ink. A
+ * `role=img` named with the same words.
+ */
+export function AdminOwned({ org }: { readonly org: string }) {
+  const words = `Owner left ${org} — owned by ${org}'s admins`;
+  return (
+    <span className={styles["adminOwned"]} role="img" aria-label={words} data-testid="admin-owned">
+      <Icon name="building" size={12} />
+      <span aria-hidden>{words}</span>
     </span>
   );
 }
@@ -473,20 +509,28 @@ export interface SessionRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   readonly state: ReactNode;
   readonly age?: ReactNode;
   readonly shared?: { readonly owner?: Person | undefined } | undefined;
+  /** Open to the organisation: its mark in place of the shared one. */
+  readonly access?: "private" | "organisation" | undefined;
+  readonly org?: string | undefined;
+  /** A line under the summary saying where it came from. */
+  readonly origin?: ReactNode;
   readonly onOpen: () => void;
 }
 
-/** A session in the list: its title, what it filed, what it reads, how it is. */
-export function SessionRow({ title, summary, projects, state, age, shared, onOpen, className, ...rest }: SessionRowProps) {
+/** A session in the list: its title, what it filed, what it reads, how it is. Under 600px its chips go under the text. */
+export function SessionRow({ title, summary, projects, state, age, shared, access, org, origin, onOpen, className, ...rest }: SessionRowProps) {
   return (
-    <li className={cx(styles["row"], className)} {...rest}>
+    <li className={cx(styles["rowBox"], className)} {...rest}>
+      <div className={styles["row"]}>
       <span className={styles["rowFace"]}><Icon name="brainstorm" size={16} /></span>
       <button type="button" className={styles["rowOpen"]} onClick={onOpen}>
         <span className={styles["rowTitle"]}>
           {title}
-          {shared ? <SharedMark owner={shared.owner} /> : null}
+          {access === "organisation" ? <SharedMark scope="organisation" org={org} />
+            : shared ? <SharedMark owner={shared.owner} /> : null}
         </span>
         <span className={styles["muted"]}>{summary}</span>
+        {origin ? <span className={styles["muted"]}>{origin}</span> : null}
       </button>
       <span className={styles["chips"]}>
         {projects.length === 0 ? <span className={styles["chip"]}>No project yet</span> : projects.map((p) => (
@@ -497,6 +541,7 @@ export function SessionRow({ title, summary, projects, state, age, shared, onOpe
         ))}
       </span>
       <span className={styles["rowState"]}>{state}{age ? <><br />{age}</> : null}</span>
+      </div>
     </li>
   );
 }

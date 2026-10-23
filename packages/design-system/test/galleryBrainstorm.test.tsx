@@ -33,7 +33,7 @@ const FRAMES = ["comfortable dark", "comfortable light", "compact dark", "compac
 test("every Brainstorm block renders in dark and light, comfortable and compact", async () => {
   const el = await mount();
   const blocks = [...el.querySelectorAll("section#brainstorm [id^='bs-']")];
-  expect(blocks.map((b) => b.id)).toEqual(["bs-avatar", "bs-title", "bs-proposal", "bs-row", "bs-sidebar", "bs-rail", "bs-rail-model", "bs-files"]);
+  expect(blocks.map((b) => b.id)).toEqual(["bs-avatar", "bs-title", "bs-proposal", "bs-row", "bs-sidebar", "bs-access", "bs-mentions", "bs-rail", "bs-rail-model", "bs-files"]);
   for (const block of blocks) {
     const panes = [...block.querySelectorAll("[data-theme][data-density]")];
     expect(panes.map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`), block.id).toEqual(FRAMES);

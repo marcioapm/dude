@@ -1,0 +1,169 @@
+/* General access, above a session's people in the Share dialog. */
+.access {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-12);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-chrome);
+}
+.accessGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-surface);
+  color: var(--ds-color-text-secondary);
+}
+.accessGlyphOrg {
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+}
+.accessBody {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.accessLabel {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.accessValue {
+  color: var(--ds-color-text-strong);
+  font-size: var(--ds-text-md);
+}
+.accessHelp {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.accessRole {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.confirmText {
+  margin: 0 0 var(--ds-space-8);
+}
+.actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+
+/* The mention picker: a listbox above the composer's field. */
+.menu {
+  display: flex;
+  flex-direction: column;
+  max-width: 440px;
+  padding: var(--ds-space-8) 0;
+  border-radius: var(--ds-radius-float);
+  background: var(--ds-color-raised);
+  box-shadow: var(--ds-shadow-2);
+}
+.menuHead {
+  padding: var(--ds-space-4) var(--ds-space-16) var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.menuList {
+  margin: 0;
+  padding: 0 var(--ds-space-8);
+  list-style: none;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  padding: var(--ds-space-6) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  cursor: pointer;
+}
+.optionActive {
+  background: var(--ds-color-hover-wash);
+  box-shadow: inset 2px 0 0 var(--ds-color-accent);
+}
+.optionName {
+  flex: none;
+  color: var(--ds-color-text-strong);
+  font-size: var(--ds-text-sm);
+}
+.optionDetail,
+.menuEmpty {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
+.menuEmpty {
+  padding: var(--ds-space-6) var(--ds-space-8);
+}
+.outside {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-attention-fg);
+}
+.menuKeys {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-8) var(--ds-space-16) 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+
+/* A mention in a sent message. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-2);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+  vertical-align: middle;
+  font-size: var(--ds-text-sm);
+}
+.chipYou {
+  box-shadow: inset 0 0 0 1px var(--ds-tone-info-border);
+  font-weight: 600;
+}
+
+/* Under the composer's field: a pending mention's confirm, ringed in the
+   attention tone (its meaning: a choice waits), raised with shadow-1 in light. */
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-12);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-raised);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-attention-border);
+}
+:global([data-theme="light"]) .confirm {
+  box-shadow: inset 0 0 0 1px var(--ds-tone-attention-border), var(--ds-shadow-1);
+}
+.confirmLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.confirmNote {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}

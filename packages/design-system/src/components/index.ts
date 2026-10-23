@@ -215,3 +215,6 @@ export type {
   DigestItem, EpicNoteAuthor, EpicNoteData, EpicNoteNoticeProps, EpicNoteProps, PeerDelivery, PeerListProps, PeerMessageData,
   PeerMessageProps, PeerRow, PeerTask, PeerThreadProps, PeerThreadState, PeerWaitEnd, PeerWaitLineProps, SinceDigestProps, TaskChipProps,
 } from "./Peer.tsx";
+export { AdminOwned } from "./Brainstorm.tsx";
+export { GeneralAccessRow, MentionChip, MentionMenu, MentionShareConfirm, mentionOptionId, oneWay } from "./SessionAccess.tsx";
+export type { GeneralAccessRowProps, MentionItem, MentionMenuProps, MentionShareConfirmProps } from "./SessionAccess.tsx";
