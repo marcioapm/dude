@@ -31,6 +31,25 @@ func (c RoundChange) deltaLines() int {
 	return c.Lines
 }
 
+// ReviewChoice is the reviewers the policy chose for one review round,
+// named by the round's creation key, and why each runs.
+type ReviewChoice struct {
+	Round      string              `json:"round"`
+	Categories []string            `json:"categories"`
+	Reasons    map[string][]string `json:"reasons"`
+}
+
+// keepReviewChoice records the round's choice on the workflow row before
+// any of its Runs is created: reviewChoice is Owned, so it outlives a step
+// that fails part-way through creating them.
+func (w *steps) keepReviewChoice(ctx context.Context, sc workflow.StepContext, c ReviewChoice) error {
+	raw, _ := json.Marshal(c)
+	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{reviewChoice}', $2::jsonb) WHERE id = $1`, sc.WorkflowRunID, raw)
+		return err
+	})
+}
+
 // goesOn is, per category ("" for the tester), what a round's Run of
 // phase goes on from (PhaseRun.Continue): its previous round and the
 // lines changed since, as GitHub compares them; nil when the policy or

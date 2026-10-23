@@ -122,7 +122,8 @@ func (r *laterRound) review() ([]string, map[string][]string, workflow.Result) {
 		r.t.Fatal(err)
 	}
 	var made []string
-	rows, err := r.owner.Query(r.ctx, `SELECT category FROM runs WHERE task_id = 'wi_rr' AND id <> 'run_rr1' ORDER BY category`)
+	rows, err := r.owner.Query(r.ctx, `SELECT category FROM runs WHERE task_id = 'wi_rr' AND id <> 'run_rr1'
+		AND creation_key LIKE '%:review:' || $1::int || ':%' ORDER BY category`, r.st.Iteration)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -215,6 +216,38 @@ func TestALaterRoundsChangeSpansEveryRepository(t *testing.T) {
 	}
 	if !slices.Equal(why["frontend"], []string{ReasonPaths}) || r.compares != 2 {
 		t.Errorf("why %v, %d compares", why, r.compares)
+	}
+}
+
+// The review step runs again after one of its round's Runs completed (a
+// forge wait or a failure part-way through creating them): the replay
+// creates the same round, not one measured from that Run's checkouts.
+func TestAReplayedReviewStepKeepsItsRoundsReviewers(t *testing.T) {
+	r := newLaterRound(t, "web/src/Button.tsx").firstRound()
+	first, _, _ := r.review()
+	r.exec(`UPDATE runs SET status = 'completed', ended_at = now() + interval '1 second'
+		WHERE organization_id = $1 AND task_id = 'wi_rr' AND category = 'tests' AND id <> 'run_rr1'`)
+	// A replay reads the state the workflow row holds.
+	var raw []byte
+	if err := r.owner.QueryRow(r.ctx, `SELECT state FROM workflow_runs WHERE id = 'wfr_rr'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	r.st = &State{}
+	if err := json.Unmarshal(raw, r.st); err != nil {
+		t.Fatal(err)
+	}
+	again, why, _ := r.review()
+	if !slices.Equal(again, first) || !slices.Equal(again, []string{"correctness", "tests", "frontend", "performance"}) {
+		t.Fatalf("replayed round %v, first run %v", again, first)
+	}
+	if !slices.Equal(why["frontend"], []string{ReasonPaths}) {
+		t.Errorf("why %v", why)
+	}
+	// The next iteration's round is chosen afresh.
+	r.st.Iteration++
+	next, _, _ := r.review()
+	if !slices.Equal(next, []string{"correctness"}) {
+		t.Errorf("next iteration's round %v, want it measured from the completed Run", next)
 	}
 }
 

@@ -138,6 +138,10 @@ type State struct {
 	// test, even at the pull request wait or with the policy's tester off.
 	// Cleared once that test's Run is created.
 	RetestDue bool `json:"retestDue,omitempty"`
+	// The policy's choice of the review round being created (roundChoice):
+	// a replay of the step creates the same round, though one of its Runs
+	// completed meanwhile and moved where the round's change starts.
+	ReviewChoice *ReviewChoice `json:"reviewChoice,omitempty"`
 
 	// A person started it past its open blockers (Start anyway): the
 	// implement step's and the conductor's start guards let it through.
@@ -482,7 +486,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	return &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta"},
+		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -750,6 +754,16 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	reviewRange := st.reviewRange()
+	// Each Run's creation key; the round's own is the key of no category.
+	runKey := func(c string) string {
+		switch {
+		case d != nil:
+			return conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
+		case st.Integration != nil:
+			return key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
+		}
+		return key(sc, st, ":review:", st.Iteration, ":", c)
+	}
 	// A retry of a round some reviewers failed: only theirs run again.
 	retrying := st.RetryCategories
 	var categories []string
@@ -763,6 +777,10 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// A check that the simplifier changed no behaviour: the policy's
 		// required reviewers, whatever paths it touched.
 		categories, reasons = st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired)
+	case st.ReviewChoice != nil && st.ReviewChoice.Round == runKey(""):
+		// A replay: a Run of this round that completed since would make
+		// the round's change start at its own checkouts.
+		categories, reasons = st.ReviewChoice.Categories, st.ReviewChoice.Reasons
 	default:
 		if categories, reasons, err = w.roundReviewers(ctx, sc, st, slices.Collect(maps.Keys(attempted))); err != nil {
 			return workflow.Result{}, err
@@ -771,6 +789,10 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 			if categories, reasons, err = w.gateReviewers(ctx, sc, st); err != nil {
 				return workflow.Result{}, err
 			}
+		}
+		st.ReviewChoice = &ReviewChoice{Round: runKey(""), Categories: db.NonNil(categories), Reasons: reasons}
+		if err := w.keepReviewChoice(ctx, sc, *st.ReviewChoice); err != nil {
+			return workflow.Result{}, err
 		}
 	}
 	if len(retrying) > 0 {
@@ -781,13 +803,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	goesOn := w.goesOn(ctx, sc, st, PhaseReview)
 	var runIDs []string
 	for _, c := range categories {
-		k := key(sc, st, ":review:", st.Iteration, ":", c)
-		if st.Integration != nil {
-			k = key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
-		}
-		if d != nil {
-			k = conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
-		}
+		k := runKey(c)
 		cont, err := goesOn(c)
 		if err != nil {
 			return workflow.Result{}, err
