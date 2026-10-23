@@ -431,11 +431,13 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 			p.Person, archived).Scan(&sessions); err != nil {
 			return err
 		}
-		// The sidebar's Open to everyone row: no list, only its numbers.
-		if err := tx.QueryRow(r.Context(), `SELECT json_build_object('count', count(*),
-				'joined', count(*) FILTER (WHERE EXISTS (SELECT 1 FROM session_people me WHERE me.session_id = s.id
-				  AND me.person_id = $1 AND me.accepted_at IS NOT NULL AND me.archived_at IS NULL)))
-			FROM sessions s WHERE s.access = 'organisation'`, p.Person).Scan(&organisation); err != nil {
+		// The sidebar's Open to everyone row: no list, only its numbers;
+		// joined driven from the caller's own rows.
+		if err := tx.QueryRow(r.Context(), `SELECT json_build_object(
+				'count', (SELECT count(*) FROM sessions s WHERE s.access = 'organisation'),
+				'joined', (SELECT count(*) FROM session_people me JOIN sessions s ON s.id = me.session_id
+				  WHERE me.person_id = $1 AND me.accepted_at IS NOT NULL AND me.archived_at IS NULL AND s.access = 'organisation'))`,
+			p.Person).Scan(&organisation); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."invitedAt" DESC), '[]') FROM (

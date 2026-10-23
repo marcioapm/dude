@@ -57,11 +57,14 @@ func OpenSession(ctx context.Context, tx pgx.Tx, ref RunRef, access, actorType, 
 // their joining (session.joined, via organisation). An invitation they had
 // not answered is accepted as it stood (a handover's is left to Accept); a
 // member is left as they are. Nothing for a private session. Under the
-// session's lock.
+// session's lock. A member already in it proposes no row at all, so the
+// standing trigger (which locks their people row) does not run on every
+// message they send.
 func JoinByWriting(ctx context.Context, tx pgx.Tx, ref RunRef, person, actorType, actorID string) error {
 	tag, err := tx.Exec(ctx, `INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
 		SELECT s.id, $2, s.organization_id, 'chat', now() FROM sessions s
 		WHERE s.id = $1 AND s.access = 'organisation'
+		  AND NOT EXISTS (SELECT 1 FROM session_people me WHERE me.session_id = $1 AND me.person_id = $2 AND me.accepted_at IS NOT NULL)
 		ON CONFLICT (session_id, person_id) DO UPDATE SET accepted_at = now()
 		WHERE session_people.accepted_at IS NULL AND NOT session_people.becomes_owner`, ref.SessionID, person)
 	if err != nil || tag.RowsAffected() == 0 {

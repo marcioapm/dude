@@ -60,7 +60,20 @@ func TestJoinByWritingJoinsOnlyAnOrganisationSession(t *testing.T) {
 	}
 
 	join(open, ana)
+	// Ana is in it now: writing again locks nothing of hers (her people
+	// row's xmax would be the writing transaction's had the standing trigger run).
+	xmax := func() string {
+		var x string
+		if err := owner.QueryRow(ctx, `SELECT xmax::text FROM people WHERE id = $1`, ana).Scan(&x); err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	before := xmax()
 	join(open, ana)
+	if after := xmax(); after != before {
+		t.Errorf("a member's message locked their people row (xmax %s → %s)", before, after)
+	}
 	if n := count(`SELECT count(*) FROM session_people WHERE session_id = $1 AND person_id = $2 AND accepted_at IS NOT NULL AND role = 'read'`, open, ana); n != 1 {
 		t.Errorf("the organisation session's pending read invitation was not accepted as it stood")
 	}
