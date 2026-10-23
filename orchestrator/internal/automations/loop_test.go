@@ -517,6 +517,26 @@ func TestAutomationTestRunSharesNothingWithLiveRuns(t *testing.T) {
 	}
 }
 
+// Q21: a test run fired while an event run waits in the queue starts at
+// once; it never waits behind the queued event run.
+func TestAutomationTestRunDoesNotWaitBehindAQueuedEventRun(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_rq", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo done"), "concurrency": "queue"})
+	h.deliver("rq-1", "push", push)
+	h.until("the first event run is running", func() bool { r := h.runs("aut_rq"); return len(r) == 1 && r[0].Status == "running" })
+	h.deliver("rq-2", "push", push)
+	h.until("the second event run is queued", func() bool { r := h.runs("aut_rq"); return len(r) == 2 && r[1].Status == "queued" })
+	test := h.runNowTest("aut_rq", "test-rq", push, "push")
+	h.until("the test run is running while an event run is queued", func() bool {
+		r := h.runs("aut_rq")
+		return h.run("aut_rq", test).Status == "running" && r[1].Status == "queued"
+	})
+}
+
 // send: an event arriving while only a test run of a resumable agent is
 // live starts its own run; the test run is sent nothing.
 func TestAutomationSendSkipsALiveTestRun(t *testing.T) {
