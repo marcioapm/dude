@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,6 +43,7 @@ func (m *memStore) del(h string) error {
 	return nil
 }
 
+// isolate swaps process globals: tests using it must not run in parallel.
 func isolate(t *testing.T, absent bool) *memStore {
 	t.Helper()
 	store := &memStore{keys: map[string]string{}, absent: absent}
@@ -158,7 +160,7 @@ func TestProfilesPerOrganisation(t *testing.T) {
 func TestReloginKeepsNewKeyAndRemovesOldItem(t *testing.T) {
 	for _, tc := range []struct {
 		name, oldURL, newURL, oldID, newID string
-		file                            bool
+		file                               bool
 	}{
 		{"port to https", "http://host:8080", "https://host", "host:8080/acme", "host/acme", false},
 		{"scheme only", "http://host", "https://host", "host/acme", "host/acme", false},
@@ -232,8 +234,10 @@ func TestLoginRefusedKeyIsNotStored(t *testing.T) {
 	store := isolate(t, false)
 	srv, _ := fakeDude(t)
 	c := &cli{login: login, logout: logout, http: srv.Client(), stdin: strings.NewReader("bad-key\n"), out: io.Discard}
-	if err := c.run([]string{"login", srv.URL}); err == nil {
-		t.Fatal("login with a refused key succeeded")
+	err := c.run([]string{"login", srv.URL})
+	var he *httpError
+	if !errors.As(err, &he) || he.status != 401 || !strings.Contains(err.Error(), "refused the key") {
+		t.Fatalf("refusal: %v", err)
 	}
 	if len(store.keys) != 0 {
 		t.Fatalf("stored %v", store.keys)
@@ -253,6 +257,77 @@ func TestOrgFlagBeforeCommand(t *testing.T) {
 	}
 	if asked != "northwind" {
 		t.Fatalf("org %q", asked)
+	}
+}
+
+func TestLogoutSelectsOrganisation(t *testing.T) {
+	for _, mode := range []string{"flag", "equals", "env"} {
+		t.Run(mode, func(t *testing.T) {
+			store := isolate(t, false)
+			for _, slug := range []string{"acme", "northwind"} {
+				if _, err := login(slug, "https://host", slug+"-key", false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			args := []string{"logout"}
+			switch mode {
+			case "flag":
+				args = []string{"--org", "acme", "logout"}
+			case "equals":
+				args = []string{"--org=acme", "logout"}
+			default:
+				t.Setenv("DUDE_ORG", "acme")
+			}
+			c := &cli{logout: logout, out: io.Discard}
+			if err := c.run(args); err != nil {
+				t.Fatal(err)
+			}
+			creds, err := loadCredentials()
+			if err != nil || len(creds.Orgs) != 1 || creds.Current != "northwind" || store.keys["host/northwind"] != "northwind-key" || len(store.keys) != 1 {
+				t.Fatalf("logout: %+v %v %v", creds, store.keys, err)
+			}
+		})
+	}
+}
+
+func TestUsePersistsAndIdentityOutputHidesKeys(t *testing.T) {
+	for _, file := range []bool{false, true} {
+		t.Run(fmt.Sprint(file), func(t *testing.T) {
+			isolate(t, file)
+			srv, _ := fakeDude(t)
+			for _, slug := range []string{"acme", "northwind"} {
+				if _, err := login(slug, srv.URL, slug+"-secret", false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			c := &cli{creds: resolve, http: srv.Client(), out: &out}
+			if err := c.run([]string{"use", "acme"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, key, err := resolve(""); err != nil || key != "acme-secret" {
+				t.Fatalf("use not saved: %q %v", key, err)
+			}
+			out.Reset()
+			if err := c.run([]string{"orgs"}); err != nil {
+				t.Fatal(err)
+			}
+			var orgs []struct {
+				Slug    string
+				Current bool
+			}
+			if err := json.Unmarshal(out.Bytes(), &orgs); err != nil || len(orgs) != 2 || orgs[0].Slug != "acme" || !orgs[0].Current || orgs[1].Current {
+				t.Fatalf("orgs: %s %v", out.String(), err)
+			}
+			if err := c.run([]string{"whoami"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"acme-secret", "northwind-secret"} {
+				if strings.Contains(out.String(), key) {
+					t.Fatalf("identity output contains %q", key)
+				}
+			}
+		})
 	}
 }
 
@@ -277,6 +352,42 @@ func TestNewCommandsReachTheirRoutes(t *testing.T) {
 		path   string
 		body   string
 	}{
+		{[]string{"start", "wi_12"}, "POST", "/v1/tasks/wi_12/deliver", `{}`},
+		{[]string{"start", "wi_12", "--override", "--note", "urgent"}, "POST", "/v1/tasks/wi_12/deliver", `{"note":"urgent","override":true}`},
+		{[]string{"talk", "wi_12", "--override", "--note", "plan"}, "POST", "/v1/tasks/wi_12/talk", `{"note":"plan","override":true}`},
+		{[]string{"create", "ABS", "--title", "New", "--goal", "A goal long enough to save.", "--talk"}, "POST", "/v1/tasks/wi_13/talk", `{}`},
+		{[]string{"chat", "wi_12", "hello"}, "POST", "/v1/tasks/wi_12/chat", `{"text":"hello"}`},
+		{[]string{"chat", "wi_12", "hello", "--aside"}, "POST", "/v1/tasks/wi_12/chat", `{"aside":true,"text":"hello"}`},
+		{[]string{"pause", "run_9"}, "POST", "/v1/runs/run_9/pause", `{"mode":"graceful"}`},
+		{[]string{"pause", "run_9", "--hard", "--reason", "wait"}, "POST", "/v1/runs/run_9/pause", `{"mode":"hard","reason":"wait"}`},
+		{[]string{"resume", "run_9", "--reason", "ready"}, "POST", "/v1/runs/run_9/resume", `{"reason":"ready"}`},
+		{[]string{"abort", "run_9", "--reason", "stop"}, "POST", "/v1/runs/run_9/abort", `{"reason":"stop"}`},
+		{[]string{"restart", "run_9", "try again", "--tier", "tier_1"}, "POST", "/v1/runs/run_9/restart", `{"note":"try again","tier":"tier_1"}`},
+		{[]string{"reviewers", "pr_1", "ana", "bob"}, "POST", "/v1/pull-requests/pr_1/reviewers", `{"logins":["ana","bob"]}`},
+		{[]string{"invite", "ana@example.com", "--role", "admin"}, "POST", "/v1/organization/invitations", `{"invitations":[{"email":"ana@example.com"}],"role":"admin"}`},
+		{[]string{"decide", "wi_12", "retry", "--note", "ready"}, "POST", "/v1/tasks/wi_12/decide", `{"action":"retry","note":"ready"}`},
+		{[]string{"memory-add", "--title", "Queue", "--content", "Use it", "--kind", "procedure", "--project", "ABS"}, "POST", "/v1/memory/memories", `{"content":"Use it","kind":"procedure","projectId":"prj_1","title":"Queue"}`},
+		{[]string{"memories", "--project", "ABS", "--text", "queue", "--archived"}, "GET", "/v1/memory/memories?archived=true&project=prj_1&q=queue", ``},
+		{[]string{"epic-create", "ABS", "--title", "Launch", "--description", "Soon"}, "POST", "/v1/projects/prj_1/epics", `{"description":"Soon","title":"Launch"}`},
+		{[]string{"events", "wi_12"}, "GET", "/v1/events?taskId=wi_12", ``},
+		{[]string{"update-branch", "pr_1"}, "POST", "/v1/pull-requests/pr_1/update-branch", ``},
+		{[]string{"rerun-checks", "pr_1"}, "POST", "/v1/pull-requests/pr_1/rerun-failed", ``},
+		{[]string{"unrelate", "wi_12", "blocks", "ABS-3"}, "DELETE", "/v1/tasks/wi_12/relations/blocks/ABS-3", ``},
+		{[]string{"brainstorm", "Think", "--title", "Queue", "--project", "ABS", "--tier", "tier_1"}, "POST", "/v1/brainstorms", `{"message":"Think","projects":[{"projectId":"prj_1"}],"tier":"tier_1","title":"Queue"}`},
+		{[]string{"brainstorm-answer", "bs_1", "q_1", "because", "--choice", "1"}, "POST", "/v1/brainstorms/bs_1/questions/q_1/answer", `{"answers":[{"choices":[1],"text":"because"}]}`},
+		{[]string{"brainstorm-invite", "bs_1", "per_1", "--role", "read"}, "POST", "/v1/brainstorms/bs_1/people", `{"people":["per_1"],"role":"read"}`},
+		{[]string{"reset-machine", "wi_12", "implementer", "--note", "fresh"}, "DELETE", "/v1/tasks/wi_12/agent-machines/implementer", `{"note":"fresh"}`},
+		{[]string{"preview", "wi_12"}, "POST", "/v1/tasks/wi_12/preview", ``},
+		{[]string{"preview", "wi_12", "--stop"}, "DELETE", "/v1/tasks/wi_12/preview", ``},
+		{[]string{"brainstorm-title", "bs_1", "Queue"}, "POST", "/v1/brainstorms/bs_1/title", `{"title":"Queue"}`},
+		{[]string{"brainstorm-chat", "bs_1", "hello"}, "POST", "/v1/brainstorms/bs_1/chat", `{"text":"hello"}`},
+		{[]string{"brainstorm-retry", "bs_1"}, "POST", "/v1/brainstorms/bs_1/retry", ``},
+		{[]string{"brainstorm-archive", "bs_1"}, "POST", "/v1/brainstorms/bs_1/archive", ``},
+		{[]string{"brainstorm-unarchive", "bs_1"}, "POST", "/v1/brainstorms/bs_1/unarchive", ``},
+		{[]string{"brainstorms", "--archived"}, "GET", "/v1/brainstorms?archived=1", ``},
+		{[]string{"brainstorm-show", "bs_1"}, "GET", "/v1/brainstorms/bs_1", ``},
+		{[]string{"project-create", "--name", "Web", "--slug", "web", "--key", "WEB"}, "POST", "/v1/projects", `{"description":"","key":"WEB","name":"Web","repositories":[],"slug":"web"}`},
+		{[]string{"repo-add", "ABS", "--name", "web", "--url", "https://example.com/web.git", "--branch", "dev"}, "POST", "/v1/projects/prj_1/repositories", `{"defaultBranch":"dev","name":"web","url":"https://example.com/web.git"}`},
 		{[]string{"resolve", "fnd_1", "accepted", "--note", "fine"}, "POST", "/v1/findings/fnd_1/resolve", `{"note":"fine","status":"accepted"}`},
 		{[]string{"recover", "wi_12"}, "GET", "/v1/tasks/wi_12/recover", ``},
 		{[]string{"recover", "wi_12", "restart", "--override"}, "POST", "/v1/tasks/wi_12/recover", `{"action":"restart","override":true}`},
