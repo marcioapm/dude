@@ -118,6 +118,10 @@ type State struct {
 	LimitRequests []LimitRequest `json:"limitRequests,omitempty"`
 	// The test Run whose verdict the gate weighs (testVerdict).
 	TestRunID string `json:"testRunId,omitempty"`
+	// The attempt's previous test round when this round's heads descend
+	// from its checkouts: what a resumed tester may carry criteria from
+	// (carryForward). Set at each test step.
+	CarryFrom string `json:"carryFrom,omitempty"`
 	// Fixes a failed test sent this attempt back for: bounded by
 	// MaxTestFixRounds.
 	TestFixRounds int `json:"testFixRounds,omitempty"`
@@ -1250,13 +1254,19 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if skip, err := w.carryForward(ctx, sc, st, judge, d != nil); err != nil {
+		return workflow.Result{}, err
+	} else if skip {
+		// The previous round's verdicts are this round's: the gate weighs them.
+		return workflow.Result{Next: "testVerdict", State: st}, nil
+	}
 	cont, err := w.goesOn(ctx, sc, st, PhaseTest)("")
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseTest, k, func(p *PhaseRun) {
 		p.BlockingSeverities, p.FindingIDs = st.Policy.BlockingSeverities, judge
-		p.Continue = cont
+		p.Continue, p.CarryFrom = cont, st.CarryFrom
 		d.apply(p)
 	})
 	if err != nil {

@@ -168,7 +168,11 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 		for _, n := range names {
 			published[n] = true
 		}
-		verdicts := JudgeAcceptance(criteria, ParseAcceptance(reply), published)
+		carry, err := carryTx(ctx, tx, runID, st.CarryFrom)
+		if err != nil {
+			return err
+		}
+		verdicts := JudgeAcceptance(criteria, ParseAcceptance(reply), published, carry)
 		if awaitsEvidence(verdicts, published) {
 			// What it published may still be on its way from lux: a pass
 			// is judged against every file, not the ones recorded so far.
@@ -177,10 +181,13 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 			}
 		}
 		for _, v := range verdicts {
+			// A carried waiver or acceptance keeps who decided it and why.
 			if _, err := tx.Exec(ctx, `INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text,
-					status, evidence, observed, problem, heads)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
-				org, st.TaskID, runID, v.Criterion, v.Text, v.Status, db.NonNil(v.Evidence), v.Observed, v.Problem, rawHeads); err != nil {
+					status, evidence, observed, problem, heads, carried_from, decision, decided_by, decision_note, decided_at)
+				SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, p.decision, p.decided_by, p.decision_note, p.decided_at
+				FROM (SELECT 1) one LEFT JOIN acceptance_verdicts p ON p.run_id = $12 AND p.criterion = $4 AND $11::text IS NOT NULL`,
+				org, st.TaskID, runID, v.Criterion, v.Text, v.Status, db.NonNil(v.Evidence), v.Observed, v.Problem, rawHeads,
+				db.Nullable(v.CarriedFrom), carry.runID()); err != nil {
 				return err
 			}
 		}

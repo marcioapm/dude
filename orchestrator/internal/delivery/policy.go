@@ -69,6 +69,11 @@ type Policy struct {
 	// agent, conversation and workspace (continueOrCreateTx), rather than
 	// starting a fresh one.
 	ResumeRounds bool `json:"resumeRounds"`
+	// Paths no criterion's behaviour depends on: a change of these alone
+	// since a passing test round starts no tester (carryForward). Globs as
+	// MatchesGlob reads them, against a path in its repository or with the
+	// repository's name.
+	NonProductPaths []string `json:"nonProductPaths"`
 }
 
 // LivePolicyKeys are the Policy keys dude reads from the project's and
@@ -102,6 +107,7 @@ func DefaultPolicy() Policy {
 		ConductorEditLines:   60,
 		ConductorEditFiles:   3,
 		ResumeRounds:         true,
+		NonProductPaths:      []string{".github/**", "docs/**", "**/*.md"},
 	}
 }
 

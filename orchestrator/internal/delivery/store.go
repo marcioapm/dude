@@ -160,6 +160,9 @@ type PhaseRun struct {
 	// Go on from the previous round of this phase and category
 	// (continueOrCreateTx); nil starts fresh, as a restart always does.
 	Continue *Continue
+	// A test round: the previous round a resumed tester may carry
+	// criteria from (State.CarryFrom), "" for none.
+	CarryFrom string
 	// Set by continueOrCreateTx: the predecessor whose conversation a
 	// fresh Run is given (runs.continues_run_id, how 'replay'), and why a
 	// Run asked to go on starts fresh, for its run.created.

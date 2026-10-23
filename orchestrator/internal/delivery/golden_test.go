@@ -267,15 +267,18 @@ func TestGoldenReviewPrompts(t *testing.T) {
 func TestGoldenResumeRounds(t *testing.T) {
 	from, to := map[string]string{"api": "aaa111", "web": "ccc333"}, map[string]string{"api": "bbb222", "web": "ccc333"}
 	lastFix := []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}
-	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings(), goldenQuestions(), lastFix))
+	golden(t, "resume-review", RoundMessage(PhaseReview, from, to, "", goldenFindings(), goldenQuestions(), lastFix, ""))
 	// Two checkouts, the fix publishing only api: BaseRefs holds api alone.
 	golden(t, "resume-review-one-published", RoundMessage(PhaseReview, map[string]string{"api": "aaa111"},
-		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, lastFix))
+		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, lastFix, ""))
 	golden(t, "resume-review-simplify-two", RoundMessage(PhaseReview, map[string]string{"api": "aaa111", "web": "ccc000"}, to,
-		rangeReason[RangeSimplify], nil, goldenQuestions()[1:2], nil))
-	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1], nil, nil))
+		rangeReason[RangeSimplify], nil, goldenQuestions()[1:2], nil, ""))
+	golden(t, "resume-test", RoundMessage(PhaseTest, from, to, "", goldenFindings()[:1], nil, nil, "run_test_previous"))
+	// A resumed tester whose round cannot rest on its last (a large change
+	// or history that does not descend from it): every criterion again.
+	golden(t, "resume-test-afresh", RoundMessage(PhaseTest, from, to, "", nil, nil, nil, ""))
 	// A round on the same head (a retry): nothing to name as changed.
-	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil, nil, nil))
+	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil, nil, nil, ""))
 	// A fixer's round: the implementer's first carries the fix contract,
 	// a fixer's next does not; what it fixes is Prompt(PhaseFix)'s.
 	fixIn := PromptInput{Findings: goldenFindings(), Tools: true, CLI: true,

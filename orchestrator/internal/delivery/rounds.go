@@ -505,7 +505,7 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 				return "", err
 			}
 		}
-		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix)
+		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
 		if in.Phase == PhaseTest {
 			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
 			if err != nil {
@@ -596,9 +596,10 @@ func roundRanges(from, to map[string]string) []roundRange {
 // RoundMessage renders contracts/resume/round: from and to are each
 // repository's commit at the last round and now; questions, what earlier
 // reviewers of a review's category asked; lastFix, the commits of the fix
-// this round follows (LastFixTx).
+// this round follows (LastFixTx); carry, a test round's previous run the
+// tester may carry criteria from ("" retests every one).
 func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
-	lastFix []FixRange) string {
+	lastFix []FixRange, carry string) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
@@ -607,8 +608,8 @@ func RoundMessage(phase string, from, to map[string]string, reason string, findi
 		Test                                 bool
 		Ranges                               []roundRange
 		Reason, Findings, Questions, LastFix string
-		Format, Summary                      string
-	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), findingFormat, reviewSummary})
+		Format, Summary, CarryFrom           string
+	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), findingFormat, reviewSummary, carry})
 }
 
 // FixRange is what a fix Run published in one repository: its commits are
