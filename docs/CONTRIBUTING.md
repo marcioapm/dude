@@ -418,11 +418,13 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
   change request or a failing check. Merged → task `done`; closed →
-  `aborted`. The end reaches the delivery at whatever step it is parked on
-  (`delivery/pr_ended.go`): live phase Runs are aborted, a pending
-  conductor decision dropped and an escalation withdrawn (`task.decided` by
-  the system); with none left open, a finished fix is dropped rather than
-  opened or promoted. dude's own closes (Start over, Close) reach no live
+  `aborted`. Once none is left open, the end reaches the delivery at
+  whatever step it is parked on (`delivery/pr_ended.go`): live phase Runs
+  are aborted, a pending conductor decision dropped and an escalation
+  withdrawn (`task.decided` by the system), and a finished fix is dropped
+  rather than opened or promoted. One closed beside one still open is the
+  pull request wait's to ask a person about; the step at work goes on.
+  dude's own closes (Start over, Close) reach no live
   delivery: the syncer signals only the one on the pull request's branch.
   Under the conductor, ready to merge (or no longer) is dude's
   line in Chat (`chat.notice`) and wakes nobody; a pull request merged or

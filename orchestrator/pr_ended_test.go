@@ -6,6 +6,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -288,45 +289,68 @@ func TestOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork(t *testing.T) {
 }
 
 // Two repositories: target's pull request closes while web's fixer works.
-// The person is asked once (pull_request_closed); choosing to wait leaves
-// the delivery waiting on web's pull request, not asked the same question
-// again by the close's terminal pr.feedback. Web closing too ends it.
-func TestWaitingAfterAMixedEndOutsideThePullRequestWaitAsksOnce(t *testing.T) {
+// One closed beside one open is not an end the fixer's step acts on: the
+// fixer goes on and its fix lands on web's pull request, and the person is
+// asked once (pull_request_closed), as on main. Web closing while they are
+// asked ends the task (aborted) and withdraws the question. (A person who
+// chooses wait is asked again by the close's terminal pr.feedback: main
+// does the same, and this branch leaves it unchanged.)
+func TestAMixedEndWhileASiblingsFixerWorksLetsTheFixLand(t *testing.T) {
 	w := newWorld(t)
 	scripted := w.lux.Decide
+	var fixers atomic.Int32
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
-			b.Hang = true
+		switch labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] {
+		case "fix":
+			b.Hang = fixers.Add(1) == 1
+			b.Commit = map[string]string{"web:TITLE.md": "the page title, fixed\n"}
+		case "simplify":
+			// The candidate changes web alone: nothing for target's closed one.
+			b.Commit = nil
 		}
 		return b
 	}
 	task := w.prOpen(w.task(), prAt{web: true})
+	webHead := func() string { return w.web.SHA(w.web.Pull(1).Head) }
+	webBefore := webHead()
 	w.web.Comment(1, "alice", "Please fix the page title.")
-	w.until("web's fixer at work", func() bool {
-		w.sync()
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`, task) == 1
-	})
+	fixer := `SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'`
+	w.until("web's fixer at work", func() bool { w.sync(); return w.count(fixer, task) == 1 })
+	var luxID string
+	if err := w.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND status = 'running'`, task).Scan(&luxID); err != nil {
+		t.Fatal(err)
+	}
 	w.gh.Close(1)
-	w.until("the person asked", func() bool { w.sync(); return w.taskStatus(task) == "awaiting_input" })
-	if r := w.escalationReason(task); r != "pull_request_closed" {
-		t.Fatalf("escalated %q", r)
-	}
-	if code, body := w.decide(w.person("owner"), task, "wait", ""); code != 200 {
-		t.Fatalf("wait: %d %v", code, body)
-	}
 	w.afterEnd()
+	if n := w.count(fixer, task); n != 1 {
+		t.Fatalf("target's close stopped web's fixer\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'aborted'`, task); n != 0 {
+		t.Fatalf("%d Runs aborted by a close beside an open pull request\n%s", n, w.describeRuns())
+	}
+	w.lux.EndTurn(luxID)
+	w.until("the person asked", func() bool { w.sync(); w.pump(); return w.taskStatus(task) == "awaiting_input" })
+	if r := w.escalationReason(task); r != "pull_request_closed" {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	if webHead() == webBefore {
+		t.Fatalf("web's fix never reached its pull request\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, task); n != 1 {
+		t.Errorf("%d promotions of web's fix, want 1", n)
+	}
 	asked := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
 		AND payload->>'reason' = 'pull_request_closed'`
 	if n := w.count(asked, task); n != 1 {
 		t.Fatalf("asked %d times about the close, want once; task %s", n, w.taskStatus(task))
 	}
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'escalation'`, task); n != 0 {
-		t.Errorf("an escalation is still open: %s", w.str(`SELECT state->>'escalation' FROM workflow_runs WHERE task_id = $1`, task))
+	if n := len(w.gh.Pulls()); n != 1 {
+		t.Errorf("%d target pull requests, want the closed one", n)
 	}
-	if st, step, _ := w.deliveryStatus(task); st != "waiting" || step != "awaitPullRequest" {
-		t.Fatalf("delivery %s at %s, want waiting on web's pull request", st, step)
-	}
+	// Web closing too, while the person is still asked, ends it: the question
+	// is withdrawn, not asked again.
 	w.web.Close(1)
 	w.until("the task to end", func() bool { w.sync(); return w.taskStatus(task) == "aborted" })
 	w.afterEnd()
