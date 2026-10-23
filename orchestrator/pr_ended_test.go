@@ -225,6 +225,34 @@ func TestAFixFinishingAfterAnUnsignalledMergeOpensNothing(t *testing.T) {
 	}
 }
 
+// The same unsignalled merge, recorded while the fix's candidate is tested:
+// the checked candidate is not promoted (promoteCandidate's guard). The pull
+// request's branch never moves and the task is done.
+func TestACandidateCheckedAcrossAnUnsignalledMergeIsNotPromoted(t *testing.T) {
+	w := newPRFixWorld(t)
+	w.onTest = func() {
+		w.gh.Merge(1)
+		mustExec(t, w.owner, `UPDATE pull_requests SET state = 'merged', merged_at = now() WHERE task_id = $1`, w.wi)
+	}
+	w.comment("Please rename the greeting.")
+	// Done, or the candidate promoted onto the merged branch.
+	w.agentsDone(w.wi, "the task to finish", func() bool { return w.taskStatus(w.wi) == "done" || w.gh.SHA(w.branch) != w.before })
+	if n := w.candidateTests.Load(); n != 1 {
+		t.Fatalf("%d candidate tests, want the one the merge landed in\n%s", n, w.describeRuns())
+	}
+	if at := w.gh.SHA(w.branch); at != w.before {
+		t.Errorf("the merged pull request's branch moved from %.8s to %.8s", w.before, at)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi); n != 0 {
+		t.Errorf("%d promotions recorded onto a merged pull request", n)
+	}
+	w.afterEnd()
+	w.assertEnded(w.wi, "done")
+	if n := len(w.gh.Pulls()); n != 1 {
+		t.Errorf("%d pull requests, want the merged one", n)
+	}
+}
+
 // Two repositories: one pull request merges while a fixer works for the
 // other. The fixer goes on and the task is not done; once the second
 // merges, it is.
