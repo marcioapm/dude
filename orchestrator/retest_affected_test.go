@@ -25,6 +25,19 @@ func ciOnly(phase string, _ int, b *fakelux.Behaviour) {
 	}
 }
 
+// ciOnlyFixLands has a collaborator ask for a fix the pull request's fixer
+// plays as ciOnly, and waits for it on the pull request, the task back in
+// review.
+func (w *prFixWorld) ciOnlyFixLands() {
+	w.t.Helper()
+	w.play = ciOnly
+	w.comment("Please run CI on pull requests too.")
+	w.until("the fix on the pull request", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
+	})
+}
+
 // A pull request's fix that changes only CI configuration, after a test
 // that passed every criterion: no tester is started, the passed verdicts
 // stand, the skip is in the task's ledger with the verdicts it rests on,
@@ -32,13 +45,8 @@ func ciOnly(phase string, _ int, b *fakelux.Behaviour) {
 // not tested again.
 func TestACIOnlyFixAfterAPassingTestStartsNoTester(t *testing.T) {
 	w := newPRFixWorld(t)
-	w.play = ciOnly
 	first := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'test'`, w.wi)
-	w.comment("Please run CI on pull requests too.")
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
-	})
+	w.ciOnlyFixLands()
 	if !slices.Equal(w.phases, []string{"fix", "review", "simplify"}) {
 		t.Errorf("after the comment: %v, want the fix, its review and the simplifier; no tester", w.phases)
 	}
@@ -77,13 +85,8 @@ func TestACIOnlyFixIsTestedWhenThePreviousTestFailedOrHasAFindingToJudge(t *test
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newPRFixWorld(t)
-			w.play = ciOnly
 			mustExec(t, w.owner, c.setup, w.wi)
-			w.comment("Please run CI on pull requests too.")
-			w.until("the fix on the pull request", func() bool {
-				w.sync()
-				return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
-			})
+			w.ciOnlyFixLands()
 			if !slices.Contains(w.phases, "test") {
 				t.Errorf("after the comment: %v, want a tester", w.phases)
 			}
