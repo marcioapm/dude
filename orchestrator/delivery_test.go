@@ -4088,6 +4088,28 @@ func TestAFixRunsWorkspaceHoldsItsChecksLog(t *testing.T) {
 		t.Errorf("pr_feedback up to %d bytes, workflow state up to %d; %d fix Runs, %d holding the log tail",
 			feedbackMax, stateMax, fixes, withLogs)
 	}
+
+	// A restarted fix Run is a new row: it carries the tail, since
+	// pr_feedback no longer holds it.
+	var fix string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE organization_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, w.org).Scan(&fix); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := w.do("POST", "/internal/runs/"+fix+"/restart", map[string]any{"note": "again"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	var fresh string
+	if err := w.owner.QueryRow(context.Background(), `SELECT replaced_by FROM runs WHERE id = $1`, fix).Scan(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	var carried int
+	if err := w.owner.QueryRow(context.Background(), `SELECT length(check_logs::text) FROM runs WHERE id = $1`, fresh).Scan(&carried); err != nil {
+		t.Fatal(err)
+	}
+	if carried < 60000 {
+		t.Errorf("the restarted fix Run %s holds %d bytes of check_logs, want the tail", fresh, carried)
+	}
 }
 
 // An approved pull request with a thread left unresolved is not ready.

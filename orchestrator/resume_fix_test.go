@@ -285,7 +285,7 @@ func TestAResumedPullRequestFixHasOnlyThisRoundsCheckExcerpt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"current-round: AssertionError: 3 != 2", "the excerpt below is all you have for this round",
-		"Any earlier files under `/workspace/.dude/checks/` are from earlier rounds and are not this failure."} {
+		"Any files under `/workspace/.dude/checks/` are from earlier rounds and are not this failure."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("directive lacks %q:\n%s", want, text)
 		}
@@ -295,7 +295,6 @@ func TestAResumedPullRequestFixHasOnlyThisRoundsCheckExcerpt(t *testing.T) {
 			t.Errorf("directive contains %q:\n%s", noise, text)
 		}
 	}
-	t.Logf("round-2 directive:\n%s", text)
 }
 
 // A continuing writer's round message waits for its resume's sync for at

@@ -1774,7 +1774,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		// What GitHub has, not what dude last pushed: a person may have
 		// pushed since, and a fix from dude's head would fail to
 		// fast-forward over theirs — or undo it.
-		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
+		if err := w.fromPullRequestHeads(ctx, sc, st, gh, true); err != nil {
 			return workflow.Result{}, err
 		}
 		// The last round's candidate branch, if a person's push left it
@@ -1954,7 +1954,7 @@ func (w *steps) openCandidate(ctx context.Context, sc workflow.StepContext, st *
 		return err
 	}
 	if gh != nil {
-		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
+		if err := w.fromPullRequestHeads(ctx, sc, st, gh, true); err != nil {
 			return err
 		}
 		if err := w.s.dropCandidateBranches(ctx, sc.OrganizationID, st, gh); err != nil {
@@ -2106,12 +2106,16 @@ func (w *steps) refreshPRWaitHeads(ctx context.Context, sc workflow.StepContext,
 	if err != nil || gh == nil {
 		return err
 	}
-	return w.fromPullRequestHeads(ctx, sc, st, gh)
+	return w.fromPullRequestHeads(ctx, sc, st, gh, false)
 }
 
 // fromPullRequestHeads starts the fix from each open pull request's head
 // as GitHub has it, and gives failing checks the end of their logs.
-func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub) error {
+//
+// tails: this step creates a fix Run, so a check read in an earlier step
+// has its tail read again (Full is never stored). Without it a check with
+// an excerpt is left as it is.
+func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, tails bool) error {
 	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
 	if err != nil {
 		return err
@@ -2136,11 +2140,7 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 	files := 0
 	for i, f := range st.PRFeedback {
 		for j, c := range f.Checks {
-			// Full is never stored (json:"-"), so a check read in an earlier
-			// step has its excerpt but not its tail: the tail is read again
-			// for the fix Run this step creates. A log already known
-			// unreadable is not asked for again.
-			if c.RunID == 0 || c.Full != "" || c.Log != "" && c.Unread != "" || slugs[f.Repo] == "" {
+			if slugs[f.Repo] == "" || !readsCheck(c, tails, files) {
 				continue
 			}
 			// A failed read never fails the step: the check goes to the
@@ -2159,6 +2159,10 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 			check := &st.PRFeedback[i].Checks[j]
 			if check.Log == "" {
 				check.Log, check.Unread = read.Cut(checkLogLimit), read.Unread
+			} else if read.Tail == "" {
+				// The excerpt survives from an earlier step; say why the
+				// longer tail could not be had now.
+				check.Unread = read.Unread
 			}
 			// The fix Run's init writes the longer tail into its workspace
 			// (phases' checkLogsInit), for the first CheckLogFiles checks.
@@ -2170,6 +2174,22 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 		}
 	}
 	return nil
+}
+
+// readsCheck says whether a failing check is read from GitHub now. Full is
+// never stored (json:"-"), so a check read in an earlier step has its
+// excerpt but not its tail: a step creating a fix Run (tails) reads it
+// again, for the first CheckLogFiles checks only. A step that creates no
+// fix Run leaves a check with an excerpt alone. A check with an excerpt
+// whose log was unreadable is not asked for again; one with neither is.
+func readsCheck(c forge.FailingCheck, tails bool, files int) bool {
+	if c.RunID == 0 || c.Full != "" {
+		return false
+	}
+	if c.Log == "" {
+		return true
+	}
+	return tails && c.Unread == "" && files < CheckLogFiles
 }
 
 // checkLogLimit: how much of a failing check's output a fixer's prompt
