@@ -359,6 +359,118 @@ export async function automationsOwnerLeft(scope: OrgScope, ctx: RequestContext,
   for (const a of held) await record(scope, ctx, a, { owner: { from: personId, to: null }, ownerLeft: true });
 }
 
+// ---------------------------------------------------------------------------
+// Runs
+// ---------------------------------------------------------------------------
+
+const RUN_COLUMNS = `r.id, r.automation_id AS "automationId", r.status, r.reason, r.source, r.session,
+  r.lux_run_id AS "luxRunId", r.cost_usd::float8 AS "costUsd", r.created_at AS "createdAt", r.started_at AS "startedAt",
+  r.ended_at AS "endedAt", r.payloads->0->>'event' AS event, r.payloads->0->>'action' AS action,
+  jsonb_array_length(r.payloads) AS "payloadCount",
+  (SELECT json_build_object('id', p.id, 'name', p.name, 'photoUrl', person_ref(p)->>'photoUrl') FROM people p WHERE p.id = r.started_by) AS "startedBy"`;
+
+const runsQuery = z.object({
+  status: z.enum(["queued", "running", "succeeded", "failed", "skipped", "cancelled"]).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+function runOut(r: Record<string, unknown>) {
+  const { luxRunId: _lux, ...rest } = r;
+  return { ...rest, createdAt: iso(r.createdAt), startedAt: iso(r.startedAt), endedAt: iso(r.endedAt) };
+}
+
+/** An automation's runs, newest first: queued and skipped ones with their reason. */
+async function listRuns(ctx: RequestContext): Promise<Response> {
+  const parsed = runsQuery.safeParse(Object.fromEntries(ctx.url.searchParams));
+  if (!parsed.success) throw badRequest("unknown run filter", parsed.error.flatten());
+  const out = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const a = await readOne(scope, ctx.params.id!);
+    const runs = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS} FROM automation_runs r
+      WHERE r.automation_id = $1 AND ($2::text IS NULL OR r.status = $2) ORDER BY r.created_at DESC, r.id DESC LIMIT $3`,
+    [a.id, parsed.data.status ?? null, parsed.data.limit])) as Array<Record<string, unknown>>;
+    const [kept] = (await scope.sql`SELECT created_at AS "since", last_run_at AS "lastRunAt",
+        (SELECT count(*)::int FROM automation_runs r WHERE r.automation_id = s.automation_id AND r.session = 'resumed') AS resumes
+      FROM automation_sessions s WHERE s.automation_id = ${a.id}`) as Array<{ since: Date; lastRunAt: Date; resumes: number }>;
+    return {
+      runs: runs.map(runOut),
+      session: kept ? { since: iso(kept.since), lastRunAt: iso(kept.lastRunAt), resumes: kept.resumes,
+        expiresAt: a.expiryDays ? new Date(kept.lastRunAt.getTime() + a.expiryDays * 86_400_000).toISOString() : null } : null,
+    };
+  });
+  return json(out);
+}
+
+/** One run: what triggered it, the end of its log, and for a Server its container's timeline and requests. */
+async function getRun(ctx: RequestContext): Promise<Response> {
+  const out = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const a = await readOne(scope, ctx.params.id!);
+    const [r] = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS}, r.payloads, r.payloads_purged_at IS NOT NULL AS "payloadsPurged",
+        r.log_tail AS "logTail", r.exit_code AS "exitCode", r.container_started_at AS "containerStartedAt",
+        r.container_stopped_at AS "containerStoppedAt", r.stop_reason AS "stopReason"
+      FROM automation_runs r WHERE r.automation_id = $1 AND r.id = $2`, [a.id, ctx.params.runId!])) as Array<Record<string, unknown>>;
+    if (!r) throw notFound(`automation ${a.id} has no run ${ctx.params.runId}`);
+    const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,
+        response_excerpt AS "responseExcerpt", at FROM automation_run_requests WHERE run_id = ${r.id as string} ORDER BY at, try`) as Array<Record<string, unknown>>;
+    return { ...runOut(r), containerStartedAt: iso(r.containerStartedAt), containerStoppedAt: iso(r.containerStoppedAt),
+      requests: requests.map((q) => ({ ...q, at: iso(q.at) })) };
+  });
+  return json(out);
+}
+
+/**
+ * The stored deliveries of the automation's event from the last 30 days,
+ * for Run now's "A past delivery" list.
+ */
+async function listDeliveries(ctx: RequestContext): Promise<Response> {
+  const out = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const a = await readOne(scope, ctx.params.id!);
+    if (a.trigger.kind !== "github") throw badRequest("a scheduled automation runs on no event");
+    const rows = (await scope.sql`SELECT id, event, payload->>'action' AS action, payload->'repository'->>'full_name' AS repository,
+        payload->'sender'->>'login' AS sender, received_at AS "receivedAt", payload AS body
+      FROM webhook_deliveries WHERE event = ${a.trigger.event} AND received_at > now() - interval '30 days'
+      ORDER BY received_at DESC LIMIT 50`) as Array<Record<string, unknown>>;
+    return { deliveries: rows.map((d) => ({ ...d, receivedAt: iso(d.receivedAt) })) };
+  });
+  return json(out);
+}
+
+/** Who may run an automation by hand: whoever may edit it, and its owner. */
+async function requireRunner(ctx: RequestContext, id: string): Promise<void> {
+  const a = await withOrg(ctx.principal.organizationId, (scope) => readOne(scope, id));
+  if (a.ownerId === ctx.principal.personId || (await canEdit(ctx, a.projectId))) return;
+  throw new HttpError(403, "only the automation's editors and its owner run it by hand", "not_editor");
+}
+
+/** Forward to the orchestrator as this person, passing its answer back. */
+function forward(ctx: RequestContext, method: string, path: string, body?: string): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, method, path, body, ctx.principal);
+}
+
+const runNowBody = z.union([
+  z.object({}).strict(),
+  z.object({ deliveryId: z.string().min(1).max(200) }).strict(),
+  z.object({ testEvent: z.object({ event: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), action: z.string().max(64).nullable().optional(),
+    deliveryId: z.string().min(1).max(200), body: z.record(z.unknown()) }).strict() }).strict(),
+]);
+
+async function runNow(ctx: RequestContext): Promise<Response> {
+  const id = ctx.params.id!;
+  await requireRunner(ctx, id);
+  const input = await parseBody(ctx.request, runNowBody);
+  return forward(ctx, "POST", `/internal/automations/${encodeURIComponent(id)}/runs`, JSON.stringify(input));
+}
+
+async function evaluateTestEvent(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, z.object({ body: z.record(z.unknown()) }).strict());
+  return forward(ctx, "POST", `/internal/automations/${encodeURIComponent(ctx.params.id!)}/test-event/evaluate`, JSON.stringify(input));
+}
+
+async function startFresh(ctx: RequestContext): Promise<Response> {
+  const id = ctx.params.id!;
+  await requireRunner(ctx, id);
+  return forward(ctx, "POST", `/internal/automations/${encodeURIComponent(id)}/start-fresh`);
+}
+
 export function registerAutomationRoutes(router: Router): void {
   router.get("/v1/automations", listOrg);
   router.post("/v1/automations", createAutomation);
@@ -372,5 +484,11 @@ export function registerAutomationRoutes(router: Router): void {
   router.put("/v1/automations/:id/enabled", setEnabled);
   router.put("/v1/automations/:id/owner", transferOwner);
   router.put("/v1/automations/:id/webhook-secret", setWebhookSecret);
+  router.get("/v1/automations/:id/runs", listRuns);
+  router.post("/v1/automations/:id/runs", runNow);
+  router.get("/v1/automations/:id/runs/:runId", getRun);
+  router.get("/v1/automations/:id/deliveries", listDeliveries);
+  router.post("/v1/automations/:id/test-event/evaluate", evaluateTestEvent);
+  router.post("/v1/automations/:id/start-fresh", startFresh);
   router.get("/v1/projects/:id/automations", listProject);
 }

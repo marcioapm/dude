@@ -38,6 +38,8 @@ let admin: SQL;
 let owner: SQL;
 let app: SQL;
 let router: Router;
+let orchestratorServer: ReturnType<typeof Bun.serve>;
+const asked: Array<{ method: string; path: string; person: string | null; body: string }> = [];
 const keys: Record<string, string> = {};
 const people: Record<string, string> = {};
 
@@ -73,18 +75,31 @@ beforeAll(async () => {
 
   app = new SQL(databaseUrl("app", NAME));
   setPool(app);
+  orchestratorServer = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      asked.push({ method: req.method, path: url.pathname, person: req.headers.get("x-dude-person"), body: await req.text() });
+      if (url.pathname.endsWith("/start-fresh")) return new Response(null, { status: 204 });
+      if (url.pathname.endsWith("/evaluate")) return Response.json({ matches: false, filter: "author", because: "it is by dependabot[bot], who is excluded" });
+      if (url.pathname.endsWith("/subscriptions")) return Response.json({ events: ["pull_request", "push"], source: "app", settingsUrl: null });
+      return Response.json({ runId: "arn_new" }, { status: 202 });
+    },
+  });
   // The organization's first person is its admin; the next ones members.
   for (const [who, org] of [["ana", ORG], ["bo", ORG], ["cy", ORG], ["di", OTHER]] as const) {
     const k = await createApiKey({ organizationId: org, name: who });
     keys[who] = k.key;
     people[who] = k.personId;
   }
-  useConfig(Config.load({ env: { ...process.env } }));
+  useConfig(Config.load({ env: { ...process.env,
+    DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestratorServer.port}`, DUDE_ORCHESTRATOR_TOKEN: "svc" } }));
   router = buildRouter("");
 });
 
 afterAll(async () => {
   useConfig(null);
+  await orchestratorServer?.stop(true);
   await closePool(app);
   await owner?.end();
   await admin?.unsafe(`DROP DATABASE IF EXISTS "${NAME}" WITH (FORCE)`);
@@ -256,5 +271,79 @@ describe("the owner", () => {
     // The admins hand it to someone, which ends "held".
     const given = await body(await call("ana", "PUT", `/v1/automations/${a.id}/owner`, { personId: people.bo }));
     expect(given).toMatchObject({ owner: { id: people.bo }, ownerLeftAt: null });
+  });
+});
+
+describe("runs", () => {
+  test("list newest first, filter by status, keep skipped and queued reasons, and show the kept session", async () => {
+    const { body: a } = await create("ana", { name: "Run lister" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads, session, cost_usd, created_at) VALUES
+      ('arn_a', ${ORG}, ${a.id}, 'succeeded', NULL, 'event', '[{"deliveryId":"d1","event":"pull_request","action":"opened","body":{}}]', 'new', 0.42, now() - interval '3 minutes'),
+      ('arn_b', ${ORG}, ${a.id}, 'skipped', 'a run was still going (Concurrency: skip)', 'event', '[{"deliveryId":"d2","event":"pull_request","action":"synchronize","body":{}}]', NULL, NULL, now() - interval '2 minutes'),
+      ('arn_c', ${ORG}, ${a.id}, 'queued', 'waiting for the run before it', 'run_now', '[]', NULL, NULL, now() - interval '1 minute')`;
+    await owner`INSERT INTO automation_sessions (automation_id, organization_id, lux_run_id, created_at, last_run_at)
+      VALUES (${a.id}, ${ORG}, 'lrun_9', now() - interval '1 day', now() - interval '3 minutes')`;
+    await owner`UPDATE automations SET session_mode = 'resumable', expiry_days = 7 WHERE id = ${a.id}`;
+
+    const all = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs`));
+    expect(all.runs.map((r: { id: string }) => r.id)).toEqual(["arn_c", "arn_b", "arn_a"]);
+    expect(all.runs[1]).toMatchObject({ status: "skipped", reason: "a run was still going (Concurrency: skip)", event: "pull_request", action: "synchronize" });
+    expect(all.runs[2]).toMatchObject({ session: "new", costUsd: 0.42, payloadCount: 1 });
+    expect(all.runs[2].luxRunId).toBeUndefined();
+    expect(all.session).toMatchObject({ resumes: 0 });
+    expect(Date.parse(all.session.expiresAt) - Date.parse(all.session.lastRunAt)).toBe(7 * 86_400_000);
+
+    const skipped = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs?status=skipped`));
+    expect(skipped.runs.map((r: { id: string }) => r.id)).toEqual(["arn_b"]);
+    expect((await call("bo", "GET", `/v1/automations/${a.id}/runs?status=weird`)).status).toBe(400);
+  });
+
+  test("a run's detail carries its payloads, log tail and a Server's requests", async () => {
+    const { body: a } = await create("ana", { name: "Changelog server", kind: "server" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source, payloads, log_tail,
+        container_started_at, container_stopped_at, stop_reason)
+      VALUES ('arn_s', ${ORG}, ${a.id}, 'succeeded', 'event', '[{"deliveryId":"d9","event":"pull_request","action":"opened","body":{"number":7}}]',
+        'listening on 8080', now() - interval '1 minute', now(), 'idle')`;
+    await owner`INSERT INTO automation_run_requests (id, organization_id, run_id, delivery_id, try, http_status, ms, at) VALUES
+      ('arq_1', ${ORG}, 'arn_s', 'd9', 1, 500, 12, now() - interval '50 seconds'), ('arq_2', ${ORG}, 'arn_s', 'd9', 2, 202, 9, now() - interval '49 seconds')`;
+    const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_s`));
+    expect(run).toMatchObject({ stopReason: "idle", logTail: "listening on 8080", payloadsPurged: false,
+      payloads: [{ deliveryId: "d9", event: "pull_request", body: { number: 7 } }] });
+    expect(run.requests.map((q: { try: number; httpStatus: number }) => [q.try, q.httpStatus])).toEqual([[1, 500], [2, 202]]);
+    expect((await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_nope`)).status).toBe(404);
+  });
+
+  test("Run now, test-event evaluation and Start fresh go to the orchestrator as the person; members who neither edit nor own it are refused", async () => {
+    const { body: a } = await create("ana", { name: "Runnable" });
+    asked.length = 0;
+    expect((await call("bo", "POST", `/v1/automations/${a.id}/runs`, {})).status).toBe(403);
+    expect((await call("bo", "POST", `/v1/automations/${a.id}/start-fresh`)).status).toBe(403);
+    const test = { testEvent: { event: "pull_request", action: "opened", deliveryId: "test-1", body: { action: "opened" } } };
+    const ran = await call("ana", "POST", `/v1/automations/${a.id}/runs`, test);
+    expect(ran.status).toBe(202);
+    expect(asked).toEqual([{ method: "POST", path: `/internal/automations/${a.id}/runs`, person: people.ana!, body: JSON.stringify(test) }]);
+    expect((await call("ana", "POST", `/v1/automations/${a.id}/runs`, { testEvent: { ...test.testEvent, body: [1] } })).status).toBe(400);
+
+    // The owner who cannot edit may still run it.
+    await call("ana", "PUT", `/v1/automations/${a.id}/owner`, { personId: people.bo });
+    expect((await call("bo", "POST", `/v1/automations/${a.id}/runs`, { deliveryId: "d-1" })).status).toBe(202);
+
+    const verdict = await body(await call("bo", "POST", `/v1/automations/${a.id}/test-event/evaluate`, { body: { sender: { login: "dependabot[bot]" } } }));
+    expect(verdict).toEqual({ matches: false, filter: "author", because: "it is by dependabot[bot], who is excluded" });
+    expect((await call("bo", "POST", `/v1/automations/${a.id}/start-fresh`)).status).toBe(204);
+
+    const subs = await body(await call("bo", "GET", "/v1/automations/subscriptions"));
+    expect(subs).toEqual({ events: ["pull_request", "push"], source: "app", settingsUrl: null });
+  });
+
+  test("past deliveries of the automation's event, from the last 30 days", async () => {
+    const { body: a } = await create("ana", { name: "Past" });
+    await owner`INSERT INTO webhook_deliveries (id, organization_id, event, payload, received_at) VALUES
+      ('pd-1', ${ORG}, 'pull_request', '{"action":"opened","repository":{"full_name":"acme/web"},"sender":{"login":"ana"}}', now() - interval '1 day'),
+      ('pd-2', ${ORG}, 'pull_request', '{"action":"closed"}', now() - interval '31 days'),
+      ('pd-3', ${ORG}, 'push', '{}', now())`;
+    const { deliveries } = await body(await call("bo", "GET", `/v1/automations/${a.id}/deliveries`));
+    expect(deliveries.map((d: { id: string }) => d.id)).toEqual(["pd-1"]);
+    expect(deliveries[0]).toMatchObject({ action: "opened", repository: "acme/web", sender: "ana" });
   });
 });
