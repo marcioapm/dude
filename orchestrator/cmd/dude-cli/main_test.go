@@ -166,14 +166,25 @@ func TestUpdateEpicNoneSendsNull(t *testing.T) {
 	}
 }
 
-func TestAnswerWithChoices(t *testing.T) {
-	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, "", "answer", "q_1", "because", "--choice", "0", "--choice", "2"); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := json.Marshal(last(*calls).body)
-	if want := `{"answers":[{"choices":[0,2],"text":"because"}],"text":"because"}`; string(b) != want {
-		t.Fatalf("body %s, want %s", b, want)
+// Bodies as the orchestrator's answerBody.check takes them: text, or
+// answers, never both.
+func TestAnswerBodies(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"answer", "q_1", "because", "--choice", "0", "--choice", "2"}, `{"answers":[{"choices":[0,2],"text":"because"}]}`},
+		{[]string{"answer", "q_1", "--choice", "1"}, `{"answers":[{"choices":[1]}]}`},
+		{[]string{"answer", "q_1", "because"}, `{"text":"because"}`},
+	} {
+		srv, calls := fakeDude(t)
+		if _, err := runCLI(t, srv, "", tc.args...); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(last(*calls).body)
+		if string(b) != tc.want {
+			t.Fatalf("%v: body %s, want %s", tc.args, b, tc.want)
+		}
 	}
 }
 

@@ -550,6 +550,19 @@ func (c *cli) onRun(ref, suffix string, body any) (any, error) {
 	return c.request("POST", "/v1/runs/"+url.PathEscape(id)+suffix, body)
 }
 
+// itemAnswer is one item's answer: the choices picked and the text, if any.
+func (c *cli) itemAnswer(text string, choices ints) (obj, error) {
+	ans := obj{"choices": append([]int{}, choices...)}
+	if text != "" {
+		t, err := c.text(text)
+		if err != nil {
+			return nil, err
+		}
+		ans["text"] = t
+	}
+	return ans, nil
+}
+
 func startFlags(fs *flag.FlagSet, route string) func(*cli, []string) (any, error) {
 	override := fs.Bool("override", false, "start even though it is blocked")
 	note := fs.String("note", "", "why, recorded with an override")
@@ -959,21 +972,14 @@ var commands = map[string]command{
 				if a[1] == "" && len(choices) == 0 {
 					return nil, errors.New("answer: give the text, --choice, or both")
 				}
-				body := obj{}
-				t := ""
-				if a[1] != "" {
-					var err error
-					if t, err = c.text(a[1]); err != nil {
-						return nil, err
-					}
-					body["text"] = t
+				ans, err := c.itemAnswer(a[1], choices)
+				if err != nil {
+					return nil, err
 				}
-				if len(choices) > 0 {
-					ans := obj{"choices": []int(choices)}
-					if t != "" {
-						ans["text"] = t
-					}
-					body["answers"] = []obj{ans}
+				// The orchestrator takes text or answers, never both (422).
+				body := obj{"answers": []obj{ans}}
+				if len(choices) == 0 {
+					body = obj{"text": ans["text"]}
 				}
 				return c.request("POST", "/v1/questions/"+url.PathEscape(a[0])+"/answer", body)
 			}

@@ -532,13 +532,9 @@ var moreCommands = map[string]command{
 			if a[2] == "" && len(choices) == 0 {
 				return nil, errors.New("brainstorm-answer: give the text, --choice, or both")
 			}
-			ans := obj{"choices": append([]int{}, choices...)}
-			if a[2] != "" {
-				t, err := c.text(a[2])
-				if err != nil {
-					return nil, err
-				}
-				ans["text"] = t
+			ans, err := c.itemAnswer(a[2], choices)
+			if err != nil {
+				return nil, err
 			}
 			return c.post("/v1/brainstorms/"+esc(a[0])+"/questions/"+esc(a[1])+"/answer", obj{"answers": []obj{ans}})
 		}
