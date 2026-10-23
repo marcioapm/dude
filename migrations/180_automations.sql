@@ -131,6 +131,10 @@ CREATE INDEX automation_runs_open_idx ON automation_runs (created_at) WHERE stat
 CREATE UNIQUE INDEX automation_runs_token_idx ON automation_runs (mcp_token_hash) WHERE mcp_token_hash IS NOT NULL;
 -- A resumed run reads on from the cursor its kept lux Run's last run left.
 CREATE INDEX automation_runs_lux_run_idx ON automation_runs (lux_run_id, created_at DESC) WHERE lux_run_id IS NOT NULL;
+-- Retention's batches: payloads not yet emptied, logs not yet dropped
+-- (each shrinks to nothing once retention has caught up).
+CREATE INDEX automation_runs_payloads_kept_idx ON automation_runs (created_at) WHERE payloads_purged_at IS NULL;
+CREATE INDEX automation_runs_log_kept_idx ON automation_runs (created_at) WHERE log_tail IS NOT NULL;
 
 CREATE FUNCTION lookup_automation_by_mcp_token(p_hash text)
 RETURNS TABLE (run_id text, organization_id text, automation_id text, status text, scope jsonb)
@@ -242,7 +246,10 @@ ALTER TABLE webhook_deliveries ADD COLUMN automations_attempts integer NOT NULL 
   ADD COLUMN automations_next_at timestamptz, ADD COLUMN automations_pending text[];
 -- Past deliveries of one event (Run now), and the events seen (the picker's fallback).
 CREATE INDEX webhook_deliveries_event_idx ON webhook_deliveries (organization_id, event, received_at DESC);
--- The retention sweep deletes deliveries after 30 days.
+-- The retention sweep deletes deliveries after 30 days, oldest first, a
+-- batch at a time. Built here, in the transaction: until now the table held
+-- pull-request deliveries only.
+CREATE INDEX webhook_deliveries_received_idx ON webhook_deliveries (received_at);
 GRANT DELETE ON webhook_deliveries TO dude_sweeper;
 
 -- What GitHub says the organisation is subscribed to, read at most hourly.

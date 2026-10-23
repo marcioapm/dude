@@ -131,27 +131,43 @@ const (
 	LogRetention     = 90 * 24 * time.Hour
 )
 
+// RetainBatch is how many rows one retention statement changes, each batch
+// its own transaction: a backlog (the first pass after a deploy or an
+// outage) is drained in short steps that never hold a table's rows long.
+const RetainBatch = 5000
+
 // Retain deletes stored deliveries past their 30 days, empties automation
 // runs' payloads at 30 days and their logs at 90 (the run rows stay, so the
-// Runs tab still says what ran). Returns how many rows it changed.
+// Runs tab still says what ran): one batch of each. Returns how many rows
+// it changed; the loop calls it again at once while that is not 0.
 func Retain(ctx context.Context, d *db.DB, now time.Time) (int, error) {
-	var n int64
-	err := d.InSystem(ctx, "automations-retention", func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM webhook_deliveries WHERE received_at < $1
-			AND (processed_at IS NOT NULL OR attempts >= 10) AND automations_at IS NOT NULL`, now.Add(-PayloadRetention))
-		if err != nil {
+	return RetainUpTo(ctx, d, now, RetainBatch)
+}
+
+// RetainUpTo is Retain with batches of limit rows.
+func RetainUpTo(ctx context.Context, d *db.DB, now time.Time, limit int) (int, error) {
+	n := int64(0)
+	for _, step := range []struct {
+		sql string
+		args []any
+	}{
+		{`DELETE FROM webhook_deliveries WHERE id IN (SELECT id FROM webhook_deliveries WHERE received_at < $1
+			AND (processed_at IS NOT NULL OR attempts >= 10) AND automations_at IS NOT NULL ORDER BY received_at LIMIT $2)`,
+			[]any{now.Add(-PayloadRetention), limit}},
+		{`UPDATE automation_runs SET payloads = '[]', payloads_purged_at = $3 WHERE id IN (SELECT id FROM automation_runs
+			WHERE created_at < $1 AND payloads_purged_at IS NULL ORDER BY created_at LIMIT $2)`,
+			[]any{now.Add(-PayloadRetention), limit, now}},
+		{`UPDATE automation_runs SET log_tail = NULL WHERE id IN (SELECT id FROM automation_runs
+			WHERE created_at < $1 AND log_tail IS NOT NULL ORDER BY created_at LIMIT $2)`,
+			[]any{now.Add(-LogRetention), limit}},
+	} {
+		if err := d.InSystem(ctx, "automations-retention", func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, step.sql, step.args...)
+			n += tag.RowsAffected()
 			return err
+		}); err != nil {
+			return int(n), err
 		}
-		n += tag.RowsAffected()
-		if tag, err = tx.Exec(ctx, `UPDATE automation_runs SET payloads = '[]', payloads_purged_at = $2
-			WHERE created_at < $1 AND payloads_purged_at IS NULL`, now.Add(-PayloadRetention), now); err != nil {
-			return err
-		}
-		n += tag.RowsAffected()
-		tag, err = tx.Exec(ctx, `UPDATE automation_runs SET log_tail = NULL WHERE created_at < $1 AND log_tail IS NOT NULL`,
-			now.Add(-LogRetention))
-		n += tag.RowsAffected()
-		return err
-	})
-	return int(n), err
+	}
+	return int(n), nil
 }

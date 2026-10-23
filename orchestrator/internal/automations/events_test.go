@@ -107,6 +107,49 @@ func TestSubscriptionsFromAPATsWebhook(t *testing.T) {
 	}
 }
 
+// A retention backlog is drained a batch per pass, each pass changing at
+// most a batch of each: the old deliveries go and the old runs' payloads
+// empty over several passes, then a pass changes nothing.
+func TestRetainDrainsABacklogInBatches(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	now := time.Now()
+	old := now.Add(-40 * 24 * time.Hour)
+	exec(t, owner, `INSERT INTO webhook_deliveries (id, organization_id, event, payload, received_at, processed_at, automations_at)
+		SELECT 'old-' || g, $1, 'push', '{}', $2, $2, $2 FROM generate_series(1, 5) g`, org, old)
+	exec(t, owner, `INSERT INTO automations (id, organization_id, name, kind, trigger, command)
+		VALUES ('aut_b', $1, 'B', 'command', '{"kind":"schedule","cron":"0 * * * *","tz":"UTC"}', 'true')`, org)
+	exec(t, owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source, payloads, created_at)
+		SELECT 'arn_b' || g, $1, 'aut_b', 'succeeded', 'event', '[{"deliveryId":"x"}]', $2 FROM generate_series(1, 3) g`, org, old)
+	count := func(q string) int {
+		var n int
+		if err := owner.QueryRow(ctx, q, org).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	var passes []int
+	for range 5 {
+		n, err := RetainUpTo(ctx, app, now, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		passes = append(passes, n)
+		if n == 0 {
+			break
+		}
+	}
+	// Deliveries 2+2+1, payloads 2+1: four passes, the last changing nothing.
+	if !slices.Equal(passes, []int{4, 3, 1, 0}) {
+		t.Errorf("rows per pass %v", passes)
+	}
+	if d, p := count(`SELECT count(*) FROM webhook_deliveries WHERE organization_id = $1`),
+		count(`SELECT count(*) FROM automation_runs WHERE organization_id = $1 AND payloads_purged_at IS NULL`); d != 0 || p != 0 {
+		t.Errorf("left: %d deliveries, %d runs with payloads", d, p)
+	}
+}
+
 func TestRetainKeepsPayloadsThirtyDaysAndLogsNinety(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)

@@ -255,10 +255,9 @@ func run(log *slog.Logger) error {
 		// followed, Server containers fed and stopped, kept sessions expired.
 		{"automations", time.Second, automationRunner.Sweep},
 		// GitHub's deliveries after 30 days, automation runs' payloads at 30
-		// and logs at 90 (counting nothing: a backlog is not a reason to spin).
+		// and logs at 90, a batch at a time: a backlog repeats the loop at once.
 		{"automations-retention", time.Hour, func(ctx context.Context) (int, error) {
-			_, err := automations.Retain(ctx, database, time.Now())
-			return 0, err
+			return automations.Retain(ctx, database, time.Now())
 		}},
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},
