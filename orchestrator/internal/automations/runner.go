@@ -591,19 +591,15 @@ func (r *Runner) Evaluate(ctx context.Context, tx pgx.Tx, a Automation, ev Event
 			return nil, errors.New("no GitHub to read the pull request's files from")
 		}
 		gh, err := r.Forges.For(ctx, a.Org)
-		if err != nil || gh == nil {
-			return nil, cmpErr(err, "no GitHub to read the pull request's files from")
+		if err != nil {
+			return nil, err
+		}
+		if gh == nil {
+			return nil, errors.New("no GitHub to read the pull request's files from")
 		}
 		return gh.PullFiles(ctx, ev.Repository, ev.PullNumber, 3000)
 	}
 	return Match(a.Trigger, a.RepoFilter, repos, ev, files)
-}
-
-func cmpErr(err error, msg string) error {
-	if err != nil {
-		return err
-	}
-	return errors.New(msg)
 }
 
 // ---------------------------------------------------------------------------
@@ -995,7 +991,7 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	case got.State == "succeeded":
 		return true, r.finish(ctx, a, runID, "succeeded", "", cost())
 	case lux.Terminal(got.State):
-		return true, r.finish(ctx, a, runID, "failed", cmpStr(got.StateReason, "its container ended: "+got.State), cost())
+		return true, r.finish(ctx, a, runID, "failed", cmp.Or(got.StateReason, "its container ended: "+got.State), cost())
 	case a.Kind == "agent" && failed != "":
 		return true, r.endThenStop(ctx, a, runID, luxRunID, keep, "failed", failed, cost())
 	case a.Kind == "agent" && turnDone.done:
@@ -1052,13 +1048,6 @@ func (r *Runner) endThenStop(ctx context.Context, a Automation, runID, luxRunID 
 	}
 	r.stopOrCancel(ctx, luxRunID, keep)
 	return nil
-}
-
-func cmpStr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func (r *Runner) stopOrCancel(ctx context.Context, luxRunID string, keep bool) {
@@ -1242,7 +1231,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	keep := a.SessionMode == "resumable" && source != SourceTest
 	if got, err := r.Lux.Get(ctx, luxRunID); err == nil && lux.Terminal(got.State) {
-		return true, r.endServer(ctx, a, runID, "failed", "error", "its container ended: "+cmpStr(got.StateReason, got.State))
+		return true, r.endServer(ctx, a, runID, "failed", "error", "its container ended: "+cmp.Or(got.StateReason, got.State))
 	}
 	base, err := r.serverURL(ctx, luxRunID, cfg.Port)
 	if err != nil || !r.healthy(ctx, base, cfg.Health) {
@@ -1254,7 +1243,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	if posted < len(payloads) {
 		for i := posted; i < len(payloads); i++ {
-			r.postOnce(ctx, a, runID, base+cfg.Path, payloads[i], true)
+			r.postOnce(ctx, a, runID, base+cfg.Path, payloads[i])
 		}
 		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, len(payloads))
@@ -1353,8 +1342,8 @@ func hostPort(hostPath, base string) string {
 }
 
 // postOnce POSTs one payload with dude's headers and records the answer;
-// a 5xx or no answer is tried once more (retry), a 4xx is not.
-func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, p Payload, retry bool) bool {
+// a 5xx or no answer is tried once more, a 4xx is not.
+func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, p Payload) bool {
 	body := []byte(p.Body)
 	if len(body) == 0 {
 		body = []byte("{}")
@@ -1377,9 +1366,6 @@ func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, 
 		})
 		if err == nil && status < 500 {
 			return status < 300
-		}
-		if !retry {
-			return false
 		}
 	}
 	return false
@@ -1446,7 +1432,7 @@ func (r *Runner) postWebhook(ctx context.Context, a Automation, runID string) er
 	if len(p.Body) == 0 {
 		p.Body, _ = json.Marshal(map[string]any{"automation": a.ID, "schedule": map[string]any{"time": r.now().UTC().Format(time.RFC3339)}})
 	}
-	if r.postOnce(ctx, a, runID, cfg.URL, p, true) {
+	if r.postOnce(ctx, a, runID, cfg.URL, p) {
 		return r.finish(ctx, a, runID, "succeeded", "", nil)
 	}
 	return r.finish(ctx, a, runID, "failed", "the webhook did not answer 2xx", nil)
@@ -1725,8 +1711,8 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 				own = &settings.Preset.Overrides
 			}
 			if own != nil {
-				tierID, harness = cmpStr(own.TierID, tierID), cmpStr(own.Harness, harness)
-				sizeID, imageID = cmpStr(own.MachineSizeID, sizeID), cmpStr(own.ImageID, imageID)
+				tierID, harness = cmp.Or(own.TierID, tierID), cmp.Or(own.Harness, harness)
+				sizeID, imageID = cmp.Or(own.MachineSizeID, sizeID), cmp.Or(own.ImageID, imageID)
 				if own.TimeLimitMinutes > 0 {
 					timeLimit = own.TimeLimitMinutes
 				}
@@ -1739,7 +1725,7 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 				why = strings.Replace(reason, "The "+delivery.RoleName(role), "The automation's agent", 1)
 				return nil
 			}
-			in.Role, in.Harness, in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = role, cmpStr(harness, delivery.HarnessOpenCode), tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
+			in.Role, in.Harness, in.Model, in.ModelTier, in.Effort, in.Options, in.Headers = role, cmp.Or(harness, delivery.HarnessOpenCode), tier.Model, tier.Name, tier.Effort, tier.Options, tier.Headers
 			if timeLimit > 0 {
 				in.Timeout = strconv.Itoa(timeLimit) + "m"
 			}
@@ -1770,7 +1756,7 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 				return err
 			}
 			if out.Fail != "" || out.WaitBuild != "" {
-				why = cmpStr(out.Fail, "its image is still being built")
+				why = cmp.Or(out.Fail, "its image is still being built")
 				return nil
 			}
 			ref, got = out.Ref, out.Image
