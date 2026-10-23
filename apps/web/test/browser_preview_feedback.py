@@ -6,7 +6,7 @@ preview is another origin, https://web-shop.preview.test, answered by Playwright
 with preview_page.html plus the tag lux would inject, which loads the overlay from
 dude's origin. Everything between them is the browser's own postMessage.
 
-It drives: Comment on the Servers tab -> pick an element -> save -> the draft in
+It drives: the Servers tab's server link -> pick an element -> save -> the draft in
 dude's tray and on the Feedback tab with its picture -> Show on preview; a page
 opened directly shows the no-opener panel; a message from another origin is
 ignored; Restart and the unavailable reason. Screenshots go to
@@ -382,6 +382,39 @@ class CommentingOnAPreview(unittest.TestCase):
         self.assertEqual(len(ctx.pages), pages)
         self.assertEqual(page.url, dude_url)
         expect(page.get_by_test_id("fb-tray")).to_have_attribute("data-count", "1")
+        self.assertEqual(self.errors, [])
+
+    def test_enter_on_the_link_opens_it_and_a_second_click_brings_it_forward_unreloaded(self):
+        ctx, page = self.context()
+        self.watch(page)
+        link = page.get_by_test_id("server-url").first
+        expect(link).to_be_visible(timeout=20_000)
+        # Keyboard activation: Enter on the focused link is a click the comment tool takes, not a plain tab.
+        link.focus()
+        with ctx.expect_page() as opened:
+            page.keyboard.press("Enter")
+        pv = opened.value
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertIsNotNone(pv.evaluate("() => window.opener"))
+        expect(page.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
+        # The person moves on in the preview and starts a comment there.
+        pv.evaluate("() => { window.__marker = 'kept'; history.pushState({}, '', '/cart'); }")
+        ov_click(pv, "ov-comment")
+        pv.hover("button.greet")
+        pv.mouse.click(*self.center(pv, "button.greet"))
+        wait_ov(pv, "ov-comment-box")
+        pv.keyboard.type("Half a thought")
+        url = pv.url
+        pages = len(ctx.pages)
+        # Back in dude, the server's links again: the window comes forward as it is.
+        page.bring_to_front()
+        for testid in ("server-url", "server-preview"):
+            page.get_by_test_id(testid).first.click()
+            page.wait_for_timeout(500)
+            self.assertEqual(len(ctx.pages), pages, testid)
+            self.assertEqual(pv.url, url, testid)
+            self.assertEqual(pv.evaluate("() => window.__marker"), "kept", testid)
+            self.assertEqual(ov(pv, "r => r.querySelector('[data-testid=ov-comment-box] textarea').value"), "Half a thought", testid)
         self.assertEqual(self.errors, [])
 
     def test_a_preview_opened_directly_says_to_open_it_from_dude(self):
