@@ -11,6 +11,10 @@
  * (`candidate.from`): staleness is measured against those, and a verdict
  * at the candidate's own heads is `candidate`, neither stale nor the pull
  * request's.
+ *
+ * A test step that started no tester after a non-product change
+ * (`test.skipped`) vouches for its run's verdict at the heads it skipped
+ * at: staleness is measured from those, as the pull request's account is.
  */
 
 import { withOrg } from "../../db/client.ts";
@@ -23,13 +27,17 @@ async function listVerification(ctx: RequestContext): Promise<Response> {
     SELECT v.run_id AS "runId", r.attempt, v.heads, v.created_at AS "createdAt", wk.work AS "work",
       v.criterion, v.text, v.status, v.evidence, v.observed, v.problem, v.decision,
       CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object('id', p.id, 'name', p.name) END AS "decidedBy",
-      v.decision_note AS "decisionNote", v.carried_from AS "carriedFrom"
+      v.decision_note AS "decisionNote", v.carried_from AS "carriedFrom", sk.heads AS "standsFor"
     FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id
     -- Lateral rather than a scalar subquery: the planner memoizes it per (task, attempt).
     LEFT JOIN LATERAL (
       SELECT jsonb_build_object('heads', w.state->'heads', 'from', w.state->'candidate'->'from') AS work FROM workflow_runs w
       WHERE w.task_id = v.task_id AND COALESCE((w.state->>'attempt')::int, r.attempt) = r.attempt
       ORDER BY w.created_at DESC LIMIT 1) wk ON true
+    LEFT JOIN LATERAL (
+      SELECT e.payload->'heads' AS heads FROM events e
+      WHERE e.task_id = v.task_id AND e.event_type = 'test.skipped' AND e.payload->>'fromRunId' = v.run_id
+      ORDER BY e.cursor DESC LIMIT 1) sk ON true
     LEFT JOIN people p ON p.id = v.decided_by
     WHERE v.task_id = ${taskId}
     ORDER BY v.created_at DESC, v.run_id, v.criterion
@@ -41,7 +49,9 @@ async function listVerification(ctx: RequestContext): Promise<Response> {
     let v = byRun.get(runId);
     if (!v) {
       const heads = (row.heads ?? {}) as Record<string, string>;
-      const { stale, candidate } = standing(heads, (row.work ?? {}) as Work);
+      // A later test step that started no tester (test.skipped) carried this verdict to its heads.
+      const tested = (row.standsFor ?? heads) as Record<string, string>;
+      const { stale, candidate } = standing(tested, (row.work ?? {}) as Work);
       v = { runId, attempt: row.attempt, heads, stale, candidate, createdAt: row.createdAt, criteria: [] };
       byRun.set(runId, v);
     }

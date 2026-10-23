@@ -140,3 +140,27 @@ test("a candidate moved on past its own test (a fix after it) leaves that test s
     candidate: { round: 1, branch: "dude/wi_c3/attempt-1-candidate", from: { api: "aaa111", web: "www000" }, base: { api: "aaa111" } } });
   expect(got).toEqual({ pr: { stale: false, candidate: false }, candidate: { stale: true, candidate: false } });
 });
+
+test("a verdict a later test step carried without a tester stands at the heads it skipped at, and goes stale past them", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_s', 'org_v', 'prj_v', 21, 'Skip')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, status)
+    VALUES ('run_s1', 'org_v', 'prj_v', 'wi_s', 1, 'test', 'qa_browser', 'completed')`;
+  await owner`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence, observed, heads)
+    VALUES ('org_v', 'wi_s', 'run_s1', 1, 'it greets', 'pass', '{}', 'Hello.', '{"api":"aaa111"}')`;
+  // Two CI-only changes after it, each skipped; the later one is at bbb222.
+  for (const [id, head] of [["ev_s1", "abab11"], ["ev_s2", "bbb222"]] as const) {
+    await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+      VALUES (${id}, 'org_v', 'test.skipped', 'wi_s', 'system', 'dude', 'orchestrator',
+        ${{ fromRunId: "run_s1", from: { api: "aaa111" }, heads: { api: head }, paths: ["api/.github/workflows/ci.yml"], criteria: [] }})`;
+  }
+  await owner`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+    VALUES ('wf_s', 'org_v', 'wi_s', 'task.delivery', 'delivery:wi_s', 'waiting', 'awaitPullRequest', '{"attempt":1,"heads":{"api":"bbb222"}}')`;
+  const stale = async () => {
+    const { verifications } = (await (await get(ana.key, "/v1/tasks/wi_s/verification")).json()) as { verifications: Array<Record<string, any>> };
+    return verifications.map((v) => [v.runId, v.heads, v.stale]);
+  };
+  expect(await stale()).toEqual([["run_s1", { api: "aaa111" }, false]]);
+  // A product change after the skip, not yet tested.
+  await owner`UPDATE workflow_runs SET state = '{"attempt":1,"heads":{"api":"ccc333"}}' WHERE id = 'wf_s'`;
+  expect(await stale()).toEqual([["run_s1", { api: "aaa111" }, true]]);
+});
