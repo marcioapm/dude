@@ -1067,13 +1067,12 @@ test("179 lets an escalation's wake line run to 1200 characters, keeping every o
   }
 }, 120_000);
 
-test("180 adds automations: expiry 1..30 on resumable only, repo filter on org ones only, reviewer on pull_request events, automation Runs", async () => {
+test("180 adds automations: expiry 1..30 on resumable only, repo filter on org ones only, reviewer on pull_request events", async () => {
   const { url, sql } = await migratedBefore("180");
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_au', 'au', 'au')`;
     await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_au', 'org_au', 'A', 'a', 'A')`;
     await sql`INSERT INTO webhook_deliveries (id, organization_id, event, payload) VALUES ('d-old', 'org_au', 'pull_request', '{}')`;
-    await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_au', 'org_au', 'S')`;
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["180_automations.sql"]);
     // A delivery from before counts as read by the matcher: an old event fires nothing new.
@@ -1109,13 +1108,10 @@ test("180 adds automations: expiry 1..30 on resumable only, repo filter on org o
     expect(await add({ concurrency: "send" })).toContain("automations_send_resumable_agent");
     expect(await add({ concurrency: "send", session_mode: "resumable", expiry_days: 3 })).toBe("inserted");
 
-    // A Run belongs to exactly one of a task, a session, an automation.
-    const run = (id: string, session: string | null, automation: string | null) =>
-      sql`INSERT INTO runs (id, organization_id, session_id, automation_id, attempt, status, kind)
-        VALUES (${id}, 'org_au', ${session}, ${automation}, 1, 'pending', 'agent')`.then(() => "inserted", (e: Error) => e.message);
-    expect(await run("run_a", null, "aut_1")).toBe("inserted");
-    expect(await run("run_b", "ssn_au", "aut_1")).toContain("runs_task_or_session");
-    expect(await run("run_c", null, null)).toContain("runs_task_or_session");
+    // A run of a deleted automation goes with it.
+    await sql`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_1', 'org_au', 'aut_1', 'queued', 'schedule')`;
+    await sql`DELETE FROM automations WHERE id = 'aut_1'`;
+    expect([...await sql`SELECT count(*)::int AS n FROM automation_runs`]).toEqual([{ n: 0 }]);
   } finally {
     await sql.end();
   }

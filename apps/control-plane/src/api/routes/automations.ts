@@ -35,6 +35,7 @@ import { canEditProject, isOrgAdmin } from "../access.ts";
 import { badRequest, HttpError, json, noContent, notFound, parseBody } from "../http.ts";
 import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
+import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */
@@ -362,6 +363,9 @@ export function registerAutomationRoutes(router: Router): void {
   router.get("/v1/automations", listOrg);
   router.post("/v1/automations", createAutomation);
   router.get("/v1/automations/repositories", orgRepositories);
+  // The GitHub events this organisation is subscribed to: the orchestrator reads GitHub.
+  router.get("/v1/automations/subscriptions", (ctx) =>
+    orchestrator(ctx.principal.organizationId, "GET", "/internal/automations/subscriptions", undefined, ctx.principal));
   router.get("/v1/automations/:id", getAutomation);
   router.put("/v1/automations/:id", putAutomation);
   router.delete("/v1/automations/:id", deleteAutomation);

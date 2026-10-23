@@ -244,7 +244,7 @@ test("Verify asks the orchestrator to mint an App's token, and says what it answ
   expect(await verify()).toEqual({ ok: false, reason: "GitHub is connected with a token, not an App" });
 });
 
-test("an App's deliveries are taken with the credential's secret; its installation events are answered and ignored", async () => {
+test("an App's deliveries are taken with the credential's secret; every event is stored, its installation events too", async () => {
   const [{ secret }] = await owner`SELECT webhook_secret AS secret FROM forge_credentials WHERE organization_id = ${ORG}`;
   const deliver = (event: string, payload: unknown, id: string) => {
     const body = JSON.stringify(payload);
@@ -258,12 +258,15 @@ test("an App's deliveries are taken with the credential's secret; its installati
   const installation = { id: 71, account: { login: "acme" } };
   for (const event of ["installation", "installation_repositories"]) {
     const res = await deliver(event, { action: "created", installation }, `d-${event}`);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, ignored: event });
+    expect(res.status).toBe(202);
   }
   const pr = await deliver("pull_request", { action: "opened", installation, number: 1, pull_request: { number: 1 },
     repository: { full_name: "acme/api" } }, "d-pr");
   expect(pr.status).toBe(202);
   const stored = await owner`SELECT id, event FROM webhook_deliveries WHERE organization_id = ${ORG} AND processed_at IS NULL ORDER BY id`;
-  expect([...stored]).toEqual([{ id: "d-pr", event: "pull_request" }]);
+  expect([...stored]).toEqual([
+    { id: "d-installation", event: "installation" },
+    { id: "d-installation_repositories", event: "installation_repositories" },
+    { id: "d-pr", event: "pull_request" },
+  ]);
 });

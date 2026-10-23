@@ -54,6 +54,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/automations"
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -237,6 +238,12 @@ func run(log *slog.Logger) error {
 		// loop only looks for the ones due.
 		{"lux-cost", 15 * time.Second, (&phases.Costs{DB: database, Lux: luxClient, Log: log, Every: set.LuxCostEvery}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
+		// GitHub's deliveries after 30 days, automation runs' payloads at 30
+		// and logs at 90 (counting nothing: a backlog is not a reason to spin).
+		{"automations-retention", time.Hour, func(ctx context.Context) (int, error) {
+			_, err := automations.Retain(ctx, database, time.Now())
+			return 0, err
+		}},
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {

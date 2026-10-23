@@ -86,10 +86,13 @@ CREATE TABLE automation_runs (
   scheduled_for        timestamptz,
   -- new or resumed for a resumable automation's kept session; ephemeral otherwise.
   session              text CHECK (session IN ('new', 'resumed', 'ephemeral')),
-  -- An agent's dude Run (its transcript, tools and cost); a command's or
-  -- server's lux Run directly.
-  run_id               text REFERENCES runs(id) ON DELETE SET NULL,
+  -- The lux Run it ran in. Not a dude Run (runs): an automation's work has
+  -- no task or session, which every reader of runs assumes; it is followed
+  -- here, by the orchestrator's automations loop.
   lux_run_id           text,
+  -- The agent's role (a preset's) or 'agent', and the model it asked for.
+  role                 text,
+  model                text,
   started_by           text REFERENCES people(id) ON DELETE SET NULL,
   cost_usd             numeric,
   exit_code            integer,
@@ -114,8 +117,7 @@ CREATE INDEX automation_runs_open_idx ON automation_runs (created_at) WHERE stat
 CREATE TABLE automation_sessions (
   automation_id   text PRIMARY KEY REFERENCES automations(id) ON DELETE CASCADE,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  run_id          text REFERENCES runs(id) ON DELETE SET NULL,
-  lux_run_id      text,
+  lux_run_id      text NOT NULL,
   created_at      timestamptz NOT NULL DEFAULT now(),
   last_run_at     timestamptz NOT NULL DEFAULT now()
 );
@@ -145,22 +147,10 @@ BEGIN
       ' WITH CHECK (organization_id = current_organization_id())', t);
   END LOOP;
 END $$;
--- The scheduler, the delivery matcher and the retention sweep read across organisations.
+-- The scheduler, the delivery matcher, the runner and the retention sweep work across organisations.
 GRANT SELECT, UPDATE ON automations TO dude_sweeper;
-GRANT SELECT, UPDATE ON automation_runs, automation_sessions TO dude_sweeper;
-
--- ---------------------------------------------------------------------------
--- An automation's agent is a Run with no task and no session.
--- ---------------------------------------------------------------------------
-
-ALTER TABLE runs ADD COLUMN automation_id text REFERENCES automations(id) ON DELETE CASCADE;
-CREATE INDEX runs_automation_idx ON runs (automation_id, created_at) WHERE automation_id IS NOT NULL;
--- NOT VALID: it only widens runs_task_or_session (automation_id is NULL on
--- every row before it), so validating would scan runs under this ALTER's
--- lock for no row it could refuse.
-ALTER TABLE runs DROP CONSTRAINT runs_task_or_session;
-ALTER TABLE runs ADD CONSTRAINT runs_task_or_session
-  CHECK (num_nonnulls(task_id, session_id, automation_id) = 1 AND (task_id IS NULL OR project_id IS NOT NULL)) NOT VALID;
+GRANT SELECT, INSERT, UPDATE ON automation_runs, automation_run_requests TO dude_sweeper;
+GRANT SELECT, INSERT, UPDATE, DELETE ON automation_sessions TO dude_sweeper;
 
 -- ---------------------------------------------------------------------------
 -- Every GitHub delivery is stored now, not only the pull-request ones.

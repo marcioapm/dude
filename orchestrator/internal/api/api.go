@@ -151,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 		write(w, http.StatusAccepted, map[string]bool{"ok": true})
 		return nil
 	}))
+	mux.Handle("GET /internal/automations/subscriptions", s.auth(s.eventSubscriptions))
 	return mux
 }
 
