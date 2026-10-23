@@ -443,6 +443,40 @@ func TestBotsAndTheFactoryItselfAreNotFeedback(t *testing.T) {
 	}
 }
 
+// A reviewer posting as a person keeps a status comment on the pull request
+// while it works; that woke a fixer with nothing to do. Its review, or a line
+// comment, still counts, and so does a plain request from the same account.
+func TestAToolsStatusCommentIsNotARequest(t *testing.T) {
+	status := comment("<!-- reviewbot:review-status -->\n**Review in progress**")
+	status.Author = "review-service"
+	if s := Classify(prior, open, []Feedback{status}, nil); s != nil {
+		t.Errorf("a status comment produced a signal: %+v", s)
+	}
+	for _, body := range []string{status.Body, "\n<!-- x -->\nReview in progress", "  <!-- x -->\r\nReview in progress\r\n", "<!-- x -->"} {
+		f := status
+		f.Body = body
+		if IsActionableComment(f, nil) {
+			t.Errorf("status comment %q was treated as a request", body)
+		}
+	}
+	for _, kind := range []string{KindReview, KindLineComment, KindChangesRequested} {
+		f := status
+		f.Kind = kind
+		if !IsActionableComment(f, nil) {
+			t.Errorf("a %s that opens with a marker was filtered out", kind)
+		}
+	}
+	if !IsActionableComment(comment("Why does the <!-- preview --> comment say failed?"), nil) {
+		t.Error("a question mentioning a marker mid-comment was filtered out")
+	}
+	ask := comment("Please rename `foo` to `bar`.")
+	ask.Author = status.Author
+	s := Classify(prior, open, []Feedback{status, ask}, nil)
+	if s == nil || s.Kind != "actionable" || len(s.Feedback) != 1 || s.Feedback[0].ID != ask.ID {
+		t.Errorf("a request beside a status comment: %+v", s)
+	}
+}
+
 func TestMergeAndCloseEndTheLoopOnce(t *testing.T) {
 	for _, state := range []string{StateMerged, StateClosed} {
 		cur := open

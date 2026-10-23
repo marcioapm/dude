@@ -141,9 +141,17 @@ func isBot(author string) bool {
 // IsBot says a login is a bot's: its comments never wake a fixer.
 func IsBot(author string) bool { return isBot(author) }
 
+// isStatusComment: a conversation comment opening with an HTML comment marker
+// is a tool's status comment, edited in place ("review in progress"), whatever
+// account posts it; a person does not start a request that way. Reviews and
+// line comments never are: a tool asks there.
+func isStatusComment(f Feedback) bool {
+	return f.Kind == KindComment && strings.HasPrefix(strings.TrimSpace(f.Body), "<!--")
+}
+
 // IsActionableComment decides whether one piece of feedback asks for a change.
 func IsActionableComment(f Feedback, factoryLogins []string) bool {
-	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" || Own(f) {
+	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" || Own(f) || isStatusComment(f) {
 		return false
 	}
 	// The factory's own comments are not feedback on the factory's work.
@@ -161,10 +169,10 @@ func IsActionableComment(f Feedback, factoryLogins []string) bool {
 
 // Classify decides what a change on a pull request means, without a model.
 //
-// Most of what happens on a PR — an approval, a green check, a bot comment —
-// only updates state. Two things are worth waking a fixer for: a person
-// asking for a change, and a check that turned red; and one is worth
-// stopping for a person: the branch turning conflicting. Returns nil
+// Most of what happens on a PR — an approval, a green check, a bot comment,
+// a tool's status comment — only updates state. Two things are worth waking a
+// fixer for: a person asking for a change, and a check that turned red; and
+// one is worth stopping for a person: the branch turning conflicting. Returns nil
 // otherwise, which is the common case and the reason this exists.
 //
 // feedback is what may wake a fixer: its authors already passed the
