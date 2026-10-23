@@ -12,7 +12,7 @@ import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID, YOU, taskFor } from "../src/fixtures/data.ts";
-import type { Artifact, EscalationAction, Verification } from "../src/api/client.ts";
+import type { Artifact, EscalationAction, Finding, Verification } from "../src/api/client.ts";
 import { VerificationSection } from "../src/screens/VerificationSection.tsx";
 import { EscalationPanel } from "../src/screens/EscalationPanel.tsx";
 
@@ -100,7 +100,7 @@ test("a pull request's fix still being checked is labelled the candidate's, not 
 
 // -- the banner --
 
-async function banner(reason: string, actions: EscalationAction[], opts: { owner?: string; you?: string; admin?: boolean; detail?: Record<string, unknown> } = {}) {
+async function banner(reason: string, actions: EscalationAction[], opts: { owner?: string; you?: string; admin?: boolean; findings?: Finding[]; detail?: Record<string, unknown> } = {}) {
   const client = new FixtureClient("a");
   const sent: Array<[EscalationAction, string] | [EscalationAction, string, string]> = [];
   client.decide = async (_task, action, note, scope) => {
@@ -111,7 +111,7 @@ async function banner(reason: string, actions: EscalationAction[], opts: { owner
     escalation: { reason, actions, at: "2026-10-01T00:00:00Z",
       detail: opts.detail ?? { runId: "run_test", criteria: [{ criterion: 2, text: "it pays", status: "blocked" }], findingIds: [] } } };
   const { container, unmount } = await mount(
-    <EscalationPanel client={client} task={task as Parameters<typeof EscalationPanel>[0]["task"]} you={opts.you ?? YOU}
+    <EscalationPanel client={client} findings={opts.findings ?? []} task={task as Parameters<typeof EscalationPanel>[0]["task"]} you={opts.you ?? YOU}
       youAdmin={opts.admin ?? false} onOpenRun={() => {}} onDecided={() => {}} />,
   );
   mounted.push(unmount);
@@ -158,6 +158,67 @@ test("an admin who is not the owner may waive, and nothing else; a member only w
   const member = await banner("test_blocked", ["retry", "waive", "stop"], { owner: "per_ana", you: "per_bo" });
   expect(count(member.page, "[data-testid=escalation-waive]")).toBe(0);
   expect(member.page.textContent).toContain("Waiting for Ana to decide.");
+});
+
+test("convergence actions require nonblank owner direction, while stop does not", async () => {
+  for (const action of ["retry", "accept", "amend"] as const) {
+    const { page, sent } = await banner("not_converging", ["retry", "accept", "amend", "stop"]);
+    expect(page.querySelector("[data-testid=escalation-retry]")?.textContent).toBe("Fix differently");
+    expect(page.querySelector("[data-testid=escalation-accept]")?.textContent).toBe("Accept the risk");
+    expect(page.querySelector("[data-testid=escalation-amend]")?.textContent).toBe("Change the intended behaviour");
+    await typeNote(page, "   ");
+    await click(page.querySelector(`[data-testid=escalation-${action}]`)!);
+    expect(sent).toEqual([]);
+    expect(page.querySelector<HTMLTextAreaElement>("textarea")!.required).toBe(true);
+    await typeNote(page, "Preserve the original timestamp.");
+    await click(page.querySelector(`[data-testid=escalation-${action}]`)!);
+    expect(sent).toEqual([[action, "Preserve the original timestamp."]]);
+  }
+  const stopped = await banner("not_converging", ["retry", "accept", "amend", "stop"]);
+  await click(stopped.page.querySelector("[data-testid=escalation-retry]")!);
+  await click(stopped.page.querySelector("[data-testid=escalation-stop]")!);
+  expect(stopped.sent).toEqual([["stop", ""]]);
+});
+
+test("stuck retry needs direction without granting admins owner-only decisions", async () => {
+  const stuck = await banner("stuck", ["retry", "accept", "stop"]);
+  await click(stuck.page.querySelector("[data-testid=escalation-retry]")!);
+  expect(stuck.sent).toEqual([]);
+  await typeNote(stuck.page, "Check the clock conversion first.");
+  await click(stuck.page.querySelector("[data-testid=escalation-retry]")!);
+  expect(stuck.sent).toEqual([["retry", "Check the clock conversion first."]]);
+  for (const reason of ["stuck", "not_converging"]) {
+    const admin = await banner(reason, ["retry", "accept", "amend", "stop"], { owner: "per_ana", admin: true });
+    expect(admin.page.querySelectorAll(".escalationActions button").length).toBe(0);
+  }
+});
+
+test("a stalled loop's note asks for the person's direction, before and after an action is picked", async () => {
+  const noteLabel = (page: HTMLElement) =>
+    page.querySelector(`label[for="${page.querySelector("[data-testid=escalation-note]")!.id}"]`)?.textContent ?? "";
+  const nc = await banner("not_converging", ["retry", "accept", "amend", "stop"]);
+  expect(noteLabel(nc.page)).toContain("A note for the agents (required to fix differently or accept the risk or change the intended behaviour)");
+  await click(nc.page.querySelector("[data-testid=escalation-amend]")!);
+  expect(noteLabel(nc.page)).toContain("Your direction to change the intended behaviour (required)");
+  expect(nc.page.textContent).toContain("Give your direction: how to fix differently, the risk you accept, or the intended behaviour.");
+  const stuck = await banner("stuck", ["retry", "accept", "stop"]);
+  expect(noteLabel(stuck.page)).toContain("A note for the agents (required to try again)");
+  await click(stuck.page.querySelector("[data-testid=escalation-retry]")!);
+  expect(noteLabel(stuck.page)).toContain("Your direction to try again (required)");
+  expect(stuck.page.textContent).toContain("Give your direction: how to fix differently, the risk you accept, or the intended behaviour.");
+});
+
+test("convergence shows only named findings and their loaded criteria", async () => {
+  const { page } = await banner("not_converging", ["retry", "accept", "amend", "stop"], {
+    detail: { findingIds: ["f2", "f3", "missing"] },
+    findings: [
+      { id: "f1", title: "Unrelated", acceptance: "Unrelated criterion" },
+      { id: "f2", title: "Timestamp", acceptance: "The original timestamp is preserved." },
+      { id: "f3", title: "Legacy blocker", acceptance: null },
+    ] as Finding[],
+  });
+  expect([...page.querySelectorAll("[data-testid=escalation-finding]")].map((f) => [f.getAttribute("data-finding-id"), f.textContent]))
+    .toEqual([["f2", "Timestamp — Done when: The original timestamp is preserved."], ["f3", "Legacy blocker"]]);
 });
 
 const checksDetail = { runId: "run_impl", rounds: 1,

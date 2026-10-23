@@ -297,12 +297,16 @@ func reviewBound(st *State) error {
 // fixable is the findings a fix may be sent, of those named (all open ones
 // for none): open, of this attempt, and short of the attempts per finding.
 func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts FROM review_findings
+	rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
+		COALESCE(btrim(acceptance), '') <> '' FROM review_findings
 		WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
 	if err != nil {
 		return nil, err
 	}
-	all, err := pgx.CollectRows(rows, pgx.RowToStructByPos[FindingState])
+	all, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (f FindingState, err error) {
+		err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion)
+		return
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -316,6 +320,23 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	}
 	if len(named) == 0 {
 		named = open
+	}
+	// A fix of no review finding (the people's feedback alone, or ids
+	// refused below) is not held by the review loop's convergence.
+	if slices.ContainsFunc(named, func(id string) bool { _, ok := byID[id]; return ok }) {
+		conv, err := ConvergenceTx(ctx, tx, st)
+		if err != nil {
+			return nil, err
+		}
+		// A tester's finding has no still streak and is never fix-caused
+		// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
+		for i := range all {
+			all[i].StillRounds = conv.StillRounds[all[i].ID]
+		}
+		// A stalled review loop holds every fix, including a named subset.
+		if exit := Exit(st.Policy, all, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
+			return nil, refuseText(rReviewLoopNotConverging)
+		}
 	}
 	if len(named) == 0 {
 		// A fix for the people's feedback alone: every open item goes with it.

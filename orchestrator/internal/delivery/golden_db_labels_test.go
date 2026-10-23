@@ -58,6 +58,14 @@ func TestGoldenDecideEscalationRefusals(t *testing.T) {
 				answered("run_cond1", "per_bo")}},
 		{name: "not-admin", step: "decide", state: fmt.Sprintf(waiting, ReasonTestFailedCriteria), action: "accept",
 			setup: []string{answered("run_cond1", "per_bo")}},
+		// An answer that is only a choice's label: a reason to ship past a
+		// failed test, the direction of a retry or amend.
+		{name: "choice-not-reason", step: "decide", state: fmt.Sprintf(waiting, ReasonTestFailedCriteria), action: "accept",
+			setup: []string{answered("run_cond1", "per_ana"), `UPDATE questions SET answer = 'Accept' WHERE id = 'qst_e'`}},
+		{name: "choice-not-direction-retry", step: "decide", state: fmt.Sprintf(waiting, "stuck"), action: "retry",
+			setup: []string{answered("run_cond1", "per_ana"), `UPDATE questions SET answer = 'Retry' WHERE id = 'qst_e'`}},
+		{name: "choice-not-direction-amend", step: "decide", state: fmt.Sprintf(waiting, ReasonNotConverging), action: "amend",
+			setup: []string{answered("run_cond1", "per_ana"), `UPDATE questions SET answer = 'Retry' WHERE id = 'qst_e'`}},
 	} {
 		w := newGoldenWorld(t)
 		w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind, created_at)
@@ -80,4 +88,34 @@ func TestGoldenDecideEscalationRefusals(t *testing.T) {
 		lines = append(lines, [2]string{c.name, refused})
 	}
 	goldenTexts(t, "decide-escalation-refusals", lines)
+}
+
+// ask_person's refusal of a choice whose action needs the person's words:
+// a reason for an acceptance of a failed test, a direction for a retry or
+// an amend.
+func TestGoldenNakedChoiceRefusals(t *testing.T) {
+	var lines [][2]string
+	for _, c := range []struct{ name, reason, action string }{
+		{"accept-failed-test", ReasonTestFailedCriteria, "accept"},
+		{"retry-stuck", "stuck", "retry"},
+		{"retry-not-converging", ReasonNotConverging, "retry"},
+		{"amend-not-converging", ReasonNotConverging, "amend"},
+		{"accept-not-converging", ReasonNotConverging, "accept"},
+	} {
+		w := newGoldenWorld(t)
+		w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+			VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'running', 'conductor', 'agent')`)
+		w.delivery(t, "decide", fmt.Sprintf(`{"taskId":"wi_g","projectId":"prj_g","attempt":1,"decider":"conductor","escalation":{"reason":%q,"step":"fix"}}`, c.reason))
+		ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
+		items := []QuestionItem{{Question: "How?", Choices: []Choice{{Label: "Go"}, {Label: "Stop"}}}}
+		w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+			_, err := EscalationQuestion(ctx, tx, ref, items, []string{c.action, "stop"})
+			if err == nil {
+				t.Fatalf("%s: a naked choice was not refused", c.name)
+			}
+			lines = append(lines, [2]string{c.name, err.Error()})
+			return "", nil
+		})
+	}
+	goldenTexts(t, "naked-choice-refusals", lines)
 }

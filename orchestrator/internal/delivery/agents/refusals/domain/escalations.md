@@ -4,6 +4,8 @@
 
 {{- define "refusals/domain/escalations/not-way-go-on-after-one"}}%q is not a way to go on after %s; one of %s{{end}}
 
+{{- define "refusals/domain/escalations/needs-direction-note"}}%s needs a note with the person's direction{{end}}
+
 {{- define "refusals/domain/escalations/needs-note-say-why-task-may"}}%s needs a note: say why the task may ship with %s{{end}}
 
 {{- define "refusals/domain/escalations/what-stopped-no-longer-kept-resume"}}what stopped is no longer kept to resume; try again or start over{{end}}

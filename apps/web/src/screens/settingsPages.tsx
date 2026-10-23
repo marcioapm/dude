@@ -575,7 +575,8 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
     form.blockingSeverities.length > 0 &&
     [form.maxReviewIterations, form.maxAttemptsPerFinding, form.parkAfterMinutes, form.conductorWarmMinutes, form.conductorEditLines,
       form.conductorEditFiles].every((n) => Number.isInteger(n) && n >= 1) &&
-    [form.maxPrFixIterations, form.idleNudgeMinutes].every((n) => Number.isInteger(n) && n >= 0);
+    [form.maxPrFixIterations, form.idleNudgeMinutes].every((n) => Number.isInteger(n) && n >= 0) &&
+    [form.maxStillRounds, form.maxRegressionRounds].every((n) => Number.isInteger(n) && n >= 0 && n <= 20);
 
   return (
     <form
@@ -612,6 +613,8 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
       <SettingsSection title="Loop">
         {number("maxReviewIterations", 1, 20, "Review → fix cycles before the owner is asked.", "Review rounds")}
         {number("maxAttemptsPerFinding", 1, 20, "Fixes one finding may survive before it is raised on its own.", "Attempts per finding")}
+        {number("maxStillRounds", 0, 20, "Consecutive explicit still verdicts on a blocking acceptance criterion. 0 disables.", "Unmet criterion rounds")}
+        {number("maxRegressionRounds", 0, 20, "Consecutive fix rounds replacing resolved blockers with blockers caused by the fix. 0 disables.", "Regression rounds")}
         {number("maxPrFixIterations", 0, 20, "Fixes for pull request comments before the owner is asked.", "Pull request fix rounds")}
         <SettingRow
           label="Simplify pass"

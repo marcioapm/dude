@@ -3548,38 +3548,59 @@ func TestADeliveryStoppedBeforeDecisionsIsReopened(t *testing.T) {
 
 // A review stuck on a finding: accepted, it ships as it is, and delivery
 // goes on to a pull request.
+// A finding with a criterion judged still after every fix is not converging
+// and its acceptance needs the person's note; one without a criterion runs
+// out of fix attempts (stuck) and is accepted as before.
 func TestAPersonAcceptsTheFindingsAReviewGotStuckOn(t *testing.T) {
-	w := newWorld(t)
-	var reviews int
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		switch labels["dude.phase"] {
-		case "review":
-			// Found once; every fix after, still there.
-			if reviews++; reviews == 1 {
-				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
+	for _, tc := range []struct {
+		name, reason, note string
+		criterion          bool
+	}{
+		{name: "criterion still after every fix", reason: delivery.ReasonNotConverging, note: "The record is not needed here.", criterion: true},
+		{name: "no criterion", reason: "stuck"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			var reviews int
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				labels, _ := spec["labels"].(map[string]any)
+				switch labels["dude.phase"] {
+				case "review":
+					// Found once; every fix after, still there.
+					if reviews++; reviews == 1 {
+						finding := fakeagent.Finding
+						if !tc.criterion {
+							finding = strings.Replace(finding, "acceptance: "+fakeagent.FindingAcceptance+"\n", "", 1)
+						}
+						return fakelux.Behaviour{Reply: "```yaml\n" + finding + "```\n"}
+					}
+					return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+				case "implement", "fix":
+					return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
+				}
+				return fakelux.Behaviour{Reply: "Nothing to simplify."}
 			}
-			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
-		case "implement", "fix":
-			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
-		}
-		return fakelux.Behaviour{Reply: "Nothing to simplify."}
-	}
-	wi := w.task()
-	w.deliver(wi)
-	w.until("the review to get stuck", func() bool { return w.taskStatus(wi) == "awaiting_input" })
-	var reason string
-	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi).Scan(&reason)
-	if reason != "stuck" && reason != "exhausted" {
-		t.Fatalf("stopped for %q", reason)
-	}
-	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "accept"}); status != 200 {
-		t.Fatalf("accept: %d %v", status, body)
-	}
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'accepted'`, wi); n == 0 {
-		t.Errorf("no finding was accepted")
+			wi := w.task()
+			w.deliver(wi)
+			w.until("the review to get stuck", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+			var reason string
+			_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
+				AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, wi).Scan(&reason)
+			if reason != tc.reason {
+				t.Fatalf("stopped for %q, want %q", reason, tc.reason)
+			}
+			decision := map[string]any{"action": "accept"}
+			if tc.note != "" {
+				decision["note"] = tc.note
+			}
+			if status, body := w.call("/internal/tasks/"+wi+"/decide", decision); status != 200 {
+				t.Fatalf("accept: %d %v", status, body)
+			}
+			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'accepted'`, wi); n == 0 {
+				t.Errorf("no finding was accepted")
+			}
+		})
 	}
 }
 

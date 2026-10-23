@@ -65,6 +65,18 @@ func (w *world) options(wi string) (actions []string, attempt int) {
 	return out.Actions, out.Attempt
 }
 
+// retryNeedsNote is the recovery options' retryNeedsNote, nil when absent.
+func (w *world) retryNeedsNote(wi string) any {
+	w.t.Helper()
+	code, body := w.get("/internal/tasks/"+wi+"/recover", w.org)
+	if code != 200 {
+		w.t.Fatalf("recovery options: %d %s", code, body)
+	}
+	var out map[string]any
+	_ = json.Unmarshal([]byte(body), &out)
+	return out["retryNeedsNote"]
+}
+
 func (w *world) closePullRequestAndAwaitAbort(wi string) {
 	w.t.Helper()
 	w.gh.Close(1)
@@ -79,6 +91,10 @@ func TestAnAbortedTaskOffersEveryWayBack(t *testing.T) {
 	wi, _ := w.aborted()
 	if got, attempt := w.options(wi); strings.Join(got, " ") != "resume retry restart" || attempt != 1 {
 		t.Fatalf("an aborted task offers %v (attempt %d)", got, attempt)
+	}
+	// Stopped at no escalation: Try again's note stays optional.
+	if needs := w.retryNeedsNote(wi); needs == true {
+		t.Fatalf("an aborted task's retryNeedsNote = %v", needs)
 	}
 	// Once it is no longer kept, only a fresh agent can pick it up.
 	mustExec(t, w.owner, `UPDATE runs SET kept_until = now() - interval '1 second' WHERE task_id = $1`, wi)

@@ -59,6 +59,16 @@ func NeedsReason(reason, action string) bool {
 	return reason == ReasonTestFailedCriteria && action == "accept" || (reason == ReasonTestBlocked || reason == ReasonChecksUnverified) && action == ActionWaive
 }
 
+// NeedsNote says an action must carry the person's own words: a reason
+// (NeedsReason), or the direction a retry or amend of a stalled loop takes.
+func NeedsNote(reason, action string) bool {
+	return NeedsReason(reason, action) || reason == ReasonNotConverging && action != "stop" || reason == "stuck" && action == "retry"
+}
+
+// givesDirection says a required note is the person's direction for the
+// next fix, not a reason to ship past something.
+func givesDirection(action string) bool { return action == "retry" || action == "amend" }
+
 // RunReplyTx is everything a Run's agent said, its messages joined.
 func RunReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT payload->>'text' FROM events

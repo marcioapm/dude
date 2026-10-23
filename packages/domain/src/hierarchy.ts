@@ -195,6 +195,8 @@ export const deliveryPolicySchema = z
     maxReviewIterations: z.number().int().min(1).max(20),
     /** Fix attempts one finding may survive before it is escalated on its own. */
     maxAttemptsPerFinding: z.number().int().min(1).max(20),
+    maxStillRounds: z.number().int().min(0).max(20),
+    maxRegressionRounds: z.number().int().min(0).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
     simplify: z.boolean(),
     /** A browser tester exercises the change and publishes a video, before the pull request. */
@@ -484,7 +486,7 @@ export type Task = z.infer<typeof taskSchema>;
  * accept the findings a review got stuck on and go on; take what was
  * merged as the task; wait on the pull requests still open; or stop.
  */
-export const escalationActionSchema = z.enum(["resume", "retry", "accept", "waive", "done", "wait", "stop"]);
+export const escalationActionSchema = z.enum(["resume", "retry", "accept", "amend", "waive", "done", "wait", "stop"]);
 export type EscalationAction = z.infer<typeof escalationActionSchema>;
 
 /**
@@ -507,6 +509,8 @@ export const recoveryOptionsSchema = z.object({
   keptUntil: z.string().nullable(),
   /** Set when a person closed or archived it: no way is open, the page offers Reopen or Unarchive. */
   refused: z.enum(["closed", "archived"]).nullable().optional(),
+  /** Try again needs the person's direction as its note: delivery stopped at a review loop not converging or stuck. */
+  retryNeedsNote: z.boolean().optional(),
 });
 export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
 

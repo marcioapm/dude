@@ -596,24 +596,46 @@ const fromReview = `NOT EXISTS (SELECT 1 FROM runs tr WHERE tr.id = review_findi
 
 // Findings is the review loop's findings: a reviewer's, of this attempt.
 func (s *Store) Findings(ctx context.Context, org string, st *State) ([]FindingState, error) {
-	return s.findings(ctx, org, st, fromReview)
+	return s.findings(ctx, org, st, fromReview, nil)
+}
+
+// ConvergingFindings is Findings with the loop's convergence, read in one
+// snapshot, each finding carrying its still streak: what Exit weighs.
+func (s *Store) ConvergingFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
+	var conv Convergence
+	out, err := s.findings(ctx, org, st, fromReview, &conv)
+	return out, conv, err
 }
 
 // FixFindings is every finding of this attempt a fix may be sent: a
 // reviewer's and the tester's.
 func (s *Store) FixFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
-	return s.findings(ctx, org, st, "true")
+	return s.findings(ctx, org, st, "true", nil)
 }
 
-func (s *Store) findings(ctx context.Context, org string, st *State, which string) ([]FindingState, error) {
+func (s *Store) findings(ctx context.Context, org string, st *State, which string, convergence *Convergence) ([]FindingState, error) {
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts FROM review_findings
+		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
+			COALESCE(btrim(acceptance), '') <> '' FROM review_findings
 			WHERE task_id = $1 AND `+thisAttempt+` AND `+which+` ORDER BY created_at`, st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[FindingState])
+		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (f FindingState, err error) {
+			err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion)
+			return
+		})
+		if err != nil || convergence == nil {
+			return err
+		}
+		conv, err := ConvergenceTx(ctx, tx, st)
+		if err == nil {
+			*convergence = conv
+			for i := range out {
+				out[i].StillRounds = conv.StillRounds[out[i].ID]
+			}
+		}
 		return err
 	})
 	return out, err
@@ -626,6 +648,25 @@ func (s *Store) AcceptFindings(ctx context.Context, org string, st *State) error
 		_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted',
 			resolution_note = 'accepted by a person', updated_at = now()
 			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND `+fromReview, st.TaskID, st.Attempt)
+		return err
+	})
+}
+
+func (s *Store) AcceptFindingIDs(ctx context.Context, org string, st *State, ids []string, note string) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE review_findings SET status = 'accepted',
+			resolution_note = $4, updated_at = now()
+			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND `+fromReview+` AND id = ANY($3)`,
+			st.TaskID, st.Attempt, ids, "accepted by a person: "+note)
+		return err
+	})
+}
+
+func (s *Store) AmendFindingIDs(ctx context.Context, org string, st *State, ids []string, acceptance string) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE review_findings SET acceptance = $4, updated_at = now()
+			WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND `+fromReview+` AND id = ANY($3)`,
+			st.TaskID, st.Attempt, ids, acceptance)
 		return err
 	})
 }

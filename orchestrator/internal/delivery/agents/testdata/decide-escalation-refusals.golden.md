@@ -18,3 +18,15 @@ the answer to your question qst_e is not the task's owner's: only the owner hand
 
 only the task's owner or an organisation admin can accept this; a person decides it on the banner, or by answering your question about it (ask_person, the escalation's actions as choices)
 
+## choice-not-reason
+
+the owner's answer to your question qst_e is one of its choices, not their reason: to accept, they say why in their own words, or decide on the banner
+
+## choice-not-direction-retry
+
+the owner's answer to your question qst_e is one of its choices, not their direction: to retry, they say how in their own words, or decide on the banner
+
+## choice-not-direction-amend
+
+the owner's answer to your question qst_e is one of its choices, not their direction: to amend, they say how in their own words, or decide on the banner
+

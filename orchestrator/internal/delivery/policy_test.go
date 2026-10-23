@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These pure functions are all that stands between a review → fix cycle and
@@ -46,16 +47,16 @@ func TestPolicyDecidesNotSeverity(t *testing.T) {
 }
 
 func TestLoopExits(t *testing.T) {
-	if e := Exit(policy, nil, 1); e == nil || e.Reason != "clear" {
+	if e := Exit(policy, nil, 1, Convergence{}); e == nil || e.Reason != "clear" {
 		t.Errorf("no findings: %+v, want clear — a review that found nothing is the good case", e)
 	}
-	if e := Exit(policy, []FindingState{finding("medium", "open", 0, "a"), finding("blocking", "resolved", 0, "b")}, 1); e == nil || e.Reason != "clear" {
+	if e := Exit(policy, []FindingState{finding("medium", "open", 0, "a"), finding("blocking", "resolved", 0, "b")}, 1, Convergence{}); e == nil || e.Reason != "clear" {
 		t.Errorf("nothing blocking: %+v", e)
 	}
-	if e := Exit(policy, []FindingState{finding("blocking", "open", 0, "a")}, 1); e != nil {
+	if e := Exit(policy, []FindingState{finding("blocking", "open", 0, "a")}, 1, Convergence{}); e != nil {
 		t.Errorf("blocking early: %+v, want keep going", e)
 	}
-	if e := Exit(policy, []FindingState{finding("blocking", "open", 0, "a")}, policy.MaxReviewIterations); e == nil || e.Reason != "exhausted" {
+	if e := Exit(policy, []FindingState{finding("blocking", "open", 0, "a")}, policy.MaxReviewIterations, Convergence{}); e == nil || e.Reason != "exhausted" {
 		t.Errorf("at the bound: %+v", e)
 	}
 }
@@ -64,12 +65,12 @@ func TestAStubbornFindingEscalatesBeforeTheLoopBudget(t *testing.T) {
 	e := Exit(policy, []FindingState{
 		finding("blocking", "open", policy.MaxAttemptsPerFinding, "f_stuck"),
 		finding("blocking", "open", 0, "f_fresh"),
-	}, 1)
+	}, 1, Convergence{})
 	if e == nil || e.Reason != "stuck" || !slices.Equal(e.FindingIDs, []string{"f_stuck"}) {
 		t.Fatalf("exit = %+v", e)
 	}
 	// Attempts spent on something since resolved must not strand the work.
-	if e := Exit(policy, []FindingState{finding("blocking", "resolved", 9, "x")}, 1); e == nil || e.Reason != "clear" {
+	if e := Exit(policy, []FindingState{finding("blocking", "resolved", 9, "x")}, 1, Convergence{}); e == nil || e.Reason != "clear" {
 		t.Errorf("resolved stubborn finding: %+v", e)
 	}
 }
@@ -78,7 +79,7 @@ func TestAStubbornFindingEscalatesBeforeTheLoopBudget(t *testing.T) {
 func TestEveryLoopTerminatesWithinItsBound(t *testing.T) {
 	findings := []FindingState{finding("blocking", "open", 0, "a")}
 	iteration := 0
-	for Exit(policy, findings, iteration) == nil {
+	for Exit(policy, findings, iteration, Convergence{}) == nil {
 		iteration++
 		if iteration > policy.MaxReviewIterations {
 			t.Fatal("the loop outlived its bound")
@@ -86,6 +87,121 @@ func TestEveryLoopTerminatesWithinItsBound(t *testing.T) {
 	}
 	if iteration != policy.MaxReviewIterations {
 		t.Errorf("stopped at %d, want %d", iteration, policy.MaxReviewIterations)
+	}
+}
+
+func TestConvergenceExits(t *testing.T) {
+	criterion := FindingState{ID: "criterion", Severity: "high", Status: "open", HasCriterion: true, StillRounds: 2, FixAttempts: 2}
+	regression := FindingState{ID: "regression", Severity: "high", Status: "open"}
+	for _, tc := range []struct {
+		name      string
+		mutate    func(*Policy, *FindingState)
+		conv      Convergence
+		iteration int
+		want      string
+		ids       []string
+		rounds    int
+	}{
+		{name: "criterion beats stuck and exhausted", iteration: 5, want: "not_converging", ids: []string{"criterion"}},
+		{name: "criterion below bound", mutate: func(p *Policy, f *FindingState) { f.StillRounds = 1; f.FixAttempts = 0 }},
+		{name: "criterion above bound", mutate: func(p *Policy, f *FindingState) { f.StillRounds = 3 }, want: "not_converging", ids: []string{"criterion"}},
+		{name: "criterion absent", mutate: func(p *Policy, f *FindingState) { f.HasCriterion = false }, want: "stuck", ids: []string{"criterion"}},
+		{name: "still disabled", mutate: func(p *Policy, f *FindingState) { p.MaxStillRounds = 0 }, want: "stuck", ids: []string{"criterion"}},
+		{name: "resolved is clear", mutate: func(p *Policy, f *FindingState) { f.Status = "resolved" }, want: "clear"},
+		{name: "medium nonblocking", mutate: func(p *Policy, f *FindingState) { f.Severity = "medium" }, want: "clear"},
+		{name: "medium dynamically blocking", mutate: func(p *Policy, f *FindingState) { f.Severity = "medium"; p.BlockingSeverities = []string{"medium"} }, want: "not_converging", ids: []string{"criterion"}},
+		{name: "human excluded", mutate: func(p *Policy, f *FindingState) { f.Human = true }, conv: Convergence{RegressionRounds: 2, FindingIDs: []string{"criterion"}}, want: "stuck"},
+		{name: "regression at bound", mutate: func(p *Policy, f *FindingState) { *f = regression }, conv: Convergence{RegressionRounds: 2, FindingIDs: []string{"regression", "missing"}}, want: "not_converging", ids: []string{"regression"}, rounds: 2},
+		{name: "still beside a regression below bound", conv: Convergence{RegressionRounds: 1, FindingIDs: []string{"other"}}, want: "not_converging", ids: []string{"criterion"}},
+		{name: "still beside a regression at bound naming others", conv: Convergence{RegressionRounds: 2, FindingIDs: []string{"other"}}, want: "not_converging", ids: []string{"criterion"}},
+		{name: "regression whose findings are closed", mutate: func(p *Policy, f *FindingState) { *f = regression }, conv: Convergence{RegressionRounds: 2, FindingIDs: []string{"closed"}}},
+		{name: "regression below bound", mutate: func(p *Policy, f *FindingState) { *f = regression }, conv: Convergence{RegressionRounds: 1, FindingIDs: []string{"regression"}}},
+		{name: "regression disabled", mutate: func(p *Policy, f *FindingState) { *f = regression; p.MaxRegressionRounds = 0 }, conv: Convergence{RegressionRounds: 9, FindingIDs: []string{"regression"}}},
+		{name: "clear beats regression", mutate: func(p *Policy, f *FindingState) { f.Status = "accepted" }, conv: Convergence{RegressionRounds: 2, FindingIDs: []string{"criterion"}}, want: "clear"},
+		{name: "streak map is caller derived", mutate: func(p *Policy, f *FindingState) { f.StillRounds = 0; f.FixAttempts = 0 }, conv: Convergence{StillRounds: map[string]int{"criterion": 9}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, f := DefaultPolicy(), criterion
+			if tc.mutate != nil {
+				tc.mutate(&p, &f)
+			}
+			got := Exit(p, []FindingState{f}, tc.iteration, tc.conv)
+			if tc.want == "" {
+				if got != nil {
+					t.Fatalf("exit = %+v, want continue", got)
+				}
+				return
+			}
+			if got == nil || got.Reason != tc.want || !slices.Equal(got.FindingIDs, tc.ids) {
+				t.Fatalf("exit = %+v, want %s %v", got, tc.want, tc.ids)
+			}
+			if tc.want == "not_converging" && got.RegressionRounds != tc.rounds {
+				t.Fatalf("regression rounds = %d, want %d", got.RegressionRounds, tc.rounds)
+			}
+			if f.Human && !slices.Equal(got.FeedbackIDs, []string{f.ID}) {
+				t.Fatalf("human feedback lost: %+v", got)
+			}
+		})
+	}
+}
+
+func TestConvergenceCombinesFindingsWithoutDuplicates(t *testing.T) {
+	findings := []FindingState{
+		{ID: "both", Severity: "high", Status: "open", HasCriterion: true, StillRounds: 2},
+		{ID: "regression", Severity: "high", Status: "open"},
+		{ID: "human", Human: true, Status: "open", HasCriterion: true, StillRounds: 2},
+		{ID: "resolved", Severity: "high", Status: "resolved"},
+	}
+	got := Exit(DefaultPolicy(), findings, 5, Convergence{RegressionRounds: 3, FindingIDs: []string{"both", "regression", "human", "resolved"}})
+	if got == nil || got.Reason != "not_converging" || !slices.Equal(got.FindingIDs, []string{"both", "regression"}) || len(got.FeedbackIDs) != 0 {
+		t.Fatalf("exit = %+v", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["regressionRounds"] != float64(3) {
+		t.Fatalf("exit JSON = %s", raw)
+	}
+}
+
+func TestConvergencePolicyFrozenCompatibility(t *testing.T) {
+	p := DefaultPolicy()
+	if p.MaxStillRounds != 2 || p.MaxRegressionRounds != 2 {
+		t.Fatalf("defaults = %+v", p)
+	}
+	var frozen Policy
+	if err := json.Unmarshal([]byte(`{"blockingSeverities":["high"],"maxAttemptsPerFinding":4,"maxReviewIterations":5}`), &frozen); err != nil {
+		t.Fatal(err)
+	}
+	if frozen.MaxStillRounds != 0 || frozen.MaxRegressionRounds != 0 {
+		t.Fatalf("old frozen policy enabled convergence: %+v", frozen)
+	}
+	f := FindingState{ID: "old", Severity: "high", Status: "open", HasCriterion: true, StillRounds: 9}
+	if got := Exit(frozen, []FindingState{f}, 1, Convergence{RegressionRounds: 9, FindingIDs: []string{"old"}}); got != nil {
+		t.Fatalf("old delivery exited: %+v", got)
+	}
+	resolved, err := ResolvePolicy(json.RawMessage(`{"maxStillRounds":0,"maxRegressionRounds":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.MaxStillRounds != 0 || resolved.MaxRegressionRounds != 0 {
+		t.Fatalf("explicit zero overwritten: %+v", resolved)
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip Policy
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.MaxStillRounds != 2 || roundTrip.MaxRegressionRounds != 2 {
+		t.Fatalf("round trip = %+v", roundTrip)
 	}
 }
 
@@ -234,4 +350,41 @@ func TestTheFactoryRequiresCorrectnessTestsAndPerformance(t *testing.T) {
 	if got := ReviewersFor(own, []string{"README.md"}); !slices.Equal(got, []string{"security"}) {
 		t.Errorf("a project's own required reviewers: %v", got)
 	}
+}
+
+// An undecided escalation and a loop never redirected persist no zero time;
+// a set one round-trips.
+func TestConvergenceTimesAreOmittedUntilSet(t *testing.T) {
+	keys := func(v any) map[string]json.RawMessage {
+		t.Helper()
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(marshalled(t, v), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if _, ok := keys(State{TaskID: "wi_1"})["convergenceFrom"]; ok {
+		t.Fatal("a never-redirected state has convergenceFrom")
+	}
+	if _, ok := keys(HumanDecision{Action: "retry"})["at"]; ok {
+		t.Fatal("a decision without a time has at")
+	}
+	at := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	var st State
+	if err := json.Unmarshal(marshalled(t, State{ConvergenceFrom: at}), &st); err != nil || !st.ConvergenceFrom.Equal(at) {
+		t.Fatalf("convergenceFrom round trip: %v, %v", st.ConvergenceFrom, err)
+	}
+	var d HumanDecision
+	if err := json.Unmarshal(marshalled(t, HumanDecision{At: at}), &d); err != nil || !d.At.Equal(at) {
+		t.Fatalf("at round trip: %v, %v", d.At, err)
+	}
+}
+
+func marshalled(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }

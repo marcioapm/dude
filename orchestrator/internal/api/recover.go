@@ -225,7 +225,8 @@ func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org str
 		refused = nil
 	}
 	write(w, http.StatusOK, map[string]any{"taskId": taskID, "actions": db.NonNil(actions),
-		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "refused": refused})
+		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "refused": refused,
+		"retryNeedsNote": t.State.Stopped != nil && delivery.NeedsNote(t.State.Stopped.Reason, "retry")})
 	return nil
 }
 
@@ -301,6 +302,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			}
 			wfID, attempt, closePRs, decider = res.WorkflowID, res.Attempt, res.ClosePRs, res.Decider
 		} else {
+			if body.Action == "retry" {
+				if err := escalationFailure(delivery.PickUpRetryTx(r.Context(), tx, &t.State, note)); err != nil {
+					return err
+				}
+			}
 			if err := delivery.RefuseLifecycleTx(r.Context(), tx, taskID); err != nil {
 				return pickUpRefusal(err)
 			}
@@ -314,7 +320,13 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			if err := reopenTask(r.Context(), tx, org, t.ProjectID, taskID, "a person picked it back up: "+body.Action); err != nil {
 				return err
 			}
-			if err := recordPickUpNote(r.Context(), tx, org, taskID, note); err != nil {
+			question := pickUpQuestion
+			// Direction a Try again required answers the escalation it
+			// stopped at, as the banner records it.
+			if body.Action == "retry" && t.State.Stopped != nil && delivery.NeedsNote(t.State.Stopped.Reason, "retry") {
+				question = delivery.EscalationDecisionQuestion(t.State.Stopped.Reason)
+			}
+			if err := recordPickUpNote(r.Context(), tx, org, taskID, question, note); err != nil {
 				return err
 			}
 			if body.Action != "resume" {
@@ -375,12 +387,14 @@ func pickUpRefusal(err error) error {
 
 // recordPickUpNote keeps a person's note on picking the task back up, for
 // every agent from then on (delivery.Decisions).
-func recordPickUpNote(ctx context.Context, tx pgx.Tx, org, taskID, note string) error {
+func recordPickUpNote(ctx context.Context, tx pgx.Tx, org, taskID, question, note string) error {
 	if note == "" {
 		return nil
 	}
-	return delivery.RecordDecisionTx(ctx, tx, org, taskID, "The work stopped. How should it go on?", note)
+	return delivery.RecordDecisionTx(ctx, tx, org, taskID, question, note)
 }
+
+const pickUpQuestion = "The work stopped. How should it go on?"
 
 // restarted is what a Start over started.
 type restarted struct {
@@ -417,7 +431,7 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 	if err := reopenTask(ctx, tx, org, t.ProjectID, taskID, reason); err != nil {
 		return out, err
 	}
-	if err := recordPickUpNote(ctx, tx, org, taskID, note); err != nil {
+	if err := recordPickUpNote(ctx, tx, org, taskID, pickUpQuestion, note); err != nil {
 		return out, err
 	}
 	if err := delivery.ReleaseKeptTx(ctx, tx, taskID); err != nil {

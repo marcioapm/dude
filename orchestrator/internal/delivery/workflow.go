@@ -78,7 +78,8 @@ type State struct {
 	// round whose reviewers in them failed.
 	RetryCategories []string `json:"retryCategories,omitempty"`
 	// Review → fix cycles spent.
-	Iteration int `json:"iteration,omitempty"`
+	Iteration       int       `json:"iteration,omitempty"`
+	ConvergenceFrom time.Time `json:"convergenceFrom,omitzero"`
 	// PR feedback → fix cycles spent in this review round: a person's new
 	// review (not a comment, not CI failing again) starts another.
 	PRIteration int `json:"prIteration,omitempty"`
@@ -217,6 +218,8 @@ type Halt struct {
 	At        string `json:"at,omitempty"`
 }
 
+const ReasonNotConverging = "not_converging"
+
 type Escalation struct {
 	Reason string `json:"reason"`
 	Detail any    `json:"detail,omitempty"`
@@ -242,6 +245,8 @@ func (e *Escalation) Actions() []string {
 		if open, _ := e.detail("open"); open > 0 {
 			out = append(out, "wait")
 		}
+	case ReasonNotConverging:
+		out = append(out, "retry", "accept", "amend")
 	case "stuck", "exhausted":
 		out = append(out, "retry", "accept")
 	case ReasonTestFailedCriteria:
@@ -371,6 +376,7 @@ func (e *Escalation) spent() []string {
 // HumanDecision is a person's answer to an escalation (SignalHumanDecision),
 // kept on it once taken (Escalation.Decided).
 type HumanDecision struct {
+	At time.Time `json:"at,omitzero"`
 	// "resume" the Run that failed; "retry" the step that stopped; "accept"
 	// the findings a review got stuck on, or a test's failed criteria, and
 	// go on; "waive" the criteria a test could not check; "done" — what is
@@ -890,13 +896,13 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 			return workflow.Result{}, err
 		}
 	}
-	findings, err := w.loopFindings(ctx, sc.OrganizationID, st)
+	findings, conv, err := w.loopFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	st.Iteration++
 	st.PendingRunIDs = nil
-	exit := w.loopExit(st, findings)
+	exit := w.loopExit(st, findings, conv)
 	if (exit == nil || exit.Reason == "clear") && !st.checkingCandidate() {
 		// Past a bound it escalates as the policy does; short of one, the
 		// round's findings are the conductor's to triage, if it decides as
@@ -910,19 +916,29 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 
 // loopExit is the review loop's exit for the findings, with the fix
 // attempts a person granted beyond the policy's.
-func (w *steps) loopExit(st *State, findings []FindingState) *LoopExit {
+func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
-	return Exit(policy, findings, st.Iteration)
+	return Exit(policy, findings, st.Iteration, conv)
 }
 
-// loopFindings is what the review loop weighs: the reviewers' findings and
-// the people's feedback still to be handled. Candidate and integration loops
-// weigh reviewers' findings alone; open feedback returns to the PR fix loop.
-func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, error) {
-	findings, err := w.s.Findings(ctx, org, st)
-	if err != nil || st.checkingCandidate() || st.Integration != nil {
-		return findings, err
+// loopFindings is what the review loop weighs: the reviewers' findings, with
+// the loop's convergence, and the people's feedback still to be handled.
+func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
+	findings, conv, err := w.s.ConvergingFindings(ctx, org, st)
+	if err != nil {
+		return nil, conv, err
+	}
+	findings, err = w.withFeedback(ctx, org, st, findings)
+	return findings, conv, err
+}
+
+// withFeedback adds the people's open feedback to the findings. Candidate
+// and integration loops weigh reviewers' findings alone; open feedback
+// returns to the PR fix loop.
+func (w *steps) withFeedback(ctx context.Context, org string, st *State, findings []FindingState) ([]FindingState, error) {
+	if st.checkingCandidate() || st.Integration != nil {
+		return findings, nil
 	}
 	feedback, err := w.s.FeedbackStates(ctx, org, st)
 	return append(findings, feedback...), err
@@ -955,17 +971,22 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 
 // reviewExit is "what the policy would do" after a review round the
 // conductor triaged: the exit for the findings as they are now — some may
-// have been dismissed since.
+// have been dismissed since. Convergence is not weighed again: awaitReview
+// weighed this round's history, and triage or a not_converging accept (which
+// moves ConvergenceFrom past it) can only lower it.
 func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	findings, err := w.loopFindings(ctx, sc.OrganizationID, st)
+	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	if err == nil {
+		findings, err = w.withFeedback(ctx, sc.OrganizationID, st, findings)
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings))
+	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings, Convergence{}))
 }
 
 // findingsLine is a review round's findings in a note: how many are open,
@@ -2700,7 +2721,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	case "review_failed":
 		// Its retry is the failed reviewers again, not a fix.
 		st.Escalation.Step = "review"
-	case ReasonTestFailedCriteria:
+	case ReasonTestFailedCriteria, ReasonNotConverging:
 		// One more fix round; a blocked test's retry is the tester again.
 		st.Escalation.Step = "fix"
 	}
@@ -2729,7 +2750,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
 		st.Escalations++
-		line := escalatedLine(reason, st.Escalation.Actions())
+		line := escalatedLine(reason, st.Escalation.Actions(), st.Escalation.findingIDs()...)
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
 				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
@@ -2832,6 +2853,21 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
 	}
+	if e.Reason == ReasonNotConverging {
+		st.ConvergenceFrom = d.At
+		switch d.Action {
+		case "accept":
+			if err := w.s.AcceptFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
+				return workflow.Result{}, err
+			}
+			return workflow.Result{Next: "reviewExit", State: st}, nil
+		case "amend":
+			if err := w.s.AmendFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		return retry(st, "fix", e), nil
+	}
 	switch d.Action {
 	case "accept", ActionWaive:
 		if e.Reason == ReasonTestFailedCriteria || e.Reason == ReasonTestBlocked {
@@ -2891,7 +2927,7 @@ func retry(st *State, step string, e *Escalation) workflow.Result {
 	case "fix":
 		// A new budget for the loop: its rounds, and each finding's fixes.
 		st.Iteration = 0
-		if e != nil && e.Reason == "stuck" {
+		if e != nil && (e.Reason == "stuck" || e.Reason == ReasonNotConverging) {
 			st.ExtraFixAttempts += st.Policy.MaxAttemptsPerFinding
 		}
 		if e != nil && e.Reason == ReasonTestFailedCriteria {
@@ -3015,12 +3051,14 @@ func humanFeedback(sc workflow.StepContext) bool {
 
 // escalatedLine tells the conductor the delivery escalated to a person for
 // reason, with the actions the person has.
-func escalatedLine(reason string, actions []string) string {
+func escalatedLine(reason string, actions []string, findingIDs ...string) string {
 	return render(escalatedTmpl, struct {
-		Reason  string
-		Actions []string
-		Verdict bool
-	}{strings.ReplaceAll(reason, "_", " "), actions, reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked})
+		Reason                        string
+		Actions, FindingIDs           []string
+		Verdict, Stuck, NotConverging bool
+	}{strings.ReplaceAll(reason, "_", " "), actions, findingIDs,
+		reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked,
+		reason == "stuck", reason == ReasonNotConverging})
 }
 
 // integrationReviewBrief is what a reviewer of an integration merge (sha)

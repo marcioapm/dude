@@ -317,6 +317,9 @@ export function PickUpDialog({ client, task, stop, options, initial, pullRequest
     return "Not for how this one stopped: start over instead.";
   };
   const n = options.attempt + 1;
+  // A review loop that stopped not converging or stuck goes on only with the person's direction.
+  const noteRequired = action === "retry" && options.retryNeedsNote === true;
+  const noteMissing = noteRequired && note.trim() === "";
   const choices: ChoiceOption<RecoverAction>[] = [
     { value: "resume", icon: "play", label: conducted ? "Resume the conductor and its agents" : `Resume the ${role}`,
       description: conducted ? "Everything goes on where it stopped, with its conversation and unpushed work."
@@ -356,7 +359,7 @@ export function PickUpDialog({ client, task, stop, options, initial, pullRequest
           {refused && action === "restart" ? (
             <Button variant="secondary" disabled={busy} onClick={() => void go(true)} data-testid="recover-anyway">Start over anyway</Button>
           ) : null}
-          <Button variant="primary" loading={busy} disabled={busy || !open.has(action)} onClick={() => void go()} data-testid="recover-confirm">
+          <Button variant="primary" loading={busy} disabled={busy || !open.has(action) || noteMissing} onClick={() => void go()} data-testid="recover-confirm">
             {GO[action](role, options.attempt)}
           </Button>
         </>
@@ -388,9 +391,11 @@ export function PickUpDialog({ client, task, stop, options, initial, pullRequest
             </div>
           ))}
         </div>
-        <Textarea label={action === "resume" ? `Tell the ${role} (optional)` : "A note for the agents (optional)"} rows={3}
+        <Textarea label={action === "resume" ? `Tell the ${role} (optional)` : noteRequired ? "Your direction for the next fix (required)" : "A note for the agents (optional)"} rows={3}
           value={note} onChange={(e) => setNote(e.target.value)} data-testid="recover-note"
-          hint={action === "resume" ? "Its next message, from you. Empty, it is told to go on where it left off." : "Kept with the task: every agent from here on is told it."} />
+          hint={action === "resume" ? "Its next message, from you. Empty, it is told to go on where it left off."
+            : noteRequired ? "The review loop stopped without converging: the next fixer works from how you say it should fix differently."
+            : "Kept with the task: every agent from here on is told it."} />
       </div>
     </Dialog>
   );

@@ -12,13 +12,23 @@ import {
   ALL_AGENT_ROLES,
   agentModelConfigSchema,
   clampTimeLimit,
+  escalationSchema,
+  escalationActionSchema,
   resolveAgentModel,
   ROLE_MODEL_REMOVED,
   taskGoalShortBy,
   type AgentModels,
   type Organization,
+  type Escalation,
   type Project,
 } from "../src/hierarchy.ts";
+
+test("convergence escalation parses amend and preserves its named findings", () => {
+  const escalation: Escalation = { reason: "not_converging", actions: ["retry", "accept", "amend", "stop"],
+    detail: { findingIds: ["f1"], regressionRounds: 2 }, at: "2026-10-22T00:00:00Z" };
+  expect(escalationSchema.parse(escalation)).toEqual(escalation);
+  expect(escalationActionSchema.safeParse("rewrite").success).toBe(false);
+});
 
 const org = (models: AgentModels) =>
   ({ defaultAgentModels: models }) as Pick<Organization, "defaultAgentModels">;

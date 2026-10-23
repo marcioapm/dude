@@ -334,6 +334,8 @@ export const SETTINGS: SettingsResponse = {
     blockingSeverities: { value: ["blocking", "high"], source: "organization" },
     maxReviewIterations: { value: 5, source: "organization" },
     maxAttemptsPerFinding: { value: 3, source: "organization" },
+    maxStillRounds: { value: 2, source: "organization" },
+    maxRegressionRounds: { value: 2, source: "organization" },
     maxPrFixIterations: { value: 5, source: "organization" },
     simplify: { value: true, source: "organization" },
     test: { value: false, source: "organization" },

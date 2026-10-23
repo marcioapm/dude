@@ -282,3 +282,7 @@ nothing in the held report is a reported failure a later Run could repeat; waive
 
 scope %q is not one this decision takes: "run", or "attempt" only when waiving unverified checks
 
+## refusals/domain/escalations/needs-direction-note
+
+%s needs a note with the person's direction
+

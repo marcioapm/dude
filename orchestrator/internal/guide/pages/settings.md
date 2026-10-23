@@ -43,6 +43,12 @@ Where neither sets a value, dude's built-in default applies.
 | Servers (project) | Server definitions, branch previews and project secrets | [Servers and previews](help:servers-and-previews#server-definitions) |
 | Memory | Search, Memories and Index | [Memory](help:memory#what-memory-is) |
 
+## Delivery policy
+
+**Delivery → Loop** includes **Unmet criterion rounds** (`maxStillRounds`) and **Regression rounds** (`maxRegressionRounds`). Both default to 2 and accept whole numbers from 0 to 20; 0 disables that convergence limit. They follow the organisation/project inheritance and Reset rules above. A delivery freezes these limits when it starts; older frozen policies without them keep both off. See [When the loop stops](help:delivery#when-the-loop-stops) for how the rounds count.
+
+Older deliveries are not changed by enabling a bound now; **Start over** reads today's policy. Reaching a convergence bound asks for the owner's direction rather than starting another undirected fixer.
+
 ## Agent roles
 
 **Agents** has a page for each role: Conductor, Brainstorm, Investigator, Implementer, Reviewer, Fixer, Simplifier and Tester. Each page sets:

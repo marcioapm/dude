@@ -10,7 +10,8 @@ Delivery stops and asks the task's owner when a loop reaches its limit or a step
 
 | Banner | Why | Your choices |
 | --- | --- | --- |
-| Review stuck | The fixer could not resolve a finding after **Attempts per finding** (2) tries. | Try again, accept the findings and go on, or stop. |
+| Fixes are not converging | Named criteria stay unmet after **Unmet criterion rounds** (2), or fixes keep causing blockers for **Regression rounds** (2). | Fix differently, accept the named risk, or change the intended behaviour, each with your own words; or stop. |
+| Review stuck | The fixer could not resolve a finding after **Attempts per finding** (2) tries. | Try again with direction for the fixer, accept the findings and go on, or stop. |
 | Review rounds used up | Blocking findings are still open after **Review rounds** (5). | Try again, accept the findings and go on, or stop. |
 | No changes made | The implementer finished without changing anything. | Try again, or stop. |
 | A reviewer failed | One reviewer's Run failed; the round is not complete without it. | Resume it or try again, go on without it, or stop. |

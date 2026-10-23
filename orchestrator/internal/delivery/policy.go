@@ -37,8 +37,12 @@ type Policy struct {
 	// Tighter than the loop bound on purpose: a finding the fixer failed twice
 	// is one it misunderstood, and a third try is a third variation of the
 	// same wrong change.
-	MaxAttemptsPerFinding int  `json:"maxAttemptsPerFinding"`
-	Simplify              bool `json:"simplify"`
+	MaxAttemptsPerFinding int `json:"maxAttemptsPerFinding"`
+	// Consecutive explicit still verdicts on a blocking criterion; 0 disables.
+	MaxStillRounds int `json:"maxStillRounds"`
+	// Consecutive fix rounds replacing fixed blockers with caused-by-fix blockers; 0 disables.
+	MaxRegressionRounds int  `json:"maxRegressionRounds"`
+	Simplify            bool `json:"simplify"`
 	// Drive a browser to demonstrate the change (plan §12).
 	Test bool `json:"test"`
 	// PR fix rounds before escalating. Separate from the review bound: a person
@@ -85,6 +89,8 @@ func DefaultPolicy() Policy {
 		},
 		MaxReviewIterations:   5,
 		MaxAttemptsPerFinding: 2,
+		MaxStillRounds:        2,
+		MaxRegressionRounds:   2,
 		Simplify:              true,
 		// On for every project: a delivery reaches a pull request with
 		// every criterion shown working, or a person's waiver.
@@ -193,7 +199,17 @@ type FindingState struct {
 	Status      string
 	FixAttempts int
 	// Not a column of review_findings: set only for a person's item.
-	Human bool `db:"-"`
+	Human        bool `db:"-"`
+	HasCriterion bool `db:"-"`
+	StillRounds  int  `db:"-"`
+}
+
+// Convergence is derived from completed review rounds in the current attempt.
+// Callers copy StillRounds onto each FindingState before evaluating Exit.
+type Convergence struct {
+	StillRounds      map[string]int
+	RegressionRounds int
+	FindingIDs       []string
 }
 
 // IsBlocking: only open findings block. A resolved one is fixed, a
@@ -208,19 +224,23 @@ func IsBlocking(p Policy, f FindingState) bool {
 
 // LoopExit says why the review loop should stop, or nil to keep going.
 //
-// Three exits, named separately because they mean different things to a
-// person: "clear" needs no attention, "stuck" means the fixer is stuck on
-// something specific, and "exhausted" means the whole loop ran out of budget.
+// "clear" needs no attention; "not_converging" identifies repeated unmet
+// criteria or regressions; "stuck" identifies exhausted finding attempts;
+// "exhausted" identifies the whole loop's budget.
 // A person's item a stuck or exhausted loop is held by is named in
 // FeedbackIDs, never among the findings.
 type LoopExit struct {
-	Reason      string   `json:"reason"`
-	FindingIDs  []string `json:"findingIds,omitempty"`
-	FeedbackIDs []string `json:"feedbackIds,omitempty"`
-	Iterations  int      `json:"iterations,omitempty"`
+	Reason           string   `json:"reason"`
+	FindingIDs       []string `json:"findingIds,omitempty"`
+	FeedbackIDs      []string `json:"feedbackIds,omitempty"`
+	Iterations       int      `json:"iterations,omitempty"`
+	RegressionRounds int      `json:"regressionRounds,omitempty"`
 }
 
-func Exit(p Policy, findings []FindingState, iteration int) *LoopExit {
+// Exit weighs the findings against the policy's bounds. conv is the review
+// loop's convergence (Store.ConvergingFindings); a zero one weighs neither
+// convergence bound.
+func Exit(p Policy, findings []FindingState, iteration int, conv Convergence) *LoopExit {
 	var blocking []FindingState
 	for _, f := range findings {
 		if IsBlocking(p, f) {
@@ -229,6 +249,29 @@ func Exit(p Policy, findings []FindingState, iteration int) *LoopExit {
 	}
 	if len(blocking) == 0 {
 		return &LoopExit{Reason: "clear"}
+	}
+	// A regression escalates only while one of the newest round's fix-caused
+	// blockers is open: with those resolved or accepted, what is left blocks
+	// as any finding does, and nothing names what to direct.
+	regressing := p.MaxRegressionRounds > 0 && conv.RegressionRounds >= p.MaxRegressionRounds
+	var nonConverging []string
+	var regressed bool
+	for _, f := range blocking {
+		if f.Human {
+			continue
+		}
+		caused := regressing && slices.Contains(conv.FindingIDs, f.ID)
+		if caused || p.MaxStillRounds > 0 && f.HasCriterion && f.StillRounds >= p.MaxStillRounds {
+			nonConverging = append(nonConverging, f.ID)
+		}
+		regressed = regressed || caused
+	}
+	if len(nonConverging) > 0 {
+		exit := &LoopExit{Reason: "not_converging", FindingIDs: nonConverging}
+		if regressed {
+			exit.RegressionRounds = conv.RegressionRounds
+		}
+		return exit
 	}
 	// A finding the fixer keeps failing is escalated on its own, before the
 	// loop's budget is spent on it.

@@ -35,11 +35,11 @@ func TestAcceptingAnExhaustedLoopResolvesThePeoplesFeedback(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.MaxReviewIterations, policy.MaxAttemptsPerFinding, policy.Simplify = 3, 2, false
 	st := &State{TaskID: "wi_x", ProjectID: "prj_x", Attempt: 1, Policy: policy, Iteration: 3}
-	findings, err := w.loopFindings(ctx, org, st)
+	findings, conv, err := w.loopFindings(ctx, org, st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	exit := w.loopExit(st, findings)
+	exit := w.loopExit(st, findings, conv)
 	if exit == nil || exit.Reason != "exhausted" {
 		t.Fatalf("the loop's exit: %+v", exit)
 	}
@@ -64,10 +64,10 @@ func TestAcceptingAnExhaustedLoopResolvesThePeoplesFeedback(t *testing.T) {
 		t.Fatalf("after accepting: %s by %v", status, by)
 	}
 	after := res.State.(*State)
-	if findings, err = w.loopFindings(ctx, org, after); err != nil {
+	if findings, conv, err = w.loopFindings(ctx, org, after); err != nil {
 		t.Fatal(err)
 	}
-	if exit := w.loopExit(after, findings); exit == nil || exit.Reason != "clear" {
+	if exit := w.loopExit(after, findings, conv); exit == nil || exit.Reason != "clear" {
 		t.Errorf("the loop after the acceptance: %+v", exit)
 	}
 	if open, err := w.s.OpenFeedbackIDs(ctx, org, after); err != nil || len(open) != 0 {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -172,13 +173,14 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		}
 	}
 	note := strings.TrimSpace(in.Note)
-	if NeedsReason(e.Reason, in.Action) {
-		// Shipping past a criterion nobody saw work is on the record, with
-		// why.
-		if note == "" {
-			return escalationErr("bad_request", mNeedsNoteSayWhyTaskMay, in.Action,
-				map[string]string{"accept": "the criteria that failed", ActionWaive: "what could not be checked"}[in.Action])
+	if NeedsNote(e.Reason, in.Action) && note == "" {
+		if !NeedsReason(e.Reason, in.Action) {
+			return escalationErr("bad_request", mNeedsDirectionNote, in.Action)
 		}
+		return escalationErr("bad_request", mNeedsNoteSayWhyTaskMay, in.Action,
+			map[string]string{"accept": "the criteria that failed", ActionWaive: "what could not be checked"}[in.Action])
+	}
+	if NeedsReason(e.Reason, in.Action) {
 		if err := SettleVerdictTx(ctx, tx, e, in.Action, valueOr(in.AnsweredBy, in.Person), note); err != nil {
 			return err
 		}
@@ -203,7 +205,11 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	// Taken now, in the workflow's own state: a second decision is refused
 	// from here on, before the workflow has acted on this one. One that
 	// ended (from before decisions) is reopened to wait for it.
-	e.Decided = &HumanDecision{Action: in.Action, Note: note, QuestionID: in.QuestionID, AnsweredBy: in.AnsweredBy,
+	var at time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
+		return err
+	}
+	e.Decided = &HumanDecision{At: at, Action: in.Action, Note: note, QuestionID: in.QuestionID, AnsweredBy: in.AnsweredBy,
 		Conductor: in.Conductor, Person: in.Person, Scope: scope}
 	next, _ := json.Marshal(st)
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, status = CASE WHEN status = 'completed'
@@ -213,8 +219,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return err
 	}
 	if note != "" {
-		if err := RecordDecisionTx(ctx, tx, org, taskID,
-			"Delivery stopped ("+strings.ReplaceAll(e.Reason, "_", " ")+"). How should it go on?", note); err != nil {
+		if err := RecordDecisionTx(ctx, tx, org, taskID, EscalationDecisionQuestion(e.Reason), note); err != nil {
 			return err
 		}
 	}
@@ -347,7 +352,7 @@ func escalationOnBannerLine(action, questionID string, system bool) string {
 // to the conductor's question about it picks one of its choices: the
 // action the choice names, the answer and the conductor's proposal its
 // note. A free answer, one to an escalation no longer waiting, or a choice
-// whose action needs the person's reason (NeedsReason) decides nothing: it
+// whose action needs the person's note (NeedsNote) decides nothing: it
 // reaches the conductor, which may then decide_escalation.
 func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, actorType, actorID, person string) error {
 	// The answer routes took the delivery and the task's row before the
@@ -375,12 +380,36 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	}
 	// A choice carries no reason of the person's: a waiver or acceptance
 	// picked so is a free answer, for decide_escalation once they say why.
-	if NeedsReason(d.State.Escalation.Reason, actions[i]) {
+	if NeedsNote(d.State.Escalation.Reason, actions[i]) {
 		return nil
 	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],
 		Note:      escalationNote(prompt, answer, ""),
 		ActorType: actorType, ActorID: actorID, QuestionID: questionID, AnsweredBy: person})
+}
+
+// EscalationDecisionQuestion is the question a person's note on an
+// escalation is recorded under (RecordDecisionTx).
+func EscalationDecisionQuestion(reason string) string {
+	return "Delivery stopped (" + strings.ReplaceAll(reason, "_", " ") + "). How should it go on?"
+}
+
+// PickUpRetryTx is a Try again's part in an escalation it stopped at: a
+// retry that needs the person's direction (NeedsNote) is refused without a
+// note, and a not_converging loop's history restarts at the pick-up, as a
+// retry from the banner restarts it at the decision.
+func PickUpRetryTx(ctx context.Context, tx pgx.Tx, st *State, note string) error {
+	e := st.Stopped
+	if e == nil {
+		return nil
+	}
+	if NeedsNote(e.Reason, "retry") && strings.TrimSpace(note) == "" {
+		return escalationErr("bad_request", mNeedsDirectionNote, "retry")
+	}
+	if e.Reason != ReasonNotConverging {
+		return nil
+	}
+	return tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&st.ConvergenceFrom)
 }
 
 // choiceOf is the index of the choice an answer picks: equal to it once
@@ -445,9 +474,13 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 		if !slices.Contains(offered, a) {
 			return "", refusef(rNotOneThisEscalationActions, a, listOr(offered))
 		}
-		// A pick carries no reason of the person's.
-		if NeedsReason(reason, a) {
-			return "", refusef(rNotChoiceShippingPastNeedsPerson, a, strings.ReplaceAll(reason, "_", " "), a)
+		// A pick carries no reason or direction of the person's.
+		if NeedsNote(reason, a) {
+			format := rNotChoiceShippingPastNeedsPerson
+			if givesDirection(a) {
+				format = rNotChoiceNeedsPersonDirection
+			}
+			return "", refusef(format, a, strings.ReplaceAll(reason, "_", " "), a)
 		}
 	}
 	// An answer picks the choice it equals trimmed and case-folded
@@ -512,11 +545,10 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		return nil, refusef(rNotWayGoOnAfterOne, action, d.State.Escalation.Reason,
 			listOr(d.State.Escalation.Actions()))
 	}
-	if NeedsReason(d.State.Escalation.Reason, action) {
-		// The answer is the waiver's or acceptance's reason: the item's own
-		// text, never picks (one or several) nor a choice's label typed
-		// back; from the owner or, on an ownerless task, an organization
-		// admin (the banner's ownerOrAdmin).
+	decisionNote := escalationNote(prompt, answer, note)
+	if NeedsNote(d.State.Escalation.Reason, action) {
+		// Required direction comes from the owner's text, never a choice
+		// label or the conductor's proposal.
 		var options []string
 		_ = json.Unmarshal(rawOpts, &options)
 		var items []ItemAnswer
@@ -526,9 +558,15 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 			words = items[0].Text
 		}
 		if strings.TrimSpace(words) == "" || choiceOf(options, words) >= 0 {
+			if givesDirection(action) {
+				return nil, refusef(rOwnerAnswerIsChoiceNotDirection, qID, action)
+			}
 			return nil, refusef(rOwnerAnswerYourQuestionOneIts, qID, action)
 		}
-		if owner == "" {
+		if action == "amend" {
+			decisionNote = strings.TrimSpace(words)
+		}
+		if owner == "" && NeedsReason(d.State.Escalation.Reason, action) {
 			var admin bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM people WHERE id = $1 AND role = 'admin'
 				AND removed_at IS NULL)`, by).Scan(&admin); err != nil {
@@ -540,7 +578,7 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		}
 	}
 	err = DecideEscalationTx(ctx, tx, ref.Org, ref.TaskID, EscalationDecision{Action: action,
-		Note:      escalationNote(prompt, answer, note),
+		Note:      decisionNote,
 		ActorType: ledger.ActorAgent, ActorID: ref.RunID, QuestionID: qID, AnsweredBy: by, Conductor: ref.RunID})
 	if e, ok := err.(EscalationError); ok {
 		return nil, refusef("%s", e.Msg)
@@ -548,11 +586,16 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"decided": action, "questionId": qID, "next": escalationDecidedNext}, nil
+	return map[string]any{"decided": action, "questionId": qID, "next": EscalationDecidedNext(action == "amend")}, nil
 }
 
-// escalationDecidedNext is what decide_escalation answers once it decided.
-var escalationDecidedNext = render(mustTemplate("results/escalation-decided"), nil)
+var escalationDecidedTmpl = mustTemplate("results/escalation-decided")
+
+// EscalationDecidedNext is what decide_escalation answers once it decided;
+// only an amend is told what it changed.
+func EscalationDecidedNext(amend bool) string {
+	return render(escalationDecidedTmpl, struct{ Amend bool }{amend})
+}
 
 // TaskOwner is the task's owner: its first active person, "" for none.
 func TaskOwner(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
