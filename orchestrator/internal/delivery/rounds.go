@@ -17,13 +17,14 @@ import (
 )
 
 // A reviewer's or tester's next round goes on from its previous one, the
-// same phase and category in the same attempt (its predecessor):
+// same phase and category in the same attempt (its predecessor); a fixer's
+// from the attempt's last writer (goesOnFrom):
 //
 //   - resumed: a new runs row takes over the predecessor's lux Run, its
 //     agent's conversation and workspace, and is told what changed since
 //     (the round message, a directive);
 //   - replayed: when it cannot be resumed (not kept, its lux Run gone, its
-//     model or harness changed, or less than half its running time left:
+//     model or harness changed, or too little running time left:
 //     timeSpentTx), a fresh agent given the predecessor chain's
 //     conversation from the ledger, reviewing what changed since;
 //   - fresh: no predecessor, a delta over MaxResumeDeltaLines, or nothing
