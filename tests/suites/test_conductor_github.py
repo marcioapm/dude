@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
@@ -34,6 +35,7 @@ def _said(client: ApiClient, run_id: str) -> list[str]:
     return [e["payload"]["text"] for e in client.events(runId=run_id, limit=1000) if e["eventType"] == "agent.message"]
 
 
+@pytest.mark.ui
 def test_a_mention_on_the_pull_request_is_answered_there(page: Page, web_url: str, client: ApiClient, org: dict,
                                                          forge_project: dict, fake_github: FakeGitHub, console_errors: list):
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}

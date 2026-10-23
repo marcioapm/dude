@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
 import requests
 from playwright.sync_api import Page, expect
 
@@ -40,6 +41,7 @@ def _pull_request(client: ApiClient, task_id: str) -> dict:
                       timeout=120, message="delivery never opened a pull request")
 
 
+@pytest.mark.ui
 def test_a_criterion_that_fails_is_fixed_tested_again_and_shown_passing(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
 ):
@@ -87,6 +89,7 @@ def test_a_criterion_that_fails_is_fixed_tested_again_and_shown_passing(
     assert console_errors == []
 
 
+@pytest.mark.ui
 def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
 ):
@@ -205,6 +208,7 @@ def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
     assert list(fake_github.body_edits[1][1]) == ["body"], fake_github.body_edits
 
 
+@pytest.mark.ui
 def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
 ):

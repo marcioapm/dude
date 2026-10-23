@@ -28,7 +28,7 @@ import requests
 from playwright.sync_api import BrowserType, Page, expect
 
 from env import FAKE_PUBLIC_URL
-from helpers import ApiClient, provision_person, sign_in, wait_until
+from helpers import ApiClient, browser_channel, provision_person, sign_in, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -179,7 +179,7 @@ def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_col
                         {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task, web = _ready_preview(client, env, forge_project, "Comment on the checkout")
     assert web["commenting"] == {"available": True} and web["needsRestart"] is False, web
-    browser = browser_type.launch(channel="chrome", headless=True, args=LAUNCH_ARGS)
+    browser = browser_type.launch(**browser_channel(), headless=True, args=LAUNCH_ARGS)
     try:
         ctx, errors = _context(browser, web, web_url, env)
         page = ctx.new_page()

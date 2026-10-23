@@ -19,8 +19,9 @@ import (
 // lux Run (delivery's continueOrCreateTx): the new row is paused, to be
 // resumed with each checkout moved to the head the round starts from. One
 // that cannot be (lux refuses the resume, the secrets it had are gone, the
-// harness came back with a blank session) is replaced in its slot by a
-// fresh Run given its predecessor's conversation (replaceRound).
+// harness came back with a blank session, lux stopped it at its time
+// limit: holdTimedOut) is replaced in its slot by a fresh Run given
+// its predecessor's conversation (replaceRound).
 
 // roundRefs is a continuation's sync on its resume: each repository the
 // lux Run holds whose checkout is not yet at the commit the round starts

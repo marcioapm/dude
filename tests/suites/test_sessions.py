@@ -56,6 +56,7 @@ def _tool(name: str, args: dict) -> str:
     return f"tool: {name} {json.dumps(args)}"
 
 
+@pytest.mark.ui
 def test_a_stuck_brainstorm_turn_stops_once_and_every_member_sees_the_notice(
         client: ApiClient, env, owner_dsn: str, page: Page, web_url: str, org: dict):
     tier = client.tier_for("fake/stall")

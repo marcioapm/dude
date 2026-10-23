@@ -17,14 +17,16 @@ import (
 )
 
 // A reviewer's or tester's next round goes on from its previous one, the
-// same phase and category in the same attempt (its predecessor):
+// same phase and category in the same attempt (its predecessor); a fixer's
+// from the attempt's last writer (goesOnFrom):
 //
 //   - resumed: a new runs row takes over the predecessor's lux Run, its
 //     agent's conversation and workspace, and is told what changed since
 //     (the round message, a directive);
 //   - replayed: when it cannot be resumed (not kept, its lux Run gone, its
-//     model or harness changed), a fresh agent given the predecessor
-//     chain's conversation from the ledger, reviewing what changed since;
+//     model or harness changed, or too little running time left:
+//     timeSpentTx), a fresh agent given the predecessor chain's
+//     conversation from the ledger, reviewing what changed since;
 //   - fresh: no predecessor, a delta over MaxResumeDeltaLines, or nothing
 //     to replay: today's whole-branch review.
 
@@ -215,7 +217,13 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	if err != nil {
 		return "", err
 	}
-	if sameSpec && !moved && in.Tier == "" {
+	spent := false
+	if p.Kept || p.Collecting {
+		if spent, err = timeSpentTx(ctx, tx, p.ID, in.timeLimit); err != nil {
+			return "", err
+		}
+	}
+	if sameSpec && !moved && !spent && in.Tier == "" {
 		if p.Kept {
 			return handOverTx(ctx, tx, org, in, p)
 		}
@@ -233,10 +241,63 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 		in.freshReason = "spec_changed"
 	case moved:
 		in.freshReason = "head_moved"
+	case spent:
+		in.freshReason = "time_budget"
 	}
 	in.Replays = p.ID
 	return createPhaseRunTx(ctx, tx, org, in)
 }
+
+// timeSpentTx says whether the lux Run predecessor holds has too little of
+// limit left for another round. lux times a Run's running time summed over
+// all its placements, and a resume cannot give it more.
+//
+//   - Used: the active time (run_metrics: started to ended, less dude's
+//     parks) of the rows that held that lux Run in turn, linked by resume.
+//   - Enough: half the limit, or the chain's longest round if that is more
+//     (a round that ran that long may run that long again), taken over
+//     every round the chain continues, replays included, as its replay
+//     (chainScope) covers.
+//
+// dude's clock can be a few minutes under lux's at each stop, so this is a
+// heuristic; phases' holdTimedOut is its backstop. A zero limit is
+// unknown: nothing is spent.
+func timeSpentTx(ctx context.Context, tx pgx.Tx, predecessor string, limit time.Duration) (bool, error) {
+	if limit <= 0 {
+		return false, nil
+	}
+	// Under RLS the planner prices run_metrics' per-park subplan from the
+	// organisation's parks, and past a few thousand JIT takes ~60 ms of a
+	// ~1.5 ms query while the predecessor is locked. Off for this query
+	// only: the caller's transaction goes on.
+	var jitWas string
+	if err := tx.QueryRow(ctx, `SELECT current_setting('jit'), set_config('jit', 'off', true)`).Scan(&jitWas, nil); err != nil {
+		return false, err
+	}
+	if beforeTimeSpentQuery != nil {
+		beforeTimeSpentQuery(ctx, tx)
+	}
+	var used, longest float64
+	err := tx.QueryRow(ctx, `WITH RECURSIVE chain AS (
+			SELECT id, continues_run_id, continues_how, true AS held FROM runs WHERE id = $1
+			UNION ALL
+			SELECT r.id, r.continues_run_id, r.continues_how, c.held AND c.continues_how = 'resume'
+			FROM runs r JOIN chain c ON r.id = c.continues_run_id)
+		SELECT COALESCE(sum(m.active_seconds) FILTER (WHERE chain.held), 0), COALESCE(max(m.active_seconds), 0)
+		FROM chain, run_metrics(chain.id) m`, predecessor).Scan(&used, &longest)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('jit', $1, true)`, jitWas); err != nil {
+		return false, err
+	}
+	seconds := func(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
+	return limit-seconds(used) < max(limit/2, seconds(longest)), nil
+}
+
+// beforeTimeSpentQuery, when set (by tests), runs in timeSpentTx's
+// transaction just before its query.
+var beforeTimeSpentQuery func(context.Context, pgx.Tx)
 
 // headMovedTx says whether a writer predecessor's checkout cannot be
 // fast-forwarded to the round's head: lux moves a checkout to a commit

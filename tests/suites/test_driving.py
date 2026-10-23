@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
@@ -59,6 +60,7 @@ def _waiting_on(client: ApiClient, task_id: str, point: str) -> None:
                message=f"the delivery never waited on {point}")
 
 
+@pytest.mark.ui
 def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list,
 ):
@@ -138,6 +140,7 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     assert console_errors == []
 
 
+@pytest.mark.ui
 def test_letting_deliver_finish_at_the_pull_request_question_asks_first(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list,
     owner_dsn: str,

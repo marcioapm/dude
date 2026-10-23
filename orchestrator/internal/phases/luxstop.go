@@ -52,6 +52,8 @@ type brokenTurn struct {
 type stopState struct {
 	LuxStop *luxStop    `json:"luxStop,omitempty"`
 	Broken  *brokenTurn `json:"brokenTurn,omitempty"`
+	// A resumed round held for a replay: holdTimedOut.
+	TimedOut *timedOut `json:"timedOut,omitempty"`
 }
 
 // How long a turn broken by its agent's process exiting waits for lux to
@@ -238,6 +240,9 @@ func (t *translator) moving(ctx context.Context, tx pgx.Tx, s *Syncer, reason st
 // failForLux fails the Run for lux's stop, the agent's failure after it.
 // Kept, as a failed turn is, unless lux stopped it at its time limit.
 func (t *translator) failForLux(ctx context.Context, tx pgx.Tx, s *Syncer, stop luxStop, failure, agentErr string) error {
+	if held, err := t.holdTimedOut(ctx, tx, stop, failure, agentErr); held || err != nil {
+		return err
+	}
 	why := luxStopWords(stop, s.timeout())
 	if failure != "" {
 		why += "; " + failure
@@ -260,6 +265,68 @@ func stopPayload(stop luxStop, agentErr string) map[string]any {
 		p["agentError"] = agentErr
 	}
 	return p
+}
+
+// timedOut is the turn's failure and the agent's error of a round
+// holdTimedOut held, for the run.failed of one that is not replaced.
+type timedOut struct {
+	Failure    string `json:"failure,omitempty"`
+	AgentError string `json:"agentError,omitempty"`
+}
+
+// holdTimedOut is the backstop to delivery's timeSpentTx. It holds a
+// resumed round (continues_how 'resume') that lux stopped at its time
+// limit, instead of failing it, for the sweep to replay on a lux Run of its
+// own (replayTimedOut): the limit it hit was its predecessors' as much as
+// its own. A round that is no continuation, a first round or a replay
+// included, fails as any Run lux timed out: one replay per round at most.
+// Says whether it held it.
+func (t *translator) holdTimedOut(ctx context.Context, tx pgx.Tx, stop luxStop, failure, agentErr string) (bool, error) {
+	if stop.Reason != luxTimeout || t.run.talker() || t.run.Phase == "" {
+		return false, nil
+	}
+	var resumed bool
+	if err := tx.QueryRow(ctx, `SELECT continues_how IS NOT DISTINCT FROM 'resume'
+			AND status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL AND turn_done_at IS NULL
+		FROM runs WHERE id = $1`, t.run.ID).Scan(&resumed); err != nil || !resumed {
+		return false, err
+	}
+	t.Broken = nil
+	// Held already (the broken turn, then lux's end of the Run): the first
+	// hold saw the agent's failure.
+	if t.TimedOut == nil {
+		t.TimedOut = &timedOut{Failure: failure, AgentError: agentErr}
+	}
+	return true, nil
+}
+
+// replayTimedOut replays a round holdTimedOut held, in its slot
+// (replaceRound); one that cannot be (the delivery no longer waits on it)
+// fails as lux's time limit fails a Run, with what the hold kept.
+func (s *Syncer) replayTimedOut(ctx context.Context, r phaseRun) error {
+	why := luxStopWords(luxStop{Reason: luxTimeout}, s.timeout())
+	if replaced, err := s.replaceRound(ctx, r, why); replaced || err != nil {
+		return err
+	}
+	s.unfollow(r.ID)
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var held timedOut
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(harness_state->'timedOut'->>'failure', ''), COALESCE(harness_state->'timedOut'->>'agentError', '')
+			FROM runs WHERE id = $1`, r.ID).Scan(&held.Failure, &held.AgentError); err != nil {
+			return err
+		}
+		failed := why
+		if held.Failure != "" {
+			failed += "; " + held.Failure
+		}
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), turn_done_at = NULL, keep = false,
+				harness_state = harness_state - 'timedOut'
+			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`, r.ID, failed)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		return s.failedTxWith(ctx, tx, r, failed, stopPayload(luxStop{Reason: luxTimeout}, held.AgentError))
+	})
 }
 
 // stateSeen follows lux's state for a broken turn: lux resuming the Run,
