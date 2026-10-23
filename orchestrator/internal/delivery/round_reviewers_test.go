@@ -512,10 +512,13 @@ func TestAlwaysReviewersAndNonProductPathsAreValidated(t *testing.T) {
 		t.Error("an empty non-product glob was accepted")
 	}
 	// As packages/domain's deliveryPolicySchema: trimmed, at most 200
-	// characters each and 50 globs, and no null for either list.
+	// characters each (UTF-16 units, as JS counts them) and 50 globs, and
+	// no null for either list.
 	for name, raw := range map[string]string{
-		"blank":            `{"nonProductPaths":["  "]}`,
-		"201 characters":   `{"nonProductPaths":["` + strings.Repeat("a", 201) + `"]}`,
+		"blank":          `{"nonProductPaths":["  "]}`,
+		"201 characters": `{"nonProductPaths":["` + strings.Repeat("a", 201) + `"]}`,
+		// 201 UTF-16 units, 101 runes: each emoji is a surrogate pair.
+		"201 UTF-16 units": `{"nonProductPaths":["` + strings.Repeat("😀", 100) + `a"]}`,
 		"51 globs":         `{"nonProductPaths":[` + strings.Repeat(`"a/**",`, 50) + `"b/**"]}`,
 		"null always":      `{"alwaysReviewers":null}`,
 		"null non-product": `{"nonProductPaths":null}`,
@@ -524,8 +527,9 @@ func TestAlwaysReviewersAndNonProductPathsAreValidated(t *testing.T) {
 			t.Errorf("%s accepted", name)
 		}
 	}
-	if p, err := ResolvePolicy(json.RawMessage(`{"nonProductPaths":[" infra/** ","` + strings.Repeat("a", 200) + `"]}`)); err != nil || p.NonProductPaths[0] != "infra/**" {
-		t.Errorf("a padded glob and one of 200 characters: %v %v", p.NonProductPaths, err)
+	// 150 é: 150 UTF-16 units, 300 bytes.
+	if p, err := ResolvePolicy(json.RawMessage(`{"nonProductPaths":[" infra/** ","` + strings.Repeat("a", 200) + `","` + strings.Repeat("é", 150) + `"]}`)); err != nil || p.NonProductPaths[0] != "infra/**" {
+		t.Errorf("a padded glob, one of 200 characters and one of 150 é: %v %v", p.NonProductPaths, err)
 	}
 	p, err := ResolvePolicy(json.RawMessage(`{"alwaysReviewers":["security"]}`), json.RawMessage(`{"nonProductPaths":["infra/**"]}`))
 	if err != nil || !slices.Equal(p.AlwaysReviewers, []string{"security"}) || !slices.Equal(p.NonProductPaths, []string{"infra/**"}) {
