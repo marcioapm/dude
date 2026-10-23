@@ -68,6 +68,9 @@ type Runner struct {
 	// Workers bounds the runs followed at once, and separately the webhooks
 	// POSTed at once, off the sweep; zero is DefaultWorkers.
 	Workers int
+	// FollowLimit bounds the webhook runs, and separately the other running
+	// runs, read per pass to follow; zero is DefaultFollowLimit.
+	FollowLimit int
 
 	mu       sync.Mutex
 	inflight map[string]bool
@@ -78,6 +81,9 @@ type Runner struct {
 // DefaultWorkers is how many runs are followed, and how many webhooks
 // POSTed, at once.
 const DefaultWorkers = 16
+
+// DefaultFollowLimit is how many running runs of each pool a pass reads.
+const DefaultFollowLimit = 50
 
 // Worker pools: a webhook's one-shot POST never waits for a slot held by a
 // long-lived agent's follower.
@@ -857,18 +863,26 @@ func (r *Runner) forgetSession(ctx context.Context, a Automation) {
 func (r *Runner) followRunning(ctx context.Context) (int, error) {
 	type running struct{ ID, Org, AutomationID, LuxRunID, Source, Kind string }
 	var list []running
-	// Webhook POSTs first, then the runs followed longest ago (never first):
-	// with more live runs than workers, each gets a turn within a few passes.
+	// Webhook runs and the rest are read with a limit each, so a burst of
+	// one kind never takes the other's places; within each, the runs
+	// followed longest ago (never first) lead: with more live runs than
+	// workers, each gets a turn within a few passes.
 	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.automation_id, COALESCE(r.lux_run_id, ''), r.source, a.kind
-			FROM automation_runs r JOIN automations a ON a.id = r.automation_id
-			WHERE r.status = 'running' AND r.session IS NOT NULL
-			ORDER BY a.kind = 'webhook' DESC, r.followed_at NULLS FIRST, r.started_at LIMIT 50`)
-		if err != nil {
-			return err
+		for _, webhook := range []bool{true, false} {
+			rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.automation_id, COALESCE(r.lux_run_id, ''), r.source, a.kind
+				FROM automation_runs r JOIN automations a ON a.id = r.automation_id
+				WHERE r.status = 'running' AND r.session IS NOT NULL AND (a.kind = 'webhook') = $1
+				ORDER BY r.followed_at NULLS FIRST, r.started_at LIMIT $2`, webhook, cmp.Or(r.FollowLimit, DefaultFollowLimit))
+			if err != nil {
+				return err
+			}
+			page, err := pgx.CollectRows(rows, pgx.RowToStructByPos[running])
+			if err != nil {
+				return err
+			}
+			list = append(list, page...)
 		}
-		list, err = pgx.CollectRows(rows, pgx.RowToStructByPos[running])
-		return err
+		return nil
 	}); err != nil {
 		return 0, err
 	}

@@ -183,6 +183,100 @@ func TestAutomationWebhookDoesNotWaitForFollowers(t *testing.T) {
 	once.Do(func() { close(stuck.held) })
 }
 
+// More live webhook runs than a pass reads, all POSTing to an endpoint that
+// holds them, take no place from other runs: a command started after them
+// is still followed and ends.
+func TestAutomationWebhookBurstLeavesFollowersTheirPlaces(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Workers, h.runner.FollowLimit = 2, 3
+	answer := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(answer) }) }
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-answer:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(hook.Close)
+	t.Cleanup(release)
+	const burst = 6
+	for i := range burst {
+		h.automation(fmt.Sprintf("aut_burst_%d", i), "webhook", map[string]any{"kind": "github", "event": "issues"},
+			map[string]any{"webhook": map[string]any{"url": hook.URL}})
+	}
+	h.deliver("burst-1", "issues", map[string]any{"action": "opened", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("every webhook run is live", func() bool {
+		var n int
+		if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM automation_runs
+			WHERE automation_id LIKE 'aut_burst_%' AND status = 'running' AND session IS NOT NULL`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == burst
+	})
+	h.automation("aut_after_burst", "command", map[string]any{"kind": "github", "event": "push"}, map[string]any{"command": "echo hi"})
+	h.deliver("after-burst-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the command is followed and ends", func() bool {
+		r := h.runs("aut_after_burst")
+		return len(r) == 1 && r[0].Status == "succeeded"
+	})
+}
+
+// A webhook run started after more live runs than a pass reads, none of
+// them followed yet, is POSTed on the first pass that follows.
+func TestAutomationNewWebhookIsPostedPastAFullFollowList(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Workers, h.runner.FollowLimit = 2, 2
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	var posts atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(hook.Close)
+	ctx := context.Background()
+	// Matched and started directly, never followed: their followed_at stays NULL.
+	pass := func() {
+		t.Helper()
+		if _, err := h.runner.matchDeliveries(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.runner.startQueued(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const live = 3
+	for i := range live {
+		h.automation(fmt.Sprintf("aut_unfollowed_%d", i), "command", map[string]any{"kind": "github", "event": "push"},
+			map[string]any{"command": g.hold("echo done")})
+	}
+	h.deliver("unfollowed-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	pass()
+	var n int
+	if err := h.owner.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE automation_id LIKE 'aut_unfollowed_%'
+		AND status = 'running' AND session IS NOT NULL AND followed_at IS NULL`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != live {
+		t.Fatalf("live unfollowed runs %d, want %d", n, live)
+	}
+	h.automation("aut_late_hook", "webhook", map[string]any{"kind": "github", "event": "issues"},
+		map[string]any{"webhook": map[string]any{"url": hook.URL}})
+	h.deliver("late-hook-1", "issues", map[string]any{"action": "opened", "repository": map[string]any{"full_name": "acme/web"}})
+	pass()
+	if _, err := h.runner.followRunning(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Only the POST is waited for; the held commands' followers return at once.
+	for deadline := time.Now().Add(10 * time.Second); posts.Load() == 0 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+	}
+	if n := posts.Load(); n != 1 {
+		t.Fatalf("webhook POSTs after one following pass: %d", n)
+	}
+}
+
 // Twenty automations whose queued run waits behind their own live run hold
 // back no other automation: an unrelated run starts at once.
 func TestAutomationQueueHeadsWithoutRoomBlockNothing(t *testing.T) {
