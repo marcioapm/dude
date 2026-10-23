@@ -372,6 +372,12 @@ export const EventTypes = {
   /** A person's checks-gate decision: `{action, note}`. */
   RunChecksDecided: "run.checks.decided",
   /**
+   * A test step started no tester: every path changed since the previous
+   * round is outside the product and that round passed; its verdicts stand.
+   * Payload: `{ fromRunId, from, heads, paths, criteria: [{criterion, status, decision}] }`.
+   */
+  TestSkipped: "test.skipped",
+  /**
    * The Run failed. Payload: `{ status, error, kept?, failedTurns?, stage?,
    * reason? }`. `stage`: a start that failed before the agent ran, the
    * `run.stage` it was in, with `reason` lux's own (its `stateReason`).

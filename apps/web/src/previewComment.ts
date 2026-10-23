@@ -13,7 +13,7 @@
  */
 
 import {
-  FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage,
+  FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage, overlayWindowName,
   type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude, type TaskServers,
 } from "@dude/domain";
 
@@ -23,8 +23,30 @@ export const COMMENTING_UNAVAILABLE: Readonly<Record<"public_url" | "lux", strin
   lux: "Commenting on previews needs lux v0.1.32 or later",
 };
 
+/** The accessible name of a server's Preview while its links open the commenting window. */
+export const commentingLinkLabel = (server: string): string => `Preview ${server} (opens the preview window with the comment tool)`;
+
 /** How long a window dude opened has to say hello before the notice says the preview is not answering. */
 export const HELLO_WAIT_MS = 10_000;
+
+/**
+ * This tab's window name, for the overlay's Go to dude to look up: the
+ * existing `dude-tab-…` name (window.name outlives a reload), else a new
+ * one; null when the browser refuses it. A duplicated tab copies the name,
+ * but the lookup searches only the preview's browsing context group.
+ */
+export function nameTab(win: Pick<Window, "name">): string | null {
+  try {
+    if (win.name.startsWith("dude-tab-") && overlayWindowName(win.name)) return win.name;
+    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    // 36 does not divide 256 evenly; the slight bias is harmless for a name that only needs to differ per tab.
+    const name = `dude-tab-${Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => alphabet[b % 36]).join("")}`;
+    win.name = name;
+    return win.name === name ? name : null;
+  } catch {
+    return null;
+  }
+}
 
 /** A preview server comments can be made on now: ready, at an https URL, with the overlay. */
 export interface CommentableServer {
@@ -75,9 +97,14 @@ export function previewOrigins(data: TaskServers | null): ReadonlySet<string> {
 
 /** Whether Show on preview can work for a page: it is on one of the servers comments can be made on now. */
 export function showable(offer: CommentingOffer, url: string): boolean {
-  if (offer.kind !== "available") return false;
+  return serverOf(offer, url) !== null;
+}
+
+/** The server comments can be made on now whose origin `url` is at, or null. */
+export function serverOf(offer: CommentingOffer, url: string): CommentableServer | null {
+  if (offer.kind !== "available") return null;
   const origin = originOf(url);
-  return origin !== null && offer.servers.some((s) => originOf(s.url) === origin);
+  return origin === null ? null : offer.servers.find((s) => originOf(s.url) === origin) ?? null;
 }
 
 export type Checked =
@@ -219,9 +246,12 @@ export class PreviewCommenting {
   readonly #answered = new Map<string, Extract<DudeToOverlay, { type: "saved" }>>();
   #timers: number[] = [];
   readonly #d: CommentingDeps;
+  // This tab's window name, sent with each session for the overlay's Go to dude.
+  readonly #tab: string | null;
 
   constructor(deps: CommentingDeps) {
     this.#d = deps;
+    this.#tab = nameTab(deps.win);
   }
 
   /** Starts hearing messages; the returned function stops. */
@@ -299,18 +329,36 @@ export class PreviewCommenting {
   }
 
   /**
-   * Comment (or Comment on preview) on `server`: the window brought forward
+   * The Feedback tab's way in (or the closed notice's Comment on preview) on `server`: the window brought forward
    * when it is already open on that server, so the page and a half-written
    * comment stay; opened at `url` otherwise.
    */
   comment(url: string, server: string): boolean {
     // By origin, not only server name: a window taken back after a reload knows its page, not its server.
     const same = this.#server === server || this.#server === null && originOf(this.#url) !== null && originOf(this.#url) === originOf(url);
-    if ((this.#state === "open" || this.#state === "waiting") && same && this.#win && !this.#win.closed) {
+    if (same && this.#live("open", "waiting")) {
       this.focus();
       return true;
     }
     return this.open(url, server);
+  }
+
+  /**
+   * A feedback card's Page link: the window brought forward when it is
+   * already on that page (origin and path), so a half-written comment stays;
+   * navigated to `url` otherwise.
+   */
+  visit(url: string, server: string): boolean {
+    if (this.#live("open", "waiting") && this.#url !== null && overlayPage(url) !== null && overlayPage(this.#url) === overlayPage(url)) {
+      this.focus();
+      return true;
+    }
+    return this.open(url, server);
+  }
+
+  // The window is in one of `states` and not closed.
+  #live(...states: CommentingState[]): boolean {
+    return states.includes(this.#state) && this.#win !== null && !this.#win.closed;
   }
 
   /** Brings the window forward, if it is still open. */
@@ -343,7 +391,8 @@ export class PreviewCommenting {
    */
   show(item: FeedbackItem): boolean {
     if (item.anchor.kind !== "preview") return false;
-    if (this.#state === "open" && this.#win && !this.#win.closed && overlayPage(this.#url ?? "") === overlayPage(item.anchor.url)) {
+    // Only "open": a highlight needs an overlay that has said hello.
+    if (this.#live("open") && overlayPage(this.#url ?? "") === overlayPage(item.anchor.url)) {
       this.#post({ type: "highlight", v: OVERLAY_PROTOCOL, itemId: item.id });
       this.focus();
       return true;
@@ -370,7 +419,7 @@ export class PreviewCommenting {
   #session(url: string): DudeToOverlay {
     const s = this.#d.read();
     return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins(),
-      ...(s.theme ? { theme: s.theme } : {}) };
+      ...(s.theme ? { theme: s.theme } : {}), ...(this.#tab ? { dudeWindow: this.#tab } : {}) };
   }
 
   #showPins(value?: boolean): boolean {

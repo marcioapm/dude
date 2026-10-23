@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,6 +120,10 @@ type State struct {
 	LimitRequests []LimitRequest `json:"limitRequests,omitempty"`
 	// The test Run whose verdict the gate weighs (testVerdict).
 	TestRunID string `json:"testRunId,omitempty"`
+	// The attempt's previous test round when this round's heads descend
+	// from its checkouts: what a resumed tester may carry criteria from
+	// (carryForward). Set at each test step.
+	CarryFrom string `json:"carryFrom,omitempty"`
 	// Fixes a failed test sent this attempt back for: bounded by
 	// MaxTestFixRounds.
 	TestFixRounds int `json:"testFixRounds,omitempty"`
@@ -138,6 +144,9 @@ type State struct {
 	// test, even at the pull request wait or with the policy's tester off.
 	// Cleared once that test's Run is created.
 	RetestDue bool `json:"retestDue,omitempty"`
+	// The policy's choice for the review round being created, which a
+	// replay of the step at the same round and heads reuses.
+	ReviewChoice *ReviewChoice `json:"reviewChoice,omitempty"`
 
 	// A person started it past its open blockers (Start anyway): the
 	// implement step's and the conductor's start guards let it through.
@@ -482,7 +491,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	return &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta"},
+		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -738,31 +747,59 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "agent review"); err != nil {
 		return workflow.Result{}, err
 	}
-	categories := ReviewersFor(st.Policy, st.ChangedPaths)
-	reviewRange := st.reviewRange()
-	if reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0 {
-		// A check that the simplifier changed no behaviour: the policy's
-		// required reviewers, whatever paths it touched.
-		categories = st.Policy.RequiredReviewers
-	}
-	d := directed(st, PhaseReview)
-	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
-		return workflow.Result{}, err
-	}
-	if d != nil && len(d.Categories) > 0 {
-		categories = d.Categories
-	}
-	// A retry of a round some reviewers failed: only theirs run again.
-	retrying := st.RetryCategories
-	if len(retrying) > 0 {
-		categories, st.RetryCategories = retrying, nil
-	}
 	// A re-review judges what the fixer was sent: every open finding a fix
 	// has attempted, by the reviewer of its category, or by one of this
 	// round's when it has none (judgedBy).
 	attempted, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	d := directed(st, PhaseReview)
+	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
+	reviewRange := st.reviewRange()
+	// Each Run's creation key; the round's own is the key of no category.
+	runKey := func(c string) string {
+		switch {
+		case d != nil:
+			return conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
+		case st.Integration != nil:
+			return key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
+		}
+		return key(sc, st, ":review:", st.Iteration, ":", c)
+	}
+	// A retry of a round some reviewers failed: only theirs run again.
+	retrying := st.RetryCategories
+	var categories []string
+	var reasons map[string][]string
+	switch {
+	case len(retrying) > 0:
+		categories, reasons, st.RetryCategories = retrying, eachFor(retrying, ReasonRetry), nil
+	case d != nil && len(d.Categories) > 0:
+		categories, reasons = d.Categories, eachFor(d.Categories, ReasonDirected)
+	case reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0:
+		// A check that the simplifier changed no behaviour: the policy's
+		// required reviewers, whatever paths it touched.
+		categories, reasons = st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired)
+	case st.ReviewChoice != nil && st.ReviewChoice.Round == runKey("") && maps.Equal(st.ReviewChoice.Heads, st.Heads):
+		// A replay: a Run of this round that completed since would make
+		// the round's change start at its own checkouts. Heads that moved
+		// since (refreshPRWaitHeads) are a change the choice never saw.
+		categories, reasons = st.ReviewChoice.Categories, st.ReviewChoice.Reasons
+	default:
+		if categories, reasons, err = w.roundReviewers(ctx, sc, st, slices.Collect(maps.Keys(attempted))); err != nil {
+			return workflow.Result{}, err
+		}
+		if len(categories) == 0 {
+			if categories, reasons, err = w.gateReviewers(ctx, sc, st); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		st.ReviewChoice = &ReviewChoice{Round: runKey(""), Heads: maps.Clone(st.Heads), Categories: db.NonNil(categories), Reasons: reasons}
+		if err := w.keepReviewChoice(ctx, sc, *st.ReviewChoice); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	if len(retrying) > 0 {
 		// The round's other reviewers judged theirs already.
@@ -772,13 +809,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	goesOn := w.goesOn(ctx, sc, st, PhaseReview)
 	var runIDs []string
 	for _, c := range categories {
-		k := key(sc, st, ":review:", st.Iteration, ":", c)
-		if st.Integration != nil {
-			k = key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
-		}
-		if d != nil {
-			k = conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
-		}
+		k := runKey(c)
 		cont, err := goesOn(c)
 		if err != nil {
 			return workflow.Result{}, err
@@ -799,11 +830,64 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		runIDs = append(runIDs, id)
 	}
 	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvRunCreated,
-		map[string]any{"phase": "review", "reviewers": categories, "iteration": st.Iteration}); err != nil {
+		map[string]any{"phase": "review", "reviewers": db.NonNil(categories), "reasons": reasons, "iteration": st.Iteration}); err != nil {
 		return workflow.Result{}, err
 	}
 	st.ReviewRunIDs = runIDs
+	if len(runIDs) == 0 {
+		// No reviewer is warranted and no gate waits (gateReviewers): the
+		// round is complete and clear of new findings.
+		st.PendingRunIDs = nil
+		return workflow.Result{Next: "awaitReview", State: st}, nil
+	}
 	return park("awaitReview", st, runIDs), nil
+}
+
+// roundReviewers is the policy's choice of this round's reviewers
+// (RoundReviewers): a later round of the attempt is measured from the
+// previous review round's checkouts to the heads. An integration's review
+// is of a merge, not of what changed since a round: it is a first round.
+func (w *steps) roundReviewers(ctx context.Context, sc workflow.StepContext, st *State, attempted []string) ([]string, map[string][]string, error) {
+	r := ReviewRound{Whole: st.ChangedPaths, Attempted: attempted}
+	if st.Integration == nil {
+		from, err := w.s.lastReviewRound(ctx, sc.OrganizationID, st)
+		if err != nil {
+			return nil, nil, err
+		}
+		if from != nil {
+			if r.Change, err = w.roundChange(ctx, sc, st, PhaseReview, from); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	categories, reasons := RoundReviewers(st.Policy, r)
+	return categories, reasons, nil
+}
+
+// gateReviewers stands in for a round the policy gave no reviewer when a
+// gate waits on a completed review at these heads: a candidate's promotion
+// (unreviewedHeads) or a conductor head before the pull request
+// (UntestedConductorHeadTx). An empty round completes no Run there, so the
+// gate would send the delivery back to review for ever. RequiredReviewers
+// run, else the first round's reviewers; nil when no gate waits.
+func (w *steps) gateReviewers(ctx context.Context, sc workflow.StepContext, st *State) ([]string, map[string][]string, error) {
+	gated := st.Candidate != nil
+	if !gated {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+			gated, err = UntestedConductorHeadTx(ctx, tx, st.TaskID, st.Heads)
+			return err
+		}); err != nil {
+			return nil, nil, err
+		}
+	}
+	switch {
+	case !gated:
+		return nil, nil, nil
+	case len(st.Policy.RequiredReviewers) > 0:
+		return st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired), nil
+	}
+	first := ReviewersFor(st.Policy, st.ChangedPaths)
+	return first, eachFor(first, ReasonFirstRound), nil
 }
 
 // reviewRange is the range the next review round covers: what the
@@ -1250,13 +1334,19 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if skip, err := w.carryForward(ctx, sc, st, judge, d != nil); err != nil {
+		return workflow.Result{}, err
+	} else if skip {
+		// The previous round's verdicts are this round's: the gate weighs them.
+		return workflow.Result{Next: "testVerdict", State: st}, nil
+	}
 	cont, err := w.goesOn(ctx, sc, st, PhaseTest)("")
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseTest, k, func(p *PhaseRun) {
 		p.BlockingSeverities, p.FindingIDs = st.Policy.BlockingSeverities, judge
-		p.Continue = cont
+		p.Continue, p.CarryFrom = cont, st.CarryFrom
 		d.apply(p)
 	})
 	if err != nil {
@@ -1772,7 +1862,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		// What GitHub has, not what dude last pushed: a person may have
 		// pushed since, and a fix from dude's head would fail to
 		// fast-forward over theirs — or undo it.
-		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
+		if err := w.fromPullRequestHeads(ctx, sc, st, gh, true); err != nil {
 			return workflow.Result{}, err
 		}
 		// The last round's candidate branch, if a person's push left it
@@ -1952,7 +2042,7 @@ func (w *steps) openCandidate(ctx context.Context, sc workflow.StepContext, st *
 		return err
 	}
 	if gh != nil {
-		if err := w.fromPullRequestHeads(ctx, sc, st, gh); err != nil {
+		if err := w.fromPullRequestHeads(ctx, sc, st, gh, true); err != nil {
 			return err
 		}
 		if err := w.s.dropCandidateBranches(ctx, sc.OrganizationID, st, gh); err != nil {
@@ -2104,12 +2194,16 @@ func (w *steps) refreshPRWaitHeads(ctx context.Context, sc workflow.StepContext,
 	if err != nil || gh == nil {
 		return err
 	}
-	return w.fromPullRequestHeads(ctx, sc, st, gh)
+	return w.fromPullRequestHeads(ctx, sc, st, gh, false)
 }
 
 // fromPullRequestHeads starts the fix from each open pull request's head
 // as GitHub has it, and gives failing checks the end of their logs.
-func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub) error {
+//
+// tails: this step creates a fix Run, so a check read in an earlier step
+// has its tail read again (Full is never stored). Without it a check with
+// an excerpt is left as it is.
+func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, tails bool) error {
 	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
 	if err != nil {
 		return err
@@ -2131,22 +2225,111 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 			st.Heads[p.Repo] = head
 		}
 	}
+	files := 0
 	for i, f := range st.PRFeedback {
 		for j, c := range f.Checks {
-			if c.RunID == 0 || c.Log != "" || slugs[f.Repo] == "" {
+			if slugs[f.Repo] == "" || !readsCheck(c, tails, files) {
 				continue
 			}
-			// Best effort: the check's name and link are enough to start.
-			if log, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, checkLogLimit); err == nil {
-				st.PRFeedback[i].Checks[j].Log = log
+			// A failed read never fails the step: the check goes to the
+			// fixer with what was read and why the rest was not.
+			read, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, CheckLogFileMax)
+			if err != nil {
+				// Never err's text: a failed download hop's *url.Error holds
+				// GitHub's signed blob URL, a bearer credential.
+				status := 0
+				if fe := (*forge.Error)(nil); errors.As(err, &fe) {
+					status = fe.Status
+				}
+				slog.Warn("reading a failing check's log failed; the fixer is told why", "check", c.RunID, "repo", slugs[f.Repo],
+					"task", st.TaskID, "reason", read.Unread, "status", status, "transient", forge.Transient(err))
+			}
+			check := &st.PRFeedback[i].Checks[j]
+			if check.Log == "" {
+				check.Log, check.Unread = read.Cut(checkLogLimit), read.Unread
+			} else if read.Tail == "" {
+				// The excerpt survives from an earlier step; say why the
+				// longer tail could not be had now.
+				check.Unread = read.Unread
+			}
+			// The fix Run's init writes the longer tail into its workspace
+			// (phases' checkLogsInit), for the first CheckLogFiles checks.
+			if read.Tail != "" && files < CheckLogFiles {
+				// The file is the log's end itself: no "…" saying it was cut.
+				check.Full = LogEnd(forge.CleanLog(strings.TrimPrefix(read.Tail, "…\n")), CheckLogFileMax)
+				files++
 			}
 		}
 	}
 	return nil
 }
 
-// checkLogLimit: how much of a failing check's output a fixer is given.
-const checkLogLimit = 4000
+// readsCheck says whether a failing check is read from GitHub now. Full is
+// never stored (json:"-"), so a check read in an earlier step has its
+// excerpt but not its tail: a step creating a fix Run (tails) reads it
+// again, for the first CheckLogFiles checks only. A step that creates no
+// fix Run leaves a check with an excerpt alone. A check with an excerpt
+// whose log was unreadable is not asked for again; one with neither is.
+func readsCheck(c forge.FailingCheck, tails bool, files int) bool {
+	if c.RunID == 0 || c.Full != "" {
+		return false
+	}
+	if c.Log == "" {
+		return true
+	}
+	return tails && c.Unread == "" && files < CheckLogFiles
+}
+
+// checkLogLimit: how much of a failing check's output a fixer's prompt
+// quotes. CheckLogFiles checks' job log tails, CheckLogFileMax bytes each,
+// go into its workspace as files.
+const (
+	checkLogLimit   = 4000
+	CheckLogFiles   = 4
+	CheckLogFileMax = 64 << 10
+)
+
+// CheckLogsOf is runs.check_logs for feedback: each check's Full by its
+// check run id (decimal), as WithCheckLogs puts them back.
+func CheckLogsOf(feedback []forge.ActionableFeedback) map[string]string {
+	out := map[string]string{}
+	for _, f := range feedback {
+		for _, c := range f.Checks {
+			if c.Full != "" && c.RunID != 0 {
+				out[strconv.FormatInt(c.RunID, 10)] = c.Full
+			}
+		}
+	}
+	return out
+}
+
+// WithCheckLogs is a copy of feedback whose checks have their Full from
+// logs (CheckLogsOf); feedback is not changed.
+func WithCheckLogs(feedback []forge.ActionableFeedback, logs map[string]string) []forge.ActionableFeedback {
+	out := slices.Clone(feedback)
+	for i := range out {
+		out[i].Checks = slices.Clone(out[i].Checks)
+		for j := range out[i].Checks {
+			if full, ok := logs[strconv.FormatInt(out[i].Checks[j].RunID, 10)]; ok {
+				out[i].Checks[j].Full = full
+			}
+		}
+	}
+	return out
+}
+
+// LogEnd is the end of s in at most limit bytes, from a line's
+// start where one is in reach.
+func LogEnd(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := s[len(s)-limit:]
+	if i := strings.IndexByte(cut, '\n'); i >= 0 && i < len(cut)-1 {
+		cut = cut[i+1:]
+	}
+	return cut
+}
 
 func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)

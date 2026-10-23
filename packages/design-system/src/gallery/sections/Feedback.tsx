@@ -122,7 +122,7 @@ export function FeedbackSection({ mode }: { readonly mode: PaneMode }) {
             <FeedbackCard item={item({ status: "replied", author: marcio, anchor: { kind: "preview", url: "https://wi-2408.preview.acme.dev/runs/run_88", viewport: { width: 1440, height: 900 },
               selector: "header > div.actions > button[data-testid=pause]", text: "Pause", component: { name: "SessionHeader", file: "src/components/ChatTranscript.tsx", line: 318 } } })}
               onReply={ok} onReopen={ok} />
-            <Label>A draft on a preview's page, with its picture: Show on preview (onJump)</Label>
+            <Label>A draft on a preview's page, with its picture: Show on preview (onJump); Page can use onOpenPage(url), returning true when handled</Label>
             <FeedbackCard data-testid="gallery-fb-preview-draft" item={item({ status: "draft", routed: undefined, author: marcio, at: ago(1), body: "Green, and on the same line as the total.",
               anchor: { kind: "preview", url: "https://web-wi-2408.preview.acme.dev/cart", viewport: { width: 1280, height: 720 }, selector: "form#checkout > button.pay",
                 rect: { x: 152, y: 431, width: 196, height: 60 }, text: "Pay now", component: { name: "PayButton", file: "src/cart/PayButton.tsx", line: 14 } } })}

@@ -59,9 +59,27 @@ func (f ActionableFeedback) IsReview() bool {
 type FailingCheck struct {
 	Name string `json:"name"`
 	URL  string `json:"url,omitempty"`
-	// The end of what it reported (its output and annotations), when the
-	// checks API has it.
+	// The end of what it reported (its output and annotations, and for an
+	// Actions job its log's end), when the checks API has it.
 	Log string `json:"log,omitempty"`
+	// Why its job's log could not be read (UnreadReason); "" when it was,
+	// or was never asked for.
+	Unread string `json:"unread,omitempty"`
+	// Full is the end of its job's log, longer than Log, for the fixer's
+	// workspace: never put in a prompt, and never serialized. It is up to
+	// 64 KiB, and pr_feedback and the workflow's state are read and
+	// rewritten often; the fix Run keeps it in runs.check_logs.
+	Full string `json:"-"`
+	// Where one fix Run's init wrote Full and how much of it (FileKiB, and
+	// FileCut when shortened to fit the init), or NoFile when it wrote
+	// none; Resumed when the Run is a resumed round, whose init does not
+	// run again: set as that Run's spec or round message is built, never
+	// stored.
+	Path    string `json:"-"`
+	FileKiB int    `json:"-"`
+	FileCut bool   `json:"-"`
+	NoFile  bool   `json:"-"`
+	Resumed bool   `json:"-"`
 	// The check run, to read its log from.
 	RunID int64 `json:"runId,omitempty"`
 }

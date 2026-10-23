@@ -1,5 +1,5 @@
 /**
- * Automations: an organisation's and its projects' (migration 180). Kept
+ * Automations: an organisation's and its projects' (migration 183). Kept
  * here; running them is the orchestrator's (internal/automations).
  *
  * Who may do what: anyone in the organisation reads every automation. An

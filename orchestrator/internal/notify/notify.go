@@ -30,7 +30,7 @@ import (
 
 // asks are the events a person is told of. A literal in the SQL, not a
 // parameter: it is the predicate of the partial index events_asks_v2_idx
-// (migration 181), which the planner uses only when the query says the
+// (migration 184), which the planner uses only when the query says the
 // same.
 const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled', 'automation.failed')"
 

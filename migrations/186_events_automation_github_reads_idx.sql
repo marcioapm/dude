@@ -1,5 +1,5 @@
 -- dude:no-transaction
--- 183_events_automation_github_reads_idx.sql — an automation's hourly GitHub
+-- 186_events_automation_github_reads_idx.sql — an automation's hourly GitHub
 -- reads (agenttools.githubReadsThisHour), as 163/164 are a session's and a
 -- task's: an automation's tool events carry its id in the payload, not in a
 -- column. The predicate is githubReadsInHour's, literally.

@@ -17,7 +17,9 @@ import (
 func (w *world) testingAdopted(model string) (string, int) {
 	w.t.Helper()
 	w.onModel("qa_browser", model)
-	mustExec(w.t, w.owner, `UPDATE projects SET delivery_policy = '{"requiredReviewers":["correctness"],"test":true}' WHERE id = $1`, w.project)
+	// The scripted writers' Markdown files stand for product changes here
+	// (scriptedPolicy): every fix is tested.
+	mustExec(w.t, w.owner, `UPDATE projects SET delivery_policy = '{"requiredReviewers":["correctness"],"test":true,"nonProductPaths":[".github/**"]}' WHERE id = $1`, w.project)
 	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
 	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
 	mustExec(w.t, w.owner, `UPDATE tasks SET acceptance_criteria = '["it greets", "it says goodbye"]' WHERE id = $1`, wi)

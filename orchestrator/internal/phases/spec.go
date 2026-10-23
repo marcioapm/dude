@@ -160,6 +160,9 @@ type specInput struct {
 	// The Run's instruction file (delivery.Instructions), written into
 	// /workspace by its init script on every placement; "" writes none.
 	Instructions string
+	// A fix Run's failing checks' job logs, as checkLogsInit writes them
+	// into /workspace/.dude/checks after the instruction file; "" for none.
+	CheckLogs string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo

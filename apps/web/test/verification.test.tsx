@@ -84,6 +84,23 @@ test("evidence opens the file that test published; a name it never published ope
   expect(opened).not.toContain("art_later");
 });
 
+test("a criterion carried from the previous round is marked carried, and its evidence opens that round's file", async () => {
+  const v = verification({ criteria: [
+    { criterion: 1, text: "it greets", status: "pass", evidence: ["01-hello.png"], observed: "Only CI changed.", problem: "",
+      decision: null, decidedBy: null, decisionNote: null, carriedFrom: "run_test1" },
+    { criterion: 2, text: "it says goodbye", status: "pass", evidence: ["02-bye.png"], observed: "Bye.", problem: "",
+      decision: null, decidedBy: null, decisionNote: null, carriedFrom: null },
+  ] });
+  const { page, opened } = await section(v, [artifact("art_h1", "01-hello.png", "run_test1"), artifact("art_h2", "01-hello.png", "run_test2"),
+    artifact("art_b", "02-bye.png", "run_test2")]);
+  const rows = [...page.querySelectorAll<HTMLElement>("[data-testid=criterion]")];
+  expect(rows.map((r) => count(r, "[data-testid=criterion-carried]"))).toEqual([1, 0]);
+  await click(rows[0]!.querySelector<HTMLElement>("[data-testid=evidence]")!);
+  await until(() => document.querySelector("[data-testid=file-content]"), "the viewer");
+  expect(opened).toContain("art_h1");
+  expect(opened).not.toContain("art_h2");
+});
+
 test("a verdict the branch has moved past is marked stale", async () => {
   const { page } = await section(verification({ stale: true, heads: { api: "aaaaaaa1", web: "bbbbbbb2" } }), []);
   expect(count(page, "[data-testid=verification-stale]")).toBe(1);

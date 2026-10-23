@@ -62,7 +62,7 @@ beforeAll(async () => {
     // for the process, and later suites in the same run save prompts on it.
     return Response.json(new URL(req.url).pathname.endsWith("builtin")
       ? Object.fromEntries(promptRoleSchema.options.map((role) => [role, "Built-in prompt"])) : {
-      requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
+      requiredReviewers: ["correctness"], alwaysReviewers: ["correctness"], nonProductPaths: [".github/**"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
       maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: true,
       parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5,
     });
@@ -137,6 +137,24 @@ for (const path of paths) {
       expect(await (await call("GET", path)).json()).toEqual(before);
     } finally {
       expect((await call("PATCH", path, { delivery: { requiredReviewers: null } })).status).toBe(200);
+    }
+  });
+
+  test(`${path} saves the reviewers every round runs and the non-product paths, refuses bad ones, then resets`, async () => {
+    try {
+      const res = await call("PATCH", path, { delivery: { alwaysReviewers: [], nonProductPaths: ["infra/**", "**/*.md"] } });
+      expect(res.status).toBe(200);
+      const saved = (await body(res)).delivery;
+      expect(saved.alwaysReviewers).toEqual({ value: [], source: path === paths[0] ? "organization" : "project" });
+      expect(saved.nonProductPaths.value).toEqual(["infra/**", "**/*.md"]);
+      expect((await body(await call("GET", path))).delivery.alwaysReviewers.value).toEqual([]);
+      const before = await (await call("GET", path)).json();
+      for (const delivery of [{ alwaysReviewers: ["style"] }, { nonProductPaths: [""] }, { nonProductPaths: "docs/**" }]) {
+        expect((await call("PATCH", path, { delivery })).status).toBe(400);
+      }
+      expect(await (await call("GET", path)).json()).toEqual(before);
+    } finally {
+      expect((await call("PATCH", path, { delivery: { alwaysReviewers: null, nonProductPaths: null } })).status).toBe(200);
     }
   });
 }

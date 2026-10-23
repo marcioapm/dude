@@ -106,7 +106,7 @@ import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/compo
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
-import { CommentOnPreview, CommentOnServer, CommentingNotices, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
+import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -389,7 +389,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     onOpenItem: (id) => feedback.onDiff.openOnTab(id) });
   const pictures = usePictures(client);
   // Kept while the control is: the Servers section is memoised.
-  const commentOn = useCallback((name: string) => <CommentOnServer control={commenting} name={name} />, [commenting]);
+  const serversCommenting = useMemo(() => ({ linkFor: commenting.linkFor, note: <CommentingNote control={commenting} /> }), [commenting]);
   // An earlier attempt's open session: only to read. One value per attempt shown, not one per frame.
   const sessionFeedback = useMemo(() => (earlier
     ? { ...feedback.onDiff, closed: `Attempt ${shown} was set aside: its diff is only to read.`, readOnly: true }
@@ -737,7 +737,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           }} />
       ) : null}
 
-      <Tabs value={tab} onValueChange={pickTab} fill>
+      <Tabs value={tab} onValueChange={pickTab} fill className="taskTabs">
         <TabList aria-label="Task" className="tabsInset">
           <Tab value="chat">Chat</Tab>
           <Tab value="overview">Overview</Tab>
@@ -874,8 +874,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   </PullRequestActions>
                 ))}
                 {showServers ? (
-                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")}
-                    comment={<CommentOnPreview control={commenting} />} />
+                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")} linkFor={commenting.linkFor}
+                    commentingOff={commenting.offer.kind === "unavailable" ? <CommentingUnavailable reason={commenting.offer.reason} /> : null} />
                 ) : null}
               </PageRail>
           } />
@@ -959,7 +959,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           ) : (
             <FeedbackTab task={item} fb={feedback} items={feedback.items} loaded={feedback.loaded} problem={feedback.problem} earlier={false} shown={shown} current={current} onCurrent={() => pickAttempt(current)}
               onStopped={stop && canPickUp && recovery ? () => setPickingUp(recovery.actions[0] ?? "retry") : undefined}
-              picture={pictures} preview={{ show: commenting.show, canShow: commenting.canShow, wayIn: <PreviewWayIn control={commenting} /> }} />
+              picture={pictures} preview={{ show: commenting.show, canShow: commenting.canShow, openPage: commenting.openPage, wayIn: <PreviewWayIn control={commenting} /> }} />
           )}
         </TabPanel>
 
@@ -976,7 +976,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabPanel>
 
         <TabPanel value="servers" className="railPanel">
-          <ServersSection client={client} servers={servers} taskId={taskId} comment={commentOn} />
+          <ServersSection client={client} servers={servers} taskId={taskId} commenting={serversCommenting} />
         </TabPanel>
 
         <TabPanel value="activity" className="railPanel">
@@ -1495,6 +1495,14 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
       case EventTypes.RunChecksJudged: {
         const { outcome, quote } = checksJudgedLine(p);
         out.push({ ...base, who: <DudeMark size={32} />, text: <>The <b>{doer(e.runId)}</b>'s checks {outcome}</>, quote, open: session(e.runId) });
+        break;
+      }
+      case EventTypes.TestSkipped: {
+        const paths = Array.isArray(p.paths) ? p.paths.map(String) : [];
+        const n = Array.isArray(p.criteria) ? p.criteria.length : 0;
+        out.push({ ...base, kind: "work", who: <DudeMark size={32} />,
+          text: <><b>{dude}</b> did not run the tester again: the change since the last test touches only paths no criterion depends on. Its {plural(n, "verdict")} stand.</>,
+          quote: paths.join("\n") || undefined, open: typeof p.fromRunId === "string" ? session(p.fromRunId) : undefined });
         break;
       }
       case "run.steered":

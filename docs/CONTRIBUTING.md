@@ -416,6 +416,24 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   round has none, to the policy's required reviewer the round has, else its
   first. Those it judges fixed are resolved (`phases.RecordFindings`). That
   rule is what lets the loop converge.
+- **A later review round's reviewers come from its own change**
+  (`RoundReviewers`, `steps.roundReviewers`): after the attempt's first
+  completed review round, a round runs `alwaysReviewers`, the categories of
+  its attempted findings, the conditional rules matched against the paths
+  changed since the previous review round's checkouts (`Store.RoundDelta`,
+  one GitHub compare per repository, cached in `roundDelta` and shared with
+  the resumption's line count), and `requiredReviewers` when one of those
+  paths is outside `nonProductPaths` (matched against the in-repo path
+  only, unlike conditional rules, so `docs/**` does not cover a repository
+  named `docs`). Unmeasurable (no forge, refused, truncated) or over
+  `MaxResumeDeltaLines`: the first round's `ReviewersFor`. A retry, a
+  directed review and the simplifier's range keep their own categories.
+  The round's `run.created` carries `reasons`; a round with no reviewer
+  goes straight to `awaitReview`, unless a gate waits on a completed review
+  at its heads (`st.Candidate`, or an untested conductor head): then
+  `requiredReviewers` run, else the first round's (`steps.gateReviewers`).
+  The choice is kept in the Owned `reviewChoice` with the round's creation
+  key and heads, so a replayed step at those heads creates the same round.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
@@ -641,7 +659,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 
 ### Automations
 
-Work nobody started by hand (migration 180; `orchestrator/internal/automations`,
+Work nobody started by hand (migration 183; `orchestrator/internal/automations`,
 the API `apps/control-plane/src/api/routes/automations.ts`, the pages
 `apps/web/src/screens/AutomationsSettings.tsx`). An automation belongs to
 the organisation (`project_id` NULL) or a project, and is one of four kinds:
@@ -706,7 +724,7 @@ their creator.
   the automation run, automation and owner it acts for.
 - **Prompt editor and history.** Own prompt and preset brief both use
   `MarkdownDocument`, `{{ }}` inserting `AUTOMATION_PROMPT_VARIABLES`.
-  `automation_prompt_versions` (migration 180, the `prompt_versions` pattern)
+  `automation_prompt_versions` (migration 183, the `prompt_versions` pattern)
   keeps every changed save's text, who and when; the first change also keeps
   what it had before. `GET /v1/automations/:id/prompt-history` lists newest
   first; `POST …/prompt-history/restore {versionId}` (editors) saves an old
@@ -756,7 +774,7 @@ their creator.
   (`owner_id` NULL, `owner_left_at` set): it stays on and its page says so.
   A failed run records `automation.failed` naming the owner, or every current
   admin while held. The Web Push notifier includes it in `asks` (and the
-  `events_asks_idx` predicate, migration 180); recipients come from the
+  `events_asks_v2_idx` predicate, migration 184); recipients come from the
   payload's `to`. The message names the automation and reason, linking to
   that run under its organisation's or project's settings.
 - **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90

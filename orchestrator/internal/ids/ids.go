@@ -43,7 +43,7 @@ const (
 	ModelCall = "mcl"
 	// A reviewer's question (migration 175).
 	ReviewQuestion = "rvq"
-	// Automations (migration 180): a firing, and one POST it made.
+	// Automations (migration 183): a firing, and one POST it made.
 	AutomationRun     = "arn"
 	AutomationRequest = "arq"
 )

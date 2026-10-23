@@ -1,4 +1,4 @@
--- 180_automations.sql — work nobody started by hand: on a schedule, or when
+-- 183_automations.sql — work nobody started by hand: on a schedule, or when
 -- GitHub says something happened. An automation belongs to its organisation
 -- (project_id NULL) or to one of its projects, and is one of four kinds: an
 -- agent, a command that runs and exits, a server that answers events, or a
@@ -264,5 +264,5 @@ ALTER TABLE forge_event_subscriptions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON forge_event_subscriptions USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 
--- The notifier's asks index gains automation.failed in 181/182, built
+-- The notifier's asks index gains automation.failed in 184/185, built
 -- concurrently: events is the ledger, too large to lock for a build here.

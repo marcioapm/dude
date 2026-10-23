@@ -112,7 +112,7 @@ func TestMatchAuthorsAndPaths(t *testing.T) {
 		want  bool
 	}{
 		{[]string{"docs/guide/intro.md"}, true},
-		{[]string{"migrations/180_automations.sql"}, true},
+		{[]string{"migrations/183_automations.sql"}, true},
 		{[]string{"a/b/c/d.sql"}, true},
 		{[]string{"apps/web/x.ts", "README.md"}, false},
 	} {

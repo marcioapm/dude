@@ -168,7 +168,11 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 		for _, n := range names {
 			published[n] = true
 		}
-		verdicts := JudgeAcceptance(criteria, ParseAcceptance(reply), published)
+		carry, err := carryTx(ctx, tx, runID, st.CarryFrom)
+		if err != nil {
+			return err
+		}
+		verdicts := JudgeAcceptance(criteria, ParseAcceptance(reply), published, carry)
 		if awaitsEvidence(verdicts, published) {
 			// What it published may still be on its way from lux: a pass
 			// is judged against every file, not the ones recorded so far.
@@ -177,10 +181,13 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 			}
 		}
 		for _, v := range verdicts {
+			// A carried waiver or acceptance keeps who decided it and why.
 			if _, err := tx.Exec(ctx, `INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text,
-					status, evidence, observed, problem, heads)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
-				org, st.TaskID, runID, v.Criterion, v.Text, v.Status, db.NonNil(v.Evidence), v.Observed, v.Problem, rawHeads); err != nil {
+					status, evidence, observed, problem, heads, carried_from, decision, decided_by, decision_note, decided_at)
+				SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, p.decision, p.decided_by, p.decision_note, p.decided_at
+				FROM (SELECT 1) one LEFT JOIN acceptance_verdicts p ON p.run_id = $12 AND p.criterion = $4 AND $11::text IS NOT NULL`,
+				org, st.TaskID, runID, v.Criterion, v.Text, v.Status, db.NonNil(v.Evidence), v.Observed, v.Problem, rawHeads,
+				db.Nullable(v.CarriedFrom), carry.runID()); err != nil {
 				return err
 			}
 		}
@@ -218,7 +225,10 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 			severity = st.Policy.BlockingSeverities[0]
 		}
 		for _, v := range verdicts {
-			if v.Status != VerdictFail {
+			// A carried failure keeps the person's acceptance, which settles
+			// it as it did in the round they decided (judgeGate skips it too).
+			// Only a carry sets Decision on a verdict judged here.
+			if v.Status != VerdictFail || v.Decision != "" {
 				continue
 			}
 			// One dude raised for this criterion at an earlier test, still
@@ -954,7 +964,13 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 	if len(at) > 0 {
 		fmt.Fprintf(&b, "Tested at %s.", strings.Join(at, ", "))
 	}
-	if stale(v.Heads, heads) {
+	tested := v.Heads
+	if len(v.StandsFor) > 0 {
+		// A test step that started no tester: the changes since are outside the product.
+		tested = v.StandsFor
+		b.WriteString(" Not tested again since: the changes after it touch only paths no criterion depends on.")
+	}
+	if stale(tested, heads) {
 		b.WriteString(" **Stale:** the branch has changed since; this verdict is about the commits above.")
 	}
 	b.WriteString("\n\n")
@@ -962,6 +978,9 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 		status := c.Status
 		if c.Decision != "" {
 			status = fmt.Sprintf("%s, %s by %s: %s", c.Status, c.Decision, valueOr(c.DecidedBy, "a person"), oneLine(c.Note))
+		}
+		if c.Carried {
+			status += ", carried from the previous test round"
 		}
 		fmt.Fprintf(&b, "- **%s** — %s\n", status, oneLine(CriteriaImagesAsText([]string{c.Text})[0]))
 	}
@@ -986,19 +1005,24 @@ func stale(tested, now map[string]string) bool {
 }
 
 // prVerification is the latest test of the attempt, for the pull request.
+// StandsFor is the heads a later test step that started no tester carried
+// it to (EvTestSkipped), nil for none.
 type prVerification struct {
-	Heads    map[string]string
-	Criteria []prCriterion
+	Heads, StandsFor map[string]string
+	Criteria         []prCriterion
 }
 
 type prCriterion struct {
 	Text, Status, Decision, DecidedBy, Note string
+	Carried                                 bool
 }
 
 // latestVerification reads the attempt's latest recorded verdict.
 func latestVerification(ctx context.Context, tx pgx.Tx, st *State) (*prVerification, error) {
 	rows, err := tx.Query(ctx, `SELECT v.text, v.status, COALESCE(v.decision, ''), COALESCE(p.name, ''),
-			COALESCE(v.decision_note, ''), v.heads
+			COALESCE(v.decision_note, ''), v.carried_from IS NOT NULL, v.heads,
+			(SELECT e.payload->'heads' FROM events e WHERE e.task_id = v.task_id AND e.event_type = 'test.skipped'
+			   AND e.payload->>'fromRunId' = v.run_id ORDER BY e.cursor DESC LIMIT 1)
 		FROM acceptance_verdicts v LEFT JOIN people p ON p.id = v.decided_by
 		WHERE v.run_id = (SELECT r.id FROM runs r JOIN acceptance_verdicts av ON av.run_id = r.id
 			WHERE r.task_id = $1 AND ($2 = 0 OR r.attempt = $2) ORDER BY av.created_at DESC, r.created_at DESC LIMIT 1)
@@ -1010,13 +1034,14 @@ func latestVerification(ctx context.Context, tx pgx.Tx, st *State) (*prVerificat
 	var v *prVerification
 	for rows.Next() {
 		var c prCriterion
-		var heads []byte
-		if err := rows.Scan(&c.Text, &c.Status, &c.Decision, &c.DecidedBy, &c.Note, &heads); err != nil {
+		var heads, standsFor []byte
+		if err := rows.Scan(&c.Text, &c.Status, &c.Decision, &c.DecidedBy, &c.Note, &c.Carried, &heads, &standsFor); err != nil {
 			return nil, err
 		}
 		if v == nil {
 			v = &prVerification{}
 			_ = json.Unmarshal(heads, &v.Heads)
+			_ = json.Unmarshal(standsFor, &v.StandsFor)
 		}
 		v.Criteria = append(v.Criteria, c)
 	}

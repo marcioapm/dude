@@ -5,7 +5,7 @@
  * exits, a server that answers events, or a signed POST to a URL. An
  * automation belongs to the organisation or to one of its projects; an
  * organisation's filters which repositories it covers (projects cannot opt
- * out). docs/CONTRIBUTING.md, "Automations"; migration 180.
+ * out). docs/CONTRIBUTING.md, "Automations"; migration 183.
  */
 
 import { z } from "zod";
@@ -357,7 +357,7 @@ export const AUTOMATION_POST_RETRY = "A 5xx or no answer within 30 s is retried 
 /**
  * Why an automation cannot be saved as it is in this scope, as the field it
  * is about and a sentence; null when it can. The database checks the same
- * rules (migration 180), this says them in words.
+ * rules (migration 183), this says them in words.
  */
 export function automationProblem(a: AutomationInput, scope: AutomationScope): { path: string; message: string } | null {
   if (scope === "project" && a.repoFilter) return { path: "repoFilter", message: "a project automation covers the project's repositories; only an organisation automation filters them" };
