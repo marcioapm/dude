@@ -110,53 +110,59 @@ func (s *Store) PreviousRound(ctx context.Context, org, taskID string, attempt i
 	return p, err
 }
 
-// DeltaLines is how many lines changed (additions and deletions) from the
-// predecessor's checkouts to heads, across the task's repositories, as
-// GitHub compares them; a comparison GitHub cut short counts as over
-// MaxResumeDeltaLines.
-func (s *Store) DeltaLines(ctx context.Context, org, taskID string, gh *forge.GitHub, from, heads map[string]string) (int, error) {
+// RoundDelta is what changed from the predecessor's checkouts to heads,
+// across the task's repositories, as GitHub compares them (RoundChange).
+// A repository with no checkout recorded is compared from its default
+// branch for the line count, and does not descend.
+func (s *Store) RoundDelta(ctx context.Context, org, taskID string, gh *forge.GitHub, from, heads map[string]string) (RoundChange, error) {
 	var repos []Repository
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		repos, err = TaskRepositories(ctx, tx, taskID)
 		return err
 	}); err != nil {
-		return 0, err
+		return RoundChange{}, err
 	}
-	lines := 0
+	out := RoundChange{Measured: true, Descends: true}
 	for _, repo := range repos {
 		now := heads[repo.Name]
 		if now == "" {
+			out.Descends = out.Descends && from[repo.Name] == ""
 			continue
 		}
 		prev := from[repo.Name]
 		if prev == "" {
-			prev = repo.DefaultBranch
+			prev, out.Descends = repo.DefaultBranch, false
 		}
 		if prev == now {
 			continue
 		}
 		if gh == nil {
-			return MaxResumeDeltaLines + 1, nil
+			return RoundChange{}, nil
 		}
 		cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), prev, now)
 		if err != nil {
 			if ctx.Err() != nil {
-				return 0, ctx.Err()
+				return RoundChange{}, ctx.Err()
 			}
 			if forge.Transient(err) {
-				return 0, forgeWait(err)
+				return RoundChange{}, forgeWait(err)
 			}
 			// Unmeasurable changes require fresh eyes on the whole branch.
-			return MaxResumeDeltaLines + 1, nil
+			return RoundChange{}, nil
 		}
 		if cmp.Truncated() {
-			return MaxResumeDeltaLines + 1, nil
+			return RoundChange{}, nil
 		}
+		out.Descends = out.Descends && cmp.BehindBy == 0
 		for _, f := range cmp.Files {
-			lines += f.Additions + f.Deletions
+			out.Lines += f.Additions + f.Deletions
+			out.Paths = append(out.Paths, repo.Name+"/"+f.Filename)
+			if f.PreviousFilename != "" {
+				out.Paths = append(out.Paths, repo.Name+"/"+f.PreviousFilename)
+			}
 		}
 	}
-	return lines, nil
+	return out, nil
 }
 
 // predecessorRow is what continueOrCreateTx reads of the predecessor:

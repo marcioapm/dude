@@ -2,10 +2,12 @@ package delivery
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -47,35 +49,7 @@ func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
 		{"a task without criteria", ci, VerdictPass, nil, false, false, true, `[]`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			f := newVerdictFixture(t)
-			f.withRepo()
-			from := f.gh.SHA("feature")
-			if c.diverged {
-				// The previous round tested a commit the branch does not hold.
-				from = f.gh.Branch("rewritten", "feature", "A commit the branch lost")
-			}
-			head := f.gh.CommitFiles("feature", "Change", c.files)
-			for _, q := range []struct {
-				sql  string
-				args []any
-			}{
-				{`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_c', 'repo_c', $1)`, nil},
-				{`UPDATE runs SET base_refs = jsonb_build_object('repo', $1::text) WHERE id = 'run_c'`, []any{from}},
-				{`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence)
-					VALUES ($1, 'wi_c', 'run_c', 1, 'it greets', $2, '{greet.webm}')`, []any{f.org, c.previous}},
-				{`UPDATE tasks SET acceptance_criteria = COALESCE(NULLIF($1, '')::jsonb, acceptance_criteria) WHERE id = 'wi_c'`,
-					[]any{c.criteria}},
-			} {
-				args := q.args
-				if args == nil {
-					args = []any{f.org}
-				}
-				if _, err := f.owner.Exec(f.ctx, q.sql, args...); err != nil {
-					t.Fatal(err)
-				}
-			}
-			st := &State{TaskID: "wi_c", ProjectID: "prj_c", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"repo": head}}
-			sc := workflow.StepContext{WorkflowRunID: "wf_c", OrganizationID: f.org}
+			f, st, sc, _ := newSkipFixture(t, c.files, c.previous, c.diverged, c.criteria)
 			skip, err := f.steps.carryForward(f.ctx, sc, st, c.judge, false)
 			if err != nil {
 				t.Fatal(err)
@@ -91,6 +65,45 @@ func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newSkipFixture is a task whose test round run_c judged its one criterion
+// "it greets" previous at the feature branch's head (or, diverged, at a
+// commit the branch lost), followed by a commit of files; criteria, when
+// set, is the task's criteria now. st is the delivery at that commit;
+// the counter, GitHub's compares.
+func newSkipFixture(t *testing.T, files map[string]string, previous string, diverged bool, criteria string) (*verdictFixture, *State, workflow.StepContext, *atomic.Int64) {
+	t.Helper()
+	f := newVerdictFixture(t)
+	compares := f.withRepo()
+	from := f.gh.SHA("feature")
+	if diverged {
+		from = f.gh.Branch("rewritten", "feature", "A commit the branch lost")
+	}
+	head := f.gh.CommitFiles("feature", "Change", files)
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_c', 'repo_c', $1)`, nil},
+		{`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
+			VALUES ('wf_c', $1, 'task.delivery', 'c', 'running', 'test', '{}', 'wi_c')`, nil},
+		{`UPDATE runs SET base_refs = jsonb_build_object('repo', $1::text) WHERE id = 'run_c'`, []any{from}},
+		{`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence)
+			VALUES ($1, 'wi_c', 'run_c', 1, 'it greets', $2, '{greet.webm}')`, []any{f.org, previous}},
+		{`UPDATE tasks SET acceptance_criteria = COALESCE(NULLIF($1, '')::jsonb, acceptance_criteria) WHERE id = 'wi_c'`,
+			[]any{criteria}},
+	} {
+		args := q.args
+		if args == nil {
+			args = []any{f.org}
+		}
+		if _, err := f.owner.Exec(f.ctx, q.sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := &State{TaskID: "wi_c", ProjectID: "prj_c", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"repo": head}}
+	return f, st, workflow.StepContext{WorkflowRunID: "wf_c", OrganizationID: f.org}, compares
 }
 
 // A failed criterion a person accepted, carried by the next round after a
@@ -168,7 +181,8 @@ func TestACarriedAcceptanceOfAFailureKeepsTheGatePassing(t *testing.T) {
 
 // withRepo gives the fixture's GitHub a git repository of its own, a
 // feature branch from main on it, so its compare answers from real commits.
-func (f *verdictFixture) withRepo() {
+// It returns how many compares GitHub has answered.
+func (f *verdictFixture) withRepo() *atomic.Int64 {
 	f.t.Helper()
 	bare := f.t.TempDir()
 	git := func(args ...string) string {
@@ -183,9 +197,50 @@ func (f *verdictFixture) withRepo() {
 	git("update-ref", "refs/heads/main", initial)
 	f.gh = fakegithub.New(bare, "acme/repo")
 	f.gh.Branch("feature", "main", "Start")
-	srv := httptest.NewServer(f.gh.Handler())
+	compares := &atomic.Int64{}
+	gh := f.gh.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/compare/") {
+			compares.Add(1)
+		}
+		gh.ServeHTTP(w, r)
+	}))
 	f.t.Cleanup(srv.Close)
 	f.steps.forges = forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})}
+	return compares
+}
+
+// A test round that is not skipped compares each changed repository once:
+// the skip check and the resumed tester's Continue share the measurement,
+// and the step entered again (a wait, a retry) asks GitHub nothing new.
+func TestATestRoundComparesEachChangedRepositoryOnce(t *testing.T) {
+	f, st, sc, compares := newSkipFixture(t, map[string]string{"app/main.go": "package main"}, VerdictPass, false, "")
+	// A second repository of the task, unchanged since the previous round.
+	for _, q := range []string{
+		`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+			VALUES ('repo_d', $1, 'prj_c', 'other', 'https://github.com/acme/other.git', 'main')`,
+		`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_c', 'repo_d', $1)`,
+		`UPDATE runs SET base_refs = base_refs || '{"other": "ddd444"}' WHERE id = 'run_c' AND organization_id = $1`,
+	} {
+		if _, err := f.owner.Exec(f.ctx, q, f.org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.Heads["other"] = "ddd444"
+	for entry := range 2 {
+		at := *st
+		skip, err := f.steps.carryForward(f.ctx, sc, &at, nil, false)
+		if err != nil || skip || at.CarryFrom != "run_c" {
+			t.Fatalf("entry %d: skip %v, carry from %q, %v; want a resumed tester carrying from run_c", entry, skip, at.CarryFrom, err)
+		}
+		c, err := f.steps.goesOn(f.ctx, sc, &at, PhaseTest)("")
+		if err != nil || c == nil || c.Predecessor != "run_c" || c.DeltaLines != 1 {
+			t.Fatalf("entry %d: continue %+v, %v; want run_c over 1 line", entry, c, err)
+		}
+	}
+	if n := compares.Load(); n != 1 {
+		t.Errorf("%d compares for one changed repository over two entries of the step, want 1", n)
+	}
 }
 
 // A resumed tester's carried criterion is recorded as the previous round's

@@ -16,7 +16,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -79,63 +78,6 @@ func NonProduct(p Policy, paths []string) bool {
 	})
 }
 
-// roundDelta is what changed from the previous round's checkouts to the
-// heads now, by GitHub's compare: the paths (a rename's both), and whether
-// every previous checkout is an ancestor of its head now. Descends is
-// false when that cannot be told (no forge, a refusal, a comparison cut
-// short): nothing may rest on the previous round then.
-type roundDelta struct {
-	Paths    []string
-	Descends bool
-}
-
-func (w *steps) roundDelta(ctx context.Context, sc workflow.StepContext, st *State, from map[string]string) (roundDelta, error) {
-	var d roundDelta
-	if w.forges == nil {
-		return d, nil
-	}
-	gh, err := w.forges.For(ctx, sc.OrganizationID)
-	switch {
-	case forge.Transient(err):
-		return d, forgeWait(err)
-	case forge.Refused(err) || err == nil && gh == nil:
-		return d, nil
-	case err != nil:
-		return d, err
-	}
-	var repos []Repository
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		repos, err = TaskRepositories(ctx, tx, st.TaskID)
-		return err
-	}); err != nil {
-		return d, err
-	}
-	for _, repo := range repos {
-		now, prev := st.Heads[repo.Name], from[repo.Name]
-		if now == prev {
-			continue
-		}
-		if now == "" || prev == "" {
-			return roundDelta{}, nil
-		}
-		cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), prev, now)
-		if forge.Transient(err) {
-			return roundDelta{}, forgeWait(err)
-		}
-		if err != nil || cmp.Truncated() || cmp.BehindBy > 0 {
-			return roundDelta{}, nil
-		}
-		for _, f := range cmp.Files {
-			d.Paths = append(d.Paths, repo.Name+"/"+f.Filename)
-			if f.PreviousFilename != "" {
-				d.Paths = append(d.Paths, repo.Name+"/"+f.PreviousFilename)
-			}
-		}
-	}
-	d.Descends = true
-	return d, nil
-}
-
 // carryForward is the test step's choice before it starts a tester. It
 // sets st.CarryFrom to the attempt's previous test round when this round's
 // heads descend from that round's checkouts, so a resumed tester may carry
@@ -155,7 +97,8 @@ func (w *steps) carryForward(ctx context.Context, sc workflow.StepContext, st *S
 	if err != nil || prev == nil {
 		return false, err
 	}
-	delta, err := w.roundDelta(ctx, sc, st, prev.BaseRefs)
+	// The same measurement, under the same key, as goesOn's for the tester.
+	delta, err := w.roundChange(ctx, sc, st, PhaseTest, prev.BaseRefs)
 	if err != nil || !delta.Descends {
 		return false, err
 	}
