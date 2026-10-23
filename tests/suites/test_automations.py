@@ -44,8 +44,8 @@ def test_a_signed_push_runs_an_automation_and_a_leaving_owner_leaves_it_on(
     on = ana.put(f"/v1/automations/{automation['id']}/enabled", {"enabled": True})
     assert on.status_code == 200 and on.json()["enabled"] is True, on.text
 
-    # A signed push from the fake GitHub: stored, matched, run.
-    assert fake_github.send_webhook("push", {"ref": "refs/heads/main", "sender": {"login": "ana"}}) == 200
+    # A signed push from the fake GitHub: stored (202, the orchestrator acts on it), matched, run.
+    assert fake_github.send_webhook("push", {"ref": "refs/heads/main", "sender": {"login": "ana"}}) == 202
     run = wait_until(
         lambda: next((r for r in _runs(ana, automation["id"]) if r["status"] in ("succeeded", "failed")), None),
         timeout=90, message="the push's run never ended",

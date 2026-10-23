@@ -56,6 +56,14 @@ describe("places", () => {
 });
 
 describe("the organisation's list", () => {
+  test("an organisation with no automations sees the empty state", async () => {
+    const client = new FixtureClient("a");
+    client.automations = async () => ({ automations: [] }) as unknown as Awaited<ReturnType<FixtureClient["automations"]>>;
+    const c = await show(<AutomationsList client={client} orgName="Example" projectId={null} canCreate onOpen={() => undefined} />);
+    const empty = await until(() => c.querySelector<HTMLElement>("[data-testid=automations-empty]"), "the empty state");
+    expect(empty.textContent).toContain("No automations yet");
+    expect(rows(c).length).toBe(0);
+  });
   test("the count, next run as a day and time / On event / Off, and the filters as words with no labels", async () => {
     const c = await show(<AutomationsList client={new FixtureClient("a")} orgName="Example" projectId={null} canCreate onOpen={() => undefined} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
