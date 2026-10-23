@@ -424,8 +424,9 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 	}
 	// What a person needs to follow a tester's video, and the tools it must not assume.
 	for _, want := range []string{"1920×1080 viewport", "records no mouse pointer", "its own walkthrough recorder",
-		"Do in the UI every step a criterion is about", "already installed", "if narration fails once, keep the video captioned but silent",
-		"mark each sped-up part", "without one, leave the waits in"} {
+		"Do in the UI every step a criterion is about", "If text-to-speech tools are already installed",
+		"do not turn the page's CSP off", "if narration fails once, stop narrating for this Run",
+		"mark each sped-up part", "leave the waits in and caption what they wait for"} {
 		if !strings.Contains(testerTools, want) {
 			t.Errorf("the tester's tools lack %q", want)
 		}
