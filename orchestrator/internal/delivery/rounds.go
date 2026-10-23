@@ -23,8 +23,9 @@ import (
 //     agent's conversation and workspace, and is told what changed since
 //     (the round message, a directive);
 //   - replayed: when it cannot be resumed (not kept, its lux Run gone, its
-//     model or harness changed), a fresh agent given the predecessor
-//     chain's conversation from the ledger, reviewing what changed since;
+//     model or harness changed, or less than half its running time left:
+//     timeSpentTx), a fresh agent given the predecessor chain's
+//     conversation from the ledger, reviewing what changed since;
 //   - fresh: no predecessor, a delta over MaxResumeDeltaLines, or nothing
 //     to replay: today's whole-branch review.
 

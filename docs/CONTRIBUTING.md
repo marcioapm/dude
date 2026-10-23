@@ -543,6 +543,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   (`run.parked`, `run.unparked`). A phase Run has a **hard limit of
   running time**: dude sends lux `timeout` (`agent.timeout`, 4h), lux
   counts running time only, and a Run past it fails. The conductor has none.
+  lux sums it over every resume of the Run, and a resume cannot raise it,
+  so a next round goes on from its predecessor's lux Run only while at
+  least half of it is left (the active time of every row that held that
+  lux Run, `run_metrics`); with less it is replayed on a lux Run of its
+  own (`run.created` `fresh: time_budget`). A Run lux stopped at its limit
+  is not kept: Try again starts the step on a new lux Run.
 - **Asks die with their Run.** Questions and repository requests still open
   when a Run ends are cancelled (triggers). Answering one returns a 409 that
   says so. Design: [`design/agent-tools.md`](design/agent-tools.md).

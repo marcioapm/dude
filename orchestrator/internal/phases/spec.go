@@ -74,7 +74,7 @@ type AgentConfig struct {
 const DefaultTimeout = "4h"
 
 // TimeLimit is the Timeout every phase Run is submitted with, as a
-// duration; zero for one LoadAgentConfig would have refused.
+// duration; zero when it is not a Go duration.
 func (c AgentConfig) TimeLimit() time.Duration {
 	d, _ := time.ParseDuration(cmp.Or(c.Timeout, DefaultTimeout))
 	return d
@@ -97,11 +97,6 @@ func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
 	}
 	if len(c.ToolsKey) == 0 {
 		c.ToolsKey = []byte(cfg.String("DUDE_ORCHESTRATOR_TOKEN"))
-	}
-	// A next round reads its predecessor's time left against it
-	// (delivery.Store.RunTimeLimit).
-	if c.TimeLimit() <= 0 {
-		return c, fmt.Errorf("%s: %q is not a positive duration (4h, 90m)", cfg.Label("DUDE_AGENT_TIMEOUT"), c.Timeout)
 	}
 	if c.LLMURL != "" {
 		if err := ValidateHTTPURL(c.LLMURL); err != nil {

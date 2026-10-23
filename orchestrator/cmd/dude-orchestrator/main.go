@@ -133,6 +133,10 @@ func run(log *slog.Logger) error {
 	// Test fixtures serve HTTP API and git daemon on distinct gateway ports.
 	forges := forge.Resolver{DB: database, TestGitHost: os.Getenv("DUDE_TEST_GITHUB_GIT_HOST")}
 	runtime := workflow.New(database, fmt.Sprintf("orchestrator-%s-%d", host, os.Getpid()), log)
+	if agent.TimeLimit() <= 0 {
+		log.Warn("agent.timeout is not a Go duration: next rounds resume their predecessor's lux Run whatever time it has left",
+			"timeout", agent.Timeout)
+	}
 	store := &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: agent.TimeLimit()}
 	runtime.Register(delivery.Workflow(store, forges))
 
