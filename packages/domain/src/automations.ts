@@ -491,6 +491,23 @@ export type RunNow = z.infer<typeof runNowSchema>;
 export const evaluateEventSchema = z.object({ body: z.record(z.unknown()) }).strict();
 export type EventVerdict = { matches: true } | { matches: false; filter: FilterName; because: string };
 
+/** An automation's runs, and its kept session when it has one. */
+export interface AutomationRunsResponse {
+  runs: AutomationRun[];
+  session: { since: string; lastRunAt: string; resumes: number; expiresAt: string | null } | null;
+}
+
+/** A stored delivery Run now offers: the event's last 30 days. */
+export interface PastDelivery {
+  id: string;
+  event: string;
+  action: string | null;
+  repository: string | null;
+  sender: string | null;
+  receivedAt: string;
+  body: Record<string, unknown>;
+}
+
 /** The events an organisation's GitHub sends dude, and where dude read that. */
 export interface EventSubscriptions {
   events: string[];

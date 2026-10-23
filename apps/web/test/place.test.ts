@@ -77,6 +77,15 @@ describe("places", () => {
     expect(parsePlace("#/org/settings/images")).toEqual({ view: "orgSettings", page: "images" });
   });
 
+  test("an automation, its runs and one run are deeper than Automations, in the organisation's settings and a project's", () => {
+    for (const hash of ["#/org/settings/automations/aut_1", "#/org/settings/automations/aut_1/runs/arn_2",
+      "#/project/prj_1/settings/automations/aut_1", "#/project/prj_1/settings/automations/aut_1/runs/arn_2"]) {
+      expect(formatPlace(parsePlace(hash))).toBe(hash);
+    }
+    expect(parsePlace("#/project/prj_1/settings/automations/aut_1/runs"))
+      .toEqual({ view: "projectSettings", projectId: "prj_1", page: "automations", sub: "aut_1/runs" });
+  });
+
   test("help, a guide page and a section of it read back, in an organisation as the guide links them", () => {
     for (const hash of ["#/help", "#/help/settings", "#/help/settings/delivery"]) {
       expect(formatPlace(parsePlace(hash))).toBe(hash);

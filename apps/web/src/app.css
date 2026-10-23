@@ -526,6 +526,73 @@ body {
   min-width: 0;
 }
 
+/* Automations: the list's filters in a wrapping row; a name beside its scope; kind beside session. */
+.automationFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.automationFilters > :first-child {
+  flex: 1 1 200px;
+  max-width: 320px;
+}
+.automationName,
+.automationKind {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.automationSave {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+  padding-top: var(--ds-space-16);
+}
+.automationSession {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-12);
+  margin-bottom: var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+}
+.automationHint {
+  display: block;
+  margin-top: var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.automationFact {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.automationTimeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin: 0 0 var(--ds-space-12);
+  padding-left: var(--ds-space-20);
+  font-size: var(--ds-text-sm);
+}
+.automationTimeline time {
+  margin-right: var(--ds-space-8);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.automationPayload {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  white-space: pre-wrap;
+}
+
 /* A tier naming no model yet: its Requests cell, in the attention tone. */
 .tierUnset {
   color: var(--ds-tone-attention-fg);
