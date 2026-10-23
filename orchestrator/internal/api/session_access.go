@@ -74,11 +74,13 @@ func (s *Server) takeSessionOwnership(w http.ResponseWriter, r *http.Request, or
 			return fail(http.StatusForbidden, "not_admin", "only an organisation admin can take over a session its admins own")
 		}
 		// The owner row is the departed owner's; one still in the
-		// organisation is never removed here.
+		// organisation is never removed here. FOR SHARE waits for an
+		// invitation's accept bringing them back, then reads them as active.
 		var from string
 		var gone bool
 		if err := tx.QueryRow(r.Context(), `SELECT sp.person_id, p.removed_at IS NOT NULL OR p.organization_id <> sp.organization_id
-			FROM session_people sp JOIN people p ON p.id = sp.person_id WHERE sp.session_id = $1 AND sp.role = 'owner'`, id).
+			FROM session_people sp JOIN people p ON p.id = sp.person_id WHERE sp.session_id = $1 AND sp.role = 'owner'
+			FOR SHARE OF p`, id).
 			Scan(&from, &gone); err != nil && !db.IsNotFound(err) {
 			return err
 		}
