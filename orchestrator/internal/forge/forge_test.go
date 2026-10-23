@@ -443,6 +443,32 @@ func TestBotsAndTheFactoryItselfAreNotFeedback(t *testing.T) {
 	}
 }
 
+// A reviewer posting as a person keeps a status comment on the pull request
+// ("Review in progress") while it works; on a dogfood task that woke a fixer that
+// had nothing to do. Its review, or a line comment, still counts.
+func TestAToolsStatusCommentIsNotARequest(t *testing.T) {
+	status := comment("<!-- reviewbot:review-status -->\n**Review in progress**\n\nAn automated review is running against the exact head below.")
+	status.Author = "review-service"
+	if IsActionableComment(status, nil) {
+		t.Error("a tool's status comment was treated as a request")
+	}
+	if s := Classify(prior, open, []Feedback{status}, nil); s != nil {
+		t.Errorf("a status comment produced a signal: %+v", s)
+	}
+	for _, kind := range []string{KindReview, KindLineComment, KindChangesRequested} {
+		f := status
+		f.Kind = kind
+		f.Body = "<!-- reviewbot:review -->\nPlease rename `foo` to `bar`."
+		if !IsActionableComment(f, nil) {
+			t.Errorf("a %s that opens with a marker was filtered out", kind)
+		}
+	}
+	// A person quoting a marker mid-comment is still asking.
+	if !IsActionableComment(comment("Why does the <!-- preview --> comment say failed?"), nil) {
+		t.Error("a question mentioning a marker was filtered out")
+	}
+}
+
 func TestMergeAndCloseEndTheLoopOnce(t *testing.T) {
 	for _, state := range []string{StateMerged, StateClosed} {
 		cur := open

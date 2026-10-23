@@ -141,9 +141,18 @@ func isBot(author string) bool {
 // IsBot says a login is a bot's: its comments never wake a fixer.
 func IsBot(author string) bool { return isBot(author) }
 
+// isStatusComment: a conversation comment that opens with an HTML comment
+// marker is a tool's status comment, kept up to date in place ("review in
+// progress", a preview environment's controls), whatever account posts it.
+// A person does not start a request that way. Reviews and line comments are
+// never status comments: a tool asking for a change does it there.
+func isStatusComment(f Feedback) bool {
+	return f.Kind == KindComment && strings.HasPrefix(strings.TrimSpace(f.Body), "<!--")
+}
+
 // IsActionableComment decides whether one piece of feedback asks for a change.
 func IsActionableComment(f Feedback, factoryLogins []string) bool {
-	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" || Own(f) {
+	if isBot(f.Author) || strings.TrimSpace(f.Body) == "" || Own(f) || isStatusComment(f) {
 		return false
 	}
 	// The factory's own comments are not feedback on the factory's work.
