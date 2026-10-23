@@ -285,6 +285,13 @@ func TestGoldenResumeRounds(t *testing.T) {
 		PRFeedback: []forge.ActionableFeedback{{Source: "review", Repo: "api", Path: "main.go", Author: "ana", Body: "Rename it.", ID: "c1"}}}
 	golden(t, "resume-fix-from-implementer", FixRoundMessage(from, to, true, fixIn))
 	golden(t, "resume-fix-from-fixer", FixRoundMessage(from, to, false, PromptInput{Findings: goldenFindings()[:1]}))
+	// A resumed fixer's failing checks: its init does not run again, so no
+	// check names a file, whatever the input says.
+	golden(t, "resume-fix-checks", FixRoundMessage(from, to, false, PromptInput{PRFeedback: []forge.ActionableFeedback{{
+		Source: "checks", Repo: "api", Body: "A check failed on the head.", Checks: []forge.FailingCheck{
+			{Name: "e2e", Log: "FAIL e2e", Path: "/workspace/.dude/checks/api-e2e.log", FileKiB: 41},
+			{Name: "lint", Unread: "the log is empty"},
+		}}}}))
 	in := goldenTask()
 	in.Category = "correctness"
 	in.ReviewBase, in.ReviewOf, in.Findings = map[string]string{"api": "aaa111"}, RangeSinceLastRound, goldenFindings()
