@@ -202,3 +202,34 @@ func TestOrgSessionAHandoverRacingTheRemovalOfItsInvitee(t *testing.T) {
 		})
 	}
 }
+
+// Taken over while the departed owner's handover is still pending: the
+// invitation is an ordinary one from then on (not an ownership offer in the
+// invitee's list), and accepting it makes them a chat member.
+func TestOrgSessionTakeOwnershipVoidsAPendingHandover(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/owner", map[string]any{"person": s.joao})
+	s.ownerLeaves(id)
+	s.ok(s.admin, "POST", "/internal/sessions/"+id+"/take-ownership", nil)
+	if n := s.count(`SELECT count(*) FROM session_people WHERE session_id = $1 AND person_id = $2 AND becomes_owner`, id, s.joao); n != 0 {
+		t.Errorf("the departed owner's handover is still pending")
+	}
+	invited := false
+	for _, inv := range s.ok(s.joao, "GET", "/internal/sessions", nil)["invitations"].([]any) {
+		if i := inv.(map[string]any); i["id"] == id {
+			invited = true
+			if i["becomesOwner"] != false {
+				t.Errorf("João's invitation still reads as an ownership offer: %v", i)
+			}
+		}
+	}
+	if !invited {
+		t.Errorf("João's invitation is not listed")
+	}
+	s.ok(s.joao, "POST", "/internal/sessions/"+id+"/accept", nil)
+	if status, role, member := s.role(s.joao, id); status != 200 || role != "chat" || !member {
+		t.Errorf("João after accepting: %d %q member=%v", status, role, member)
+	}
+}
