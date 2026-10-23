@@ -95,6 +95,33 @@ func TestAResumedRoundLuxTimesOutMidTurnIsHeldForAReplay(t *testing.T) {
 	}
 }
 
+// A held round the delivery no longer waits on (a person stopped the task
+// meanwhile) cannot be replaced in its slot: the sweep fails it as lux's
+// time limit fails a Run, not kept, and the hold is gone.
+func TestAHeldRoundTheDeliveryNoLongerWaitsOnFails(t *testing.T) {
+	w := timeLimitWorld(t, "resume", false)
+	w.luxState("stopping")
+	w.feed(processExited)
+	w.luxState("failed")
+	if _, err := w.s.advance(context.Background(), w.swept()); err != nil {
+		t.Fatal(err)
+	}
+	status, timedOut, failed := w.held()
+	var keep bool
+	if err := w.owner.QueryRow(context.Background(), `SELECT keep FROM runs WHERE id = $1`, w.run.ID).Scan(&keep); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || keep || timedOut || failed != 1 {
+		t.Fatalf("status %s, keep %v, held %v, %d run.failed; want failed once, not kept, not held", status, keep, timedOut, failed)
+	}
+	if p := w.failedWith(); p["luxStop"] != "timeout" {
+		t.Errorf("run.failed %v, want luxStop timeout", p)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND continues_how = 'replay'`, w.run.TaskID); n != 0 {
+		t.Errorf("%d replays made, want none", n)
+	}
+}
+
 // luxState is lux's state event for the Run's first placement, with reason
 // timeout, applied and saved in one batch as the follower does.
 func (w *harnessWorld) luxState(state string) {
@@ -109,4 +136,29 @@ func (w *harnessWorld) luxState(state string) {
 	}); err != nil {
 		w.t.Fatal(err)
 	}
+}
+
+// swept is the Run as the sweep takes it up.
+func (w *harnessWorld) swept() phaseRun {
+	w.t.Helper()
+	runs, err := w.s.due(context.Background())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	for _, r := range runs {
+		if r.ID == w.run.ID {
+			return r
+		}
+	}
+	w.t.Fatalf("the sweep does not take up %s", w.run.ID)
+	return phaseRun{}
+}
+
+func (w *harnessWorld) count(sql string, args ...any) int {
+	w.t.Helper()
+	var n int
+	if err := w.owner.QueryRow(context.Background(), sql, args...).Scan(&n); err != nil {
+		w.t.Fatal(err)
+	}
+	return n
 }
