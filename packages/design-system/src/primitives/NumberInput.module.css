@@ -4,10 +4,13 @@
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-4);
-  /* Its inline size is a container's: with no floor it collapses to its
-     padding in a shrinking flex row (a SettingRow's control). Room for the
-     − and + and a few digits. */
-  min-inline-size: calc(var(--ds-size-control-md) * 4);
+  /* Its inline size is contained (a container), so with no intrinsic size
+     it would collapse to its padding in a shrinking flex row (a
+     SettingRow's control). Room for the − and + and a few digits as its
+     intrinsic size, not a floor: a grid track narrower than that (a
+     FormRow in a phone dialog) still shrinks it. */
+  contain-intrinsic-inline-size: calc(var(--ds-size-control-md) * 4);
+  min-width: 0;
   container-type: inline-size;
 }
 
