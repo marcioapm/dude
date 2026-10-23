@@ -46,6 +46,8 @@ A round that changed more than 300 lines, or one GitHub cannot measure, runs the
 
 Change both under **Settings → Delivery → Reviewers every round runs** and **Not product**.
 
+The default `**/*.md` makes every Markdown file non-product, wherever it is. A project that ships Markdown as behaviour (prompt templates, help pages, content the product renders) should replace the list with one that leaves those out, for example `.github/**`, `docs/**`, `README.md` and `**/README.md`. A glob cannot exclude a path, so the list has to name what is non-product rather than carve out what is not.
+
 ## Which findings block
 
 A finding has a severity: Blocking, High, Medium, Low or Note. By default, **Blocking** and **High** findings send the work back to the fixer. Lower severities go into the pull request for a person to weigh.
