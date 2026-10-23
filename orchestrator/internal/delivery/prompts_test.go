@@ -422,8 +422,13 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 			t.Errorf("the tester's contract lacks %q", want)
 		}
 	}
-	if !strings.Contains(testerTools, "1920×1080 viewport") {
-		t.Error("the tester does not record at 1920×1080 by default")
+	// What a person needs to follow a tester's video, and the tools it must not assume.
+	for _, want := range []string{"1920×1080 viewport", "records no mouse pointer", "its own walkthrough recorder",
+		"Do in the UI every step a criterion is about", "already installed", "if narration fails once, keep the video captioned but silent",
+		"mark each sped-up part", "without one, leave the waits in"} {
+		if !strings.Contains(testerTools, want) {
+			t.Errorf("the tester's tools lack %q", want)
+		}
 	}
 }
 
