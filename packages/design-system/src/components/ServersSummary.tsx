@@ -51,9 +51,11 @@ export interface ServersSummaryRowProps extends Omit<HTMLAttributes<HTMLLIElemen
   readonly onRestart?: (() => void) | undefined;
   /** The app's own way to open the URL, as ServerRow's: a plain left click on the link or Preview; false leaves it to the link. */
   readonly onOpen?: ((url: string) => boolean) | undefined;
+  /** The eye Preview's accessible name while `onOpen` handles it; else "Preview <name> (opens in a new tab)". */
+  readonly openLabel?: string | undefined;
 }
 
-export function ServersSummaryRow({ name, state, stateLabel, url, detail, onStart, onRestart, onOpen, className, ...rest }: ServersSummaryRowProps) {
+export function ServersSummaryRow({ name, state, stateLabel, url, detail, onStart, onRestart, onOpen, openLabel, className, ...rest }: ServersSummaryRowProps) {
   const ready = state === "ready";
   const href = safeServerUrl(url);
   const open = ready && href ? openLinkWith(onOpen, href) : undefined;
@@ -65,7 +67,7 @@ export function ServersSummaryRow({ name, state, stateLabel, url, detail, onStar
         {ready && href ? <a href={href} target="_blank" rel="noopener noreferrer" title={href} onClick={open} data-testid="server-url">{bareUrl(href)}</a> : detail}
       </span>
       {ready && href ? (
-        <LinkButton href={href} size="sm" iconOnly leadingIcon="eye" label={`Preview ${name}${open ? "" : " (opens in a new tab)"}`} external={false} target="_blank" rel="noopener noreferrer"
+        <LinkButton href={href} size="sm" iconOnly leadingIcon="eye" label={open && openLabel ? openLabel : `Preview ${name} (opens in a new tab)`} external={false} target="_blank" rel="noopener noreferrer"
           onClick={open} data-testid="server-preview" />
       ) : state === "unreachable" && onRestart ? (
         <IconButton size="sm" icon="retry" label={`Restart ${name}`} onClick={onRestart} />

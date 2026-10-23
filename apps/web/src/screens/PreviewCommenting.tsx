@@ -154,7 +154,7 @@ export function CommentingNote({ control }: { control: PreviewCommentingControl 
   if (offer.kind !== "available" || offer.servers.length === 0) return null;
   return (
     <span data-testid="commenting-links">
-      A server's link here opens the preview with dude's comment tool: pick an element, say what should change, and it lands in your drafts. A modified click opens a plain tab.
+      Opening a ready preview server's link here starts dude's comment tool; what you save lands in your drafts. Ctrl- or ⌘-click opens a plain tab.
     </span>
   );
 }

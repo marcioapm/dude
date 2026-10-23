@@ -127,7 +127,7 @@ test("the session names this tab's window, valid by the protocol, the same name 
   post({ type: "hello", v: 1, url: `${WEB}/cart` });
   const session = told().find((m) => m.type === "session");
   const name = session?.type === "session" ? session.dudeWindow : undefined;
-  expect(name).toMatch(/^dude-tab-[a-z0-9]+$/);
+  expect(name).toMatch(/^dude-tab-[a-z0-9]{10}$/);
   expect(window.name).toBe(name!);
   expect(overlaySessionSchema.safeParse(session).success).toBe(true);
   // Another task's commenting in the same tab, or the page reloaded, keeps the name an open preview already holds.
@@ -146,7 +146,7 @@ test("a tab named something else (by a page script, a link's target) is named an
   c.open(`${WEB}/cart`, "web");
   post({ type: "hello", v: 1, url: `${WEB}/cart` });
   const session = told().find((m) => m.type === "session");
-  expect(session?.type === "session" && session.dudeWindow).toMatch(/^dude-tab-/);
+  expect(session?.type === "session" && session.dudeWindow).toMatch(/^dude-tab-[a-z0-9]{10}$/);
   expect(window.name).toBe((session as { dudeWindow: string }).dudeWindow);
 });
 

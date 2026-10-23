@@ -96,7 +96,7 @@ async function press(el: Element, init: MouseEventInit = {}): Promise<boolean> {
 
 // A ready server's links: on the Servers tab its URL, its open icon and Preview; on the Overview its URL and Preview.
 const LINKS = {
-  servers: ['[data-testid="server-url"]', '[data-server="web"] a[aria-label^="Open"]', '[data-testid="server-preview"]'],
+  servers: ['[data-testid="server-url"]', '[data-server="web"] [data-testid="server-open"]', '[data-testid="server-preview"]'],
   overview: ['[data-testid="servers-summary"] [data-testid="server-url"]', '[data-testid="servers-summary"] [data-testid="server-preview"]'],
 } as const;
 
@@ -162,7 +162,7 @@ test("there is no Comment button: the Servers tab says its links open the commen
   const c = await page(new PreviewClient([web()]), "servers");
   await until(() => c.querySelector('[data-testid="server-preview"]'), "Preview");
   expect(c.querySelectorAll('[data-testid="comment-on-server"]').length).toBe(0);
-  expect(c.querySelector('[data-testid="commenting-links"]')!.textContent).toContain("opens the preview with dude's comment tool");
+  expect(c.querySelector('[data-testid="commenting-links"]')!.textContent).toContain("starts dude's comment tool");
   for (const u of mounted.splice(0)) await u();
   const o = await page(new PreviewClient([web()]), "overview");
   await until(() => o.querySelector('[data-testid="servers-summary"] [data-testid="server-preview"]'), "the Overview's Preview");
@@ -189,6 +189,22 @@ test("with commenting off the links are plain links to a new tab, and the reason
       }
       for (const u of mounted.splice(0)) await u();
     }
+  }
+});
+
+test("with commenting on, the open icon, Preview and the Overview's eye say they open the comment tool; off, a new tab", async () => {
+  const phrase = "Preview web (opens the preview window with the comment tool)";
+  for (const [on, servers] of [[true, [web()]], [false, [web({ commenting: { available: false, reason: "lux" } })]]] as const) {
+    const s = await page(new PreviewClient([...servers]), "servers");
+    const icon = await until(() => s.querySelector('[data-server="web"] [data-testid="server-open"]'), "the open icon");
+    const preview = s.querySelector('[data-server="web"] [data-testid="server-preview"]')!;
+    expect([on, icon.getAttribute("aria-label"), icon.getAttribute("title"), preview.getAttribute("title")])
+      .toEqual(on ? [on, phrase, phrase, phrase] : [on, "Open in a new tab", "Opens in a new tab", "Opens in a new tab"]);
+    for (const u of mounted.splice(0)) await u();
+    const o = await page(new PreviewClient([...servers]), "overview");
+    const eye = await until(() => o.querySelector('[data-testid="servers-summary"] [data-testid="server-preview"]'), "the Overview's eye");
+    expect([on, eye.getAttribute("aria-label")]).toEqual([on, on ? phrase : "Preview web (opens in a new tab)"]);
+    for (const u of mounted.splice(0)) await u();
   }
 });
 
@@ -239,7 +255,7 @@ test("a card's Page link on a page commenting can't reach stays a plain link", a
   const cases: Array<[string, RunServer[], string]> = [
     ["commenting off", [web({ commenting: { available: false, reason: "public_url" } })], `${WEB}/cart`],
     ["an earlier preview's hostname", [web()], "https://web-old-1.preview.example.test/cart"],
-    ["a server not ready yet", [web({ state: "starting", serverState: "starting" })], `${WEB}/cart`],
+    ["a server not ready yet", [web({ state: "starting", serverState: "waking" })], `${WEB}/cart`],
   ];
   for (const [what, servers, url] of cases) {
     const open = stubOpen();

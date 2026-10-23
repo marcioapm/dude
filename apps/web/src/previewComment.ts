@@ -23,6 +23,9 @@ export const COMMENTING_UNAVAILABLE: Readonly<Record<"public_url" | "lux", strin
   lux: "Commenting on previews needs lux v0.1.32 or later",
 };
 
+/** The accessible name of a server's Preview while its links open the commenting window. */
+export const commentingLinkLabel = (server: string): string => `Preview ${server} (opens the preview window with the comment tool)`;
+
 /** How long a window dude opened has to say hello before the notice says the preview is not answering. */
 export const HELLO_WAIT_MS = 10_000;
 
@@ -38,7 +41,9 @@ export const HELLO_WAIT_MS = 10_000;
 export function nameTab(win: Pick<Window, "name">): string | null {
   try {
     if (win.name.startsWith("dude-tab-") && overlayWindowName(win.name)) return win.name;
-    const name = `dude-tab-${Math.random().toString(36).slice(2, 12)}`;
+    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    // 36 does not divide 256 evenly; the slight bias is harmless for a name that only needs to differ per tab.
+    const name = `dude-tab-${Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => alphabet[b % 36]).join("")}`;
     win.name = name;
     return win.name === name ? name : null;
   } catch {

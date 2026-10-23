@@ -2340,8 +2340,8 @@ MarkdownCheatsheet.
   application's way: it handles plain left clicks on the URL, its open icon
   and Preview when it returns true; false leaves the link's default intact.
   Modified clicks and middle-click remain the browser's. All remain real
-  `<a href>` links. The former `besidePreview` slot is removed: Preview and
-  the URL now share the same opener rather than offering a separate Comment.
+  `<a href>` links. `openLabel` names the open icon and titles both links
+  while `onOpen` handles them; without it they say "in a new tab".
 - **ServersRunLine / ServersPanel** — the run the servers live on as a
   line, and the panel: the task's Servers tab (a container: under 560px,
   a phone, its rows stack). An agent session has no servers panel; its servers
@@ -2359,7 +2359,8 @@ MarkdownCheatsheet.
   grammar. `ServersSummaryRow.onOpen(url)` has the same contract as
   `ServerRow.onOpen`: plain left clicks on the URL and eye Preview call it;
   true handles the click, false leaves it to the link. Without it, links
-  open in a new tab as before.
+  open in a new tab. `openLabel` is the eye's accessible name while
+  `onOpen` handles it.
 - **ServerRecipeTable / ServerRecipeDialog / EnvVarRows / HostChips** —
   project settings: the definitions, the editor with validation in words,
   and a preview's egress allowlist as chips. `HostChips readOnly` lists

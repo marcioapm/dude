@@ -38,6 +38,7 @@ import type { LogLine } from "@dude/design-system/components";
 import type { ApiClient } from "../api/client.ts";
 import { runIsLive, type ServersState } from "../hooks/useServers.ts";
 import { usePeople } from "../people.tsx";
+import { commentingLinkLabel } from "../previewComment.ts";
 import { AddServerDialog } from "./AddServerDialog.tsx";
 import { WaitingForHost } from "../waiting.tsx";
 
@@ -182,7 +183,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
       <ServersPanel
         data-testid="servers-panel"
         data-run={run.kind}
-        note={commenting?.note ?? undefined}
+        note={commenting?.note}
       >
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
         {wakeable && run.error ? <Callout tone="attention" data-testid="preview-error">{run.error}</Callout> : null}
@@ -215,6 +216,7 @@ export const ServersSection = memo(function ServersSection({ client, servers, ta
                 url={s.url}
                 busy={rowBusy}
                 onOpen={commenting?.linkFor(s.name)}
+                openLabel={commentingLinkLabel(s.name)}
                 onStart={live && s.command ? () => void servers.start(s.name) : undefined}
                 onStop={live ? () => void servers.stop(s.name) : undefined}
                 onRestart={live && s.command ? () => void servers.restart(s.name) : undefined}

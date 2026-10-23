@@ -12,6 +12,7 @@ import { anyMoving, describeServer, formatTimestamp, useNow } from "@dude/design
 import { Button } from "@dude/design-system/primitives";
 import type { ApiClient } from "../api/client.ts";
 import { runIsLive, type ServersState } from "../hooks/useServers.ts";
+import { commentingLinkLabel } from "../previewComment.ts";
 
 export function ServersAside({ client, taskId, servers, onAll, linkFor, commentingOff }: {
   client: ApiClient; taskId: string; servers: ServersState; onAll: () => void;
@@ -61,7 +62,7 @@ export function ServersAside({ client, taskId, servers, onAll, linkFor, commenti
         return (
           <ServersSummaryRow key={s.name} name={s.name} state={words.state} stateLabel={words.label} url={s.url} detail={words.detail}
             onStart={live && s.command ? () => void servers.start(s.name) : undefined}
-            onRestart={live && s.command ? () => void servers.restart(s.name) : undefined} onOpen={linkFor?.(s.name)} />
+            onRestart={live && s.command ? () => void servers.restart(s.name) : undefined} onOpen={linkFor?.(s.name)} openLabel={commentingLinkLabel(s.name)} />
         );
       })}
     </ServersSummary>
