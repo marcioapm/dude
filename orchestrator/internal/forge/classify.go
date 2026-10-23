@@ -143,7 +143,8 @@ func IsBot(author string) bool { return isBot(author) }
 
 // isStatusComment: a conversation comment opening with an HTML comment marker
 // is a tool's status comment, edited in place ("review in progress"), whatever
-// account posts it. Reviews and line comments never are: a tool asks there.
+// account posts it; a person does not start a request that way. Reviews and
+// line comments never are: a tool asks there.
 func isStatusComment(f Feedback) bool {
 	return f.Kind == KindComment && strings.HasPrefix(strings.TrimSpace(f.Body), "<!--")
 }
@@ -170,8 +171,8 @@ func IsActionableComment(f Feedback, factoryLogins []string) bool {
 //
 // Most of what happens on a PR — an approval, a green check, a bot comment,
 // a tool's status comment — only updates state. Two things are worth waking a
-// fixer for: a person asking for a change, and a check that turned red; and one is worth
-// stopping for a person: the branch turning conflicting. Returns nil
+// fixer for: a person asking for a change, and a check that turned red; and
+// one is worth stopping for a person: the branch turning conflicting. Returns nil
 // otherwise, which is the common case and the reason this exists.
 //
 // feedback is what may wake a fixer: its authors already passed the
