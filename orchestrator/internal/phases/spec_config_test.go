@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 )
@@ -79,6 +80,14 @@ url = "http://10.0.0.7:3200/"
 	c, err = LoadAgentConfig(settings(t, map[string]string{"DUDE_CONFIG": path, "DUDE_AGENT_NESTED_CONTAINERS": "false"}))
 	if err != nil || c.NestedContainers {
 		t.Errorf("env false over file true: nested = %v, %v", c.NestedContainers, err)
+	}
+	// What a next round weighs its predecessor's time left against is the
+	// limit its Runs are submitted with.
+	if got := c.TimeLimit(); got != 48*time.Hour {
+		t.Errorf("time limit %v, want the file's 48h", got)
+	}
+	if got := (AgentConfig{}).TimeLimit(); got != 4*time.Hour {
+		t.Errorf("unset time limit %v, want DefaultTimeout's 4h", got)
 	}
 }
 
