@@ -2806,3 +2806,61 @@ densities.
 - **Redaction shows as `[REDACTED:NAME]`** in the transcript, tool output
   and diffs, as dude stored it; nothing styles it. The redaction note says
   it is defence in depth, not a guarantee.
+
+## Automations
+
+`src/components/Automations.tsx`: `KindMark`, `ScopeChip`, `OwnerMark`,
+`TriggerSummary`, `SessionMark`, `ListSwitch`, `NextRuns`, `DayToggles`,
+`SchedulePicker`, `ChipsInput`, `RepoFilterField`, and the helpers
+`describeCron`, `scheduleOf`, `cronOf`, `repoGlob`, `repoFilterCount`,
+`cityOf`. Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
+`#au-schedule`, `#au-chips`, `#au-repo-filter`), in both themes and
+densities. No tone of their own: an automation's state is its runs'
+(`StatusMark`), so `paletteDistance` is untouched.
+
+- **KindMark** (`kind`, `role?`): the kind as glyph and word (Agent,
+  Command, Server, Webhook only); an agent that is one of dude's roles adds
+  "· Tester" in muted text.
+- **ScopeChip** (`org`, `project?`): where an automation lives, a building
+  glyph for the organisation or a folder and the project's name, on the
+  neutral tint at the chip height.
+- **OwnerMark** (`owner`, `org`, `avatarOnly?`, `left?`): who owns an
+  automation — `PersonAvatar` and name, or only the avatar with the name for
+  screen readers (list cells). `left` (or no owner): the organisation's
+  admins hold it — a building glyph in info tone and "Acme's admins".
+- **TriggerSummary** (`trigger`): one line. A schedule in words when it is a
+  preset ("Daily at 03:00", "Weekdays at 09:30", "Every 15 minutes") else
+  the cron line, then the zone's city muted; an event in mono and its
+  actions, or "any action".
+- **SessionMark** (`mode`, `expiryDays?`): Ephemeral, or Resumable and its
+  expiry in days.
+- **ListSwitch** (`checked`, `onCheckedChange`, `label`): the settings
+  `Switch`'s track and thumb with no words beside it, for a list row. Its
+  accessible name is "<label>: on/off"; a press does not open the row.
+- **NextRuns** (`times`, `tz`): the next runs as a list of `time`s in the
+  schedule's zone; none says it never runs.
+- **DayToggles** (`days`, `onChange`): seven pressed/unpressed buttons,
+  Monday first; the last one on cannot be turned off.
+- **SchedulePicker** (`cron`, `tz`, `zones`, `onChange`, `next?`,
+  `problem?`): a `Segmented` Minutes / Hourly / Daily / Weekly / cron, the
+  mode's fields (every N minutes, minute of the hour, time, days, or the
+  cron line in mono), and the time zone. `next` is shown under it (the
+  app's `NextRuns`, from the orchestrator's parser); `problem` is an alert
+  line in danger text, and marks the cron field invalid.
+- **ChipsInput** (`values`, `onChange`, `label`, `matches?`,
+  `suggestions?`): filter values as chips in a field box. Enter or comma
+  adds, Backspace in an empty field takes the last back, each chip has a
+  Remove button named for its value. A chip with `*` is info-toned and,
+  with `matches`, counts what it matches. With `suggestions` the field is
+  a combobox whose listbox (raised surface, `shadow-1`) groups values by
+  heading, filtered by what is typed.
+- **RepoFilterField** (`value`, `onChange`, `org`, `groups`, `disabled?`):
+  which of the organisation's repositories an organisation automation
+  covers. A `Segmented` picks All repositories in <org>, Only these or All
+  except these; the last two show a `ChipsInput` of owner/name values and
+  globs (`acme/svc-*`), suggested from the projects' repositories grouped by
+  project. Under it a status line: "Matches N of M repositories" (", and
+  any added later" on All).
+- **Settings rows stack below 720px.** `SettingRow` puts its label over its
+  control and `SettingsHeader`'s actions wrap under the title, so a page's
+  Run now and switch never squeeze its title on a phone.
