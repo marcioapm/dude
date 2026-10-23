@@ -85,6 +85,9 @@ type Store struct {
 	// The dude CLI is served in agents' containers (phases.AgentConfig's
 	// ToolsService): a resumed fixer's round message names it only then.
 	ToolsService bool
+	// The running time lux gives a phase Run (phases.AgentConfig's
+	// TimeLimit), for timeSpentTx; zero checks nothing.
+	RunTimeLimit time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).
@@ -157,6 +160,9 @@ type PhaseRun struct {
 	// Go on from the previous round of this phase and category
 	// (continueOrCreateTx); nil starts fresh, as a restart always does.
 	Continue *Continue
+	// A test round: the previous round a resumed tester may carry
+	// criteria from (State.CarryFrom), "" for none.
+	CarryFrom string
 	// Set by continueOrCreateTx: the predecessor whose conversation a
 	// fresh Run is given (runs.continues_run_id, how 'replay'), and why a
 	// Run asked to go on starts fresh, for its run.created.
@@ -164,6 +170,8 @@ type PhaseRun struct {
 	freshReason string
 	// Store.ToolsService, for a resumed fixer's round message.
 	toolsService bool
+	// Store.RunTimeLimit, for continueOrCreateTx.
+	timeLimit time.Duration
 }
 
 // ReviewRange is the range a review covers: from Base, per repository,
@@ -182,6 +190,7 @@ type ReviewRange struct {
 func (s *Store) CreatePhaseRun(ctx context.Context, org string, in PhaseRun) (string, error) {
 	var runID string
 	in.toolsService = s.ToolsService
+	in.timeLimit = s.RunTimeLimit
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		runID, err = createPhaseRunTx(ctx, tx, org, in)
 		return err
@@ -275,6 +284,7 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		return "", fmt.Errorf("task %s: %w", in.TaskID, err)
 	}
 	feedback, _ := json.Marshal(db.NonNil(in.PRFeedback))
+	checkLogs, _ := json.Marshal(CheckLogsOf(in.PRFeedback))
 	bases, _ := json.Marshal(nonNilMap(in.BaseRefs))
 	var reviewRange []byte
 	if in.ReviewRange != nil && len(in.ReviewRange.Base) > 0 {
@@ -290,14 +300,14 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
 		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override,
-		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how)
+		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how, check_logs)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23)`,
+		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23, $24::jsonb)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
 		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
-		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how); err != nil {
+		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how, checkLogs); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {

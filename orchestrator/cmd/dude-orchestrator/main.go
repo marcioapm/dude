@@ -89,6 +89,17 @@ func main() {
 	}
 }
 
+// deliveryStore is the workflow's delivery store, with what it takes from
+// the agent configuration: ToolsService and the phase Runs' time limit.
+func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) *delivery.Store {
+	limit := agent.TimeLimit()
+	if limit <= 0 {
+		log.Warn("agent.timeout is not a Go duration: next rounds resume their predecessor's lux Run whatever time it has left",
+			"timeout", agent.Timeout)
+	}
+	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
+}
+
 func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -133,7 +144,7 @@ func run(log *slog.Logger) error {
 	// Test fixtures serve HTTP API and git daemon on distinct gateway ports.
 	forges := forge.Resolver{DB: database, TestGitHost: os.Getenv("DUDE_TEST_GITHUB_GIT_HOST")}
 	runtime := workflow.New(database, fmt.Sprintf("orchestrator-%s-%d", host, os.Getpid()), log)
-	store := &delivery.Store{DB: database, ToolsService: agent.ToolsService}
+	store := deliveryStore(database, agent, log)
 	runtime.Register(delivery.Workflow(store, forges))
 
 	signalWorkflow := func(ctx context.Context, org, wf, name string, payload any, key string) error {

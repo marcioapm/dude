@@ -1,6 +1,7 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { shortId } from "../util/format.ts";
+import { openLinkWith } from "../util/openLink.ts";
 import { bareUrl, canStop, safeServerUrl, type TaskServersSummary } from "../util/servers.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button, IconButton, LinkButton } from "../primitives/Button.tsx";
@@ -55,8 +56,15 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
   readonly onRestart?: (() => void) | undefined;
   /** The row's overflow menu (the app's RowMenu). */
   readonly menu?: ReactNode;
-  /** Right after Preview: another way to open the page (Comment), or why there is none. */
-  readonly besidePreview?: ReactNode;
+  /**
+   * The app's own way to open the URL (dude: the task's preview window,
+   * with its comment tool). A plain left click on the URL, its open icon or
+   * Preview calls it; true means it opened, false leaves the click to the
+   * link. Modified clicks always go to the browser.
+   */
+  readonly onOpen?: ((url: string) => boolean) | undefined;
+  /** The open icon's accessible name and title, and Preview's title, while `onOpen` handles them; else "in a new tab". */
+  readonly openLabel?: string | undefined;
   readonly logs?: ServerLogs | undefined;
   /** An action is in flight: the buttons wait. */
   readonly busy?: boolean | undefined;
@@ -65,14 +73,16 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
 /**
  * One server: its name and port in mono, its state and what that means,
  * its URL to copy or open, and what can be done to it — Preview (the URL,
- * in a new tab) while it is ready, Logs always, Stop or Start by its state, a menu for the rest.
+ * in a new tab, or by `onOpen`) while it is ready, Logs always, Stop or Start by its state, a menu for the rest.
  * Its log folds open under the row, titled `server:<name>`.
  */
 export function ServerRow({
-  name, port, state, stateLabel, mark, detail, error, url, urlSlot, onStart, onStop, onRestart, menu, besidePreview, logs, busy, className, ...rest
+  name, port, state, stateLabel, mark, detail, error, url, urlSlot, onStart, onStop, onRestart, menu, onOpen, openLabel, logs, busy, className, ...rest
 }: ServerRowProps) {
   const live = state === "ready";
   const href = safeServerUrl(url);
+  const open = href && live ? openLinkWith(onOpen, href) : undefined;
+  const custom = open ? openLabel : undefined;
   return (
     <li className={className} {...rest}>
       <div className={cx(styles["row"], logs?.open && styles["open"])} data-server={name} data-state={state}>
@@ -90,17 +100,16 @@ export function ServerRow({
             <div className={cx(styles["url"], styles["off"])}>{urlSlot}</div>
           ) : url ? (
             <div className={cx(styles["url"], !live && styles["off"])}>
-              {href ? <a href={href} target="_blank" rel="noopener noreferrer" title={url} tabIndex={live ? undefined : -1}>{bareUrl(url)}</a> : <span title={url}>{url}</span>}
+              {href ? <a href={href} target="_blank" rel="noopener noreferrer" title={url} tabIndex={live ? undefined : -1} onClick={open} data-testid="server-url">{bareUrl(url)}</a> : <span title={url}>{url}</span>}
               <IconButton size="sm" icon="copy" label="Copy URL" onClick={() => void navigator.clipboard?.writeText(url)} />
-              {live && href ? <a className={styles["openLink"]} href={href} target="_blank" rel="noopener noreferrer" aria-label="Open in a new tab" title="Open in a new tab"><Icon name="external" size={16} /></a> : null}
+              {live && href ? <a className={styles["openLink"]} href={href} target="_blank" rel="noopener noreferrer" aria-label={custom ?? "Open in a new tab"} title={custom ?? "Opens in a new tab"} onClick={open} data-testid="server-open"><Icon name="external" size={16} /></a> : null}
             </div>
           ) : null}
         </div>
         <div className={styles["actions"]}>
           {live && href ? (
-            <LinkButton href={href} size="sm" variant="secondary" leadingIcon="eye" external={false} target="_blank" rel="noopener noreferrer" title="Opens in a new tab" data-testid="server-preview">Preview</LinkButton>
+            <LinkButton href={href} size="sm" variant="secondary" leadingIcon="eye" external={false} target="_blank" rel="noopener noreferrer" title={custom ?? "Opens in a new tab"} onClick={open} data-testid="server-preview">Preview</LinkButton>
           ) : null}
-          {besidePreview}
           {logs ? (
             <Button size="sm" variant="quiet" trailingIcon={logs.open ? "chevron-up" : "chevron-down"} aria-expanded={logs.open} onClick={logs.onToggle} data-testid="server-logs">
               Logs

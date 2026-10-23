@@ -50,9 +50,9 @@ func TestRoundCompareFailuresAndCaching(t *testing.T) {
 			st := &State{TaskID: "wi_c", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"repo": "bbb", "second": "bbb"}}
 			sc := workflow.StepContext{WorkflowRunID: "wfr_delta", OrganizationID: f.org}
 			if status == 200 {
-				lines, err := f.steps.s.DeltaLines(f.ctx, f.org, "wi_c", nil, map[string]string{"repo": "aaa"}, st.Heads)
-				if err != nil || lines != MaxResumeDeltaLines+1 {
-					t.Fatalf("nil credential delta=%d error=%v", lines, err)
+				change, err := f.steps.s.RoundDelta(f.ctx, f.org, "wi_c", nil, map[string]string{"repo": "aaa"}, st.Heads)
+				if err != nil || change.Measured || change.deltaLines() != MaxResumeDeltaLines+1 {
+					t.Fatalf("nil credential change=%+v error=%v", change, err)
 				}
 			}
 			c, err := f.steps.goesOn(context.Background(), sc, st, PhaseReview)("correctness")

@@ -28,7 +28,7 @@ import requests
 from playwright.sync_api import BrowserType, Page, expect
 
 from env import FAKE_PUBLIC_URL
-from helpers import ApiClient, provision_person, sign_in, wait_until
+from helpers import ApiClient, browser_channel, provision_person, sign_in, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -121,8 +121,8 @@ def _shoot(page: Page, name: str) -> None:
 
 
 def _open_comment(ctx, page: Page) -> Page:
-    """Comment on the Servers tab, and the preview window it opens, connected to dude."""
-    comment = page.get_by_test_id("comment-on-server").first
+    """The Servers tab's server URL clicked, and the preview window it opens with the comment tool, connected to dude."""
+    comment = page.get_by_test_id("server-url").first
     expect(comment).to_be_visible(timeout=20_000)
     with ctx.expect_page() as opened:
         comment.click()
@@ -135,7 +135,7 @@ def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> di
     """The servers read showing the preview again, its web server ready: the web server as it says.
 
     Submitting the draft starts a delivery, and while its agents work the
-    servers read is their Run, where dude offers no Comment. Once they are
+    servers read is their Run, where dude's links open no comment tool. Once they are
     done the read is the preview's again; one that went to sleep meanwhile is
     woken as a visitor would.
     """
@@ -179,12 +179,12 @@ def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_col
                         {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task, web = _ready_preview(client, env, forge_project, "Comment on the checkout")
     assert web["commenting"] == {"available": True} and web["needsRestart"] is False, web
-    browser = browser_type.launch(channel="chrome", headless=True, args=LAUNCH_ARGS)
+    browser = browser_type.launch(**browser_channel(), headless=True, args=LAUNCH_ARGS)
     try:
         ctx, errors = _context(browser, web, web_url, env)
         page = ctx.new_page()
         sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}/servers")
-        # The existing Preview link still drops the opener.
+        # A plain click opens the commenting window with its opener; a modified click is the browser's, and that tab drops the opener.
         expect(page.get_by_test_id("server-preview").first).to_have_attribute("rel", "noopener noreferrer")
         pv = _open_comment(ctx, page)
         expect(page.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")

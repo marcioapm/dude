@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from playwright.sync_api import Page, expect
 
 from helpers import ApiClient, execute, query, sign_in, wait_until
@@ -109,6 +110,7 @@ def test_the_conductor_is_told_once_and_restarts_the_stalled_reviewer(client: Ap
     assert len(stalled_wakes) == 1, [e["payload"]["text"] for e in stalled_wakes]
 
 
+@pytest.mark.ui
 def test_an_owner_restarts_a_stalled_reviewer_from_its_banner(page: Page, web_url: str, client: ApiClient, org: dict,
                                                              forge_project: dict, owner_dsn: str, console_errors: list):
     models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/stall"})}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import secrets
 import time
@@ -265,6 +266,22 @@ def lux_stamp(value: str | None):
     from datetime import datetime
 
     return None if value is None else datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+# ---------------------------------------------------------------------------
+# Browser
+# ---------------------------------------------------------------------------
+
+
+def browser_channel() -> dict[str, str]:
+    """The `channel` Playwright launches the browser with, as launch kwargs.
+
+    System Chrome by default, as CI runs. DUDE_TEST_BROWSER_CHANNEL names
+    another channel; set but empty, Playwright's bundled Chromium (no
+    channel), for a host Google ships no Chrome for, such as Linux arm64.
+    """
+    channel = os.environ.get("DUDE_TEST_BROWSER_CHANNEL", "chrome")
+    return {"channel": channel} if channel else {}
 
 
 # ---------------------------------------------------------------------------

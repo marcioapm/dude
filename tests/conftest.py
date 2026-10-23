@@ -14,7 +14,7 @@ import requests
 from playwright.sync_api import Page
 
 from env import TestEnvironment
-from helpers import ApiClient, create_api_key, create_organization, execute, wait_until, webhook_secret
+from helpers import ApiClient, browser_channel, create_api_key, create_organization, execute, wait_until, webhook_secret
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -22,6 +22,20 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "lux: runs against a real lux (opt-in with --lux)")
     config.addinivalue_line("markers", "e2e: runs against the real control-plane/orchestrator stack")
     config.addinivalue_line("markers", "both_luxes: runs against the fake lux, and with --lux against the real one")
+
+
+# The fixtures that open a browser. A test asking for one is a UI test
+# whether or not it says so, so `--no-ui` (-m "not ui") leaves it out on a
+# host with no browser instead of erroring in its setup.
+BROWSER_FIXTURES = frozenset({"page", "context", "browser", "browser_type", "browser_context_args"})
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    # tryfirst: before pytest's own -m deselection reads the marks.
+    for item in items:
+        if BROWSER_FIXTURES.intersection(getattr(item, "fixturenames", ())) and not item.get_closest_marker("ui"):
+            item.add_marker(pytest.mark.ui)
 
 
 @pytest.fixture(scope="session")
@@ -95,12 +109,15 @@ def project(client: ApiClient) -> dict:
 
 @pytest.fixture(scope="session")
 def browser_type_launch_args(browser_type_launch_args):
-    """Use the system Chrome.
+    """Use the system Chrome, unless DUDE_TEST_BROWSER_CHANNEL says otherwise.
 
-    Playwright's bundled Chromium has no build for this platform, and pinning
-    to the installed browser keeps CI and local runs on the same engine.
+    Pinning to the installed browser keeps CI and local runs on the same
+    engine. Google ships no Chrome for Linux arm64, where
+    `DUDE_TEST_BROWSER_CHANNEL=` (empty) runs Playwright's bundled Chromium
+    (helpers.browser_channel).
     """
-    return {**browser_type_launch_args, "channel": "chrome"}
+    args = {k: v for k, v in browser_type_launch_args.items() if k != "channel"}
+    return {**args, **browser_channel()}
 
 
 @pytest.fixture(scope="session")

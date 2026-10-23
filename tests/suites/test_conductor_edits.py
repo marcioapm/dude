@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
@@ -51,6 +52,7 @@ def _woken_with(client: ApiClient, task_id: str, words: str) -> bool:
     return bool(_woken_texts(client, task_id, words))
 
 
+@pytest.mark.ui
 def test_the_conductor_edits_publishes_and_is_reviewed(page: Page, web_url: str, client: ApiClient, org: dict, owner_dsn: str,
                                                       forge_project: dict, fake_github: FakeGitHub, console_errors: list):
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}

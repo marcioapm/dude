@@ -153,9 +153,9 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: The E2E shard split
+      - name: The E2E harness's own checks (shard split, browser channel, ui auto-mark)
         working-directory: tests
-        run: uv run pytest suites/test_shard.py -q
+        run: uv run pytest suites/test_shard.py suites/test_harness.py -q
 
   e2e:
     runs-on: ubuntu-26.04

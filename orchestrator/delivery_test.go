@@ -310,6 +310,9 @@ func scriptedPolicy() delivery.Policy {
 	p.RequiredReviewers = []string{"correctness"}
 	p.Test = false // the world's project pins it off; the gate's tests turn it on
 	p.ResumeRounds = false
+	// The scripted writers' files (FIXED.md, SIMPLE.md) stand for product
+	// changes: only CI configuration is outside the product here.
+	p.NonProductPaths = []string{".github/**"}
 	return p
 }
 
@@ -3879,6 +3882,242 @@ func TestAFixerIsToldAnActionsJobsFailureLog(t *testing.T) {
 		}
 		return false
 	})
+}
+
+// (a) JERV-1's check: a Node 20 deprecation warning, the exit code's
+// failure and a runner-label notice. The fixer's check carries the job
+// log's end, failure line included, and neither warning nor notice.
+func TestAFixerOfAJobWithWarningsIsToldItsLog(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+	})
+	w.gh.SetJobLog(77, "2026-10-23T09:12:01.123Z ruff check .\n"+
+		"2026-10-23T09:12:02.123Z app/backup.py:14:5: F841 Local variable `rows` is assigned to but never used\n"+
+		"2026-10-23T09:12:03.123Z ##[error]Process completed with exit code 1.\n"+
+		"2026-10-23T09:12:04.123Z Post job cleanup.\n", downloads.URL)
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	var feedback []forge.ActionableFeedback
+	var raw []byte
+	_ = w.owner.QueryRow(context.Background(), `SELECT pr_feedback FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, wi).Scan(&raw)
+	if err := json.Unmarshal(raw, &feedback); err != nil || len(feedback) != 1 || len(feedback[0].Checks) != 1 {
+		t.Fatalf("pr_feedback %s: %v", raw, err)
+	}
+	c := feedback[0].Checks[0]
+	if !strings.Contains(c.Log, "F841 Local variable `rows`") || !strings.HasSuffix(c.Log, "##[error]Process completed with exit code 1.") {
+		t.Errorf("the check's log is not the job log's end: %+v", c)
+	}
+	for _, noise := range []string{"Node.js 20", "ubuntu-latest", "warning", "notice", "Post job cleanup"} {
+		if strings.Contains(c.Log, noise) {
+			t.Errorf("the check's log holds %q:\n%s", noise, c.Log)
+		}
+	}
+}
+
+// failingCheckFix makes check 77 of an open pull request an Actions job of
+// run's annotations and log, fails it, and returns the fix's stored check
+// and its prompt once the fix reaches lux.
+func failingCheckFix(t *testing.T, w *world, run fakegithub.CheckRun, log string, set func(*fakegithub.Server)) (forge.FailingCheck, string) {
+	t.Helper()
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: run} })
+	w.gh.SetJobLog(77, log, downloads.URL)
+	if set != nil {
+		w.gh.Set(set)
+	}
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	var prompt string
+	w.until("the fix to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "fix" && strings.Contains(spec.Workload.Prompt, "Pull request feedback") {
+				prompt = spec.Workload.Prompt
+				return true
+			}
+		}
+		return false
+	})
+	var raw []byte
+	_ = w.owner.QueryRow(context.Background(), `SELECT pr_feedback FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, wi).Scan(&raw)
+	var feedback []forge.ActionableFeedback
+	if err := json.Unmarshal(raw, &feedback); err != nil || len(feedback) != 1 || len(feedback[0].Checks) != 1 {
+		t.Fatalf("pr_feedback %s: %v", raw, err)
+	}
+	return feedback[0].Checks[0], prompt
+}
+
+// (c) A job log GitHub refuses (no Actions: Read) or has expired: the fix
+// still starts, its check says why, and the fixer's prompt says so in one
+// sentence with what to do instead. GitHub's own words, which here echo
+// the token, reach neither.
+func TestAFixerIsToldWhyAJobsLogCouldNotBeRead(t *testing.T) {
+	for status, why := range map[int]string{http.StatusForbidden: "GitHub refused: no Actions: Read permission",
+		http.StatusGone: "the log has expired"} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			w := newWorld(t)
+			c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+				s.LogStatus, s.LogMessage = status, "Resource not accessible by integration (token ghp_test)"
+			})
+			if c.Unread != why || c.Log != ".github:243: failure: Process completed with exit code 1." {
+				t.Errorf("check %+v", c)
+			}
+			sentence := "dude could not read this job's log (" + why + "), so reproduce the failure locally from the workflow file"
+			if !strings.Contains(prompt, sentence) {
+				t.Errorf("the prompt does not say why:\n%s", prompt)
+			}
+			var events string
+			if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(string_agg(payload::text, ' '), '') FROM events
+				WHERE organization_id = $1`, w.org).Scan(&events); err != nil || events == "" {
+				t.Fatalf("events: %v", err)
+			}
+			for where, text := range map[string]string{"prompt": prompt, "check": c.Unread + c.Log, "events": events} {
+				if strings.Contains(text, "ghp_test") || strings.Contains(text, "Resource not accessible") {
+					t.Errorf("GitHub's words reached the %s", where)
+				}
+			}
+		})
+	}
+}
+
+// (d) A 5xx on the log read does not fail the step: the fix starts, with
+// the check run's words and that GitHub was unavailable.
+func TestAFixerIsToldGitHubWasUnavailableForAJobsLog(t *testing.T) {
+	w := newWorld(t)
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+		s.LogStatus = http.StatusBadGateway
+	})
+	if c.Unread != "GitHub was unavailable" || !strings.Contains(prompt, "dude could not read this job's log (GitHub was unavailable)") {
+		t.Errorf("check %+v\n%s", c, prompt)
+	}
+}
+
+// A log whose download hop fails after GitHub's redirect: the signed
+// blob URL in the redirect (its sig a bearer credential) reaches no log
+// line, no stored check and no prompt.
+func TestASignedLogURLIsNeverLogged(t *testing.T) {
+	logs := &lockedBuffer{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	w := newWorld(t)
+	w.syncer.Log = slog.New(slog.NewTextHandler(logs, nil))
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+		s.LogHost, s.LogSignature = gone.URL, "SECRET"
+	})
+	if c.Unread != "GitHub was unavailable" {
+		t.Errorf("check %+v", c)
+	}
+	if !strings.Contains(logs.String(), "reading a failing check's log failed") {
+		t.Fatalf("the failed read was not logged:\n%s", logs)
+	}
+	var events string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(string_agg(payload::text, ' '), '') FROM events
+		WHERE organization_id = $1`, w.org).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	for where, text := range map[string]string{"logs": logs.String(), "prompt": prompt, "check": c.Log + c.Unread + c.Full, "events": events} {
+		if strings.Contains(text, "SECRET") {
+			t.Errorf("the signature reached the %s:\n%s", where, text)
+		}
+	}
+}
+
+// (e) A fix Run's spec writes the end of its failing check's job log, up
+// to 64 KiB and cleaned, to /workspace/.dude/checks/<repo>-<check>.log; the
+// prompt keeps a 4000-byte excerpt, quoted as external text, and names the
+// file.
+func TestAFixRunsWorkspaceHoldsItsChecksLog(t *testing.T) {
+	var log strings.Builder
+	for i := 0; log.Len() < 200<<10; i++ {
+		fmt.Fprintf(&log, "2026-10-23T09:12:01.123Z \x1b[32mtests/test_%d.py PASSED\x1b[0m\n", i)
+	}
+	log.WriteString("2026-10-23T09:12:02.123Z E       AssertionError: 3 != 2\n" +
+		"2026-10-23T09:12:03.123Z ##[error]Process completed with exit code 1.\n2026-10-23T09:12:04.123Z Post job cleanup.\n")
+	w := newWorld(t)
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), log.String(), nil)
+	if len(c.Log) > 4000+len("…\n") || !strings.HasSuffix(c.Log, "##[error]Process completed with exit code 1.") {
+		t.Errorf("the prompt's excerpt is %d bytes:\n%s", len(c.Log), c.Log)
+	}
+	var spec lux.Spec
+	for _, r := range w.lux.Runs() {
+		var s lux.Spec
+		_ = json.Unmarshal(r.Spec, &s)
+		if s.Labels["dude.phase"] == "fix" && s.Workload.Prompt == prompt {
+			spec = s
+		}
+	}
+	if spec.Init == nil {
+		t.Fatal("the fix's spec has no init")
+	}
+	dir := t.TempDir()
+	if out, err := exec.Command("/bin/sh", "-c", strings.ReplaceAll(spec.Init.Script, "/workspace/", dir+"/")).CombinedOutput(); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, ".dude", "checks", "target-e2e.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > 64<<10 || len(got) < 60<<10 || !strings.HasSuffix(string(got), "E       AssertionError: 3 != 2\n##[error]Process completed with exit code 1.\n") ||
+		!strings.HasPrefix(string(got), "tests/test_") || strings.ContainsAny(string(got), "\x1b") || strings.Contains(string(got), "2026-10-23T") {
+		t.Errorf("the log file is %d bytes, starting %q, ending %q", len(got), got[:min(80, len(got))], got[max(0, len(got)-120):])
+	}
+	if !strings.Contains(prompt, "The last 64 KiB of this job's log is at `/workspace/.dude/checks/target-e2e.log`: read it") ||
+		!strings.Contains(prompt, "⟦external ") || strings.Contains(prompt, "tests/test_0.py") {
+		t.Errorf("the prompt:\n%s", prompt)
+	}
+	// The 64 KiB tail lives in runs.check_logs alone: the rows the phase
+	// sweep and the workflow runtime read and rewrite stay small.
+	var feedbackMax, stateMax, fixes, withLogs int
+	if err := w.owner.QueryRow(context.Background(), `SELECT
+			COALESCE((SELECT max(length(pr_feedback::text)) FROM runs WHERE organization_id = $1), 0),
+			COALESCE((SELECT max(length(state::text)) FROM workflow_runs WHERE organization_id = $1), 0),
+			(SELECT count(*) FROM runs WHERE organization_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb),
+			(SELECT count(*) FROM runs WHERE organization_id = $1 AND phase = 'fix' AND length(check_logs::text) > 60000)`,
+		w.org).Scan(&feedbackMax, &stateMax, &fixes, &withLogs); err != nil {
+		t.Fatal(err)
+	}
+	if feedbackMax >= 16384 || stateMax >= 16384 || fixes != 1 || withLogs != 1 {
+		t.Errorf("pr_feedback up to %d bytes, workflow state up to %d; %d fix Runs, %d holding the log tail",
+			feedbackMax, stateMax, fixes, withLogs)
+	}
+
+	// A restarted fix Run is a new row: it carries the tail, since
+	// pr_feedback no longer holds it.
+	var fix string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE organization_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, w.org).Scan(&fix); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := w.do("POST", "/internal/runs/"+fix+"/restart", map[string]any{"note": "again"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	var fresh string
+	if err := w.owner.QueryRow(context.Background(), `SELECT replaced_by FROM runs WHERE id = $1`, fix).Scan(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	var carried int
+	if err := w.owner.QueryRow(context.Background(), `SELECT length(check_logs::text) FROM runs WHERE id = $1`, fresh).Scan(&carried); err != nil {
+		t.Fatal(err)
+	}
+	if carried < 60000 {
+		t.Errorf("the restarted fix Run %s holds %d bytes of check_logs, want the tail", fresh, carried)
+	}
 }
 
 // An approved pull request with a thread left unresolved is not ready.

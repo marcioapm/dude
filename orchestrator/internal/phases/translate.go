@@ -626,11 +626,16 @@ func (t *translator) ended(ctx context.Context, tx pgx.Tx, s *Syncer, state, rea
 	var setup *SetupFailure
 	switch {
 	case stop != nil:
-		why = luxStopWords(*stop, s.timeout())
-		agentErr := ""
+		failure, agentErr := "", ""
 		if broken != nil {
-			why += "; " + broken.Error
-			agentErr = broken.AgentError
+			failure, agentErr = broken.Error, broken.AgentError
+		}
+		if held, err := t.holdTimedOut(ctx, tx, *stop, failure, agentErr); held || err != nil {
+			return err
+		}
+		why = luxStopWords(*stop, s.timeout())
+		if failure != "" {
+			why += "; " + failure
 		}
 		if lux.Moved(stop.Reason) {
 			// A move lux ended the Run at instead (a resumePolicy that does

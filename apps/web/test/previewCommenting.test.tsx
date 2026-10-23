@@ -1,8 +1,9 @@
 /**
- * Commenting on the branch preview, on the task page: Comment where a
- * ready preview server is, the reason in its place when commenting is
- * off, Restart for a server serving its pages without the overlay, the
- * notice while a window is open, and Show on preview on a preview card.
+ * Commenting on the branch preview, on the task page: every link to a
+ * commentable server opening it in the task's window, the reason when
+ * commenting is off (and plain links then), Restart for a server serving
+ * its pages without the overlay, the notice while a window is open, and
+ * Show on preview and the Page link on a preview card.
  */
 
 import { afterEach, expect, mock, test } from "bun:test";
@@ -59,41 +60,163 @@ async function page(client: FixtureClient, tab: "servers" | "feedback" | "overvi
   return container;
 }
 
-test("Comment sits beside Preview on a ready preview server and opens the task's named window without noopener", async () => {
-  const client = new PreviewClient([web()]);
-  const open = mock((_url: string, _name?: string, _features?: string) => ({ postMessage() {}, closed: false, focus() {} }));
-  (window as unknown as { open: unknown }).open = open;
-  const c = await page(client, "servers");
-  const button = await until(() => c.querySelector('[data-testid="comment-on-server"][data-server="web"]'), "Comment on web");
-  await click(button);
-  expect(open).toHaveBeenCalledWith(WEB, `dude-preview-${TASK_ID}`);
-  expect(open.mock.calls[0]!.length).toBe(2);
-  // The notice says a window is open.
-  const notice = await until(() => c.querySelector('[data-testid="commenting-notice"]'), "the commenting notice");
-  expect(notice.textContent).toContain("Commenting on web");
-  // The existing Preview link is unchanged.
-  expect(c.querySelector('[data-testid="server-preview"]')!.getAttribute("rel")).toBe("noopener noreferrer");
-});
+/**
+ * window.open stubbed; `dude` is what dude opened in the task's window. happy-dom
+ * follows a link a click left alone with window.open(href, "_blank", …), which
+ * `browser` records: a modified or plain-link click lands there.
+ */
+function stubOpen() {
+  const dude: Array<[string, string]> = [];
+  const browser: string[] = [];
+  // One window for the task's name, as a browser gives back the same named window.
+  const win = { postMessage() {}, closed: false, focused: 0, focus() { win.focused++; } };
+  (window as unknown as { open: unknown }).open = (url: string, name?: string) => {
+    if (name === `dude-preview-${TASK_ID}`) dude.push([url, name]);
+    else browser.push(url);
+    return win;
+  };
+  return { dude, browser, win };
+}
 
-test("with commenting off there is no Comment: the reason is said in its place", async () => {
-  for (const [reason, words] of [["public_url", "Commenting on previews needs auth.public_url"], ["lux", "Commenting on previews needs lux v0.1.32 or later"]] as const) {
-    const client = new PreviewClient([web({ commenting: { available: false, reason } })]);
-    const c = await page(client, "servers");
-    const off = await until(() => c.querySelector('[data-testid="commenting-unavailable"]'), "the reason");
-    expect(off.textContent).toBe(words);
-    expect(c.querySelectorAll('[data-testid="comment-on-server"]').length).toBe(0);
-    for (const u of mounted.splice(0)) await u();
-    // The Overview's servers and the Feedback tab's way in say the same, with no Comment.
-    for (const tab of ["overview", "feedback"] as const) {
-      const t = await page(new PreviewClient([web({ commenting: { available: false, reason } })]), tab);
-      const where = tab === "overview" ? '[data-testid="servers-summary"] [data-testid="commenting-unavailable"]' : '[data-testid="preview-way-in"] [data-testid="commenting-unavailable"]';
-      const said = await until(() => t.querySelector(where), `the reason on ${tab}`);
-      expect([tab, said.textContent]).toEqual([tab, words]);
-      expect([tab, t.querySelectorAll('[data-testid="comment-on-preview"]').length]).toEqual([tab, 0]);
-      expect([tab, t.querySelectorAll('button[data-testid="preview-way-in"]').length]).toEqual([tab, 0]);
+/** The overlay in the task's window saying hello from `url`. */
+async function hello(win: object, url: string) {
+  await act(async () => {
+    window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 1, url }, origin: WEB, source: win as unknown as MessageEventSource }));
+  });
+}
+
+/** A click as a person's, with the modifiers given: whether the link's default (the browser opening it) went ahead. */
+async function press(el: Element, init: MouseEventInit = {}): Promise<boolean> {
+  let followed = false;
+  await act(async () => {
+    followed = el.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...init }));
+  });
+  return followed;
+}
+
+// A ready server's links: on the Servers tab its URL, its open icon and Preview; on the Overview its URL and Preview.
+const LINKS = {
+  servers: ['[data-testid="server-url"]', '[data-server="web"] [data-testid="server-open"]', '[data-testid="server-preview"]'],
+  overview: ['[data-testid="servers-summary"] [data-testid="server-url"]', '[data-testid="servers-summary"] [data-testid="server-preview"]'],
+} as const;
+
+test("every link to a commentable server opens it in the task's named window without noopener, and stays a real link", async () => {
+  for (const tab of ["servers", "overview"] as const) {
+    for (const sel of LINKS[tab]) {
+      const open = stubOpen();
+      const c = await page(new PreviewClient([web()]), tab);
+      const link = await until(() => c.querySelector(sel), `${sel} on ${tab}`);
+      // A real <a href>: middle-click and copy address still have the URL.
+      expect([sel, link.localName, link.getAttribute("href")]).toEqual([sel, "a", WEB]);
+      expect([sel, await press(link)]).toEqual([sel, false]);
+      expect([sel, open.dude, open.browser]).toEqual([sel, [[WEB, `dude-preview-${TASK_ID}`]], []]);
+      const notice = await until(() => c.querySelector('[data-testid="commenting-notice"]'), "the commenting notice");
+      expect(notice.textContent).toContain("Commenting on web");
       for (const u of mounted.splice(0)) await u();
     }
   }
+});
+
+test("a modified click on a server's link is the browser's: dude opens nothing", async () => {
+  const open = stubOpen();
+  const c = await page(new PreviewClient([web()]), "servers");
+  const link = await until(() => c.querySelector('[data-testid="server-preview"]'), "Preview");
+  for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }]) {
+    expect([init, await press(link, init)]).toEqual([init, true]);
+  }
+  // A middle click (auxclick in a browser) never reaches onClick; one dispatched as a click with button 1 is the browser's too.
+  expect(await press(link, { button: 1 })).toBe(true);
+  expect(open.dude).toEqual([]);
+});
+
+test("a second click on a server's link brings the open window forward instead of reloading it", async () => {
+  const open = stubOpen();
+  const c = await page(new PreviewClient([web()]), "servers");
+  const link = await until(() => c.querySelector('[data-testid="server-preview"]'), "Preview");
+  expect(await press(link)).toBe(false);
+  await hello(open.win, `${WEB}/checkout`);
+  await until(() => c.querySelector('[data-testid="commenting-notice"][data-state="open"]'), "the open notice");
+  const focused = open.win.focused;
+  for (const sel of LINKS.servers) expect([sel, await press(c.querySelector(sel)!)]).toEqual([sel, false]);
+  expect([open.dude, open.browser]).toEqual([[[WEB, `dude-preview-${TASK_ID}`]], []]);
+  expect(open.win.focused).toBe(focused + LINKS.servers.length);
+});
+
+test("a card's Page link brings the window forward when it is on that page, and navigates it to another", async () => {
+  const client = new PreviewClient([web()]);
+  client.feedbackItems.push(previewDraft("fbk_a", `${WEB}/cart?step=2`), previewDraft("fbk_b", `${WEB}/checkout`));
+  const open = stubOpen();
+  const c = await page(client, "feedback");
+  const pageLink = (id: string) => c.querySelector(`[data-id="${id}"] [data-testid="fb-preview-page"]`)!;
+  await until(() => c.querySelector('[data-id="fbk_b"] [data-testid="fb-preview-page"]'), "the Page links");
+  expect(await press(pageLink("fbk_a"))).toBe(false);
+  // The window is on /cart without the query: the same page, so fbk_a's link brings it forward.
+  await hello(open.win, `${WEB}/cart`);
+  const focused = open.win.focused;
+  expect(await press(pageLink("fbk_a"))).toBe(false);
+  expect([open.dude.length, open.win.focused]).toEqual([1, focused + 1]);
+  expect(await press(pageLink("fbk_b"))).toBe(false);
+  expect([open.dude, open.browser]).toEqual([[[`${WEB}/cart?step=2`, `dude-preview-${TASK_ID}`], [`${WEB}/checkout`, `dude-preview-${TASK_ID}`]], []]);
+});
+
+test("there is no Comment button: the Servers tab says its links open the comment tool", async () => {
+  const c = await page(new PreviewClient([web()]), "servers");
+  await until(() => c.querySelector('[data-testid="server-preview"]'), "Preview");
+  expect(c.querySelectorAll('[data-testid="comment-on-server"]').length).toBe(0);
+  expect(c.querySelector('[data-testid="commenting-links"]')!.textContent).toContain("starts dude's comment tool");
+  for (const u of mounted.splice(0)) await u();
+  const o = await page(new PreviewClient([web()]), "overview");
+  await until(() => o.querySelector('[data-testid="servers-summary"] [data-testid="server-preview"]'), "the Overview's Preview");
+  expect(o.querySelectorAll('[data-testid="comment-on-preview"]').length).toBe(0);
+});
+
+test("with commenting off the links are plain links to a new tab, and the reason is said on the Servers tab, the Overview and the Feedback tab", async () => {
+  for (const [reason, words] of [["public_url", "Commenting on previews needs auth.public_url"], ["lux", "Commenting on previews needs lux v0.1.32 or later"]] as const) {
+    for (const tab of ["servers", "overview", "feedback"] as const) {
+      const open = stubOpen();
+      const t = await page(new PreviewClient([web({ commenting: { available: false, reason } })]), tab);
+      const where = tab === "feedback" ? '[data-testid="preview-way-in"] [data-testid="commenting-unavailable"]'
+        : `${tab === "overview" ? '[data-testid="servers-summary"]' : '[data-testid="servers-panel"]'} [data-testid="commenting-unavailable"]`;
+      const said = await until(() => t.querySelector(where), `the reason on ${tab}`);
+      expect([tab, said.textContent]).toEqual([tab, words]);
+      expect([tab, t.querySelectorAll('button[data-testid="preview-way-in"]').length]).toEqual([tab, 0]);
+      if (tab !== "feedback") {
+        for (const sel of LINKS[tab]) {
+          const link = t.querySelector(sel)!;
+          expect([tab, sel, link.getAttribute("target"), link.getAttribute("rel")]).toEqual([tab, sel, "_blank", "noopener noreferrer"]);
+          expect([tab, sel, await press(link)]).toEqual([tab, sel, true]);
+        }
+        expect([tab, open.dude, open.browser.length]).toEqual([tab, [], LINKS[tab].length]);
+      }
+      for (const u of mounted.splice(0)) await u();
+    }
+  }
+});
+
+test("with commenting on, the open icon, Preview and the Overview's eye say they open the comment tool; off, a new tab", async () => {
+  const phrase = "Preview web (opens the preview window with the comment tool)";
+  for (const [on, servers] of [[true, [web()]], [false, [web({ commenting: { available: false, reason: "lux" } })]]] as const) {
+    const s = await page(new PreviewClient([...servers]), "servers");
+    const icon = await until(() => s.querySelector('[data-server="web"] [data-testid="server-open"]'), "the open icon");
+    const preview = s.querySelector('[data-server="web"] [data-testid="server-preview"]')!;
+    expect([on, icon.getAttribute("aria-label"), icon.getAttribute("title"), preview.getAttribute("title")])
+      .toEqual(on ? [on, phrase, phrase, phrase] : [on, "Open in a new tab", "Opens in a new tab", "Opens in a new tab"]);
+    for (const u of mounted.splice(0)) await u();
+    const o = await page(new PreviewClient([...servers]), "overview");
+    const eye = await until(() => o.querySelector('[data-testid="servers-summary"] [data-testid="server-preview"]'), "the Overview's eye");
+    expect([on, eye.getAttribute("aria-label")]).toEqual([on, on ? phrase : "Preview web (opens in a new tab)"]);
+    for (const u of mounted.splice(0)) await u();
+  }
+});
+
+test("a server commenting is not about keeps its plain link beside one it is", async () => {
+  const open = stubOpen();
+  const api: RunServer = { ...web(), name: "api", port: 8080, url: "https://api-shop-1.preview.example.test" };
+  delete (api as { commenting?: unknown }).commenting;
+  const c = await page(new PreviewClient([web(), api]), "servers");
+  const link = await until(() => c.querySelector('[data-server="api"] [data-testid="server-preview"]'), "api's Preview");
+  expect(await press(link)).toBe(true);
+  expect([open.dude, open.browser]).toEqual([[], ["https://api-shop-1.preview.example.test/"]]);
 });
 
 test("a server that needs a restart says so, and Restart web restarts it through the existing action", async () => {
@@ -109,14 +232,42 @@ test("a server that needs a restart says so, and Restart web restarts it through
   expect(c.querySelectorAll('[data-testid="commenting-restart"]').length).toBe(0);
 });
 
-test("Overview's servers carry Comment on preview; the Feedback tab its way in", async () => {
-  const client = new PreviewClient([web()]);
-  const c = await page(client, "overview");
-  await until(() => c.querySelector('[data-testid="servers-summary"] [data-testid="comment-on-preview"]'), "Comment on preview");
-  for (const u of mounted.splice(0)) await u();
+test("the Feedback tab keeps its way in", async () => {
   const f = await page(new PreviewClient([web()]), "feedback");
   const wayIn = await until(() => f.querySelector('[data-testid="preview-way-in"]'), "the Feedback tab's way in");
   expect(wayIn.textContent).toContain("Comment on the branch preview");
+});
+
+test("a preview card's Page link opens that page, not the server's root, in the task's window", async () => {
+  const client = new PreviewClient([web()]);
+  client.feedbackItems.push(previewDraft("fbk_p", `${WEB}/cart?step=2`));
+  const open = stubOpen();
+  const c = await page(client, "feedback");
+  const link = await until(() => c.querySelector('[data-id="fbk_p"] [data-testid="fb-preview-page"]'), "the Page link");
+  expect(link.getAttribute("href")).toBe(`${WEB}/cart?step=2`);
+  expect(await press(link)).toBe(false);
+  expect([open.dude, open.browser]).toEqual([[[`${WEB}/cart?step=2`, `dude-preview-${TASK_ID}`]], []]);
+  // A modified click is the browser's.
+  expect(await press(link, { metaKey: true })).toBe(true);
+  expect([open.dude.length, open.browser]).toEqual([1, [`${WEB}/cart?step=2`]]);
+});
+
+test("a card's Page link on a page commenting can't reach stays a plain link", async () => {
+  const cases: Array<[string, RunServer[], string]> = [
+    ["commenting off", [web({ commenting: { available: false, reason: "public_url" } })], `${WEB}/cart`],
+    ["an earlier preview's hostname", [web()], "https://web-old-1.preview.example.test/cart"],
+    ["a server not ready yet", [web({ state: "starting", serverState: "waking" })], `${WEB}/cart`],
+  ];
+  for (const [what, servers, url] of cases) {
+    const open = stubOpen();
+    const client = new PreviewClient(servers);
+    client.feedbackItems.push(previewDraft("fbk_p", url));
+    const c = await page(client, "feedback");
+    const link = await until(() => c.querySelector('[data-id="fbk_p"] [data-testid="fb-preview-page"]'), `the Page link (${what})`);
+    expect([what, await press(link)]).toEqual([what, true]);
+    expect([what, open.dude, open.browser]).toEqual([what, [], [url]]);
+    for (const u of mounted.splice(0)) await u();
+  }
 });
 
 test("a preview card's Show on preview opens its page in the task's window", async () => {
@@ -164,7 +315,7 @@ test("the open preview hears dude's resolved theme in its session, and again whe
     </PeopleProvider></TooltipProvider></ToastProvider></ThemeProvider>,
   );
   mounted.push(async () => { await unmount(); localStorage.removeItem("dude.theme"); });
-  await click(await until(() => c.querySelector('[data-testid="comment-on-server"][data-server="web"]'), "Comment on web"));
+  await press(await until(() => c.querySelector('[data-server="web"] [data-testid="server-preview"]'), "Preview web"));
   await act(async () => {
     window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 1, url: `${WEB}/` }, origin: WEB, source: popup as unknown as MessageEventSource }));
   });

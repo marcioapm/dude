@@ -92,8 +92,8 @@ func TestTheNextReviewerOfTheCategoryIsShownTheQuestion(t *testing.T) {
 			// The section RoundMessage adds for the open question, whatever
 			// its words: the difference with and without it.
 			open := []delivery.EarlierQuestion{{Question: "Do invoices close in UTC or in the organisation's zone?", Status: "open"}}
-			section := inserted(delivery.RoundMessage(delivery.PhaseReview, nil, nil, "", nil, nil, nil),
-				delivery.RoundMessage(delivery.PhaseReview, nil, nil, "", nil, open, nil))
+			section := inserted(delivery.RoundMessage(delivery.PhaseReview, nil, nil, "", nil, nil, nil, ""),
+				delivery.RoundMessage(delivery.PhaseReview, nil, nil, "", nil, open, nil, ""))
 			if section == "" || !strings.Contains(section, open[0].Question) {
 				t.Fatalf("RoundMessage renders no section for an open question: %q", section)
 			}

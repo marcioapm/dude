@@ -128,6 +128,12 @@ func restartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	}
 	var prFeedback []forge.ActionableFeedback
 	_ = json.Unmarshal(feedback, &prFeedback)
+	// The replaced Run's log tails go with its checks to the new one.
+	var checkLogs map[string]string
+	if err := tx.QueryRow(ctx, `SELECT check_logs FROM runs WHERE id = $1`, in.RunID).Scan(&checkLogs); err != nil {
+		return "", err
+	}
+	prFeedback = WithCheckLogs(prFeedback, checkLogs)
 	newID, err := createPhaseRunTx(ctx, tx, org, PhaseRun{
 		TaskID: taskID, Phase: phase, WorkflowID: d.WorkflowID, BaseRefs: d.State.Heads, ParentRunID: d.State.HeadRunID, Attempt: attempt,
 		Category: category, FindingIDs: findingIDs, BlockingSeverities: blocking, PRFeedback: prFeedback,

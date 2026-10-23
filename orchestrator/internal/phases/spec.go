@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/config"
@@ -71,6 +72,13 @@ type AgentConfig struct {
 
 // DefaultTimeout is a phase Run's hard limit when none is configured.
 const DefaultTimeout = "4h"
+
+// TimeLimit is the Timeout every phase Run is submitted with, as a
+// duration; zero when it is not a Go duration.
+func (c AgentConfig) TimeLimit() time.Duration {
+	d, _ := time.ParseDuration(cmp.Or(c.Timeout, DefaultTimeout))
+	return d
+}
 
 // LoadAgentConfig reads the agent configuration from the resolved settings.
 func LoadAgentConfig(cfg *config.Config) (AgentConfig, error) {
@@ -152,6 +160,9 @@ type specInput struct {
 	// The Run's instruction file (delivery.Instructions), written into
 	// /workspace by its init script on every placement; "" writes none.
 	Instructions string
+	// A fix Run's failing checks' job logs, as checkLogsInit writes them
+	// into /workspace/.dude/checks after the instruction file; "" for none.
+	CheckLogs string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
 	Repos      []specRepo

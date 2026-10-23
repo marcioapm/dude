@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 import { FEEDBACK_LIMITS, FEEDBACK_STATUSES, previewAnchorInput } from "./feedback.ts";
-import { OVERLAY_LIMITS, OVERLAY_THEMES, type OverlayTheme, type OverlayToDude } from "./previewOverlayProtocol.ts";
+import { OVERLAY_LIMITS, OVERLAY_THEMES, overlayWindowName, type OverlayTheme, type OverlayToDude } from "./previewOverlayProtocol.ts";
 
 export * from "./previewOverlayProtocol.ts";
 
@@ -42,13 +42,15 @@ const overlayPinSchema = z.object({
 
 /**
  * What dude's session message to the overlay may be: strict, `theme` one of
- * OVERLAY_THEMES or absent. dude builds it itself; this holds it to the
- * protocol (the overlay, which bundles no zod, guards the same by hand).
+ * OVERLAY_THEMES or absent, `dudeWindow` an overlayWindowName or absent.
+ * dude builds it itself; this holds it to the protocol (the overlay, which
+ * bundles no zod, guards the same by hand).
  */
 export const overlaySessionSchema = z.object({
   type: z.literal("session"), v: v1, task: z.string().max(100), url: pageUrl,
   pins: z.array(overlayPinSchema).max(OVERLAY_LIMITS.pins), drafts: z.number().int().nonnegative(), showPins: z.boolean(),
   theme: z.enum(OVERLAY_THEMES as [OverlayTheme, ...OverlayTheme[]]).optional(),
+  dudeWindow: z.string().refine(overlayWindowName, "a window name").optional(),
 }).strict();
 
 const MAX_ENTRIES = 2_000;

@@ -10,19 +10,22 @@
 package delivery
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
 )
 
-// Verdict statuses. A tester may report the first four; unverified is
-// dude's, for a pass whose evidence is not there.
+// Verdict statuses. A tester may report the first four and carried;
+// unverified is dude's, for a pass whose evidence is not there. Carried
+// is never recorded: dude records the verdict it carries, or blocked.
 const (
 	VerdictPass          = "pass"
 	VerdictFail          = "fail"
 	VerdictBlocked       = "blocked"
 	VerdictNotApplicable = "not-applicable"
 	VerdictUnverified    = "unverified"
+	VerdictCarried       = "carried"
 )
 
 // Acceptance is one criterion as the tester reported it.
@@ -37,6 +40,8 @@ type Acceptance struct {
 	Reported string
 	Evidence []string
 	Observed string
+	// A carried criterion's: the test Run whose verdict it keeps.
+	FromRound string
 }
 
 /*
@@ -66,7 +71,8 @@ func ParseAcceptance(output string) []Acceptance {
 			continue
 		}
 		a := Acceptance{Criterion: n, Check: fields["check"], Status: acceptanceStatus(fields["status"]),
-			Evidence: evidenceNames(fields["evidence"]), Observed: fields["observed"]}
+			Evidence: evidenceNames(fields["evidence"]), Observed: fields["observed"],
+			FromRound: strings.Trim(strings.TrimSpace(fields["from_round"]), "`\"'")}
 		if a.Status == VerdictBlocked && !strings.EqualFold(strings.TrimSpace(fields["status"]), VerdictBlocked) {
 			a.Reported = fields["status"]
 		}
@@ -90,6 +96,8 @@ func acceptanceStatus(s string) string {
 		return VerdictFail
 	case "not-applicable", "not applicable", "not_applicable", "n/a", "na":
 		return VerdictNotApplicable
+	case "carried":
+		return VerdictCarried
 	}
 	return VerdictBlocked
 }
@@ -123,13 +131,27 @@ type CriterionVerdict struct {
 	Problem string `json:"problem,omitempty"`
 	// A person's decision on it: waived or accepted.
 	Decision string `json:"decision,omitempty"`
+	// The earlier test Run whose pass this verdict carries forward.
+	CarriedFrom string `json:"carriedFrom,omitempty"`
+}
+
+// Carry is what a carried criterion may rest on: the test round the Run
+// resumed and its recorded verdicts, by criterion. Descends says that
+// round is this attempt's previous one and this round's heads descend from
+// its checkouts (State.CarryFrom). A nil Carry is a round that resumed
+// none: it tests every criterion.
+type Carry struct {
+	RunID    string
+	Descends bool
+	Verdicts map[int]CriterionVerdict
 }
 
 // JudgeAcceptance is the verdict on each criterion: the tester's report
-// checked against what the Run published (by name). With criteria, every
-// one has a verdict, blocked when unreported; without, each check the
-// tester derived does, and none at all is one blocked check of the goal.
-func JudgeAcceptance(criteria []string, reported []Acceptance, published map[string]bool) []CriterionVerdict {
+// checked against what the Run published (by name), and a carried one
+// against carry. With criteria, every one has a verdict, blocked when
+// unreported; without, each check the tester derived does, and none at
+// all is one blocked check of the goal.
+func JudgeAcceptance(criteria []string, reported []Acceptance, published map[string]bool, carry *Carry) []CriterionVerdict {
 	byN := map[int]Acceptance{}
 	for _, a := range reported {
 		byN[a.Criterion] = a
@@ -143,7 +165,7 @@ func JudgeAcceptance(criteria []string, reported []Acceptance, published map[str
 					Problem: "The tester reported nothing on this criterion."})
 				continue
 			}
-			out = append(out, checked(i+1, text, a, published))
+			out = append(out, checked(i+1, text, a, published, carry))
 		}
 		return out
 	}
@@ -152,7 +174,7 @@ func JudgeAcceptance(criteria []string, reported []Acceptance, published map[str
 		if text == "" {
 			text = fmt.Sprintf("Check %d", a.Criterion)
 		}
-		out = append(out, checked(a.Criterion, text, a, published))
+		out = append(out, checked(a.Criterion, text, a, published, carry))
 	}
 	if len(out) == 0 {
 		out = append(out, CriterionVerdict{Criterion: 1, Text: "The task's goal", Status: VerdictBlocked,
@@ -161,7 +183,7 @@ func JudgeAcceptance(criteria []string, reported []Acceptance, published map[str
 	return out
 }
 
-func checked(n int, text string, a Acceptance, published map[string]bool) CriterionVerdict {
+func checked(n int, text string, a Acceptance, published map[string]bool, carry *Carry) CriterionVerdict {
 	v := CriterionVerdict{Criterion: n, Text: text, Status: a.Status, Evidence: a.Evidence, Observed: a.Observed}
 	if v.Evidence == nil {
 		v.Evidence = []string{}
@@ -169,6 +191,8 @@ func checked(n int, text string, a Acceptance, published map[string]bool) Criter
 	switch {
 	case a.Reported != "":
 		v.Problem = fmt.Sprintf("The tester's status %q is not one dude reads; taken as blocked.", a.Reported)
+	case a.Status == VerdictCarried:
+		return carried(v, a, carry)
 	case a.Status == VerdictPass && len(a.Evidence) == 0:
 		v.Status, v.Problem = VerdictUnverified, "A pass that names no evidence."
 	case a.Status == VerdictPass:
@@ -182,4 +206,48 @@ func checked(n int, text string, a Acceptance, published map[string]bool) Criter
 		v.Status, v.Problem = VerdictBlocked, "Not applicable, without a reason."
 	}
 	return v
+}
+
+// carried is a criterion the tester kept from its previous round: that
+// round's verdict on it, with its evidence and any person's decision, when
+// the round may carry (carry), names that round, and gives a reason, and
+// the verdict it keeps is a pass, a not-applicable with its reason, a
+// waiver or an acceptance, of the criterion as it reads now. Anything else
+// is blocked: dude, not the tester, says what a carried verdict is.
+func carried(v CriterionVerdict, a Acceptance, carry *Carry) CriterionVerdict {
+	v.Status = VerdictBlocked
+	if carry == nil {
+		v.Problem = "Carried, but this round tests every criterion afresh: nothing carries into it."
+		return v
+	}
+	prev, ok := carry.Verdicts[v.Criterion]
+	switch {
+	case a.FromRound != carry.RunID:
+		v.Problem = fmt.Sprintf("Carried from %q, which is not this tester's previous round %s.", a.FromRound, carry.RunID)
+	case !carry.Descends:
+		v.Problem = fmt.Sprintf("Carried, but this round's commits do not descend from those %s tested: nothing it judged carries.", carry.RunID)
+	case strings.TrimSpace(a.Observed) == "":
+		v.Problem = "Carried without a reason why the change cannot affect it."
+	case !ok || prev.Status != VerdictPass && !carriesNotApplicable(prev) && prev.Decision == "":
+		v.Problem = fmt.Sprintf("Carried, but %s did not pass it: it must be tested again.", carry.RunID)
+	case prev.Text != v.Text:
+		// Criteria edited while the task was stopped, or a derived check
+		// renumbered: the verdict was on another statement.
+		v.Problem = fmt.Sprintf("Carried, but criterion %d changed since %s judged it: it must be tested again.", v.Criterion, carry.RunID)
+	default:
+		v.Status, v.Evidence, v.Decision = prev.Status, prev.Evidence, prev.Decision
+		if carriesNotApplicable(prev) {
+			// Why it does not apply is what makes the verdict.
+			v.Observed = prev.Observed
+		}
+		// The Run whose files the evidence names, through any earlier carry.
+		v.CarriedFrom = cmp.Or(prev.CarriedFrom, carry.RunID)
+	}
+	return v
+}
+
+// carriesNotApplicable: a previous not-applicable verdict with its reason,
+// which carries as a pass does.
+func carriesNotApplicable(prev CriterionVerdict) bool {
+	return prev.Status == VerdictNotApplicable && strings.TrimSpace(prev.Observed) != ""
 }
