@@ -522,7 +522,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           {a.projectId && a.kind !== "webhook" ? (
             <ProjectReposRow client={client} projectId={a.projectId} ro={ro} value={form.repos} onChange={(v) => set("repos", v)} />
           ) : null}
-          {trigger.kind === "github" && a.canEdit || trigger.kind === "github" && a.canTransfer ? (
+          {trigger.kind === "github" && (a.canEdit || a.canTransfer) ? (
             <SettingRow label="Try it" help="Runs it once on a past delivery or an event you write, as its own run.">
               <Button variant="secondary" size="sm" leadingIcon="play" data-testid="try-it" onClick={onTry}>Test with an event…</Button>
             </SettingRow>

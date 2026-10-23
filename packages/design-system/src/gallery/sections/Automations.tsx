@@ -75,6 +75,10 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <TriggerSummary trigger={{ kind: "schedule", cron: "30 9 * * 1-5", tz: "America/New_York" }} />
             <TriggerSummary trigger={{ kind: "github", event: "pull_request", actions: ["opened", "synchronize"] }} />
             <TriggerSummary trigger={{ kind: "github", event: "push" }} />
+            <Label>Trigger, wrapping in a narrow cell</Label>
+            <div style={{ width: 128 }}>
+              <TriggerSummary wrap trigger={{ kind: "github", event: "pull_request", actions: ["opened", "synchronize", "reopened"] }} />
+            </div>
             <Label>Session</Label>
             <SessionMark mode="ephemeral" />
             <SessionMark mode="resumable" expiryDays={7} />

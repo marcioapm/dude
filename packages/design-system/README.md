@@ -2086,7 +2086,8 @@ Button drawn disabled inside a focusable wrapper with the control's focus
 ring and radius, its `reason` the tooltip and the accessible description,
 its `label` the name; StartGate's gated starts and a task header's refused
 Stop), Input (`size="title"` for a
-document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
+document's heading), NumberInput (`step`, `min`, `max`, `unit`; `aria-label`
+when no `label` shows), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
 `footer`, `onOpenChange`), Checkbox (named by its `label`; its
 `description` and `aria-describedby`, the ids of hints beside it, describe
@@ -2842,7 +2843,8 @@ densities. No tone of their own: an automation's state is its runs'
   automation — `PersonAvatar` and name, or only the avatar with the name for
   screen readers (list cells). `left` (or no owner): the organisation's
   admins hold it — a building glyph in info tone and "Acme's admins".
-- **TriggerSummary** (`trigger`): one line. A schedule in words when it is a
+- **TriggerSummary** (`trigger`, `wrap`): one line, or with `wrap` words
+  that wrap in a narrow cell, the glyph staying beside the first. A schedule in words when it is a
   preset ("Daily at 03:00", "Weekdays at 09:30", "Every 15 minutes") else
   the cron line, then the zone's city muted; an event in mono and its
   actions, or "any action".
