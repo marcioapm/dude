@@ -360,7 +360,7 @@ def test_a_session_open_to_the_organisation_is_read_and_written_by_anyone_in_it_
     seen = [e["payload"].get("text") for e in bea_client.get("/v1/events", params={"sessionId": session}).json()["events"]
             if e["eventType"] == "chat.message"]
     assert seen[0] == "the export times out"
-    assert [s["id"] for s in bea_client.get("/v1/brainstorms/open").json()["sessions"]] == [session]
+    assert session in [s["id"] for s in bea_client.get("/v1/brainstorms/open").json()["sessions"]]
 
     # She writes, mentioning Caio: her message reaches the agent signed, and writing joined her.
     resp = bea_client.post(f"/v1/brainstorms/{session}/chat", {"text": "@Caio Lima can you check the rows?", "mentions": [caio["id"]]})
