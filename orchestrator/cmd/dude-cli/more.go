@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-type doer = func(c *cli, args []string) (any, error)
-
 func init() {
 	for name, cmd := range filterCommands {
 		moreCommands[name] = cmd

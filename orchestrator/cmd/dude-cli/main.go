@@ -439,8 +439,10 @@ func (m *ints) Set(v string) error {
 type command struct {
 	args  string
 	help  string
-	flags func(fs *flag.FlagSet) func(c *cli, args []string) (any, error)
+	flags func(fs *flag.FlagSet) doer
 }
+
+type doer = func(c *cli, args []string) (any, error)
 
 // parse lets flags and positional arguments mix, as `dude show ABS-1 --x`.
 func parse(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -523,8 +525,8 @@ func (c *cli) run(args []string) error {
 }
 
 // noFlags is a command with no options.
-func noFlags(do func(c *cli, args []string) (any, error)) func(*flag.FlagSet) func(*cli, []string) (any, error) {
-	return func(*flag.FlagSet) func(*cli, []string) (any, error) { return do }
+func noFlags(do doer) func(*flag.FlagSet) doer {
+	return func(*flag.FlagSet) doer { return do }
 }
 
 // onTask posts body to /v1/tasks/ID/suffix.
@@ -557,7 +559,7 @@ func (c *cli) itemAnswer(text string, choices ints) (obj, error) {
 	return ans, nil
 }
 
-func startFlags(fs *flag.FlagSet, route string) func(*cli, []string) (any, error) {
+func startFlags(fs *flag.FlagSet, route string) doer {
 	override := fs.Bool("override", false, "start even though it is blocked")
 	note := fs.String("note", "", "why, recorded with an override")
 	return func(c *cli, a []string) (any, error) {
@@ -572,7 +574,7 @@ func startFlags(fs *flag.FlagSet, route string) func(*cli, []string) (any, error
 	}
 }
 
-func reasonFlags(fs *flag.FlagSet, route string) func(*cli, []string) (any, error) {
+func reasonFlags(fs *flag.FlagSet, route string) doer {
 	reason := fs.String("reason", "", "why")
 	return func(c *cli, a []string) (any, error) {
 		body := obj{}
@@ -629,7 +631,7 @@ var commands = map[string]command{
 		}
 		return c.request("GET", "/v1/projects/"+url.PathEscape(pid)+"/epics", nil)
 	})},
-	"list": {"PROJECT", "a project's tasks", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"list": {"PROJECT", "a project's tasks", func(fs *flag.FlagSet) doer {
 		status := fs.String("status", "", "received, queued, running, awaiting_input, review, ready_to_merge, done, …")
 		return func(c *cli, a []string) (any, error) {
 			pid, err := c.projectID(a[0])
@@ -684,7 +686,7 @@ var commands = map[string]command{
 	})},
 
 	// Projects and epics
-	"project-create": {"", "a new project (organisation admins)", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"project-create": {"", "a new project (organisation admins)", func(fs *flag.FlagSet) doer {
 		name := fs.String("name", "", "its name (required)")
 		slug := fs.String("slug", "", "lowercase-with-dashes (required)")
 		key := fs.String("key", "", "task key prefix, e.g. WEB (default: from the slug)")
@@ -715,7 +717,7 @@ var commands = map[string]command{
 			return pick(p, "key", "name", "slug", "id", "repositories"), nil
 		}
 	}},
-	"repo-add": {"PROJECT", "add a repository to a project", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"repo-add": {"PROJECT", "add a repository to a project", func(fs *flag.FlagSet) doer {
 		name := fs.String("name", "", "its name in the project (required)")
 		u := fs.String("url", "", "its clone URL (required)")
 		branch := fs.String("branch", "main", "its default branch")
@@ -731,7 +733,7 @@ var commands = map[string]command{
 				obj{"name": *name, "url": *u, "defaultBranch": *branch})
 		}
 	}},
-	"epic-create": {"PROJECT", "a new epic in a project", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"epic-create": {"PROJECT", "a new epic in a project", func(fs *flag.FlagSet) doer {
 		title := fs.String("title", "", "its title (required)")
 		desc := fs.String("description", "", "- reads stdin")
 		return func(c *cli, a []string) (any, error) {
@@ -752,7 +754,7 @@ var commands = map[string]command{
 
 	// Tasks
 	"create": {"PROJECT", "record a task; --start starts delivery, --talk starts its conductor to plan it with you",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "what changes, in one line (required)")
 			goal := fs.String("goal", "", "why it matters and what should change, 16+ characters (required); - reads stdin")
 			epic := fs.String("epic", "", "epic id")
@@ -837,7 +839,7 @@ var commands = map[string]command{
 			}
 		}},
 	"update": {"TASK", "change a task's title, goal, criteria, epic, repositories or owner",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "a new title")
 			goal := fs.String("goal", "", "a new goal; - reads stdin")
 			noCriteria := fs.Bool("no-criteria", false, "remove all criteria")
@@ -892,10 +894,10 @@ var commands = map[string]command{
 			}
 		}},
 	"start": {"TASK", "start delivery: agents implement, review and open a PR",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) { return startFlags(fs, "/deliver") }},
+		func(fs *flag.FlagSet) doer { return startFlags(fs, "/deliver") }},
 	"talk": {"TASK", "start its conductor to plan it with you in Chat; nothing is built until it decides",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) { return startFlags(fs, "/talk") }},
-	"auto-start": {"TASK", "start it by itself once its blockers merge", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer { return startFlags(fs, "/talk") }},
+	"auto-start": {"TASK", "start it by itself once its blockers merge", func(fs *flag.FlagSet) doer {
 		how := fs.String("how", "deliver", "deliver or talk")
 		return func(c *cli, a []string) (any, error) {
 			if *how != "deliver" && *how != "talk" {
@@ -906,7 +908,7 @@ var commands = map[string]command{
 	}},
 	"no-auto-start": {"TASK", "cancel auto-start",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("DELETE", a[0], "/auto-start", nil) })},
-	"relate": {"TASK", "relate two tasks", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"relate": {"TASK", "relate two tasks", func(fs *flag.FlagSet) doer {
 		blocks := fs.String("blocks", "", "a TASK that waits for this one")
 		blockedBy := fs.String("blocked-by", "", "a TASK this one waits for")
 		related := fs.String("related", "", "a related TASK")
@@ -944,7 +946,7 @@ var commands = map[string]command{
 
 	// Talking to the agents
 	"chat": {"TASK TEXT", "a message in a task's Chat: starts or tells its conductor",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			aside := fs.Bool("aside", false, "for people only; the conductor does not act on it")
 			return func(c *cli, a []string) (any, error) {
 				t, err := c.text(a[1])
@@ -959,7 +961,7 @@ var commands = map[string]command{
 			}
 		}},
 	"answer": {"QUESTION TEXT?", "answer an agent's question (id from questions or show)",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			var choices ints
 			fs.Var(&choices, "choice", "index of a choice; repeatable")
 			return func(c *cli, a []string) (any, error) {
@@ -979,7 +981,7 @@ var commands = map[string]command{
 			}
 		}},
 	"decide": {"TASK ACTION", "the owner's decision after delivery stopped for them (see show's escalation)",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			note := fs.String("note", "", "a note with the decision")
 			return func(c *cli, a []string) (any, error) {
 				body := obj{"action": a[1]}
@@ -990,7 +992,7 @@ var commands = map[string]command{
 			}
 		}},
 	"steer": {"RUN TEXT", "tell a running agent something, read at its next step",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			interrupt := fs.Bool("interrupt", false, "stop its current turn: only when that work is wasted")
 			return func(c *cli, a []string) (any, error) {
 				t, err := c.text(a[1])
@@ -1004,7 +1006,7 @@ var commands = map[string]command{
 				return c.onRun(a[0], "/steer", body)
 			}
 		}},
-	"pause": {"RUN", "pause a run", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"pause": {"RUN", "pause a run", func(fs *flag.FlagSet) doer {
 		hard := fs.Bool("hard", false, "stop now, not at the next safe point")
 		reason := fs.String("reason", "", "why")
 		return func(c *cli, a []string) (any, error) {
@@ -1018,14 +1020,14 @@ var commands = map[string]command{
 			return c.onRun(a[0], "/pause", body)
 		}
 	}},
-	"resume": {"RUN", "resume a run", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"resume": {"RUN", "resume a run", func(fs *flag.FlagSet) doer {
 		return reasonFlags(fs, "/resume")
 	}},
-	"abort": {"RUN", "abort a run", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"abort": {"RUN", "abort a run", func(fs *flag.FlagSet) doer {
 		return reasonFlags(fs, "/abort")
 	}},
 	"restart": {"RUN NOTE", "a fresh run in a stalled run's slot; NOTE says what to do differently",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			tier := fs.String("tier", "", "model tier id")
 			return func(c *cli, a []string) (any, error) {
 				body := obj{"note": a[1]}
@@ -1037,7 +1039,7 @@ var commands = map[string]command{
 		}},
 
 	// Brainstorms
-	"brainstorms": {"", "your brainstorm sessions", func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+	"brainstorms": {"", "your brainstorm sessions", func(fs *flag.FlagSet) doer {
 		archived := fs.Bool("archived", false, "the archived ones")
 		return func(c *cli, _ []string) (any, error) {
 			a := ""
@@ -1048,7 +1050,7 @@ var commands = map[string]command{
 		}
 	}},
 	"brainstorm": {"MESSAGE", "start a brainstorm session: an agent to think something through with",
-		func(fs *flag.FlagSet) func(*cli, []string) (any, error) {
+		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "its title")
 			tier := fs.String("tier", "", "model tier id")
 			var projects many
