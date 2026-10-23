@@ -220,8 +220,9 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
 def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
                                                             owner_dsn: str):
     """The abs run's stall: the review gets stuck, the conductor asks with the
-    escalation's actions as choices, the owner answers "Your call", and the
-    conductor retries with decide_escalation: the next fix round runs."""
+    escalation's actions as choices (a retry is not one: it needs the person's
+    own direction), the owner answers "Your call", and the conductor retries
+    with decide_escalation: the next fix round runs."""
     project = _conducting(client, forge_project)
     models = {**project["agentModels"], **client.on_models({"reviewer": "fake/stuck"})}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
@@ -244,8 +245,8 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     wait_until(lambda: any("Escalated to a person: stuck" in n and "decide_escalation" in n for n in _woken(client, task["id"])),
                timeout=60, message="the conductor was never told of the escalation")
     _say(client, task["id"], "Ask me.", _tool("ask_person", {"question": "Stuck on one finding. Retry once more?",
-                                                            "choices": ["Retry as proposed", "Accept as it is", "Stop"],
-                                                            "actions": ["retry", "accept", "stop"]}))
+                                                            "choices": ["Accept as it is", "Stop"],
+                                                            "actions": ["accept", "stop"]}))
     question = wait_until(lambda: query(owner_dsn, "SELECT id FROM questions WHERE task_id = %s AND escalation IS NOT NULL",
                                         (task["id"],)), timeout=60, message="the escalation's question was never asked")[0]
     # The banner stays while the question is open: a person may still use it.
