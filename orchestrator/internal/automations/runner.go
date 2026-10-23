@@ -182,13 +182,24 @@ func scanAutomation(row pgx.Row) (Automation, error) {
 	if err != nil {
 		return a, err
 	}
-	_ = json.Unmarshal(trigger, &a.Trigger)
+	if err := json.Unmarshal(trigger, &a.Trigger); err != nil {
+		// An empty trigger matches no event and has no schedule.
+		slog.Warn("automation trigger unreadable; it fires on nothing", "automation", a.ID, "error", err)
+		a.Trigger = Trigger{}
+	}
 	if len(filter) > 0 && string(filter) != "null" {
 		a.RepoFilter = &RepoFilter{}
-		_ = json.Unmarshal(filter, a.RepoFilter)
+		if err := json.Unmarshal(filter, a.RepoFilter); err != nil || !knownFilterMode(a.RepoFilter.Mode) {
+			// Never "every repository" by accident: an unreadable filter
+			// covers none.
+			slog.Warn("automation repository filter unreadable; it covers no repository", "automation", a.ID, "error", err)
+			a.RepoFilter = &RepoFilter{Mode: "only"}
+		}
 	}
 	return a, nil
 }
+
+func knownFilterMode(m string) bool { return m == "all" || m == "only" || m == "except" }
 
 // Load reads one automation in its organisation.
 func Load(ctx context.Context, tx pgx.Tx, id string) (Automation, error) {
@@ -1662,9 +1673,13 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 			return err
 		}
 		var orgEgress, projectEgress []string
-		_ = tx.QueryRow(ctx, `SELECT COALESCE(agent_egress, '{}') FROM organizations WHERE id = $1`, a.Org).Scan(&orgEgress)
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(agent_egress, '{}') FROM organizations WHERE id = $1`, a.Org).Scan(&orgEgress); err != nil {
+			return err
+		}
 		if a.ProjectID != "" {
-			_ = tx.QueryRow(ctx, `SELECT COALESCE(agent_egress, '{}') FROM projects WHERE id = $1`, a.ProjectID).Scan(&projectEgress)
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(agent_egress, '{}') FROM projects WHERE id = $1`, a.ProjectID).Scan(&projectEgress); err != nil {
+				return err
+			}
 		}
 		in.Egress = append(orgEgress, projectEgress...)
 		return nil

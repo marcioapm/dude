@@ -78,8 +78,10 @@ CREATE TABLE automation_runs (
   automation_id        text NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
   status               text NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'skipped', 'cancelled')),
   reason               text CHECK (length(reason) <= 2000),
-  -- schedule, event (a live delivery), run_now (a person, on a schedule or a
-  -- past delivery) or test (a written test event: always a run of its own).
+  -- schedule, event (a live delivery), run_now (a person's Run now on a
+  -- schedule: queues behind a live run) or test (a person's Run now on an
+  -- event automation, with a past delivery or a written event: always a run
+  -- of its own).
   source               text NOT NULL CHECK (source IN ('schedule', 'event', 'run_now', 'test')),
   -- Every payload the run got, in arrival order: one, or the merged queue.
   -- [{deliveryId, event, action, body}]; emptied after 30 days.
@@ -127,6 +129,8 @@ CREATE TABLE automation_runs (
 CREATE INDEX automation_runs_automation_idx ON automation_runs (automation_id, created_at DESC);
 CREATE INDEX automation_runs_open_idx ON automation_runs (created_at) WHERE status IN ('queued', 'running');
 CREATE UNIQUE INDEX automation_runs_token_idx ON automation_runs (mcp_token_hash) WHERE mcp_token_hash IS NOT NULL;
+-- A resumed run reads on from the cursor its kept lux Run's last run left.
+CREATE INDEX automation_runs_lux_run_idx ON automation_runs (lux_run_id, created_at DESC) WHERE lux_run_id IS NOT NULL;
 
 CREATE FUNCTION lookup_automation_by_mcp_token(p_hash text)
 RETURNS TABLE (run_id text, organization_id text, automation_id text, status text, scope jsonb)

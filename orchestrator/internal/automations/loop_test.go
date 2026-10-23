@@ -223,6 +223,30 @@ func TestAutomationServerKeepsAnEventThatArrivesAsItIdles(t *testing.T) {
 	}
 }
 
+// An organisation automation whose repository filter cannot be read covers
+// no repository: it never widens to all of them.
+func TestAutomationUnreadableRepoFilterCoversNothing(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_badfilter", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": "echo fired", "project_id": nil})
+	h.automation("aut_goodfilter", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": "echo fired", "project_id": nil})
+	exec(t, h.owner, `UPDATE automations SET repo_filter = '{"mode": 7, "repos": "acme/*"}' WHERE id = 'aut_badfilter'`)
+	exec(t, h.owner, `UPDATE automations SET repo_filter = '{"mode": "only", "repos": ["acme/*"]}' WHERE id = 'aut_goodfilter'`)
+	h.deliver("p-f", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	// Fired is what is under test: the fake cannot clone the event's remote
+	// repository, so how the run ends is not.
+	h.until("the readable filter fires", func() bool { return len(h.runs("aut_goodfilter")) == 1 })
+	h.until("the delivery is read", func() bool {
+		var read bool
+		_ = h.owner.QueryRow(context.Background(), `SELECT automations_at IS NOT NULL FROM webhook_deliveries WHERE id = 'p-f'`).Scan(&read)
+		return read
+	})
+	if r := h.runs("aut_badfilter"); len(r) != 0 {
+		t.Errorf("an unreadable filter fired: %+v", r)
+	}
+}
+
 // A delivery an automation cannot be matched to (a paths filter with no
 // GitHub to read the pull request's files from) holds up nothing: a later
 // push still fires its own automation, a Run now on a schedule still starts,
