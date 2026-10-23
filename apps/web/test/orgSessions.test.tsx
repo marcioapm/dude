@@ -224,11 +224,13 @@ describe("a session its admins own", () => {
   });
 
   test("a member who is not an admin is not offered Make me owner", async () => {
-    const d = detail("chat", { ownedByAdmins: true, access: "organisation" }, { admin: false });
+    const d = detail("chat", { ownedByAdmins: true, access: "private" }, { admin: false });
     const p = await page(new OrgClient(d));
     expect(p.querySelectorAll("[data-testid=admin-owned]").length).toBe(2);
     const dialog = await openShare(p);
     expect(dialog.querySelectorAll("[data-testid=take-ownership]").length).toBe(0);
+    // Its access is not theirs to change.
+    expect(dialog.querySelectorAll("[data-testid=general-access-select]").length).toBe(0);
     expect(dialog.querySelector("[data-testid=admin-owned-callout]")!.textContent).toContain("admins own it now");
   });
 });
