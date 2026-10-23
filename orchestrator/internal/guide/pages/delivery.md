@@ -96,6 +96,10 @@ For each acceptance criterion the tester reports pass, fail or blocked. A pass w
 
 Accepting a failure or waiving a check needs a note. The task's owner or an organisation admin can do it.
 
+A test round after a fix whose change is only **non-product** paths (the same **Not product** list) starts no tester when the previous test round passed: every criterion keeps its verdict, shown as carried. That holds only when the branch still descends from what was tested, no criterion was added or edited since, no finding waits to be judged, and no test was asked for or is due after a failure. A task without acceptance criteria, whose checks the tester derived, is always tested again.
+
+Otherwise a later tester picks up its previous round. It tests again every criterion the change can affect, and reports the rest as carried with a reason. dude keeps a carried verdict only if the last one was a pass, or not applicable with its reason; anything else it reports as blocked. A round that changed more than 300 lines, or that starts a fresh tester, tests every criterion again.
+
 ## The checks report
 
 The implementer, fixer and simplifier end their work with a report of the checks they ran. Before their work is published, dude reads it. A missing or malformed report, or a check the agent itself says failed, sends the work back. If the organisation has a judgement tier, dude also asks it whether each reported pass matches the commands the Run actually ran. See [Judgements](help:judgements#what-judgements-are).
