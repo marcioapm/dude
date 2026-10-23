@@ -942,9 +942,29 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	case a.Kind == "agent" && failed != "":
 		return true, r.endThenStop(ctx, a, runID, luxRunID, keep, "failed", failed, cost())
 	case a.Kind == "agent" && turnDone.done:
-		return true, r.endThenStop(ctx, a, runID, luxRunID, keep, "succeeded", "", cost())
+		return r.endTurnDone(ctx, a, runID, luxRunID, keep, cost())
 	}
 	return false, nil
+}
+
+// endTurnDone ends an agent run whose turn is done, under the automation's
+// lock Fire takes, only once every payload it holds was given to its agent:
+// an event sent into it since payloads were read keeps it live, and the
+// next pass gives that event to the agent and waits for its turn.
+func (r *Runner) endTurnDone(ctx context.Context, a Automation, runID, luxRunID string, keep bool, cost *float64) (bool, error) {
+	ended := false
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM automations WHERE id = $1 FOR UPDATE`, a.ID); err != nil {
+			return err
+		}
+		var err error
+		ended, err = endIn(ctx, tx, a, runID, "succeeded", "", cost, allInputs)
+		return err
+	}); err != nil || !ended {
+		return ended, err
+	}
+	r.stopOrCancel(ctx, luxRunID, keep)
+	return true, nil
 }
 
 // sendInputs gives a running agent the payloads after the first sent ones,
@@ -1078,19 +1098,28 @@ func (r *Runner) finish(ctx context.Context, a Automation, runID, status, reason
 func (r *Runner) end(ctx context.Context, a Automation, runID, status, reason string, cost *float64) (bool, error) {
 	ended := false
 	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) (err error) {
-		ended, err = endIn(ctx, tx, a, runID, status, reason, cost, false)
+		ended, err = endIn(ctx, tx, a, runID, status, reason, cost, allAny)
 		return err
 	})
 	return ended && err == nil, err
 }
 
-// endIn ends a live run in tx. delivered also requires every payload the
-// run holds to have been POSTed (a Server run ending idle).
-func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason string, cost *float64, delivered bool) (bool, error) {
+// What endIn requires to have reached every payload the run holds.
+const (
+	allAny    = ""
+	allPosted = "posted"      // POSTed to a Server run's container
+	allInputs = "inputs_sent" // given to an agent run's agent
+)
+
+// endIn ends a live run in tx; all names a counter (allPosted, allInputs)
+// that must have reached every payload the run holds, or allAny.
+func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason string, cost *float64, all string) (bool, error) {
 	tag, err := tx.Exec(ctx, `UPDATE automation_runs SET status = $2, reason = NULLIF($3, ''), cost_usd = COALESCE($4, cost_usd),
 		ended_at = now(), container_stopped_at = CASE WHEN container_started_at IS NOT NULL THEN COALESCE(container_stopped_at, now()) END
-		WHERE id = $1 AND status IN ('queued', 'running') AND (NOT $5 OR posted >= jsonb_array_length(payloads))`,
-		runID, status, reason, cost, delivered)
+		WHERE id = $1 AND status IN ('queued', 'running')
+		  AND ($5 <> 'posted' OR posted >= jsonb_array_length(payloads))
+		  AND ($5 <> 'inputs_sent' OR inputs_sent >= jsonb_array_length(payloads))`,
+		runID, status, reason, cost, all)
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
 	}
@@ -1195,7 +1224,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 			return err
 		}
 		var err error
-		ended, err = endIn(ctx, tx, a, runID, status, reason, nil, true)
+		ended, err = endIn(ctx, tx, a, runID, status, reason, nil, allPosted)
 		return err
 	}); err != nil || !ended {
 		return false, err

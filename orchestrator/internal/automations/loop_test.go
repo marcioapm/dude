@@ -223,6 +223,76 @@ func TestAutomationQueueHeadsWithoutRoomBlockNothing(t *testing.T) {
 	}
 }
 
+// turnEndHook is lux that runs late once, right after an Output read in
+// which the Run's agent went idle after busy: as a follower decides the
+// turn is done.
+type turnEndHook struct {
+	lux.Client
+	late func()
+	busy bool
+	once sync.Once
+}
+
+func (h *turnEndHook) Output(ctx context.Context, runID, cursor string, after int64, fn func(lux.Frame) error) error {
+	ended := false
+	err := h.Client.Output(ctx, runID, cursor, after, func(f lux.Frame) error {
+		if f.Event != nil && f.Event.Type == "lux.activity" {
+			var d map[string]any
+			_ = json.Unmarshal(f.Event.Data, &d)
+			switch d["activity"] {
+			case "busy":
+				h.busy = true
+			case "idle":
+				ended = ended || h.busy
+			}
+		}
+		return fn(f)
+	})
+	if ended {
+		h.once.Do(h.late)
+	}
+	return err
+}
+
+// Concurrency send: an event sent into an agent run as its turn ends is
+// given to the agent; the run ends only after that turn.
+func TestAutomationSendAtTurnEndReachesTheAgent(t *testing.T) {
+	h := newHarness(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	hook := &turnEndHook{Client: h.lux}
+	hook.late = func() {
+		ctx := context.Background()
+		if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+			a, err := Load(ctx, tx, "aut_send_late")
+			if err != nil {
+				return err
+			}
+			body, _ := json.Marshal(push)
+			_, err = Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: "late", Event: "push", Body: body}}, "", nil)
+			return err
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	h.runner.Lux = hook
+	h.automation("aut_send_late", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "send", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Look at {{event.delivery_id}}"}}})
+	h.deliver("first", "push", push)
+	h.until("the run ends", func() bool {
+		r := h.runs("aut_send_late")
+		return len(r) > 0 && r[0].Status != "running" && r[0].Status != "queued"
+	})
+	h.runner.Wait()
+	r := h.runs("aut_send_late")
+	if len(r) != 1 || r[0].Status != "succeeded" || r[0].Payloads != 2 {
+		t.Fatalf("runs %+v", r)
+	}
+	if in := h.fake.InputBodies(r[0].LuxRunID, "automation-"+r[0].ID+"-1"); len(in) != 1 || !strings.Contains(in[0], "Look at late") {
+		t.Errorf("the late event's input %q", in)
+	}
+}
+
 // submitHook is lux with a hook run inside Submit, before lux answers.
 type submitHook struct {
 	lux.Client
