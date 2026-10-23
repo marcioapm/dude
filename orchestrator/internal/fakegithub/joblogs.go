@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -98,7 +99,7 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	s.mu.Lock()
 	log, ok := s.JobLogs[id]
-	host, status, message := s.LogHost, s.LogStatus, s.LogMessage
+	host, status, message, sig := s.LogHost, s.LogStatus, s.LogMessage, cmp.Or(s.LogSignature, "short-lived")
 	s.mu.Unlock()
 	switch {
 	case status != 0:
@@ -108,7 +109,7 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 	case log == "":
 		fail(w, 410, "Logs have expired")
 	default:
-		w.Header().Set("Location", fmt.Sprintf("%s/%s/jobs/%d/log?sig=short-lived", host, s.Slug, id))
+		w.Header().Set("Location", fmt.Sprintf("%s/%s/jobs/%d/log?sig=%s", host, s.Slug, id, url.QueryEscape(sig)))
 		w.WriteHeader(http.StatusFound)
 	}
 }

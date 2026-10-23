@@ -3997,6 +3997,39 @@ func TestAFixerIsToldGitHubWasUnavailableForAJobsLog(t *testing.T) {
 	}
 }
 
+// A log whose download hop fails after GitHub's redirect: the signed
+// blob URL in the redirect (its sig a bearer credential) reaches no log
+// line, no stored check and no prompt.
+func TestASignedLogURLIsNeverLogged(t *testing.T) {
+	logs := &lockedBuffer{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	w := newWorld(t)
+	w.syncer.Log = slog.New(slog.NewTextHandler(logs, nil))
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+		s.LogHost, s.LogSignature = gone.URL, "SECRET"
+	})
+	if c.Unread != "GitHub was unavailable" {
+		t.Errorf("check %+v", c)
+	}
+	if !strings.Contains(logs.String(), "reading a failing check's log failed") {
+		t.Fatalf("the failed read was not logged:\n%s", logs)
+	}
+	var events string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(string_agg(payload::text, ' '), '') FROM events
+		WHERE organization_id = $1`, w.org).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	for where, text := range map[string]string{"logs": logs.String(), "prompt": prompt, "check": c.Log + c.Unread + c.Full, "events": events} {
+		if strings.Contains(text, "SECRET") {
+			t.Errorf("the signature reached the %s:\n%s", where, text)
+		}
+	}
+}
+
 // (e) A fix Run's spec writes the end of its failing check's job log, up
 // to 64 KiB and cleaned, to /workspace/.dude/checks/<repo>-<check>.log; the
 // prompt keeps a 4000-byte excerpt, quoted as external text, and names the

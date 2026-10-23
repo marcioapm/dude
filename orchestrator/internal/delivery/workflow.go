@@ -2142,8 +2142,14 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 			// fixer with what was read and why the rest was not.
 			read, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, CheckLogFileMax)
 			if err != nil {
+				// Never err's text: a failed download hop's *url.Error holds
+				// GitHub's signed blob URL, a bearer credential.
+				status := 0
+				if fe := (*forge.Error)(nil); errors.As(err, &fe) {
+					status = fe.Status
+				}
 				slog.Warn("reading a failing check's log failed; the fixer is told why", "check", c.RunID, "repo", slugs[f.Repo],
-					"task", st.TaskID, "reason", read.Unread, "error", err)
+					"task", st.TaskID, "reason", read.Unread, "status", status, "transient", forge.Transient(err))
 			}
 			check := &st.PRFeedback[i].Checks[j]
 			check.Log, check.Unread = read.Cut(checkLogLimit), read.Unread

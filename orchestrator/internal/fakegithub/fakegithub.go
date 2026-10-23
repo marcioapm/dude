@@ -162,11 +162,13 @@ type Server struct {
 	CheckRuns map[int64]CheckRun
 	// Actions job logs by id, the download host they redirect to, and a
 	// status the logs endpoint answers instead (403: no permission), with
-	// LogMessage as its message when set.
+	// LogMessage as its message when set. LogSignature is the download
+	// URL's sig query parameter ("short-lived" when unset).
 	JobLogs      map[int64]string
 	LogHost      string
 	LogStatus    int
 	LogMessage   string
+	LogSignature string
 	downloadAuth []string
 }
 
