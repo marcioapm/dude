@@ -170,8 +170,8 @@ func IsActionableComment(f Feedback, factoryLogins []string) bool {
 
 // Classify decides what a change on a pull request means, without a model.
 //
-// Most of what happens on a PR — an approval, a green check, a bot comment —
-// only updates state. Two things are worth waking a fixer for: a person
+// Most of what happens on a PR — an approval, a green check, a bot's or a
+// tool's status comment — only updates state. Two things are worth waking a fixer for: a person
 // asking for a change, and a check that turned red; and one is worth
 // stopping for a person: the branch turning conflicting. Returns nil
 // otherwise, which is the common case and the reason this exists.

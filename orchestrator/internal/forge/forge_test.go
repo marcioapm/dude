@@ -463,9 +463,26 @@ func TestAToolsStatusCommentIsNotARequest(t *testing.T) {
 			t.Errorf("a %s that opens with a marker was filtered out", kind)
 		}
 	}
+	// However the tool spaces it.
+	for _, body := range []string{"\n<!-- reviewbot:review-status -->\nReview in progress",
+		"  <!-- reviewbot:review-status -->\r\nReview in progress\r\n", "<!-- reviewbot:review-status -->"} {
+		f := status
+		f.Body = body
+		if IsActionableComment(f, nil) {
+			t.Errorf("status comment %q was treated as a request", body)
+		}
+	}
 	// A person quoting a marker mid-comment is still asking.
 	if !IsActionableComment(comment("Why does the <!-- preview --> comment say failed?"), nil) {
 		t.Error("a question mentioning a marker was filtered out")
+	}
+	// The same author asking in plain words is still asking, beside its
+	// status comment: the signal carries the request alone.
+	ask := comment("Please rename `foo` to `bar`.")
+	ask.ID, ask.Author = "ask", status.Author
+	s := Classify(prior, open, []Feedback{status, ask}, nil)
+	if s == nil || s.Kind != "actionable" || len(s.Feedback) != 1 || s.Feedback[0].ID != "ask" {
+		t.Errorf("a request beside a status comment: %+v", s)
 	}
 }
 
