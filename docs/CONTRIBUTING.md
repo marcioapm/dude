@@ -637,6 +637,43 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   use the people's minute read is the heartbeat; background polling stops
   while hidden (`useVisibleInterval`), not every event-driven request.
 
+### Organisation sessions, admin-owned sessions and mentions
+
+A brainstorm session's **general access** (`sessions.access`, migration 181)
+is `private` (its accepted people) or `organisation` (every active member of
+its organisation can open it and chat). The change is one way: `PUT
+/internal/sessions/{id}/access` takes only `organisation` (anything else is
+409), and the `sessions_access_one_way` trigger refuses going back whoever
+writes the row. Who may do what is `session_role()` alone, which the
+orchestrator (`delivery.SessionRole`), the ledger's visibility, artifacts and
+the notifier all read: in an organisation session a `read` member counts as
+`chat` and any active member without a row is `chat`; someone removed, or of
+another organisation, has no role whatever rows they left. Writing as a
+non-member inserts their `chat` row under the session's lock
+(`delivery.JoinByWriting`, `session.joined` with `via: organisation`).
+`GET /internal/sessions/open` lists the open sessions with `joined` per row;
+the sidebar's Open to everyone count is those joined and not archived.
+
+**When the owner is removed** from the organisation (`removePerson` →
+`passOnSessions`, in the removal's transaction), each session of theirs that
+someone else can reach — open to the organisation, or with any other row —
+gets `owned_by_admins` (`session.owner_left`); a private one nobody else is in
+is archived with them. While it is set every active admin is `owner` in
+`session_role()` (and may open it); `POST …/take-ownership` makes one of them
+the owner row and clears it (`session.owner_taken`), else 409. Handing it on
+waits until an admin has taken it.
+
+**Mentions** ride on a session message (`mentions`, `shareWith`: person ids).
+`shareWith` is the owner's only (403, nothing sent) and adds each as accepted
+`chat` in the message's transaction. Each mention of someone `session_role()`
+admits (others are dropped silently) is a `session_mentions` row, listed in
+`GET /internal/sessions`'s `mentions` while unseen and while the person does
+not have the session open; their page's open heartbeat (`setOpen`, which also
+covers non-members through `session_viewers`) marks it seen. A
+`session.mentioned` event, which the notifier pushes, is written only when
+they did not have it open. The agent reads the words as written; `mentions`
+is metadata on the `chat.message`, for the chips.
+
 ## Decisions already made
 
 These were settled deliberately. Change them on purpose, not by accident.
@@ -884,5 +921,7 @@ In rough priority order.
 | Change the scripted agent | `orchestrator/internal/fakeagent` |
 | Add an event type | `packages/domain/src/events/types.ts` and the Go constants that write it |
 | Change the sidebar/board data | `apps/control-plane/src/api/routes/navigation.ts` |
+| Change who may read or chat in a session | `session_role()` (`migrations/181_org_sessions.sql`), `orchestrator/internal/delivery/session_access.go` |
+| Change what a session mention does | `orchestrator/internal/delivery/session_mentions.go`, `notify.go`'s `asks` |
 | Change a screen | `apps/web/src/screens/` |
 | Change a component | `packages/design-system/src/components/` |
