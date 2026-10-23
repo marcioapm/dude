@@ -119,7 +119,8 @@ export function TriggerSummary({ trigger, wrap }: {
   return (
     <span className={cx(styles["trigger"], wrap && styles["triggerWrap"])}>
       {wrap ? lead : <>{glyph}{first}</>}
-      {/* A no-break space: the "·" never ends a line on its own. */}
+      {/* Wrapping breaks before the "·", never after it: a line never ends on the separator alone. */}
+      {wrap ? <wbr /> : null}
       <span className={styles["muted"]}>{"·\u00a0"}{schedule ? cityOf(trigger.tz) : trigger.actions?.length ? trigger.actions.join(", ") : "any action"}</span>
     </span>
   );

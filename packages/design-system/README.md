@@ -2844,7 +2844,7 @@ densities. No tone of their own: an automation's state is its runs'
   screen readers (list cells). `left` (or no owner): the organisation's
   admins hold it — a building glyph in info tone and "Acme's admins".
 - **TriggerSummary** (`trigger`, `wrap`): one line, or with `wrap` words
-  that wrap in a narrow cell, the glyph staying beside the first. A schedule in words when it is a
+  that wrap in a narrow cell, the glyph staying beside the first word; a long event name breaks under the glyph rather than being cut off, and a line never ends on the "·" alone. A schedule in words when it is a
   preset ("Daily at 03:00", "Weekdays at 09:30", "Every 15 minutes") else
   the cron line, then the zone's city muted; an event in mono and its
   actions, or "any action".

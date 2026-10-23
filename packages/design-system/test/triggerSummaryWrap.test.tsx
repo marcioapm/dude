@@ -54,6 +54,11 @@ for (const [id, first, rest] of [["wrap-github", "pull_request", "opened"], ["wr
     expect(summary.textContent).toContain(rest);
     // A first word wider than its cell breaks inside itself instead of overflowing.
     const word = lead.querySelector(":scope > span")!;
-    expect(getComputedStyle(word).overflowWrap).toBe("anywhere");
+    expect(getComputedStyle(word).overflowWrap).toBe("break-word");
+    // A break opportunity before the separator, so "·" starts a line rather than ending one.
+    const separator = summary.querySelector("wbr")?.nextElementSibling as HTMLElement | null;
+    expect(separator?.textContent?.startsWith("·")).toBe(true);
+    // The separator keeps its gap from the phrase before it.
+    expect(getComputedStyle(separator!).marginInlineStart).not.toBe("0px");
   });
 }
