@@ -204,6 +204,31 @@ describe("an automation's page", () => {
     for (const t of items) expect(t).toMatch(/^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, 03:00$/);
   });
 
+  test("a cron being typed asks for its next runs once, when it is complete", async () => {
+    const client = new FixtureClient("a");
+    const asked: Array<[string, string]> = [];
+    const next = client.scheduleNext.bind(client);
+    client.scheduleNext = (cron, tz) => { asked.push([cron, tz]); return next(cron, tz); };
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    await until(() => c.querySelector("[data-testid=schedule-next]"), "the first next runs");
+    asked.length = 0;
+    const picker = c.querySelector<HTMLElement>("[data-testid=schedule-picker]")!;
+    await click([...picker.querySelectorAll("button")].find((b) => b.textContent === "cron")!);
+    const input = await until(() => c.querySelector<HTMLInputElement>("[data-testid=schedule-cron]"), "the cron box");
+    const full = "* * * * *";
+    // Each prefix is left longer than the 300 ms pause, so only an incomplete cron's refusal to ask is what keeps it quiet.
+    for (let n = 1; n < full.length; n++) {
+      await typeInto(input, full.slice(0, n));
+      await settle(350);
+      expect(c.querySelector("[data-testid=schedule-next]")).toBeNull();
+    }
+    expect(asked).toEqual([]);
+    await typeInto(input, full);
+    await until(() => c.querySelector("[data-testid=schedule-next] ol[aria-label='Next runs']"), "the next runs");
+    expect(asked).toEqual([[full, "Europe/Lisbon"]]);
+  });
+
   test("an owner who left: the attention callout, Transfer, and the admins as owner", async () => {
     const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_cost" }}
       onPlace={() => undefined} onBack={() => undefined} />);

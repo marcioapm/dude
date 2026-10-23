@@ -85,6 +85,8 @@ import {
   PRESET_ROLES,
   REVIEWER_NEEDS_PULL_REQUEST,
   automationProblem,
+  isTimeZone,
+  parseCron,
   type AgentOverrides,
   type Automation,
   type AutomationInput,
@@ -686,14 +688,20 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   );
 }
 
-/** A schedule's next three runs, as the orchestrator's scheduler computes them. */
+/**
+ * A schedule's next three runs, as the orchestrator's scheduler computes them.
+ * Asked only for a complete cron and a known zone, once typing pauses: a
+ * half-typed expression would be refused, and the form says what is wrong.
+ */
 function ScheduleNext({ client, cron, tz }: { client: ApiClient; cron: string; tz: string }) {
   const [times, setTimes] = useState<Date[] | null>(null);
   useEffect(() => {
     let live = true;
     setTimes(null);
-    client.scheduleNext(cron, tz).then((r) => { if (live) setTimes(r.times.map((t) => new Date(t))); }, () => { if (live) setTimes(null); });
-    return () => { live = false; };
+    if (!parseCron(cron).ok || !isTimeZone(tz)) return;
+    const t = setTimeout(() => client.scheduleNext(cron, tz)
+      .then((r) => { if (live) setTimes(r.times.map((x) => new Date(x))); }, () => { if (live) setTimes(null); }), 300);
+    return () => { live = false; clearTimeout(t); };
   }, [client, cron, tz]);
   return times ? <span className="automationNext" data-testid="schedule-next">Next: <NextRuns times={times} tz={tz} /></span> : null;
 }
