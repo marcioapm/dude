@@ -932,6 +932,8 @@ export const criterionVerdictSchema = z.object({
   decision: z.enum(["waived", "accepted"]).nullable(),
   decidedBy: z.object({ id: z.string(), name: z.string() }).nullable(),
   decisionNote: z.string().nullable(),
+  /** The earlier test Run whose verdict and evidence this one carries forward, unretested; null for one judged here. */
+  carriedFrom: z.string().nullable().optional(),
 });
 export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
 

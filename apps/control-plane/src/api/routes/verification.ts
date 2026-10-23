@@ -23,7 +23,7 @@ async function listVerification(ctx: RequestContext): Promise<Response> {
     SELECT v.run_id AS "runId", r.attempt, v.heads, v.created_at AS "createdAt", wk.work AS "work",
       v.criterion, v.text, v.status, v.evidence, v.observed, v.problem, v.decision,
       CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object('id', p.id, 'name', p.name) END AS "decidedBy",
-      v.decision_note AS "decisionNote"
+      v.decision_note AS "decisionNote", v.carried_from AS "carriedFrom"
     FROM acceptance_verdicts v JOIN runs r ON r.id = v.run_id
     -- Lateral rather than a scalar subquery: the planner memoizes it per (task, attempt).
     LEFT JOIN LATERAL (
@@ -48,6 +48,7 @@ async function listVerification(ctx: RequestContext): Promise<Response> {
     v.criteria.push({
       criterion: row.criterion, text: row.text, status: row.status, evidence: row.evidence ?? [], observed: row.observed,
       problem: row.problem, decision: row.decision ?? null, decidedBy: row.decidedBy ?? null, decisionNote: row.decisionNote ?? null,
+      carriedFrom: row.carriedFrom ?? null,
     });
   }
   return json({ verifications: [...byRun.values()] });

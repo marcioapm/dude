@@ -2,11 +2,109 @@ package delivery
 
 import (
 	"context"
+	"net/http/httptest"
+	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
+
+// The test step starts no tester after a passing round when the change
+// since is all non-product paths and the tester has no finding to judge;
+// a previous round that did not pass, a finding to judge, a product path
+// or a head the previous checkout is not an ancestor of each starts one.
+// This round may carry from the previous one only when its heads descend
+// from that round's checkouts.
+func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
+	ci := map[string]string{".github/workflows/ci.yml": "on: [push, pull_request]"}
+	for _, c := range []struct {
+		name     string
+		files    map[string]string
+		previous string
+		judge    []string
+		diverged bool
+		skip     bool
+		carry    bool
+	}{
+		{"CI only after a pass", ci, VerdictPass, nil, false, true, true},
+		{"docs and Markdown after a pass", map[string]string{"docs/guide.txt": "x", "api/NOTES.md": "x"}, VerdictPass, nil, false, true, true},
+		{"CI only after a failure", ci, VerdictFail, nil, false, false, true},
+		{"CI only after an unverified pass", ci, VerdictUnverified, nil, false, false, true},
+		{"CI only with a finding to judge", ci, VerdictPass, []string{"fnd_1"}, false, false, true},
+		{"a product path beside CI", map[string]string{".github/workflows/ci.yml": "x", "app/main.go": "package main"}, VerdictPass, nil, false, false, true},
+		{"history that does not descend", ci, VerdictPass, nil, true, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newVerdictFixture(t)
+			f.withRepo()
+			from := f.gh.SHA("feature")
+			if c.diverged {
+				// The previous round tested a commit the branch does not hold.
+				from = f.gh.Branch("rewritten", "feature", "A commit the branch lost")
+			}
+			head := f.gh.CommitFiles("feature", "Change", c.files)
+			for _, q := range []struct {
+				sql  string
+				args []any
+			}{
+				{`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_c', 'repo_c', $1)`, nil},
+				{`UPDATE runs SET base_refs = jsonb_build_object('repo', $1::text) WHERE id = 'run_c'`, []any{from}},
+				{`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence)
+					VALUES ($1, 'wi_c', 'run_c', 1, 'it greets', $2, '{greet.webm}')`, []any{f.org, c.previous}},
+			} {
+				args := q.args
+				if args == nil {
+					args = []any{f.org}
+				}
+				if _, err := f.owner.Exec(f.ctx, q.sql, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st := &State{TaskID: "wi_c", ProjectID: "prj_c", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"repo": head}}
+			sc := workflow.StepContext{WorkflowRunID: "wf_c", OrganizationID: f.org}
+			skip, err := f.steps.carryForward(f.ctx, sc, st, c.judge, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if skip != c.skip || (st.CarryFrom == "run_c") != c.carry {
+				t.Fatalf("skip %v, carry from %q; want skip %v, carry %v", skip, st.CarryFrom, c.skip, c.carry)
+			}
+			var events int
+			_ = f.owner.QueryRow(f.ctx, `SELECT count(*) FROM events WHERE task_id = 'wi_c' AND event_type = $1
+				AND payload->>'fromRunId' = 'run_c' AND payload->'criteria'->0->>'status' = 'pass'`, EvTestSkipped).Scan(&events)
+			if want := map[bool]int{true: 1}[c.skip]; events != want || c.skip && st.TestRunID != "run_c" {
+				t.Errorf("%d skip events, gate on %q; want %d and the previous round", events, st.TestRunID, want)
+			}
+		})
+	}
+}
+
+// withRepo gives the fixture's GitHub a git repository of its own, a
+// feature branch from main on it, so its compare answers from real commits.
+func (f *verdictFixture) withRepo() {
+	f.t.Helper()
+	bare := f.t.TempDir()
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", bare}, args...)...).Output()
+		if err != nil {
+			f.t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "--bare", "--initial-branch=main")
+	initial := git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", git("mktree"), "-m", "Initial")
+	git("update-ref", "refs/heads/main", initial)
+	f.gh = fakegithub.New(bare, "acme/repo")
+	f.gh.Branch("feature", "main", "Start")
+	srv := httptest.NewServer(f.gh.Handler())
+	f.t.Cleanup(srv.Close)
+	f.steps.forges = forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})}
+}
 
 // A resumed tester's carried criterion is recorded as the previous round's
 // pass, with that round's evidence and carried_from naming it; the same

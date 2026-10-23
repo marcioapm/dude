@@ -60,6 +60,9 @@ beforeAll(async () => {
       heads, decision, decided_by, decision_note, decided_at, created_at)
     VALUES ('org_v', 'wi_v', 'run_t2', 1, 'it greets', 'unverified', '{walkthrough.webm}', 'It greets.', 'missing.png is not a file this test published.',
       '{"api":"bbb222"}', 'waived', ${ana.personId}, 'Checked by hand.', now(), '2026-01-02T00:00:00Z')`;
+  // A second criterion the second test kept from the first, untested.
+  await owner`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence, observed, heads, carried_from, created_at)
+    VALUES ('org_v', 'wi_v', 'run_t2', 2, 'it waves', 'pass', '{wave.png}', 'Only CI changed.', '{"api":"bbb222"}', 'run_t1', '2026-01-02T00:00:00Z')`;
   await owner`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
     VALUES ('wf_v', 'org_v', 'wi_v', 'task.delivery', 'delivery:wi_v', 'waiting', 'awaitPullRequest', '{"attempt":1,"heads":{"api":"bbb222"}}')`;
   router = buildRouter("", async (credential) => (credential === null ? null : authenticate(credential)));
@@ -85,7 +88,10 @@ test("a task's verification is each test's verdict, the latest first, stale once
   expect(verifications[0]!.criteria).toEqual([{
     criterion: 1, text: "it greets", status: "unverified", evidence: ["walkthrough.webm"], observed: "It greets.",
     problem: "missing.png is not a file this test published.", decision: "waived",
-    decidedBy: { id: ana.personId, name: "Ana" }, decisionNote: "Checked by hand.",
+    decidedBy: { id: ana.personId, name: "Ana" }, decisionNote: "Checked by hand.", carriedFrom: null,
+  }, {
+    criterion: 2, text: "it waves", status: "pass", evidence: ["wave.png"], observed: "Only CI changed.", problem: "",
+    decision: null, decidedBy: null, decisionNote: null, carriedFrom: "run_t1",
   }]);
 });
 

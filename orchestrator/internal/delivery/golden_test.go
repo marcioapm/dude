@@ -458,4 +458,8 @@ func TestGoldenTesterWriterChecks(t *testing.T) {
 	in.Tools, in.CLI, in.Repositories = true, true, twoRepos()
 	in.WriterChecks = writerChecksText(runs, writerChecksMax)
 	golden(t, "prompt-test-writer-checks", Prompt(PhaseTest, in))
+	// A fresh tester after an earlier round (a change too large to go on
+	// over, or a replay): it tests afresh and carries nothing.
+	in.WriterChecks, in.RetestsAfresh = "", true
+	golden(t, "prompt-test-afresh", Prompt(PhaseTest, in))
 }

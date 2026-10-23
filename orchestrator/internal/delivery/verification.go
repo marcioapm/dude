@@ -961,7 +961,13 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 	if len(at) > 0 {
 		fmt.Fprintf(&b, "Tested at %s.", strings.Join(at, ", "))
 	}
-	if stale(v.Heads, heads) {
+	tested := v.Heads
+	if len(v.StandsFor) > 0 {
+		// A test step that started no tester: the changes since are outside the product.
+		tested = v.StandsFor
+		b.WriteString(" Not tested again since: the changes after it touch only paths no criterion depends on.")
+	}
+	if stale(tested, heads) {
 		b.WriteString(" **Stale:** the branch has changed since; this verdict is about the commits above.")
 	}
 	b.WriteString("\n\n")
@@ -969,6 +975,9 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 		status := c.Status
 		if c.Decision != "" {
 			status = fmt.Sprintf("%s, %s by %s: %s", c.Status, c.Decision, valueOr(c.DecidedBy, "a person"), oneLine(c.Note))
+		}
+		if c.Carried {
+			status += ", carried from the previous test round"
 		}
 		fmt.Fprintf(&b, "- **%s** — %s\n", status, oneLine(CriteriaImagesAsText([]string{c.Text})[0]))
 	}
@@ -993,23 +1002,28 @@ func stale(tested, now map[string]string) bool {
 }
 
 // prVerification is the latest test of the attempt, for the pull request.
+// StandsFor is the heads a later test step that started no tester carried
+// it to (EvTestSkipped), nil for none.
 type prVerification struct {
-	Heads    map[string]string
-	Criteria []prCriterion
+	Heads, StandsFor map[string]string
+	Criteria         []prCriterion
 }
 
 type prCriterion struct {
 	Text, Status, Decision, DecidedBy, Note string
+	Carried                                 bool
 }
 
 // latestVerification reads the attempt's latest recorded verdict.
 func latestVerification(ctx context.Context, tx pgx.Tx, st *State) (*prVerification, error) {
 	rows, err := tx.Query(ctx, `SELECT v.text, v.status, COALESCE(v.decision, ''), COALESCE(p.name, ''),
-			COALESCE(v.decision_note, ''), v.heads
+			COALESCE(v.decision_note, ''), v.carried_from IS NOT NULL, v.heads,
+			(SELECT e.payload->'heads' FROM events e WHERE e.task_id = v.task_id AND e.event_type = $3
+			   AND e.payload->>'fromRunId' = v.run_id ORDER BY e.cursor DESC LIMIT 1)
 		FROM acceptance_verdicts v LEFT JOIN people p ON p.id = v.decided_by
 		WHERE v.run_id = (SELECT r.id FROM runs r JOIN acceptance_verdicts av ON av.run_id = r.id
 			WHERE r.task_id = $1 AND ($2 = 0 OR r.attempt = $2) ORDER BY av.created_at DESC, r.created_at DESC LIMIT 1)
-		ORDER BY v.criterion`, st.TaskID, st.Attempt)
+		ORDER BY v.criterion`, st.TaskID, st.Attempt, EvTestSkipped)
 	if err != nil {
 		return nil, err
 	}
@@ -1017,13 +1031,14 @@ func latestVerification(ctx context.Context, tx pgx.Tx, st *State) (*prVerificat
 	var v *prVerification
 	for rows.Next() {
 		var c prCriterion
-		var heads []byte
-		if err := rows.Scan(&c.Text, &c.Status, &c.Decision, &c.DecidedBy, &c.Note, &heads); err != nil {
+		var heads, standsFor []byte
+		if err := rows.Scan(&c.Text, &c.Status, &c.Decision, &c.DecidedBy, &c.Note, &c.Carried, &heads, &standsFor); err != nil {
 			return nil, err
 		}
 		if v == nil {
 			v = &prVerification{}
 			_ = json.Unmarshal(heads, &v.Heads)
+			_ = json.Unmarshal(standsFor, &v.StandsFor)
 		}
 		v.Criteria = append(v.Criteria, c)
 	}

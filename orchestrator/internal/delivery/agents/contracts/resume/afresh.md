@@ -1,0 +1,1 @@
+This branch was tested before, and has changed since by more than a next round goes on from, or in a way it could not: this round tests afresh. Run every criterion's check and report every criterion with fresh evidence. No criterion may be carried from an earlier round.

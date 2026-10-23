@@ -310,6 +310,9 @@ func scriptedPolicy() delivery.Policy {
 	p.RequiredReviewers = []string{"correctness"}
 	p.Test = false // the world's project pins it off; the gate's tests turn it on
 	p.ResumeRounds = false
+	// The scripted writers' files (FIXED.md, SIMPLE.md) stand for product
+	// changes: only CI configuration is outside the product here.
+	p.NonProductPaths = []string{".github/**"}
 	return p
 }
 
