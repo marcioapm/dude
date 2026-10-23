@@ -738,31 +738,35 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "agent review"); err != nil {
 		return workflow.Result{}, err
 	}
-	categories := ReviewersFor(st.Policy, st.ChangedPaths)
-	reviewRange := st.reviewRange()
-	if reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0 {
-		// A check that the simplifier changed no behaviour: the policy's
-		// required reviewers, whatever paths it touched.
-		categories = st.Policy.RequiredReviewers
-	}
-	d := directed(st, PhaseReview)
-	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
-		return workflow.Result{}, err
-	}
-	if d != nil && len(d.Categories) > 0 {
-		categories = d.Categories
-	}
-	// A retry of a round some reviewers failed: only theirs run again.
-	retrying := st.RetryCategories
-	if len(retrying) > 0 {
-		categories, st.RetryCategories = retrying, nil
-	}
 	// A re-review judges what the fixer was sent: every open finding a fix
 	// has attempted, by the reviewer of its category, or by one of this
 	// round's when it has none (judgedBy).
 	attempted, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	d := directed(st, PhaseReview)
+	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
+	reviewRange := st.reviewRange()
+	// A retry of a round some reviewers failed: only theirs run again.
+	retrying := st.RetryCategories
+	var categories []string
+	var reasons map[string][]string
+	switch {
+	case len(retrying) > 0:
+		categories, reasons, st.RetryCategories = retrying, eachFor(retrying, ReasonRetry), nil
+	case d != nil && len(d.Categories) > 0:
+		categories, reasons = d.Categories, eachFor(d.Categories, ReasonDirected)
+	case reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0:
+		// A check that the simplifier changed no behaviour: the policy's
+		// required reviewers, whatever paths it touched.
+		categories, reasons = st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired)
+	default:
+		if categories, reasons, err = w.roundReviewers(ctx, sc, st, slices.Collect(maps.Keys(attempted))); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	if len(retrying) > 0 {
 		// The round's other reviewers judged theirs already.
@@ -799,11 +803,39 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		runIDs = append(runIDs, id)
 	}
 	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvRunCreated,
-		map[string]any{"phase": "review", "reviewers": categories, "iteration": st.Iteration}); err != nil {
+		map[string]any{"phase": "review", "reviewers": db.NonNil(categories), "reasons": reasons, "iteration": st.Iteration}); err != nil {
 		return workflow.Result{}, err
 	}
 	st.ReviewRunIDs = runIDs
+	if len(runIDs) == 0 {
+		// No reviewer is warranted (no always-run reviewer, and a change
+		// to non-product paths only, with no finding to judge): the round
+		// is complete and clear of new findings.
+		st.PendingRunIDs = nil
+		return workflow.Result{Next: "awaitReview", State: st}, nil
+	}
 	return park("awaitReview", st, runIDs), nil
+}
+
+// roundReviewers is the policy's choice of this round's reviewers
+// (RoundReviewers): a later round of the attempt is measured from the
+// previous review round's checkouts to the heads. An integration's review
+// is of a merge, not of what changed since a round: it is a first round.
+func (w *steps) roundReviewers(ctx context.Context, sc workflow.StepContext, st *State, attempted []string) ([]string, map[string][]string, error) {
+	r := ReviewRound{Whole: st.ChangedPaths, Attempted: attempted}
+	if st.Integration == nil {
+		from, err := w.s.lastReviewRound(ctx, sc.OrganizationID, st)
+		if err != nil {
+			return nil, nil, err
+		}
+		if r.Later = from != nil; r.Later {
+			if r.Change, err = w.roundChange(ctx, sc, st, PhaseReview, from); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	categories, reasons := RoundReviewers(st.Policy, r)
+	return categories, reasons, nil
 }
 
 // reviewRange is the range the next review round covers: what the

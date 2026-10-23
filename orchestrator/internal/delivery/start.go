@@ -124,6 +124,9 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 		if err := json.Unmarshal(in.Policy, &policy); err != nil {
 			return out, PolicyError{err}
 		}
+		if err := policy.checkReviewerKeys(); err != nil {
+			return out, PolicyError{err}
+		}
 	}
 	// The prompt's images are the ones the task's text references, kept so
 	// by the backend on every save (PromptAttachments). Which repositories

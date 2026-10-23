@@ -153,7 +153,7 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 			return p, fmt.Errorf("delivery policy layer %d: %w", i, err)
 		}
 	}
-	return p, nil
+	return p, p.checkReviewerKeys()
 }
 
 // Prompts are the prompts one Run is told with: the organization's (nil

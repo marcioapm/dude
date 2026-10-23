@@ -13,6 +13,9 @@
 package delivery
 
 import (
+	"errors"
+	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -30,6 +33,13 @@ type Policy struct {
 	BlockingSeverities   []string       `json:"blockingSeverities"`
 	RequiredReviewers    []string       `json:"requiredReviewers"`
 	ConditionalReviewers []ReviewerRule `json:"conditionalReviewers"`
+	// Run on every review round, a later round whose own change is
+	// non-product included.
+	AlwaysReviewers []string `json:"alwaysReviewers"`
+	// Globs of paths that are not the product (CI, docs): a later round
+	// whose own change touches only these runs no required reviewer
+	// beyond AlwaysReviewers and the reviewers of its findings.
+	NonProductPaths []string `json:"nonProductPaths"`
 	// Review → fix cycles before escalating to a person. The bound exists
 	// because a loop that cannot converge will spend a budget finding that out.
 	MaxReviewIterations int `json:"maxReviewIterations"`
@@ -87,6 +97,8 @@ func DefaultPolicy() Policy {
 			{Category: "frontend", WhenPathsMatch: []string{"**/*.tsx", "**/*.css"}},
 			{Category: "api", WhenPathsMatch: []string{"**/routes/**", "**/api/**"}},
 		},
+		AlwaysReviewers:       []string{"correctness"},
+		NonProductPaths:       []string{".github/**", "docs/**", "**/*.md"},
 		MaxReviewIterations:   5,
 		MaxAttemptsPerFinding: 2,
 		MaxStillRounds:        2,
@@ -158,36 +170,119 @@ var Publishes = map[string]bool{
 
 var reviewerOrder = []string{"correctness", "tests", "security", "database", "api", "frontend", "documentation", "performance"}
 
-// ReviewersFor picks the reviewers a diff warrants, in a stable order so a
-// task's fan-out is reproducible.
+// ReviewersFor picks the reviewers a diff warrants on a first review round,
+// in a stable order so a task's fan-out is reproducible.
 func ReviewersFor(p Policy, changedPaths []string) []string {
-	selected := map[string]bool{}
-	for _, c := range p.RequiredReviewers {
-		selected[c] = true
-	}
+	return inReviewerOrder(slices.Concat(p.RequiredReviewers, pathReviewers(p, changedPaths)))
+}
+
+// pathReviewers are the conditional reviewers whose rules match a path,
+// or that have no paths.
+func pathReviewers(p Policy, paths []string) []string {
+	var out []string
 	for _, rule := range p.ConditionalReviewers {
-		if len(rule.WhenPathsMatch) == 0 {
-			selected[rule.Category] = true
-			continue
-		}
-		for _, path := range changedPaths {
-			// A path is <repo>/<path in repo>: a rule may name either, so
-			// "migrations/**" matches api/migrations/x.sql, and "web/**"
-			// matches everything in web.
-			_, inRepo, _ := strings.Cut(path, "/")
-			if slices.ContainsFunc(rule.WhenPathsMatch, func(g string) bool { return MatchesGlob(g, path) || MatchesGlob(g, inRepo) }) {
-				selected[rule.Category] = true
-				break
-			}
+		if len(rule.WhenPathsMatch) == 0 || slices.ContainsFunc(paths, func(path string) bool { return matchesAny(rule.WhenPathsMatch, path) }) {
+			out = append(out, rule.Category)
 		}
 	}
+	return out
+}
+
+// matchesAny: a path is <repo>/<path in repo>, and a glob may name either,
+// so "migrations/**" matches api/migrations/x.sql, and "web/**" matches
+// everything in web.
+func matchesAny(globs []string, path string) bool {
+	_, inRepo, _ := strings.Cut(path, "/")
+	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, path) || MatchesGlob(g, inRepo) })
+}
+
+func inReviewerOrder(categories []string) []string {
 	var out []string
 	for _, c := range reviewerOrder {
-		if selected[c] {
+		if slices.Contains(categories, c) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// Why a reviewer runs in a round, as the round's run.created records it.
+const (
+	ReasonAlways     = "always"
+	ReasonFinding    = "finding"
+	ReasonPaths      = "paths"
+	ReasonRequired   = "required"
+	ReasonFirstRound = "first_round"
+	ReasonLargeRound = "large_round"
+	ReasonDirected   = "directed"
+	ReasonRetry      = "retry"
+)
+
+// ReviewRound is what a review round's reviewers are picked from.
+type ReviewRound struct {
+	// The task's changed paths, <repo>/<path>.
+	Whole []string
+	// Later: a review round of the attempt completed before this one, and
+	// Change is what changed since it.
+	Later  bool
+	Change RoundChange
+	// The categories of the open findings a fix attempted.
+	Attempted []string
+}
+
+// RoundReviewers picks a review round's reviewers, in reviewerOrder, and
+// why each runs. The first round of an attempt, one whose own change could
+// not be measured, and one over MaxResumeDeltaLines run the whole change's
+// reviewers (ReviewersFor). A later round runs AlwaysReviewers, the
+// reviewers of the findings it judges, the conditional reviewers its own
+// change's paths match, and RequiredReviewers when that change touches a
+// path outside NonProductPaths.
+func RoundReviewers(p Policy, r ReviewRound) ([]string, map[string][]string) {
+	why := map[string][]string{}
+	add := func(categories []string, reason string) {
+		for _, c := range inReviewerOrder(categories) {
+			if !slices.Contains(why[c], reason) {
+				why[c] = append(why[c], reason)
+			}
+		}
+	}
+	add(p.AlwaysReviewers, ReasonAlways)
+	switch {
+	case !r.Later || !r.Change.Measured:
+		add(ReviewersFor(p, r.Whole), ReasonFirstRound)
+	case r.Change.Lines > MaxResumeDeltaLines:
+		add(ReviewersFor(p, r.Whole), ReasonLargeRound)
+	default:
+		add(r.Attempted, ReasonFinding)
+		add(pathReviewers(p, r.Change.Paths), ReasonPaths)
+		if slices.ContainsFunc(r.Change.Paths, func(path string) bool { return !matchesAny(p.NonProductPaths, path) }) {
+			add(p.RequiredReviewers, ReasonRequired)
+		}
+	}
+	return inReviewerOrder(slices.Collect(maps.Keys(why))), why
+}
+
+// eachFor is categories, each run for one reason.
+func eachFor(categories []string, reason string) map[string][]string {
+	why := map[string][]string{}
+	for _, c := range categories {
+		why[c] = []string{reason}
+	}
+	return why
+}
+
+// checkReviewerKeys refuses an always-run reviewer that is not in the
+// catalogue, or an empty non-product glob.
+func (p Policy) checkReviewerKeys() error {
+	for _, c := range p.AlwaysReviewers {
+		if !slices.Contains(reviewerOrder, c) {
+			return fmt.Errorf("alwaysReviewers: "+rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
+		}
+	}
+	if slices.Contains(p.NonProductPaths, "") {
+		return errors.New("nonProductPaths: a glob is empty")
+	}
+	return nil
 }
 
 // FindingState is what the loop reads about a finding, or about a
