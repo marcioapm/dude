@@ -44,16 +44,24 @@
   display: inline;
   white-space: normal;
 }
-/* The glyph and the first word: the line never breaks between them. */
+/* The glyph and the first word: the line never breaks between them. A first
+   word wider than the cell (a long event name) breaks inside itself rather
+   than overflowing into the cell's ellipsis. */
 .triggerLead {
   white-space: nowrap;
+}
+.triggerLead > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .triggerLead > .kindIcon {
   display: inline-block;
   vertical-align: -2px;
   margin-inline-end: var(--ds-space-6);
 }
-.triggerWrap > span + span {
+/* The rest of the first phrase follows its first word with the phrase's own
+   space; only the "·" part after it is spaced by margin. */
+.triggerWrap > span + span:not(.triggerTail) {
   margin-inline-start: var(--ds-space-6);
 }
 .scope[data-scope="organization"] {

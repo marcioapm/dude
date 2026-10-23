@@ -92,7 +92,8 @@ export function OwnerMark({ owner, avatarOnly, left, org }: {
 /**
  * A trigger in one line: "Daily at 03:00 · Lisbon" or "pull_request ·
  * opened, synchronize". `wrap`: its words wrap in a narrow cell, the glyph
- * staying beside the first.
+ * staying beside the first word; a long event name breaks under the glyph
+ * rather than being cut off.
  */
 export function TriggerSummary({ trigger, wrap }: {
   readonly trigger: { readonly kind: "schedule"; readonly cron: string; readonly tz: string }
@@ -101,11 +102,25 @@ export function TriggerSummary({ trigger, wrap }: {
 }) {
   const schedule = trigger.kind === "schedule";
   const glyph = <Icon name={schedule ? "clock" : "github"} size={14} className={styles["kindIcon"]} />;
-  const first = schedule ? <span>{describeCron(trigger.cron)}</span> : <span className="ds-mono">{trigger.event}</span>;
+  const words = schedule ? describeCron(trigger.cron) : trigger.event;
+  const first = schedule ? <span>{words}</span> : <span className="ds-mono">{words}</span>;
+  // Wrapping: only the glyph and the first word are held together; the rest
+  // of the phrase may wrap, so a narrow cell never hides the time behind an
+  // ellipsis.
+  const space = words.indexOf(" ");
+  const head = space < 0 ? words : words.slice(0, space);
+  const tail = space < 0 ? "" : words.slice(space);
+  const lead = (
+    <>
+      <span className={styles["triggerLead"]}>{glyph}<span className={schedule ? undefined : "ds-mono"}>{head}</span></span>
+      {tail ? <span className={cx(styles["triggerTail"], !schedule && "ds-mono")}>{tail}</span> : null}
+    </>
+  );
   return (
     <span className={cx(styles["trigger"], wrap && styles["triggerWrap"])}>
-      {wrap ? <span className={styles["triggerLead"]}>{glyph}{first}</span> : <>{glyph}{first}</>}
-      <span className={styles["muted"]}>· {schedule ? cityOf(trigger.tz) : trigger.actions?.length ? trigger.actions.join(", ") : "any action"}</span>
+      {wrap ? lead : <>{glyph}{first}</>}
+      {/* A no-break space: the "·" never ends a line on its own. */}
+      <span className={styles["muted"]}>{"·\u00a0"}{schedule ? cityOf(trigger.tz) : trigger.actions?.length ? trigger.actions.join(", ") : "any action"}</span>
     </span>
   );
 }

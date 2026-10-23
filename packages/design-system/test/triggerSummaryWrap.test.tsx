@@ -39,7 +39,7 @@ afterAll(async () => {
   style?.remove();
 });
 
-for (const [id, first, rest] of [["wrap-github", "pull_request", "opened"], ["wrap-schedule", "Daily", "Lisbon"]] as const) {
+for (const [id, first, rest] of [["wrap-github", "pull_request", "opened"], ["wrap-schedule", "Daily", "at 03:00"]] as const) {
   test(`${id}: the glyph and "${first}" do not break apart; the rest wraps`, () => {
     const summary = host!.querySelector(`[data-testid=${id}] > span`)!;
     expect(getComputedStyle(summary).whiteSpace).toBe("normal");
@@ -47,7 +47,13 @@ for (const [id, first, rest] of [["wrap-github", "pull_request", "opened"], ["wr
     const lead = glyph.parentElement!;
     expect(lead).not.toBe(summary);
     expect(getComputedStyle(lead).whiteSpace).toBe("nowrap");
-    expect(lead.textContent).toContain(first);
+    expect(lead.textContent).toBe(first);
+    // Only the first word is held: everything after it may wrap, so a narrow
+    // cell never hides the time (or the actions) behind an ellipsis.
     expect(lead.textContent).not.toContain(rest);
+    expect(summary.textContent).toContain(rest);
+    // A first word wider than its cell breaks inside itself instead of overflowing.
+    const word = lead.querySelector(":scope > span")!;
+    expect(getComputedStyle(word).overflowWrap).toBe("anywhere");
   });
 }
