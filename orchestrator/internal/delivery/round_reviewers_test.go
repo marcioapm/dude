@@ -1,0 +1,598 @@
+package delivery
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
+)
+
+// laterRound is a task whose whole change touched routes, a .tsx file and
+// a migration, whose first review round ended at aaa; its heads are now
+// bbb, and GitHub compares aaa...bbb as files.
+type laterRound struct {
+	t     *testing.T
+	ctx   context.Context
+	org   string
+	owner *pgx.Conn
+	exec  func(q string, args ...any)
+	steps *steps
+	files []map[string]any
+	// Compare files by repository slug, for a task of several repositories.
+	bySlug   map[string][]map[string]any
+	status   int
+	compares int
+	st       *State
+}
+
+// The whole task's paths, which pick every conditional reviewer.
+var wholeTask = []string{"repo/src/api/routes/work.ts", "repo/web/src/App.tsx", "repo/migrations/031_x.sql", "repo/src/auth/login.ts"}
+
+// modified is a compare's files: each name modified by 4 lines.
+func modified(names ...string) []map[string]any {
+	var files []map[string]any
+	for _, name := range names {
+		files = append(files, map[string]any{"filename": name, "status": "modified", "additions": 3, "deletions": 1})
+	}
+	return files
+}
+
+func newLaterRound(t *testing.T, files ...string) *laterRound {
+	app, owner := dbtest.Open(t)
+	r := &laterRound{t: t, ctx: context.Background(), org: dbtest.Org(t, owner), owner: owner, status: 200, files: modified(files...)}
+	r.exec = func(q string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(r.ctx, q, append([]any{r.org}, args...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_rr', $1, 'P', 'p', 'P')`)
+	r.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_rr', $1, 'prj_rr', 1, 'T', 'g', 'running')`)
+	r.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ('repo_rr', $1, 'prj_rr', 'repo', 'https://github.com/acme/repo.git', 'main')`)
+	r.exec(`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_rr', 'repo_rr', $1)`)
+	r.st = &State{TaskID: "wi_rr", ProjectID: "prj_rr", Attempt: 1, Iteration: 1, Decider: "policy", Policy: DefaultPolicy(),
+		Heads: map[string]string{"repo": "bbb"}, ChangedPaths: wholeTask}
+	raw, _ := json.Marshal(r.st)
+	r.exec(`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
+		VALUES ('wfr_rr', $1, 'task.delivery', 'rr', 'running', 'review', $2, 'wi_rr')`, raw)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.compares++
+		// /repos/<owner>/<name>/compare/...
+		if parts := strings.Split(req.URL.Path, "/"); r.bySlug != nil && len(parts) > 3 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": r.bySlug[parts[2]+"/"+parts[3]]})
+			return
+		}
+		if !strings.Contains(req.URL.Path, "/compare/aaa...bbb") {
+			t.Errorf("unexpected request %s", req.URL.Path)
+		}
+		w.WriteHeader(r.status)
+		_ = json.NewEncoder(w).Encode(map[string]any{"files": r.files})
+	}))
+	t.Cleanup(srv.Close)
+	pool, err := pgxpool.NewWithConfig(r.ctx, app.Pool.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	r.steps = &steps{s: &Store{DB: &db.DB{Pool: pool}}, forges: forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "t", APIBaseURL: srv.URL})}}
+	return r
+}
+
+// firstRound records a completed review round of the attempt at aaa.
+func (r *laterRound) firstRound() *laterRound {
+	r.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category, base_refs, ended_at)
+		VALUES ('run_rr1', $1, 'prj_rr', 'wi_rr', 1, 'completed', 'review', 'reviewer', 'agent', 'correctness', '{"repo":"aaa"}', now())`)
+	return r
+}
+
+// attempted adds an open finding of category a fix attempted.
+func (r *laterRound) attempted(category string) {
+	r.exec(`INSERT INTO review_findings (id, organization_id, task_id, run_id, severity, category, title, description, status, fix_attempts)
+		VALUES ('fnd_'||$2::text, $1, 'wi_rr', 'run_rr1', 'high', $2, 'T', 'd', 'open', 1)`, category)
+}
+
+func (r *laterRound) sc(step string) workflow.StepContext {
+	raw, _ := json.Marshal(r.st)
+	return workflow.StepContext{WorkflowRunID: "wfr_rr", OrganizationID: r.org, Step: step, State: raw}
+}
+
+// reload reads the state the workflow row holds, as a replay of a step does.
+func (r *laterRound) reload() {
+	r.t.Helper()
+	var raw []byte
+	if err := r.owner.QueryRow(r.ctx, `SELECT state FROM workflow_runs WHERE id = 'wfr_rr'`).Scan(&raw); err != nil {
+		r.t.Fatal(err)
+	}
+	r.st = &State{}
+	if err := json.Unmarshal(raw, r.st); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// policy layers raw over the defaults, as a project's settings do.
+func (r *laterRound) policy(raw string) {
+	r.t.Helper()
+	p, err := ResolvePolicy(nil, json.RawMessage(raw))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.st.Policy = p
+}
+
+// onCandidate puts the round on a pull request's candidate cut at aaa.
+func (r *laterRound) onCandidate() {
+	r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+}
+
+// completeRound marks every Run the test's review steps made completed at
+// the heads they started from.
+func (r *laterRound) completeRound() {
+	r.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE organization_id = $1 AND task_id = 'wi_rr' AND id <> 'run_rr1'`)
+}
+
+// review runs the review step and returns the round's reviewers and why
+// each runs, as its run.created records them, and the step's result.
+func (r *laterRound) review() ([]string, map[string][]string, workflow.Result) {
+	r.t.Helper()
+	res, err := r.steps.review(r.ctx, r.sc("review"))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	var payload struct {
+		Reviewers []string            `json:"reviewers"`
+		Reasons   map[string][]string `json:"reasons"`
+	}
+	var raw []byte
+	if err := r.owner.QueryRow(r.ctx, `SELECT payload FROM events WHERE task_id = 'wi_rr' AND event_type = 'run.created'
+		AND run_id IS NULL ORDER BY occurred_at DESC, id DESC LIMIT 1`).Scan(&raw); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		r.t.Fatal(err)
+	}
+	rows, err := r.owner.Query(r.ctx, `SELECT category FROM runs WHERE task_id = 'wi_rr' AND id <> 'run_rr1'
+		AND creation_key LIKE '%:review:' || $1::int || ':%' ORDER BY category`, r.st.Iteration)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	made, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if want := slices.Sorted(slices.Values(payload.Reviewers)); !slices.Equal(made, want) {
+		r.t.Fatalf("runs made %v, run.created says %v", made, payload.Reviewers)
+	}
+	return payload.Reviewers, payload.Reasons, res
+}
+
+var firstRoundOfWholeTask = []string{"correctness", "tests", "security", "database", "api", "frontend", "performance"}
+
+func TestALaterRoundOfACIChangeRunsCorrectnessAlone(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness"}) {
+		t.Fatalf("reviewers %v, want correctness alone", got)
+	}
+	if !slices.Equal(why["correctness"], []string{ReasonAlways}) {
+		t.Errorf("why %v", why)
+	}
+	if r.compares != 1 {
+		t.Errorf("%d compares for one repository's round, want 1 shared with the resumption", r.compares)
+	}
+}
+
+func TestALaterRoundRunsTheReviewerOfAFindingItJudges(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.attempted("api")
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "api"}) {
+		t.Fatalf("reviewers %v, want correctness and api", got)
+	}
+	if !slices.Equal(why["api"], []string{ReasonFinding}) {
+		t.Errorf("why %v", why)
+	}
+}
+
+// The round's own change is one .tsx file: product, so the required
+// reviewers, and frontend by its path; not the reviewers the whole task's
+// routes, migrations and auth picked.
+func TestALaterRoundsReviewersFollowItsOwnChangeNotTheWholeTasks(t *testing.T) {
+	r := newLaterRound(t, "web/src/Button.tsx").firstRound()
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "frontend", "performance"}) {
+		t.Fatalf("reviewers %v", got)
+	}
+	if !slices.Equal(why["frontend"], []string{ReasonPaths}) || !slices.Equal(why["tests"], []string{ReasonRequired}) ||
+		!slices.Equal(why["correctness"], []string{ReasonAlways, ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+}
+
+// A rename out of migrations into docs: the old path is product and a
+// migration, so the round runs database by its paths and the required
+// reviewers, though the new path alone is non-product.
+func TestALaterRoundCountsARenamesOldPath(t *testing.T) {
+	r := newLaterRound(t).firstRound()
+	r.files = []map[string]any{{"filename": "docs/old_schema.md", "previous_filename": "migrations/031_x.sql", "status": "renamed", "additions": 0, "deletions": 0}}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "database", "performance"}) {
+		t.Fatalf("reviewers %v", got)
+	}
+	if !slices.Equal(why["database"], []string{ReasonPaths}) || !slices.Equal(why["tests"], []string{ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+}
+
+// Two repositories, one changed only CI and the other a .tsx file: the
+// round's change is both repositories', so frontend and the required
+// reviewers run.
+func TestALaterRoundsChangeSpansEveryRepository(t *testing.T) {
+	r := newLaterRound(t).firstRound()
+	r.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ('repo_rr_web', $1, 'prj_rr', 'web', 'https://github.com/acme/web.git', 'main')`)
+	r.exec(`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_rr', 'repo_rr_web', $1)`)
+	r.exec(`UPDATE runs SET base_refs = '{"repo":"aaa","web":"ccc"}' WHERE organization_id = $1 AND id = 'run_rr1'`)
+	r.st.Heads = map[string]string{"repo": "bbb", "web": "ddd"}
+	// Repositories are compared in name order: the product change is in the
+	// first one read, the CI-only one last.
+	r.bySlug = map[string][]map[string]any{"acme/repo": modified("src/App.tsx"), "acme/web": modified(".github/x.yml")}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "frontend", "performance"}) {
+		t.Fatalf("reviewers %v", got)
+	}
+	if !slices.Equal(why["frontend"], []string{ReasonPaths}) || r.compares != 2 {
+		t.Errorf("why %v, %d compares", why, r.compares)
+	}
+}
+
+// The review step runs again after one of its round's Runs completed (a
+// forge wait or a failure part-way through creating them): the replay
+// creates the same round, not one measured from that Run's checkouts.
+func TestAReplayedReviewStepKeepsItsRoundsReviewers(t *testing.T) {
+	r := newLaterRound(t, "web/src/Button.tsx").firstRound()
+	first, _, _ := r.review()
+	r.exec(`UPDATE runs SET status = 'completed', ended_at = now() + interval '1 second'
+		WHERE organization_id = $1 AND task_id = 'wi_rr' AND category = 'tests' AND id <> 'run_rr1'`)
+	r.reload()
+	again, why, _ := r.review()
+	if !slices.Equal(again, first) || !slices.Equal(again, []string{"correctness", "tests", "frontend", "performance"}) {
+		t.Fatalf("replayed round %v, first run %v", again, first)
+	}
+	if !slices.Equal(why["frontend"], []string{ReasonPaths}) {
+		t.Errorf("why %v", why)
+	}
+	// The next iteration's round is chosen afresh.
+	r.st.Iteration++
+	next, _, _ := r.review()
+	if !slices.Equal(next, []string{"correctness"}) {
+		t.Errorf("next iteration's round %v, want it measured from the completed Run", next)
+	}
+}
+
+// cachedPaths is how many paths each roundDelta entry the workflow row holds.
+func (r *laterRound) cachedPaths() []int {
+	r.t.Helper()
+	rows, err := r.owner.Query(r.ctx, `SELECT COALESCE(jsonb_array_length(v->'paths'), 0) FROM workflow_runs, jsonb_each(state->'roundDelta') e(k, v)
+		WHERE id = 'wfr_rr' ORDER BY 1`)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	n, err := pgx.CollectRows(rows, pgx.RowTo[int])
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return n
+}
+
+// The round-delta cache keeps paths only where a review round's choice
+// reads them: the review key of a round within MaxResumeDeltaLines.
+func TestTheRoundDeltaCacheKeepsPathsOnlyForAReviewChoice(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		phase string
+		lines int
+		want  int
+	}{{"review", PhaseReview, 4, 1}, {"large review", PhaseReview, MaxResumeDeltaLines + 1, 0}, {"fix", PhaseFix, 4, 0}, {"test", PhaseTest, 4, 0}} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLaterRound(t, "web/src/Button.tsx")
+			r.files[0]["additions"], r.files[0]["deletions"] = c.lines, 0
+			change, err := r.steps.roundChange(r.ctx, r.sc("review"), r.st, c.phase, map[string]string{"repo": "aaa"})
+			if err != nil || !change.Measured || change.Lines != c.lines {
+				t.Fatalf("change %+v: %v", change, err)
+			}
+			if got := r.cachedPaths(); !slices.Equal(got, []int{c.want}) {
+				t.Errorf("cached paths %v, want [%d]", got, c.want)
+			}
+		})
+	}
+}
+
+// A replay whose heads moved since the round was chosen (a person's push,
+// read by refreshPRWaitHeads) chooses again: the stored choice never saw
+// that change.
+func TestAReplayAtMovedHeadsChoosesItsRoundAgain(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	if first, _, _ := r.review(); !slices.Equal(first, []string{"correctness"}) {
+		t.Fatalf("round at bbb %v", first)
+	}
+	r.reload()
+	if r.st.ReviewChoice == nil {
+		t.Fatal("no stored choice")
+	}
+	r.st.Heads = map[string]string{"repo": "ccc"}
+	r.bySlug = map[string][]map[string]any{"acme/repo": modified("web/src/Button.tsx")}
+	again, why, _ := r.review()
+	if !slices.Equal(again, []string{"correctness", "tests", "frontend", "performance"}) || !slices.Equal(why["frontend"], []string{ReasonPaths}) {
+		t.Fatalf("replay at moved heads %v %v, want the round chosen again", again, why)
+	}
+}
+
+// refusingStarter fails any start: a policy StartTx refuses never gets here.
+type refusingStarter struct{}
+
+func (refusingStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions) (string, bool, error) {
+	return "", false, errors.New("started")
+}
+
+// Deliver's per-task policy reaches StartTx unchecked by the settings
+// schema: a null list is refused there, not read as an empty one.
+func TestADeliverPolicyWithANullReviewerListIsRefused(t *testing.T) {
+	r := newLaterRound(t)
+	for _, raw := range []string{`{"alwaysReviewers":null}`, `{"nonProductPaths":null}`} {
+		err := r.steps.s.DB.InOrg(r.ctx, r.org, func(tx pgx.Tx) error {
+			_, err := StartTx(r.ctx, tx, refusingStarter{}, StartInput{Org: r.org, TaskID: "wi_rr", How: HowDeliver, Policy: json.RawMessage(raw)})
+			return err
+		})
+		if !errors.As(err, new(PolicyError)) {
+			t.Errorf("%s: %v, want a PolicyError", raw, err)
+		}
+	}
+}
+
+// nonProductPaths name paths in a repository, not repositories: a product
+// change in a repository named docs is not matched by "docs/**".
+func TestARepositoryNamedLikeANonProductGlobIsProduct(t *testing.T) {
+	r := newLaterRound(t, "src/components/Search.tsx")
+	r.exec(`UPDATE repositories SET name = 'docs' WHERE organization_id = $1 AND id = 'repo_rr'`)
+	r.firstRound()
+	r.exec(`UPDATE runs SET base_refs = '{"docs":"aaa"}' WHERE organization_id = $1 AND id = 'run_rr1'`)
+	r.st.Heads = map[string]string{"docs": "bbb"}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "frontend", "performance"}) {
+		t.Fatalf("reviewers %v, want the required ones and frontend", got)
+	}
+	if !slices.Equal(why["tests"], []string{ReasonRequired}) || !slices.Equal(why["correctness"], []string{ReasonAlways, ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+}
+
+func TestALargeLaterRoundRunsTheFirstRoundsReviewers(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.files[0]["additions"] = MaxResumeDeltaLines
+	got, why, _ := r.review()
+	if !slices.Equal(got, firstRoundOfWholeTask) {
+		t.Fatalf("reviewers %v, want the first round's", got)
+	}
+	if !slices.Equal(why["database"], []string{ReasonLargeRound}) {
+		t.Errorf("why %v", why)
+	}
+}
+
+func TestAnUnmeasurableLaterRoundRunsTheFirstRoundsReviewers(t *testing.T) {
+	for _, how := range []string{"refused", "truncated", "no forge"} {
+		t.Run(how, func(t *testing.T) {
+			r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+			switch how {
+			case "refused":
+				r.status = 404
+			case "truncated":
+				for range 300 {
+					r.files = append(r.files, map[string]any{"filename": "docs/a.md", "additions": 0, "deletions": 0})
+				}
+			case "no forge":
+				r.steps.forges = nil
+			}
+			got, why, _ := r.review()
+			if !slices.Equal(got, firstRoundOfWholeTask) {
+				t.Fatalf("reviewers %v, want the first round's", got)
+			}
+			if !slices.Equal(why["api"], []string{ReasonFirstRound}) {
+				t.Errorf("why %v", why)
+			}
+		})
+	}
+}
+
+func TestTheFirstRoundOfAnAttemptRunsTheWholeChangesReviewers(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml")
+	got, _, _ := r.review()
+	if !slices.Equal(got, firstRoundOfWholeTask) {
+		t.Fatalf("reviewers %v", got)
+	}
+	if r.compares != 0 {
+		t.Errorf("%d compares for a first round", r.compares)
+	}
+}
+
+// A project that runs no reviewer always: a CI-only later round has no
+// reviewer, and the loop goes on as from a clear round.
+func TestALaterRoundWithNoReviewerGoesOnClear(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.policy(`{"alwaysReviewers":[]}`)
+	got, _, res := r.review()
+	if len(got) != 0 || res.Next != "awaitReview" || len(res.AwaitSignals) != 0 {
+		t.Fatalf("reviewers %v, result %+v; want none, straight to awaitReview", got, res)
+	}
+	r.st = res.State.(*State)
+	after, err := r.steps.awaitReview(r.ctx, r.sc("awaitReview"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Next != "simplify" || after.State.(*State).Iteration != 2 {
+		t.Fatalf("after an empty round: %+v", after)
+	}
+}
+
+// A pull request's CI-only fix on its candidate, in a project that runs no
+// reviewer always: promotion waits on a completed review at the candidate's
+// head, so the round runs the required reviewers rather than none.
+func TestAnEmptyRoundOnACandidateRunsTheRequiredReviewers(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.policy(`{"alwaysReviewers":[]}`)
+	r.onCandidate()
+	res, err := r.steps.promoteCandidate(r.ctx, r.sc("promoteCandidate"))
+	if err != nil || res.Next != "review" {
+		t.Fatalf("promoteCandidate on an unreviewed head went to %q: %v", res.Next, err)
+	}
+	got, why, res := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "performance"}) || len(res.AwaitSignals) == 0 {
+		t.Fatalf("reviewers %v, result %+v; want the required ones, awaited", got, res)
+	}
+	if !slices.Equal(why["tests"], []string{ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+	r.completeRound()
+	if unreviewed, err := r.steps.s.unreviewedHeads(r.ctx, r.org, r.st, r.st.Candidate); err != nil || len(unreviewed) != 0 {
+		t.Fatalf("after the round, promotion still finds %v unreviewed: %v", unreviewed, err)
+	}
+}
+
+// With no required reviewer either, the gate-bound round falls back to the
+// first round's reviewers.
+func TestAnEmptyGateBoundRoundWithNoRequiredReviewerRunsTheFirstRounds(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.policy(`{"alwaysReviewers":[],"requiredReviewers":[]}`)
+	r.onCandidate()
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"security", "database", "api", "frontend"}) || !slices.Equal(why["api"], []string{ReasonFirstRound}) {
+		t.Fatalf("reviewers %v %v", got, why)
+	}
+}
+
+// A CI-only head the conductor published, before any pull request: the
+// pull request step sends it to review, and that round must complete a
+// review at the head for the step to let it through.
+func TestAnEmptyRoundOnAnUntestedConductorHeadRunsTheRequiredReviewers(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.policy(`{"alwaysReviewers":[]}`)
+	r.exec(`INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, status, heads)
+		VALUES ('pub_rr', $1, 'wi_rr', 'run_rr1', 'req_rr', 'published', '{"repo":{"sha":"bbb"}}')`)
+	res, err := r.steps.openPullRequest(r.ctx, r.sc("openPullRequest"))
+	if err != nil || res.Next != "review" {
+		t.Fatalf("openPullRequest on an untested conductor head went to %q: %v", res.Next, err)
+	}
+	got, why, res := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "performance"}) || len(res.AwaitSignals) == 0 {
+		t.Fatalf("reviewers %v, result %+v; want the required ones, awaited", got, res)
+	}
+	if !slices.Equal(why["correctness"], []string{ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+	r.completeRound()
+	if _, diverted, err := r.steps.reviewUntested(r.ctx, r.sc("openPullRequest"), r.st); err != nil || diverted {
+		t.Fatalf("after the round, the pull request step still diverts: %v", err)
+	}
+}
+
+func TestDirectedAndRetriedRoundsKeepTheirCategories(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.st.RetryCategories = []string{"security"}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"security"}) || !slices.Equal(why["security"], []string{ReasonRetry}) {
+		t.Fatalf("retry: %v %v", got, why)
+	}
+
+	r = newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.st.Directed = &Directed{Phase: PhaseReview, Categories: []string{"database"}}
+	got, why, _ = r.review()
+	if !slices.Equal(got, []string{"database"}) || !slices.Equal(why["database"], []string{ReasonDirected}) {
+		t.Fatalf("directed: %v %v", got, why)
+	}
+}
+
+func TestAlwaysReviewersAndNonProductPathsAreValidated(t *testing.T) {
+	if _, err := ResolvePolicy(json.RawMessage(`{"alwaysReviewers":["vibes"]}`)); err == nil {
+		t.Error("an unknown always-run reviewer was accepted")
+	}
+	if _, err := ResolvePolicy(json.RawMessage(`{"nonProductPaths":[""]}`)); err == nil {
+		t.Error("an empty non-product glob was accepted")
+	}
+	// As packages/domain's deliveryPolicySchema: trimmed, at most 200
+	// characters each (UTF-16 units, as JS counts them) and 50 globs, and
+	// no null for either list.
+	for name, raw := range map[string]string{
+		"blank":          `{"nonProductPaths":["  "]}`,
+		"201 characters": `{"nonProductPaths":["` + strings.Repeat("a", 201) + `"]}`,
+		// 201 UTF-16 units, 101 runes: each emoji is a surrogate pair.
+		"201 UTF-16 units": `{"nonProductPaths":["` + strings.Repeat("😀", 100) + `a"]}`,
+		"51 globs":         `{"nonProductPaths":[` + strings.Repeat(`"a/**",`, 50) + `"b/**"]}`,
+		"null always":      `{"alwaysReviewers":null}`,
+		"null non-product": `{"nonProductPaths":null}`,
+	} {
+		if _, err := ResolvePolicy(json.RawMessage(raw)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	// 150 é: 150 UTF-16 units, 300 bytes.
+	if p, err := ResolvePolicy(json.RawMessage(`{"nonProductPaths":[" infra/** ","` + strings.Repeat("a", 200) + `","` + strings.Repeat("é", 150) + `"]}`)); err != nil || p.NonProductPaths[0] != "infra/**" {
+		t.Errorf("a padded glob, one of 200 characters and one of 150 é: %v %v", p.NonProductPaths, err)
+	}
+	p, err := ResolvePolicy(json.RawMessage(`{"alwaysReviewers":["security"]}`), json.RawMessage(`{"nonProductPaths":["infra/**"]}`))
+	if err != nil || !slices.Equal(p.AlwaysReviewers, []string{"security"}) || !slices.Equal(p.NonProductPaths, []string{"infra/**"}) {
+		t.Fatalf("layers: %+v %v", p, err)
+	}
+	if d := DefaultPolicy(); !slices.Equal(d.AlwaysReviewers, []string{"correctness"}) ||
+		!slices.Equal(d.NonProductPaths, []string{".github/**", "docs/**", "**/*.md"}) {
+		t.Errorf("defaults %v %v", d.AlwaysReviewers, d.NonProductPaths)
+	}
+}
+
+// The boundaries of "later round": an integration's review, a new attempt,
+// a previous round that failed, and a pull request's fix on its candidate.
+func TestWhereALaterRoundStarts(t *testing.T) {
+	t.Run("an integration review is a first round", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		r.st.Integration = &Integration{Repo: "repo", Number: 7, RunID: "run_int", MergeSHA: "bbb"}
+		got, why, _ := r.review()
+		if !slices.Equal(got, firstRoundOfWholeTask) || !slices.Equal(why["api"], []string{ReasonFirstRound}) || r.compares != 0 {
+			t.Fatalf("reviewers %v %v, %d compares", got, why, r.compares)
+		}
+	})
+	t.Run("the first round of a new attempt is a first round", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		r.st.Attempt = 2
+		got, _, _ := r.review()
+		if !slices.Equal(got, firstRoundOfWholeTask) || r.compares != 0 {
+			t.Fatalf("reviewers %v, %d compares", got, r.compares)
+		}
+	})
+	t.Run("a failed round is not where the change starts", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		// The handler refuses any compare but aaa...bbb.
+		r.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category, base_refs, ended_at)
+			VALUES ('run_rr_failed', $1, 'prj_rr', 'wi_rr', 1, 'failed', 'review', 'reviewer', 'agent', 'tests', '{"repo":"zzz"}', now() + interval '1 second')`)
+		got, _, _ := r.review()
+		if !slices.Equal(got, []string{"correctness"}) || r.compares != 1 {
+			t.Fatalf("reviewers %v, %d compares", got, r.compares)
+		}
+	})
+	t.Run("a pull request's fix on its candidate is a later round", func(t *testing.T) {
+		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+		r.onCandidate()
+		got, why, _ := r.review()
+		if !slices.Equal(got, []string{"correctness"}) || !slices.Equal(why["correctness"], []string{ReasonAlways}) || r.compares != 1 {
+			t.Fatalf("reviewers %v %v, %d compares", got, why, r.compares)
+		}
+	})
+}

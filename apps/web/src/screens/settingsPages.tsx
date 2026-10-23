@@ -542,13 +542,17 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   const d = settings.delivery;
   const canEdit = settings.canEdit;
   const [form, setForm] = useState<FullDeliveryPolicy>(() => deliveryValues(d));
+  const [nonProduct, setNonProduct] = useState(() => d.nonProductPaths.value.join(", "));
   const { busy, problem, save } = useSave();
-  useEffect(() => setForm(deliveryValues(d)), [d]);
+  useEffect(() => {
+    setForm(deliveryValues(d));
+    setNonProduct(d.nonProductPaths.value.join(", "));
+  }, [d]);
 
   const changes = deliveryPatch(d, form);
   const dirty = Object.keys(changes).length > 0;
   const setField = <K extends keyof FullDeliveryPolicy>(k: K, v: FullDeliveryPolicy[K]) => setForm((f) => ({ ...f, [k]: v }));
-  const toggle = <K extends "requiredReviewers" | "blockingSeverities">(k: K, v: string, on: boolean) =>
+  const toggle = <K extends "requiredReviewers" | "alwaysReviewers" | "blockingSeverities">(k: K, v: string, on: boolean) =>
     setField(k, (on ? [...form[k], v] : form[k].filter((x) => x !== v)) as FullDeliveryPolicy[K]);
   const number = (k: keyof FullDeliveryPolicy, min: number, max: number, help: string, label: string) => (
     <SettingRow
@@ -590,6 +594,8 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
       <SettingsHeader title="Delivery" description="How a task goes from Deliver to a pull request." />
       <SettingsSection title="Review">
         <SettingRow
+          role="group"
+          aria-label="Reviewers every delivery runs"
           label="Reviewers every delivery runs"
           help="Others join when a change touches their area."
           source={<Source scope={scope} setting={d.requiredReviewers} reset={() => void scope.patch({ delivery: { requiredReviewers: null } }, "Reviewers reset")} />}
@@ -598,6 +604,30 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
             <Checkbox key={c} label={REVIEWER_CATEGORY_LABEL[c]} disabled={!canEdit} checked={form.requiredReviewers.includes(c)}
               onCheckedChange={(on) => toggle("requiredReviewers", c, on === true)} />
           ))}
+        </SettingRow>
+        <SettingRow
+          role="group"
+          aria-label="Reviewers every round runs"
+          label="Reviewers every round runs"
+          help="A re-review after a fix runs these, the reviewers of the findings it judges, and the reviewers its own change picks."
+          source={<Source scope={scope} setting={d.alwaysReviewers} reset={() => void scope.patch({ delivery: { alwaysReviewers: null } }, "Reviewers reset")} />}
+        >
+          {REVIEWER_CATEGORIES.map((c) => (
+            <Checkbox key={c} label={REVIEWER_CATEGORY_LABEL[c]} disabled={!canEdit} checked={form.alwaysReviewers.includes(c)}
+              onCheckedChange={(on) => toggle("alwaysReviewers", c, on === true)} />
+          ))}
+        </SettingRow>
+        <SettingRow
+          label="Not product"
+          help="Paths, comma-separated, whose change alone does not bring back the reviewers every delivery runs: a re-review of a CI or docs fix. They are in-repo paths; to make a whole repository non-product, list its paths. The default **/*.md counts every Markdown file; replace it if your project ships Markdown as behaviour (prompt templates, help content)."
+          htmlFor="delivery-nonProductPaths"
+          source={<Source scope={scope} setting={d.nonProductPaths} reset={() => void scope.patch({ delivery: { nonProductPaths: null } }, "Paths reset")} />}
+        >
+          <Input id="delivery-nonProductPaths" data-testid="delivery-nonProductPaths" disabled={!canEdit} value={nonProduct}
+            onChange={(e) => {
+              setNonProduct(e.target.value);
+              setField("nonProductPaths", e.target.value.split(",").map((g) => g.trim()).filter(Boolean));
+            }} />
         </SettingRow>
         <SettingRow
           label="Findings that send it back"

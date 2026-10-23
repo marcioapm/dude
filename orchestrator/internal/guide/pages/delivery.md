@@ -22,7 +22,7 @@ Each step that writes code (implement, fix, simplify) pushes to a branch of its 
 
 ## Which reviewers run
 
-Every review round runs the **required reviewers**, plus any **conditional reviewer** whose paths the change touches. By default:
+Every first review round of a delivery runs the **required reviewers**, plus any **conditional reviewer** whose paths the change touches. By default:
 
 - Required: **Correctness**, **Tests** and **Performance**.
 - **Security** joins when a changed path matches `**/auth/**`, `**/payments/**` or `**/*credential*`.
@@ -34,6 +34,19 @@ Every review round runs the **required reviewers**, plus any **conditional revie
 Change the required reviewers in **Settings → Delivery → Reviewers every delivery runs**. At least one must be chosen.
 
 A re-review checks every open finding a fixer already tried. The reviewer of the finding's category judges it; those judged fixed are resolved. That is what lets the loop finish.
+
+A later round (a re-review after a fix, or the review of a pull request's fix or a test's fix) is picked from what changed since the previous review round, not from everything the task has changed. It runs:
+
+- the **reviewers every round runs** (`alwaysReviewers`, by default **Correctness**), even when the round changed only CI or docs;
+- the reviewer of each finding it judges;
+- each conditional reviewer whose paths the round's own change touches;
+- the required reviewers, unless the round changed only **non-product** paths (`nonProductPaths`, by default `.github/**`, `docs/**` and `**/*.md`). These are paths inside a repository: `docs/**` matches a `docs` folder, not a repository named `docs`. To make a whole repository non-product, list its paths.
+
+A round that changed more than 300 lines, or one GitHub cannot measure, runs the first round's reviewers again. A reviewer the conductor or a person names, and a retry of failed reviewers, run as asked. The round's `run.created` event lists why each reviewer ran: `always`, `finding`, `paths`, `required`, `first_round`, `large_round`, `directed` or `retry`. With no reviewer every round runs, a CI-only round with no finding to judge runs no reviewer and the loop goes on as from a clear round. On a pull request's fix being checked, or on a commit the conductor made before the pull request, such a round runs the required reviewers instead (reason `required`): those heads need a completed review before they go on.
+
+Change both under **Settings → Delivery → Reviewers every round runs** and **Not product**.
+
+The default `**/*.md` makes every Markdown file non-product, wherever it is. A project that ships Markdown as behaviour (prompt templates, help pages, content the product renders) should replace the list with one that leaves those out, for example `.github/**`, `docs/**`, `README.md` and `**/README.md`. A glob cannot exclude a path, so the list has to name what is non-product rather than carve out what is not.
 
 ## Which findings block
 
