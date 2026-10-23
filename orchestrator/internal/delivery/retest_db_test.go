@@ -68,6 +68,45 @@ func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
 	}
 }
 
+// A change whose paths look non-product still starts a tester when it is
+// not all non-product or not measured against the previous round: a
+// product file renamed under docs/ (its old name is a product path), and a
+// repository with a head now but no checkout recorded by the previous
+// round, which is compared from its default branch and does not descend.
+func TestATesterIsNotSkippedForAChangeItCannotTellIsNonProduct(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func(f *verdictFixture)
+		carry bool
+	}{
+		{"a product file renamed under docs", func(f *verdictFixture) {
+			f.gh.Set(func(s *fakegithub.Server) {
+				s.CompareAnswer = func(_, _ string, answer map[string]any) {
+					answer["files"] = []any{map[string]any{"filename": "docs/main.go", "previous_filename": "app/main.go",
+						"status": "renamed", "additions": 0, "deletions": 0}}
+				}
+			})
+		}, true},
+		{"a repository with no recorded checkout", func(f *verdictFixture) {
+			if _, err := f.owner.Exec(f.ctx, `UPDATE runs SET base_refs = '{}' WHERE id = 'run_c'`); err != nil {
+				f.t.Fatal(err)
+			}
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc, _ := newSkipFixture(t, map[string]string{"docs/main.go": "package main"}, VerdictPass, false, "")
+			c.setup(f)
+			skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if skip || (st.CarryFrom == "run_c") != c.carry {
+				t.Fatalf("skip %v, carry from %q; want no skip, carry %v", skip, st.CarryFrom, c.carry)
+			}
+		})
+	}
+}
+
 // A CI-only change after a pass still starts a tester when the conductor
 // directed this test, when the round is an integration's, or when a fix of
 // a failed test is due: each is a test someone asked for, not a round to
