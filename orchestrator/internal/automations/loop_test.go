@@ -247,6 +247,98 @@ func TestAutomationUnreadableRepoFilterCoversNothing(t *testing.T) {
 	}
 }
 
+// runNowTest fires a written test event on an event automation.
+func (h *harness) runNowTest(id, delivery string, body map[string]any, event string) string {
+	h.t.Helper()
+	b, _ := json.Marshal(body)
+	runID, v, err := h.runner.RunNow(context.Background(), h.org, id, h.person, "", &Payload{DeliveryID: delivery, Event: event, Body: b})
+	if err != nil || !v.Matches {
+		h.t.Fatalf("run now: %v %+v", err, v)
+	}
+	return runID
+}
+
+func (h *harness) run(automation, id string) runRow {
+	h.t.Helper()
+	for _, r := range h.runs(automation) {
+		if r.ID == id {
+			return r
+		}
+	}
+	h.t.Fatalf("no run %s", id)
+	return runRow{}
+}
+
+// A test run shares nothing with event runs (Q21), in the database's
+// decisions too: it starts while an event run is live; a live test run
+// neither makes an event skip (skip), nor is cancelled by one (cancel),
+// nor is sent one (send), nor holds an event run in the queue (queue).
+func TestAutomationTestRunSharesNothingWithLiveRuns(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_q21", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo done"), "concurrency": "skip"})
+	set := func(c string) { exec(t, h.owner, `UPDATE automations SET concurrency = $1 WHERE id = 'aut_q21'`, c) }
+
+	// An event run is live: a test run starts beside it, never queued.
+	h.deliver("q-1", "push", push)
+	h.until("the event run is running", func() bool { r := h.runs("aut_q21"); return len(r) == 1 && r[0].Status == "running" })
+	event1 := h.runs("aut_q21")[0].ID
+	test1 := h.runNowTest("aut_q21", "test-1", push, "push")
+	h.until("the test run is running beside it", func() bool { return h.run("aut_q21", test1).Status == "running" })
+
+	// cancel: an event cancels the event run, not the test run.
+	set("cancel")
+	h.deliver("q-2", "push", push)
+	h.until("the second event run is running", func() bool { r := h.runs("aut_q21"); return len(r) == 3 && r[2].Status == "running" })
+	if e, tr := h.run("aut_q21", event1), h.run("aut_q21", test1); e.Status != "cancelled" || tr.Status != "running" {
+		t.Fatalf("cancel: event %+v test %+v", e, tr)
+	}
+	event2 := h.runs("aut_q21")[2].ID
+
+	// skip with only the test run live (the event run cancelled by hand): an event starts.
+	set("skip")
+	exec(t, h.owner, `UPDATE automation_runs SET status = 'cancelled', ended_at = now() WHERE id = $1`, event2)
+	h.deliver("q-3", "push", push)
+	h.until("the third event is read", func() bool { return len(h.runs("aut_q21")) == 4 })
+	if r := h.runs("aut_q21")[3]; r.Status == "skipped" {
+		t.Fatalf("skip with only a test run live: %+v", r)
+	}
+	event3 := h.runs("aut_q21")[3].ID
+	h.until("the third event run is running", func() bool { return h.run("aut_q21", event3).Status == "running" })
+
+	// queue with only the test run live: an event starts, never waits behind it.
+	set("queue")
+	exec(t, h.owner, `UPDATE automation_runs SET status = 'cancelled', ended_at = now() WHERE id = $1`, event3)
+	h.deliver("q-4", "push", push)
+	h.until("the fourth event run is running", func() bool { r := h.runs("aut_q21"); return len(r) == 5 && r[4].Status == "running" })
+	if h.run("aut_q21", test1).Payloads != 1 {
+		t.Errorf("the test run was given an event: %+v", h.run("aut_q21", test1))
+	}
+}
+
+// send: an event arriving while only a test run of a resumable agent is
+// live starts its own run; the test run is sent nothing.
+func TestAutomationSendSkipsALiveTestRun(t *testing.T) {
+	h := newHarness(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_q21_send", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "send", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
+	test := h.runNowTest("aut_q21_send", "test-s", push, "push")
+	h.until("the test run is running", func() bool { return h.run("aut_q21_send", test).Status == "running" })
+	h.deliver("e-s", "push", push)
+	h.until("the event run is running", func() bool { r := h.runs("aut_q21_send"); return len(r) == 2 && r[1].Status == "running" })
+	if tr := h.run("aut_q21_send", test); tr.Payloads != 1 {
+		t.Errorf("the test run was sent the event: %+v", tr)
+	}
+	if ev := h.runs("aut_q21_send")[1]; ev.Session != "new" || ev.LuxRunID == h.run("aut_q21_send", test).LuxRunID {
+		t.Errorf("event run %+v", ev)
+	}
+}
+
 // A delivery an automation cannot be matched to (a paths filter with no
 // GitHub to read the pull request's files from) holds up nothing: a later
 // push still fires its own automation, a Run now on a schedule still starts,
