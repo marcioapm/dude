@@ -344,6 +344,7 @@ export const SETTINGS: SettingsResponse = {
     conductorWarmMinutes: { value: 5, source: "organization" },
     conductorEditLines: { value: 60, source: "organization" },
     conductorEditFiles: { value: 3, source: "organization" },
+    nonProductPaths: { value: [".github/**", "docs/**", "**/*.md"], source: "organization" },
   },
   network: {
     egress: { value: [], source: "organization" }, mode: { value: "add", source: "organization" },

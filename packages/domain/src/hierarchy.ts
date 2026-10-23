@@ -211,6 +211,8 @@ export const deliveryPolicySchema = z
     conductorEditLines: z.number().int().min(1).max(10_000),
     /** The most changed files a conductor may publish at once. */
     conductorEditFiles: z.number().int().min(1).max(1000),
+    /** Paths no criterion depends on: a change of these alone after a passing test starts no tester. */
+    nonProductPaths: z.array(z.string().min(1).max(200)).max(100),
   })
   .partial()
   .strict();
