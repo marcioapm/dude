@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
@@ -18,6 +20,7 @@ import (
 type pushWorld struct {
 	t          *testing.T
 	org        string
+	owner      *pgx.Conn
 	exec       func(string, ...any)
 	mu         sync.Mutex
 	recipients map[string]int
@@ -31,7 +34,7 @@ func newPushWorld(t *testing.T, names ...string) (*pushWorld, map[string]string)
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	ctx := context.Background()
-	w := &pushWorld{t: t, org: org, recipients: map[string]int{}, browsers: map[string]*browser{}}
+	w := &pushWorld{t: t, org: org, owner: owner, recipients: map[string]int{}, browsers: map[string]*browser{}}
 	w.exec = func(sql string, args ...any) {
 		t.Helper()
 		if _, err := owner.Exec(ctx, sql, args...); err != nil {
@@ -171,5 +174,140 @@ func TestAnOwnerQuestionOfAnAdminOwnedSessionReachesTheAdmins(t *testing.T) {
 	w.sweep(w.notifier(), 3)
 	if got := w.got(); len(got) != 2 || got[a1] != 2 || got[a2] != 1 {
 		t.Fatalf("after A1 took it over: %v, want A1 twice and A2 once", got)
+	}
+}
+
+// While its admins own the session, a question put by name to a member is
+// that member's (the asks sweep's), and one answered before the sweep is
+// nobody's: neither reaches an admin.
+func TestAQuestionByNameOrAnsweredDoesNotReachTheAdmins(t *testing.T) {
+	w, ids := newPushWorld(t, "admin1", "mem", "lea")
+	org := w.org
+	a1, mem, lea := ids["admin1"], ids["mem"], ids["lea"]
+	w.exec(`UPDATE people SET removed_at = now() WHERE id = $1`, lea)
+	id, run := "ssn_n_"+org, "run_n_"+org
+	w.exec(`INSERT INTO sessions (id, organization_id, title, owned_by_admins) VALUES ($1, $2, 'Billing', true)`, id, org)
+	w.exec(`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+		VALUES ($1, $2, $4, 'owner', now()), ($1, $3, $4, 'chat', now())`, id, lea, mem, org)
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, role, kind, status) VALUES ($1, $2, $3, 1, 'brainstorm', 'agent', 'running')`, run, org, id)
+	for _, q := range []struct{ id, to, status string }{{"q_named_", mem, "open"}, {"q_done_", "", "answered"}} {
+		w.exec(`INSERT INTO questions (id, organization_id, run_id, prompt, to_person, status) VALUES ($1, $2, $3, 'Which plan?', NULLIF($4, ''), $5)`,
+			q.id+org, org, run, q.to, q.status)
+		w.exec(`INSERT INTO events (id, organization_id, event_type, session_id, run_id, actor_type, actor_id, source, payload)
+			VALUES ($1, $2, 'question.asked', $3, $4, 'agent', $4, 'orchestrator', jsonb_build_object('questionId', $5::text, 'prompt', 'Which plan?'))`,
+			"evt_"+q.id+org, org, id, run, q.id+org)
+	}
+	w.sweep(w.notifier(), 3)
+	if got := w.got(); got[a1] != 0 || got[mem] != 1 {
+		t.Fatalf("pushes %v: want the named member once and no admin", got)
+	}
+}
+
+// The session sweep failing (here its sent set's grant is gone) is
+// reported, and the asks sweep still sends: an ask on a task nobody owns
+// reaches the organisation.
+func TestASessionSweepFailingStillSendsTheAsks(t *testing.T) {
+	w, ids := newPushWorld(t, "ana")
+	org := w.org
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'TEXT')`, "prj_"+org, org)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 20, 'Count words')`, "wi_"+org, org, "prj_"+org)
+	w.exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'task.ready_to_merge', $3, $4, 'system', 'orchestrator', 'orchestrator', '{}')`, "evt_r_"+org, org, "prj_"+org, "wi_"+org)
+	w.exec(`REVOKE SELECT ON push_session_sent FROM dude_sweeper`)
+	if _, err := w.notifier().Sweep(context.Background()); err == nil {
+		t.Errorf("the session sweep's failure was not reported")
+	}
+	if got := w.got(); got[ids["ana"]] != 1 {
+		t.Fatalf("with the session sweep failing the ask reached %v, want Ana once", got)
+	}
+}
+
+// sessionCursor is the session sweep's watermark, -1 while unset.
+func (w *pushWorld) sessionCursor(owner func(string, ...any) int64) int64 {
+	return owner(`SELECT COALESCE(session_after_cursor, -1) FROM push_config`)
+}
+
+// mentionAt records a mention of person, as a message would, with the
+// event at cursor (0: the next one): a transaction that took its cursor
+// earlier and commits now.
+func (w *pushWorld) mentionAt(session, person, by string, cursor int64) {
+	w.t.Helper()
+	w.exec(`INSERT INTO session_mentions (organization_id, session_id, person_id, by_person, text) VALUES ($1, $2, $3, $4, 'look')`,
+		w.org, session, person, by)
+	w.exec(`INSERT INTO events (cursor, id, organization_id, event_type, session_id, actor_type, actor_id, source, payload)
+		OVERRIDING SYSTEM VALUE
+		VALUES (CASE WHEN $5::bigint = 0 THEN nextval(pg_get_serial_sequence('events', 'cursor')) ELSE $5::bigint END,
+			'evt_' || md5(random()::text), $1, 'session.mentioned', $2, 'human', $3, 'orchestrator',
+			jsonb_build_object('person', $4::text, 'byName', 'Ana', 'text', 'look'))`,
+		w.org, session, by, person, cursor)
+}
+
+// A fresh deploy (no session watermark yet) starts at the asks'
+// watermark: a mention below it is history and never pushed, one above it
+// is, and the watermark is set. Once a sent mention is settled the
+// watermark moves to it and its sent row goes. A mention committed late,
+// below a sent one, holds the watermark below it until it is sent: pushed
+// once, never skipped.
+func TestTheSessionWatermarkStartsAtTheAsksAndNeverSkipsALateMention(t *testing.T) {
+	w, ids := newPushWorld(t, "ana", "old", "gus", "late")
+	org, ana := w.org, ids["ana"]
+	owner := w.owner
+	one := func(sql string, args ...any) int64 {
+		t.Helper()
+		var v int64
+		if err := owner.QueryRow(context.Background(), sql, args...).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	id := "ssn_w_" + org
+	w.exec(`INSERT INTO sessions (id, organization_id, title, access) VALUES ($1, $2, 'Q4', 'organisation')`, id, org)
+	w.exec(`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at) VALUES ($1, $2, $3, 'owner', now())`, id, ana, org)
+
+	w.mentionAt(id, ids["old"], ana, 0)
+	w.exec(`UPDATE push_config SET after_cursor = (SELECT max(cursor) FROM events), session_after_cursor = NULL`)
+	w.mentionAt(id, ids["gus"], ana, 0)
+	sent := one(`SELECT max(cursor) FROM events`)
+	w.sweep(w.notifier(), 1)
+	if got := w.got(); got[ids["gus"]] != 1 || got[ids["old"]] != 0 {
+		t.Fatalf("a fresh deploy's first sweep pushed %v: want the new mention only", got)
+	}
+	if c := w.sessionCursor(one); c < 0 {
+		t.Fatalf("the session watermark is still unset")
+	}
+
+	w.exec(`UPDATE events SET occurred_at = now() - interval '11 minutes' WHERE cursor = $1`, sent)
+	w.sweep(w.notifier(), 1)
+	if c, left := w.sessionCursor(one), one(`SELECT count(*) FROM push_session_sent`); c != sent || left != 0 {
+		t.Fatalf("after a settled mention: watermark %d (want %d), %d sent rows left", c, sent, left)
+	}
+
+	// A mention sent far ahead, not settled yet: the watermark stays.
+	ahead := sent + 1000
+	w.mentionAt(id, ids["gus"], ana, ahead)
+	w.sweep(w.notifier(), 1)
+	if err := w.notifier().AdvanceSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := w.sessionCursor(one); c != sent {
+		t.Fatalf("the watermark moved to %d past a sent mention not settled (want %d)", c, sent)
+	}
+	// One committed late below it, unsent, while the one ahead settles:
+	// the watermark stops short of the late one.
+	late := sent + 500
+	w.mentionAt(id, ids["late"], ana, late)
+	w.exec(`UPDATE events SET occurred_at = now() - interval '11 minutes' WHERE cursor = $1`, ahead)
+	if err := w.notifier().AdvanceSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := w.sessionCursor(one); c != late-1 {
+		t.Fatalf("the watermark is %d with an unsent mention at %d", c, late)
+	}
+	w.sweep(w.notifier(), 3)
+	if got := w.got(); got[ids["late"]] != 1 {
+		t.Fatalf("the late mention: %v, want it pushed once", got)
+	}
+	if c := w.sessionCursor(one); c != ahead {
+		t.Errorf("once both are sent and settled the watermark is %d, want %d", c, ahead)
 	}
 }

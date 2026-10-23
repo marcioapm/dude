@@ -11,6 +11,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -133,10 +134,17 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	handled, err := n.sweepSessions(ctx, public, private)
-	if err != nil {
-		return 0, err
+	// Each sweep on its own: one failing (a grant missing, say) is logged
+	// and reported, and the other still runs.
+	handled, sessionsErr := n.sweepSessions(ctx, public, private)
+	if sessionsErr != nil {
+		n.Log.Warn("session pushes failed", "error", sessionsErr)
 	}
+	asked, err := n.sweepAsks(ctx, public, private)
+	return handled + asked, errors.Join(sessionsErr, err)
+}
+
+func (n *Notifier) sweepAsks(ctx context.Context, public, private string) (int, error) {
 	var found []ask
 	subs := map[string][]subscription{}
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
@@ -197,7 +205,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if len(found) == 0 {
-		return handled, n.advance(ctx)
+		return 0, n.advance(ctx)
 	}
 
 	// A few at a time: one slow push service must not hold up the rest.
@@ -235,7 +243,7 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	for i, a := range found {
 		cursors[i] = a.Cursor
 	}
-	return handled + len(found), n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
+	return len(found), n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {
 		if len(gone) > 0 {
 			// The push service says the browser's subscription itself is
 			// gone, so it goes in every organisation that registered it.
