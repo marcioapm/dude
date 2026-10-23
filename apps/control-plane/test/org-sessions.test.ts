@@ -169,11 +169,9 @@ test("removing a person hands their reachable sessions to the admins and archive
   expect([...await owner`SELECT becomes_owner FROM session_people WHERE session_id = 'ssn_lea_org' AND person_id = ${gus.personId}`])
     .toEqual([{ becomes_owner: false }]);
   // The agents are told, and what was put to Lea withdrawn, by the
-  // orchestrator once the removal committed: nothing of the agent's is written here.
-  expect(forwarded.map((f) => [f.method, f.path, f.body, f.person])).toEqual([
-    ["POST", `/internal/people/${leaver.personId}/sessions`,
-      { change: "left", sessions: ["ssn_lea_invited", "ssn_lea_org", "ssn_lea_shared"] }, null],
-  ]);
+  // orchestrator's owner sweep from these events: the backend only wakes it.
+  await waitsFor(() => forwarded.length > 0);
+  expect(forwarded.map((f) => [f.method, f.path, f.body, f.person])).toEqual([["POST", "/internal/kick", {}, null]]);
   expect([...await owner`SELECT 1 FROM directives WHERE run_id = 'run_lea_org'`]).toEqual([]);
   // While its admins own it, an admin acts as owner of each; a member not in the private one gets nothing.
   const role = async (session: string, person: string) =>
@@ -185,6 +183,13 @@ test("removing a person hands their reachable sessions to the admins and archive
   // A session someone else owns is untouched by the leaver's departure.
   expect(await role("ssn_eli", boss.personId)).toBe(null);
 });
+
+// Resolves once `ready` holds, within 5 s.
+async function waitsFor(ready: () => boolean): Promise<void> {
+  for (const until = Date.now() + 5_000; !ready(); await Bun.sleep(10)) {
+    if (Date.now() > until) throw new Error("condition not reached");
+  }
+}
 
 // Resolves once a backend of this database waits on a lock of `type` (pg_locks' locktype).
 async function waitsOn(types: string[]): Promise<void> {
@@ -279,6 +284,65 @@ test("a removal locks only the sessions it changes, at most PASS_BATCH a transac
   const [events] = await owner`SELECT count(*)::int AS n FROM events WHERE event_type = 'session.owner_left' AND payload->>'owner' = ${many}`;
   expect(events.n).toBe(n / 2);
 }, 60_000);
+
+test("a removal that fails between its batches is finished by removing them again; then they are gone (404)", async () => {
+  const kai = await someone("Kai");
+  const n = PASS_BATCH + 100;
+  const id = (g: number) => `ssn_kai_${String(g).padStart(5, "0")}`;
+  await owner.begin(async (tx) => {
+    await tx`INSERT INTO sessions (id, organization_id, title, access)
+      SELECT 'ssn_kai_' || lpad(g::text, 5, '0'), ${ORG}, 'K', 'organisation' FROM generate_series(1, ${n}) g`;
+    await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      SELECT 'ssn_kai_' || lpad(g::text, 5, '0'), ${kai}, ${ORG}, 'owner', now() FROM generate_series(1, ${n}) g`;
+  });
+  // One session of the second batch refuses to pass: a stand-in for a
+  // deadlock or a dropped connection after the first batch committed.
+  const failing = id(PASS_BATCH + 50);
+  await owner.unsafe(`CREATE FUNCTION kai_fails() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.id = '${failing}' AND NEW.owned_by_admins THEN RAISE EXCEPTION 'batch 2 failed'; END IF; RETURN NEW; END $$`);
+  await owner.unsafe(`CREATE TRIGGER kai_fails BEFORE UPDATE ON sessions FOR EACH ROW EXECUTE FUNCTION kai_fails()`);
+  const passed = async () => (await owner`SELECT count(*)::int AS n FROM sessions WHERE id LIKE 'ssn_kai_%' AND owned_by_admins`)[0].n as number;
+  try {
+    expect((await call(boss, "DELETE", `/v1/people/${kai}`)).status).toBe(500);
+    expect([...await owner`SELECT removed_at IS NOT NULL AS removed FROM people WHERE id = ${kai}`]).toEqual([{ removed: true }]);
+    expect(await passed()).toBe(PASS_BATCH);
+  } finally {
+    await owner.unsafe(`DROP TRIGGER kai_fails ON sessions; DROP FUNCTION kai_fails()`);
+  }
+  const again = await call(boss, "DELETE", `/v1/people/${kai}`);
+  expect(again.status).toBe(200);
+  expect(await again.json()).toEqual({ passed: n - PASS_BATCH });
+  expect(await passed()).toBe(n);
+  const [events] = await owner`SELECT count(*)::int AS n, count(DISTINCT session_id)::int AS sessions FROM events
+    WHERE event_type = 'session.owner_left' AND payload->>'owner' = ${kai}`;
+  expect(events).toEqual({ n, sessions: n });
+  expect((await call(boss, "DELETE", `/v1/people/${kai}`)).status).toBe(404);
+}, 60_000);
+
+test("removing a member who owns no session only wakes the orchestrator: its sweep withdraws what was put to them", async () => {
+  const lou = await someone("Lou");
+  forwarded.length = 0;
+  expect((await call(boss, "DELETE", `/v1/people/${lou}`)).status).toBe(204);
+  await waitsFor(() => forwarded.length > 0);
+  // Only kicks (the test before may still be landing one): no call names the person.
+  expect(forwarded.every((f) => f.method === "POST" && f.path === "/internal/kick" && f.person === null)).toBe(true);
+  expect([...await owner`SELECT count(*)::int AS n FROM events WHERE event_type = 'person.removed' AND payload->>'personId' = ${lou}`])
+    .toEqual([{ n: 1 }]);
+});
+
+test("the removal's response does not wait on an orchestrator that does not answer", async () => {
+  const mo = await someone("Mo");
+  const hung = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
+  useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${hung.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
+  try {
+    const started = Date.now();
+    expect((await call(boss, "DELETE", `/v1/people/${mo}`)).status).toBe(204);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  } finally {
+    useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestrator.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
+    hung.stop(true);
+  }
+});
 
 test("someone not in an organisation session may say they have it open; opening marks their mentions in it seen", async () => {
   await session("ssn_open", "organisation", eli.personId);

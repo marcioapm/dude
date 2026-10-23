@@ -141,7 +141,13 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 		n.Log.Warn("session pushes failed", "error", sessionsErr)
 	}
 	asked, err := n.sweepAsks(ctx, public, private)
-	return handled + asked, errors.Join(sessionsErr, err)
+	// What follows an owner leaving or coming back (owners.go): no push, but
+	// the same loop and its kick.
+	owners, ownersErr := n.sweepOwners(ctx)
+	if ownersErr != nil {
+		n.Log.Warn("session owner changes failed", "error", ownersErr)
+	}
+	return handled + asked + owners, errors.Join(sessionsErr, err, ownersErr)
 }
 
 func (n *Notifier) sweepAsks(ctx context.Context, public, private string) (int, error) {

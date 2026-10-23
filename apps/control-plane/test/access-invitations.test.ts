@@ -199,6 +199,10 @@ describe("accepting", () => {
         await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at) VALUES
           (${id}, ${fay.id}, ${acme}, 'owner', now()), (${id}, ${gil}, ${acme}, 'chat', now())`;
       }
+      // Private and hers alone: the removal archives it, and her return leaves it as it is.
+      await owner`INSERT INTO sessions (id, organization_id, title) VALUES (${`ssn_alone_${suffix}`}, ${acme}, 'S')`;
+      await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+        VALUES (${`ssn_alone_${suffix}`}, ${fay.id}, ${acme}, 'owner', now())`;
       expect((await as(at("ana"), "DELETE", `/v1/people/${fay.id}`)).status).toBe(204);
       // An admin took the second one over: the departed owner's row is gone and the flag cleared.
       await owner.begin(async (tx) => {
@@ -207,12 +211,30 @@ describe("accepting", () => {
           VALUES (${`ssn_taken_${suffix}`}, ${adminId}, ${acme}, 'owner', now())`;
         await tx`UPDATE sessions SET owned_by_admins = false WHERE id = ${`ssn_taken_${suffix}`}`;
       });
+      // The removal's own kick, unawaited, is in before the count starts.
+      await waitFor(async () => told.length > 0);
       told.length = 0;
       const again = (await invite([at("returner")])).body.results[0].invitation.code;
-      expect((await as(at("returner"), "POST", `/v1/invitations/${again}/accept`, {}, null)).body.person.id).toBe(fay.id);
+      // An admin's take-ownership holds the session's lock: the accept waits for it, then returns the session.
+      const held = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const holder = owner.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || ${`ssn_back_${suffix}`}))`;
+        held.resolve();
+        await release.promise;
+      });
+      await held.promise;
+      const accepting = as(at("returner"), "POST", `/v1/invitations/${again}/accept`, {}, null);
+      await waitFor(async () => (await owner`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE a.datname = current_database() AND l.locktype = 'advisory' AND NOT l.granted`)[0].n > 0);
+      expect([...await owner`SELECT removed_at IS NOT NULL AS removed FROM people WHERE id = ${fay.id}`]).toEqual([{ removed: true }]);
+      release.resolve();
+      await holder;
+      expect((await accepting).body.person.id).toBe(fay.id);
       const rows = await owner`SELECT s.id, s.owned_by_admins AS "byAdmins", o.person_id AS owner FROM sessions s
         JOIN session_people o ON o.session_id = s.id AND o.role = 'owner' WHERE s.id LIKE ${`ssn_%_${suffix}`} ORDER BY s.id`;
       expect([...rows]).toEqual([
+        { id: `ssn_alone_${suffix}`, byAdmins: false, owner: fay.id },
         { id: `ssn_back_${suffix}`, byAdmins: false, owner: fay.id },
         { id: `ssn_taken_${suffix}`, byAdmins: false, owner: adminId },
       ]);
@@ -221,7 +243,9 @@ describe("accepting", () => {
         { session_id: `ssn_back_${suffix}`, actor_type: "system", actor_id: "dude", owner: fay.id },
       ]);
       expect((await owner`SELECT session_role(${`ssn_back_${suffix}`}, ${fay.id}) AS r`)[0].r).toBe("owner");
-      expect(told).toEqual([{ path: `/internal/people/${fay.id}/sessions`, body: { change: "returned", sessions: [`ssn_back_${suffix}`] } }]);
+      // The orchestrator's owner sweep tells the agent from the ledger; the backend only wakes it.
+      await waitFor(async () => told.length > 0);
+      expect(told).toEqual([{ path: "/internal/kick", body: {} }]);
     } finally {
       useConfig(null);
       stand.stop(true);

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
 
 // system calls the orchestrator's internal API as the backend does for
@@ -58,8 +60,8 @@ func (s *sessionWorld) heldFor(run string) string {
 
 // A question the agent put by name to the owner before they left would
 // hold every later message for ever (nobody else may answer it). Taking the
-// session over withdraws it; so does the backend telling the orchestrator
-// the owner left, before anyone takes it over.
+// session over withdraws it; so does the owner sweep reading the removal
+// from the ledger, before anyone takes it over.
 func TestOrgSessionAQuestionToTheDepartedOwnerIsWithdrawn(t *testing.T) {
 	s := newSessionWorld(t)
 	s.withTools()
@@ -72,9 +74,10 @@ func TestOrgSessionAQuestionToTheDepartedOwnerIsWithdrawn(t *testing.T) {
 		s.ownerLeaves(id)
 		if how == "take-ownership" {
 			s.ok(s.admin, "POST", "/internal/sessions/"+id+"/take-ownership", nil)
-		} else if status, out := s.system("POST", "/internal/people/"+s.marcio+"/sessions",
-			map[string]any{"change": "left", "sessions": []string{id}}); status != 200 {
-			t.Fatalf("left: %d %v", status, out)
+		} else {
+			s.recorded(id, "session.owner_left", map[string]any{"owner": s.marcio, "ownerName": "Márcio Martins"})
+			s.recorded("", "person.removed", map[string]any{"personId": s.marcio})
+			s.sweepOwners()
 		}
 		if got := s.questionStatus(q); got != "cancelled" {
 			t.Errorf("%s: the departed owner's question is %q", how, got)
@@ -91,46 +94,91 @@ func TestOrgSessionAQuestionToTheDepartedOwnerIsWithdrawn(t *testing.T) {
 	}
 }
 
-// The backend's "left" tells each session passed to the admins, and only
-// those still theirs, through the owner-left notice; a person's principal
-// may not call it; a person still here is not "left".
-func TestOrgSessionLeftTellsTheAgentAndWithdrawsEverywhere(t *testing.T) {
+// The owner sweep, from the ledger: a member's removal withdraws what was
+// put to them by name in a session they never owned (no session of theirs
+// is named anywhere); an owner's leaving tells the agent once, across a
+// restart; their return tells it they are back; and a change recorded
+// after one (an admin took it over) means that one is not told.
+func TestOrgSessionTheOwnerSweepTellsTheAgentAndWithdrawsEverywhere(t *testing.T) {
 	s := newSessionWorld(t)
 	s.withTools()
 	id := s.session()
 	s.join(id, s.ana, "chat")
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "let's plan"})
 	run := s.started(id)
-	// A session Ana does not own: a question to her there is withdrawn too.
 	asked := s.askedBy(run, "Ana")
-
-	if status, _ := s.as(s.admin, "POST", "/internal/people/"+s.marcio+"/sessions", map[string]any{"change": "left"}); status != 403 {
-		t.Errorf("a person called the backend's own route: %d", status)
+	told := func(prefix string) int {
+		return s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.told'
+			AND starts_with(payload->>'text', $2)`, id, prefix)
 	}
-	if status, _ := s.system("POST", "/internal/people/"+s.ana+"/sessions", map[string]any{"change": "left"}); status != 409 {
-		t.Errorf("left for someone still here: %d", status)
-	}
+	// Ana owns nothing: only person.removed names her.
 	mustExec(t, s.owner, `UPDATE people SET removed_at = now() WHERE id = $1`, s.ana)
-	if status, out := s.system("POST", "/internal/people/"+s.ana+"/sessions", map[string]any{"change": "left", "sessions": []string{id}}); status != 200 {
-		t.Fatalf("left: %d %v", status, out)
-	} else if told := out["told"].([]any); len(told) != 0 {
-		t.Errorf("a session Ana did not own was told she left: %v", told)
-	}
+	s.recorded("", "person.removed", map[string]any{"personId": s.ana})
+	s.sweepOwners()
 	if got := s.questionStatus(asked); got != "cancelled" {
-		t.Errorf("the question to a removed member is %q", got)
+		t.Errorf("the question to a removed member, in a session she never owned, is %q", got)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'question.closed' AND payload->>'by' = 'withdrawn'`, id); n != 1 {
+		t.Errorf("question.closed withdrawn: %d, want 1", n)
+	}
+	if n := told("Ana Nunes left"); n != 0 {
+		t.Errorf("a member's removal told the agent she owned it: %d", n)
 	}
 
+	left := "Márcio Martins left the organisation. Its admins own this session now"
 	s.ownerLeaves(id)
-	if status, out := s.system("POST", "/internal/people/"+s.marcio+"/sessions", map[string]any{"change": "left", "sessions": []string{id}}); status != 200 {
-		t.Fatalf("left: %d %v", status, out)
-	}
+	s.recorded(id, "session.owner_left", map[string]any{"owner": s.marcio, "ownerName": "Márcio Martins"})
+	s.sweepOwners()
+	s.sweepOwners()
 	var text string
 	_ = s.owner.QueryRow(t0(), `SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, run).Scan(&text)
-	if !strings.HasPrefix(text, "Márcio Martins left the organisation. Its admins own this session now") {
+	if !strings.HasPrefix(text, left) {
 		t.Errorf("the agent was told %q", text)
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.told' AND payload->>'text' = $2`, id, text); n != 1 {
-		t.Errorf("session.told for the notice: %d", n)
+	if n := told(left); n != 1 {
+		t.Errorf("owner-left told %d times across two sweeps, want once", n)
+	}
+
+	// Back, and told so.
+	mustExec(t, s.owner, `UPDATE people SET removed_at = NULL WHERE id = $1`, s.marcio)
+	mustExec(t, s.owner, `UPDATE sessions SET owned_by_admins = false WHERE id = $1`, id)
+	s.recorded(id, "session.owner_returned", map[string]any{"owner": s.marcio})
+	s.sweepOwners()
+	_ = s.owner.QueryRow(t0(), `SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, run).Scan(&text)
+	if !strings.HasPrefix(text, "Márcio Martins is back in the organisation and owns this session again") {
+		t.Errorf("the agent was told %q on his return", text)
+	}
+	if n := told("Márcio Martins is back"); n != 1 {
+		t.Errorf("owner-returned told %d times, want once", n)
+	}
+
+	// Gone again, and an admin takes it over before the sweep reads it:
+	// the owner-left is not told, only the take-over.
+	s.ownerLeaves(id)
+	s.recorded(id, "session.owner_left", map[string]any{"owner": s.marcio, "ownerName": "Márcio Martins"})
+	s.ok(s.admin, "POST", "/internal/sessions/"+id+"/take-ownership", nil)
+	s.sweepOwners()
+	if n := told(left); n != 1 {
+		t.Errorf("a session taken over since was told its owner left: %d owner-left notices, want the first only", n)
+	}
+}
+
+// recorded appends an event as the backend does (its removal, an
+// invitation accept), committed now.
+func (s *sessionWorld) recorded(session, typ string, payload map[string]any) {
+	s.t.Helper()
+	b, _ := json.Marshal(payload)
+	mustExec(s.t, s.owner, `INSERT INTO events (id, organization_id, event_type, session_id, actor_type, actor_id, source, payload)
+		VALUES ('evt_' || md5(random()::text), $1, $2, NULLIF($3, ''), 'system', 'dude', 'control-plane', $4::jsonb)`,
+		s.org, typ, session, string(b))
+}
+
+// sweepOwners runs the notifier's sweep as a fresh orchestrator would.
+func (s *sessionWorld) sweepOwners() {
+	s.t.Helper()
+	n := &notify.Notifier{DB: s.app, Log: quiet, Subject: "ops@example.com"}
+	if _, err := n.Sweep(t0()); err != nil {
+		s.t.Fatal(err)
 	}
 }
 

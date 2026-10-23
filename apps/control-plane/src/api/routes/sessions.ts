@@ -161,8 +161,8 @@ export async function lockOwnedSessions(scope: OrgScope, personId: string, limit
  * to the organisation's admins (`owned_by_admins`, `session.owner_left`)
  * and its pending handover is void; their row stays as its owner of record
  * until an admin takes it over. A private session nobody else is in is
- * archived with them. Returns what passed; its agents are told by the
- * orchestrator once the removal commits (`tellPersonLeft`).
+ * archived with them. Returns what passed; the orchestrator's owner sweep
+ * tells their agents from each `session.owner_left` once it commits.
  */
 export async function passOnSessions(scope: OrgScope, ctx: RequestContext, personId: string, locked: string[]): Promise<string[]> {
   if (locked.length === 0) return [];
@@ -194,20 +194,55 @@ export async function passOnSessions(scope: OrgScope, ctx: RequestContext, perso
 }
 
 /**
+ * The orchestrator's lock on each session its admins own whose owner of
+ * record is a removed person of `accountId`: the sessions an invitation
+ * accept by that account would return. Taken in id order before the
+ * person's row, the order the orchestrator's owner changes take them in
+ * (take-ownership, a handover, Make owner: the session's lock, then the
+ * person's row), so an admin taking one over and the owner coming back
+ * settle one after the other.
+ */
+export async function lockReturnable(scope: OrgScope, accountId: string): Promise<string[]> {
+  const rows = (await scope.sql`
+    SELECT s.id FROM people p JOIN session_people me ON me.person_id = p.id AND me.role = 'owner'
+      JOIN sessions s ON s.id = me.session_id
+    WHERE p.account_id = ${accountId} AND p.removed_at IS NOT NULL AND s.owned_by_admins
+    ORDER BY s.id`) as Array<{ id: string }>;
+  const ids = rows.map((r) => r.id);
+  if (ids.length > 0) {
+    await scope.sql`SELECT pg_advisory_xact_lock(hashtext('session:' || x.id))
+      FROM unnest(${scope.sql.array(ids, "TEXT")}::text[]) WITH ORDINALITY AS x(id, n) ORDER BY x.n`;
+  }
+  return ids;
+}
+
+/** A session to return that `lockReturnable` did not lock is held elsewhere; the accept tries again. */
+export class ReturnRaced extends Error {}
+
+/**
  * Someone removed from the organisation is back (an invitation accepted,
  * in its transaction, which holds their row): each session its admins own
  * with them still its owner of record is theirs again (`owned_by_admins`
- * cleared, `session.owner_returned` by the system). A session an admin
- * already took over has another owner row and is not touched. Returns
- * those, for `tellPersonReturned` once the transaction commits.
+ * cleared, `session.owner_returned` by the system, which the orchestrator's
+ * owner sweep tells the agent). A session an admin already took over has
+ * another owner row and is not touched. `locked` is what `lockReturnable`
+ * locked; one found beyond it is locked without waiting (the person's row
+ * is held), else `ReturnRaced`. Returns the sessions returned.
  */
-export async function returnSessions(scope: OrgScope, personId: string): Promise<string[]> {
-  const rows = (await scope.sql`
-    UPDATE sessions s SET owned_by_admins = false, updated_at = now()
-    FROM session_people me
-    WHERE me.session_id = s.id AND me.person_id = ${personId} AND me.role = 'owner' AND s.owned_by_admins
-    RETURNING s.id`) as Array<{ id: string }>;
-  const ids = rows.map((r) => r.id).sort();
+export async function returnSessions(scope: OrgScope, personId: string, locked: string[]): Promise<string[]> {
+  const found = (await scope.sql`
+    SELECT s.id FROM session_people me JOIN sessions s ON s.id = me.session_id
+    WHERE me.person_id = ${personId} AND me.role = 'owner' AND s.owned_by_admins
+    ORDER BY s.id`) as Array<{ id: string }>;
+  const ids = found.map((r) => r.id);
+  const extra = ids.filter((id) => !locked.includes(id));
+  if (extra.length > 0) {
+    const [got] = await scope.sql`SELECT bool_and(pg_try_advisory_xact_lock(hashtext('session:' || x))) AS ok
+      FROM unnest(${scope.sql.array(extra, "TEXT")}::text[]) x`;
+    if (!got?.ok) throw new ReturnRaced();
+  }
+  if (ids.length === 0) return [];
+  await scope.sql`UPDATE sessions SET owned_by_admins = false, updated_at = now() WHERE id = ANY(${scope.sql.array(ids, "TEXT")})`;
   for (const id of ids) {
     await appendInScope(scope, {
       eventType: EventTypes.BrainstormOwnerReturned, organizationId: scope.organizationId, sessionId: id,
@@ -217,23 +252,17 @@ export async function returnSessions(scope: OrgScope, personId: string): Promise
   return ids;
 }
 
+/** How long the control plane waits on a kick before it lets go. */
+const KICK_MS = 1_000;
+
 /**
- * After a removal or a return commits, the orchestrator tells each changed
- * session's live agent who owns it (and, for a removal, withdraws every
- * open question put to the person by name, in any session). Not inside the
- * transaction: the orchestrator takes each session's lock, which the
- * removal holds until it commits. Best effort: unreachable, it is logged,
- * and take-ownership withdraws what was put to the departed owner anyway.
+ * Wakes the orchestrator's loops, so its owner sweep tells the agents (and
+ * withdraws a removed person's questions) now rather than on its next tick.
+ * Not awaited by the caller and bounded at `KICK_MS`: the sweep reads the
+ * ledger, so nothing depends on this call arriving.
  */
-export async function tellPersonSessions(organizationId: string, personId: string, change: "left" | "returned",
-  sessions: string[]): Promise<void> {
-  try {
-    const res = await orchestrator(organizationId, "POST", `/internal/people/${encodeURIComponent(personId)}/sessions`,
-      JSON.stringify({ change, sessions }));
-    if (!res.ok) console.error(`sessions: the orchestrator refused ${change} for ${personId}: ${res.status} ${await res.text()}`);
-  } catch (err) {
-    console.error(`sessions: could not tell the orchestrator ${personId} ${change}: ${(err as Error).message}`);
-  }
+export function kickOwnerSweep(organizationId: string): void {
+  void orchestrator(organizationId, "POST", "/internal/kick", "{}", undefined, KICK_MS).catch(() => {});
 }
 
 /**

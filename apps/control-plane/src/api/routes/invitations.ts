@@ -5,7 +5,7 @@ import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { HttpError, json, noContent, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
-import { returnSessions, tellPersonSessions } from "./sessions.ts";
+import { kickOwnerSweep, lockReturnable, ReturnRaced, returnSessions } from "./sessions.ts";
 
 const unusable = () => new HttpError(404, "invitation_unusable", "invitation_unusable");
 const mismatch = () => new HttpError(403, "invitation_for_another_email", "invitation_for_another_email");
@@ -91,8 +91,8 @@ export function registerInvitationRoutes(router: Router) {
   router.post("/v1/invitations/:code/accept", async (ctx) => {
     const input = await parseBody(ctx.request, z.object({ name: z.string().trim().min(1).max(100).optional() }).strict());
     const preview = await detail(ctx), access = ctx.principal.access!;
-    let returned: { personId: string; sessions: string[] } | null = null;
-    const accepted = await withOrg(preview.organization.id, async (scope) => {
+    let returned = false;
+    const acceptOnce = () => withOrg(preview.organization.id, async (scope) => {
       await lockPeople(scope);
       const [i] = await scope.sql`SELECT * FROM invitations WHERE code = ${ctx.params.code!} FOR UPDATE`;
       if (!i || i.revoked_at || (!i.accepted_at && new Date(i.expires_at).getTime() <= Date.now())) throw unusable();
@@ -100,6 +100,8 @@ export function registerInvitationRoutes(router: Router) {
       const [a] = await scope.sql`INSERT INTO accounts (id, email, name, photo_url)
         VALUES (${`acc_${crypto.randomUUID()}`}, ${access.email}, ${input.name ?? access.profile?.name ?? i.name ?? access.email}, ${access.profile?.picture ?? null})
         ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING *`;
+      // Before their row: the session's lock, then the person's, as the orchestrator takes them.
+      const returnable = await lockReturnable(scope, a.id);
       let [person] = await scope.sql`SELECT * FROM people WHERE account_id=${a.id} ORDER BY (removed_at IS NULL) DESC, created_at DESC LIMIT 1 FOR UPDATE`;
       if (i.accepted_at && (!person || person.removed_at)) throw unusable();
       if (!person || person.removed_at) {
@@ -108,7 +110,7 @@ export function registerInvitationRoutes(router: Router) {
         else [person] = await scope.sql`INSERT INTO people (id, organization_id, account_id, name, email, role, photo_url, photo_key, photo_token)
           VALUES (${`per_${crypto.randomUUID()}`}, ${scope.organizationId}, ${a.id}, ${a.name}, ${a.email}, ${i.role}, ${a.photo_url}, ${a.photo_key}, ${a.photo_token}) RETURNING *`;
         // A departed owner's sessions its admins still own are theirs again.
-        returned = { personId: person.id, sessions: await returnSessions(scope, person.id) };
+        returned = (await returnSessions(scope, person.id, returnable)).length > 0;
         // The ledger's "joined" entry, attributed to whoever invited them (the operator: system).
         await appendInScope(scope, { eventType: EventTypes.PersonInvited, organizationId: scope.organizationId,
           projectId: null, taskId: null, correlationId: null, source: "control-plane",
@@ -118,8 +120,17 @@ export function registerInvitationRoutes(router: Router) {
       await scope.sql`UPDATE invitations SET accepted_at=COALESCE(accepted_at,now()), accepted_person_id=${person.id} WHERE id=${i.id}`;
       return { person: { id: person.id, role: person.role, name: person.name }, organization: preview.organization };
     });
-    const back = returned as { personId: string; sessions: string[] } | null;
-    if (back && back.sessions.length > 0) await tellPersonSessions(preview.organization.id, back.personId, "returned", back.sessions);
+    // A session passed to the admins while this waited is locked on the next try.
+    let accepted: Awaited<ReturnType<typeof acceptOnce>>;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        accepted = await acceptOnce();
+        break;
+      } catch (err) {
+        if (!(err instanceof ReturnRaced) || attempt === 3) throw err;
+      }
+    }
+    if (returned) kickOwnerSweep(preview.organization.id);
     return json(accepted);
   });
   const path = "/v1/organization/invitations";

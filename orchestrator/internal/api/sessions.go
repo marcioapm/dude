@@ -51,7 +51,6 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/sessions/{id}/model", s.auth(s.setSessionModel))
 	mux.Handle("POST /internal/sessions/{id}/archive", s.auth(s.archiveSession(true)))
 	mux.Handle("POST /internal/sessions/{id}/unarchive", s.auth(s.archiveSession(false)))
-	mux.Handle("POST /internal/people/{person}/sessions", s.auth(s.personSessions))
 }
 
 // sessionTitleMax bounds a session's title, as the schema does.

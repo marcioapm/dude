@@ -665,17 +665,26 @@ waits until an admin has taken it. `removePerson` takes the `session:`
 advisory lock (`lockOwnedSessions`, before the person's row) of each owned
 session its leaving changes, at most 500 a transaction (the rest pass in
 transactions of their own), and voids the departed owner's pending handover.
-After it commits it calls the orchestrator's `POST
-/internal/people/{person}/sessions` (`left`), which tells each passed
-session's live agent (`notices/told/session-owner-left`) and withdraws every
-open question put to the person by name, in any session. The orchestrator's
+A removal that fails between batches is finished by `DELETE` again (200,
+`{passed}`); otherwise an already removed person is a 404. The backend never
+waits on the orchestrator here: it only kicks it (unawaited, 1 s). The
+orchestrator's owner sweep (`notify/owners.go`, in the notify loop, its own
+watermark `session_owner_sweep` and done set `session_owner_done`, migration
+192) reads `session.owner_left`, `session.owner_returned` and `person.removed`
+from the ledger: it tells each session's live agent
+(`notices/told/session-owner-left` / `-returned`) once, unless an owner change
+was recorded for the session since, and withdraws every open question put to
+a removed person by name, in any session. The orchestrator's
 handover, accept and take-ownership hold the new owner's `people` row FOR
 SHARE under the session lock, so a removal either refuses them or sees the
-session as theirs. Take-ownership withdraws what was put to the departed
+session as theirs; take-ownership also holds the departed owner's row FOR
+SHARE, so an invitation bringing them back is waited for (409 `owner_active`).
+Take-ownership withdraws what was put to the departed
 owner and tells the agent through `notices/told/session-owner`. An owner
 invited back while its admins still own the session owns it again (the
-invitation's transaction clears `owned_by_admins`, `session.owner_returned`;
-the agent is told through `returned`). Writing a message, answering, filing
+invitation's transaction takes those sessions' `session:` locks before the
+person's row, clears `owned_by_admins` and records `session.owner_returned`,
+which the owner sweep tells the agent). Writing a message, answering, filing
 and Try again join an organisation session; renaming takes an owner or chat
 row (or an admin while its admins own it).
 
