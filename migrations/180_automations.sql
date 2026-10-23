@@ -257,8 +257,5 @@ ALTER TABLE forge_event_subscriptions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON forge_event_subscriptions USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 
--- The notifier pushes a failed automation run to its owner, or to every admin
--- while the owner has left: the asks index's predicate names it too.
-DROP INDEX IF EXISTS events_asks_idx;
-CREATE INDEX events_asks_idx ON events (cursor)
-  WHERE event_type IN ('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled', 'automation.failed');
+-- The notifier's asks index gains automation.failed in 181/182, built
+-- concurrently: events is the ledger, too large to lock for a build here.
