@@ -3,9 +3,11 @@ package agenttools_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
@@ -14,6 +16,7 @@ import (
 
 func TestAutomationToolsScopeAndLifecycle(t *testing.T) {
 	posts := 0
+	lastBody := ""
 	ghServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || r.URL.Path != "/repos/acme/web/issues/7/comments" {
 			t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
@@ -21,6 +24,8 @@ func TestAutomationToolsScopeAndLifecycle(t *testing.T) {
 			return
 		}
 		posts++
+		b, _ := io.ReadAll(r.Body)
+		lastBody = string(b)
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 42, "html_url": "https://example.com/comment/42"})
 	}))
 	defer ghServer.Close()
@@ -76,6 +81,20 @@ func TestAutomationToolsScopeAndLifecycle(t *testing.T) {
 	}
 	if posts != 1 {
 		t.Fatalf("posts: %d", posts)
+	}
+	// A project secret the automation gives its runs, pasted into a tool
+	// call, reaches neither GitHub nor the ledger.
+	mustExec(t, f.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'DEPLOY_KEY', 'acme-deploy-s3cr3t-value', 'alue')`, f.org, f.project)
+	mustExec(t, f.owner, `UPDATE automations SET secrets = '{DEPLOY_KEY}' WHERE id = 'aut_tools'`)
+	if status, out := f.post(t, token, "github_comment", `{"body":"Using acme-deploy-s3cr3t-value to deploy"}`); status != 200 {
+		t.Fatalf("comment with a secret: %d %v", status, out)
+	}
+	if strings.Contains(lastBody, "acme-deploy-s3cr3t-value") || !strings.Contains(lastBody, "to deploy") {
+		t.Errorf("GitHub got %q", lastBody)
+	}
+	var leaked int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE organization_id = $1 AND payload::text LIKE '%acme-deploy-s3cr3t-value%'`, f.org).Scan(&leaked); err != nil || leaked != 0 {
+		t.Errorf("ledger events carrying the secret: %d %v", leaked, err)
 	}
 	if status, _ := f.post(t, token, "publish", `{}`); status != 404 {
 		t.Fatalf("publish: %d", status)

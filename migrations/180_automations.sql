@@ -138,6 +138,24 @@ $$;
 REVOKE ALL ON FUNCTION lookup_automation_by_mcp_token(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION lookup_automation_by_mcp_token(text) TO dude_app;
 
+-- The values an automation run's tool calls are redacted with, as
+-- run_secret_values (130) is a Run's: the current value of each project
+-- secret its automation gives its runs. Empty for a role that may not read
+-- project_secrets.
+CREATE FUNCTION automation_run_secret_values(rid text) RETURNS TABLE (name text, value text)
+LANGUAGE plpgsql STABLE AS $$
+#variable_conflict use_column
+BEGIN
+  IF NOT has_table_privilege('project_secrets', 'SELECT') THEN
+    RETURN;
+  END IF;
+  RETURN QUERY
+    SELECT p.name, p.value FROM automation_runs r
+      JOIN automations a ON a.id = r.automation_id
+      JOIN project_secrets p ON p.project_id = a.project_id AND p.name = ANY (a.secrets)
+    WHERE r.id = rid;
+END $$;
+
 ALTER TABLE tasks ADD COLUMN created_by_automation_run_id text REFERENCES automation_runs(id) ON DELETE SET NULL;
 
 -- Every saved version of an agent automation's prompt (its own agent's) or

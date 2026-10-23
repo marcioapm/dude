@@ -9,6 +9,7 @@ package ledger
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -83,7 +84,13 @@ func Redactor(ctx context.Context, tx pgx.Tx, runID string) (*redact.Redactor, e
 	if r, ok := cache[runID]; ok {
 		return r, nil
 	}
-	rows, err := tx.Query(ctx, `SELECT name, value FROM run_secret_values($1)`, runID)
+	// An automation run (ids.AutomationRun) has no runs row: its automation's
+	// project secrets are its values.
+	query := `SELECT name, value FROM run_secret_values($1)`
+	if strings.HasPrefix(runID, ids.AutomationRun+"_") {
+		query = `SELECT name, value FROM automation_run_secret_values($1)`
+	}
+	rows, err := tx.Query(ctx, query, runID)
 	if err != nil {
 		return nil, err
 	}
