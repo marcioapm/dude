@@ -216,13 +216,12 @@ func checked(n int, text string, a Acceptance, published map[string]bool, carry 
 // is blocked: dude, not the tester, says what a carried verdict is.
 func carried(v CriterionVerdict, a Acceptance, carry *Carry) CriterionVerdict {
 	v.Status = VerdictBlocked
-	prev, ok := CriterionVerdict{}, false
-	if carry != nil {
-		prev, ok = carry.Verdicts[v.Criterion]
-	}
-	switch {
-	case carry == nil:
+	if carry == nil {
 		v.Problem = "Carried, but this round tests every criterion afresh: nothing carries into it."
+		return v
+	}
+	prev, ok := carry.Verdicts[v.Criterion]
+	switch {
 	case a.FromRound != carry.RunID:
 		v.Problem = fmt.Sprintf("Carried from %q, which is not this tester's previous round %s.", a.FromRound, carry.RunID)
 	case !carry.Descends:
