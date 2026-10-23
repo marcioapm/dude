@@ -5,8 +5,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
+
+// The time used is read with JIT off, which past a few thousand parks in
+// an organisation costs ~60 ms of a ~1.5 ms query while the predecessor is
+// locked; the caller's transaction gets its setting back.
+func TestTheTimeUsedIsReadWithoutJIT(t *testing.T) {
+	w := testerRound.world(t, 2*time.Hour+6*time.Minute)
+	var during string
+	delivery.BeforeTimeSpentQuery(func(ctx context.Context, tx pgx.Tx) {
+		if err := tx.QueryRow(ctx, `SELECT current_setting('jit')`).Scan(&during); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Cleanup(func() { delivery.BeforeTimeSpentQuery(nil) })
+	var before, after, id string
+	w.in(t, func(tx pgx.Tx) (err error) {
+		ctx := context.Background()
+		if err := tx.QueryRow(ctx, `SELECT set_config('jit', 'on', true)`).Scan(&before); err != nil {
+			return err
+		}
+		if id, err = delivery.CreatePhaseRunTx(ctx, tx, w.org, delivery.PhaseRun{TaskID: w.task, Phase: delivery.PhaseTest, Attempt: 1,
+			BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_b"}}, 4*time.Hour); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT current_setting('jit')`).Scan(&after)
+	})
+	if got := w.how(t, id); got != timeReplayed {
+		t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
+	}
+	if before != "on" || during != "off" || after != "on" {
+		t.Errorf("jit %q before, %q during the query, %q after; want on, off, on", before, during, after)
+	}
+}
 
 // budgetRound is a phase whose next round may take its predecessor's lux
 // Run over: its agent role (also its settings role) and category.

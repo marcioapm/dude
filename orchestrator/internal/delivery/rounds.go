@@ -263,6 +263,17 @@ func timeSpentTx(ctx context.Context, tx pgx.Tx, predecessor string, limit time.
 	if limit <= 0 {
 		return false, nil
 	}
+	// Under RLS the planner prices run_metrics' per-park subplan from the
+	// organisation's parks, and past a few thousand JIT takes ~60 ms of a
+	// ~1.5 ms query while the predecessor is locked. Off for this query
+	// only: the caller's transaction goes on.
+	var jitWas string
+	if err := tx.QueryRow(ctx, `SELECT current_setting('jit'), set_config('jit', 'off', true)`).Scan(&jitWas, nil); err != nil {
+		return false, err
+	}
+	if beforeTimeSpentQuery != nil {
+		beforeTimeSpentQuery(ctx, tx)
+	}
 	var used, longest float64
 	err := tx.QueryRow(ctx, `WITH RECURSIVE chain AS (
 			SELECT id, continues_run_id, continues_how, true AS held FROM runs WHERE id = $1
@@ -271,9 +282,19 @@ func timeSpentTx(ctx context.Context, tx pgx.Tx, predecessor string, limit time.
 			FROM runs r JOIN chain c ON r.id = c.continues_run_id)
 		SELECT COALESCE(sum(m.active_seconds) FILTER (WHERE chain.held), 0), COALESCE(max(m.active_seconds), 0)
 		FROM chain, run_metrics(chain.id) m`, predecessor).Scan(&used, &longest)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('jit', $1, true)`, jitWas); err != nil {
+		return false, err
+	}
 	seconds := func(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
-	return limit-seconds(used) < max(limit/2, seconds(longest)), err
+	return limit-seconds(used) < max(limit/2, seconds(longest)), nil
 }
+
+// beforeTimeSpentQuery, when set (by tests), runs in timeSpentTx's
+// transaction just before its query.
+var beforeTimeSpentQuery func(context.Context, pgx.Tx)
 
 // headMovedTx says whether a writer predecessor's checkout cannot be
 // fast-forwarded to the round's head: lux moves a checkout to a commit
