@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -58,9 +57,9 @@ func earlierQuestions(questions []EarlierQuestion) string {
 // human.feedback as people's feedback to fix.
 const SignalReviewQuestion = "review.question_settled"
 
-// SignalPullRequestEnded wakes a step held by open reviewer questions when
-// one of the task's pull requests is merged or closed. The sync sends it
-// beside pr.feedback's terminal signal: the held step must not consume
+// SignalPullRequestEnded wakes any step parked while the delivery has a pull
+// request (awaitEnded) when one of them is merged or closed. The sync sends
+// it beside pr.feedback's terminal signal: other steps must not consume
 // pr.feedback, whose other kinds are awaitPullRequest's to act on.
 const SignalPullRequestEnded = "pr.ended"
 
@@ -105,7 +104,7 @@ func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, s
 	}
 	// A pull request merged or closed meanwhile makes the question moot:
 	// the delivery ends as the pull request loop would end it, and nothing
-	// held is published.
+	// held is published. Woken by that end, endable has ended it already.
 	if res, ended, err := w.heldPullRequestEnded(ctx, sc, st); ended || err != nil {
 		st.QuestionsHeld = false
 		return res, true, err
@@ -116,36 +115,9 @@ func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, s
 			return workflow.Result{}, false, err
 		}
 	}
+	// pr.ended is added while a pull request exists (awaitEnded).
 	return workflow.Result{Next: step, State: st,
-		AwaitSignals: []string{SignalReviewQuestion, SignalHumanFeedback, SignalPullRequestEnded}}, true, nil
-}
-
-// heldPullRequestEnded ends a held delivery through pullRequestEnded when
-// its pull requests' recorded states say the loop is over: none open, or
-// one closed (a person's decision). Merged ones beside open ones keep it
-// held: the rest are still to be reviewed.
-func (w *steps) heldPullRequestEnded(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
-	if len(st.PullRequestIDs) == 0 {
-		return workflow.Result{}, false, nil
-	}
-	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-	if err != nil {
-		return workflow.Result{}, false, err
-	}
-	var open, closed int
-	for _, p := range states {
-		switch p.State {
-		case forge.StateClosed:
-			closed++
-		case forge.StateMerged:
-		default:
-			open++
-		}
-	}
-	if open > 0 && closed == 0 {
-		return workflow.Result{}, false, nil
-	}
-	return w.pullRequestEnded(ctx, sc, st)
+		AwaitSignals: []string{SignalReviewQuestion, SignalHumanFeedback}}, true, nil
 }
 
 // ConductAnswerReviewQuestion is answer_review_question: the task's live

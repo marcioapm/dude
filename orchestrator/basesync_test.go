@@ -297,12 +297,25 @@ func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 	// what was checked there (checkedAt below).
 	checkTarget, checkWeb := func() {}, func() {}
 	if closed {
+		// The task's only pull request closed without merging: the loop is
+		// over wherever the delivery stands (delivery.endable), so web's
+		// opening never comes and nothing integrates.
 		w.gh.Close(1)
-		w.sync()
-	} else {
-		checkTarget = w.prShowsOnlyChecked(t, task, "target", branch, true)
-		checkWeb = w.prShowsOnlyChecked(t, task, "web", branch, true)
+		w.until("the delivery to end", func() bool { w.sync(); return w.taskStatus(task) == "aborted" })
+		for range 3 {
+			w.sync()
+			w.pump()
+		}
+		if n := len(w.web.Pulls()); n != 0 {
+			t.Errorf("%d web pull requests opened after the task's pull request closed", n)
+		}
+		if n := w.count(integrationRuns, task); n != 0 {
+			t.Errorf("%d integration Runs after the task's pull request closed", n)
+		}
+		return
 	}
+	checkTarget = w.prShowsOnlyChecked(t, task, "target", branch, true)
+	checkWeb = w.prShowsOnlyChecked(t, task, "web", branch, true)
 	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed and tested; web is new."}`)
 	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
 		t.Fatalf("answer: %d %v", status, out)

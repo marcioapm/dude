@@ -479,14 +479,14 @@ const promotedRefreshRetries = 2
 // a decision, not a reflex — an approval or a green check wakes nobody.
 func Workflow(s *Store, forges Forges) *workflow.Definition {
 	w := &steps{s: s, forges: forges}
-	return &workflow.Definition{
+	def := &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
 		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
-		Recheck: w.recheck,
+		Recheck: w.awaitEnded,
 		Steps: map[string]workflow.Step{
 			"implement":         w.implement,
 			"adopt":             w.adopt,
@@ -514,6 +514,14 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"recover":           w.recover,
 		},
 	}
+	// A pull request's end reaches every step but the pull request wait,
+	// which reads it from pr.feedback.
+	for name, step := range def.Steps {
+		if name != "awaitPullRequest" {
+			def.Steps[name] = w.endable(step)
+		}
+	}
+	return def
 }
 
 type steps struct {
