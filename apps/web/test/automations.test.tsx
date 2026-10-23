@@ -185,6 +185,42 @@ describe("an automation's page", () => {
     expect(overrides["tierId"]).toBeDefined();
     expect(overrides["machineSizeId"]).toBeDefined();
   });
+
+  test("an own agent sets harness, model, time limit, machine and image; a setup script; Try it opens the test dialog", async () => {
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const agent = await until(() => c.querySelector<HTMLElement>("[data-testid=agent-source]"), "the agent section");
+    const labels = [...agent.querySelectorAll("[aria-label]")].map((e) => e.getAttribute("aria-label"));
+    for (const name of ["Harness", "Model", "Time limit", "Machine", "Image"]) expect(labels).toContain(name);
+    expect(c.querySelectorAll("[data-testid=setup-script]").length + c.querySelectorAll("[aria-label='Setup script']").length).toBeGreaterThan(0);
+    expect(c.querySelector("[data-testid=size-meter]")?.textContent).toBe("0 B of 64 KB");
+    await click(c.querySelector<HTMLElement>("[data-testid=try-it]")!);
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the test dialog");
+    expect(dialog.textContent).toContain("Write a test event");
+  });
+
+  test("a project command chooses what it checks out: None, or Some of its repositories", async () => {
+    const client = new FixtureClient("a");
+    const sent: unknown[] = [];
+    const update = client.updateAutomation.bind(client);
+    client.updateAutomation = (id, input) => { sent.push(input.repos); return update(id, input); };
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const row = await until(() => c.querySelector<HTMLElement>("[data-testid=repos-checked-out]"), "Checked out");
+    await click([...row.querySelectorAll("button")].find((b) => b.textContent === "None")!);
+    expect(c.querySelectorAll("[role=group][aria-label='Repositories checked out']").length).toBe(0);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => (sent.length ? sent : null), "the save");
+    expect(sent[0]).toBe("none");
+  });
+
+  test("a preset shows its role's prompt folded, from Agents settings", async () => {
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
+      onPlace={() => undefined} onBack={() => undefined} />);
+    const fields = await until(() => c.querySelector<HTMLElement>("[data-testid=preset-fields] details"), "the disclosure");
+    expect(fields.querySelector("summary")?.textContent).toContain("Tester's prompt (from");
+    expect(fields.querySelector("summary")?.textContent).toContain("Agents settings)Show");
+  });
   test("the prompt is the Markdown editor with the automation's variables; a save is a version, and an old one restores", async () => {
     const client = new FixtureClient("a");
     const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}

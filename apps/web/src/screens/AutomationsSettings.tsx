@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Breadcrumb,
   ChipsInput,
+  CodeEditor,
   KindMark,
   ListSwitch,
   MarkdownDocument,
@@ -21,12 +22,16 @@ import {
   ScopeChip,
   Segmented,
   SessionMark,
+  SettingField,
+  SettingFields,
   SettingRow,
+  SettingsDisclosure,
   SettingsHeader,
   SettingsMeta,
   SettingsNote,
   SettingsSection,
   SettingSource,
+  SizeMeter,
   Switch,
   TextButton,
   TriggerSummary,
@@ -62,6 +67,7 @@ import {
 import {
   AUTOMATION_PROMPT_VARIABLES,
   AUTOMATION_POST_RETRY,
+  COMMAND_MAX_BYTES,
   ORG_AUTOMATION_SECRETS,
   CONCURRENCY,
   CONCURRENCY_LABEL,
@@ -401,7 +407,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
           <Tab value="runs">Runs</Tab>
         </TabList>
         <TabPanel value="settings">
-          <AutomationSettings client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} />
+          <AutomationSettings client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} onTry={() => setRunning(true)} />
         </TabPanel>
         <TabPanel value="runs">
           {place.runId ? <RunDetail client={client} a={a} runId={place.runId} />
@@ -417,12 +423,13 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
   );
 }
 
-function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
+function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: {
   client: ApiClient;
   a: Automation;
   orgName: string;
   onSaved: (a: Automation) => void;
   onTransfer: () => void;
+  onTry: () => void;
 }) {
   const [form, setForm] = useState<AutomationInput>(() => inputOf(a));
   const [subs, setSubs] = useState<EventSubscriptions | null>(null);
@@ -480,6 +487,14 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
                 onChange={(v) => set("repoFilter", { mode: v.mode, repos: [...v.repos] })} />
             </SettingRow>
           )}
+          {a.projectId && a.kind !== "webhook" ? (
+            <ProjectReposRow client={client} projectId={a.projectId} ro={ro} value={form.repos} onChange={(v) => set("repos", v)} />
+          ) : null}
+          {trigger.kind === "github" && a.canEdit || trigger.kind === "github" && a.canTransfer ? (
+            <SettingRow label="Try it" help="Runs it once on a past delivery or an event you write, as its own run.">
+              <Button variant="secondary" size="sm" leadingIcon="play" data-testid="try-it" onClick={onTry}>Test with an event…</Button>
+            </SettingRow>
+          ) : null}
         </SettingsSection>
 
         {a.kind === "webhook" ? null : (
@@ -533,12 +548,35 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
                 </SettingRow>
               </>
             ) : own ? (
-              <SettingRow label="Prompt" block data-testid="automation-prompt">
-                <PromptEditor client={client} a={a} ro={ro} label="Prompt" text={own.prompt}
-                  onSave={(prompt) => saveText({ own: { ...own, prompt } })} onRestored={onSaved} />
-              </SettingRow>
+              <>
+                <RuntimeFields client={client} ro={ro} agent value={own}
+                  onChange={(next) => set("agent", { own: { ...next, prompt: own.prompt } })} />
+                <SettingRow label="Prompt" block data-testid="automation-prompt">
+                  <PromptEditor client={client} a={a} ro={ro} label="Prompt" text={own.prompt}
+                    onSave={(prompt) => saveText({ own: { ...own, prompt } })} onRestored={onSaved} />
+                </SettingRow>
+              </>
             ) : null}
             <SettingsNote>It can create dude tasks and comment on GitHub as the dude App; it opens no pull requests.</SettingsNote>
+          </SettingsSection>
+        ) : null}
+
+        {a.kind === "command" || a.kind === "server" ? (
+          <SettingsSection title="Runs in">
+            <RuntimeFields client={client} ro={ro} agent={false}
+              value={{ ...(form.machineSizeId ? { machineSizeId: form.machineSizeId } : {}), ...(form.imageId ? { imageId: form.imageId } : {}) }}
+              onChange={(next) => setForm((f) => ({ ...f, machineSizeId: next.machineSizeId ?? null, imageId: next.imageId ?? null }))} />
+          </SettingsSection>
+        ) : null}
+
+        {a.kind !== "webhook" ? (
+          <SettingsSection title="Setup script">
+            <SettingRow label="Setup script" block help="Runs in each checkout before the run starts; a repository's own setup script takes its place.">
+              <CodeEditor aria-label="Setup script" language="shell" readOnly={ro} value={form.setupScript ?? ""} minLines={3} maxLines={16}
+                placeholder="bun install" data-testid="setup-script"
+                onChange={(v) => set("setupScript", v || null)}
+                footer={<SizeMeter bytes={new TextEncoder().encode(form.setupScript ?? "").length} limit={COMMAND_MAX_BYTES} />} />
+            </SettingRow>
           </SettingsSection>
         ) : null}
 
@@ -603,6 +641,31 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer }: {
   );
 }
 
+/** A project automation's checkouts: none, or the repositories ticked (every one is "all"). */
+function ProjectReposRow({ client, projectId, ro, value, onChange }: {
+  client: ApiClient; projectId: string; ro: boolean; value: AutomationInput["repos"]; onChange: (v: AutomationInput["repos"]) => void;
+}) {
+  const [repos, setRepos] = useState<Array<{ id: string; name: string }> | null>(null);
+  useEffect(() => {
+    client.getProject(projectId).then((p) => setRepos(p.repositories.map((r) => ({ id: r.id, name: r.name }))), () => setRepos([]));
+  }, [client, projectId]);
+  const chosen = value === "all" ? (repos ?? []).map((r) => r.id) : value === "none" ? [] : value;
+  const pick = (ids: string[]) => onChange(ids.length === 0 ? "none" : repos && ids.length === repos.length ? "all" : ids);
+  return (
+    <SettingRow label="Checked out" help="The project's repositories each run starts with.">
+      <Segmented<"none" | "some"> label="Checked out" value={value === "none" ? "none" : "some"} disabled={ro} data-testid="repos-checked-out"
+        onChange={(m) => onChange(m === "none" ? "none" : "all")}
+        options={[{ value: "none", label: "None" }, { value: "some", label: "Some" }]} />
+      {value !== "none" && repos ? (
+        <div role="group" aria-label="Repositories checked out">
+          {repos.map((r) => <Checkbox key={r.id} label={r.name} checked={chosen.includes(r.id)} disabled={ro}
+            onCheckedChange={(on) => pick(on ? [...chosen, r.id] : chosen.filter((x) => x !== r.id))} />)}
+        </div>
+      ) : null}
+    </SettingRow>
+  );
+}
+
 function AutomationSecrets({ client, projectId, ro, chosen, onChange }: {
   client: ApiClient; projectId: string | null; ro: boolean; chosen: string[]; onChange: (names: string[]) => void;
 }) {
@@ -627,6 +690,71 @@ function AutomationSecrets({ client, projectId, ro, chosen, onChange }: {
 }
 
 type OverrideKey = keyof AgentOverrides;
+
+const DEFAULT = "__default";
+
+/**
+ * What an automation's own agent, command or server runs on: harness,
+ * model and time limit (an agent's), machine and image. Each left at the
+ * default is unset, and the run gets the organisation's default.
+ */
+function RuntimeFields({ client, ro, agent, value, onChange }: {
+  client: ApiClient;
+  ro: boolean;
+  agent: boolean;
+  value: AgentOverrides;
+  onChange: (v: AgentOverrides) => void;
+}) {
+  const [tiers, setTiers] = useState<readonly ModelTier[]>([]);
+  const [sizes, setSizes] = useState<readonly MachineSizeWithUse[]>([]);
+  const [images, setImages] = useState<readonly ImageChoice[]>([]);
+  useEffect(() => {
+    if (agent) client.modelTiers().then((r) => setTiers(r.tiers), () => undefined);
+    client.machineSizes().then((r) => setSizes(r.sizes), () => undefined);
+    client.imageChoices().then((r) => setImages(r.images), () => undefined);
+  }, [client, agent]);
+  const setOne = <K extends OverrideKey>(k: K, v: AgentOverrides[K] | undefined) => {
+    const next = { ...value };
+    if (v === undefined || (v as unknown) === DEFAULT) delete next[k];
+    else next[k] = v;
+    onChange(next);
+  };
+  const defaultSize = sizes.find((s) => s.isDefault)?.name;
+  return (
+    <SettingFields>
+      {agent ? (
+        <>
+          <SettingField label="Harness">
+            <Select<string> aria-label="Harness" value={value.harness ?? DEFAULT} disabled={ro}
+              options={[{ value: DEFAULT, label: "OpenCode (default)" }, ...HARNESSES.map((h) => ({ value: h, label: HARNESS_LABEL[h] }))]}
+              onValueChange={(v) => setOne("harness", v === DEFAULT ? undefined : v as Harness)} />
+          </SettingField>
+          <SettingField label="Model">
+            <Select<string> aria-label="Model" value={value.tierId ?? DEFAULT} disabled={ro}
+              options={[{ value: DEFAULT, label: "The default tier" }, ...tiers.map((t) => ({ value: t.id, label: t.name, meta: t.model ?? "No model" }))]}
+              onValueChange={(v) => setOne("tierId", v === DEFAULT ? undefined : v)} />
+          </SettingField>
+          <SettingField label="Time limit">
+            <Select<string> aria-label="Time limit" value={value.timeLimitMinutes ? String(value.timeLimitMinutes) : DEFAULT} disabled={ro}
+              options={[{ value: DEFAULT, label: "No limit" }, ...[30, 60, 120, 240, 480].map((m) => ({ value: String(m), label: m < 60 ? `${m} min` : `${m / 60} hour${m === 60 ? "" : "s"}` }))]}
+              onValueChange={(v) => setOne("timeLimitMinutes", v === DEFAULT ? undefined : Number(v))} />
+          </SettingField>
+        </>
+      ) : null}
+      <SettingField label="Machine">
+        <Select<string> aria-label="Machine" value={value.machineSizeId ?? DEFAULT} disabled={ro}
+          options={[{ value: DEFAULT, label: defaultSize ? `${defaultSize} (default)` : "The default size" },
+            ...sizes.map((s) => ({ value: s.id, label: s.name, meta: `${s.cpus} CPUs` }))]}
+          onValueChange={(v) => setOne("machineSizeId", v === DEFAULT ? undefined : v)} />
+      </SettingField>
+      <SettingField label="Image">
+        <Select<string> aria-label="Image" value={value.imageId ?? DEFAULT} disabled={ro}
+          options={[{ value: DEFAULT, label: "The project's runtime image" }, ...images.map((i) => ({ value: i.id, label: i.name }))]}
+          onValueChange={(v) => setOne("imageId", v === DEFAULT ? undefined : v)} />
+      </SettingField>
+    </SettingFields>
+  );
+}
 
 /**
  * A preset's harness, model, time limit, machine and image: each shows the
@@ -705,8 +833,15 @@ function PresetFields({ client, a, orgName, ro, role, overrides, onChange }: {
     ["imageId", "Image", "What it works in."],
   ];
   const from = `${roleName} · ${scopeName}`;
+  const rolePrompt = r?.prompt.project?.mode === "replace" ? r.prompt.project.body
+    : [r?.prompt.organization.body, r?.prompt.project?.mode === "add" ? r.prompt.project.body : ""].filter(Boolean).join("\n\n");
   return (
     <div data-testid="preset-fields">
+      {r ? (
+        <SettingsDisclosure summary={`${roleName}'s prompt (from ${scopeName}'s Agents settings)`}>
+          <pre className="automationPayload" data-testid="preset-role-prompt">{rolePrompt || `${roleName}'s built-in prompt.`}</pre>
+        </SettingsDisclosure>
+      ) : null}
       {rows.map(([k, label, help]) => {
         const set = overrides[k] !== undefined;
         return (
