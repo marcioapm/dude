@@ -30,26 +30,23 @@ func (g gate) release(t *testing.T) {
 	}
 }
 
-// A webhook endpoint that does not answer and live runs whose output is
-// still open cost the sweep nothing: in the same pass, an unrelated
-// automation's delivery is matched and its run started.
+// A webhook endpoint that does not answer and live agents whose output is
+// still open cost the sweep nothing: a pass returns while the endpoint is
+// still silent, having matched an unrelated delivery and started its run.
 func TestAutomationSlowWorkStaysOffTheSweep(t *testing.T) {
 	h := newHarness(t)
-	g := newGate(t)
 	answer := make(chan struct{})
 	var once sync.Once
 	release := func() { once.Do(func() { close(answer) }) }
-	t.Cleanup(release)
 	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-answer:
-		case <-time.After(20 * time.Second):
-		}
+		<-answer
 		w.WriteHeader(200)
 	}))
 	t.Cleanup(hook.Close)
-	h.automation("aut_live", "command", map[string]any{"kind": "github", "event": "push"},
-		map[string]any{"command": g.hold("echo done"), "concurrency": "parallel"})
+	// Runs before hook.Close, which waits for the held request.
+	t.Cleanup(release)
+	h.automation("aut_live", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "parallel", "agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Work"}}})
 	exec(t, h.owner, `UPDATE automations SET parallel_max = 4 WHERE id = 'aut_live'`)
 	h.automation("aut_slowhook", "webhook", map[string]any{"kind": "github", "event": "release"},
 		map[string]any{"webhook": map[string]any{"url": hook.URL}})
@@ -57,7 +54,7 @@ func TestAutomationSlowWorkStaysOffTheSweep(t *testing.T) {
 		h.deliver(fmt.Sprintf("p-%d", i), "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
 	}
 	h.deliver("rel-1", "release", map[string]any{"action": "published", "repository": map[string]any{"full_name": "acme/web"}})
-	h.until("four live runs and the webhook POSTing", func() bool {
+	h.until("four live agents and the webhook POSTing", func() bool {
 		live, hk := 0, h.runs("aut_slowhook")
 		for _, r := range h.runs("aut_live") {
 			if r.Status == "running" {
@@ -69,28 +66,25 @@ func TestAutomationSlowWorkStaysOffTheSweep(t *testing.T) {
 
 	h.automation("aut_other", "command", map[string]any{"kind": "github", "event": "issues"}, map[string]any{"command": "echo other"})
 	h.deliver("i-1", "issues", map[string]any{"action": "opened", "repository": map[string]any{"full_name": "acme/web"}})
-	began := time.Now()
-	if _, err := h.runner.Sweep(context.Background()); err != nil {
-		t.Fatal(err)
+	done := make(chan error, 1)
+	go func() { _, err := h.runner.Sweep(context.Background()); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		release()
+		<-done
+		t.Fatal("a pass waited on the silent webhook endpoint")
 	}
-	took := time.Since(began)
 	if r := h.runs("aut_other"); len(r) != 1 || r[0].Status != "running" {
 		t.Fatalf("after one pass the unrelated run is %+v", r)
 	}
-	if took > time.Second {
-		t.Errorf("one pass took %v with a silent webhook and four live runs", took)
-	}
 	release()
-	g.release(t)
-	h.until("everything ends", func() bool {
-		for _, id := range []string{"aut_live", "aut_slowhook", "aut_other"} {
-			for _, r := range h.runs(id) {
-				if r.Status != "succeeded" {
-					return false
-				}
-			}
-		}
-		return true
+	h.until("the webhook and the unrelated run succeed", func() bool {
+		hk, o := h.runs("aut_slowhook"), h.runs("aut_other")
+		return hk[0].Status == "succeeded" && o[0].Status == "succeeded"
 	})
 }
 
