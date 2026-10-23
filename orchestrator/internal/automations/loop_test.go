@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,6 +169,57 @@ func TestAutomationRunIsClaimedBeforeItStarts(t *testing.T) {
 	})
 	if m := h.runs("aut_claim_merge"); m[0].Payloads != 1 || m[1].Payloads != 1 {
 		t.Errorf("merge runs %+v", m)
+	}
+}
+
+// A Server run is not ended idle while an event sent into it is still to be
+// POSTed: one arriving as the idle stop is decided is POSTed to the same
+// container, then the run ends.
+func TestAutomationServerKeepsAnEventThatArrivesAsItIdles(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Idle = 0
+	var mu sync.Mutex
+	var deliveries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		deliveries = append(deliveries, r.Header.Get("X-GitHub-Delivery"))
+		mu.Unlock()
+		w.WriteHeader(202)
+	}))
+	t.Cleanup(srv.Close)
+	var inject atomic.Bool
+	var once sync.Once
+	h.runner.ServerURL = func(ctx context.Context, _ string, _ int) (string, error) {
+		if inject.Load() {
+			once.Do(func() {
+				if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+					a, err := Load(ctx, tx, "aut_srv_late")
+					if err != nil {
+						return err
+					}
+					body, _ := json.Marshal(prBody("synchronize", "acme/web", "ana"))
+					_, err = Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: "d-late", Event: "pull_request", Body: body}}, "", nil)
+					return err
+				}); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		return srv.URL, nil
+	}
+	h.automation("aut_srv_late", "server", map[string]any{"kind": "github", "event": "pull_request"},
+		map[string]any{"server": map[string]any{"command": "bun run serve", "port": 8080, "path": "/events", "health": nil}})
+	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
+	h.until("the first POST", func() bool { mu.Lock(); defer mu.Unlock(); return len(deliveries) == 1 })
+	h.runner.Wait()
+	inject.Store(true)
+	h.advance(ServerIdle + time.Second)
+	h.until("the run ends", func() bool { r := h.runs("aut_srv_late"); return len(r) == 1 && r[0].Status != "running" })
+	r := h.runs("aut_srv_late")[0]
+	mu.Lock()
+	defer mu.Unlock()
+	if r.Status != "succeeded" || r.Payloads != 2 || len(deliveries) != 2 || deliveries[1] != "d-late" {
+		t.Errorf("run %+v, POSTs %v", r, deliveries)
 	}
 }
 

@@ -1037,23 +1037,30 @@ func (r *Runner) finish(ctx context.Context, a Automation, runID, status, reason
 // end is finish, saying whether the run was still live (and so ended now).
 func (r *Runner) end(ctx context.Context, a Automation, runID, status, reason string, cost *float64) (bool, error) {
 	ended := false
-	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET status = $2, reason = NULLIF($3, ''), cost_usd = COALESCE($4, cost_usd),
-			ended_at = now(), container_stopped_at = CASE WHEN container_started_at IS NOT NULL THEN COALESCE(container_stopped_at, now()) END
-			WHERE id = $1 AND status IN ('queued', 'running')`, runID, status, reason, cost)
-		if err != nil || tag.RowsAffected() == 0 {
-			return err
-		}
-		ended = true
-		if _, err := tx.Exec(ctx, `UPDATE automation_sessions SET last_run_at = now() WHERE automation_id = $1`, a.ID); err != nil {
-			return err
-		}
-		if status != "failed" || !a.NotifyOnFailure {
-			return nil
-		}
-		return notifyFailure(ctx, tx, a, runID, reason)
+	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) (err error) {
+		ended, err = endIn(ctx, tx, a, runID, status, reason, cost, false)
+		return err
 	})
 	return ended && err == nil, err
+}
+
+// endIn ends a live run in tx. delivered also requires every payload the
+// run holds to have been POSTed (a Server run ending idle).
+func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason string, cost *float64, delivered bool) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE automation_runs SET status = $2, reason = NULLIF($3, ''), cost_usd = COALESCE($4, cost_usd),
+		ended_at = now(), container_stopped_at = CASE WHEN container_started_at IS NOT NULL THEN COALESCE(container_stopped_at, now()) END
+		WHERE id = $1 AND status IN ('queued', 'running') AND (NOT $5 OR posted >= jsonb_array_length(payloads))`,
+		runID, status, reason, cost, delivered)
+	if err != nil || tag.RowsAffected() == 0 {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE automation_sessions SET last_run_at = now() WHERE automation_id = $1`, a.ID); err != nil {
+		return false, err
+	}
+	if status != "failed" || !a.NotifyOnFailure {
+		return true, nil
+	}
+	return true, notifyFailure(ctx, tx, a, runID, reason)
 }
 
 // EvAutomationFailed is the ledger's word for a failed automation run: the
@@ -1131,13 +1138,30 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	if r.now().Sub(last) < r.idle() {
 		return false, nil
 	}
-	r.stopOrCancel(ctx, luxRunID, keep)
 	status := "succeeded"
 	reason := ""
 	if failedReq {
 		status, reason = "failed", "a POST to the server failed"
 	}
-	return true, r.endServer(ctx, a, runID, status, "idle", reason)
+	// Decided under the automation's lock Fire takes: an event sent into
+	// this run since payloads were read keeps it up, to be POSTed next pass.
+	ended := false
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM automations WHERE id = $1 FOR UPDATE`, a.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET stop_reason = 'idle', container_stopped_at = now()
+			WHERE id = $1 AND status = 'running' AND posted >= jsonb_array_length(payloads)`, runID); err != nil {
+			return err
+		}
+		var err error
+		ended, err = endIn(ctx, tx, a, runID, status, reason, nil, true)
+		return err
+	}); err != nil || !ended {
+		return false, err
+	}
+	r.stopOrCancel(ctx, luxRunID, keep)
+	return true, nil
 }
 
 func (r *Runner) endServer(ctx context.Context, a Automation, runID, status, stop, reason string) error {
