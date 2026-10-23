@@ -215,6 +215,7 @@ func resolve(flagOrg string) (base, key string, err error) {
 		if envURL != "" && !sameServer(envURL, p.URL) {
 			return "", "", fmt.Errorf("DUDE_URL %q differs from %s's stored URL %q: set DUDE_API_KEY too, or unset DUDE_URL", envURL, slug, p.URL)
 		}
+		base = p.URL // DUDE_URL names the same server; the stored form is the one to use
 		if p.Key != "" {
 			return base, p.Key, nil
 		}

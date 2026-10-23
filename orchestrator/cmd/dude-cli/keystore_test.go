@@ -86,8 +86,8 @@ func TestEnvURLCannotRedirectStoredKey(t *testing.T) {
 			}
 			for _, same := range []string{"https://stored.example/", "https://STORED.example", "https://stored.example:443", "stored.example"} {
 				t.Setenv("DUDE_URL", same)
-				if _, key, err := resolve(""); err != nil || key != "stored-key" {
-					t.Fatalf("same URL %q: %q %v", same, key, err)
+				if base, key, err := resolve(""); err != nil || base != "https://stored.example" || key != "stored-key" {
+					t.Fatalf("same URL %q: %q %q %v", same, base, key, err)
 				}
 			}
 			t.Setenv("DUDE_URL", "http://stored.example")
