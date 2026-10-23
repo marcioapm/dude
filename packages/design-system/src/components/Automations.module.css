@@ -40,6 +40,18 @@
 .scopeIcon {
   flex: none;
 }
+.triggerWrap {
+  display: inline;
+  white-space: normal;
+}
+.triggerWrap > .kindIcon {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-inline-end: var(--ds-space-6);
+}
+.triggerWrap > span + span {
+  margin-inline-start: var(--ds-space-6);
+}
 .scope[data-scope="organization"] {
   background: var(--ds-tone-info-bg);
   color: var(--ds-tone-info-fg);

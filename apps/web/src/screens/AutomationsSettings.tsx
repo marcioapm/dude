@@ -270,12 +270,12 @@ function AutomationTable({ rows, orgName, onOpen, onToggle, showScope }: {
       <THead>
         <Tr>
           <Th width={56}>On</Th>
-          <Th>Name</Th>
-          <Th>Kind · session</Th>
+          <Th width="19%">Name</Th>
+          <Th width="15%">Kind · session</Th>
           <Th>Trigger</Th>
-          <Th hideWhenNarrow>Owner</Th>
-          <Th hideWhenNarrow>Last run</Th>
-          <Th hideWhenNarrow>Next run</Th>
+          <Th hideWhenNarrow width={64}>Owner</Th>
+          <Th hideWhenNarrow width="11%">Last run</Th>
+          <Th hideWhenNarrow width="11%">Next run</Th>
         </Tr>
       </THead>
       <TBody>
@@ -292,13 +292,13 @@ function AutomationTable({ rows, orgName, onOpen, onToggle, showScope }: {
               </span>
             </Td>
             <Td wrap><span className="automationKind" data-stack="true"><KindMark kind={a.kind} role={roleOf(a)} /><SessionMark mode={a.sessionMode} expiryDays={a.expiryDays} /></span></Td>
-            <Td wrap><TriggerSummary trigger={a.trigger} /></Td>
+            <Td wrap><TriggerSummary trigger={a.trigger} wrap /></Td>
             <Td hideWhenNarrow><OwnerMark owner={a.owner} left={Boolean(a.ownerLeftAt)} org={orgName} avatarOnly /></Td>
-            <Td hideWhenNarrow muted fit>{a.lastRun
+            <Td hideWhenNarrow muted wrap>{a.lastRun
               ? <span className="automationLastRun"><StatusMark status={RUN_MARK[a.lastRun.status]} size="sm" iconOnly label={RUN_WORD[a.lastRun.status]} />
                 {a.lastRun.status === "succeeded" ? "" : `${RUN_WORD[a.lastRun.status]} `}{ago(a.lastRun.at)}</span>
               : "Never"}</Td>
-            <Td hideWhenNarrow muted fit>{nextRun(a)}</Td>
+            <Td hideWhenNarrow muted wrap>{nextRun(a)}</Td>
           </Tr>
         ))}
       </TBody>

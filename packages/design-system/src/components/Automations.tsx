@@ -89,14 +89,19 @@ export function OwnerMark({ owner, avatarOnly, left, org }: {
   );
 }
 
-/** A trigger in one line: "Daily at 03:00 · Lisbon" or "pull_request · opened, synchronize". */
-export function TriggerSummary({ trigger }: {
+/**
+ * A trigger in one line: "Daily at 03:00 · Lisbon" or "pull_request ·
+ * opened, synchronize". `wrap`: its words wrap in a narrow cell, the glyph
+ * staying beside the first.
+ */
+export function TriggerSummary({ trigger, wrap }: {
   readonly trigger: { readonly kind: "schedule"; readonly cron: string; readonly tz: string }
     | { readonly kind: "github"; readonly event: string; readonly actions?: readonly string[] | undefined };
+  readonly wrap?: boolean | undefined;
 }) {
   if (trigger.kind === "schedule") {
     return (
-      <span className={styles["trigger"]}>
+      <span className={cx(styles["trigger"], wrap && styles["triggerWrap"])}>
         <Icon name="clock" size={14} className={styles["kindIcon"]} />
         <span>{describeCron(trigger.cron)}</span>
         <span className={styles["muted"]}>· {cityOf(trigger.tz)}</span>
@@ -104,7 +109,7 @@ export function TriggerSummary({ trigger }: {
     );
   }
   return (
-    <span className={styles["trigger"]}>
+    <span className={cx(styles["trigger"], wrap && styles["triggerWrap"])}>
       <Icon name="github" size={14} className={styles["kindIcon"]} />
       <span className="ds-mono">{trigger.event}</span>
       <span className={styles["muted"]}>· {trigger.actions?.length ? trigger.actions.join(", ") : "any action"}</span>
