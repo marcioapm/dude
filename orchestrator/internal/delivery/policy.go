@@ -30,6 +30,11 @@ type Policy struct {
 	BlockingSeverities   []string       `json:"blockingSeverities"`
 	RequiredReviewers    []string       `json:"requiredReviewers"`
 	ConditionalReviewers []ReviewerRule `json:"conditionalReviewers"`
+	// Globs of paths that are not the product (CI, docs): a change of
+	// these alone since a passing test round starts no tester
+	// (carryForward). Matched against in-repo paths only; to make a whole
+	// repository non-product, list its paths.
+	NonProductPaths []string `json:"nonProductPaths"`
 	// Review → fix cycles before escalating to a person. The bound exists
 	// because a loop that cannot converge will spend a budget finding that out.
 	MaxReviewIterations int `json:"maxReviewIterations"`
@@ -69,11 +74,6 @@ type Policy struct {
 	// agent, conversation and workspace (continueOrCreateTx), rather than
 	// starting a fresh one.
 	ResumeRounds bool `json:"resumeRounds"`
-	// Paths no criterion's behaviour depends on: a change of these alone
-	// since a passing test round starts no tester (carryForward). Globs as
-	// MatchesGlob reads them, against a path in its repository only: no
-	// glob names a whole repository.
-	NonProductPaths []string `json:"nonProductPaths"`
 }
 
 // LivePolicyKeys are the Policy keys dude reads from the project's and
@@ -92,6 +92,7 @@ func DefaultPolicy() Policy {
 			{Category: "frontend", WhenPathsMatch: []string{"**/*.tsx", "**/*.css"}},
 			{Category: "api", WhenPathsMatch: []string{"**/routes/**", "**/api/**"}},
 		},
+		NonProductPaths:       []string{".github/**", "docs/**", "**/*.md"},
 		MaxReviewIterations:   5,
 		MaxAttemptsPerFinding: 2,
 		MaxStillRounds:        2,
@@ -107,7 +108,6 @@ func DefaultPolicy() Policy {
 		ConductorEditLines:   60,
 		ConductorEditFiles:   3,
 		ResumeRounds:         true,
-		NonProductPaths:      []string{".github/**", "docs/**", "**/*.md"},
 	}
 }
 

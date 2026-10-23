@@ -191,6 +191,8 @@ export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, str
 export const deliveryPolicySchema = z
   .object({
     requiredReviewers: z.array(z.enum(REVIEWER_CATEGORIES)).min(1),
+    /** Path globs that are not the product: a change of these alone after a passing test starts no tester. In-repo paths; to make a whole repository non-product, list its paths. */
+    nonProductPaths: z.array(z.string().trim().min(1).max(200)).max(50),
     blockingSeverities: z.array(findingSeveritySchema).min(1),
     maxReviewIterations: z.number().int().min(1).max(20),
     /** Fix attempts one finding may survive before it is escalated on its own. */
@@ -211,8 +213,6 @@ export const deliveryPolicySchema = z
     conductorEditLines: z.number().int().min(1).max(10_000),
     /** The most changed files a conductor may publish at once. */
     conductorEditFiles: z.number().int().min(1).max(1000),
-    /** Paths no criterion depends on: a change of these alone after a passing test starts no tester. */
-    nonProductPaths: z.array(z.string().min(1).max(200)).max(100),
   })
   .partial()
   .strict();

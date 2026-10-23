@@ -331,6 +331,7 @@ export const SETTINGS: SettingsResponse = {
   }])) as SettingsResponse["roles"],
   delivery: {
     requiredReviewers: { value: ["correctness"], source: "organization" },
+    nonProductPaths: { value: [".github/**", "docs/**", "**/*.md"], source: "organization" },
     blockingSeverities: { value: ["blocking", "high"], source: "organization" },
     maxReviewIterations: { value: 5, source: "organization" },
     maxAttemptsPerFinding: { value: 3, source: "organization" },
@@ -344,7 +345,6 @@ export const SETTINGS: SettingsResponse = {
     conductorWarmMinutes: { value: 5, source: "organization" },
     conductorEditLines: { value: 60, source: "organization" },
     conductorEditFiles: { value: 3, source: "organization" },
-    nonProductPaths: { value: [".github/**", "docs/**", "**/*.md"], source: "organization" },
   },
   network: {
     egress: { value: [], source: "organization" }, mode: { value: "add", source: "organization" },
