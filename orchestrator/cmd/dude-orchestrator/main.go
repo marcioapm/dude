@@ -133,7 +133,7 @@ func run(log *slog.Logger) error {
 	// Test fixtures serve HTTP API and git daemon on distinct gateway ports.
 	forges := forge.Resolver{DB: database, TestGitHost: os.Getenv("DUDE_TEST_GITHUB_GIT_HOST")}
 	runtime := workflow.New(database, fmt.Sprintf("orchestrator-%s-%d", host, os.Getpid()), log)
-	store := &delivery.Store{DB: database, ToolsService: agent.ToolsService}
+	store := &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: agent.TimeLimit()}
 	runtime.Register(delivery.Workflow(store, forges))
 
 	signalWorkflow := func(ctx context.Context, org, wf, name string, payload any, key string) error {

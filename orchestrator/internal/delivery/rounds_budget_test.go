@@ -1,0 +1,143 @@
+package delivery_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+)
+
+// budgetRound is a phase whose next round may take its predecessor's lux
+// Run over: its agent role (also its settings role) and category.
+type budgetRound struct {
+	phase, role, category string
+}
+
+var (
+	testerRound   = budgetRound{delivery.PhaseTest, "qa_browser", ""}
+	reviewerRound = budgetRound{delivery.PhaseReview, "reviewer", "correctness"}
+)
+
+// world is a task whose last round, run_b, is kept and on the model its
+// role runs on now (lux Run lrun_b), its round having run for used, with
+// something said to replay.
+func (b budgetRound) world(t *testing.T, used time.Duration) *roundWorld {
+	t.Helper()
+	w := newRoundWorld(t)
+	w.exec(t, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('tier_b_'||$1, $1, 'Checking', 'fake/scripted')`, w.org)
+	w.exec(t, `UPDATE projects SET agent_models = jsonb_build_object($2::text, jsonb_build_object('tier', 'tier_b_'||$3::text)) WHERE id = $1`,
+		w.project, b.role, w.org)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category, base_refs,
+			started_at, ended_at, keep, kept_until, lux_run_id, model, model_tier, harness)
+		VALUES ('run_b', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{"api":"aaa"}',
+			now() - interval '10 minutes' - make_interval(secs => $7), now() - interval '10 minutes', true, now() + interval '1 day',
+			'lrun_b', 'fake/scripted', 'Checking', 'opencode')`,
+		w.org, w.project, w.task, b.phase, b.role, b.category, used.Seconds())
+	w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_b', $1, 'agent.message', 'run_b', $2, 'agent', 'run_b', 'test', '{"text":"Earlier round"}')`, w.org, w.task)
+	return w
+}
+
+// next creates the round after run_b through the store, as the workflow's
+// steps do, on a deployment whose phase Runs get limit.
+func (b budgetRound) next(t *testing.T, w *roundWorld, limit time.Duration) string {
+	t.Helper()
+	id, err := (&delivery.Store{DB: w.app, RunTimeLimit: limit}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
+		TaskID: w.task, Phase: b.phase, Category: b.category, Key: "next", Attempt: 1,
+		BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// how is the new round's continuation, lux Run and run.created's fresh.
+func (w *roundWorld) how(t *testing.T, id string) string {
+	t.Helper()
+	return w.str(t, `SELECT COALESCE(continues_how, '') || '|' || COALESCE(lux_run_id, '') || '|' ||
+		COALESCE((SELECT payload->>'fresh' FROM events WHERE run_id = r.id AND event_type = 'run.created'), '')
+		FROM runs r WHERE id = $1`, id)
+}
+
+const (
+	resumed      = "resume|lrun_b|"
+	timeReplayed = "replay||time_budget"
+)
+
+// lux times a Run's running time over all its placements, and a resume
+// cannot give it more: a tester's or reviewer's next round takes its
+// predecessor's lux Run over only while at least half the limit is left;
+// with less it is a fresh Run, with the full limit, given the
+// predecessor's conversation, and the run.created says why.
+func TestARoundIsNotHandedALuxRunWithLittleTimeLeft(t *testing.T) {
+	for name, b := range map[string]budgetRound{"tester": testerRound, "reviewer": reviewerRound} {
+		for _, tc := range []struct {
+			used, limit time.Duration
+			want        string
+		}{
+			{2*time.Hour + 6*time.Minute, 4 * time.Hour, timeReplayed},
+			{90 * time.Minute, 4 * time.Hour, resumed},
+			// The configured limit, not the default: 90m of 4h is little
+			// used, of 2h most of it.
+			{90 * time.Minute, 2 * time.Hour, timeReplayed},
+		} {
+			t.Run(name+"/"+tc.used.String()+"-of-"+tc.limit.String(), func(t *testing.T) {
+				w := b.world(t, tc.used)
+				id := b.next(t, w, tc.limit)
+				if got := w.how(t, id); got != tc.want {
+					t.Fatalf("how|lux|fresh = %q, want %q", got, tc.want)
+				}
+				if tc.want == resumed {
+					return
+				}
+				// Let go, for RetireCompleted to end its lux Run; the replay
+				// continues it.
+				if got := w.str(t, `SELECT keep::text || '|' || COALESCE(lux_run_id, '') FROM runs WHERE id = 'run_b'`); got != "false|lrun_b" {
+					t.Errorf("predecessor keep|lux = %q, want released", got)
+				}
+				if got := w.str(t, `SELECT continues_run_id FROM runs WHERE id = $1`, id); got != "run_b" {
+					t.Errorf("the fresh round continues %q, want run_b", got)
+				}
+			})
+		}
+	}
+}
+
+// What a lux Run has used is every round's that held it: the predecessor
+// and each row it resumed, back to the row it was submitted for. A row
+// before a replay held another lux Run and counts for nothing.
+func TestTheTimeUsedIsTheWholeResumeChains(t *testing.T) {
+	for _, b := range []budgetRound{testerRound, reviewerRound} {
+		t.Run(b.phase, func(t *testing.T) {
+			// Three rounds of 50 minutes each on one lux Run: each under
+			// two hours, 2h30m together.
+			w := b.world(t, 50*time.Minute)
+			w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category,
+					base_refs, started_at, ended_at, continues_run_id, continues_how)
+				VALUES ('run_b1', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
+					now() - interval '5 hours', now() - interval '4 hours 10 minutes', NULL, NULL),
+				       ('run_b2', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
+					now() - interval '3 hours', now() - interval '2 hours 10 minutes', 'run_b1', 'resume')`,
+				w.org, w.project, w.task, b.phase, b.role, b.category)
+			w.exec(t, `UPDATE runs SET continues_run_id = 'run_b2', continues_how = 'resume' WHERE id = 'run_b'`)
+			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != timeReplayed {
+				t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
+			}
+			// The same two rounds on this lux Run, after a replay of a round
+			// that ran for five hours on another: 1h40m used.
+			w = b.world(t, 50*time.Minute)
+			w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category,
+					base_refs, started_at, ended_at, continues_run_id, continues_how)
+				VALUES ('run_b0', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
+					now() - interval '11 hours', now() - interval '6 hours', NULL, NULL),
+				       ('run_b1', $1, $2, $3, 1, 'completed', $4::run_phase, $5::agent_role, 'agent', NULLIF($6, ''), '{}',
+					now() - interval '3 hours', now() - interval '2 hours 10 minutes', 'run_b0', 'replay')`,
+				w.org, w.project, w.task, b.phase, b.role, b.category)
+			w.exec(t, `UPDATE runs SET continues_run_id = 'run_b1', continues_how = 'resume' WHERE id = 'run_b'`)
+			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != resumed {
+				t.Fatalf("after a replay: how|lux|fresh = %q, want %q", got, resumed)
+			}
+		})
+	}
+}

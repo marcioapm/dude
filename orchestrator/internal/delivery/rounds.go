@@ -215,7 +215,13 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 	if err != nil {
 		return "", err
 	}
-	if sameSpec && !moved && in.Tier == "" {
+	spent := false
+	if p.Kept || p.Collecting {
+		if spent, err = timeSpentTx(ctx, tx, p.ID, in.timeLimit); err != nil {
+			return "", err
+		}
+	}
+	if sameSpec && !moved && !spent && in.Tier == "" {
 		if p.Kept {
 			return handOverTx(ctx, tx, org, in, p)
 		}
@@ -233,9 +239,32 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 		in.freshReason = "spec_changed"
 	case moved:
 		in.freshReason = "head_moved"
+	case spent:
+		in.freshReason = "time_budget"
 	}
 	in.Replays = p.ID
 	return createPhaseRunTx(ctx, tx, org, in)
+}
+
+// timeSpentTx says whether the lux Run predecessor holds has less than half
+// of limit left: lux times a Run's running time summed over all its
+// placements, and a resume cannot give it more, so a round handed a Run
+// with less could be stopped at its limit before it ends. Used is each
+// row's active time (run_metrics: started to ended, less dude's parks)
+// over the resume chain, the rows that held that lux Run in turn. A zero
+// limit is unknown: nothing is spent.
+func timeSpentTx(ctx context.Context, tx pgx.Tx, predecessor string, limit time.Duration) (bool, error) {
+	if limit <= 0 {
+		return false, nil
+	}
+	var used float64
+	err := tx.QueryRow(ctx, `WITH RECURSIVE chain AS (
+			SELECT id, continues_run_id, continues_how FROM runs WHERE id = $1
+			UNION ALL
+			SELECT r.id, r.continues_run_id, r.continues_how FROM runs r JOIN chain c ON r.id = c.continues_run_id
+			WHERE c.continues_how = 'resume')
+		SELECT COALESCE(sum(m.active_seconds), 0) FROM chain, run_metrics(chain.id) m`, predecessor).Scan(&used)
+	return limit-time.Duration(used*float64(time.Second)) < limit/2, err
 }
 
 // headMovedTx says whether a writer predecessor's checkout cannot be
