@@ -1563,6 +1563,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 				return err
 			}
 		}
+		// A fix Run's checks' log tails, kept apart from pr_feedback
+		// (runs.check_logs): read only on submit, for its init.
+		if stored == nil && r.Phase == delivery.PhaseFix {
+			var checkLogs map[string]string
+			if err := tx.QueryRow(ctx, `SELECT check_logs FROM runs WHERE id = $1`, r.ID).Scan(&checkLogs); err != nil {
+				return fmt.Errorf("load the check logs: %w", err)
+			}
+			feedback = delivery.WithCheckLogs(feedback, checkLogs)
+		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
 				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix

@@ -66,15 +66,20 @@ type FailingCheck struct {
 	// or was never asked for.
 	Unread string `json:"unread,omitempty"`
 	// Full is the end of its job's log, longer than Log, for the fixer's
-	// workspace: never put in a prompt.
-	Full string `json:"full,omitempty"`
+	// workspace: never put in a prompt, and never serialized. It is up to
+	// 64 KiB, and pr_feedback and the workflow's state are read and
+	// rewritten often; the fix Run keeps it in runs.check_logs.
+	Full string `json:"-"`
 	// Where one fix Run's init wrote Full and how much of it (FileKiB, and
 	// FileCut when shortened to fit the init), or NoFile when it wrote
-	// none: set as that Run's spec is built, never stored.
+	// none; Resumed when the Run is a resumed round, whose init does not
+	// run again: set as that Run's spec or round message is built, never
+	// stored.
 	Path    string `json:"-"`
 	FileKiB int    `json:"-"`
 	FileCut bool   `json:"-"`
 	NoFile  bool   `json:"-"`
+	Resumed bool   `json:"-"`
 	// The check run, to read its log from.
 	RunID int64 `json:"runId,omitempty"`
 }

@@ -4073,6 +4073,21 @@ func TestAFixRunsWorkspaceHoldsItsChecksLog(t *testing.T) {
 		!strings.Contains(prompt, "⟦external ") || strings.Contains(prompt, "tests/test_0.py") {
 		t.Errorf("the prompt:\n%s", prompt)
 	}
+	// The 64 KiB tail lives in runs.check_logs alone: the rows the phase
+	// sweep and the workflow runtime read and rewrite stay small.
+	var feedbackMax, stateMax, fixes, withLogs int
+	if err := w.owner.QueryRow(context.Background(), `SELECT
+			COALESCE((SELECT max(length(pr_feedback::text)) FROM runs WHERE organization_id = $1), 0),
+			COALESCE((SELECT max(length(state::text)) FROM workflow_runs WHERE organization_id = $1), 0),
+			(SELECT count(*) FROM runs WHERE organization_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb),
+			(SELECT count(*) FROM runs WHERE organization_id = $1 AND phase = 'fix' AND length(check_logs::text) > 60000)`,
+		w.org).Scan(&feedbackMax, &stateMax, &fixes, &withLogs); err != nil {
+		t.Fatal(err)
+	}
+	if feedbackMax >= 16384 || stateMax >= 16384 || fixes != 1 || withLogs != 1 {
+		t.Errorf("pr_feedback up to %d bytes, workflow state up to %d; %d fix Runs, %d holding the log tail",
+			feedbackMax, stateMax, fixes, withLogs)
+	}
 }
 
 // An approved pull request with a thread left unresolved is not ready.

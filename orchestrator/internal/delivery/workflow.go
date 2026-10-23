@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2135,7 +2136,11 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 	files := 0
 	for i, f := range st.PRFeedback {
 		for j, c := range f.Checks {
-			if c.RunID == 0 || c.Log != "" || slugs[f.Repo] == "" {
+			// Full is never stored (json:"-"), so a check read in an earlier
+			// step has its excerpt but not its tail: the tail is read again
+			// for the fix Run this step creates. A log already known
+			// unreadable is not asked for again.
+			if c.RunID == 0 || c.Full != "" || c.Log != "" && c.Unread != "" || slugs[f.Repo] == "" {
 				continue
 			}
 			// A failed read never fails the step: the check goes to the
@@ -2152,7 +2157,9 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 					"task", st.TaskID, "reason", read.Unread, "status", status, "transient", forge.Transient(err))
 			}
 			check := &st.PRFeedback[i].Checks[j]
-			check.Log, check.Unread = read.Cut(checkLogLimit), read.Unread
+			if check.Log == "" {
+				check.Log, check.Unread = read.Cut(checkLogLimit), read.Unread
+			}
 			// The fix Run's init writes the longer tail into its workspace
 			// (phases' checkLogsInit), for the first CheckLogFiles checks.
 			if read.Tail != "" && files < CheckLogFiles {
@@ -2173,6 +2180,35 @@ const (
 	CheckLogFiles   = 4
 	CheckLogFileMax = 64 << 10
 )
+
+// CheckLogsOf is runs.check_logs for feedback: each check's Full by its
+// check run id (decimal), as WithCheckLogs puts them back.
+func CheckLogsOf(feedback []forge.ActionableFeedback) map[string]string {
+	out := map[string]string{}
+	for _, f := range feedback {
+		for _, c := range f.Checks {
+			if c.Full != "" && c.RunID != 0 {
+				out[strconv.FormatInt(c.RunID, 10)] = c.Full
+			}
+		}
+	}
+	return out
+}
+
+// WithCheckLogs is a copy of feedback whose checks have their Full from
+// logs (CheckLogsOf); feedback is not changed.
+func WithCheckLogs(feedback []forge.ActionableFeedback, logs map[string]string) []forge.ActionableFeedback {
+	out := slices.Clone(feedback)
+	for i := range out {
+		out[i].Checks = slices.Clone(out[i].Checks)
+		for j := range out[i].Checks {
+			if full, ok := logs[strconv.FormatInt(out[i].Checks[j].RunID, 10)]; ok {
+				out[i].Checks[j].Full = full
+			}
+		}
+	}
+	return out
+}
 
 // LogEnd is the end of s in at most limit bytes, from a line's
 // start where one is in reach.
