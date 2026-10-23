@@ -787,19 +787,24 @@ function countFocus(): () => number {
   return () => focused;
 }
 
-test("Go to dude looks up dude's tab by the window name its session gave, not the opener's focus()", async () => {
+/** window.open finding dude's tab (the opener) by name; returns the [url, name] it was called with. */
+function openFindsOpener(): Array<[string, string]> {
   const opens: Array<[string, string]> = [];
-  const focused = countFocus();
   win.open = (url: string, name: string) => { opens.push([url, name]); return opener; };
+  return opens;
+}
+
+test("Go to dude looks up dude's tab by the window name its session gave, not the opener's focus()", async () => {
+  const opens = openFindsOpener();
+  const focused = countFocus();
   await atGoToDude({ ...themed(), dudeWindow: "dude-tab-abc123" });
   expect(opens).toEqual([["", "dude-tab-abc123"]]);
   expect(focused()).toBe(0);
 });
 
 test("from a session with no window name (an older dude), Go to dude falls back to the opener's focus()", async () => {
-  const opens: string[] = [];
+  const opens = openFindsOpener();
   const focused = countFocus();
-  win.open = (_: string, name: string) => { opens.push(name); return opener; };
   await atGoToDude(themed());
   expect(opens).toEqual([]);
   expect(focused()).toBe(1);
@@ -822,9 +827,8 @@ test("a name held by another origin's window, not the opener, leaves that window
 });
 
 test("a pin's Open in dude tells dude which item and brings dude's tab forward by its window name", () => {
-  const opens: Array<[string, string]> = [];
+  const opens = openFindsOpener();
   const focused = countFocus();
-  win.open = (url: string, name: string) => { opens.push([url, name]); return opener; };
   boot();
   fromDude({ ...themed(), pins: [{ id: "fbk_9", n: 1, status: "draft", author: "Márcio", mine: true, body: "Green", selector: "button.pay", when: "drafted now", replies: [] }], dudeWindow: "dude-tab-abc123" });
   fromDude({ type: "highlight", v: 1, itemId: "fbk_9" });

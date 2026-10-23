@@ -150,7 +150,8 @@ test("a card's Page link brings the window forward when it is on that page, and 
   const pageLink = (id: string) => c.querySelector(`[data-id="${id}"] [data-testid="fb-preview-page"]`)!;
   await until(() => c.querySelector('[data-id="fbk_b"] [data-testid="fb-preview-page"]'), "the Page links");
   expect(await press(pageLink("fbk_a"))).toBe(false);
-  await hello(open.win, `${WEB}/cart?step=2`);
+  // The window is on /cart without the query: the same page, so fbk_a's link brings it forward.
+  await hello(open.win, `${WEB}/cart`);
   const focused = open.win.focused;
   expect(await press(pageLink("fbk_a"))).toBe(false);
   expect([open.dude.length, open.win.focused]).toEqual([1, focused + 1]);

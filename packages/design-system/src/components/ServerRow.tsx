@@ -63,7 +63,7 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
    * link. Modified clicks always go to the browser.
    */
   readonly onOpen?: ((url: string) => boolean) | undefined;
-  /** The open icon's accessible name and both links' title while `onOpen` handles them; else "Open in a new tab". */
+  /** The open icon's accessible name and title, and Preview's title, while `onOpen` handles them; else "in a new tab". */
   readonly openLabel?: string | undefined;
   readonly logs?: ServerLogs | undefined;
   /** An action is in flight: the buttons wait. */
@@ -82,8 +82,7 @@ export function ServerRow({
   const live = state === "ready";
   const href = safeServerUrl(url);
   const open = href && live ? openLinkWith(onOpen, href) : undefined;
-  const label = open && openLabel ? openLabel : "Open in a new tab";
-  const title = open && openLabel ? openLabel : "Opens in a new tab";
+  const custom = open ? openLabel : undefined;
   return (
     <li className={className} {...rest}>
       <div className={cx(styles["row"], logs?.open && styles["open"])} data-server={name} data-state={state}>
@@ -103,13 +102,13 @@ export function ServerRow({
             <div className={cx(styles["url"], !live && styles["off"])}>
               {href ? <a href={href} target="_blank" rel="noopener noreferrer" title={url} tabIndex={live ? undefined : -1} onClick={open} data-testid="server-url">{bareUrl(url)}</a> : <span title={url}>{url}</span>}
               <IconButton size="sm" icon="copy" label="Copy URL" onClick={() => void navigator.clipboard?.writeText(url)} />
-              {live && href ? <a className={styles["openLink"]} href={href} target="_blank" rel="noopener noreferrer" aria-label={label} title={title} onClick={open} data-testid="server-open"><Icon name="external" size={16} /></a> : null}
+              {live && href ? <a className={styles["openLink"]} href={href} target="_blank" rel="noopener noreferrer" aria-label={custom ?? "Open in a new tab"} title={custom ?? "Opens in a new tab"} onClick={open} data-testid="server-open"><Icon name="external" size={16} /></a> : null}
             </div>
           ) : null}
         </div>
         <div className={styles["actions"]}>
           {live && href ? (
-            <LinkButton href={href} size="sm" variant="secondary" leadingIcon="eye" external={false} target="_blank" rel="noopener noreferrer" title={title} onClick={open} data-testid="server-preview">Preview</LinkButton>
+            <LinkButton href={href} size="sm" variant="secondary" leadingIcon="eye" external={false} target="_blank" rel="noopener noreferrer" title={custom ?? "Opens in a new tab"} onClick={open} data-testid="server-preview">Preview</LinkButton>
           ) : null}
           {logs ? (
             <Button size="sm" variant="quiet" trailingIcon={logs.open ? "chevron-up" : "chevron-down"} aria-expanded={logs.open} onClick={logs.onToggle} data-testid="server-logs">

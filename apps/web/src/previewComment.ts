@@ -30,13 +30,10 @@ export const commentingLinkLabel = (server: string): string => `Preview ${server
 export const HELLO_WAIT_MS = 10_000;
 
 /**
- * This tab's window name, which the overlay's Go to dude looks up: the
- * tab's own when it is already a `dude-tab-…` (window.name outlives a
- * reload, so a preview opened before it still finds the tab), else a new
- * one. Chrome ignores a popup's `opener.focus()`; a named lookup inside a
- * click brings the tab forward. A duplicated tab copies the name, but the
- * lookup searches only the preview's own browsing context group, where the
- * copy is not. Null when the browser refuses the name.
+ * This tab's window name, for the overlay's Go to dude to look up: the
+ * existing `dude-tab-…` name (window.name outlives a reload), else a new
+ * one; null when the browser refuses it. A duplicated tab copies the name,
+ * but the lookup searches only the preview's browsing context group.
  */
 export function nameTab(win: Pick<Window, "name">): string | null {
   try {
@@ -339,7 +336,7 @@ export class PreviewCommenting {
   comment(url: string, server: string): boolean {
     // By origin, not only server name: a window taken back after a reload knows its page, not its server.
     const same = this.#server === server || this.#server === null && originOf(this.#url) !== null && originOf(this.#url) === originOf(url);
-    if ((this.#state === "open" || this.#state === "waiting") && same && this.#win && !this.#win.closed) {
+    if (same && this.#live("open", "waiting")) {
       this.focus();
       return true;
     }
@@ -352,12 +349,16 @@ export class PreviewCommenting {
    * navigated to `url` otherwise.
    */
   visit(url: string, server: string): boolean {
-    if ((this.#state === "open" || this.#state === "waiting") && this.#win && !this.#win.closed
-      && this.#url !== null && overlayPage(url) !== null && overlayPage(this.#url) === overlayPage(url)) {
+    if (this.#live("open", "waiting") && this.#url !== null && overlayPage(url) !== null && overlayPage(this.#url) === overlayPage(url)) {
       this.focus();
       return true;
     }
     return this.open(url, server);
+  }
+
+  // The window is in one of `states` and not closed.
+  #live(...states: CommentingState[]): boolean {
+    return states.includes(this.#state) && this.#win !== null && !this.#win.closed;
   }
 
   /** Brings the window forward, if it is still open. */
@@ -390,7 +391,8 @@ export class PreviewCommenting {
    */
   show(item: FeedbackItem): boolean {
     if (item.anchor.kind !== "preview") return false;
-    if (this.#state === "open" && this.#win && !this.#win.closed && overlayPage(this.#url ?? "") === overlayPage(item.anchor.url)) {
+    // Only "open": a highlight needs an overlay that has said hello.
+    if (this.#live("open") && overlayPage(this.#url ?? "") === overlayPage(item.anchor.url)) {
       this.#post({ type: "highlight", v: OVERLAY_PROTOCOL, itemId: item.id });
       this.focus();
       return true;

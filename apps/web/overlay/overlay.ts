@@ -861,10 +861,9 @@ export class Overlay {
   /**
    * Brings dude's tab forward; called inside a click. Chrome ignores a
    * popup's `opener.focus()`, but `window.open("", name)` with the click's
-   * activation brings forward the window already holding that name, across
-   * origins, without navigating it. Only when that window is the opener:
-   * otherwise (no name from an older dude, or the name no longer the
-   * opener's) the opener's focus(), which some browsers honour.
+   * activation brings forward the window holding that name without
+   * navigating it. When that is not the opener, or there is no name, the
+   * opener's focus(), which some browsers honour.
    */
   #goToDude(): void {
     const opener = this.#opener();
