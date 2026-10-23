@@ -487,7 +487,7 @@ def test_new_session_opens_untitled_with_the_composer_focused_and_its_header_ren
     expect(page.get_by_text('Briefed on ""')).to_have_count(0)
     expect(page.get_by_test_id("session-screen").locator("[data-activity]")).to_have_count(0, timeout=15_000)
     # A session has no task: its composer says who it writes to.
-    expect(page.get_by_test_id("session-composer").locator("textarea")).to_have_attribute("placeholder", "Message the brainstorm…")
+    expect(page.get_by_test_id("session-composer").locator("textarea")).to_have_attribute("placeholder", "Message the brainstorm… (@ to mention someone)")
     assert client.get(f"/v1/brainstorms/{session}").json()["session"]["title"] is None
     assert [s["id"] for s in client.get("/v1/brainstorms").json()["sessions"]] == [session]
     expect(page.get_by_test_id("sidebar-sessions").locator(f'[data-session="{session}"]')).to_contain_text("Untitled session")

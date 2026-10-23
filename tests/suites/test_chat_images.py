@@ -975,7 +975,7 @@ def test_an_image_pasted_and_dropped_in_a_session_reaches_its_agent_and_shows_in
 
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"], at=f"#/sessions/{session}")
-    field = page.get_by_placeholder("Message the brainstorm…")
+    field = page.get_by_placeholder("Message the brainstorm… (@ to mention someone)")
     expect(field).to_be_visible()
     chips = page.get_by_test_id("attachment-chip")
     _paste_into(field, _files(page, [("pasted.png", png(160, 90), "image/png")]))
