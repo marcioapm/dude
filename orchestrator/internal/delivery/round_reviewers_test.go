@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -314,6 +315,28 @@ func TestAReplayAtMovedHeadsChoosesItsRoundAgain(t *testing.T) {
 	again, why, _ := r.review()
 	if !slices.Equal(again, []string{"correctness", "tests", "frontend", "performance"}) || !slices.Equal(why["frontend"], []string{ReasonPaths}) {
 		t.Fatalf("replay at moved heads %v %v, want the round chosen again", again, why)
+	}
+}
+
+// refusingStarter fails any start: a policy StartTx refuses never gets here.
+type refusingStarter struct{}
+
+func (refusingStarter) StartInTx(context.Context, pgx.Tx, workflow.StartOptions) (string, bool, error) {
+	return "", false, errors.New("started")
+}
+
+// Deliver's per-task policy reaches StartTx unchecked by the settings
+// schema: a null list is refused there, not read as an empty one.
+func TestADeliverPolicyWithANullReviewerListIsRefused(t *testing.T) {
+	r := newLaterRound(t)
+	for _, raw := range []string{`{"alwaysReviewers":null}`, `{"nonProductPaths":null}`} {
+		err := r.steps.s.DB.InOrg(r.ctx, r.org, func(tx pgx.Tx) error {
+			_, err := StartTx(r.ctx, tx, refusingStarter{}, StartInput{Org: r.org, TaskID: "wi_rr", How: HowDeliver, Policy: json.RawMessage(raw)})
+			return err
+		})
+		if !errors.As(err, new(PolicyError)) {
+			t.Errorf("%s: %v, want a PolicyError", raw, err)
+		}
 	}
 }
 
