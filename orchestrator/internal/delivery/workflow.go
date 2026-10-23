@@ -767,6 +767,11 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if categories, reasons, err = w.roundReviewers(ctx, sc, st, slices.Collect(maps.Keys(attempted))); err != nil {
 			return workflow.Result{}, err
 		}
+		if len(categories) == 0 {
+			if categories, reasons, err = w.gateReviewers(ctx, sc, st); err != nil {
+				return workflow.Result{}, err
+			}
+		}
 	}
 	if len(retrying) > 0 {
 		// The round's other reviewers judged theirs already.
@@ -809,8 +814,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	st.ReviewRunIDs = runIDs
 	if len(runIDs) == 0 {
 		// No reviewer is warranted (no always-run reviewer, and a change
-		// to non-product paths only, with no finding to judge): the round
-		// is complete and clear of new findings.
+		// to non-product paths only, with no finding to judge) and no gate
+		// waits on a review of these heads: the round is complete and
+		// clear of new findings.
 		st.PendingRunIDs = nil
 		return workflow.Result{Next: "awaitReview", State: st}, nil
 	}
@@ -836,6 +842,32 @@ func (w *steps) roundReviewers(ctx context.Context, sc workflow.StepContext, st 
 	}
 	categories, reasons := RoundReviewers(st.Policy, r)
 	return categories, reasons, nil
+}
+
+// gateReviewers stands in for a round the policy gave no reviewer when a
+// gate waits on a completed review at these heads: a candidate's promotion
+// (unreviewedHeads) or a conductor head before the pull request
+// (UntestedConductorHeadTx). An empty round completes no Run there, so the
+// gate would send the delivery back to review for ever. RequiredReviewers
+// run, else the first round's reviewers; nil when no gate waits.
+func (w *steps) gateReviewers(ctx context.Context, sc workflow.StepContext, st *State) ([]string, map[string][]string, error) {
+	gated := st.Candidate != nil
+	if !gated {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+			gated, err = UntestedConductorHeadTx(ctx, tx, st.TaskID, st.Heads)
+			return err
+		}); err != nil {
+			return nil, nil, err
+		}
+	}
+	switch {
+	case !gated:
+		return nil, nil, nil
+	case len(st.Policy.RequiredReviewers) > 0:
+		return st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired), nil
+	}
+	first := ReviewersFor(st.Policy, st.ChangedPaths)
+	return first, eachFor(first, ReasonFirstRound), nil
 }
 
 // reviewRange is the range the next review round covers: what the

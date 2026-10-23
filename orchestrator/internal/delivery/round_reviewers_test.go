@@ -243,6 +243,83 @@ func TestALaterRoundWithNoReviewerGoesOnClear(t *testing.T) {
 	}
 }
 
+// policy layers raw over the defaults, as a project's settings do.
+func (r *laterRound) policy(raw string) {
+	r.t.Helper()
+	p, err := ResolvePolicy(nil, json.RawMessage(raw))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.st.Policy = p
+}
+
+// completeRound marks every Run the test's review steps made completed at
+// the heads they started from.
+func (r *laterRound) completeRound() {
+	r.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE organization_id = $1 AND task_id = 'wi_rr' AND id <> 'run_rr1'`)
+}
+
+// A pull request's CI-only fix on its candidate, in a project that runs no
+// reviewer always: promotion waits on a completed review at the candidate's
+// head, so the round runs the required reviewers rather than none.
+func TestAnEmptyRoundOnACandidateRunsTheRequiredReviewers(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.policy(`{"alwaysReviewers":[]}`)
+	r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+	res, err := r.steps.promoteCandidate(r.ctx, r.sc("promoteCandidate"))
+	if err != nil || res.Next != "review" {
+		t.Fatalf("promoteCandidate on an unreviewed head went to %q: %v", res.Next, err)
+	}
+	got, why, res := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "performance"}) || len(res.AwaitSignals) == 0 {
+		t.Fatalf("reviewers %v, result %+v; want the required ones, awaited", got, res)
+	}
+	if !slices.Equal(why["tests"], []string{ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+	r.completeRound()
+	if unreviewed, err := r.steps.s.unreviewedHeads(r.ctx, r.org, r.st, r.st.Candidate); err != nil || len(unreviewed) != 0 {
+		t.Fatalf("after the round, promotion still finds %v unreviewed: %v", unreviewed, err)
+	}
+}
+
+// With no required reviewer either, the gate-bound round falls back to the
+// first round's reviewers.
+func TestAnEmptyGateBoundRoundWithNoRequiredReviewerRunsTheFirstRounds(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.policy(`{"alwaysReviewers":[],"requiredReviewers":[]}`)
+	r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+	got, why, _ := r.review()
+	if !slices.Equal(got, []string{"security", "database", "api", "frontend"}) || !slices.Equal(why["api"], []string{ReasonFirstRound}) {
+		t.Fatalf("reviewers %v %v", got, why)
+	}
+}
+
+// A CI-only head the conductor published, before any pull request: the
+// pull request step sends it to review, and that round must complete a
+// review at the head for the step to let it through.
+func TestAnEmptyRoundOnAnUntestedConductorHeadRunsTheRequiredReviewers(t *testing.T) {
+	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
+	r.policy(`{"alwaysReviewers":[]}`)
+	r.exec(`INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, status, heads)
+		VALUES ('pub_rr', $1, 'wi_rr', 'run_rr1', 'req_rr', 'published', '{"repo":{"sha":"bbb"}}')`)
+	res, err := r.steps.openPullRequest(r.ctx, r.sc("openPullRequest"))
+	if err != nil || res.Next != "review" {
+		t.Fatalf("openPullRequest on an untested conductor head went to %q: %v", res.Next, err)
+	}
+	got, why, res := r.review()
+	if !slices.Equal(got, []string{"correctness", "tests", "performance"}) || len(res.AwaitSignals) == 0 {
+		t.Fatalf("reviewers %v, result %+v; want the required ones, awaited", got, res)
+	}
+	if !slices.Equal(why["correctness"], []string{ReasonRequired}) {
+		t.Errorf("why %v", why)
+	}
+	r.completeRound()
+	if _, diverted, err := r.steps.reviewUntested(r.ctx, r.sc("openPullRequest"), r.st); err != nil || diverted {
+		t.Fatalf("after the round, the pull request step still diverts: %v", err)
+	}
+}
+
 func TestDirectedAndRetriedRoundsKeepTheirCategories(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.st.RetryCategories = []string{"security"}
