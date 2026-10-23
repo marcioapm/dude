@@ -341,6 +341,45 @@ def test_handing_over_keeps_the_run_and_the_new_owner_decides(client: ApiClient,
     assert [s["id"] for s in client.get("/v1/brainstorms").json()["sessions"]] == []
 
 
+def test_a_session_open_to_the_organisation_is_read_and_written_by_anyone_in_it_and_a_mention_waits_on_its_person(
+        client: ApiClient, env):
+    _scripted_brainstorm(client)
+    bea, bea_client = _person(client, env, "Bea Costa")
+    caio, caio_client = _person(client, env, "Caio Lima")
+    session = client.post("/v1/brainstorms", {"title": "Usage CSV export", "projects": []}).json()["id"]
+    client.post(f"/v1/brainstorms/{session}/chat", {"text": "the export times out"})
+    wait_until(lambda: _said(client, session), timeout=60, message="the agent never answered")
+    # Private: someone not added sees nothing of it.
+    assert bea_client.get(f"/v1/brainstorms/{session}").status_code == 404
+
+    resp = client.put(f"/v1/brainstorms/{session}/access", {"access": "organisation"})
+    assert resp.status_code == 200, resp.text
+    # Bea was never added: she reads the whole conversation, and is not one of its people yet.
+    detail = bea_client.get(f"/v1/brainstorms/{session}").json()
+    assert detail["you"]["role"] == "chat" and detail["you"]["member"] is False
+    seen = [e["payload"].get("text") for e in bea_client.get("/v1/events", params={"sessionId": session}).json()["events"]
+            if e["eventType"] == "chat.message"]
+    assert seen[0] == "the export times out"
+    assert [s["id"] for s in bea_client.get("/v1/brainstorms/open").json()["sessions"]] == [session]
+
+    # She writes, mentioning Caio: her message reaches the agent signed, and writing joined her.
+    resp = bea_client.post(f"/v1/brainstorms/{session}/chat", {"text": "@Caio Lima can you check the rows?", "mentions": [caio["id"]]})
+    assert resp.status_code == 200, resp.text
+    wait_until(lambda: any("Bea Costa: @Caio Lima can you check the rows?" in s for s in _said(client, session)), timeout=60,
+               message="Bea's message never reached the agent signed")
+    assert bea_client.get(f"/v1/brainstorms/{session}").json()["you"]["member"] is True
+    opened = bea_client.get("/v1/brainstorms/open").json()
+    assert opened["joined"] == 1 and bea_client.get("/v1/brainstorms").json()["organisation"]["joined"] == 1
+
+    # Caio's Waiting on you has the mention: who, where, that he is not in it yet.
+    mentions = caio_client.get("/v1/brainstorms").json()["mentions"]
+    assert [(m["sessionId"], m["by"]["id"], m["member"]) for m in mentions] == [(session, bea["id"], False)]
+    assert "can you check the rows?" in mentions[0]["text"]
+    # Opening it marks it seen.
+    assert caio_client.post(f"/v1/brainstorms/{session}/open", {"open": True}).status_code == 200
+    assert caio_client.get("/v1/brainstorms").json()["mentions"] == []
+
+
 def test_a_session_starts_untitled_its_agent_names_it_and_a_persons_name_wins(client: ApiClient, env, owner_dsn: str):
     _scripted_brainstorm(client)
     ana, ana_client = _person(client, env, "Ana Nunes")
