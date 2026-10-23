@@ -158,7 +158,8 @@ func TestAutomationIssuesStableScopedToken(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		id, err = Fire(ctx, tx, a, SourceEvent, payloads, "", nil)
+		fired, err := Fire(ctx, tx, a, SourceEvent, payloads, "", nil)
+		id = fired.Run
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -553,4 +554,89 @@ func TestAutomationConcurrencyRows(t *testing.T) {
 	if len(merge) != 2 || merge[1].Payloads != 2 {
 		t.Errorf("merge: %+v", merge)
 	}
+}
+
+// hangTier is a model tier whose agent stays busy until stopped.
+func (h *harness) hangTier() string {
+	id := h.org + "_hang"
+	exec(h.t, h.owner, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ($1, $2, 'Hang', 'fake/hang') ON CONFLICT DO NOTHING`, id, h.org)
+	return id
+}
+
+// Concurrency cancel: a newer event cancels the live run and its lux Run
+// ends with it; for a resumable agent the kept session is stopped, not
+// ended, and the new run resumes it.
+func TestAutomationConcurrencyCancel(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_cancel", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo released"), "concurrency": "cancel"})
+	h.automation("aut_cancel_kept", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "cancel", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
+	h.deliver("c-1", "push", push)
+	h.until("both running", func() bool {
+		a, b := h.runs("aut_cancel"), h.runs("aut_cancel_kept")
+		return len(a) == 1 && a[0].Status == "running" && len(b) == 1 && b[0].Status == "running"
+	})
+	firstCmd, firstAgent := h.runs("aut_cancel")[0], h.runs("aut_cancel_kept")[0]
+	h.deliver("c-2", "push", push)
+	h.until("the second runs are running", func() bool {
+		a, b := h.runs("aut_cancel"), h.runs("aut_cancel_kept")
+		return len(a) == 2 && a[1].Status == "running" && len(b) == 2 && b[1].Status == "running"
+	})
+	a, b := h.runs("aut_cancel"), h.runs("aut_cancel_kept")
+	if a[0].Status != "cancelled" || a[0].Reason != "a newer event restarted it (Concurrency: cancel)" || a[1].LuxRunID == firstCmd.LuxRunID {
+		t.Errorf("ephemeral cancel: %+v", a)
+	}
+	h.until("the cancelled command's container is ended", func() bool { return lux.Terminated(h.luxState(firstCmd.LuxRunID)) })
+	if b[0].Status != "cancelled" || b[1].Session != "resumed" || b[1].LuxRunID != firstAgent.LuxRunID {
+		t.Errorf("resumable cancel: %+v", b)
+	}
+	if in := h.fake.ResumeInputs(firstAgent.LuxRunID); len(in) != 1 || !strings.Contains(in[0], "Look at c-2") {
+		t.Errorf("resume inputs %q", in)
+	}
+	g.release(t)
+}
+
+// A kept session that stays busy (resume answers 409) holds the next run
+// for ResumeConflictMax at most: then the kept Run is ended and the run
+// starts fresh, saying so.
+func TestAutomationResumeConflictIsBounded(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_busy", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look"}}})
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.deliver("b-1", "push", push)
+	h.until("running", func() bool { r := h.runs("aut_busy"); return len(r) == 1 && r[0].Status == "running" })
+	first := h.runs("aut_busy")[0]
+	// The run ends in dude while its lux Run is still busy: the kept
+	// session cannot be resumed.
+	exec(t, h.owner, `UPDATE automation_runs SET status = 'succeeded', ended_at = now() WHERE id = $1`, first.ID)
+	h.deliver("b-2", "push", push)
+	h.until("the second run tried to resume", func() bool {
+		var since *time.Time
+		r := h.runs("aut_busy")
+		if len(r) != 2 {
+			return false
+		}
+		_ = h.owner.QueryRow(context.Background(), `SELECT resume_conflict_since FROM automation_runs WHERE id = $1`, r[1].ID).Scan(&since)
+		return since != nil
+	})
+	if _, err := h.runner.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.runs("aut_busy"); r[1].Status != "queued" {
+		t.Fatalf("within the bound: %+v", r[1])
+	}
+	h.advance(ResumeConflictMax + time.Second)
+	h.until("the second run starts fresh", func() bool { r := h.runs("aut_busy"); return r[1].Status == "running" })
+	second := h.runs("aut_busy")[1]
+	if second.Session != "new" || second.LuxRunID == first.LuxRunID ||
+		second.Reason != "its kept session was still busy after 2m0s, so it started fresh" {
+		t.Errorf("second run %+v", second)
+	}
+	h.until("the busy kept Run is ended", func() bool { return lux.Terminated(h.luxState(first.LuxRunID)) })
 }

@@ -42,6 +42,9 @@ const (
 	ServerIdle      = 30 * time.Second
 	ServerHealthMax = 60 * time.Second
 	RequestTimeout  = 30 * time.Second
+	// How long a run waits for its kept session's lux Run to stop (resume
+	// answering 409) before that Run is ended and the run starts fresh.
+	ResumeConflictMax = 2 * time.Minute
 )
 
 // EventPath is where a command's or server's container finds the event(s).
@@ -226,49 +229,81 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 // Firing
 // ---------------------------------------------------------------------------
 
+// Fired is what one firing did: the run that holds it, and the lux Runs of
+// the runs it cancelled (Concurrency: cancel), to end once it is committed.
+type Fired struct {
+	Run       string
+	Cancelled []Cancelled
+}
+
+// Cancelled is a cancelled run's lux Run; Keep says it is the automation's
+// kept session, stopped (not ended) so the next run resumes it.
+type Cancelled struct {
+	LuxRunID string
+	Keep     bool
+}
+
 // Fire records one firing of an automation and decides what it does
 // (Arrive), in the automation's transaction: a queued, merged, skipped or
-// sent run row. A run to start is left queued for startQueued. Returns the
-// run that holds the firing.
-func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads []Payload, startedBy string, scheduledFor *time.Time) (string, error) {
+// sent run row. A run to start is left queued for startQueued. The caller
+// ends the cancelled runs' lux Runs after commit (Runner.EndCancelled).
+func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads []Payload, startedBy string, scheduledFor *time.Time) (Fired, error) {
 	// One firing at a time per automation: two deliveries arriving together
 	// must see each other's run.
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM automations WHERE id = $1 FOR UPDATE`, a.ID); err != nil {
-		return "", err
+		return Fired{}, err
 	}
 	live, err := liveOf(ctx, tx, a.ID)
 	if err != nil {
-		return "", err
+		return Fired{}, err
 	}
 	d := Arrive(a.policy(), source, live)
 	raw, _ := json.Marshal(nonNil(payloads))
+	var fired Fired
 	switch d.Action {
 	case MergeInto, SendInto:
-		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw); err != nil {
-			return "", err
-		}
-		return d.Into, nil
+		_, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw)
+		return Fired{Run: d.Into}, err
 	case Skip:
 		id := ids.New(ids.AutomationRun)
 		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 			started_by, scheduled_for, ended_at) VALUES ($1, $2, $3, 'skipped', $4, $5, $6, NULLIF($7, ''), $8, now())`,
 			id, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
-		return id, err
+		return Fired{Run: id}, err
 	case CancelAndStart:
-		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
-			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'`, a.ID); err != nil {
-			return "", err
+		rows, err := tx.Query(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
+			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'
+			RETURNING COALESCE(lux_run_id, ''), COALESCE(session, '') IN ('new', 'resumed')`, a.ID)
+		if err != nil {
+			return Fired{}, err
+		}
+		var c Cancelled
+		if _, err := pgx.ForEachRow(rows, []any{&c.LuxRunID, &c.Keep}, func() error {
+			if c.LuxRunID != "" {
+				fired.Cancelled = append(fired.Cancelled, c)
+			}
+			return nil
+		}); err != nil {
+			return Fired{}, err
 		}
 	}
-	id := ids.New(ids.AutomationRun)
+	fired.Run = ids.New(ids.AutomationRun)
 	reason := ""
 	if d.Action == Queue {
 		reason = "waiting for the run before it"
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 		started_by, scheduled_for) VALUES ($1, $2, $3, 'queued', NULLIF($4, ''), $5, $6, NULLIF($7, ''), $8)`,
-		id, a.Org, a.ID, reason, source, raw, startedBy, scheduledFor)
-	return id, err
+		fired.Run, a.Org, a.ID, reason, source, raw, startedBy, scheduledFor)
+	return fired, err
+}
+
+// EndCancelled ends the lux Runs of runs a firing cancelled: a kept
+// session's is stopped, so the new run resumes it; any other's is ended.
+func (r *Runner) EndCancelled(ctx context.Context, cancelled []Cancelled) {
+	for _, c := range cancelled {
+		r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
+	}
 }
 
 func nonNil(p []Payload) []Payload {
@@ -325,19 +360,22 @@ func (r *Runner) fireSchedules(ctx context.Context) (int, error) {
 			r.Log.Warn("automation schedule unreadable", "automation", a.ID, "cron", a.Trigger.Cron, "tz", a.Trigger.TZ)
 			continue
 		}
-		if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		var fired Fired
+		if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) (err error) {
 			if a.NextRunAt != nil {
 				at := *a.NextRunAt
-				if _, err := Fire(ctx, tx, a, SourceSchedule, nil, "", &at); err != nil {
+				if fired, err = Fire(ctx, tx, a, SourceSchedule, nil, "", &at); err != nil {
 					return err
 				}
 				n++
 			}
-			_, err := tx.Exec(ctx, `UPDATE automations SET next_run_at = $2 WHERE id = $1`, a.ID, cron.Next(now, loc))
+			_, err = tx.Exec(ctx, `UPDATE automations SET next_run_at = $2 WHERE id = $1`, a.ID, cron.Next(now, loc))
 			return err
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("automation %s: %w", a.ID, err))
+			continue
 		}
+		r.EndCancelled(ctx, fired.Cancelled)
 	}
 	return n, errors.Join(errs...)
 }
@@ -401,7 +439,9 @@ func (r *Runner) matchDeliveries(ctx context.Context) (int, error) {
 // fires the matching ones. An automation it cannot be evaluated against
 // is kept pending for the next try, or after the last gets a skipped run.
 func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
-	return r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+	var cancelled []Cancelled
+	err := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+		cancelled = nil
 		rows, err := tx.Query(ctx, `SELECT `+automationColumns+` FROM automations a
 			WHERE a.enabled AND a.trigger->>'kind' = 'github' AND a.trigger->>'event' = $1
 			  AND ($2::text[] IS NULL OR a.id = ANY($2)) ORDER BY a.id`, d.Event, d.Pending)
@@ -433,9 +473,11 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 			if !v.Matches {
 				continue
 			}
-			if _, err := Fire(ctx, tx, a, SourceEvent, payloads, "", nil); err != nil {
+			fired, err := Fire(ctx, tx, a, SourceEvent, payloads, "", nil)
+			if err != nil {
 				return err
 			}
+			cancelled = append(cancelled, fired.Cancelled...)
 		}
 		if len(pending) > 0 {
 			_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_attempts = automations_attempts + 1,
@@ -445,6 +487,10 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 		_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_at = now(), automations_pending = NULL WHERE id = $1`, d.ID)
 		return err
 	})
+	if err == nil {
+		r.EndCancelled(ctx, cancelled)
+	}
+	return err
 }
 
 // recordSkipped records a firing that did not run, with its reason.
@@ -581,14 +627,31 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 			return err
 		})
 	}
-	var luxRunID, session string
+	var luxRunID, session, startReason string
 	var err error
 	if resumable && run.Kept != "" {
 		luxRunID, err = r.resume(ctx, a, run.Kept, runID, run.Payloads, run.At)
 		session = "resumed"
 		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
-			// Still stopping after the last run: tried again next pass.
-			return false, nil
+			// Still stopping after the last run: tried again next pass, for
+			// up to ResumeConflictMax; then the kept Run is ended and this
+			// run starts fresh.
+			var since time.Time
+			if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+				return tx.QueryRow(ctx, `UPDATE automation_runs SET resume_conflict_since = COALESCE(resume_conflict_since, $2)
+					WHERE id = $1 RETURNING resume_conflict_since`, runID, r.now()).Scan(&since)
+			}); err != nil {
+				return false, err
+			}
+			if r.now().Sub(since) < ResumeConflictMax {
+				return false, nil
+			}
+			r.Log.Warn("kept automation session stayed busy; starting fresh", "automation", a.ID, "lux_run", run.Kept)
+			if err := StartFresh(ctx, r.DB, r.Lux, a.Org, a.ID); err != nil {
+				return false, err
+			}
+			startReason = fmt.Sprintf("its kept session was still busy after %s, so it started fresh", ResumeConflictMax)
+			luxRunID, session, err = "", "", nil
 		}
 		if err != nil {
 			// The kept container is gone: the run starts fresh.
@@ -628,11 +691,11 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 		}
 		// A resumed session's output is read on from where its last run left
 		// it: what it said before is not this run's.
-		_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', reason = NULL, lux_run_id = $2, session = $3,
+		_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', reason = NULLIF($5, ''), lux_run_id = $2, session = $3,
 			started_at = now(), container_started_at = CASE WHEN $4 = 'server' THEN now() END, last_request_at = now(),
 			lux_cursor = CASE WHEN $3 = 'resumed' THEN (SELECT p.lux_cursor FROM automation_runs p WHERE p.lux_run_id = $2 AND p.id <> $1
 				ORDER BY p.created_at DESC LIMIT 1) END
-			WHERE id = $1`, runID, luxRunID, session, a.Kind)
+			WHERE id = $1`, runID, luxRunID, session, a.Kind, startReason)
 		return err
 	})
 }
@@ -771,13 +834,23 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	case lux.Terminal(got.State):
 		return true, r.finish(ctx, a, runID, "failed", cmpStr(got.StateReason, "its container ended: "+got.State), cost())
 	case a.Kind == "agent" && failed != "":
-		r.stopOrCancel(ctx, luxRunID, keep)
-		return true, r.finish(ctx, a, runID, "failed", failed, cost())
+		return true, r.endThenStop(ctx, a, runID, luxRunID, keep, "failed", failed, cost())
 	case a.Kind == "agent" && turnDone.done:
-		r.stopOrCancel(ctx, luxRunID, keep)
-		return true, r.finish(ctx, a, runID, "succeeded", "", cost())
+		return true, r.endThenStop(ctx, a, runID, luxRunID, keep, "succeeded", "", cost())
 	}
 	return false, nil
+}
+
+// endThenStop ends a run that is still live and only then stops or cancels
+// its lux Run: a run a newer firing already cancelled (and whose kept
+// session the next run may have resumed) leaves the lux Run alone.
+func (r *Runner) endThenStop(ctx context.Context, a Automation, runID, luxRunID string, keep bool, status, reason string, cost *float64) error {
+	ended, err := r.end(ctx, a, runID, status, reason, cost)
+	if err != nil || !ended {
+		return err
+	}
+	r.stopOrCancel(ctx, luxRunID, keep)
+	return nil
 }
 
 func cmpStr(a, b string) string {
@@ -873,13 +946,21 @@ func (r *Runner) cost(ctx context.Context, luxRunID string) *float64 {
 // finish ends a run and, on a failure, tells its owner (or, held, every
 // admin) when the automation says to. A queued run behind it starts next pass.
 func (r *Runner) finish(ctx context.Context, a Automation, runID, status, reason string, cost *float64) error {
-	return r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+	_, err := r.end(ctx, a, runID, status, reason, cost)
+	return err
+}
+
+// end is finish, saying whether the run was still live (and so ended now).
+func (r *Runner) end(ctx context.Context, a Automation, runID, status, reason string, cost *float64) (bool, error) {
+	ended := false
+	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET status = $2, reason = NULLIF($3, ''), cost_usd = COALESCE($4, cost_usd),
 			ended_at = now(), container_stopped_at = CASE WHEN container_started_at IS NOT NULL THEN COALESCE(container_stopped_at, now()) END
 			WHERE id = $1 AND status IN ('queued', 'running')`, runID, status, reason, cost)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
+		ended = true
 		if _, err := tx.Exec(ctx, `UPDATE automation_sessions SET last_run_at = now() WHERE automation_id = $1`, a.ID); err != nil {
 			return err
 		}
@@ -888,6 +969,7 @@ func (r *Runner) finish(ctx context.Context, a Automation, runID, status, reason
 		}
 		return notifyFailure(ctx, tx, a, runID, reason)
 	})
+	return ended && err == nil, err
 }
 
 // EvAutomationFailed is the ledger's word for a failed automation run: the
@@ -1636,8 +1718,9 @@ func (r *Runner) RunNow(ctx context.Context, org, automationID, person string, d
 				return fmt.Errorf("%w: a scheduled automation runs on no event", ErrBadRequest)
 			}
 			now := r.now()
-			runID, err = Fire(ctx, tx, a, SourceRunNow, nil, person, &now)
-			verdict = Verdict{Matches: true}
+			// Run now queues or starts (Q7), never cancels: nothing to end.
+			fired, err := Fire(ctx, tx, a, SourceRunNow, nil, person, &now)
+			runID, verdict = fired.Run, Verdict{Matches: true}
 			return err
 		}
 		var p Payload
@@ -1659,7 +1742,8 @@ func (r *Runner) RunNow(ctx context.Context, org, automationID, person string, d
 		if verdict, err = r.Evaluate(ctx, tx, a, ev); err != nil || !verdict.Matches {
 			return err
 		}
-		runID, err = Fire(ctx, tx, a, SourceTest, []Payload{p}, person, nil)
+		fired, err := Fire(ctx, tx, a, SourceTest, []Payload{p}, person, nil)
+		runID = fired.Run
 		return err
 	})
 	return runID, verdict, err

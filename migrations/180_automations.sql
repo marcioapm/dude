@@ -111,6 +111,9 @@ CREATE TABLE automation_runs (
   stop_reason          text CHECK (stop_reason IN ('idle', 'error', 'aborted')),
   -- A Server run's last request answered (or started): the idle clock.
   last_request_at      timestamptz,
+  -- When resuming the kept session was first refused as still busy (409);
+  -- after a bound the kept Run is ended and the run starts fresh.
+  resume_conflict_since timestamptz,
   created_at           timestamptz NOT NULL DEFAULT now(),
   started_at           timestamptz,
   ended_at             timestamptz,
