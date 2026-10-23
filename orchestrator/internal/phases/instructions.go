@@ -68,6 +68,8 @@ func addInit(spec *lux.Spec, script string) {
 
 // runSpec is buildSpec for a Run with an instruction file: refused when
 // the file cannot be written by an init, or the init is over MaxInitScript.
+// A fix Run's check logs (CheckLogs, sized by checkLogsInit to fit) are
+// written after the instruction file, before any other init.
 func runSpec(c AgentConfig, in specInput) (lux.Spec, error) {
 	spec := buildSpec(c, in)
 	if in.Instructions == "" {
@@ -77,9 +79,29 @@ func runSpec(c AgentConfig, in specInput) (lux.Spec, error) {
 	if err != nil {
 		return lux.Spec{}, err
 	}
+	if in.CheckLogs != "" {
+		script = strings.TrimSuffix(script, "\n") + " &&\n" + in.CheckLogs + "\n"
+	}
 	addInit(&spec, script)
 	if len(spec.Init.Script) > MaxInitScript {
 		return lux.Spec{}, fmt.Errorf("the Run's init script is %d bytes, over the %d-byte limit", len(spec.Init.Script), MaxInitScript)
 	}
 	return spec, nil
 }
+
+// initRoom is what is left for a Run's check logs once its instruction
+// file and other init are written, under checkLogInitMax: 0 when nothing
+// is.
+func initRoom(c AgentConfig, in specInput) int {
+	in.CheckLogs = ""
+	spec, err := runSpec(c, in)
+	if err != nil || spec.Init == nil || in.Instructions == "" {
+		return 0
+	}
+	return max(min(MaxInitScript, checkLogInitMax)-len(spec.Init.Script), 0)
+}
+
+// checkLogInitMax bounds an init that carries check logs: lux's shim runs
+// the script as one `sh -c` argument, which Linux caps at 128 KiB
+// (MAX_ARG_STRLEN), less a margin for the shim's own wrapping.
+const checkLogInitMax = 120 << 10

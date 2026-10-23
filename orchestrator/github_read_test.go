@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
@@ -89,12 +90,16 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 			}
 			downloads := httptest.NewServer(w.gh.LogDownloads())
 			t.Cleanup(downloads.Close)
-			w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()} })
+			// JERV-1's shape: GitHub's warning and notice beside the exit
+			// code's failure. The read is the log, not those annotations.
+			w.gh.Set(func(s *fakegithub.Server) {
+				s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+			})
 			w.gh.SetJobLog(77, log, downloads.URL)
 			out := read("github_check_log", `{"repo":"acme/target","checkId":77}`)
 			text, ok := quoted(field(out, "log").(string))
 			if !ok || !strings.Contains(text, "AssertionError: 3 != 2") || strings.Contains(text, "Post job cleanup") ||
-				len(text) > 16<<10 || field(out, "source") != "log" {
+				strings.Contains(text, "Node.js 20") || len(text) > 16<<10 || field(out, "source") != "log" {
 				t.Fatalf("log result: %v", out)
 			}
 			var payload string
@@ -108,6 +113,14 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM events WHERE `+column+` = $1
 				AND event_type = 'agent.tool.attempted' AND payload->>'tool' = 'github_check_log'`, scope); n != 1 {
 				t.Fatalf("log read attempts: %d", n)
+			}
+			// A log GitHub refuses: the check run's failure, and why.
+			w.gh.Set(func(s *fakegithub.Server) { s.LogStatus = http.StatusForbidden })
+			out = read("github_check_log", `{"repo":"acme/target","checkId":77}`)
+			text, _ = quoted(field(out, "log").(string))
+			if field(out, "source") != "check_run" || field(out, "unread") != "GitHub refused: no Actions: Read permission" ||
+				text != ".github:243: failure: Process completed with exit code 1." {
+				t.Fatalf("refused log result: %v", out)
 			}
 		})
 	}

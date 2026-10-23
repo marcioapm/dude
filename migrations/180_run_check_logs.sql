@@ -1,0 +1,12 @@
+-- 180_run_check_logs.sql — a fix Run's failing checks' job log tails, by
+-- check run id: what its init writes into /workspace/.dude/checks.
+--
+-- Up to four tails of 64 KiB each, read only when the Run's spec is built
+-- (phases.Syncer.spec on submit). Kept out of runs.pr_feedback, which the
+-- phase-sync sweep reads for every live Run each second and the conductor
+-- tools unnest per comment, and out of workflow_runs.state, which the
+-- runtime rewrites on every step.
+--
+-- No grant: dude_app and dude_sweeper hold table-level grants on runs
+-- (002, 008, 012), which cover a new column.
+ALTER TABLE runs ADD COLUMN check_logs jsonb NOT NULL DEFAULT '{}'::jsonb;

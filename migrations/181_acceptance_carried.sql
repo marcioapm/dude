@@ -1,4 +1,4 @@
--- 180_acceptance_carried.sql — a criterion verdict a later test round kept
+-- 181_acceptance_carried.sql — a criterion verdict a later test round kept
 -- from the round before it, rather than tested again.
 --
 -- carried_from: the test Run whose verdict and evidence this row repeats

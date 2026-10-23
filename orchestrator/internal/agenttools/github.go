@@ -656,7 +656,12 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 }
 
 func (w wrapper) checkLog(log forge.CheckLogRead) map[string]any {
-	return map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(log.Text, 16<<10), "external": w.note()}
+	out := map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(log.Text, 16<<10), "external": w.note()}
+	// Why an Actions job's log was not read, in dude's words (forge.UnreadReason).
+	if log.Unread != "" {
+		out["unread"] = log.Unread
+	}
+	return out
 }
 
 // fit encodes a result within resultCap, its note first. Past it, one
