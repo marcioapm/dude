@@ -514,7 +514,9 @@ body {
   align-items: flex-start;
   gap: var(--ds-space-24);
 }
-.settingsForm > section {
+/* Sections take the column's width, also those grouped in a plainFieldset (display: contents). */
+.settingsForm > section,
+.settingsForm > .plainFieldset > section {
   align-self: stretch;
 }
 
