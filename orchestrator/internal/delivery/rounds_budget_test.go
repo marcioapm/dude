@@ -112,9 +112,13 @@ func TestARoundIsNotHandedALuxRunWithLittleTimeLeft(t *testing.T) {
 		}{
 			{2*time.Hour + 6*time.Minute, 4 * time.Hour, timeReplayed},
 			{90 * time.Minute, 4 * time.Hour, resumed},
+			// Exactly half left is enough.
+			{2 * time.Hour, 4 * time.Hour, resumed},
 			// The configured limit, not the default: 90m of 4h is little
 			// used, of 2h most of it.
 			{90 * time.Minute, 2 * time.Hour, timeReplayed},
+			// No limit known: nothing is spent.
+			{5 * time.Hour, 0, resumed},
 		} {
 			t.Run(name+"/"+tc.used.String()+"-of-"+tc.limit.String(), func(t *testing.T) {
 				w := b.world(t, tc.used)
@@ -172,6 +176,42 @@ func TestARoundNeedsTheChainsLongestRoundLeft(t *testing.T) {
 			b.before(t, w, chainRow{"run_b0", 3 * time.Hour, ""}, chainRow{"run_b1", 50 * time.Minute, "replay"})
 			if got := w.how(t, b.next(t, w, 4*time.Hour)); got != timeReplayed {
 				t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
+			}
+		})
+	}
+}
+
+// A spent predecessor whose last exit's files are still being collected is
+// not waited for: it would not be taken over once they are.
+func TestASpentRoundStillCollectingIsReplayedAtOnce(t *testing.T) {
+	w := testerRound.world(t, 2*time.Hour+6*time.Minute)
+	w.exec(t, `UPDATE runs SET artifacts_due_at = now() WHERE id = 'run_b'`)
+	if got := w.how(t, testerRound.next(t, w, 4*time.Hour)); got != timeReplayed {
+		t.Fatalf("how|lux|fresh = %q, want %q", got, timeReplayed)
+	}
+}
+
+// A fixer going on from the implementer takes its lux Run over by the same
+// rule: with less than half the limit left it is a fresh writer, given the
+// implementer's conversation.
+func TestAFixerIsNotHandedAnImplementersLuxRunWithLittleTimeLeft(t *testing.T) {
+	for _, tc := range []struct {
+		used time.Duration
+		want string
+	}{{2*time.Hour + 6*time.Minute, "replay||time_budget"}, {90 * time.Minute, "resume|lrun_im|"}} {
+		t.Run(tc.used.String(), func(t *testing.T) {
+			w := writerWorld(t)
+			w.exec(t, `UPDATE runs SET started_at = ended_at - make_interval(secs => $1) WHERE id = 'run_im'`, tc.used.Seconds())
+			w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+				VALUES ('ev_im', $1, 'agent.message', 'run_im', $2, 'agent', 'run_im', 'test', '{"text":"Implemented it"}')`, w.org, w.task)
+			id, err := (&delivery.Store{DB: w.app, RunTimeLimit: 4 * time.Hour}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
+				TaskID: w.task, Phase: delivery.PhaseFix, Key: "f1", Attempt: 1,
+				BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_im"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := w.how(t, id); got != tc.want {
+				t.Fatalf("how|lux|fresh = %q, want %q", got, tc.want)
 			}
 		})
 	}
