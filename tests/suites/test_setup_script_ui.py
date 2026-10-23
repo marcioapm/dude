@@ -91,6 +91,9 @@ def test_a_setup_script_is_set_marked_reopened_and_cleared(page: Page, web_url: 
     expect(settings.get_by_test_id("setup-script-mark")).to_have_count(0)
     assert _repository(client, project, "api")["setupScript"] is None
     assert console_errors == []
+
+
+@pytest.mark.ui
 def test_editor_scrolls_after_max_lines(page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list):
     project = _project_with_repositories(client)
     sign_in(page, web_url, org["api_key"], at=f"#/project/{project['id']}/settings/repositories")

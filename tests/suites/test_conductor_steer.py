@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import requests
 from playwright.sync_api import Page, expect
 
@@ -30,6 +31,7 @@ def _say(client: ApiClient, task_id: str, *lines: str) -> dict:
     return resp.json()
 
 
+@pytest.mark.ui
 def test_the_conductor_steers_its_running_implementer(page: Page, web_url: str, env, client: ApiClient, org: dict,
                                                       forge_project: dict, owner_dsn: str, console_errors: list):
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted", "implementer": "fake/command"})}

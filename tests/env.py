@@ -35,7 +35,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Photos go to object storage. The suite shares one S3 gateway over a
 # local directory, started on first use and left running like the dev
 # Postgres; each run makes and removes its own bucket.
-S3_IMAGE = os.environ.get("DUDE_TEST_S3_IMAGE", "versity/versitygw:v1.7.0")
+# Fully qualified: Docker reads it as the short name, and podman, with no
+# unqualified-search registries configured, can pull it at all.
+S3_IMAGE = os.environ.get("DUDE_TEST_S3_IMAGE", "docker.io/versity/versitygw:v1.7.0")
 S3_CONTAINER = os.environ.get("DUDE_TEST_S3_CONTAINER", "dude-e2e-s3")
 S3_PORT = int(os.environ.get("DUDE_TEST_S3_PORT", "59200"))
 S3_ACCESS_KEY = "dudes3"
@@ -325,7 +327,11 @@ class TestEnvironment:
              # A lux from v0.1.32: preview servers take dude's overlay tag.
              "-server-inject",
              # Each Run's checkout, removed with the rest of the run's files.
-             "-workspaces", str(self.git_root.parent)],
+             "-workspaces", str(self.git_root.parent),
+             # The fake reads a command's /workspace as the Run's checkout;
+             # where this host's own checkout is under /workspace too (a lux
+             # Run's), the files a test hands a command are still its own.
+             "-host-dir", str(self.log_dir), "-host-dir", str(self.workspace_root)],
             stdout=self._log("fake-lux"), stderr=subprocess.STDOUT,
         )
         deadline = time.time() + 10

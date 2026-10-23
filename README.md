@@ -86,7 +86,9 @@ Photos, and the images people send agents, are kept in S3 (`DUDE_S3_*`, see
 images from it too, so set the same variables on both processes. To try
 images with a real agent, see [`docs/demo/chat-images.md`](docs/demo/chat-images.md).
 The test suite and the demo start their own S3, a versitygw container
-(`dude-e2e-s3`, port 59200), and make a bucket per run.
+(`dude-e2e-s3`, port 59200; its image is `DUDE_TEST_S3_IMAGE`, by default
+the fully qualified `docker.io/versity/versitygw:v1.7.0`, so podman pulls it
+as Docker does), and make a bucket per run.
 
 Migrations run as the owner role. Everything else connects as `dude_app`,
 which has neither `SUPERUSER` nor `BYPASSRLS`, so the row-level security that
@@ -247,6 +249,15 @@ endpoints dude calls, and signed webhook deliveries — so the suite needs no
 network, no containers and no token. `--lux` runs the same flows against a
 real lux (the latest `run_tests.py --serve` in lux's repository, or
 `DUDE_TEST_LUX_ENV`), so a drift between the stand-in and lux shows up.
+
+The browser suites run in the system's Google Chrome, as CI does;
+`DUDE_TEST_BROWSER_CHANNEL` names another Playwright channel. Where Google
+ships no Chrome, such as Linux arm64, set it empty to run Playwright's
+bundled Chromium (`uv run playwright install chromium` once). That is
+Chromium's headless shell, which denies notifications whatever the context
+grants, so `test_a_browser_turns_notifications_on_and_off` fails there;
+`chromium` runs the same browser in its new headless mode, where every
+browser suite passes.
 
 ## Releases
 

@@ -4,7 +4,9 @@
 // land in the git repository each Run's spec names, resolved under -root —
 // the directory the suite's fake GitHub serves.
 //
-// Each Run's checkout, which exec runs in, is a clone under -workspaces.
+// Each Run's checkout, which exec runs in, is a clone under -workspaces. A
+// command's /workspace is read as that checkout, except in a -host-dir: the
+// suite's own directories, which may themselves be under /workspace.
 //
 //	fake-lux -listen 127.0.0.1:0 -root /path/served/by/git-daemon -key KEY -addr-file PATH -workspaces DIR
 package main
@@ -35,6 +37,9 @@ func main() {
 	noNestedHost := flag.Bool("no-nested-host", false, "no host offers nested containers: a Run asking for them waits, saying so in its stateReason")
 	memoryShare := flag.Float64("memory-share", 0.95, "report each placement's memoryLimit as this share of the memory its spec asks for; 0 reports none, as an older lux")
 	serverInject := flag.Bool("server-inject", false, "a lux from v0.1.32: whoami says serverInject and servers take inject")
+	var hostDirs []string
+	flag.Func("host-dir", "a directory of the caller's that a command's /workspace path in it names as written, not in the Run's checkout (repeatable)",
+		func(dir string) error { hostDirs = append(hostDirs, dir); return nil })
 	flag.Parse()
 
 	srv := fakelux.New("", *key, nil)
@@ -48,6 +53,7 @@ func main() {
 		srv.Pools = fakelux.OldPools()
 	}
 	srv.Workspaces = *workspaces
+	srv.HostDirs = hostDirs
 	srv.RepoFor = func(u string) string { return repoPath(*root, u) }
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
