@@ -24,6 +24,20 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "both_luxes: runs against the fake lux, and with --lux against the real one")
 
 
+# The fixtures that open a browser. A test asking for one is a UI test
+# whether or not it says so, so `--no-ui` (-m "not ui") leaves it out on a
+# host with no browser instead of erroring in its setup.
+BROWSER_FIXTURES = frozenset({"page", "context", "browser", "browser_type", "browser_context_args"})
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    # tryfirst: before pytest's own -m deselection reads the marks.
+    for item in items:
+        if BROWSER_FIXTURES.intersection(getattr(item, "fixturenames", ())) and not item.get_closest_marker("ui"):
+            item.add_marker(pytest.mark.ui)
+
+
 @pytest.fixture(scope="session")
 def env() -> TestEnvironment:
     """The environment set up by run_tests.py."""
