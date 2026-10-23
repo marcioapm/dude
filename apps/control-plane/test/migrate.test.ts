@@ -1113,7 +1113,7 @@ test("190 keeps existing sessions private, opens them one way only, and lets the
       ('ssn_org', 'per_mem', 'org_s', 'owner', now()), ('ssn_org', 'per_rd', 'org_s', 'read', now()),
       ('ssn_org', 'per_adm', 'org_s', 'read', now()),
       ('ssn_adm_priv', 'per_gone', 'org_s', 'owner', now()), ('ssn_adm_priv', 'per_rd', 'org_s', 'read', now()),
-      ('ssn_adm_priv', 'per_adm', 'org_s', 'chat', now()),
+      ('ssn_adm_priv', 'per_adm', 'org_s', 'chat', now()), ('ssn_adm_priv', 'per_mem', 'org_s', 'chat', now()),
       ('ssn_far', 'per_far', 'org_t', 'owner', now())`;
     await sql`INSERT INTO session_people (session_id, person_id, organization_id, role) VALUES ('ssn_priv', 'per_mem', 'org_s', 'chat')`;
     const differ = async () => [...await sql`SELECT s.id AS session, p.id AS person, session_role(s.id, p.id) AS got, (SELECT CASE
@@ -1142,6 +1142,16 @@ test("190 keeps existing sessions private, opens them one way only, and lets the
     expect((await differ()).filter((r) => r.got !== r.want)).toEqual([]);
     expect((await sql`SELECT session_role('ssn_org', 'per_mem') AS r`)[0].r).toBe("owner");
     expect((await sql`SELECT session_role('ssn_adm_priv', 'per_adm') AS r`)[0].r).toBe("owner");
+    // A member promoted with a chat row in an admin-owned session owns it
+    // now; one moved to another organisation has nothing in this one's.
+    expect((await sql`SELECT session_role('ssn_adm_priv', 'per_mem') AS r`)[0].r).toBe("chat");
+    await sql`UPDATE people SET role = 'admin' WHERE id = 'per_mem'`;
+    expect((await differ()).filter((r) => r.got !== r.want)).toEqual([]);
+    expect((await sql`SELECT session_role('ssn_adm_priv', 'per_mem') AS r`)[0].r).toBe("owner");
+    expect((await sql`SELECT session_role('ssn_priv', 'per_own') AS r`)[0].r).toBe("owner");
+    await sql`UPDATE people SET organization_id = 'org_t' WHERE id = 'per_own'`;
+    expect((await differ()).filter((r) => r.got !== r.want)).toEqual([]);
+    expect((await sql`SELECT session_role('ssn_priv', 'per_own') AS r`)[0].r).toBe(null);
 
     // The notifier's mention sweep has its own partial index, built concurrently.
     expect([...await sql`SELECT i.indisvalid AS valid FROM pg_index i WHERE i.indexrelid = to_regclass('events_session_mentioned_idx')`])
