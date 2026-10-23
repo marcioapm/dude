@@ -211,9 +211,66 @@ func (s *Server) beforeStop(run *Run) {
 func (s *Server) inWorkspace(run *Run, args []string) []string {
 	out := make([]string, len(args))
 	for i, a := range args {
-		out[i] = strings.ReplaceAll(a, workspaceRoot, run.workspace)
+		out[i] = rewriteWorkspace(a, run.workspace, s.HostDirs)
 	}
 	return out
+}
+
+// rewriteWorkspace reads each path in text that starts with /workspace as
+// the same path under dir. Only a path's leading /workspace is the
+// container's: one at the start of the text or after a byte no path has
+// (a space, a quote, `=`, `:`, `>`…), and followed by `/` or the path's
+// end, so /srv/workspace, /workspaces and /workspace.old stay as written.
+//
+// A path in one of hostDirs stays as written too. The fake runs on the
+// host, and its caller can hand a command a file of its own: on a lux Run,
+// whose checkout is /workspace/repos/…, the E2E suite's log directory is
+// itself under /workspace, and is the host's, not the Run's.
+func rewriteWorkspace(text, dir string, hostDirs []string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		end := i + len(workspaceRoot)
+		if !strings.HasPrefix(text[i:], workspaceRoot) || (i > 0 && isPathByte(text[i-1])) ||
+			(end < len(text) && text[end] != '/' && isPathByte(text[end])) {
+			b.WriteByte(text[i])
+			i++
+			continue
+		}
+		pathEnd := end
+		for pathEnd < len(text) && isPathByte(text[pathEnd]) {
+			pathEnd++
+		}
+		path := text[i:pathEnd]
+		if inAny(path, hostDirs) {
+			b.WriteString(path)
+		} else {
+			b.WriteString(dir + strings.TrimPrefix(path, workspaceRoot))
+		}
+		i = pathEnd
+	}
+	return b.String()
+}
+
+// isPathByte says whether c can be inside a path as commands write one: not
+// whitespace, a quote, or what separates a path from its neighbours in a
+// shell line, an assignment or a PATH-like list.
+func isPathByte(c byte) bool {
+	return c > ' ' && !strings.ContainsRune("'\"`;|&<>():,=", rune(c))
+}
+
+// inAny says whether path is one of dirs or under one, either written with
+// `..` or not (a log directory given as $PWD/../logs).
+func inAny(path string, dirs []string) bool {
+	path = filepath.Clean(path)
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		if d = filepath.Clean(d); path == d || strings.HasPrefix(path, d+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // Edit is a working agent writing files into its checkout now, each with
@@ -447,7 +504,7 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 			env = append(env, k+"="+str)
 		}
 	}
-	cmd := exec.Command("/bin/sh", "-c", inWorkspaceScript(script, dir))
+	cmd := exec.Command("/bin/sh", "-c", inWorkspaceScript(script, dir, s.HostDirs))
 	cmd.Dir, cmd.Env = dir, env
 	var stdout, stderr tailWriter
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

@@ -23,7 +23,7 @@ func (s *Server) workspaceDir(run *Run) (string, error) {
 // inWorkspaceScript reads /workspace in a script's commands as the Run's
 // directory, as inWorkspace does for an exec's arguments; a here-document's
 // body is data, and is left exactly as written.
-func inWorkspaceScript(script, dir string) string {
+func inWorkspaceScript(script, dir string, hostDirs []string) string {
 	lines := strings.SplitAfter(script, "\n")
 	end := ""
 	for i, line := range lines {
@@ -34,7 +34,7 @@ func inWorkspaceScript(script, dir string) string {
 			}
 			continue
 		}
-		lines[i] = strings.ReplaceAll(line, workspaceRoot, dir)
+		lines[i] = rewriteWorkspace(line, dir, hostDirs)
 		if _, word, ok := strings.Cut(bare, "<<"); ok {
 			word = strings.TrimPrefix(strings.TrimSpace(word), "-")
 			word, _, _ = strings.Cut(strings.TrimSpace(word), " ")
