@@ -737,7 +737,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           }} />
       ) : null}
 
-      <Tabs value={tab} onValueChange={pickTab} fill>
+      <Tabs value={tab} onValueChange={pickTab} fill className="taskTabs">
         <TabList aria-label="Task" className="tabsInset">
           <Tab value="chat">Chat</Tab>
           <Tab value="overview">Overview</Tab>
