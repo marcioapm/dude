@@ -211,8 +211,8 @@ func checked(n int, text string, a Acceptance, published map[string]bool, carry 
 // carried is a criterion the tester kept from its previous round: that
 // round's verdict on it, with its evidence and any person's decision, when
 // the round may carry (carry), names that round, and gives a reason, and
-// the verdict it keeps is a pass, a waiver or an acceptance, of the
-// criterion as it reads now. Anything else
+// the verdict it keeps is a pass, a not-applicable with its reason, a
+// waiver or an acceptance, of the criterion as it reads now. Anything else
 // is blocked: dude, not the tester, says what a carried verdict is.
 func carried(v CriterionVerdict, a Acceptance, carry *Carry) CriterionVerdict {
 	v.Status = VerdictBlocked
@@ -229,7 +229,7 @@ func carried(v CriterionVerdict, a Acceptance, carry *Carry) CriterionVerdict {
 		v.Problem = fmt.Sprintf("Carried, but this round's commits do not descend from those %s tested: nothing it judged carries.", carry.RunID)
 	case strings.TrimSpace(a.Observed) == "":
 		v.Problem = "Carried without a reason why the change cannot affect it."
-	case !ok || prev.Status != VerdictPass && prev.Decision == "":
+	case !ok || prev.Status != VerdictPass && !carriesNotApplicable(prev) && prev.Decision == "":
 		v.Problem = fmt.Sprintf("Carried, but %s did not pass it: it must be tested again.", carry.RunID)
 	case prev.Text != v.Text:
 		// Criteria edited while the task was stopped, or a derived check
@@ -237,8 +237,18 @@ func carried(v CriterionVerdict, a Acceptance, carry *Carry) CriterionVerdict {
 		v.Problem = fmt.Sprintf("Carried, but criterion %d changed since %s judged it: it must be tested again.", v.Criterion, carry.RunID)
 	default:
 		v.Status, v.Evidence, v.Decision = prev.Status, prev.Evidence, prev.Decision
+		if carriesNotApplicable(prev) {
+			// Why it does not apply is what makes the verdict.
+			v.Observed = prev.Observed
+		}
 		// The Run whose files the evidence names, through any earlier carry.
 		v.CarriedFrom = cmp.Or(prev.CarriedFrom, carry.RunID)
 	}
 	return v
+}
+
+// carriesNotApplicable: a previous not-applicable verdict with its reason,
+// which carries as a pass does.
+func carriesNotApplicable(prev CriterionVerdict) bool {
+	return prev.Status == VerdictNotApplicable && strings.TrimSpace(prev.Observed) != ""
 }

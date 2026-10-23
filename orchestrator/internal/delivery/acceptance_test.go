@@ -245,3 +245,17 @@ func TestACarriedCriterionWhoseTextChangedIsBlocked(t *testing.T) {
 		t.Errorf("an unchanged derived check carried = %+v, want the pass", got[0])
 	}
 }
+
+// A not-applicable verdict carries as a pass does, with the reason it was
+// not applicable, not the tester's reason for carrying it.
+func TestACarriedNotApplicableKeepsItsReason(t *testing.T) {
+	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
+		1: {Criterion: 1, Text: "it works offline", Status: VerdictNotApplicable, Evidence: []string{},
+			Observed: "The app has no offline mode in this build."},
+	}}
+	got := JudgeAcceptance([]string{"it works offline"},
+		ParseAcceptance("criterion: 1\nstatus: carried\nfrom_round: run_prev\nobserved: Only CI changed.\n"), nil, prev)[0]
+	if got.Status != VerdictNotApplicable || got.CarriedFrom != "run_prev" || got.Observed != prev.Verdicts[1].Observed {
+		t.Errorf("carried not-applicable = %+v, want not-applicable from run_prev with its reason", got)
+	}
+}
