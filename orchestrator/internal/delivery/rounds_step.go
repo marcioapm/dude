@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -31,6 +32,27 @@ func (c RoundChange) deltaLines() int {
 		return MaxResumeDeltaLines + 1
 	}
 	return c.Lines
+}
+
+// ReviewChoice is the reviewers the policy chose for one review round,
+// named by the round's creation key, at the heads it was measured to, and
+// why each runs.
+type ReviewChoice struct {
+	Round      string              `json:"round"`
+	Heads      map[string]string   `json:"heads"`
+	Categories []string            `json:"categories"`
+	Reasons    map[string][]string `json:"reasons"`
+}
+
+// keepReviewChoice records the round's choice on the workflow row before
+// any of its Runs is created: reviewChoice is Owned, so it outlives a step
+// that fails part-way through creating them.
+func (w *steps) keepReviewChoice(ctx context.Context, sc workflow.StepContext, c ReviewChoice) error {
+	raw, _ := json.Marshal(c)
+	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{reviewChoice}', $2::jsonb) WHERE id = $1`, sc.WorkflowRunID, raw)
+		return err
+	})
 }
 
 // goesOn is, per category ("" for the tester), what a round's Run of
@@ -57,8 +79,9 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 // roundChange is what changed from the checkouts from to the state's
 // heads (Store.RoundDelta), measured once per round: the durable cache
 // survives artifact-collection waits and step retries, and equal
-// checkouts share a measurement across categories and between the test
-// step's skip (carryForward) and its tester's Continue.
+// checkouts share a measurement across categories, with the review
+// step's choice of reviewers, and between the test step's skip
+// (carryForward) and its tester's Continue.
 func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *State, phase string, from map[string]string) (RoundChange, error) {
 	// Keyed by the identity's sha256, not the JSON, to keep the state small.
 	identity, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, st.Candidate, from, st.Heads})
@@ -93,9 +116,13 @@ func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *St
 	if change, err = w.s.RoundDelta(ctx, sc.OrganizationID, st.TaskID, gh, from, st.Heads); err != nil {
 		return RoundChange{}, err
 	}
-	// Only the test step's skip reads the paths: of a change that descends
-	// and is all non-product. Any other's are not kept in the state.
-	if phase != PhaseTest || !change.Descends || !NonProduct(st.Policy, change.Paths) {
+	// Two readers keep the paths, and only these: a review round's choice
+	// of reviewers, up to MaxResumeDeltaLines; and the test step's skip, of
+	// a change that descends and is all non-product. The cache is rewritten
+	// with the state at every step transition.
+	keepForReview := phase == PhaseReview && change.Lines <= MaxResumeDeltaLines
+	keepForSkip := phase == PhaseTest && change.Descends && NonProduct(st.Policy, change.Paths)
+	if !keepForReview && !keepForSkip {
 		change.Paths = nil
 	}
 	raw, _ := json.Marshal(change)
@@ -104,4 +131,23 @@ func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *St
 		return err
 	})
 	return change, err
+}
+
+// lastReviewRound is where the checkouts of the attempt's latest completed
+// review round were, of any category; nil before its first. Integration
+// reviews, replaced Runs and adopted ones are not rounds of the loop.
+func (s *Store) lastReviewRound(ctx context.Context, org string, st *State) (map[string]string, error) {
+	var base map[string]string
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT `+roundEnd+` FROM runs r
+			WHERE r.task_id = $1 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1), 1)
+			  AND r.phase = 'review' AND r.status = 'completed'
+			  AND r.replaced_by IS NULL AND r.source_kind IS NULL AND `+notIntegration+`
+			ORDER BY r.ended_at DESC, r.id DESC LIMIT 1`, st.TaskID, st.Attempt).Scan(&base)
+		if db.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
+	return base, err
 }

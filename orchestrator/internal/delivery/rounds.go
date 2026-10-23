@@ -111,9 +111,11 @@ func (s *Store) PreviousRound(ctx context.Context, org, taskID string, attempt i
 }
 
 // RoundDelta is what changed from the predecessor's checkouts to heads,
-// across the task's repositories, as GitHub compares them (RoundChange).
-// A repository with no checkout recorded is compared from its default
-// branch for the line count, and does not descend.
+// across the task's repositories, as GitHub compares them: lines (additions
+// and deletions) and <repo>/<path>s. A comparison GitHub refused or cut
+// short is not Measured. A repository with no checkout recorded is
+// compared from its default branch for the line count, and does not
+// descend.
 func (s *Store) RoundDelta(ctx context.Context, org, taskID string, gh *forge.GitHub, from, heads map[string]string) (RoundChange, error) {
 	var repos []Repository
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {

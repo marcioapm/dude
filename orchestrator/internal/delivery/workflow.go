@@ -142,6 +142,9 @@ type State struct {
 	// test, even at the pull request wait or with the policy's tester off.
 	// Cleared once that test's Run is created.
 	RetestDue bool `json:"retestDue,omitempty"`
+	// The policy's choice for the review round being created, which a
+	// replay of the step at the same round and heads reuses.
+	ReviewChoice *ReviewChoice `json:"reviewChoice,omitempty"`
 
 	// A person started it past its open blockers (Start anyway): the
 	// implement step's and the conductor's start guards let it through.
@@ -486,7 +489,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	return &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta"},
+		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -742,31 +745,59 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "agent review"); err != nil {
 		return workflow.Result{}, err
 	}
-	categories := ReviewersFor(st.Policy, st.ChangedPaths)
-	reviewRange := st.reviewRange()
-	if reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0 {
-		// A check that the simplifier changed no behaviour: the policy's
-		// required reviewers, whatever paths it touched.
-		categories = st.Policy.RequiredReviewers
-	}
-	d := directed(st, PhaseReview)
-	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
-		return workflow.Result{}, err
-	}
-	if d != nil && len(d.Categories) > 0 {
-		categories = d.Categories
-	}
-	// A retry of a round some reviewers failed: only theirs run again.
-	retrying := st.RetryCategories
-	if len(retrying) > 0 {
-		categories, st.RetryCategories = retrying, nil
-	}
 	// A re-review judges what the fixer was sent: every open finding a fix
 	// has attempted, by the reviewer of its category, or by one of this
 	// round's when it has none (judgedBy).
 	attempted, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	d := directed(st, PhaseReview)
+	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
+	reviewRange := st.reviewRange()
+	// Each Run's creation key; the round's own is the key of no category.
+	runKey := func(c string) string {
+		switch {
+		case d != nil:
+			return conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
+		case st.Integration != nil:
+			return key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
+		}
+		return key(sc, st, ":review:", st.Iteration, ":", c)
+	}
+	// A retry of a round some reviewers failed: only theirs run again.
+	retrying := st.RetryCategories
+	var categories []string
+	var reasons map[string][]string
+	switch {
+	case len(retrying) > 0:
+		categories, reasons, st.RetryCategories = retrying, eachFor(retrying, ReasonRetry), nil
+	case d != nil && len(d.Categories) > 0:
+		categories, reasons = d.Categories, eachFor(d.Categories, ReasonDirected)
+	case reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0:
+		// A check that the simplifier changed no behaviour: the policy's
+		// required reviewers, whatever paths it touched.
+		categories, reasons = st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired)
+	case st.ReviewChoice != nil && st.ReviewChoice.Round == runKey("") && maps.Equal(st.ReviewChoice.Heads, st.Heads):
+		// A replay: a Run of this round that completed since would make
+		// the round's change start at its own checkouts. Heads that moved
+		// since (refreshPRWaitHeads) are a change the choice never saw.
+		categories, reasons = st.ReviewChoice.Categories, st.ReviewChoice.Reasons
+	default:
+		if categories, reasons, err = w.roundReviewers(ctx, sc, st, slices.Collect(maps.Keys(attempted))); err != nil {
+			return workflow.Result{}, err
+		}
+		if len(categories) == 0 {
+			if categories, reasons, err = w.gateReviewers(ctx, sc, st); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		st.ReviewChoice = &ReviewChoice{Round: runKey(""), Heads: maps.Clone(st.Heads), Categories: db.NonNil(categories), Reasons: reasons}
+		if err := w.keepReviewChoice(ctx, sc, *st.ReviewChoice); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	if len(retrying) > 0 {
 		// The round's other reviewers judged theirs already.
@@ -776,13 +807,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	goesOn := w.goesOn(ctx, sc, st, PhaseReview)
 	var runIDs []string
 	for _, c := range categories {
-		k := key(sc, st, ":review:", st.Iteration, ":", c)
-		if st.Integration != nil {
-			k = key(sc, st, ":integration:", st.Integration.RunID, ":review:", st.Iteration, ":", c)
-		}
-		if d != nil {
-			k = conductorKey(sc, st, d, ":review:", st.Iteration, ":", c)
-		}
+		k := runKey(c)
 		cont, err := goesOn(c)
 		if err != nil {
 			return workflow.Result{}, err
@@ -803,11 +828,64 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		runIDs = append(runIDs, id)
 	}
 	if err := w.s.Emit(ctx, sc.OrganizationID, st, EvRunCreated,
-		map[string]any{"phase": "review", "reviewers": categories, "iteration": st.Iteration}); err != nil {
+		map[string]any{"phase": "review", "reviewers": db.NonNil(categories), "reasons": reasons, "iteration": st.Iteration}); err != nil {
 		return workflow.Result{}, err
 	}
 	st.ReviewRunIDs = runIDs
+	if len(runIDs) == 0 {
+		// No reviewer is warranted and no gate waits (gateReviewers): the
+		// round is complete and clear of new findings.
+		st.PendingRunIDs = nil
+		return workflow.Result{Next: "awaitReview", State: st}, nil
+	}
 	return park("awaitReview", st, runIDs), nil
+}
+
+// roundReviewers is the policy's choice of this round's reviewers
+// (RoundReviewers): a later round of the attempt is measured from the
+// previous review round's checkouts to the heads. An integration's review
+// is of a merge, not of what changed since a round: it is a first round.
+func (w *steps) roundReviewers(ctx context.Context, sc workflow.StepContext, st *State, attempted []string) ([]string, map[string][]string, error) {
+	r := ReviewRound{Whole: st.ChangedPaths, Attempted: attempted}
+	if st.Integration == nil {
+		from, err := w.s.lastReviewRound(ctx, sc.OrganizationID, st)
+		if err != nil {
+			return nil, nil, err
+		}
+		if from != nil {
+			if r.Change, err = w.roundChange(ctx, sc, st, PhaseReview, from); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	categories, reasons := RoundReviewers(st.Policy, r)
+	return categories, reasons, nil
+}
+
+// gateReviewers stands in for a round the policy gave no reviewer when a
+// gate waits on a completed review at these heads: a candidate's promotion
+// (unreviewedHeads) or a conductor head before the pull request
+// (UntestedConductorHeadTx). An empty round completes no Run there, so the
+// gate would send the delivery back to review for ever. RequiredReviewers
+// run, else the first round's reviewers; nil when no gate waits.
+func (w *steps) gateReviewers(ctx context.Context, sc workflow.StepContext, st *State) ([]string, map[string][]string, error) {
+	gated := st.Candidate != nil
+	if !gated {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+			gated, err = UntestedConductorHeadTx(ctx, tx, st.TaskID, st.Heads)
+			return err
+		}); err != nil {
+			return nil, nil, err
+		}
+	}
+	switch {
+	case !gated:
+		return nil, nil, nil
+	case len(st.Policy.RequiredReviewers) > 0:
+		return st.Policy.RequiredReviewers, eachFor(st.Policy.RequiredReviewers, ReasonRequired), nil
+	}
+	first := ReviewersFor(st.Policy, st.ChangedPaths)
+	return first, eachFor(first, ReasonFirstRound), nil
 }
 
 // reviewRange is the range the next review round covers: what the

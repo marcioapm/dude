@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deliveryPolicySchema, settingsPatchSchema, type DeliverySettings, type FullDeliveryPolicy, type RoleSettings } from "@dude/domain";
+import { deliveryPolicySchema, settingsPatchSchema, type DeliverySettings, type FullDeliveryPolicy, type RoleSettings, type DeliveryPolicy } from "@dude/domain";
 import { deliveryChanged, deliveryPatch, deliveryValues, roleChanged, settingsPage, timeLimitLabel } from "../src/settings.ts";
 
 const org = <T,>(value: T) => ({ value, source: "organization" as const });
@@ -59,6 +59,19 @@ describe("settings helpers", () => {
   test("a delivery form's patch is only what it changed", () => {
     const form = { ...Object.fromEntries(Object.entries(delivery).map(([k, s]) => [k, s.value])), test: true, requiredReviewers: ["correctness", "security"] } as FullDeliveryPolicy;
     expect(deliveryPatch(delivery, form)).toEqual({ test: true, requiredReviewers: ["correctness", "security"] });
+  });
+
+  test("the reviewers every round runs may be none, and the non-product paths are globs", () => {
+    const fine: DeliveryPolicy[] = [{ alwaysReviewers: [] }, { alwaysReviewers: ["correctness", "documentation"] }, { nonProductPaths: [] }, { nonProductPaths: [".github/**"] }];
+    for (const ok of fine) {
+      expect(deliveryPolicySchema.parse(ok)).toEqual(ok);
+      expect(settingsPatchSchema.parse({ delivery: ok })).toEqual({ delivery: ok });
+    }
+    for (const bad of [{ alwaysReviewers: ["style"] }, { alwaysReviewers: "correctness" }, { nonProductPaths: [""] }, { nonProductPaths: [" "] }, { nonProductPaths: [1] }]) {
+      expect(deliveryPolicySchema.safeParse(bad).success).toBe(false);
+      expect(settingsPatchSchema.safeParse({ delivery: bad }).success).toBe(false);
+    }
+    expect(settingsPatchSchema.parse({ delivery: { alwaysReviewers: null, nonProductPaths: null } })).toEqual({ delivery: { alwaysReviewers: null, nonProductPaths: null } });
   });
 
   test("counts what a project overrides", () => {

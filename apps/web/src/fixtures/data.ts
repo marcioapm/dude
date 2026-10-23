@@ -331,6 +331,7 @@ export const SETTINGS: SettingsResponse = {
   }])) as SettingsResponse["roles"],
   delivery: {
     requiredReviewers: { value: ["correctness"], source: "organization" },
+    alwaysReviewers: { value: ["correctness"], source: "organization" },
     nonProductPaths: { value: [".github/**", "docs/**", "**/*.md"], source: "organization" },
     blockingSeverities: { value: ["blocking", "high"], source: "organization" },
     maxReviewIterations: { value: 5, source: "organization" },

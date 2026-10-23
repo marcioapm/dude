@@ -203,6 +203,8 @@ export const settingsPatchSchema = z
     delivery: z
       .object({
         requiredReviewers: nullable(field("requiredReviewers")),
+        alwaysReviewers: nullable(field("alwaysReviewers")),
+        nonProductPaths: nullable(field("nonProductPaths")),
         blockingSeverities: nullable(field("blockingSeverities")),
         maxReviewIterations: nullable(field("maxReviewIterations")),
         maxAttemptsPerFinding: nullable(field("maxAttemptsPerFinding")),

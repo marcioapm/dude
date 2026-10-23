@@ -13,9 +13,15 @@
 package delivery
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf16"
 )
 
 type ReviewerRule struct {
@@ -30,8 +36,13 @@ type Policy struct {
 	BlockingSeverities   []string       `json:"blockingSeverities"`
 	RequiredReviewers    []string       `json:"requiredReviewers"`
 	ConditionalReviewers []ReviewerRule `json:"conditionalReviewers"`
-	// Globs of paths that are not the product (CI, docs): a change of
-	// these alone since a passing test round starts no tester
+	// Run on every review round, a later round whose own change is
+	// non-product included.
+	AlwaysReviewers []string `json:"alwaysReviewers"`
+	// Globs of paths that are not the product (CI, docs). A later review
+	// round whose own change touches only these runs no required reviewer
+	// beyond AlwaysReviewers and the reviewers of its findings; a change
+	// of these alone since a passing test round starts no tester
 	// (carryForward). Matched against in-repo paths only; to make a whole
 	// repository non-product, list its paths.
 	NonProductPaths []string `json:"nonProductPaths"`
@@ -92,6 +103,7 @@ func DefaultPolicy() Policy {
 			{Category: "frontend", WhenPathsMatch: []string{"**/*.tsx", "**/*.css"}},
 			{Category: "api", WhenPathsMatch: []string{"**/routes/**", "**/api/**"}},
 		},
+		AlwaysReviewers:       []string{"correctness"},
 		NonProductPaths:       []string{".github/**", "docs/**", "**/*.md"},
 		MaxReviewIterations:   5,
 		MaxAttemptsPerFinding: 2,
@@ -164,36 +176,157 @@ var Publishes = map[string]bool{
 
 var reviewerOrder = []string{"correctness", "tests", "security", "database", "api", "frontend", "documentation", "performance"}
 
-// ReviewersFor picks the reviewers a diff warrants, in a stable order so a
-// task's fan-out is reproducible.
+// ReviewersFor picks the reviewers a diff warrants on a first review round,
+// in a stable order so a task's fan-out is reproducible.
 func ReviewersFor(p Policy, changedPaths []string) []string {
-	selected := map[string]bool{}
-	for _, c := range p.RequiredReviewers {
-		selected[c] = true
-	}
+	return inReviewerOrder(slices.Concat(p.RequiredReviewers, pathReviewers(p, changedPaths)))
+}
+
+// pathReviewers are the conditional reviewers whose rules match a path,
+// or that have no paths.
+func pathReviewers(p Policy, paths []string) []string {
+	var out []string
 	for _, rule := range p.ConditionalReviewers {
-		if len(rule.WhenPathsMatch) == 0 {
-			selected[rule.Category] = true
-			continue
-		}
-		for _, path := range changedPaths {
-			// A path is <repo>/<path in repo>: a rule may name either, so
-			// "migrations/**" matches api/migrations/x.sql, and "web/**"
-			// matches everything in web.
-			_, inRepo, _ := strings.Cut(path, "/")
-			if slices.ContainsFunc(rule.WhenPathsMatch, func(g string) bool { return MatchesGlob(g, path) || MatchesGlob(g, inRepo) }) {
-				selected[rule.Category] = true
-				break
-			}
+		if len(rule.WhenPathsMatch) == 0 || slices.ContainsFunc(paths, func(path string) bool { return matchesRepoOrPath(rule.WhenPathsMatch, path) }) {
+			out = append(out, rule.Category)
 		}
 	}
+	return out
+}
+
+// Both matchers take a <repo>/<path in repo>. A conditional rule's glob may
+// name either form, so "migrations/**" matches api/migrations/x.sql and
+// "web/**" everything in web; a NonProductPaths glob names the in-repo path
+// only, so "docs/**" does not cover a repository named docs.
+func matchesRepoOrPath(globs []string, path string) bool {
+	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, path) }) || matchesPathInRepo(globs, path)
+}
+
+func matchesPathInRepo(globs []string, path string) bool {
+	_, inRepo, _ := strings.Cut(path, "/")
+	return slices.ContainsFunc(globs, func(g string) bool { return MatchesGlob(g, inRepo) })
+}
+
+func inReviewerOrder(categories []string) []string {
 	var out []string
 	for _, c := range reviewerOrder {
-		if selected[c] {
+		if slices.Contains(categories, c) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// Why a reviewer runs in a round, as the round's run.created records it.
+const (
+	ReasonAlways     = "always"
+	ReasonFinding    = "finding"
+	ReasonPaths      = "paths"
+	ReasonRequired   = "required"
+	ReasonFirstRound = "first_round"
+	ReasonLargeRound = "large_round"
+	ReasonDirected   = "directed"
+	ReasonRetry      = "retry"
+)
+
+// ReviewRound is what a review round's reviewers are picked from.
+type ReviewRound struct {
+	// The task's changed paths, <repo>/<path>.
+	Whole []string
+	// What changed since the attempt's previous completed review round;
+	// not Measured on a first round.
+	Change RoundChange
+	// The categories of the open findings a fix attempted.
+	Attempted []string
+}
+
+// RoundReviewers picks a review round's reviewers, in reviewerOrder, and
+// why each runs. A round whose own change is not measured (a first round,
+// or one GitHub could not compare) or is over MaxResumeDeltaLines runs the
+// whole change's reviewers (ReviewersFor). A later round runs the
+// reviewers of the findings it judges, the conditional reviewers its own
+// change's paths match, and RequiredReviewers when that change touches a
+// path outside NonProductPaths. Every round runs AlwaysReviewers.
+func RoundReviewers(p Policy, r ReviewRound) ([]string, map[string][]string) {
+	why := map[string][]string{}
+	add := func(categories []string, reason string) {
+		for _, c := range inReviewerOrder(categories) {
+			if !slices.Contains(why[c], reason) {
+				why[c] = append(why[c], reason)
+			}
+		}
+	}
+	add(p.AlwaysReviewers, ReasonAlways)
+	switch {
+	case !r.Change.Measured:
+		add(ReviewersFor(p, r.Whole), ReasonFirstRound)
+	case r.Change.Lines > MaxResumeDeltaLines:
+		add(ReviewersFor(p, r.Whole), ReasonLargeRound)
+	default:
+		add(r.Attempted, ReasonFinding)
+		add(pathReviewers(p, r.Change.Paths), ReasonPaths)
+		if slices.ContainsFunc(r.Change.Paths, func(path string) bool { return !matchesPathInRepo(p.NonProductPaths, path) }) {
+			add(p.RequiredReviewers, ReasonRequired)
+		}
+	}
+	return inReviewerOrder(slices.Collect(maps.Keys(why))), why
+}
+
+// eachFor is categories, each run for one reason.
+func eachFor(categories []string, reason string) map[string][]string {
+	why := map[string][]string{}
+	for _, c := range categories {
+		why[c] = []string{reason}
+	}
+	return why
+}
+
+// The bounds packages/domain's deliveryPolicySchema puts on nonProductPaths.
+const (
+	maxNonProductPaths = 50
+	maxNonProductGlob  = 200
+)
+
+// checkReviewerKeys refuses what deliveryPolicySchema refuses: an
+// always-run reviewer not in the catalogue, more than maxNonProductPaths
+// globs, or one blank or longer than maxNonProductGlob UTF-16 units once
+// trimmed. It trims each glob, as the schema stores it.
+func (p *Policy) checkReviewerKeys() error {
+	for _, c := range p.AlwaysReviewers {
+		if !slices.Contains(reviewerOrder, c) {
+			return fmt.Errorf("alwaysReviewers: "+rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
+		}
+	}
+	if len(p.NonProductPaths) > maxNonProductPaths {
+		return fmt.Errorf("nonProductPaths: %d globs, at most %d", len(p.NonProductPaths), maxNonProductPaths)
+	}
+	for i, g := range p.NonProductPaths {
+		g = strings.TrimSpace(g)
+		switch {
+		case g == "":
+			return errors.New("nonProductPaths: a glob is empty")
+		case len(utf16.Encode([]rune(g))) > maxNonProductGlob:
+			return fmt.Errorf("nonProductPaths: a glob is over %d characters", maxNonProductGlob)
+		}
+		p.NonProductPaths[i] = g
+	}
+	return nil
+}
+
+// refuseNullReviewerKeys refuses a policy layer naming alwaysReviewers or
+// nonProductPaths as null, which json.Unmarshal would read as an empty
+// list: the stored schema has no null (a settings reset removes the key).
+func refuseNullReviewerKeys(raw json.RawMessage) error {
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) != nil {
+		return nil
+	}
+	for _, k := range []string{"alwaysReviewers", "nonProductPaths"} {
+		if v, ok := keys[k]; ok && string(bytes.TrimSpace(v)) == "null" {
+			return fmt.Errorf("%s: null is not a list; leave it out for the inherited value", k)
+		}
+	}
+	return nil
 }
 
 // FindingState is what the loop reads about a finding, or about a
