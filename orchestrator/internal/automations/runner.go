@@ -546,11 +546,21 @@ func cmpErr(err error, msg string) error {
 // Starting
 // ---------------------------------------------------------------------------
 
+// StartingMax is how long a claimed run may stay starting (submitted to
+// lux, session not yet recorded) before it is queued again: an
+// orchestrator that stopped mid-start. lux's idempotency key makes the
+// second submit the same Run.
+const StartingMax = 10 * time.Minute
+
 // startQueued starts the oldest queued run of each automation that has room.
 func (r *Runner) startQueued(ctx context.Context) (int, error) {
 	type queued struct{ ID, Org, AutomationID, Source string }
 	var list []queued
 	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'queued', started_at = NULL
+			WHERE status = 'running' AND session IS NULL AND started_at < $1`, r.now().Add(-StartingMax)); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `SELECT q.id, q.organization_id, q.automation_id, q.source FROM automation_runs q
 			WHERE q.status = 'queued' AND NOT EXISTS (SELECT 1 FROM automation_runs o WHERE o.automation_id = q.automation_id
 			  AND o.status = 'queued' AND o.source <> 'test' AND q.source <> 'test' AND (o.created_at, o.id) < (q.created_at, q.id))
@@ -577,35 +587,55 @@ func (r *Runner) startQueued(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// start submits one queued run, or leaves it queued while its automation
-// has no room. A run that cannot start fails, saying why.
+// start claims one queued run and submits it, or leaves it queued while its
+// automation has no room. A run that cannot start fails, saying why.
+//
+// The claim (status running, session NULL while it starts) is taken under
+// the automation's row lock Fire takes, so a firing meanwhile sees the run
+// as running: it queues, merges into a new run, or cancels this one; it
+// never adds to payloads this start already read.
 func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 	var a Automation
 	var run struct {
 		Source   string
 		Payloads []Payload
 		At       *time.Time
-		Running  int
 		Kept     string
 	}
+	claimed := false
 	if err := r.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var automationID string
-		if err := tx.QueryRow(ctx, `SELECT automation_id, source, payloads, scheduled_for FROM automation_runs WHERE id = $1 AND status = 'queued'`, runID).
-			Scan(&automationID, &run.Source, &run.Payloads, &run.At); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT automation_id FROM automation_runs WHERE id = $1 AND status = 'queued'`, runID).Scan(&automationID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM automations WHERE id = $1 FOR UPDATE`, automationID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT source, payloads, scheduled_for FROM automation_runs WHERE id = $1 AND status = 'queued'`, runID).
+			Scan(&run.Source, &run.Payloads, &run.At); err != nil {
 			return err
 		}
 		var err error
 		if a, err = Load(ctx, tx, automationID); err != nil {
 			return err
 		}
+		var running int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE automation_id = $1 AND status = 'running' AND source <> 'test'`,
-			a.ID).Scan(&run.Running); err != nil {
+			a.ID).Scan(&running); err != nil {
 			return err
 		}
-		err = tx.QueryRow(ctx, `SELECT lux_run_id FROM automation_sessions WHERE automation_id = $1`, a.ID).Scan(&run.Kept)
-		if db.IsNotFound(err) {
-			err = nil
+		if run.Source != SourceTest && !CanStartQueued(a.policy(), running) {
+			return nil
 		}
+		err = tx.QueryRow(ctx, `SELECT lux_run_id FROM automation_sessions WHERE automation_id = $1`, a.ID).Scan(&run.Kept)
+		if err != nil && !db.IsNotFound(err) {
+			return err
+		}
+		// A webhook run is claimed whole: its POST is sent off the sweep, as
+		// followRunning finds it running.
+		_, err = tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', started_at = now(), reason = NULL,
+			session = CASE WHEN $2 = 'webhook' THEN 'ephemeral' END WHERE id = $1`, runID, a.Kind)
+		claimed = err == nil
 		return err
 	}); err != nil {
 		if db.IsNotFound(err) {
@@ -613,24 +643,33 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 		}
 		return false, err
 	}
-	if run.Source != SourceTest && !CanStartQueued(a.policy(), run.Running) {
-		return false, nil
+	if !claimed || a.Kind == "webhook" {
+		return claimed, nil
 	}
-	// A test run's session is its own: fresh and ephemeral, the kept one untouched (Q21).
-	resumable := a.SessionMode == "resumable" && run.Source != SourceTest && a.Kind != "webhook"
-	if a.Kind == "webhook" {
-		// Claimed here; its POST is sent off the sweep, as followRunning
-		// finds it running.
-		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', started_at = now(), session = 'ephemeral'
-				WHERE id = $1 AND status = 'queued'`, runID)
+	started, err := r.submit(ctx, a, runID, run.Source, run.Payloads, run.At, run.Kept)
+	if err != nil || !started {
+		// Not started (a busy kept session, lux unreachable): queued again
+		// for the next pass, unless a firing cancelled it meanwhile.
+		if rerr := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'queued', started_at = NULL
+				WHERE id = $1 AND status = 'running' AND session IS NULL`, runID)
 			return err
-		})
+		}); rerr != nil {
+			return false, errors.Join(err, rerr)
+		}
 	}
+	return started, err
+}
+
+// submit resumes the kept session or submits a new lux Run for a claimed
+// run; false, nil leaves it for the next pass.
+func (r *Runner) submit(ctx context.Context, a Automation, runID, source string, payloads []Payload, at *time.Time, kept string) (bool, error) {
+	// A test run's session is its own: fresh and ephemeral, the kept one untouched (Q21).
+	resumable := a.SessionMode == "resumable" && source != SourceTest
 	var luxRunID, session, startReason string
 	var err error
-	if resumable && run.Kept != "" {
-		luxRunID, err = r.resume(ctx, a, run.Kept, runID, run.Payloads, run.At)
+	if resumable && kept != "" {
+		luxRunID, err = r.resume(ctx, a, kept, runID, payloads, at)
 		session = "resumed"
 		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 			// Still stopping after the last run: tried again next pass, for
@@ -646,7 +685,7 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 			if r.now().Sub(since) < ResumeConflictMax {
 				return false, nil
 			}
-			r.Log.Warn("kept automation session stayed busy; starting fresh", "automation", a.ID, "lux_run", run.Kept)
+			r.Log.Warn("kept automation session stayed busy; starting fresh", "automation", a.ID, "lux_run", kept)
 			if err := StartFresh(ctx, r.DB, r.Lux, a.Org, a.ID); err != nil {
 				return false, err
 			}
@@ -661,7 +700,7 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 		}
 	}
 	if luxRunID == "" {
-		spec, why, err := r.spec(ctx, a, runID, run.Payloads, run.At)
+		spec, why, err := r.spec(ctx, a, runID, payloads, at)
 		if err != nil {
 			return false, err
 		}
@@ -681,23 +720,35 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 			session = "new"
 		}
 	}
-	return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		if resumable {
-			if _, err := tx.Exec(ctx, `INSERT INTO automation_sessions (automation_id, organization_id, lux_run_id, last_run_at)
-				VALUES ($1, $2, $3, now()) ON CONFLICT (automation_id) DO UPDATE SET lux_run_id = EXCLUDED.lux_run_id, last_run_at = now()`,
-				a.ID, a.Org, luxRunID); err != nil {
-				return err
-			}
-		}
+	claimed := false
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 		// A resumed session's output is read on from where its last run left
 		// it: what it said before is not this run's.
-		_, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', reason = NULLIF($5, ''), lux_run_id = $2, session = $3,
-			started_at = now(), container_started_at = CASE WHEN $4 = 'server' THEN now() END, last_request_at = now(), inputs_sent = $6,
+		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET reason = NULLIF($5, ''), lux_run_id = $2, session = $3,
+			container_started_at = CASE WHEN $4 = 'server' THEN now() END, last_request_at = now(), inputs_sent = $6,
 			lux_cursor = CASE WHEN $3 = 'resumed' THEN (SELECT p.lux_cursor FROM automation_runs p WHERE p.lux_run_id = $2 AND p.id <> $1
 				ORDER BY p.created_at DESC LIMIT 1) END
-			WHERE id = $1`, runID, luxRunID, session, a.Kind, startReason, len(run.Payloads))
+			WHERE id = $1 AND status = 'running' AND session IS NULL`, runID, luxRunID, session, a.Kind, startReason, len(payloads))
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		claimed = true
+		if resumable {
+			_, err = tx.Exec(ctx, `INSERT INTO automation_sessions (automation_id, organization_id, lux_run_id, last_run_at)
+				VALUES ($1, $2, $3, now()) ON CONFLICT (automation_id) DO UPDATE SET lux_run_id = EXCLUDED.lux_run_id, last_run_at = now()`,
+				a.ID, a.Org, luxRunID)
+		}
 		return err
-	})
+	}); err != nil {
+		return false, err
+	}
+	if !claimed {
+		// Cancelled by a firing while it was submitted: a resumed kept
+		// session is stopped and stays kept; a new Run is ended.
+		r.Log.Info("an automation run was cancelled while it started; its lux Run is ended", "run", runID, "lux_run", luxRunID)
+		r.stopOrCancel(ctx, luxRunID, session == "resumed")
+	}
+	return true, nil
 }
 
 // resume takes the kept session up again with this firing's instructions.
@@ -756,7 +807,7 @@ func (r *Runner) followRunning(ctx context.Context) (int, error) {
 	var list []running
 	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.automation_id, COALESCE(r.lux_run_id, ''), r.source
-			FROM automation_runs r WHERE r.status = 'running' ORDER BY r.started_at LIMIT 50`)
+			FROM automation_runs r WHERE r.status = 'running' AND r.session IS NOT NULL ORDER BY r.started_at LIMIT 50`)
 		if err != nil {
 			return err
 		}

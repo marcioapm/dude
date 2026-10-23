@@ -2,6 +2,7 @@ package automations
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // gate is a file a test's commands wait on: a command made by hold runs
@@ -86,6 +91,84 @@ func TestAutomationSlowWorkStaysOffTheSweep(t *testing.T) {
 		hk, o := h.runs("aut_slowhook"), h.runs("aut_other")
 		return hk[0].Status == "succeeded" && o[0].Status == "succeeded"
 	})
+}
+
+// submitHook is lux with a hook run inside Submit, before lux answers.
+type submitHook struct {
+	lux.Client
+	before func()
+}
+
+func (s *submitHook) Submit(ctx context.Context, spec lux.Spec, key string) (lux.Run, error) {
+	if s.before != nil {
+		s.before()
+	}
+	return s.Client.Submit(ctx, spec, key)
+}
+
+// A run is claimed before it is submitted: an event cancelling it while lux
+// takes the submit leaves it cancelled and its new lux Run ended, never
+// running beside the newer run; with merge, an event arriving then queues
+// its own run rather than joining payloads the start already read.
+func TestAutomationRunIsClaimedBeforeItStarts(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	hook := &submitHook{Client: h.lux}
+	h.runner.Lux = hook
+	fireDuringSubmit := func(id, delivery string) {
+		var once sync.Once
+		hook.before = func() {
+			once.Do(func() {
+				ctx := context.Background()
+				var fired Fired
+				if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+					a, err := Load(ctx, tx, id)
+					if err != nil {
+						return err
+					}
+					body, _ := json.Marshal(push)
+					fired, err = Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: delivery, Event: "push", Body: body}}, "", nil)
+					return err
+				}); err != nil {
+					t.Error(err)
+				}
+				h.runner.EndCancelled(ctx, fired.Cancelled)
+			})
+		}
+	}
+
+	h.automation("aut_claim_cancel", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo done"), "concurrency": "cancel"})
+	fireDuringSubmit("aut_claim_cancel", "late-1")
+	h.deliver("first-1", "push", push)
+	h.until("the newer run is running", func() bool {
+		r := h.runs("aut_claim_cancel")
+		return len(r) == 2 && r[1].Status == "running"
+	})
+	r := h.runs("aut_claim_cancel")
+	if r[0].Status != "cancelled" || r[0].LuxRunID != "" {
+		t.Fatalf("the run cancelled while it was submitted: %+v", r[0])
+	}
+	for _, run := range h.fake.Runs() {
+		if strings.Contains(string(run.Spec), r[0].ID) {
+			h.until("its lux Run is ended", func() bool { return lux.Terminated(h.luxState(run.ID)) })
+		}
+	}
+
+	h.automation("aut_claim_merge", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo done"), "concurrency": "merge"})
+	exec(t, h.owner, `UPDATE automations SET enabled = false WHERE id = 'aut_claim_cancel'`)
+	fireDuringSubmit("aut_claim_merge", "late-2")
+	h.deliver("first-2", "push", push)
+	h.until("the first merge run is running and the late event waits", func() bool {
+		r := h.runs("aut_claim_merge")
+		return len(r) == 2 && r[0].Status == "running" && r[1].Status == "queued"
+	})
+	if m := h.runs("aut_claim_merge"); m[0].Payloads != 1 || m[1].Payloads != 1 {
+		t.Errorf("merge runs %+v", m)
+	}
 }
 
 // A delivery an automation cannot be matched to (a paths filter with no
