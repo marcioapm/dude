@@ -289,7 +289,8 @@ func TestATestRoundComparesEachChangedRepositoryOnce(t *testing.T) {
 // pass, with that round's evidence and carried_from naming it; the same
 // carry of a criterion that failed there, or naming another run, is
 // recorded blocked. A Run that resumed no round (fresh after a large
-// change) carries nothing.
+// change, or a replay), or resumed one its heads do not descend from,
+// carries nothing.
 func TestACarriedVerdictIsRecordedFromThePreviousRound(t *testing.T) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
@@ -313,12 +314,24 @@ func TestACarriedVerdictIsRecordedFromThePreviousRound(t *testing.T) {
 		"---\ncriterion: 2\nstatus: carried\nfrom_round: run_k1\nobserved: Only CI changed.\n" +
 		"---\ncriterion: 3\nstatus: carried\nfrom_round: run_other\nobserved: Only CI changed.\n```\n"
 	s := &Store{DB: app}
+	nothing := []string{"1 blocked  ", "2 blocked  ", "3 blocked  "}
+	afresh := "Carried, but this round tests every criterion afresh: nothing carries into it."
 	for _, c := range []struct {
 		run, how string
-		want     []string
+		// st.CarryFrom: the previous round when this round's heads descend
+		// from its checkouts, "" when they do not.
+		from string
+		want []string
+		// Why criterion 1, which run_k1 passed, is refused, when it is.
+		refused string
 	}{
-		{"run_k2", "resume", []string{"1 pass run_k1 greet.webm", "2 blocked  ", "3 blocked  "}},
-		{"run_k3", "", []string{"1 blocked  ", "2 blocked  ", "3 blocked  "}},
+		{"run_k2", "resume", "run_k1", []string{"1 pass run_k1 greet.webm", "2 blocked  ", "3 blocked  "}, ""},
+		{"run_k3", "", "run_k1", nothing, afresh},
+		// A replay after the round's time budget starts the tester afresh.
+		{"run_k4", "replay", "run_k1", nothing, afresh},
+		// Resumed, but the branch was rewritten since run_k1.
+		{"run_k5", "resume", "", nothing,
+			"Carried, but this round's commits do not descend from those run_k1 tested: nothing it judged carries."},
 	} {
 		exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at,
 				continues_run_id, continues_how)
@@ -326,7 +339,7 @@ func TestACarriedVerdictIsRecordedFromThePreviousRound(t *testing.T) {
 				CASE WHEN $3 <> '' THEN 'run_k1' END, NULLIF($3, ''))`, c.run, c.how)
 		exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
 			VALUES ('ev_'||$2, $1, 'agent.message', $2, 'wi_k', 'agent', $2, 'test', jsonb_build_object('text', $3::text))`, c.run, reply)
-		st := &State{TaskID: "wi_k", ProjectID: "prj_k", Attempt: 1, TestRunID: c.run, Policy: DefaultPolicy(), CarryFrom: "run_k1"}
+		st := &State{TaskID: "wi_k", ProjectID: "prj_k", Attempt: 1, TestRunID: c.run, Policy: DefaultPolicy(), CarryFrom: c.from}
 		if _, err := s.RecordVerdict(ctx, org, st, c.run); err != nil {
 			t.Fatal(err)
 		}
@@ -346,6 +359,9 @@ func TestACarriedVerdictIsRecordedFromThePreviousRound(t *testing.T) {
 		}
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%s's verdicts = %q, want %q", c.run, got, c.want)
+		}
+		if c.refused != "" && (len(problems) == 0 || problems[0] != c.refused) {
+			t.Errorf("%s's criterion 1 problem = %q, want %q", c.run, problems, c.refused)
 		}
 		for i, line := range got {
 			if line[2:9] == "blocked" && problems[i] == "" {
