@@ -1,6 +1,7 @@
 package fakegithub
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
 	"slices"
@@ -97,11 +98,11 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	s.mu.Lock()
 	log, ok := s.JobLogs[id]
-	host, status := s.LogHost, s.LogStatus
+	host, status, message := s.LogHost, s.LogStatus, s.LogMessage
 	s.mu.Unlock()
 	switch {
 	case status != 0:
-		fail(w, status, http.StatusText(status))
+		fail(w, status, cmp.Or(message, http.StatusText(status)))
 	case !ok:
 		fail(w, 404, "Not Found")
 	case log == "":

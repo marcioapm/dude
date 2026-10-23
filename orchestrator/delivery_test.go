@@ -3913,6 +3913,90 @@ func TestAFixerOfAJobWithWarningsIsToldItsLog(t *testing.T) {
 	}
 }
 
+// failingCheckFix makes check 77 of an open pull request an Actions job of
+// run's annotations and log, fails it, and returns the fix's stored check
+// and its prompt once the fix reaches lux.
+func failingCheckFix(t *testing.T, w *world, run fakegithub.CheckRun, log string, set func(*fakegithub.Server)) (forge.FailingCheck, string) {
+	t.Helper()
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: run} })
+	w.gh.SetJobLog(77, log, downloads.URL)
+	if set != nil {
+		w.gh.Set(set)
+	}
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	var prompt string
+	w.until("the fix to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "fix" && strings.Contains(spec.Workload.Prompt, "Pull request feedback") {
+				prompt = spec.Workload.Prompt
+				return true
+			}
+		}
+		return false
+	})
+	var raw []byte
+	_ = w.owner.QueryRow(context.Background(), `SELECT pr_feedback FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, wi).Scan(&raw)
+	var feedback []forge.ActionableFeedback
+	if err := json.Unmarshal(raw, &feedback); err != nil || len(feedback) != 1 || len(feedback[0].Checks) != 1 {
+		t.Fatalf("pr_feedback %s: %v", raw, err)
+	}
+	return feedback[0].Checks[0], prompt
+}
+
+// (c) A job log GitHub refuses (no Actions: Read) or has expired: the fix
+// still starts, its check says why, and the fixer's prompt says so in one
+// sentence with what to do instead. GitHub's own words, which here echo
+// the token, reach neither.
+func TestAFixerIsToldWhyAJobsLogCouldNotBeRead(t *testing.T) {
+	for status, why := range map[int]string{http.StatusForbidden: "GitHub refused: no Actions: Read permission",
+		http.StatusGone: "the log has expired"} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			w := newWorld(t)
+			c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+				s.LogStatus, s.LogMessage = status, "Resource not accessible by integration (token ghp_test)"
+			})
+			if c.Unread != why || c.Log != ".github:243: failure: Process completed with exit code 1." {
+				t.Errorf("check %+v", c)
+			}
+			sentence := "dude could not read this job's log (" + why + "), so reproduce the failure locally from the workflow file"
+			if !strings.Contains(prompt, sentence) {
+				t.Errorf("the prompt does not say why:\n%s", prompt)
+			}
+			var events string
+			if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(string_agg(payload::text, ' '), '') FROM events
+				WHERE organization_id = $1`, w.org).Scan(&events); err != nil || events == "" {
+				t.Fatalf("events: %v", err)
+			}
+			for where, text := range map[string]string{"prompt": prompt, "check": c.Unread + c.Log, "events": events} {
+				if strings.Contains(text, "ghp_test") || strings.Contains(text, "Resource not accessible") {
+					t.Errorf("GitHub's words reached the %s", where)
+				}
+			}
+		})
+	}
+}
+
+// (d) A 5xx on the log read does not fail the step: the fix starts, with
+// the check run's words and that GitHub was unavailable.
+func TestAFixerIsToldGitHubWasUnavailableForAJobsLog(t *testing.T) {
+	w := newWorld(t)
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+		s.LogStatus = http.StatusBadGateway
+	})
+	if c.Unread != "GitHub was unavailable" || !strings.Contains(prompt, "dude could not read this job's log (GitHub was unavailable)") {
+		t.Errorf("check %+v\n%s", c, prompt)
+	}
+}
+
 // An approved pull request with a thread left unresolved is not ready.
 func TestUnresolvedThreadsHoldReadinessBack(t *testing.T) {
 	w := newWorld(t)

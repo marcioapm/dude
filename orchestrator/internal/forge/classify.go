@@ -59,9 +59,12 @@ func (f ActionableFeedback) IsReview() bool {
 type FailingCheck struct {
 	Name string `json:"name"`
 	URL  string `json:"url,omitempty"`
-	// The end of what it reported (its output and annotations), when the
-	// checks API has it.
+	// The end of what it reported (its output and annotations, and for an
+	// Actions job its log's end), when the checks API has it.
 	Log string `json:"log,omitempty"`
+	// Why its job's log could not be read (UnreadReason); "" when it was,
+	// or was never asked for.
+	Unread string `json:"unread,omitempty"`
 	// The check run, to read its log from.
 	RunID int64 `json:"runId,omitempty"`
 }

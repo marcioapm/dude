@@ -138,6 +138,8 @@ func goldenPRFeedback() []forge.ActionableFeedback {
 		{Source: "checks", Repo: "api", Body: "A check failed on the head.", Checks: []forge.FailingCheck{
 			{Name: "go test", URL: "https://ci.example/run/1", Log: "--- FAIL: TestExport\n```\nwant 10.00, got 9.99\n```"},
 			{Name: "lint"},
+			{Name: "Python (lint, tests)", URL: "https://github.com/acme/api/actions/runs/9/job/10",
+				Log: ".github:243: failure: Process completed with exit code 1.", Unread: "the log has expired"},
 		}},
 		{Source: forge.SourceBot, ID: "issue-comment-13", Author: "coderabbitai[bot]", Body: "Consider a constant for the separator."},
 	}

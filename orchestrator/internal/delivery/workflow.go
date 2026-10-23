@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -2136,10 +2137,14 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 			if c.RunID == 0 || c.Log != "" || slugs[f.Repo] == "" {
 				continue
 			}
-			// Best effort: the check's name and link are enough to start.
-			if read, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, checkLogLimit); err == nil {
-				st.PRFeedback[i].Checks[j].Log = read.Text
+			// A failed read never fails the step: the check goes to the
+			// fixer with what was read and why the rest was not.
+			read, err := gh.CheckOutput(ctx, slugs[f.Repo], c.RunID, checkLogLimit)
+			if err != nil {
+				slog.Warn("reading a failing check's log failed; the fixer is told why", "check", c.RunID, "repo", slugs[f.Repo],
+					"task", st.TaskID, "reason", read.Unread, "error", err)
 			}
+			st.PRFeedback[i].Checks[j].Log, st.PRFeedback[i].Checks[j].Unread = read.Text, read.Unread
 		}
 	}
 	return nil
