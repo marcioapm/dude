@@ -124,6 +124,41 @@ func TestProfilesPerOrganisation(t *testing.T) {
 	}
 }
 
+func TestReloginKeepsNewKeyAndRemovesOldItem(t *testing.T) {
+	for _, tc := range []struct {
+		name, oldURL, newURL, oldID, newID string
+		file                            bool
+	}{
+		{"port to https", "http://host:8080", "https://host", "host:8080/acme", "host/acme", false},
+		{"scheme only", "http://host", "https://host", "host/acme", "host/acme", false},
+		{"another host", "https://old", "https://new", "old/acme", "new/acme", false},
+		{"to file", "https://host", "https://host", "host/acme", "host/acme", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := isolate(t, false)
+			if _, err := login("acme", tc.oldURL, "old-key", false); err != nil {
+				t.Fatal(err)
+			}
+			if store.keys[tc.oldID] != "old-key" {
+				t.Fatalf("old item: %v", store.keys)
+			}
+			if _, err := login("acme", tc.newURL, "new-key", tc.file); err != nil {
+				t.Fatal(err)
+			}
+			if base, key, err := resolve(""); err != nil || base != tc.newURL || key != "new-key" {
+				t.Fatalf("after re-login: %q %q %v", base, key, err)
+			}
+			if tc.file {
+				if len(store.keys) != 0 {
+					t.Fatalf("file login left keys: %v", store.keys)
+				}
+			} else if len(store.keys) != 1 || store.keys[tc.newID] != "new-key" {
+				t.Fatalf("new item: %v", store.keys)
+			}
+		})
+	}
+}
+
 func TestKeyInFileWithoutStore(t *testing.T) {
 	isolate(t, true)
 	where, err := login("acme", "https://dude.acme.dev", "s3cret", false)
@@ -148,8 +183,7 @@ func TestLoginNamesTheOrganisation(t *testing.T) {
 	if err := c.run([]string{"login", srv.URL}); err != nil {
 		t.Fatal(err)
 	}
-	host, _ := hostOf(srv.URL)
-	if store.keys[host+"/acme"] != "new-key" {
+	if store.keys[keyID("acme", srv.URL)] != "new-key" {
 		t.Fatalf("stored %v", store.keys)
 	}
 	if c := last(*calls); c.path != "/v1/me" || c.auth != "Bearer new-key" {

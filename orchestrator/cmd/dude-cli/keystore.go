@@ -76,8 +76,8 @@ func normalURL(raw string) (string, error) {
 
 // keyID names an organisation's key in the OS store: HOST/SLUG.
 func keyID(slug, base string) string {
-	host, _ := hostOf(base)
-	return host + "/" + slug
+	u, _ := url.Parse(base)
+	return u.Host + "/" + slug
 }
 
 // defaultCredentialsFile is $XDG_CONFIG_HOME/dude/credentials.toml, or
@@ -249,7 +249,7 @@ func login(slug, base, key string, toFile bool) (string, error) {
 		where = credentialsFile()
 	}
 	// Moving servers, or from the OS store to the file: the old key goes.
-	if had && (old.URL != base || p.Key != "") {
+	if had && (keyID(slug, old.URL) != keyID(slug, base) || p.Key != "") {
 		_ = osKeystore.del(keyID(slug, old.URL))
 	}
 	creds.Orgs[slug] = p
