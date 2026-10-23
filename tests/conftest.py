@@ -14,7 +14,7 @@ import requests
 from playwright.sync_api import Page
 
 from env import TestEnvironment
-from helpers import ApiClient, create_api_key, create_organization, execute, wait_until, webhook_secret
+from helpers import ApiClient, browser_channel, create_api_key, create_organization, execute, wait_until, webhook_secret
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -95,12 +95,15 @@ def project(client: ApiClient) -> dict:
 
 @pytest.fixture(scope="session")
 def browser_type_launch_args(browser_type_launch_args):
-    """Use the system Chrome.
+    """Use the system Chrome, unless DUDE_TEST_BROWSER_CHANNEL says otherwise.
 
-    Playwright's bundled Chromium has no build for this platform, and pinning
-    to the installed browser keeps CI and local runs on the same engine.
+    Pinning to the installed browser keeps CI and local runs on the same
+    engine. Google ships no Chrome for Linux arm64, where
+    `DUDE_TEST_BROWSER_CHANNEL=` (empty) runs Playwright's bundled Chromium
+    (helpers.browser_channel).
     """
-    return {**browser_type_launch_args, "channel": "chrome"}
+    args = {k: v for k, v in browser_type_launch_args.items() if k != "channel"}
+    return {**args, **browser_channel()}
 
 
 @pytest.fixture(scope="session")
