@@ -1,8 +1,11 @@
 package orchestrator_test
 
 import (
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
 
 // waitsOnARow polls until some backend of this database waits on a row
@@ -72,5 +75,49 @@ func TestOrgSessionTakeOwnershipWaitsForTheDepartedOwnersReturn(t *testing.T) {
 	}
 	if n := s.count(`SELECT count(*) FROM sessions WHERE id = $1 AND owned_by_admins`, id); n != 0 {
 		t.Errorf("the session is still its admins'")
+	}
+}
+
+// Two orchestrators sweep the same owner-left at once: both read it, both
+// wait on the session's lock; the agent is told once.
+func TestOrgSessionTwoOwnerSweepsTellTheAgentOnce(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "let's plan"})
+	s.started(id)
+	s.ownerLeaves(id)
+	s.recorded(id, "session.owner_left", map[string]any{"owner": s.marcio, "ownerName": "Márcio Martins"})
+
+	holder, err := s.owner.Begin(t0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(t0())
+	if _, err := holder.Exec(t0(), `SELECT pg_advisory_xact_lock(hashtext('session:' || $1))`, id); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			n := &notify.Notifier{DB: s.app, Log: quiet, Subject: "ops@example.com"}
+			_, _ = n.Sweep(t0())
+		}()
+	}
+	for deadline := time.Now().Add(10 * time.Second); s.count(`SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+		WHERE a.datname = current_database() AND NOT l.granted AND l.locktype = 'advisory'`) < 2; {
+		if time.Now().After(deadline) {
+			t.Fatal("the two sweeps never both waited on the session's lock")
+		}
+	}
+	if err := holder.Commit(t0()); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.told'
+		AND starts_with(payload->>'text', 'Márcio Martins left the organisation')`, id); n != 1 {
+		t.Errorf("owner-left told %d times by two sweeps, want once", n)
 	}
 }
