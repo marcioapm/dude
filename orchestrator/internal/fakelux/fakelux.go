@@ -657,6 +657,11 @@ type Server struct {
 	// Workspaces is where each Run's checkout is made; "" is the system's
 	// temporary directory.
 	Workspaces string
+	// HostDirs are the caller's own directories, which a command's
+	// /workspace paths in them name as they are rather than in the Run's
+	// checkout (rewriteWorkspace): a test's log directory on a host whose
+	// own checkout is under /workspace, as a lux Run's is.
+	HostDirs []string
 	// How long a started server with a command takes to be ready; zero is
 	// 30ms.
 	ServerReadyAfter time.Duration
