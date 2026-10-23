@@ -177,6 +177,15 @@ describe("changing", () => {
     expect(otherProjects.status).toBe(400);
   });
 
+  test("the Reviewer preset is refused on anything but a pull_request event (Q6)", async () => {
+    const { body: a } = await create("ana", { name: "Review", preset: "reviewer" });
+    const reviewer = { name: "Review", kind: "agent", agent: { preset: { role: "reviewer", overrides: {} }, brief: "" } };
+    const issues = await call("ana", "PUT", `/v1/automations/${a.id}`, { ...reviewer, trigger: { kind: "github", event: "issues", actions: [], filters: {} } });
+    expect(issues.status).toBe(400);
+    const ok = await call("ana", "PUT", `/v1/automations/${a.id}`, { ...reviewer, trigger: { kind: "github", event: "pull_request_review", actions: [], filters: {} } });
+    expect(ok.status).toBe(200);
+  });
+
   test("another organisation sees none of them", async () => {
     const { body: a } = await create("ana", { name: "Private" });
     expect((await call("di", "GET", `/v1/automations/${a.id}`)).status).toBe(404);
@@ -267,7 +276,13 @@ describe("the owner", () => {
     const { body: a } = await create("ana", { name: "Weekly cost report", trigger: "schedule" });
     await call("ana", "PUT", `/v1/automations/${a.id}/enabled`, { enabled: true });
     await call("ana", "PUT", `/v1/automations/${a.id}/owner`, { personId: people.cy });
+    // A project automation of theirs is held the same way (Q18).
+    const { body: p } = await create("ana", { name: "Project lint", kind: "command", trigger: "schedule", projectId: WEB });
+    await call("ana", "PUT", `/v1/automations/${p.id}/owner`, { personId: people.cy });
     expect((await call("ana", "DELETE", `/v1/people/${people.cy}`)).status).toBe(204);
+    const project = await body(await call("ana", "GET", `/v1/automations/${p.id}`));
+    expect(project.owner).toBeNull();
+    expect(project.ownerLeftAt).not.toBeNull();
     const after = await body(await call("ana", "GET", `/v1/automations/${a.id}`));
     expect(after.owner).toBeNull();
     expect(after.ownerLeftAt).not.toBeNull();

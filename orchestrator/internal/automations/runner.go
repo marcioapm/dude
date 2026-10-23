@@ -1761,7 +1761,7 @@ func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Pa
 	case len(payloads) > 0:
 		ev := ReadEvent(payloads[len(payloads)-1].Event, payloads[len(payloads)-1].Body)
 		for _, r := range all {
-			if strings.EqualFold(slugOf(r.URL), ev.Repository) {
+			if strings.EqualFold(slugOf(r.URL), ev.Repository) && RepoAllowed(a.RepoFilter, ev.Repository) {
 				picked = append(picked, r)
 				break
 			}

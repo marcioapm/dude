@@ -31,7 +31,9 @@ async function show(node: ReactNode) {
 const promptNow = (client: FixtureClient) => (client.fixtureAutomation("aut_triage").agent as { own: { prompt: string } }).own.prompt;
 
 const rows = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>("[data-testid=automation-row]")];
-const names = (c: HTMLElement) => rows(c).map((r) => r.querySelector(".automationName button")?.textContent);
+// A row's name: the one plain button in it (its switch is role=switch).
+const nameOf = (r: HTMLElement) => [...r.querySelectorAll("button")].find((b) => !b.hasAttribute("role"))?.textContent;
+const names = (c: HTMLElement) => rows(c).map(nameOf);
 
 async function typeInto(el: HTMLTextAreaElement | HTMLInputElement, text: string) {
   await act(async () => {
@@ -77,9 +79,9 @@ describe("a project's list", () => {
     const c = await show(<AutomationsList client={new FixtureClient("a")} orgName="Example" projectId={PROJECT.id} canCreate onOpen={() => undefined} />);
     const here = await until(() => c.querySelector("[data-testid=also-running]"), "Also running here");
     expect(here.textContent).toContain("Also running here, from Example");
-    const own = rows(c).filter((r) => !here.contains(r)).map((r) => r.querySelector(".automationName button")?.textContent);
+    const own = rows(c).filter((r) => !here.contains(r)).map(nameOf);
     expect(own).toEqual(["Nightly QA pass", "Changelog builder"]);
-    const theirs = rows(c).filter((r) => here.contains(r)).map((r) => r.querySelector(".automationName button")?.textContent);
+    const theirs = rows(c).filter((r) => here.contains(r)).map(nameOf);
     expect(theirs).toContain("PR triage");
     expect(theirs).toContain("Release notes to Slack");
     expect(theirs).not.toContain("Nightly dependency audit");
@@ -115,7 +117,7 @@ describe("an automation's page", () => {
     // The brief reads, with no Edit; its history opens, with no Restore.
     const doc = c.querySelector<HTMLElement>("[data-testid=role-prompt] [data-testid=automation-prompt-document]")!;
     expect(doc.textContent).toContain("Walk the sign-in and checkout flows.");
-    expect(doc.querySelector("[data-testid=markdown-edit]")).toBeNull();
+    expect(doc.querySelectorAll("[data-testid=markdown-edit]").length).toBe(0);
   });
 
   test("a preset agent shows its role's instructions brief and where its values come from", async () => {
@@ -133,7 +135,7 @@ describe("an automation's page", () => {
     for (const k of ["harness", "tierId", "machineSizeId"]) {
       expect(c.querySelector(`[data-testid=preset-${k}-override]`)).not.toBeNull();
     }
-    expect(c.querySelector("[data-testid=preset-imageId-override]")).toBeNull();
+    expect(c.querySelectorAll("[data-testid=preset-imageId-override]").length).toBe(0);
     expect(field("timeLimitMinutes").textContent).toContain("Overridden");
     expect(field("timeLimitMinutes").textContent).toContain("Tester:");
   });
@@ -247,7 +249,7 @@ describe("the header's ⋯ menu", () => {
     const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
       onPlace={() => undefined} onBack={() => undefined} />);
     const items = await openMenu(c);
-    for (const i of items) expect(i.getAttribute("aria-disabled") ?? i.getAttribute("data-disabled")).not.toBeNull();
+    for (const i of items) expect(i.getAttribute("aria-disabled")).toBe("true");
   });
 });
 
@@ -257,7 +259,7 @@ describe("secrets and webhook wording", () => {
       onPlace={() => undefined} onBack={() => undefined} />);
     await until(() => c.querySelector("[data-testid=owner-row]"), "the page");
     expect(c.textContent).toContain("secrets belong to a project");
-    expect(c.querySelector("[role=group][aria-label='Project secrets']")).toBeNull();
+    expect(c.querySelectorAll("[role=group][aria-label='Project secrets']").length).toBe(0);
   });
 
   test("a project automation chooses its project's secrets and saves those names", async () => {
