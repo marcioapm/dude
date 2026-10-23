@@ -254,7 +254,11 @@ The browser suites run in the system's Google Chrome (Playwright's `chrome`
 channel), as CI does. Where Google ships no Chrome, such as Linux arm64, set
 `DUDE_TEST_BROWSER_CHANNEL=` (empty) to run Playwright's bundled Chromium
 instead (`uv run playwright install chromium` once); any other value names a
-Playwright channel.
+Playwright channel. Empty runs Chromium's headless shell, which denies
+notifications whatever the context grants, so
+`test_a_browser_turns_notifications_on_and_off` fails there;
+`DUDE_TEST_BROWSER_CHANNEL=chromium` runs the same bundled Chromium in its
+new headless mode, where every browser suite passes.
 
 ## Releases
 
