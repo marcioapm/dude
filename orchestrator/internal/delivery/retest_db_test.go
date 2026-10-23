@@ -30,14 +30,19 @@ func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
 		diverged bool
 		skip     bool
 		carry    bool
+		// The task's criteria now, when not the ["it greets"] round 1 judged.
+		criteria string
 	}{
-		{"CI only after a pass", ci, VerdictPass, nil, false, true, true},
-		{"docs and Markdown after a pass", map[string]string{"docs/guide.txt": "x", "api/NOTES.md": "x"}, VerdictPass, nil, false, true, true},
-		{"CI only after a failure", ci, VerdictFail, nil, false, false, true},
-		{"CI only after an unverified pass", ci, VerdictUnverified, nil, false, false, true},
-		{"CI only with a finding to judge", ci, VerdictPass, []string{"fnd_1"}, false, false, true},
-		{"a product path beside CI", map[string]string{".github/workflows/ci.yml": "x", "app/main.go": "package main"}, VerdictPass, nil, false, false, true},
-		{"history that does not descend", ci, VerdictPass, nil, true, false, false},
+		{"CI only after a pass", ci, VerdictPass, nil, false, true, true, ""},
+		{"docs and Markdown after a pass", map[string]string{"docs/guide.txt": "x", "api/NOTES.md": "x"}, VerdictPass, nil, false, true, true, ""},
+		{"CI only after a failure", ci, VerdictFail, nil, false, false, true, ""},
+		{"CI only after an unverified pass", ci, VerdictUnverified, nil, false, false, true, ""},
+		{"CI only with a finding to judge", ci, VerdictPass, []string{"fnd_1"}, false, false, true, ""},
+		{"a product path beside CI", map[string]string{".github/workflows/ci.yml": "x", "app/main.go": "package main"}, VerdictPass, nil, false, false, true, ""},
+		{"history that does not descend", ci, VerdictPass, nil, true, false, false, ""},
+		{"a criterion added after a pass", ci, VerdictPass, nil, false, false, true, `["it greets", "it waves"]`},
+		{"a criterion edited after a pass", ci, VerdictPass, nil, false, false, true, `["it greets by name"]`},
+		{"a task without criteria", ci, VerdictPass, nil, false, false, true, `[]`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newVerdictFixture(t)
@@ -56,6 +61,8 @@ func TestATesterIsSkippedOnlyForANonProductChangeAfterAPass(t *testing.T) {
 				{`UPDATE runs SET base_refs = jsonb_build_object('repo', $1::text) WHERE id = 'run_c'`, []any{from}},
 				{`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence)
 					VALUES ($1, 'wi_c', 'run_c', 1, 'it greets', $2, '{greet.webm}')`, []any{f.org, c.previous}},
+				{`UPDATE tasks SET acceptance_criteria = COALESCE(NULLIF($1, '')::jsonb, acceptance_criteria) WHERE id = 'wi_c'`,
+					[]any{c.criteria}},
 			} {
 				args := q.args
 				if args == nil {

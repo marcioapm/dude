@@ -9,6 +9,7 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -140,7 +141,8 @@ func (w *steps) roundDelta(ctx context.Context, sc workflow.StepContext, st *Sta
 // changed since is a non-product one, the tester has no finding to judge
 // (judge), no fix of a failed test is due, the conductor did not ask for
 // this test (directed), and the previous round passed the gate as it
-// stands: its verdicts are this round's, recorded as EvTestSkipped, and
+// stands, on every one of the task's criteria as they read now: its
+// verdicts are this round's, recorded as EvTestSkipped, and
 // st.TestRunID names that round for the gate.
 func (w *steps) carryForward(ctx context.Context, sc workflow.StepContext, st *State, judge []string, directed bool) (skip bool, err error) {
 	st.CarryFrom = ""
@@ -163,13 +165,32 @@ func (w *steps) carryForward(ctx context.Context, sc workflow.StepContext, st *S
 	if err != nil || len(in.Verdicts) == 0 || judgeGate(st.Policy, in).Outcome != "pass" {
 		return false, err
 	}
-	criteria := make([]map[string]any, len(in.Verdicts))
+	var criteria []string
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT acceptance_criteria FROM tasks WHERE id = $1`, st.TaskID).Scan(&raw); err != nil {
+			return err
+		}
+		return json.Unmarshal(raw, &criteria)
+	}); err != nil {
+		return false, err
+	}
+	// The verdicts must be on the criteria as they read now: one added or
+	// edited while the task was stopped has not been judged. A task
+	// without criteria has the tester's derived checks, which nothing here
+	// can compare, so it is tested.
+	if len(in.Verdicts) != len(criteria) || slices.ContainsFunc(in.Verdicts, func(v StoredVerdict) bool {
+		return v.Criterion < 1 || v.Criterion > len(criteria) || v.Text != criteria[v.Criterion-1]
+	}) {
+		return false, nil
+	}
+	verdicts := make([]map[string]any, len(in.Verdicts))
 	for i, v := range in.Verdicts {
-		criteria[i] = map[string]any{"criterion": v.Criterion, "status": v.Status, "decision": v.Decision}
+		verdicts[i] = map[string]any{"criterion": v.Criterion, "status": v.Status, "decision": v.Decision}
 	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		return emitTx(ctx, tx, sc.OrganizationID, st, EvTestSkipped, map[string]any{"fromRunId": prev.ID,
-			"from": prev.BaseRefs, "heads": st.Heads, "paths": delta.Paths, "criteria": criteria})
+			"from": prev.BaseRefs, "heads": st.Heads, "paths": delta.Paths, "criteria": verdicts})
 	}); err != nil {
 		return false, err
 	}

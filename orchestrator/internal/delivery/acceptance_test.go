@@ -165,9 +165,9 @@ func TestJudgeAcceptanceWithoutCriteriaTakesTheDerivedChecks(t *testing.T) {
 func TestACarriedCriterionKeepsOnlyThePreviousRoundsPass(t *testing.T) {
 	criteria := []string{"it greets", "it says goodbye", "it waves"}
 	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
-		1: {Criterion: 1, Status: VerdictPass, Evidence: []string{"greet.webm"}},
-		2: {Criterion: 2, Status: VerdictFail, Evidence: []string{"bye.png"}},
-		3: {Criterion: 3, Status: VerdictBlocked, Decision: "waived"},
+		1: {Criterion: 1, Text: "it greets", Status: VerdictPass, Evidence: []string{"greet.webm"}},
+		2: {Criterion: 2, Text: "it says goodbye", Status: VerdictFail, Evidence: []string{"bye.png"}},
+		3: {Criterion: 3, Text: "it waves", Status: VerdictBlocked, Decision: "waived"},
 	}}
 	reply := func(n int, from, observed string) string {
 		return fmt.Sprintf("criterion: %d\nstatus: carried\nfrom_round: %s\nobserved: %s\n---\n", n, from, observed)
@@ -212,5 +212,36 @@ func TestACarriedCriterionKeepsOnlyThePreviousRoundsPass(t *testing.T) {
 		"criterion: 2\nstatus: pass\nevidence: bye.png\nobserved: It says goodbye."), map[string]bool{}, prev)
 	if got[1].Status != VerdictUnverified || got[1].CarriedFrom != "" {
 		t.Errorf("a fresh pass citing a file this Run did not publish = %+v, want unverified", got[1])
+	}
+}
+
+// A carried verdict is on the text the previous round judged: a criterion
+// edited since, or a derived check that now reads differently, is blocked
+// and must be tested again.
+func TestACarriedCriterionWhoseTextChangedIsBlocked(t *testing.T) {
+	prev := &Carry{RunID: "run_prev", Descends: true, Verdicts: map[int]CriterionVerdict{
+		1: {Criterion: 1, Text: "it greets", Status: VerdictPass, Evidence: []string{"greet.webm"}},
+	}}
+	carry := "criterion: 1\nstatus: carried\nfrom_round: run_prev\nobserved: Only CI changed.\n"
+	for _, c := range []struct {
+		name     string
+		criteria []string
+		reply    string
+	}{
+		{"an edited criterion", []string{"it greets by name"}, carry},
+		{"a derived check that changed", nil, "check: The page says goodbye\n" + carry},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := JudgeAcceptance(c.criteria, ParseAcceptance(c.reply), nil, prev)
+			if len(got) != 1 || got[0].Status != VerdictBlocked || got[0].CarriedFrom != "" ||
+				!strings.Contains(got[0].Problem, "criterion 1 changed since run_prev") {
+				t.Fatalf("verdict = %+v, want blocked: criterion 1 changed since run_prev", got)
+			}
+		})
+	}
+	// The same carry of an unchanged derived check keeps its pass.
+	got := JudgeAcceptance(nil, ParseAcceptance("check: it greets\n"+carry), nil, prev)
+	if got[0].Status != VerdictPass || got[0].CarriedFrom != "run_prev" {
+		t.Errorf("an unchanged derived check carried = %+v, want the pass", got[0])
 	}
 }
