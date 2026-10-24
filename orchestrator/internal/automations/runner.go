@@ -838,11 +838,14 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 
 // resume takes the kept session up again with this firing's instructions.
 // lux keeps no secret's value and refuses a resume that does not give
-// every secret the Run declares, or gives one it does not: its forge
-// tokens are minted afresh from the stored spec, and the rest it declares
-// (the event and env files, the setup manifest, project secrets, a registry
-// login) are this firing's values. why says what stops this firing from
-// running at all (an image still building, no tier), resumed or fresh.
+// every secret the Run declares: its forge tokens are minted afresh from
+// the stored spec, and the rest it declares (the event and env files, the
+// setup manifest, project secrets, an agent's harness secrets, a registry
+// login) are this firing's values. Only names the kept Run declares are
+// given: lux would declare any other and require it on every later resume,
+// so the kept Run's secrets stay fixed until Start fresh. why says what
+// stops this firing from running at all (an image still building, no
+// tier), resumed or fresh.
 func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, string, error) {
 	in := lux.ResumeInput{RequestID: "automation-" + runID}
 	if a.Kind == "agent" {

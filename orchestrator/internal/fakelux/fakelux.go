@@ -3054,25 +3054,36 @@ func missingSecrets(rawSpec json.RawMessage, given []lux.Secret) []string {
 	return missing
 }
 
-// undeclaredSecrets are the names a resume that adds no repository gives
-// and the Run never declared: lux refuses them rather than hold a value
-// nothing reads. A resume adding repositories may bring their credentials
-// and the setup manifest with them, and is not checked here.
-func undeclaredSecrets(rawSpec json.RawMessage, given []lux.Secret, git *struct {
-	Repositories []map[string]any `json:"repositories"`
-}) []string {
-	if git != nil && len(git.Repositories) > 0 {
-		return nil
+// resumeDeclares are the secrets a resume supplies under names the stored
+// spec lacks, as lux's RunSpec.ResumeSecrets reads them: each is declared
+// (stored with no value), except a name in git.droppedCredentials, which
+// is skipped, and refused when sent as env or file. A credential of a
+// repository the resume adds is that repository's, declared with it.
+func resumeDeclares(rawSpec json.RawMessage, given []lux.Secret, adding []lux.Repository) ([]lux.Secret, string) {
+	var spec struct {
+		Secrets []lux.Secret `json:"secrets"`
+		Git     *struct {
+			DroppedCredentials []string `json:"droppedCredentials"`
+		} `json:"git"`
 	}
-	var spec lux.Spec
 	_ = json.Unmarshal(rawSpec, &spec)
-	var out []string
-	for _, g := range given {
-		if !slices.ContainsFunc(spec.Secrets, func(sec lux.Secret) bool { return sec.Name == g.Name }) {
-			out = append(out, g.Name)
+	var out []lux.Secret
+	var problems []string
+	for i, g := range given {
+		switch {
+		case slices.ContainsFunc(spec.Secrets, func(s lux.Secret) bool { return s.Name == g.Name }),
+			slices.ContainsFunc(adding, func(r lux.Repository) bool { return r.Credential == g.Name }):
+		case spec.Git != nil && slices.Contains(spec.Git.DroppedCredentials, g.Name):
+			if g.As != "" && g.As != "none" {
+				problems = append(problems, fmt.Sprintf("secrets[%d]: %q was a git credential: use a secret of its own", i, g.Name))
+			}
+		case slices.ContainsFunc(out, func(s lux.Secret) bool { return s.Name == g.Name }):
+			problems = append(problems, fmt.Sprintf("secrets: duplicate %q", g.Name))
+		default:
+			out = append(out, lux.Secret{Name: g.Name, As: cmp.Or(g.As, "env"), Path: g.Path})
 		}
 	}
-	return out
+	return out, strings.Join(problems, "; ")
 }
 
 // specRepos are a spec's repositories as lux reads them.
@@ -3336,17 +3347,30 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_resumable", "run is "+run.State+": stop it first")
 		return
 	}
-	// As lux does (resumeRun, requireSecrets): it kept no value, so every
-	// secret the Run has must come again, non-empty. A dry run checks
-	// only the names sent.
-	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 && !in.ValidateOnly {
+	// As lux's resumeRun: a supplied name the spec lacks is declared
+	// (ResumeSecrets), then every secret the Run has, those included, must
+	// come with a non-empty value (requireSecrets), since lux kept none. A
+	// dry run checks only the names sent.
+	var adding []lux.Repository
+	if in.Git != nil {
+		rawRepos, _ := json.Marshal(in.Git.Repositories)
+		_ = json.Unmarshal(rawRepos, &adding)
+	}
+	declares, msg := resumeDeclares(run.Spec, in.Secrets, adding)
+	if msg != "" {
 		s.mu.Unlock()
-		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(msg, ", "))
+		writeErr(w, 422, "invalid_spec", msg)
 		return
 	}
-	if msg := undeclaredSecrets(run.Spec, in.Secrets, in.Git); len(msg) > 0 {
+	missing := missingSecrets(run.Spec, in.Secrets)
+	for _, d := range declares {
+		if !slices.ContainsFunc(in.Secrets, func(g lux.Secret) bool { return g.Name == d.Name && g.Value != "" }) {
+			missing = append(missing, d.Name)
+		}
+	}
+	if len(missing) > 0 && !in.ValidateOnly {
 		s.mu.Unlock()
-		writeErr(w, 422, "invalid_request", "secrets the run does not declare: "+strings.Join(msg, ", "))
+		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(missing, ", "))
 		return
 	}
 	if msg := s.syncModeProblem(in.Sync); msg != "" {
@@ -3465,6 +3489,22 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	run.ResumeResources = append(run.ResumeResources, raw.Resources)
 	run.ResumePlacements = append(run.ResumePlacements, targetPool)
 	run.Resumed++
+	if len(declares) > 0 {
+		// As lux's resumeRun: the names declared join the stored spec, so
+		// every later resume must give them too.
+		var spec map[string]any
+		_ = json.Unmarshal(run.Spec, &spec)
+		list, _ := spec["secrets"].([]any)
+		for _, d := range declares {
+			entry := map[string]any{"name": d.Name, "as": d.As}
+			if d.Path != "" {
+				entry["path"] = d.Path
+			}
+			list = append(list, entry)
+		}
+		spec["secrets"] = list
+		run.Spec, _ = json.Marshal(spec)
+	}
 	run.secretValues = secretValues(run.Spec, in.Secrets)
 	run.ResumeSecrets = append(run.ResumeSecrets, in.Secrets)
 	run.ResumeSecretsRaw = append(run.ResumeSecretsRaw, raw.Secrets)

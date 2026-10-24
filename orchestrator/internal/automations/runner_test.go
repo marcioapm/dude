@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -517,7 +518,8 @@ func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
 	}
 
 	// A secret chosen after the container was kept is not one it declared:
-	// lux would refuse it on the resume, so it is not given.
+	// lux would declare it on the resume and require it on every resume
+	// after, so it is not given until Start fresh.
 	exec(t, h.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'ACME_LATER', 'later-1', 'l-1')`, h.org, h.project)
 	exec(t, h.owner, `UPDATE automations SET secrets = '{ACME_TOKEN,ACME_LATER}' WHERE id IN ('aut_rsrv', 'aut_ragent')`)
 	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
@@ -540,6 +542,11 @@ func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
 		}
 		if _, ok := given["ACME_LATER"]; ok {
 			t.Errorf("%s: the resume gave ACME_LATER, which the kept Run never declared", id)
+		}
+		if got, err := h.lux.Get(context.Background(), r.LuxRunID); err != nil {
+			t.Fatal(err)
+		} else if slices.ContainsFunc(got.Spec.Secrets, func(s lux.StoredSecret) bool { return s.Name == "ACME_LATER" }) {
+			t.Errorf("%s: the kept Run's stored spec gained ACME_LATER", id)
 		}
 		if id == "aut_rsrv" {
 			var event map[string]any
