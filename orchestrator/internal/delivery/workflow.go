@@ -2855,34 +2855,24 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 			return workflow.Result{}, true, err
 		}
 	}
-	var open, merged, closed int
-	for _, s := range states {
-		switch s.State {
-		case forge.StateMerged:
-			merged++
-		case forge.StateClosed:
-			closed++
-		default:
-			open++
-		}
-	}
+	c := countStates(states)
 	waitAgain := waitForPR(st)
 	switch {
 	case len(states) == 0:
 		return workflow.Result{}, true, fmt.Errorf("no pull requests recorded for %s", st.TaskID)
-	case closed == 0 && open > 0:
+	case c.closed == 0 && c.open > 0:
 		// The rest are still open: what is merged is taken, so whether the
 		// task is ready depends on those.
 		return waitAgain, false, w.weighReadiness(ctx, sc, st, states)
-	case closed == 0:
+	case c.closed == 0:
 		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
-	case open == 0 && merged == 0:
+	case c.open == 0 && c.merged == 0:
 		// Closed without merging is someone deciding not to take the
 		// change: an abort of the task, not a failure of it.
 		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "pull request closed without merging")
 	}
 	// Part taken, part refused, or part still open: a person decides.
-	res, err := w.escalate(ctx, sc, st, "pull_request_closed", map[string]any{"merged": merged, "closed": closed, "open": open})
+	res, err := w.escalate(ctx, sc, st, "pull_request_closed", map[string]any{"merged": c.merged, "closed": c.closed, "open": c.open})
 	return res, true, err
 }
 
