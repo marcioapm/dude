@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -183,6 +184,74 @@ func TestChatABoundTaskGoneBeforeTheLinkRoutesAfresh(t *testing.T) {
 	}
 	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "white_check_mark" || len(w.fake.Ephemerals()) != 0 {
 		t.Fatalf("reactions %v, ephemerals %+v", r, w.fake.Ephemerals())
+	}
+}
+
+// Giving up on a delivery whose request another attempt already recorded
+// and replied to tells nobody anything: no note, no ❌.
+func TestChatGivingUpAfterAnotherAttemptRepliedSaysNothing(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	ts, ev := w.receive("Eli", "C1", "", "file: stream it")
+	w.svc.SetBeforeMake(func(ctx context.Context) error {
+		if _, err := w.owner.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id,
+				conversation_id, external_user_id, route, replied_at) VALUES ('chr_other', $1, 'slack', $2, 'T1', 'C1', 'U2', 'task', now())`,
+			w.org, ev); err != nil {
+			return err
+		}
+		return errors.New("refused")
+	})
+	w.once()
+	if e := w.event(ev); !e.Processed {
+		t.Fatalf("delivery %+v", e)
+	}
+	if got := w.requests(); len(got) != 1 || got[0].Route != "task" {
+		t.Fatalf("requests %+v", got)
+	}
+	if eph := w.fake.Ephemerals(); len(eph) != 0 {
+		t.Fatalf("ephemerals %+v", eph)
+	}
+	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "eyes" {
+		t.Fatalf("reactions %v", r)
+	}
+}
+
+// Giving up on a click marks the mention that was asked, not the click,
+// and forwards the link it made privately.
+func TestChatGivingUpOnAClickMarksTheAskedMention(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "Fix the export", "goal": "Fix it."}))
+	root := w.mention("Eli", "C1", "", "the export is broken")
+	q := lastBot(t, w.fake)
+	w.fake.FailTimes("chat.update", "internal_error", 100)
+	w.click("Eli", "C1", q.TS, root, buttonValue(t, q, 0))
+	for range chat.MaxAttempts {
+		w.due()
+		w.once()
+	}
+	got := w.requests()
+	if len(got) != 2 || got[1].Route != "failed" || got[1].ResultKind != "task" {
+		t.Fatalf("requests %+v", got)
+	}
+	if r := w.fake.Reactions("C1", root); strings.Join(r, ",") != "x" {
+		t.Fatalf("reactions on the asked mention %v", r)
+	}
+	if eph := w.fake.Ephemerals(); len(eph) != 1 || !strings.Contains(eph[0].Text, "Filed ABS-1") {
+		t.Fatalf("ephemerals %+v", eph)
+	}
+}
+
+// Giving up on someone linked with no display name records them by their
+// provider name.
+func TestChatGivingUpNamesAnAskerLinkedWithoutAName(t *testing.T) {
+	w := setup(t)
+	w.fake.FailNext("conversations.info", "missing_scope")
+	w.exec(`INSERT INTO chat_identities (organization_id, provider, external_workspace_id, external_user_id, account_id, person_id, handle,
+		display_name) VALUES ($1, 'slack', 'T1', 'U3', $2, $3, 'gus', '')`, w.org, "acc_U3_"+w.org, w.people["Gus"][0])
+	w.receive("Gus", "C1", "", "file it")
+	w.once()
+	if n := w.one(`SELECT external_user_name FROM chat_requests WHERE organization_id = $1`, w.org); n != "Gus" {
+		t.Fatalf("named %q", n)
 	}
 }
 
