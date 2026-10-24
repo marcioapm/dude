@@ -3150,7 +3150,8 @@ func (s *Syncer) resume(ctx context.Context, r phaseRun, input string) (resumed 
 // added repository's credential declared even after its failed clone
 // dropped the repository, so the fresh spec, naming no repository, lacks
 // GIT_TOKEN (or an owner's GIT_TOKEN_<OWNER>): it is minted from the forge
-// now, never reused. Any other declared secret fails the resume, naming it.
+// now, never reused; and the setup manifest a resume adding it declared,
+// given with no script. Any other declared secret fails the resume, naming it.
 func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.StoredSpec, fresh []lux.Secret) ([]lux.Secret, error) {
 	out := fresh
 	for _, sec := range stored.Secrets {
@@ -3158,6 +3159,12 @@ func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.Store
 			continue
 		}
 		owner := ownerOfSecret(sec.Name)
+		if sec.Name == setupSecretName {
+			// Declared by a resume that added a repository whose clone then
+			// failed: the fresh spec names none to set up.
+			out = append(slices.Clone(out), SetupSecret(nil))
+			continue
+		}
 		if sec.Name != gitTokenSecret && owner == "" {
 			return nil, errCannotResume{fmt.Errorf("lux's Run declares the secret %s, which dude cannot supply on a resume", sec.Name)}
 		}

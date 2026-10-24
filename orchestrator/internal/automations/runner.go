@@ -18,6 +18,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,7 +78,24 @@ type Runner struct {
 	inflight map[string]bool
 	pools    map[string]chan struct{}
 	wg       sync.WaitGroup
+	// The preview sign-in of each Server run's lux Run, as a Cookie header.
+	previewCookies map[string]string
+	// The last sign-in attempt per lux Run, and whether lux has taken a
+	// cookie since (signInOrLog's backoff).
+	previewTries map[string]previewTry
 }
+
+// previewTry is a lux Run's last preview sign-in attempt.
+type previewTry struct {
+	at       time.Time
+	accepted bool
+}
+
+// SignInBackoff is how long after a preview sign-in another is not tried
+// for the same lux Run while lux has taken no cookie since: a lux preview
+// not in ticket mode (cloudflare-access) answers every request with its
+// sign-in page, and would otherwise cost a ticket per request.
+const SignInBackoff = 30 * time.Second
 
 // DefaultWorkers is how many runs are followed, and how many webhooks
 // POSTed, at once.
@@ -735,8 +754,14 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 	var luxRunID, session, startReason string
 	var err error
 	if resumable && kept != "" {
-		luxRunID, err = r.resume(ctx, a, kept, runID, payloads, at)
+		var why string
+		luxRunID, why, err = r.resume(ctx, a, kept, runID, payloads, at)
 		session = "resumed"
+		if why != "" {
+			// What stops this resume (an image still building, no tier) stops
+			// a fresh start too: the run fails and the kept session stays.
+			return true, r.finish(ctx, a, runID, "failed", why, nil)
+		}
 		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 			// Still stopping after the last run: tried again next pass, for
 			// up to ResumeConflictMax; then the kept Run is ended and this
@@ -752,16 +777,25 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 				return false, nil
 			}
 			r.Log.Warn("kept automation session stayed busy; starting fresh", "automation", a.ID, "lux_run", kept)
-			if err := StartFresh(ctx, r.DB, r.Lux, a.Org, a.ID); err != nil {
+			if err := r.StartFresh(ctx, a.Org, a.ID); err != nil {
 				return false, err
 			}
 			startReason = fmt.Sprintf("its kept session was still busy after %s, so it started fresh", ResumeConflictMax)
 			luxRunID, session, err = "", "", nil
 		}
+		if le, isLux := lux.AsError(err); err != nil && (!isLux || le.Retryable()) {
+			// Not lux's answer (the database, a forge token), or lux out of
+			// reach, failing or busy (unreachable, 5xx, 429): tried again
+			// next pass, the kept session untouched.
+			return false, err
+		}
 		if err != nil {
-			// The kept container is gone: the run starts fresh.
+			// lux refused to resume the kept Run: it is ended, so no stopped
+			// Run is left behind, and the run starts fresh.
 			r.Log.Info("kept automation session could not be resumed; starting fresh", "automation", a.ID, "error", err)
-			r.forgetSession(ctx, a)
+			if err := r.StartFresh(ctx, a.Org, a.ID); err != nil {
+				return false, err
+			}
 			luxRunID, session = "", ""
 		}
 	}
@@ -817,49 +851,64 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 	return true, nil
 }
 
-// resume takes the kept session up again with this firing's instructions.
-func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, error) {
+// resume supplies this firing's instructions and every declared secret:
+// fresh forge tokens and current file, project, harness and registry values.
+// Other secret names are excluded: lux would declare them for all later resumes.
+// why names a condition that also prevents a fresh start (unbuilt image, no tier).
+func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, string, error) {
 	in := lux.ResumeInput{RequestID: "automation-" + runID}
 	if a.Kind == "agent" {
 		prompt, _, err := r.prompt(ctx, a, payloads, at)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		in.Input = prompt
+	}
+	got, err := r.Lux.Get(ctx, kept)
+	if err != nil {
+		return "", "", err
 	}
 	if r.Forges != nil {
 		gh, err := r.Forges.For(ctx, a.Org)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if gh != nil {
-			got, err := r.Lux.Get(ctx, kept)
-			if err != nil {
-				return "", err
-			}
 			if in.Secrets, err = phases.ResumeCredentials(ctx, gh, got.Spec, nil); err != nil {
-				return "", err
+				return "", "", err
 			}
 		}
 	}
 	if a.Kind == "agent" && r.Agent.ToolsURL != "" {
 		token, err := r.toolsToken(ctx, a, runID, payloads)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		in.Secrets = append(in.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + token})
 	}
-	if _, err := r.Lux.Resume(ctx, kept, in); err != nil {
-		return "", err
+	given := func(name string) bool {
+		return slices.ContainsFunc(in.Secrets, func(s lux.Secret) bool { return s.Name == name })
 	}
-	return kept, nil
-}
-
-func (r *Runner) forgetSession(ctx context.Context, a Automation) {
-	_ = r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1`, a.ID)
-		return err
-	})
+	if slices.ContainsFunc(got.Spec.Secrets, func(s lux.StoredSecret) bool { return !given(s.Name) }) {
+		specIn, why, err := r.specInput(ctx, a, runID, payloads, at, false)
+		if err != nil || why != "" {
+			return "", why, err
+		}
+		rest, err := phases.AutomationResumeSecrets(ctx, r.Agent, r.Registry, specIn, got.Spec)
+		if err != nil {
+			return "", "", err
+		}
+		for _, s := range rest {
+			declared := slices.ContainsFunc(got.Spec.Secrets, func(d lux.StoredSecret) bool { return d.Name == s.Name })
+			if declared && !given(s.Name) {
+				in.Secrets = append(in.Secrets, s)
+			}
+		}
+	}
+	if _, err := r.Lux.Resume(ctx, kept, in); err != nil {
+		return "", "", err
+	}
+	return kept, "", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -952,17 +1001,17 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 		}
 		return false, err
 	}
-	var cursor string
+	var cursor, prior string
 	var busy bool
 	var payloads []Payload
 	var inputsSent int
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, payloads, inputs_sent FROM automation_runs WHERE id = $1`, runID).
-			Scan(&cursor, &busy, &payloads, &inputsSent)
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, payloads, inputs_sent, COALESCE(log_tail, '') FROM automation_runs WHERE id = $1`, runID).
+			Scan(&cursor, &busy, &payloads, &inputsSent, &prior)
 	}); err != nil {
 		return false, err
 	}
-	turnDone, log, newCursor, failed, err := r.readOutput(ctx, luxRunID, cursor, busy)
+	turnDone, log, newCursor, failed, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy, prior)
 	if err != nil {
 		return false, err
 	}
@@ -1050,7 +1099,10 @@ func (r *Runner) endThenStop(ctx context.Context, a Automation, runID, luxRunID 
 	return nil
 }
 
+// stopOrCancel stops (keep) or ends a run's lux Run; either way its preview
+// sign-in is forgotten: a resume starts a new placement, signed in afresh.
 func (r *Runner) stopOrCancel(ctx context.Context, luxRunID string, keep bool) {
+	r.forgetPreview(luxRunID)
 	var err error
 	if keep {
 		err = r.Lux.Stop(ctx, luxRunID)
@@ -1066,7 +1118,12 @@ type turnState struct{ busy, done bool }
 
 // readOutput reads a Run's records since cursor without waiting for more:
 // the text the workload printed, and whether its agent went busy, then idle.
-func (r *Runner) readOutput(ctx context.Context, luxRunID, cursor string, busy bool) (turnState, string, string, string, error) {
+// An agent's reply is read from its harness's message events (ACP chunks,
+// Claude Code's assistant text, Codex's agentMessage items). lux's acp
+// adapter also writes each reply as one stdout record: that copy is left
+// out, matched against the reply read so far and prior, the log before
+// this read; any other record, stderr included, is kept.
+func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool, prior string) (turnState, string, string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	state := turnState{busy: busy}
@@ -1080,6 +1137,11 @@ func (r *Runner) readOutput(ctx context.Context, luxRunID, cursor string, busy b
 			cursor = f.Cursor
 		}
 		if f.Event == nil {
+			copied := strings.TrimSpace(f.Data)
+			// Assumes the copy directly follows the reply: a record between them leaves it logged twice.
+			if kind == "agent" && f.Channel == "stdout" && copied != "" && strings.HasSuffix(strings.TrimSpace(prior+log.String()), copied) {
+				return nil
+			}
 			log.WriteString(f.Data)
 			return nil
 		}
@@ -1101,6 +1163,30 @@ func (r *Runner) readOutput(ctx context.Context, luxRunID, cursor string, busy b
 				if t, ok := c["text"].(string); ok {
 					log.WriteString(t)
 				}
+			}
+		case "claude.assistant":
+			var line struct {
+				Message struct {
+					Content []struct {
+						Type, Text string
+					} `json:"content"`
+				} `json:"message"`
+			}
+			_ = json.Unmarshal(f.Event.Data, &line)
+			for _, b := range line.Message.Content {
+				if b.Type == "text" {
+					log.WriteString(b.Text)
+				}
+			}
+		case "codex.item/completed":
+			var item struct {
+				Item struct {
+					Type, Text string
+				} `json:"item"`
+			}
+			_ = json.Unmarshal(f.Event.Data, &item)
+			if item.Item.Type == "agentMessage" {
+				log.WriteString(item.Item.Text)
 			}
 		case "acp.turn_end", "turn_end":
 			if e, _ := d["error"].(string); e != "" {
@@ -1231,10 +1317,13 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	keep := a.SessionMode == "resumable" && source != SourceTest
 	if got, err := r.Lux.Get(ctx, luxRunID); err == nil && lux.Terminal(got.State) {
+		r.forgetPreview(luxRunID)
 		return true, r.endServer(ctx, a, runID, "failed", "error", "its container ended: "+cmp.Or(got.StateReason, got.State))
 	}
 	base, err := r.serverURL(ctx, luxRunID, cfg.Port)
-	if err != nil || !r.healthy(ctx, base, cfg.Health) {
+	// Its requests go through lux's preview listener, signed in (previewDo).
+	signIn := previewAuth{luxRunID: luxRunID, base: base}
+	if err != nil || !r.healthy(ctx, base, signIn, cfg.Health) {
 		if r.now().Sub(started) > ServerHealthMax {
 			r.stopOrCancel(ctx, luxRunID, keep)
 			return true, r.endServer(ctx, a, runID, "failed", "error", "its server was not healthy within 60 seconds")
@@ -1243,7 +1332,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	if posted < len(payloads) {
 		for i := posted; i < len(payloads); i++ {
-			r.postOnce(ctx, a, runID, base+cfg.Path, payloads[i])
+			r.postOnce(ctx, a, runID, base+cfg.Path, signIn, payloads[i])
 		}
 		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, len(payloads))
@@ -1311,7 +1400,7 @@ func (r *Runner) serverURL(ctx context.Context, luxRunID string, port int) (stri
 	return "", errors.New("the server is not ready")
 }
 
-func (r *Runner) healthy(ctx context.Context, base string, health *string) bool {
+func (r *Runner) healthy(ctx context.Context, base string, signIn previewAuth, health *string) bool {
 	if health == nil || *health == "" {
 		u := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
 		conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", hostPort(u, base))
@@ -1321,13 +1410,151 @@ func (r *Runner) healthy(ctx context.Context, base string, health *string) bool 
 		conn.Close()
 		return true
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", base+*health, nil)
-	res, err := r.client().Do(req)
+	req, err := http.NewRequestWithContext(ctx, "GET", base+*health, nil)
+	if err != nil {
+		return false
+	}
+	res, err := r.previewDo(ctx, signIn, req, nil)
 	if err != nil {
 		return false
 	}
 	res.Body.Close()
 	return res.StatusCode < 400
+}
+
+// previewAuth names a Server run's lux preview: its lux Run and address.
+// Zero for a webhook's request, which is sent as it is.
+type previewAuth struct{ luxRunID, base string }
+
+// previewStatusHeader marks a page lux's preview listener answered itself
+// (its sign-in page among them), never one the container's app answered.
+const previewStatusHeader = "X-Lux-Preview"
+
+// previewDo sends a request to a Server run's container through lux's
+// preview listener, which answers its own 401 to a request without its
+// sign-in cookie. It signs in (previewSignIn) before the lux Run's first
+// request, and again only when lux itself refuses the cookie: then the
+// app never saw the request, and it is sent once more. An app's own 401 is
+// its answer. The cookie is kept per lux Run until the run ends.
+func (r *Runner) previewDo(ctx context.Context, signIn previewAuth, req *http.Request, body []byte) (*http.Response, error) {
+	if signIn.luxRunID == "" {
+		return r.client().Do(req)
+	}
+	r.mu.Lock()
+	_, held := r.previewCookies[signIn.luxRunID]
+	r.mu.Unlock()
+	if !held {
+		r.signInOrLog(ctx, signIn)
+	}
+	send := func() (*http.Response, error) {
+		r.mu.Lock()
+		cookie := r.previewCookies[signIn.luxRunID]
+		r.mu.Unlock()
+		req.Header.Del("Cookie")
+		if cookie != "" {
+			req.Header.Set("Cookie", cookie)
+		}
+		return r.client().Do(req)
+	}
+	res, err := send()
+	if err != nil || res.StatusCode != http.StatusUnauthorized || res.Header.Get(previewStatusHeader) != "status" {
+		if err == nil && req.Header.Get("Cookie") != "" {
+			r.mu.Lock()
+			if t, ok := r.previewTries[signIn.luxRunID]; ok {
+				t.accepted = true
+				r.previewTries[signIn.luxRunID] = t
+			}
+			r.mu.Unlock()
+		}
+		return res, err
+	}
+	if !r.signInOrLog(ctx, signIn) {
+		return res, nil
+	}
+	res.Body.Close()
+	req = req.Clone(ctx)
+	if body != nil {
+		req.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	return send()
+}
+
+// signInOrLog signs in to the lux Run's preview. A failure is logged and
+// remembered as no cookie, so requests go as they are until lux itself
+// asks again. Within SignInBackoff of the last attempt it does not try
+// again unless lux took a cookie since: false, nothing logged.
+func (r *Runner) signInOrLog(ctx context.Context, signIn previewAuth) bool {
+	r.mu.Lock()
+	if t, ok := r.previewTries[signIn.luxRunID]; ok && !t.accepted && r.now().Sub(t.at) < SignInBackoff {
+		r.mu.Unlock()
+		return false
+	}
+	if r.previewTries == nil {
+		r.previewTries = map[string]previewTry{}
+	}
+	r.previewTries[signIn.luxRunID] = previewTry{at: r.now()}
+	r.mu.Unlock()
+	err := r.previewSignIn(ctx, signIn)
+	if err == nil {
+		return true
+	}
+	r.Log.Info("signing in to a Server run's lux preview failed", "lux_run", signIn.luxRunID, "error", err)
+	r.mu.Lock()
+	if r.previewCookies == nil {
+		r.previewCookies = map[string]string{}
+	}
+	if _, ok := r.previewCookies[signIn.luxRunID]; !ok {
+		r.previewCookies[signIn.luxRunID] = ""
+	}
+	r.mu.Unlock()
+	return false
+}
+
+// previewSignIn spends a preview ticket on <base>/.lux/auth, which answers
+// with the preview cookie, and keeps it for the lux Run.
+func (r *Runner) previewSignIn(ctx context.Context, signIn previewAuth) error {
+	ticket, err := r.Lux.PreviewTicket(ctx, signIn.luxRunID)
+	if err != nil {
+		return fmt.Errorf("minting a preview ticket: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", signIn.base+"/.lux/auth?ticket="+url.QueryEscape(ticket)+"&to=/", nil)
+	if err != nil {
+		return err
+	}
+	// It answers with its cookie and a redirect, which is not followed.
+	client := *r.client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := client.Do(req)
+	if err != nil {
+		// The URL holds the ticket: it is no part of what is logged.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			ue.URL = signIn.base + "/.lux/auth"
+		}
+		return err
+	}
+	res.Body.Close()
+	var parts []string
+	for _, c := range res.Cookies() {
+		parts = append(parts, c.Name+"="+c.Value)
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("its sign-in answered %d with no cookie", res.StatusCode)
+	}
+	r.mu.Lock()
+	if r.previewCookies == nil {
+		r.previewCookies = map[string]string{}
+	}
+	r.previewCookies[signIn.luxRunID] = strings.Join(parts, "; ")
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runner) forgetPreview(luxRunID string) {
+	r.mu.Lock()
+	delete(r.previewCookies, luxRunID)
+	delete(r.previewTries, luxRunID)
+	r.mu.Unlock()
 }
 
 func hostPort(hostPath, base string) string {
@@ -1342,14 +1569,15 @@ func hostPort(hostPath, base string) string {
 }
 
 // postOnce POSTs one payload with dude's headers and records the answer;
-// a 5xx or no answer is tried once more, a 4xx is not.
-func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, p Payload) bool {
+// a 5xx or no answer is tried once more, a 4xx is not. A Server run's go
+// through its lux preview (previewDo).
+func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, signIn previewAuth, p Payload) bool {
 	body := []byte(p.Body)
 	if len(body) == 0 {
 		body = []byte("{}")
 	}
 	for try := 1; try <= 2; try++ {
-		status, ms, excerpt, err := r.post(ctx, a, runID, url, p, body)
+		status, ms, excerpt, err := r.post(ctx, a, runID, url, signIn, p, body)
 		_ = r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 			var code any
 			if status > 0 {
@@ -1371,7 +1599,7 @@ func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, 
 	return false
 }
 
-func (r *Runner) post(ctx context.Context, a Automation, runID, url string, p Payload, body []byte) (int, int, string, error) {
+func (r *Runner) post(ctx context.Context, a Automation, runID, url string, signIn previewAuth, p Payload, body []byte) (int, int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return 0, 0, "", err
@@ -1389,7 +1617,7 @@ func (r *Runner) post(ctx context.Context, a Automation, runID, url string, p Pa
 		req.Header.Set("X-Dude-Signature-256", Sign(a.WebhookSecret, body))
 	}
 	began := time.Now()
-	res, err := r.client().Do(req)
+	res, err := r.previewDo(ctx, signIn, req, body)
 	ms := int(time.Since(began).Milliseconds())
 	if err != nil {
 		return 0, ms, "", err
@@ -1432,7 +1660,7 @@ func (r *Runner) postWebhook(ctx context.Context, a Automation, runID string) er
 	if len(p.Body) == 0 {
 		p.Body, _ = json.Marshal(map[string]any{"automation": a.ID, "schedule": map[string]any{"time": r.now().UTC().Format(time.RFC3339)}})
 	}
-	if r.postOnce(ctx, a, runID, cfg.URL, p) {
+	if r.postOnce(ctx, a, runID, cfg.URL, previewAuth{}, p) {
 		return r.finish(ctx, a, runID, "succeeded", "", nil)
 	}
 	return r.finish(ctx, a, runID, "failed", "the webhook did not answer 2xx", nil)
@@ -1463,7 +1691,7 @@ func (r *Runner) expireSessions(ctx context.Context) (int, error) {
 	}
 	var errs []error
 	for _, k := range list {
-		if err := StartFresh(ctx, r.DB, r.Lux, k.Org, k.AutomationID); err != nil {
+		if err := r.StartFresh(ctx, k.Org, k.AutomationID); err != nil {
 			errs = append(errs, fmt.Errorf("automation %s: %w", k.AutomationID, err))
 		}
 	}
@@ -1473,22 +1701,45 @@ func (r *Runner) expireSessions(ctx context.Context) (int, error) {
 // StartFresh lets go of an automation's kept session: its lux Run is
 // cancelled and the next firing starts a new one.
 func StartFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) error {
+	_, err := startFresh(ctx, d, c, org, automationID)
+	return err
+}
+
+// StartFresh is the package's StartFresh, forgetting the cancelled lux
+// Run's preview sign-in.
+func (r *Runner) StartFresh(ctx context.Context, org, automationID string) error {
+	luxRunID, err := startFresh(ctx, r.DB, r.Lux, org, automationID)
+	if luxRunID != "" {
+		r.forgetPreview(luxRunID)
+	}
+	return err
+}
+
+// startFresh returns the lux Run let go of ("" for none). Retryable cancel
+// errors keep the session for another attempt; other refusals release it
+// so an uncancellable Run cannot block later firings.
+func startFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) (string, error) {
 	var luxRunID string
 	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1 RETURNING lux_run_id`, automationID).Scan(&luxRunID)
+		return tx.QueryRow(ctx, `SELECT lux_run_id FROM automation_sessions WHERE automation_id = $1`, automationID).Scan(&luxRunID)
 	})
 	if db.IsNotFound(err) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := c.Cancel(ctx, luxRunID); err != nil {
-		if le, ok := lux.AsError(err); !ok || le.Status != http.StatusNotFound {
-			return err
+		if le, ok := lux.AsError(err); !ok || le.Retryable() {
+			return "", err
 		}
 	}
-	return nil
+	// Only the session cancelled: a run that kept another meanwhile keeps it.
+	err = d.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1 AND lux_run_id = $2`, automationID, luxRunID)
+		return err
+	})
+	return luxRunID, err
 }
 
 // ---------------------------------------------------------------------------
@@ -1618,6 +1869,30 @@ func eventEnv(payloads []Payload, a Automation, runID string) map[string]string 
 	return env
 }
 
+// EnvPath is a command's or server's file of the DUDE_* values that differ
+// per firing. lux keeps a Run's env as it was first submitted, but a resume
+// gives every file secret again: the command line sources this file first,
+// so a resumed container sees this firing's run, delivery and event.
+const EnvPath = "/workspace/.dude/env.sh"
+
+// perFiring are the eventEnv names a resume must be able to change.
+var perFiring = []string{"DUDE_AUTOMATION_RUN", "DUDE_DELIVERY_ID", "DUDE_EVENT_NAME", "DUDE_EVENT_ACTION"}
+
+// envFile is EnvPath's content: an export line per perFiring value, each
+// single-quoted for sh; one this firing has none of is unset.
+func envFile(env map[string]string) string {
+	var b strings.Builder
+	for _, name := range perFiring {
+		v, ok := env[name]
+		if !ok {
+			b.WriteString("unset " + name + "\n")
+			continue
+		}
+		b.WriteString("export " + name + "='" + strings.ReplaceAll(v, "'", `'\''`) + "'\n")
+	}
+	return b.String()
+}
+
 func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, payloads []Payload) (string, error) {
 	token, hash := agenttools.RunToken(r.Agent.ToolsKey, runID, 0)
 	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
@@ -1674,6 +1949,23 @@ func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, pay
 
 // spec builds a run's lux spec; why is the reason it cannot run, in words.
 func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads []Payload, at *time.Time) (lux.Spec, string, error) {
+	in, why, err := r.specInput(ctx, a, runID, payloads, at, true)
+	if err != nil || why != "" {
+		return lux.Spec{}, why, err
+	}
+	var gh *forge.GitHub
+	if r.Forges != nil {
+		if gh, err = r.Forges.For(ctx, a.Org); err != nil {
+			return lux.Spec{}, "", err
+		}
+	}
+	spec, err := phases.AutomationSpec(ctx, r.Agent, r.Registry, gh, in)
+	return spec, "", err
+}
+
+// specInput is what a run's spec is built from. withAgent adds an agent's
+// prompt and tools token, which a resume gives otherwise.
+func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payloads []Payload, at *time.Time, withAgent bool) (phases.AutomationSpecInput, string, error) {
 	in := phases.AutomationSpecInput{OrganizationID: a.Org, AutomationID: a.ID, RunID: runID, Kind: a.Kind}
 	var settings agentSettings
 	_ = json.Unmarshal(a.Agent, &settings)
@@ -1786,18 +2078,21 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 		return nil
 	})
 	if err != nil || why != "" {
-		return lux.Spec{}, why, err
+		return in, why, err
 	}
 	switch a.Kind {
 	case "agent":
+		if !withAgent {
+			break
+		}
 		prompt, _, err := r.prompt(ctx, a, payloads, at)
 		if err != nil {
-			return lux.Spec{}, "", err
+			return in, "", err
 		}
 		in.Prompt = prompt
 		if r.Agent.ToolsURL != "" {
 			if in.ToolsToken, err = r.toolsToken(ctx, a, runID, payloads); err != nil {
-				return lux.Spec{}, "", err
+				return in, "", err
 			}
 		}
 	case "command":
@@ -1811,23 +2106,18 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 		in.Command, in.Port = cfg.Command, cfg.Port
 	}
 	if a.Kind != "agent" {
+		in.Command = ". " + EnvPath + "\n" + in.Command
 		in.Env = eventEnv(payloads, a, runID)
+		in.Files = map[string]string{EnvPath: envFile(in.Env)}
 		if len(payloads) > 0 {
 			body := []byte(payloads[len(payloads)-1].Body)
 			if len(payloads) > 1 {
 				body, _ = json.Marshal(payloads)
 			}
-			in.Files = map[string]string{EventPath: string(body)}
+			in.Files[EventPath] = string(body)
 		}
 	}
-	var gh *forge.GitHub
-	if r.Forges != nil {
-		if gh, err = r.Forges.For(ctx, a.Org); err != nil {
-			return lux.Spec{}, "", err
-		}
-	}
-	spec, err := phases.AutomationSpec(ctx, r.Agent, r.Registry, gh, in)
-	return spec, "", err
+	return in, "", nil
 }
 
 // automationRepos are what a run checks out: a project automation's
