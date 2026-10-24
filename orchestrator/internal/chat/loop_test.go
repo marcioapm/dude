@@ -298,6 +298,26 @@ func TestChatGivingUpAfterTheRoutingCallKeepsItsModelCall(t *testing.T) {
 	}
 }
 
+// Given up by the very attempt that made the routing call (a failure
+// trying again would not mend): the failed request still links that call.
+func TestChatGivingUpInTheAttemptThatAskedKeepsItsModelCall(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
+	w.svc.SetBeforeMake(func(context.Context) error { return errors.New("boom") })
+	_, ev := w.receive("Eli", "C1", "", "file: stream it")
+	w.once()
+	if e := w.event(ev); !e.Processed || e.Attempts != 1 || !e.Decision {
+		t.Fatalf("not given up at once: %+v", e)
+	}
+	if w.model.calls() != 1 {
+		t.Fatalf("the model was asked %d times", w.model.calls())
+	}
+	got := w.requests()
+	if len(got) != 1 || got[0].Route != "failed" || got[0].ModelCall == "" {
+		t.Fatalf("requests %+v", got)
+	}
+}
+
 // Retry-After longer than the backoff is waited for.
 func TestChatWaitsForTheProvidersRetryAfter(t *testing.T) {
 	_, after := chat.IsTransient(chat.Transient(errors.New("x"), 40*time.Second))

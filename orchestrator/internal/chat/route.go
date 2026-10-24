@@ -865,9 +865,16 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 	}
 	var recorded, unanswered bool
 	var effects []effect
+	// The decision as stored now: the attempt giving up may itself have made
+	// and kept the routing call, after d was claimed.
+	var decision []byte
 	if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) (err error) {
-		if recorded, err = handled(ctx, tx, d.Provider, d.ID); err != nil || !recorded {
+		if recorded, err = handled(ctx, tx, d.Provider, d.ID); err != nil {
 			return err
+		}
+		if !recorded {
+			return tx.QueryRow(ctx, `SELECT decision FROM chat_events WHERE provider = $1 AND event_id = $2`,
+				d.Provider, d.ID).Scan(&decision)
 		}
 		// Made (or refused) but never told: failed, with what it asked and
 		// made kept, and the request's own mention (a click's is the one asked).
@@ -913,7 +920,7 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 	// A routing call already made and kept is the model asked, whatever
 	// failed after it; a click's choice asked nothing.
 	var kept storedDecision
-	if d.Kind != "interaction" && len(d.Decision) > 0 && json.Unmarshal(d.Decision, &kept) == nil {
+	if d.Kind != "interaction" && len(decision) > 0 && json.Unmarshal(decision, &kept) == nil {
 		r.ModelCall = kept.CallID
 	}
 	if r.UserName == "" {
