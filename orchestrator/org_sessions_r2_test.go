@@ -237,8 +237,12 @@ func TestOrgSessionAHandoverRacingTheRemovalOfItsInvitee(t *testing.T) {
 			}
 			select {
 			case status := <-result:
-				if status < 400 {
-					t.Errorf("%s by someone removed meanwhile: %d", route, status)
+				// accept: its caller is no longer one of the organisation's
+				// people; take-ownership: an admin no longer. A 500 here is
+				// the deadlock the person's row FOR SHARE prevents.
+				want := map[string]int{"accept": 403, "take-ownership": 403}[route]
+				if status != want {
+					t.Errorf("%s by someone removed meanwhile: %d, want %d", route, status, want)
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatalf("%s never finished", route)

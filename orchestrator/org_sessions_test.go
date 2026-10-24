@@ -178,11 +178,18 @@ func TestOrgSessionOpenListCountsTheJoined(t *testing.T) {
 		t.Errorf("a not-joined organisation session is in Ana's Sessions")
 	}
 	// The sidebar's numbers ride on Sessions: three open, one joined and
-	// active; Ana's private session is not one of them.
+	// active; Ana's private session is not one of them, nor an open one she
+	// is only invited to (not accepted yet).
 	s.join(private, s.ana, "chat")
+	invited := s.openToOrg()
+	mustExec(t, s.owner, `INSERT INTO session_people (session_id, person_id, organization_id, role, invited_by)
+		VALUES ($1, $2, $3, 'chat', $4)`, invited, s.ana, s.org, s.marcio)
 	if got := s.ok(s.ana, "GET", "/internal/sessions", nil)["organisation"]; got == nil ||
-		got.(map[string]any)["count"] != float64(3) || got.(map[string]any)["joined"] != float64(1) {
-		t.Errorf("Ana's organisation summary %v, want count 3 joined 1", got)
+		got.(map[string]any)["count"] != float64(4) || got.(map[string]any)["joined"] != float64(1) {
+		t.Errorf("Ana's organisation summary %v, want count 4 joined 1", got)
+	}
+	if got := s.ok(s.ana, "GET", "/internal/sessions/open", nil)["joined"]; got != float64(1) {
+		t.Errorf("Ana's open list joined %v with a pending invitation, want 1", got)
 	}
 	// Its owner archives one: it is archived by owner for everyone, and still listed.
 	s.ok(s.marcio, "POST", "/internal/sessions/"+notJoined+"/archive", nil)
@@ -191,7 +198,7 @@ func TestOrgSessionOpenListCountsTheJoined(t *testing.T) {
 		m := row.(map[string]any)
 		byOwner[m["id"].(string)] = m["archivedByOwner"].(bool)
 	}
-	if len(byOwner) != 3 || !byOwner[notJoined] || byOwner[joined] || byOwner[archived] {
+	if len(byOwner) != 4 || !byOwner[notJoined] || byOwner[joined] || byOwner[archived] || byOwner[invited] {
 		t.Errorf("archived by owner %v, want only %s", byOwner, notJoined)
 	}
 }
