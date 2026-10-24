@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/marciomartins/dude/orchestrator/internal/chat/slack"
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/images"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -52,6 +53,11 @@ type settings struct {
 	FactoryLogins []string
 
 	VAPIDPublic, VAPIDPrivate, VAPIDSubject string
+
+	// The Slack app; ClientID "" offers no Slack.
+	Slack slack.Config
+	// Chat deliveries routed at once.
+	ChatWorkers int
 
 	// Where people's attached images are read from; Bucket "" for none.
 	Objects objects.Config
@@ -179,6 +185,9 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	s.FactoryLogins = cfg.List("DUDE_FACTORY_LOGINS")
 	s.VAPIDPublic, s.VAPIDPrivate = cfg.String("DUDE_VAPID_PUBLIC_KEY"), cfg.String("DUDE_VAPID_PRIVATE_KEY")
 	s.VAPIDSubject = cfg.String("DUDE_VAPID_SUBJECT")
+	s.Slack = slack.Config{SigningSecret: cfg.String("DUDE_SLACK_SIGNING_SECRET"), ClientID: cfg.String("DUDE_SLACK_CLIENT_ID"),
+		ClientSecret: cfg.String("DUDE_SLACK_CLIENT_SECRET"), APIURL: cfg.String("DUDE_SLACK_API_URL")}
+	s.ChatWorkers = int(cfg.Int("DUDE_CHAT_WORKERS"))
 
 	if s.Embeddings, err = embeddingsFromEnv(cfg.Getenv); err != nil {
 		return settings{}, err

@@ -81,6 +81,8 @@ export interface BoardProps extends Omit<HTMLAttributes<HTMLElement>, "onSelect"
    * start. Tabbable only beside the card that holds the board's focus.
    */
   readonly cardStart?: ((card: BoardCard, focus: BoardCardStartFocus) => ReactNode) | undefined;
+  /** On a card's first line, before its key: where it came from (a chat provider's glyph and name). */
+  readonly cardLead?: ((card: BoardCard) => ReactNode) | undefined;
   /** Keys kept lit, the rest dimmed; null for none. Hover and focus set it when uncontrolled. */
   readonly highlight?: ReadonlySet<string> | null | undefined;
   /** The card hovered or focused, by key (null on leaving), whether `highlight` is controlled or not. */
@@ -138,7 +140,7 @@ interface Group {
  * saying it in words. Nothing is added to the layout.
  */
 export function Board({ project, you, epic, selected, onSelect, cap = 12, loading, headerActions, overview, hideHeader, groupBy, collapsed, onCollapsedChange, laneMenu,
-  cardMarks, cardStart, highlight: controlledHighlight, onHighlightChange, filter = "all", onFilterChange, archivedHint, className, ...rest }: BoardProps) {
+  cardMarks, cardStart, cardLead, highlight: controlledHighlight, onHighlightChange, filter = "all", onFilterChange, archivedHint, className, ...rest }: BoardProps) {
   const swimlanes = groupBy === "epic" && !epic;
   const allColumns = useMemo(() => boardColumns(project, epic, you), [project, epic, you]);
   const columns = useMemo(() => boardFilter(allColumns, filter), [allColumns, filter]);
@@ -381,6 +383,7 @@ export function Board({ project, you, epic, selected, onSelect, cap = 12, loadin
                         lit={highlight ? (k === litKey ? "self" : k && highlight.has(k) ? "related" : "dim") : null}
                         cardMarks={cardMarks}
                         cardStart={cardStart}
+                        cardLead={cardLead}
                       />
                     );
                   })}
@@ -511,6 +514,7 @@ interface BoardCardViewProps {
   readonly cardMarks: BoardProps["cardMarks"];
   /** A Backlog card's start: after the card in its list item, never inside it. */
   readonly cardStart: BoardProps["cardStart"];
+  readonly cardLead: BoardProps["cardLead"];
 }
 
 /** The card's name: its key and title, who drives it, then why it can't start, and when it will. */
@@ -568,9 +572,10 @@ function DefaultMarks({ card }: { readonly card: BoardCard }) {
  * only the cards whose lit state changes.
  */
 const BoardCardView = memo(function BoardCardView({ card, now, showEpic, selected, tabIndex, group, col, row, onFocus, onKeyDown, onClick, onHover,
-  lit, cardMarks, cardStart }: BoardCardViewProps) {
+  lit, cardMarks, cardStart, cardLead }: BoardCardViewProps) {
   const wi = card.task;
   const key = navKey({ kind: "task", id: wi.id });
+  const lead = cardLead?.(card) ?? null;
   const marks = cardMarks ? cardMarks(card) : <DefaultMarks card={card} />;
   const start = card.column === "backlog" ? (cardStart?.(card, { tabIndex }) ?? null) : null;
   const spec = statusSpec(wi.status);
@@ -609,6 +614,7 @@ const BoardCardView = memo(function BoardCardView({ card, now, showEpic, selecte
         onClick={() => onClick(card)}
       >
         <span className={styles["top"]}>
+          {lead ? <span className={styles["lead"]}>{lead}</span> : null}
           {wi.key ? <span className={styles["key"]}>{wi.key}</span> : null}
           {showEpic && card.epic ? (
             <span className={styles["epic"]} title={card.epic.title}>

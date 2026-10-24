@@ -46,6 +46,9 @@ const (
 	// Automations (migration 183): a firing, and one POST it made.
 	AutomationRun     = "arn"
 	AutomationRequest = "arq"
+	// A chat provider's installation, and a routed mention (migration 195).
+	ChatInstallation = "chi"
+	ChatRequest      = "chr"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

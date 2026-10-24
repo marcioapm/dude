@@ -427,6 +427,29 @@
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }
+/* cardLead: where the card came from, a small tinted chip inline before its
+   key. Whatever the lead holds (a glyph and a word, wrapped or not) lays out
+   on the key's line. Its fill and edge are their own shade over the card's
+   chrome (ΔE ≈ 7 / 12 dark, 12 / 26 light), so it reads as a chip. */
+.lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  padding: 0 var(--ds-space-4);
+  background: color-mix(in srgb, var(--ds-tone-neutral-solid) 30%, var(--ds-color-chrome));
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-strong);
+  border-radius: var(--ds-radius-mark);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-tight);
+  flex-shrink: 0;
+}
+.lead > *,
+.lead svg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
 /* Never squeezed to a letter: below 8ch the mark at the end wraps under it, and the epic takes the line. */
 .epic {
   color: var(--ds-color-text-muted);

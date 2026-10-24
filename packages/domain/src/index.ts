@@ -26,3 +26,4 @@ export * from "./feedback.ts";
 export * from "./feedbackAnchor.ts";
 export * from "./previewOverlay.ts";
 export * from "./automations.ts";
+export * from "./chat.ts";

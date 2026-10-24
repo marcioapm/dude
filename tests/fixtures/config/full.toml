@@ -88,6 +88,15 @@ subject = "mailto:ops@example.com"
 [factory]
 logins = ["dude-bot", "dude-factory"]
 
+[slack]
+signing_secret = "slack-signing"
+client_id = "1234.5678"
+client_secret = "slack-client-secret"
+api_url = "https://slack.example.com/api"
+
+[chat]
+workers = 4
+
 [auth]
 provider = "cloudflare_access"
 public_url = "https://dude.example.com"

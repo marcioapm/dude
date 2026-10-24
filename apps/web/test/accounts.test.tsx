@@ -370,6 +370,14 @@ describe("links from before addresses named an organisation", () => {
     await until(() => (window.location.hash === `#/o/acme/task/${TASK_ID}` ? true : null), "the rewritten address");
     expect(w.calls.some((c) => c.method === "locate")).toBe(false);
   });
+
+  test("a chat Connect link names no organisation: its state is located and the page opens there", async () => {
+    const w = world();
+    w.located.set("st-1", { organization: { id: NORTHWIND.id, name: "Northwind", slug: "northwind" }, kind: "connect", id: "st-1" });
+    await open("#/connect/slack?state=st-1", w);
+    await until(() => (window.location.hash === "#/o/northwind/connect/slack?state=st-1" ? true : null), `the rewritten address, not ${window.location.hash}`);
+    expect(w.calls.find((c) => c.method === "locate")?.args).toEqual(["st-1"]);
+  });
 });
 
 /** Members, as an admin of Acme, with the invite dialog open. */

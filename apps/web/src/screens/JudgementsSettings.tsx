@@ -82,7 +82,7 @@ function DecisionBadge({ call }: { call: Pick<JudgementCall, "status" | "decisio
   return <Badge tone={d.tone} emphasis="tinted" icon={d.icon} size="sm">{d.word}</Badge>;
 }
 
-export function JudgementsPage({ client, orgName, tiers, tiersProblem, judgement, onManageTiers, onChanged }: {
+export function JudgementsPage({ client, orgName, tiers, tiersProblem, judgement, onManageTiers, onChanged, onChat }: {
   client: ApiClient;
   orgName: string;
   tiers: readonly ModelTier[] | null;
@@ -91,6 +91,8 @@ export function JudgementsPage({ client, orgName, tiers, tiersProblem, judgement
   onManageTiers?: (() => void) | undefined;
   /** The setting changed: the Models page's Used by says so. */
   onChanged?: (() => void) | undefined;
+  /** To the Chat settings, whose routing the tier also answers. */
+  onChat?: (() => void) | undefined;
 }) {
   const { settings, setSettings, problem } = judgement;
   if (problem || tiersProblem) return <div className="centered"><Callout tone="danger">{problem ?? `${orgName}’s tiers could not be loaded: ${tiersProblem}`}</Callout></div>;
@@ -105,7 +107,7 @@ export function JudgementsPage({ client, orgName, tiers, tiersProblem, judgement
         { title: "dude asks the tier", children: <>{tier?.model ? <code>{tier.name}</code> : "The judgement tier"} → <code>{tier?.model ?? "its model"}</code>, once, through the proxy, and reads a yes, no or unsure with how sure it is.</> },
         { title: "The caller decides", children: <>Below its own threshold, or on no answer, it does what it does today.</> },
       ]} />
-      <WhoAnswers client={client} settings={settings} tiers={tiers} tier={tier} onManageTiers={onManageTiers}
+      <WhoAnswers client={client} settings={settings} tiers={tiers} tier={tier} onManageTiers={onManageTiers} onChat={onChat}
         onSaved={(s) => {
           setSettings(s);
           onChanged?.();
@@ -115,13 +117,14 @@ export function JudgementsPage({ client, orgName, tiers, tiersProblem, judgement
   );
 }
 
-function WhoAnswers({ client, settings, tiers, tier, onSaved, onManageTiers }: {
+function WhoAnswers({ client, settings, tiers, tier, onSaved, onManageTiers, onChat }: {
   client: ApiClient;
   settings: JudgementSettings;
   tiers: readonly ModelTier[];
   tier: ModelTier | null;
   onSaved: (s: JudgementSettings) => void;
   onManageTiers?: (() => void) | undefined;
+  onChat?: (() => void) | undefined;
 }) {
   const { save, problem } = useSave();
   const [test, setTest] = useState<{ tierId: string; result: JudgementTestResult } | { tierId: string; error: string } | "asking" | null>(null);
@@ -143,7 +146,7 @@ function WhoAnswers({ client, settings, tiers, tier, onSaved, onManageTiers }: {
   return (
     <SettingsSection title="Who answers">
       <SettingRow label="Tier" htmlFor="judgement-tier"
-        help="The tier dude asks when it needs one decision: one call to its model, no agent, no tools. Short questions, so a fast tier is usually right.">
+        help={<>The tier dude asks when it needs one decision: one call to its model, no agent, no tools. Short questions, so a fast tier is usually right.{onChat ? <> Also answers chat routing (<TextButton onClick={onChat} data-testid="judgements-chat-link">Chat settings</TextButton>).</> : null}</>}>
         <FormStack>
           <Select id="judgement-tier" aria-label="Judgement tier" data-testid="judgement-tier" disabled={!settings.canEdit}
             value={tier?.id ?? OFF} options={options} footer={footer} onValueChange={pick} />
