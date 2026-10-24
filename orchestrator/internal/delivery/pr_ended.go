@@ -112,19 +112,22 @@ func (e *Escalation) counts() prCounts {
 	return prCounts{int(open), int(merged), int(closed)}
 }
 
-// closedBeyondWait says a pull request is closed that the person did not
-// choose to wait past (WaitedPastClosed): a close they have not been asked about.
+// closedNotWaitedPast says p is closed and the person did not choose to
+// wait past it (WaitedPastClosed): a close they have not been asked about.
+func (st *State) closedNotWaitedPast(p PullRequestState) bool {
+	return p.State == forge.StateClosed && !slices.Contains(st.WaitedPastClosed, p.ID)
+}
+
+// closedBeyondWait says one of states is closedNotWaitedPast.
 func (st *State) closedBeyondWait(states []PullRequestState) bool {
-	return slices.ContainsFunc(states, func(p PullRequestState) bool {
-		return p.State == forge.StateClosed && !slices.Contains(st.WaitedPastClosed, p.ID)
-	})
+	return slices.ContainsFunc(states, st.closedNotWaitedPast)
 }
 
 // waitPastClosed records the pull requests closed now as ones the person
 // chose to wait past.
 func (st *State) waitPastClosed(states []PullRequestState) {
 	for _, p := range states {
-		if p.State == forge.StateClosed && !slices.Contains(st.WaitedPastClosed, p.ID) {
+		if st.closedNotWaitedPast(p) {
 			st.WaitedPastClosed = append(st.WaitedPastClosed, p.ID)
 		}
 	}

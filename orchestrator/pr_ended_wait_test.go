@@ -341,16 +341,23 @@ func TestANewCloseAfterWaitingPastAMixedEndIsAskedAbout(t *testing.T) {
 	m.waitPastTargetsClose()
 	m.assertAskedOnce()
 	m.apiRepo.Close(1)
-	m.until("the person asked again", func() bool {
-		m.sync()
-		m.pump()
-		return m.count(askedAboutCloses, m.task) == 2 && m.taskStatus(m.task) == "awaiting_input"
-	})
+	m.untilAskedAgain()
 	m.assertLastAskedAbout(2, 1)
 	m.afterEnd()
 	if n := m.count(askedAboutCloses, m.task); n != 2 {
 		t.Errorf("asked %d times, want twice: target's close, then api's", n)
 	}
+}
+
+// untilAskedAgain waits for a second question about the closes, the task
+// awaiting the person.
+func (m *mixedEnd) untilAskedAgain() {
+	m.t.Helper()
+	m.until("the person asked again", func() bool {
+		m.sync()
+		m.pump()
+		return m.count(askedAboutCloses, m.task) == 2 && m.taskStatus(m.task) == "awaiting_input"
+	})
 }
 
 // assertLastAskedAbout checks the closed and open counts on the latest
@@ -380,10 +387,6 @@ func TestACloseWhileAskedIsNotWaitedPast(t *testing.T) {
 	if code, body := m.decide(m.person("owner"), m.task, "wait", ""); code != 200 {
 		t.Fatalf("decide: %d %v", code, body)
 	}
-	m.until("the person asked again", func() bool {
-		m.sync()
-		m.pump()
-		return m.count(askedAboutCloses, m.task) == 2 && m.taskStatus(m.task) == "awaiting_input"
-	})
+	m.untilAskedAgain()
 	m.assertLastAskedAbout(2, 1)
 }
