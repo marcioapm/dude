@@ -674,17 +674,26 @@ watermark `session_owner_sweep` and done set `session_owner_done`, migration
 from the ledger: it tells each session's live agent
 (`notices/told/session-owner-left` / `-returned`) once, unless an owner change
 was recorded for the session since, and withdraws every open question put to
-a removed person by name, in any session. The orchestrator's
+a removed person by name, in any session. A change that keeps failing is
+counted (`session_owner_attempts`, migration 194) and given up, logged as
+`session owner change given up` with its cursor and error, once it has failed
+five times and first failed over ten minutes ago. The orchestrator's
 handover, accept and take-ownership hold the new owner's `people` row FOR
 SHARE under the session lock, so a removal either refuses them or sees the
 session as theirs; take-ownership also holds the departed owner's row FOR
 SHARE, so an invitation bringing them back is waited for (409 `owner_active`).
 Take-ownership withdraws what was put to the departed
 owner and tells the agent through `notices/told/session-owner`. An owner
-invited back while its admins still own the session owns it again (the
-invitation's transaction takes those sessions' `session:` locks before the
-person's row, clears `owned_by_admins` and records `session.owner_returned`,
-which the owner sweep tells the agent). Writing a message, answering, filing
+invited back while its admins still own the session owns it again: the
+invitation's transaction takes the `session:` locks of at most 500 of those
+sessions before the person's row, clears `owned_by_admins` and records
+`session.owner_returned` (which the owner sweep tells the agent); the rest
+follow in transactions of their own of at most 500, each stopping if the
+person was removed again meanwhile, plus one more pass after coming back for
+sessions a removal batch passed while the accept waited on the row. A return
+that fails between batches (500, the person active, the rest still
+`owned_by_admins`) is finished only by accepting the same invitation again,
+as a removal is by `DELETE` again: nothing periodic resumes it. Writing a message, answering, filing
 and Try again join an organisation session; renaming takes an owner or chat
 row (or an admin while its admins own it).
 
