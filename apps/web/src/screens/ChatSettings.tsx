@@ -463,7 +463,7 @@ function RequestsTable({ client, providers, provider, route, limit, summary }: {
         <p className="muted" data-testid="chat-requests-summary">Last 7 days · {week.length} {week.length === 1 ? "mention" : "mentions"} · {asked} asked the model</p>
       ) : null}
       <Table>
-        <THead><Tr><Th>Request</Th><Th width="200px">Route</Th><Th align="right" width="64px">Sure</Th><Th>Result</Th><Th align="right" width="120px">When</Th></Tr></THead>
+        <THead><Tr><Th>Request</Th><Th width="200px">Route</Th><Th align="right" width="64px">Sure</Th><Th>Result</Th><Th align="right">When</Th></Tr></THead>
         <TBody>
           {shown.map((r) => {
             const pv = byId.get(r.provider) ?? { id: r.provider, name: r.provider, glyph: "integration" as const };
@@ -490,9 +490,9 @@ function RequestsTable({ client, providers, provider, route, limit, summary }: {
                 <Td align="right" mono>{r.confidence === null ? "—" : `${Math.round(r.confidence * 100)}%`}</Td>
                 <Td wrap>{r.result ? (
                   <a href={resultHref(r.result)} data-testid="chat-request-result" className="chatRequestResult">
-                    <Icon name={RESULT_ICON[r.result.kind]} size={12} />{r.result.label ?? r.result.id}</a>
+                    <span className="chatRequestKind"><Icon name={RESULT_ICON[r.result.kind]} size={12} /></span>{r.result.label ?? r.result.id}</a>
                 ) : <span className="muted">{r.route === "not_connected" ? "Asked to connect" : r.route.startsWith("not_") ? "Refused privately" : "—"}</span>}</Td>
-                <Td align="right" muted>
+                <Td align="right" muted fit>
                   <span className="chatRequestWhen">{formatTimestamp(r.createdAt, "relative")}
                     {r.reasoning ? (
                       <Tooltip content={r.reasoning}>

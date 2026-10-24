@@ -88,10 +88,14 @@ a.origin:focus-visible {
 }
 .threadHead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--ds-space-6);
+  gap: var(--ds-space-2) var(--ds-space-6);
   color: var(--ds-color-text-muted);
   font-size: var(--ds-text-xs);
+}
+.threadHead > span {
+  white-space: nowrap;
 }
 .threadLink {
   margin-left: auto;

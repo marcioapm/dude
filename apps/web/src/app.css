@@ -1848,14 +1848,28 @@ body {
 }
 .chatRequestWhere {
   font-size: var(--ds-text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.chatRequestResult,
+/* The request keeps a readable width; on a phone the table scrolls in its frame. */
+.chatRequestText {
+  min-width: 220px;
+}
+/* The result's kind glyph sits on its first line, before the label. */
+.chatRequestKind {
+  display: inline-flex;
+  vertical-align: -0.125em;
+  margin-right: var(--ds-space-4);
+}
+.chatRequestResult {
+  display: inline-block;
+  min-width: 140px;
+}
 .chatRequestWhen {
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-4);
-}
-.chatRequestWhen {
   white-space: nowrap;
 }
 .chatConnections {
