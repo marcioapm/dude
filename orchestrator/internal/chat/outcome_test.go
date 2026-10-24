@@ -160,6 +160,32 @@ func TestChatARetryRemembersAnEarlierRefusal(t *testing.T) {
 	}
 }
 
+// A thread whose task went between reading the binding and linking it is
+// routed as unbound: the model is asked and a session made, not a failure.
+// The binding cascades with its task, so the race is built by deleting the
+// task with foreign-key triggers off, leaving the binding behind.
+func TestChatABoundTaskGoneBeforeTheLinkRoutesAfresh(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	root := w.mention("Eli", "C1", "", "file: stream it")
+	task := w.requests()[0].ResultID
+	w.exec(`SET session_replication_role = replica`)
+	w.exec(`DELETE FROM tasks WHERE id = $1`, task)
+	w.exec(`RESET session_replication_role`)
+	if n := w.count(`SELECT count(*) FROM chat_threads WHERE organization_id = $1 AND task_id = $2`, w.org, task); n != 1 {
+		t.Fatalf("%d bindings left", n)
+	}
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Status"}))
+	ts := w.mention("Eli", "C1", root, "what's the status?")
+	got := w.requests()
+	if len(got) != 2 || got[1].Route != "brainstorm" || got[1].ResultKind != "session" || w.model.calls() != 2 {
+		t.Fatalf("requests %+v, %d model calls", got, w.model.calls())
+	}
+	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "white_check_mark" || len(w.fake.Ephemerals()) != 0 {
+		t.Fatalf("reactions %v, ephemerals %+v", r, w.fake.Ephemerals())
+	}
+}
+
 // A clarifying question the provider refuses outright ends the mention:
 // the asker is told privately, the mention is ❌, Requests says failed
 // with what was asked, and nothing is tried again. A transient failure is
