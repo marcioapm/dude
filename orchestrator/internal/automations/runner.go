@@ -80,7 +80,22 @@ type Runner struct {
 	wg       sync.WaitGroup
 	// The preview sign-in of each Server run's lux Run, as a Cookie header.
 	previewCookies map[string]string
+	// The last sign-in attempt per lux Run, and whether lux has taken a
+	// cookie since (signInOrLog's backoff).
+	previewTries map[string]previewTry
 }
+
+// previewTry is a lux Run's last preview sign-in attempt.
+type previewTry struct {
+	at       time.Time
+	accepted bool
+}
+
+// SignInBackoff is how long after a preview sign-in another is not tried
+// for the same lux Run while lux has taken no cookie since: a lux preview
+// not in ticket mode (cloudflare-access) answers every request with its
+// sign-in page, and would otherwise cost a ticket per request.
+const SignInBackoff = 30 * time.Second
 
 // DefaultWorkers is how many runs are followed, and how many webhooks
 // POSTed, at once.
@@ -1448,6 +1463,14 @@ func (r *Runner) previewDo(ctx context.Context, signIn previewAuth, req *http.Re
 	}
 	res, err := send()
 	if err != nil || res.StatusCode != http.StatusUnauthorized || res.Header.Get(previewStatusHeader) != "status" {
+		if err == nil && req.Header.Get("Cookie") != "" {
+			r.mu.Lock()
+			if t, ok := r.previewTries[signIn.luxRunID]; ok {
+				t.accepted = true
+				r.previewTries[signIn.luxRunID] = t
+			}
+			r.mu.Unlock()
+		}
 		return res, err
 	}
 	if !r.signInOrLog(ctx, signIn) {
@@ -1463,8 +1486,19 @@ func (r *Runner) previewDo(ctx context.Context, signIn previewAuth, req *http.Re
 
 // signInOrLog signs in to the lux Run's preview. A failure is logged and
 // remembered as no cookie, so requests go as they are until lux itself
-// asks again.
+// asks again. Within SignInBackoff of the last attempt it does not try
+// again unless lux took a cookie since: false, nothing logged.
 func (r *Runner) signInOrLog(ctx context.Context, signIn previewAuth) bool {
+	r.mu.Lock()
+	if t, ok := r.previewTries[signIn.luxRunID]; ok && !t.accepted && r.now().Sub(t.at) < SignInBackoff {
+		r.mu.Unlock()
+		return false
+	}
+	if r.previewTries == nil {
+		r.previewTries = map[string]previewTry{}
+	}
+	r.previewTries[signIn.luxRunID] = previewTry{at: r.now()}
+	r.mu.Unlock()
 	err := r.previewSignIn(ctx, signIn)
 	if err == nil {
 		return true
@@ -1524,6 +1558,7 @@ func (r *Runner) previewSignIn(ctx context.Context, signIn previewAuth) error {
 func (r *Runner) forgetPreview(luxRunID string) {
 	r.mu.Lock()
 	delete(r.previewCookies, luxRunID)
+	delete(r.previewTries, luxRunID)
 	r.mu.Unlock()
 }
 

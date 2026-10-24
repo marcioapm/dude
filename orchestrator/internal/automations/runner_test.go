@@ -869,6 +869,61 @@ func TestAutomationAnAppsOwn401IsItsAnswer(t *testing.T) {
 	}
 }
 
+// countingHandler counts the log records whose message is msg.
+type countingHandler struct {
+	slog.Handler
+	msg string
+	n   *atomic.Int32
+}
+
+func (c countingHandler) Handle(ctx context.Context, rec slog.Record) error {
+	if rec.Message == c.msg {
+		c.n.Add(1)
+	}
+	return c.Handler.Handle(ctx, rec)
+}
+
+// A lux preview not in ticket mode (cloudflare-access) answers every
+// request, its sign-in too, with its own marked 401: a minute of health
+// sweeps signs in at most once per SignInBackoff, minting at most two
+// tickets and logging each failed attempt once.
+func TestAutomationPreviewThatNeverSignsInBacksOff(t *testing.T) {
+	h := newHarness(t)
+	var logged atomic.Int32
+	h.runner.Log = slog.New(countingHandler{Handler: slog.NewTextHandler(io.Discard, nil),
+		msg: "signing in to a Server run's lux preview failed", n: &logged})
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("X-Lux-Preview", "status")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return srv.URL, nil }
+	h.automation("aut_access", "server", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": "/health"}})
+	h.deliver("d-push", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the server's container starts", func() bool { r := h.runs("aut_access"); return len(r) == 1 && r[0].LuxRunID != "" })
+	luxRun := h.runs("aut_access")[0].LuxRunID
+	for range 60 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h.runner.Wait()
+		h.advance(time.Second)
+	}
+	tickets := count(h.fake.CallsOf(luxRun), "ticket preview")
+	if tickets < 1 || tickets > 2 {
+		t.Errorf("%d tickets minted over a minute of sweeps, want 1 or 2", tickets)
+	}
+	if n := int(logged.Load()); n != tickets {
+		t.Errorf("%d failed sign-ins logged for %d attempts", n, tickets)
+	}
+	if requests.Load() < 30 {
+		t.Errorf("only %d requests reached the preview: the health sweeps did not run", requests.Load())
+	}
+}
+
 // Webhook only: one signed POST per firing, never queued or merged (Q13).
 func TestAutomationWebhookSignsEachPost(t *testing.T) {
 	h := newHarness(t)
