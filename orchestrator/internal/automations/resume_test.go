@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	osexec "os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -40,6 +41,17 @@ func keptServer(t *testing.T, h *harness, id string) (*fakegithub.App, runRow) {
 		map[string]any{"session_mode": "resumable", "expiry_days": 7,
 			"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": nil}})
 	exec(t, h.owner, `UPDATE automations SET repos = '"all"' WHERE id = $1`, id)
+	// Its checkout clones the fake lux's repository: one of its own, not the
+	// directory the test runs in (CI's checkout has no local main).
+	h.fake.Repo = t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "A"},
+	} {
+		if out, err := osexec.Command("git", append([]string{"-C", h.fake.Repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
 	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("the first event is POSTed", func() bool {
 		var posted int
