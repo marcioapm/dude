@@ -389,8 +389,11 @@ func TestAutomationSendAtTurnEndReachesTheAgent(t *testing.T) {
 }
 
 // stdoutMirror is lux as its acp adapter speaks: an agent's reply is its
-// message chunks and, as well, one stdout record of the same text.
+// message chunks and, as well, one stdout record of the same text. Its
+// harness also writes a line on stderr.
 type stdoutMirror struct{ lux.Client }
+
+const harnessStderr = "SETUP-DIAG: npm ERR! peer dependency missing\n"
 
 func (m stdoutMirror) Output(ctx context.Context, runID, cursor string, after int64, fn func(lux.Frame) error) error {
 	var said strings.Builder
@@ -408,26 +411,40 @@ func (m stdoutMirror) Output(ctx context.Context, runID, cursor string, after in
 			if err := fn(lux.Frame{Kind: "record", Channel: "stdout", Data: said.String()}); err != nil {
 				return err
 			}
+			if err := fn(lux.Frame{Kind: "record", Channel: "stderr", Data: harnessStderr}); err != nil {
+				return err
+			}
 			said.Reset()
 		}
 		return fn(f)
 	})
 }
 
-// An agent's log is what it said, once: lux's stdout copy of its reply is
-// not appended after the message chunks it already read.
+// An agent's log is what it said, once, and what its harness wrote on
+// stderr: lux's stdout copy of its reply is not appended after the message
+// chunks it already read. On Claude Code or Codex the reply is read from
+// that harness's own message events.
 func TestAutomationAgentLogIsItsReplyOnce(t *testing.T) {
 	h := newHarness(t)
 	h.runner.Lux = stdoutMirror{h.lux}
-	h.automation("aut_said", "agent", map[string]any{"kind": "github", "event": "push"},
-		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Look"}}})
-	h.deliver("d-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
-	h.until("the run ends", func() bool { r := h.runs("aut_said"); return len(r) == 1 && r[0].Status == "succeeded" })
-	h.runner.Wait()
-	log := h.runs("aut_said")[0].Log
 	reply := fakeagent.For("automation", "fake/scripted", "", false).Reply
-	if n := strings.Count(log, reply); n != 1 {
-		t.Errorf("the reply %q is in the log %d times: %q", reply, n, log)
+	harnesses := []string{"", "claude-code", "codex"}
+	for _, harness := range harnesses {
+		h.automation("aut_said"+strings.ReplaceAll(harness, "-", "_"), "agent", map[string]any{"kind": "github", "event": "push"},
+			map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Look", "harness": harness}}})
+	}
+	h.deliver("d-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	for _, harness := range harnesses {
+		id := "aut_said" + strings.ReplaceAll(harness, "-", "_")
+		h.until(id+" ends", func() bool { r := h.runs(id); return len(r) == 1 && r[0].Status == "succeeded" })
+		h.runner.Wait()
+		log := h.runs(id)[0].Log
+		if n := strings.Count(log, reply); n != 1 {
+			t.Errorf("%s: the reply %q is in the log %d times: %q", id, reply, n, log)
+		}
+		if harness == "" && !strings.Contains(log, harnessStderr) {
+			t.Errorf("%s: the harness's stderr is not in the log: %q", id, log)
+		}
 	}
 }
 

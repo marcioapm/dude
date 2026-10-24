@@ -979,17 +979,17 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 		}
 		return false, err
 	}
-	var cursor string
+	var cursor, prior string
 	var busy bool
 	var payloads []Payload
 	var inputsSent int
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, payloads, inputs_sent FROM automation_runs WHERE id = $1`, runID).
-			Scan(&cursor, &busy, &payloads, &inputsSent)
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, payloads, inputs_sent, COALESCE(log_tail, '') FROM automation_runs WHERE id = $1`, runID).
+			Scan(&cursor, &busy, &payloads, &inputsSent, &prior)
 	}); err != nil {
 		return false, err
 	}
-	turnDone, log, newCursor, failed, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy)
+	turnDone, log, newCursor, failed, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy, prior)
 	if err != nil {
 		return false, err
 	}
@@ -1093,9 +1093,12 @@ type turnState struct{ busy, done bool }
 
 // readOutput reads a Run's records since cursor without waiting for more:
 // the text the workload printed, and whether its agent went busy, then idle.
-// An agent's text is its message chunks: lux's acp adapter also writes each
-// reply to stdout, which would put it in the log twice.
-func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool) (turnState, string, string, string, error) {
+// An agent's reply is read from its harness's message events (ACP chunks,
+// Claude Code's assistant text, Codex's agentMessage items). lux's acp
+// adapter also writes each reply as one stdout record: that copy is left
+// out, matched against the reply read so far and prior, the log before
+// this read; any other record, stderr included, is kept.
+func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool, prior string) (turnState, string, string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	state := turnState{busy: busy}
@@ -1109,9 +1112,11 @@ func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, 
 			cursor = f.Cursor
 		}
 		if f.Event == nil {
-			if kind != "agent" {
-				log.WriteString(f.Data)
+			copied := strings.TrimSpace(f.Data)
+			if kind == "agent" && f.Channel == "stdout" && copied != "" && strings.HasSuffix(strings.TrimSpace(prior+log.String()), copied) {
+				return nil
 			}
+			log.WriteString(f.Data)
 			return nil
 		}
 		var d map[string]any
@@ -1132,6 +1137,30 @@ func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, 
 				if t, ok := c["text"].(string); ok {
 					log.WriteString(t)
 				}
+			}
+		case "claude.assistant":
+			var line struct {
+				Message struct {
+					Content []struct {
+						Type, Text string
+					} `json:"content"`
+				} `json:"message"`
+			}
+			_ = json.Unmarshal(f.Event.Data, &line)
+			for _, b := range line.Message.Content {
+				if b.Type == "text" {
+					log.WriteString(b.Text)
+				}
+			}
+		case "codex.item/completed":
+			var item struct {
+				Item struct {
+					Type, Text string
+				} `json:"item"`
+			}
+			_ = json.Unmarshal(f.Event.Data, &item)
+			if item.Item.Type == "agentMessage" {
+				log.WriteString(item.Item.Text)
 			}
 		case "acp.turn_end", "turn_end":
 			if e, _ := d["error"].(string); e != "" {
