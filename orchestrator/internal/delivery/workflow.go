@@ -488,14 +488,14 @@ const promotedRefreshRetries = 2
 // a decision, not a reflex — an approval or a green check wakes nobody.
 func Workflow(s *Store, forges Forges) *workflow.Definition {
 	w := &steps{s: s, forges: forges}
-	return &workflow.Definition{
+	def := &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
 		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
-		Recheck: w.recheck,
+		Recheck: w.awaitEnded,
 		Steps: map[string]workflow.Step{
 			"implement":         w.implement,
 			"adopt":             w.adopt,
@@ -523,6 +523,14 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"recover":           w.recover,
 		},
 	}
+	// A pull request's end reaches every step but the pull request wait,
+	// which reads it from pr.feedback.
+	for name, step := range def.Steps {
+		if name != "awaitPullRequest" {
+			def.Steps[name] = w.endable(step)
+		}
+	}
+	return def
 }
 
 type steps struct {
@@ -2339,6 +2347,11 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if pending := settle(st, sc); len(pending) > 0 {
 		return park("awaitPRFix", st, pending), nil
 	}
+	// No pull request left open for the fix to reach, signalled or not: it
+	// is dropped, and nothing is opened for it (endedBeforeOpening).
+	if res, ended, err := w.endedBeforeOpening(ctx, sc, st); ended || err != nil {
+		return res, err
+	}
 	runID := st.PendingRunIDs[0]
 	out, err := w.s.PhaseOutcome(ctx, sc.OrganizationID, runID)
 	if err != nil {
@@ -2420,6 +2433,10 @@ func (w *steps) promoteCandidate(ctx context.Context, sc workflow.StepContext) (
 	c := st.Candidate
 	if c == nil {
 		return waitForPR(st), nil
+	}
+	// Nor to a pull request no longer open.
+	if res, ended, err := w.endedBeforeOpening(ctx, sc, st); ended || err != nil {
+		return res, err
 	}
 	// Never unreviewed at the pull request: a head a conductor's simplifier
 	// or fix left after the last review goes back to one.

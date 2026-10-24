@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -160,22 +161,38 @@ func (w *world) postAsPerson(path, person string, body any) (int, map[string]any
 	return res.StatusCode, out
 }
 
-// A fix may need a new PR after the original closes. Missing authorization
-// parks this secondary publication path without spending its fix budget.
+// A fix may need a new PR: one for a repository it changed first, beside
+// the open one. Missing authorization parks this secondary publication path
+// without spending its fix budget. (Once every pull request has ended, no
+// fix opens one: pr_ended_test.go.)
 func TestAPRFixPublicationParksForTheFrozenOwner(t *testing.T) {
 	w := newWorld(t)
 	w.asApp()
+	scripted := w.lux.Decide
+	var prOpen atomic.Bool
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		switch {
+		case labels["dude.phase"] == "implement":
+			// web is left for the pull request's fix to change first.
+			b.Commit = map[string]string{"target:FACTORY.md": "work\n"}
+		case labels["dude.phase"] == "fix" && prOpen.Load():
+			b.Commit = map[string]string{"web:FIX.md": "fix\n"}
+		}
+		return b
+	}
 	ana, bo := w.ownerPerson("Ana"), w.ownerPerson("Bo")
 	w.connectOwner(ana, "ana-token", 1)
 	w.connectOwner(bo, "bo-token", 2)
 	task := w.task()
+	w.addWeb(task, "write")
 	w.taskOwners(task, ana, bo)
-	w.deliver(task)
+	w.start(task, scriptedPolicy())
 	w.until("the target pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	prOpen.Store(true)
 	armed := w.gated(func(step, next string) {
 		if step == "prFix" && next == "awaitPRFix" {
-			w.gh.Close(1)
-			mustExec(t, w.owner, `UPDATE pull_requests SET state='closed' WHERE task_id=$1`, task)
 			mustExec(t, w.owner, `DELETE FROM github_user_authorizations WHERE person_id=$1`, ana)
 			mustExec(t, w.owner, `UPDATE task_people SET position=CASE person_id WHEN $2 THEN 0 ELSE 1 END WHERE task_id=$1`, task, bo)
 		}
@@ -183,18 +200,18 @@ func TestAPRFixPublicationParksForTheFrozenOwner(t *testing.T) {
 	armed.Store(true)
 	w.gh.ReviewSaying(1, "alice", "CHANGES_REQUESTED", "Please rename the helper.")
 	w.sync()
-	w.until("parked for Ana", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	w.until("parked for Ana", func() bool { w.sync(); return w.taskStatus(task) == "awaiting_input" })
 	armed.Store(false)
-	if len(w.gh.Pulls()) != 1 || w.attempts(task) != 0 {
-		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	if len(w.gh.Pulls()) != 1 || len(w.web.Pulls()) != 0 || w.attempts(task) != 0 {
+		t.Fatalf("pulls %d+%d attempt %d", len(w.gh.Pulls()), len(w.web.Pulls()), w.attempts(task))
 	}
-	if w.gh.SHA(delivery.BranchFor(task, 1)) == "" {
+	if w.web.SHA(delivery.BranchFor(task, 1)) == "" {
 		t.Fatal("the fix's branch was not kept")
 	}
 	w.connectOwner(ana, "ana-again", 1)
 	w.authorizeAgain(task, ana)
-	w.until("the new pull request", func() bool { return len(w.gh.Pulls()) == 2 && w.taskStatus(task) == "review" })
-	if got := w.gh.OpenAuth; len(got) != 2 || got[1] != "Bearer ana-again" {
+	w.until("the new pull request", func() bool { return len(w.web.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if got := w.web.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-again" {
 		t.Fatalf("new creation auth %v", got)
 	}
 	var iteration int

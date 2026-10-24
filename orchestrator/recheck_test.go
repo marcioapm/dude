@@ -1088,11 +1088,9 @@ func TestADeletionBeforeTheRefPatchKeepsTheCheckedCandidate(t *testing.T) {
 			var raced atomic.Bool
 			var creates atomic.Int32
 			var checked string
-			w.onTest = func() {
-				checked = w.candidate()
-				w.gh.Merge(1)
-				w.sync()
-			}
+			// The pull request stays open: one merged meanwhile ends the
+			// delivery before any promotion (pr_ended_test.go).
+			w.onTest = func() { checked = w.candidate() }
 			w.gh.Set(func(s *fakegithub.Server) {
 				s.Intercept = func(r *http.Request) int {
 					if raced.Load() && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/git/refs") {
@@ -1125,8 +1123,8 @@ func TestADeletionBeforeTheRefPatchKeepsTheCheckedCandidate(t *testing.T) {
 			if pulls := w.gh.Pulls(); len(pulls) != 1 {
 				t.Errorf("created a follow-up after source deletion: %v", pulls)
 			}
-			if p := w.gh.Pull(1); p.State != "closed" || p.MergedAt == nil {
-				t.Errorf("original pull request no longer merged: %+v", p)
+			if p := w.gh.Pull(1); p.State != "open" {
+				t.Errorf("the pull request is %s, want open: %+v", p.State, p)
 			}
 			if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
 				t.Fatalf("escalated %q\n%s", r, w.describeRuns())

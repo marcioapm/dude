@@ -1836,20 +1836,25 @@ func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 		return w.taskStatus(wi) != "ready_to_merge"
 	})
 
-	// Merged by a person while the fixer is still at work. The fix lands
-	// after the merge, so it is outside it: it gets a pull request of its
-	// own, and the task is done when that one is merged too.
+	// Merged by a person while the fixer is still at work: the merge ends
+	// the delivery there. The fixer is stopped and its fix opens no pull
+	// request of its own.
 	w.gh.SetChecks("success")
 	w.gh.Merge(1)
-	w.until("a pull request for the fix", func() bool {
-		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return len(w.gh.Pulls()) == 2
-	})
-	w.gh.Merge(2)
 	w.until("the task to finish", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.taskStatus(wi) == "done"
 	})
+	for range 3 {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		w.pump()
+	}
+	if n := len(w.gh.Pulls()); n != 1 {
+		t.Errorf("%d pull requests after the merge ended the delivery, want the merged one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status NOT IN ('completed', 'aborted')`, wi); n != 0 {
+		t.Errorf("%d fixers still live after the merge", n)
+	}
 }
 
 // An agent quiet mid-turn is nudged once; still quiet, it is parked for a
