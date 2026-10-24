@@ -691,11 +691,12 @@ sessions before the person's row, clears `owned_by_admins` and records
 follow in transactions of their own of at most 500, each stopping if the
 person was removed again meanwhile, plus one more pass after coming back for
 sessions a removal batch passed while the accept waited on the row. A return
-that fails between batches (500, the person active, the rest still
-`owned_by_admins`) is finished only by accepting the same invitation again,
-as a removal is by `DELETE` again: nothing periodic resumes it. Writing a message, answering, filing
-and Try again join an organisation session; renaming takes an owner or chat
-row (or an admin while its admins own it).
+that fails between batches (a multiple of 500 back, the person active, the
+rest still `owned_by_admins`) is finished by accepting the same invitation
+again, as a removal is by `DELETE` again, or by an admin taking each session
+over: nothing periodic resumes it. Writing a message, answering, filing and
+Try again join an organisation session; renaming takes an owner or chat row
+(or an admin while its admins own it).
 
 **Mentions** ride on a session message (`mentions`, `shareWith`: person ids).
 `shareWith` is the owner's only (403, nothing sent) and adds each as accepted
