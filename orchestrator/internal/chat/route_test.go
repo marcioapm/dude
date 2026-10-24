@@ -33,6 +33,8 @@ type model struct {
 	mu      sync.Mutex
 	answers []string
 	sent    []map[string]any
+	// How long each call waits before it answers (or the caller gives up).
+	delay time.Duration
 }
 
 func (m *model) queue(answers ...string) {
@@ -65,7 +67,15 @@ func (m *model) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		answer, m.answers = m.answers[0], m.answers[1:]
 	}
+	delay := m.delay
 	m.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	if !ok {
 		w.WriteHeader(http.StatusBadGateway)
 		return
@@ -599,20 +609,22 @@ func TestChatFallsBackToABrainstorm(t *testing.T) {
 		name, answer string
 		route, asked string
 		question     string
+		reasoning    string
 	}{
-		{"no answer from the proxy", "", "failed", "", ""},
-		{"not JSON", "I think a task", "failed", "", ""},
+		{"no answer from the proxy", "", "failed", "", "", ""},
+		{"not JSON", "I think a task", "failed", "", "", ""},
 		{"a project dude does not know, no projects to offer instead", answer(map[string]any{"route": "task", "confidence": 0.9,
-			"project": "NOPE", "title": "x"}), "clarify", "task", "Which project should the task go in?"},
+			"project": "NOPE", "title": "x"}), "clarify", "task", "Which project should the task go in?", ""},
+		// Refused by dude's own check, before the database could refuse it.
 		{"a cycle", answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "ABS", "new_epic": map[string]any{"title": "E",
 			"tasks": []map[string]any{{"ref": "a", "title": "A", "blocked_by": []string{"b"}}, {"ref": "b", "title": "B", "blocked_by": []string{"a"}}}}}),
-			"brainstorm", "epic", ""},
+			"brainstorm", "epic", "", "(the tasks' blocked_by form a cycle)"},
 		{"13 tasks", answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "ABS", "new_epic": map[string]any{"title": "E",
-			"tasks": twelve(13)}}), "clarify", "epic", "That is 13 tasks. File the first 12, or talk it through?"},
+			"tasks": twelve(13)}}), "clarify", "epic", "That is 13 tasks. File the first 12, or talk it through?", ""},
 		{"a session the person cannot chat in", answer(map[string]any{"route": "resume", "confidence": 0.95, "session": "ssn_nope"}),
-			"brainstorm", "resume", ""},
+			"brainstorm", "resume", "", ""},
 		{"a question with one choice", answer(map[string]any{"route": "clarify", "confidence": 0.9, "question": map[string]any{"text": "?",
-			"choices": []map[string]any{{"id": "a", "label": "A", "route": "task"}}}}), "brainstorm", "clarify", ""},
+			"choices": []map[string]any{{"id": "a", "label": "A", "route": "task"}}}}), "brainstorm", "clarify", "", ""},
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -624,6 +636,12 @@ func TestChatFallsBackToABrainstorm(t *testing.T) {
 			got := w.requests()[before:]
 			if len(got) != 1 || got[0].Route != c.route || got[0].AskedRoute != c.asked {
 				t.Fatalf("requests %+v", got)
+			}
+			if c.reasoning != "" && !strings.HasSuffix(got[0].Reasoning, c.reasoning) {
+				t.Fatalf("reasoning %q", got[0].Reasoning)
+			}
+			if c.reasoning != "" && w.count(`SELECT count(*) FROM tasks WHERE organization_id = $1`, w.org) != 0 {
+				t.Fatal("a task of the refused epic was filed")
 			}
 			if c.question != "" {
 				if q := lastBot(t, w.fake).Text; q != c.question {

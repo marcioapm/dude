@@ -18,6 +18,27 @@ func TestChatEpicTasksProblemRefusesARepeatedBlocker(t *testing.T) {
 	}
 }
 
+// A cycle in blocked_by is refused before anything is filed: two tasks
+// blocking each other, a three-task loop, and a task blocking itself.
+func TestChatEpicTasksProblemRefusesACycle(t *testing.T) {
+	for name, tasks := range map[string][]chat.NewTask{
+		"two": {{Ref: "a", Title: "A", BlockedBy: []string{"b"}}, {Ref: "b", Title: "B", BlockedBy: []string{"a"}}},
+		"three": {{Ref: "a", Title: "A", BlockedBy: []string{"c"}}, {Ref: "b", Title: "B", BlockedBy: []string{"a"}},
+			{Ref: "c", Title: "C", BlockedBy: []string{"b"}}},
+		"itself": {{Ref: "a", Title: "A", BlockedBy: []string{"a"}}},
+	} {
+		if p := chat.EpicTasksProblem(tasks); p != "the tasks' blocked_by form a cycle" {
+			t.Fatalf("%s: %q", name, p)
+		}
+	}
+	// A diamond is no cycle.
+	diamond := []chat.NewTask{{Ref: "a", Title: "A"}, {Ref: "b", Title: "B", BlockedBy: []string{"a"}},
+		{Ref: "c", Title: "C", BlockedBy: []string{"a"}}, {Ref: "d", Title: "D", BlockedBy: []string{"b", "c"}}}
+	if p := chat.EpicTasksProblem(diamond); p != "" {
+		t.Fatalf("a diamond: %q", p)
+	}
+}
+
 // A model's clarifying question may offer a task or a session: an epic or
 // resume choice carries nothing to make, so dude asks its own question.
 func TestChatModelClarifyChoicesAreTasksOrSessions(t *testing.T) {

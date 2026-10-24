@@ -81,20 +81,23 @@ func (s *Service) Sweep(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	var batch []claimed
+	// The lease is read and set on the service's clock, so a test can
+	// let one run out.
+	now := s.now()
 	if err := s.DB.InSystem(ctx, "chat", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `WITH candidate AS (
 				SELECT e.provider, e.event_id FROM chat_events e
 				WHERE e.processed_at IS NULL AND e.attempts < $1
 				  AND (e.next_attempt_at IS NULL OR e.next_attempt_at <= now())
-				  AND (e.claimed_until IS NULL OR e.claimed_until < now())
+				  AND (e.claimed_until IS NULL OR e.claimed_until < $4)
 				  AND (e.thread_key = '' OR NOT EXISTS (SELECT 1 FROM chat_events o
 				    WHERE o.thread_key = e.thread_key AND o.processed_at IS NULL AND o.attempts < $1
 				      AND (o.received_at, o.event_id) < (e.received_at, e.event_id)))
 				ORDER BY e.received_at LIMIT $2 FOR UPDATE SKIP LOCKED)
-			UPDATE chat_events e SET claimed_until = now() + $3::interval FROM candidate
+			UPDATE chat_events e SET claimed_until = $4::timestamptz + $3::interval FROM candidate
 			WHERE e.provider = candidate.provider AND e.event_id = candidate.event_id
 			RETURNING e.provider, e.event_id, e.organization_id, e.kind, e.payload, e.attempts, e.decision`,
-			MaxAttempts, free, claimLease.String())
+			MaxAttempts, free, claimLease.String(), now)
 		if err != nil {
 			return err
 		}
@@ -119,7 +122,11 @@ func (s *Service) Sweep(ctx context.Context) (int, error) {
 // provider's Retry-After); or, past MaxAttempts, given up with the person
 // told privately.
 func (s *Service) handle(parent context.Context, d claimed) {
-	ctx, cancel := context.WithTimeout(parent, DeliveryTimeout)
+	timeout := DeliveryTimeout
+	if s.deliveryTimeout > 0 {
+		timeout = s.deliveryTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	err := s.process(ctx, d)
 	settle := context.WithoutCancel(parent)
@@ -237,4 +244,6 @@ type serviceState struct {
 	// Runs after the routing decision is kept and before it is acted on;
 	// tests fail or change the world there.
 	beforeMake func(ctx context.Context) error
+	// DeliveryTimeout, shortened by tests.
+	deliveryTimeout time.Duration
 }

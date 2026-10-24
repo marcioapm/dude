@@ -192,6 +192,14 @@ describe("webhooks", () => {
     expect(await found.json()).toEqual({ organization: { id: ORG, name: "Acme", slug: "acme" }, kind: "connect", id: state });
     expect((await call(memberKey, "GET", "/v1/locate/not-a-state")).status).toBe(404);
     await owner`DELETE FROM chat_connect_states WHERE state_hash = ${hash}`;
+    // An install's or a sign-in's state is never located: only a prompt's link is shown to a browser.
+    for (const kind of ["install", "oauth"]) {
+      const other = `${kind}-state-1`;
+      await owner`INSERT INTO chat_connect_states (state_hash, organization_id, kind, provider, person_id, expires_at)
+        VALUES (${createHash("sha256").update(other).digest("hex")}, ${ORG}, ${kind}, 'slack', ${memberPerson}, now() + interval '15 minutes')`;
+      expect([kind, (await call(memberKey, "GET", `/v1/locate/${other}`)).status]).toEqual([kind, 404]);
+    }
+    await owner`DELETE FROM chat_connect_states WHERE organization_id = ${ORG}`;
   });
 });
 

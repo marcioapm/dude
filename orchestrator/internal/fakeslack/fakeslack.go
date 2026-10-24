@@ -82,8 +82,8 @@ type Server struct {
 }
 
 type failure struct {
-	code string
-	left int
+	code        string
+	left, after int
 }
 
 type code struct{ kind, team, user, redirect string }
@@ -185,10 +185,14 @@ func (s *Server) AuthorizeAs(installer, signer string) {
 func (s *Server) FailNext(method, code string) { s.FailTimes(method, code, 1) }
 
 // FailTimes makes the next n calls of method fail as FailNext does.
-func (s *Server) FailTimes(method, code string, n int) {
+func (s *Server) FailTimes(method, code string, n int) { s.FailRetryAfter(method, code, n, 1) }
+
+// FailRetryAfter is FailTimes whose "ratelimited" answers carry
+// Retry-After: after seconds.
+func (s *Server) FailRetryAfter(method, code string, n, after int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.failNext[method] = failure{code: code, left: n}
+	s.failNext[method] = failure{code: code, left: n, after: after}
 }
 
 // Post adds a person's message, in thread (a new root with ""), returning its ts.
@@ -374,7 +378,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 			s.failNext[method] = f
 		}
 		if f.code == "ratelimited" {
-			w.Header().Set("Retry-After", "1")
+			w.Header().Set("Retry-After", strconv.Itoa(f.after))
 			w.WriteHeader(http.StatusTooManyRequests)
 		}
 		refuse(w, f.code)
