@@ -174,6 +174,53 @@ func TestAutomationAgentResumeGivesItsHarnessSecrets(t *testing.T) {
 	h.runner.Wait()
 }
 
+// failCancel is a lux whose cancel fails while down is set.
+type failCancel struct {
+	lux.Client
+	down *atomic.Bool
+}
+
+func (f failCancel) Cancel(ctx context.Context, id string) error {
+	if f.down.Load() {
+		return &lux.Error{Status: 0, Code: "unreachable", Message: "dial tcp: connection refused"}
+	}
+	return f.Client.Cancel(ctx, id)
+}
+
+// Start fresh lets go of the session only once its container is ended: a
+// failed cancel keeps the row naming the stopped Run, so trying again
+// ends it rather than leaving it with nothing naming it.
+func TestAutomationStartFreshKeepsTheSessionUntilItsCancelSucceeds(t *testing.T) {
+	h := newHarness(t)
+	_, first := keptServer(t, h, "aut_fresh")
+	f := failCancel{Client: h.lux, down: new(atomic.Bool)}
+	f.down.Store(true)
+	h.runner.Lux = f
+	kept := func() string {
+		var id string
+		_ = h.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM automation_sessions WHERE automation_id = 'aut_fresh'`).Scan(&id)
+		return id
+	}
+	if err := h.runner.StartFresh(context.Background(), h.org, "aut_fresh"); err == nil {
+		t.Fatal("Start fresh with the cancel failing answered no error")
+	}
+	if got := kept(); got != first.LuxRunID {
+		t.Fatalf("after a failed cancel the session names %q, want %s", got, first.LuxRunID)
+	}
+	if s := h.luxState(first.LuxRunID); s != "stopped" {
+		t.Fatalf("the kept container is %s", s)
+	}
+	f.down.Store(false)
+	if err := h.runner.StartFresh(context.Background(), h.org, "aut_fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if got := kept(); got != "" {
+		t.Errorf("after the cancel the session still names %q", got)
+	}
+	h.until("the container is ended", func() bool { return lux.Terminated(h.luxState(first.LuxRunID)) })
+	h.runner.Wait()
+}
+
 // refuseResume is a lux that will not resume any Run, as one refuses a Run
 // whose snapshot is gone.
 type refuseResume struct{ lux.Client }

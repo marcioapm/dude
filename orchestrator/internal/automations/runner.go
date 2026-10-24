@@ -1683,10 +1683,13 @@ func (r *Runner) StartFresh(ctx context.Context, org, automationID string) error
 }
 
 // startFresh is StartFresh, saying which lux Run it let go of ("" none).
+// The row goes only once the cancel succeeds or lux has no such Run: a
+// failed cancel keeps it, so the next Start fresh or sweep tries again
+// rather than leaving a stopped Run nothing names.
 func startFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) (string, error) {
 	var luxRunID string
 	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1 RETURNING lux_run_id`, automationID).Scan(&luxRunID)
+		return tx.QueryRow(ctx, `SELECT lux_run_id FROM automation_sessions WHERE automation_id = $1`, automationID).Scan(&luxRunID)
 	})
 	if db.IsNotFound(err) {
 		return "", nil
@@ -1696,10 +1699,15 @@ func startFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID s
 	}
 	if err := c.Cancel(ctx, luxRunID); err != nil {
 		if le, ok := lux.AsError(err); !ok || le.Status != http.StatusNotFound {
-			return luxRunID, err
+			return "", err
 		}
 	}
-	return luxRunID, nil
+	// Only the session cancelled: a run that kept another meanwhile keeps it.
+	err = d.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1 AND lux_run_id = $2`, automationID, luxRunID)
+		return err
+	})
+	return luxRunID, err
 }
 
 // ---------------------------------------------------------------------------
