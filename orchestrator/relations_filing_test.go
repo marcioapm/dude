@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -121,5 +122,61 @@ func TestARelateItemIsFiledAsAnEdge(t *testing.T) {
 	status, body := s.call("/internal/tasks/"+b+"/deliver", map[string]any{})
 	if status != 409 {
 		t.Fatalf("the filed edge does not block: %d %v", status, body)
+	}
+}
+
+// #308: Filing a card that edits an existing task and makes a new one,
+// while an agent's create_task in the same project relates its new task to
+// that existing one. The agent holds the project's row (its next number)
+// and its relation's insert checks the foreign key to the existing task
+// (KEY SHARE). Filing holds the named task (readFileFacts, then EditTaskTx
+// on the same row) and, making its new task, waits on the project's row.
+// Neither of filing's task locks may exclude that KEY SHARE: both commit,
+// and the file answers 200, not a deadlock's 500.
+func TestFilingBesideAnAgentRelatingToTheNamedTaskDoesNotDeadlock(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	named := s.taskIn(s.project, "Meter", s.marcio)
+	other := s.taskIn(s.project, "Rates", s.marcio)
+	proposal := s.proposal(id, []delivery.ProposalItem{
+		{Kind: "edit", Task: s.keyOf(named), After: &delivery.TaskText{Goal: ptr("Meter the usage, counted by the hour")}},
+		{Kind: "task", Project: "BL", Title: "Line items", Goal: "Line items for the invoice, from the meter's rows"},
+	})
+	ctx := context.Background()
+	agent, err := s.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = agent.Rollback(ctx) }()
+	// create_task's first write: the project's next number.
+	if _, err := agent.Exec(ctx, `UPDATE projects SET next_task_number = next_task_number + 1 WHERE id = $1`, s.project); err != nil {
+		t.Fatal(err)
+	}
+	filed := make(chan int, 1)
+	go func() {
+		status, body := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": proposal, "items": []int{0, 1}})
+		if status != 200 {
+			t.Logf("file: %d %v", status, body)
+		}
+		filed <- status
+	}()
+	s.blockedBehind(agent)
+	if _, err := agent.Exec(ctx, `INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+		VALUES ($1, $2, $3, 'blocks', $4)`, s.org, other, named, s.marcio); err != nil {
+		t.Fatalf("the agent's relation: %v", err)
+	}
+	if err := agent.Commit(ctx); err != nil {
+		t.Fatalf("the agent's commit: %v", err)
+	}
+	select {
+	case status := <-filed:
+		if status != 200 {
+			t.Fatalf("file: %d", status)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the file did not finish after the agent committed")
+	}
+	if n := s.count(`SELECT count(*) FROM tasks WHERE organization_id = $1 AND title = 'Line items'`, s.org); n != 1 {
+		t.Fatalf("%d filed tasks, want 1", n)
 	}
 }
