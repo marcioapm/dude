@@ -758,7 +758,17 @@ their creator.
   one session per automation (`automation_sessions`), stopped and kept at
   the end of a run and resumed by the next firing, until `expiry_days`
   (1–30) pass without a run — whether or not the automation is on. "Start
-  fresh now" lets it go.
+  fresh now" lets it go. lux keeps no secret's value, so a resume gives
+  every secret the kept Run declares again: forge tokens minted afresh, the
+  rest (event file, setup manifest, project secrets) from the spec a new
+  Run would get, so the event file holds the new event. A Run's env stays as
+  first submitted, so `DUDE_AUTOMATION_RUN`, `DUDE_DELIVERY_ID`,
+  `DUDE_EVENT_NAME` and `DUDE_EVENT_ACTION` are also written to
+  `/workspace/.dude/env.sh` (`EnvPath`), a file secret the resume gives again,
+  and the command or server line sources it first: a resumed container sees
+  this firing's values. A process that outlives the resume (one the command
+  started in the background) keeps the values it started with; it must read
+  the event file or `env.sh` again.
 - **Concurrency** (`Arrive`): queue (default), merge (the waiting run gets
   every payload, as a list), skip (a skipped run row with the reason),
   cancel and restart, send to the running agent (a resumable agent), or run
@@ -771,7 +781,11 @@ their creator.
   (GET its health path, else the port; at most 60 s), and POSTs each event
   to `<path>` with `Content-Type: application/json`, `X-Dude-Automation`,
   `X-Dude-Run`, `X-GitHub-Event`, `X-GitHub-Delivery` and, with a secret,
-  `X-Dude-Signature-256`. Events arriving while it is up go to the same
+  `X-Dude-Signature-256`. It reaches the container at the server's lux
+  preview URL, whose listener answers 401 without its sign-in cookie: on a
+  401 dude mints a preview ticket (`POST /v1/runs/{id}/tickets`), spends it
+  on `<url>/.lux/auth` and sends the request again with the cookie, kept per
+  lux Run (`previewDo`). Events arriving while it is up go to the same
   container. A 5xx or no answer within 30 s is tried once more; a 4xx is
   recorded; one `automation_run_requests` row per POST. With nothing in
   flight and no request for 30 s it is stopped and the run ends (`idle`).

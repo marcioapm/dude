@@ -149,7 +149,11 @@ func (s *Server) scheduleNext(w http.ResponseWriter, r *http.Request, _ string) 
 
 // startFresh lets go of a resumable automation's kept session now.
 func (s *Server) automationStartFresh(w http.ResponseWriter, r *http.Request, org string) error {
-	if err := automations.StartFresh(r.Context(), s.DB, s.Lux, org, r.PathValue("id")); err != nil {
+	startFresh := func() error { return automations.StartFresh(r.Context(), s.DB, s.Lux, org, r.PathValue("id")) }
+	if s.Automations != nil {
+		startFresh = func() error { return s.Automations.StartFresh(r.Context(), org, r.PathValue("id")) }
+	}
+	if err := startFresh(); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -7,6 +7,8 @@ package phases
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -57,12 +59,7 @@ func AutomationSpec(ctx context.Context, c AgentConfig, reg registry.Provider, g
 	labels := map[string]string{lux.AppLabel: lux.App, "dude.org": in.OrganizationID, "dude.kind": "automation",
 		"dude.automation": in.AutomationID, "dude.automation_run": in.RunID}
 	if in.Kind == "agent" {
-		si := specInput{RunID: in.RunID, OrganizationID: in.OrganizationID, Role: in.Role, Phase: "automation",
-			Image: in.Image, NestedContainers: in.Nested, Model: in.Model, ModelTier: in.ModelTier, Effort: in.Effort,
-			Options: in.Options, Headers: in.Headers, Harness: in.Harness, Prompt: in.Prompt, ToolsToken: in.ToolsToken, Machine: in.Machine, Egress: in.Egress}
-		for _, r := range in.Repos {
-			si.Repos = append(si.Repos, specRepo{Name: r.Name, URL: r.URL, Ref: r.Ref, ReadOnly: true, Setup: r.Setup})
-		}
+		si := automationAgentInput(in)
 		if gh != nil && len(si.Repos) > 0 {
 			var err error
 			if si.ForgeToken, si.RepoTokens, err = forgeTokens(ctx, gh, si.Repos, nil); err != nil {
@@ -134,8 +131,8 @@ func AutomationSpec(ctx context.Context, c AgentConfig, reg registry.Provider, g
 	for k, v := range in.Env {
 		spec.Env[k] = v
 	}
-	for path, content := range in.Files {
-		spec.Secrets = append(spec.Secrets, lux.Secret{Name: fileSecretName(path), Value: content, As: "file", Path: path})
+	for _, path := range slices.Sorted(maps.Keys(in.Files)) {
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: fileSecretName(path), Value: in.Files[path], As: "file", Path: path})
 	}
 	spec.Secrets = append(spec.Secrets, in.Secrets...)
 	login, err := LoginFor(ctx, reg, in.Image, nil)
@@ -144,6 +141,47 @@ func AutomationSpec(ctx context.Context, c AgentConfig, reg registry.Provider, g
 	}
 	login.Apply(&spec)
 	return spec, nil
+}
+
+// automationAgentInput is the phase spec input an automation's agent Run
+// is built from, with no forge tokens or bot.
+func automationAgentInput(in AutomationSpecInput) specInput {
+	si := specInput{RunID: in.RunID, OrganizationID: in.OrganizationID, Role: in.Role, Phase: "automation",
+		Image: in.Image, NestedContainers: in.Nested, Model: in.Model, ModelTier: in.ModelTier, Effort: in.Effort,
+		Options: in.Options, Headers: in.Headers, Harness: in.Harness, Prompt: in.Prompt, ToolsToken: in.ToolsToken, Machine: in.Machine, Egress: in.Egress}
+	for _, r := range in.Repos {
+		si.Repos = append(si.Repos, specRepo{Name: r.Name, URL: r.URL, Ref: r.Ref, ReadOnly: true, Setup: r.Setup})
+	}
+	return si
+}
+
+// AutomationResumeSecrets supplies current file, project, harness and setup
+// values and the stored registry login. ResumeCredentials mints forge tokens
+// separately from the stored spec.
+func AutomationResumeSecrets(ctx context.Context, c AgentConfig, reg registry.Provider, in AutomationSpecInput, stored lux.StoredSpec) ([]lux.Secret, error) {
+	var out []lux.Secret
+	for _, path := range slices.Sorted(maps.Keys(in.Files)) {
+		out = append(out, lux.Secret{Name: fileSecretName(path), Value: in.Files[path], As: "file", Path: path})
+	}
+	out = append(out, in.Secrets...)
+	if in.Kind == "agent" {
+		out = append(out, harnessSecrets(c, automationAgentInput(in))...)
+	}
+	if DeclaresSetup(stored) {
+		setups := make([]Setup, 0, len(in.Repos))
+		for _, r := range in.Repos {
+			setups = append(setups, Setup{Name: lux.SpecName(r.Name), Path: RepoPath(r.Name), Script: r.Setup})
+		}
+		out = append(out, SetupSecret(setups))
+	}
+	login, err := LoginFor(ctx, reg, in.Image, &stored)
+	if err != nil {
+		return nil, err
+	}
+	if login != nil {
+		out = append(out, lux.Secret{Name: registrySecret, Value: login.Credential})
+	}
+	return out, nil
 }
 
 // fileSecretName names a file the spec places by its path: lux's secret

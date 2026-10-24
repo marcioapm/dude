@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+// An automation's scripted agent sleeps as its prompt says, then calls the
+// tools its prompt names through lux's service socket, then replies.
+func TestTheAutomationScriptCallsThePromptsTools(t *testing.T) {
+	prompt := "Triage it\nsleep: 20\ntool: create_task {\"title\":\"x\"}\ntool: github_comment {\"body\":\"y\"}"
+	want := "sleep 20\nhttp dude POST /tools/create_task {\"title\":\"x\"}\nhttp dude POST /tools/github_comment {\"body\":\"y\"}\necho " + AutomationReply
+	if got := AutomationScript(prompt); got != want {
+		t.Errorf("script:\n%s\nwant:\n%s", got, want)
+	}
+	if got := AutomationScript("Nothing to call"); got != "echo "+AutomationReply {
+		t.Errorf("no calls: %q", got)
+	}
+}
+
 // A session agent's briefing names a session, not a task: the scripted
 // reply quotes the session's title, first turn and later ones, never an
 // empty task. A conductor's still quotes its task.

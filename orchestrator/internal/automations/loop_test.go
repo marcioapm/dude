@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -387,6 +388,66 @@ func TestAutomationSendAtTurnEndReachesTheAgent(t *testing.T) {
 	}
 }
 
+// stdoutMirror is lux as its acp adapter speaks: an agent's reply is its
+// message chunks and, as well, one stdout record of the same text. Its
+// harness also writes a line on stderr.
+type stdoutMirror struct{ lux.Client }
+
+const harnessStderr = "SETUP-DIAG: npm ERR! peer dependency missing\n"
+
+func (m stdoutMirror) Output(ctx context.Context, runID, cursor string, after int64, fn func(lux.Frame) error) error {
+	var said strings.Builder
+	return m.Client.Output(ctx, runID, cursor, after, func(f lux.Frame) error {
+		if f.Event != nil && f.Event.Type == "acp.agent_message_chunk" {
+			var d struct {
+				Content struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			_ = json.Unmarshal(f.Event.Data, &d)
+			said.WriteString(d.Content.Text)
+		}
+		if f.Event != nil && f.Event.Type == "lux.activity" && strings.Contains(string(f.Event.Data), `"idle"`) && said.Len() > 0 {
+			if err := fn(lux.Frame{Kind: "record", Channel: "stdout", Data: said.String()}); err != nil {
+				return err
+			}
+			if err := fn(lux.Frame{Kind: "record", Channel: "stderr", Data: harnessStderr}); err != nil {
+				return err
+			}
+			said.Reset()
+		}
+		return fn(f)
+	})
+}
+
+// An agent's log is what it said, once, and what its harness wrote on
+// stderr: lux's stdout copy of its reply is not appended after the message
+// chunks it already read. On Claude Code or Codex the reply is read from
+// that harness's own message events.
+func TestAutomationAgentLogIsItsReplyOnce(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Lux = stdoutMirror{h.lux}
+	reply := fakeagent.For("automation", "fake/scripted", "", false).Reply
+	harnesses := []string{"", "claude-code", "codex"}
+	for _, harness := range harnesses {
+		h.automation("aut_said"+strings.ReplaceAll(harness, "-", "_"), "agent", map[string]any{"kind": "github", "event": "push"},
+			map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Look", "harness": harness}}})
+	}
+	h.deliver("d-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	for _, harness := range harnesses {
+		id := "aut_said" + strings.ReplaceAll(harness, "-", "_")
+		h.until(id+" ends", func() bool { r := h.runs(id); return len(r) == 1 && r[0].Status == "succeeded" })
+		h.runner.Wait()
+		log := h.runs(id)[0].Log
+		if n := strings.Count(log, reply); n != 1 {
+			t.Errorf("%s: the reply %q is in the log %d times: %q", id, reply, n, log)
+		}
+		if harness == "" && !strings.Contains(log, harnessStderr) {
+			t.Errorf("%s: the harness's stderr is not in the log: %q", id, log)
+		}
+	}
+}
+
 // submitHook is lux with a hook run inside Submit, before lux answers.
 type submitHook struct {
 	lux.Client
@@ -472,12 +533,12 @@ func TestAutomationServerKeepsAnEventThatArrivesAsItIdles(t *testing.T) {
 	h := newHarness(t)
 	var mu sync.Mutex
 	var deliveries []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(h.fake.Preview(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		deliveries = append(deliveries, r.Header.Get("X-GitHub-Delivery"))
 		mu.Unlock()
 		w.WriteHeader(202)
-	}))
+	})))
 	t.Cleanup(srv.Close)
 	var inject atomic.Bool
 	var once sync.Once

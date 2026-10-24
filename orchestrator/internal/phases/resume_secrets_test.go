@@ -61,6 +61,13 @@ func TestAResumeSuppliesEverySecretLuxDeclares(t *testing.T) {
 		t.Errorf("an unknown secret: %v", err)
 	}
 
+	// The setup manifest a resume adding a repository declared, that
+	// repository's clone since failed: given with no script, never empty.
+	got, err = s.resumeSecrets(context.Background(), phaseRun{}, stored("DUDE_TOOLS_AUTH", setupSecretName), fresh)
+	if err != nil || !slices.Equal(got, []lux.Secret{fresh[0], SetupSecret(nil)}) || got[1].Value == "" {
+		t.Errorf("the setup manifest declared, none fresh: %v, %v", got, err)
+	}
+
 	none := &Syncer{Forges: forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })}
 	if _, err := none.resumeSecrets(context.Background(), phaseRun{}, stored("GIT_TOKEN"), nil); !errors.As(err, &cannot) {
 		t.Errorf("GIT_TOKEN with no forge: %v, want errCannotResume", err)

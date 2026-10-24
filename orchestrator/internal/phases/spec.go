@@ -493,6 +493,15 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
+		// An automation's scripted agent calls the tools its prompt names:
+		// the fake lux from the label, a real lux's lux-fake from the script.
+		if in.Phase == "automation" {
+			spec.Workload.Prompt = fakeagent.AutomationScript(in.Prompt)
+			if calls := fakeagent.ConductorCalls(in.Prompt); len(calls) > 0 {
+				raw, _ := json.Marshal(calls)
+				spec.Labels[fakeagent.CallsLabel] = string(raw)
+			}
+		}
 		if in.Anywhere || len(spec.Workload.MCPServers) > 0 || len(in.Egress) > 0 {
 			// Its tools must be reachable, and what it stands in for may
 			// reach; it needs no model.
@@ -514,6 +523,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 	default:
 		openCodeWorkload(c, in, &spec)
 	}
+	spec.Secrets = append(spec.Secrets, harnessSecrets(c, in)...)
 	spec.Network = runNetwork(c, in)
 	commitIdentity(&spec, in.Bot)
 	return spec
@@ -669,9 +679,29 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	if in.native(capabilities.NativeWebSearch) {
 		spec.Env["OPENCODE_ENABLE_EXA"] = "1"
 	}
-	if c.LLMKey != "" {
-		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "DUDE_LLM_KEY", Value: c.LLMKey, As: "env"})
+}
+
+// harnessSecrets supplies the harness-specific LLM key and Codex config.toml.
+// Submit and resume both need these values; lux does not retain them.
+func harnessSecrets(c AgentConfig, in specInput) []lux.Secret {
+	if fakeagent.Is(in.Model) {
+		return nil
 	}
+	var out []lux.Secret
+	key := "DUDE_LLM_KEY"
+	switch in.Harness {
+	case delivery.HarnessClaudeCode:
+		key = "ANTHROPIC_API_KEY"
+	case delivery.HarnessCodex:
+		key = "OPENAI_API_KEY"
+		settings, _ := codexSettings(c, in)
+		out = append(out, lux.Secret{Name: "CODEX_CONFIG", Value: strings.Join(settings, "\n") + "\n",
+			As: "file", Path: agentHome + "/.codex/config.toml"})
+	}
+	if c.LLMKey != "" {
+		out = append(out, lux.Secret{Name: key, Value: c.LLMKey, As: "env"})
+	}
+	return out
 }
 
 // claudeCodeWorkload runs Claude Code on the tier's model, against the
@@ -726,9 +756,6 @@ func claudeCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 			lines = append(lines, name+": "+in.Headers[name])
 		}
 		spec.Env["ANTHROPIC_CUSTOM_HEADERS"] = strings.Join(lines, "\n")
-	}
-	if c.LLMKey != "" {
-		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "ANTHROPIC_API_KEY", Value: c.LLMKey, As: "env"})
 	}
 }
 
@@ -818,11 +845,6 @@ func codexWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 		cmd = append(cmd, "-c", s)
 	}
 	spec.Workload.Command = cmd
-	spec.Secrets = append(spec.Secrets, lux.Secret{Name: "CODEX_CONFIG", Value: strings.Join(settings, "\n") + "\n",
-		As: "file", Path: agentHome + "/.codex/config.toml"})
-	if c.LLMKey != "" {
-		spec.Secrets = append(spec.Secrets, lux.Secret{Name: "OPENAI_API_KEY", Value: c.LLMKey, As: "env"})
-	}
 }
 
 // codexSettings are a Codex Run's config.toml lines (key=value), and the
