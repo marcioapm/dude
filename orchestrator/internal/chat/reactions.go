@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // What a mention's mark follows. 👀 is put as a delivery's first stage,
@@ -100,6 +101,23 @@ func (s *Service) SettleMarks(ctx context.Context) (int, error) {
 	return settled, nil
 }
 
+// sessionProbe reads, in one snapshot so that output committed with its
+// Run's end is never missed:
+//   - spoke: the session's own agent (its brainstorm Runs, not the
+//     investigators it starts) said or did something past the cursor, read
+//     from events_session_cursor_idx with a primary-key lookup per event;
+//   - ended: no live brainstorm Run is left (runs_live_brainstorm_idx) and
+//     no ended one holds an unread message the syncer will hand to a
+//     successor (delivery.UnheardBrainstorm: completed or failed, through
+//     runs_session_idx and directives_unsettled_idx).
+const sessionProbe = `SELECT
+	EXISTS (SELECT 1 FROM events e WHERE e.session_id = $1 AND e.cursor > $2
+		AND e.event_type IN ('agent.message', 'agent.tool.called')
+		AND EXISTS (SELECT 1 FROM runs r WHERE r.id = e.run_id AND r.role = 'brainstorm' AND r.kind = 'agent')),
+	NOT EXISTS (SELECT 1 FROM runs r WHERE r.session_id = $1 AND ` + delivery.LiveBrainstorm + `)
+	AND NOT EXISTS (SELECT 1 FROM runs r JOIN directives d ON d.run_id = r.id WHERE r.session_id = $1
+		AND r.role = 'brainstorm' AND r.status IN ('completed', 'failed') AND d.delivered_at IS NULL AND d.failed_at IS NULL)`
+
 // settleMark decides one request's mark and, once it is decided and
 // recorded, puts it.
 func (s *Service) settleMark(ctx context.Context, a awaiting) (bool, error) {
@@ -110,21 +128,12 @@ func (s *Service) settleMark(ctx context.Context, a awaiting) (bool, error) {
 		ok      bool
 	)
 	err := s.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		// events_session_cursor_idx, from the request's cursor on.
-		var spoke bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE session_id = $1 AND cursor > $2
-				AND event_type IN ('agent.message', 'agent.tool.called'))`, a.Session, a.After).Scan(&spoke); err != nil {
+		var spoke, ended bool
+		if err := tx.QueryRow(ctx, sessionProbe, a.Session, a.After).Scan(&spoke, &ended); err != nil {
 			return err
 		}
 		outcome = "done"
 		if !spoke {
-			// Its agent ended (failed, aborted, or done) with nothing said:
-			// no live session agent is left to answer.
-			var ended bool
-			if err := tx.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM runs r WHERE r.session_id = $1 AND r.role = 'brainstorm'
-					AND r.kind = 'agent' AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))`, a.Session).Scan(&ended); err != nil {
-				return err
-			}
 			switch {
 			case ended:
 				outcome = "failed"

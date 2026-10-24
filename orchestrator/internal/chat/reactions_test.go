@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // settle runs one chat-reactions pass.
@@ -18,12 +21,28 @@ func (w *world) settle() int {
 }
 
 // agentSays records an event of the session's agent as the phase syncer
-// does (Syncer.event): its Run's, on the session, from the runner.
+// does (Syncer.event): its latest brainstorm Run's, on the session, from
+// the runner.
 func (w *world) agentSays(session, eventType string) {
 	w.t.Helper()
 	w.exec(`INSERT INTO events (id, organization_id, event_type, run_id, session_id, actor_type, actor_id, source, payload)
 		SELECT 'evt_' || md5(random()::text), $1, $2, r.id, $3, 'agent', r.id, 'runner', '{"text":"On it."}'
-		FROM runs r WHERE r.session_id = $3 ORDER BY r.created_at DESC LIMIT 1`, w.org, eventType, session)
+		FROM runs r WHERE r.session_id = $3 AND r.role = 'brainstorm' ORDER BY r.created_at DESC LIMIT 1`, w.org, eventType, session)
+}
+
+// childSays starts a read-only investigator of the session's agent, as
+// delivery.StartSessionChild does, and records its tool call on the
+// session, as the syncer does for a child.
+func (w *world) childSays(session, eventType string) {
+	w.t.Helper()
+	child := "run_child_" + session
+	w.exec(`INSERT INTO runs (id, organization_id, session_id, attempt, status, phase, role, parent_run_id, parent_session_id,
+			source_kind, child_profile, child_capabilities, creation_key, base_refs)
+		SELECT $1, $2, $3, 1, 'running', 'investigate', 'investigator', r.id, $3, 'session', 'investigator', '{}'::jsonb, $1, '{}'::jsonb
+		FROM runs r WHERE r.session_id = $3 AND r.role = 'brainstorm' ORDER BY r.created_at DESC LIMIT 1
+		ON CONFLICT DO NOTHING`, child, w.org, session)
+	w.exec(`INSERT INTO events (id, organization_id, event_type, run_id, session_id, actor_type, actor_id, source, payload)
+		VALUES ('evt_' || md5(random()::text), $1, $2, $3, $4, 'agent', $3, 'runner', '{"text":"Reading."}')`, w.org, eventType, child, session)
 }
 
 func (w *world) marks(channel, ts string) string {
@@ -81,6 +100,64 @@ func TestChatASessionsMarkFollowsItsAgentsFirstReply(t *testing.T) {
 	w.agentSays(session, "agent.tool.called")
 	if n := w.settle(); n != 1 || w.marks("C1", second) != "white_check_mark" {
 		t.Fatalf("settled %d after a tool use: %s", n, w.marks("C1", second))
+	}
+}
+
+// The session's agent is its brainstorm Run: an investigator it started
+// acting is not the agent answering.
+func TestChatASessionChildsOutputSettlesNothing(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.requests()[0].ResultID
+	w.childSays(session, "agent.tool.called")
+	w.childSays(session, "agent.message")
+	if n := w.settle(); n != 0 || w.marks("C1", ts) != "eyes" {
+		t.Fatalf("settled %d on a child's output: %s", n, w.marks("C1", ts))
+	}
+	w.agentSays(session, "agent.tool.called")
+	if n := w.settle(); n != 1 || w.marks("C1", ts) != "white_check_mark" {
+		t.Fatalf("settled %d on the agent's tool use: %s", n, w.marks("C1", ts))
+	}
+}
+
+// A session agent that ends holding the mention's message unread is not
+// the end: the syncer hands the message to a successor, whose answer is ✅.
+func TestChatAMessageHandedToASuccessorWaitsForItsAnswer(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	root := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.requests()[0].ResultID
+	w.agentSays(session, "agent.message")
+	if n := w.settle(); n != 1 {
+		t.Fatalf("settled %d", n)
+	}
+	w.exec(`UPDATE directives SET delivered_at = now() WHERE run_id IN (SELECT id FROM runs WHERE session_id = $1)`, session)
+	second := w.mention("Eli", "C1", root, "and the CSV?")
+	if w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id WHERE r.session_id = $1 AND d.delivered_at IS NULL`, session) != 1 {
+		t.Fatal("the message was not queued for the live agent")
+	}
+	// The syncer fails the agent and keeps the message for its successor.
+	w.exec(`UPDATE runs SET status = 'failed', ended_at = now() WHERE session_id = $1`, session)
+	if n := w.settle(); n != 0 || w.marks("C1", second) != "eyes" {
+		t.Fatalf("settled %d before the hand-over: %s", n, w.marks("C1", second))
+	}
+	var ended string
+	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(w.ctx, `SELECT id FROM runs WHERE session_id = $1 AND role = 'brainstorm'`, session).Scan(&ended); err != nil {
+			return err
+		}
+		_, err := delivery.SessionHandOver(w.ctx, tx, delivery.RunRef{Org: w.org, SessionID: session, RunID: ended})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.settle(); n != 0 || w.marks("C1", second) != "eyes" {
+		t.Fatalf("settled %d while the successor starts: %s", n, w.marks("C1", second))
+	}
+	w.agentSays(session, "agent.message")
+	if n := w.settle(); n != 1 || w.marks("C1", second) != "white_check_mark" {
+		t.Fatalf("settled %d after the successor answered: %s", n, w.marks("C1", second))
 	}
 }
 
@@ -166,11 +243,15 @@ func TestChatATaskOrEpicIsMarkedDoneWithItsReply(t *testing.T) {
 	}
 }
 
-// A mention kept for a Connect was marked 👀 when it came: routed once the
-// person links, it is not marked again.
-func TestChatAKeptMentionIsNotMarkedTwice(t *testing.T) {
+// A mention kept for a Connect loses its 👀 with the Connect prompt: routed
+// once the person links, it is marked 👀 again, once, and ✅ when the
+// session's agent answers.
+func TestChatAKeptMentionIsMarkedAgainOnce(t *testing.T) {
 	w := setup(t)
-	w.mention("Gus", "C1", "", "let's think about exports")
+	ts := w.mention("Gus", "C1", "", "let's think about exports")
+	if m := w.marks("C1", ts); m != "" {
+		t.Fatalf("after the Connect prompt: %q", m)
+	}
 	prompt := promptState(t, w)
 	eyes := w.fake.Calls("reactions.add")
 	w.fake.AuthorizeAs("", "U3")
@@ -186,10 +267,15 @@ func TestChatAKeptMentionIsNotMarkedTwice(t *testing.T) {
 		t.Fatalf("connect %+v, %v", l, err)
 	}
 	w.sweep()
-	if got := w.requests(); len(got) != 2 || got[1].ResultKind != "session" {
+	got := w.requests()
+	if len(got) != 2 || got[1].ResultKind != "session" {
 		t.Fatalf("requests %+v", got)
 	}
-	if n := w.fake.Calls("reactions.add"); n != eyes {
-		t.Fatalf("%d marks put on the kept mention", n-eyes)
+	if n := w.fake.Calls("reactions.add"); n != eyes+1 || w.marks("C1", ts) != "eyes" {
+		t.Fatalf("%d marks put on the kept mention: %q", n-eyes, w.marks("C1", ts))
+	}
+	w.agentSays(got[1].ResultID, "agent.message")
+	if n := w.settle(); n != 1 || w.marks("C1", ts) != "white_check_mark" {
+		t.Fatalf("settled %d after the reply: %q", n, w.marks("C1", ts))
 	}
 }

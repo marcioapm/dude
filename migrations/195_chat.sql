@@ -145,8 +145,8 @@ CREATE TABLE chat_events (
   decision        jsonb,
   last_error      text,
   -- When dude put its working mark (👀) on the mention, as the delivery's
-  -- first stage: set once, so a retry, a reclaimed lease or a mention kept
-  -- for a Connect marks nothing again.
+  -- first stage: set once, so a retry or a reclaimed lease marks nothing
+  -- again.
   working_at      timestamptz,
   PRIMARY KEY (provider, event_id)
 );
