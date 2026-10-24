@@ -159,6 +159,9 @@ type State struct {
 	// A step is held by open reviewer questions (holdForQuestions): the
 	// task waits on a person until the last is settled.
 	QuestionsHeld bool `json:"questionsHeld,omitempty"`
+	// The closed pull requests a person chose to wait past (decide, "wait"
+	// on pull_request_closed): only a close beyond them is asked about again.
+	WaitedPastClosed []string `json:"waitedPastClosed,omitempty"`
 	// The escalation a person stopped the delivery at, kept so the task can
 	// be picked back up from where it stopped.
 	Stopped *Escalation `json:"stopped,omitempty"`
@@ -2174,7 +2177,10 @@ func (w *steps) prsCoverTheWork(ctx context.Context, sc workflow.StepContext, st
 	var todo []Repository
 	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		var err error
-		todo, _, _, err = reposToOpen(ctx, tx, st)
+		if todo, _, _, err = reposToOpen(ctx, tx, st); err != nil {
+			return err
+		}
+		todo, _, err = waitedPastRepos(ctx, tx, st, todo)
 		return err
 	})
 	return err == nil && len(todo) == 0, err
@@ -2856,15 +2862,18 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 		}
 	}
 	c := countStates(states)
+	// A close the person already chose to wait past is not asked about
+	// again, however often this runs: only one beyond those is.
+	grown := st.closedBeyondWait(states)
 	waitAgain := waitForPR(st)
 	switch {
 	case len(states) == 0:
 		return workflow.Result{}, true, fmt.Errorf("no pull requests recorded for %s", st.TaskID)
-	case c.closed == 0 && c.open > 0:
+	case !grown && c.open > 0:
 		// The rest are still open: what is merged is taken, so whether the
 		// task is ready depends on those.
 		return waitAgain, false, w.weighReadiness(ctx, sc, st, states)
-	case c.closed == 0:
+	case !grown && c.merged > 0:
 		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
 	case c.open == 0 && c.merged == 0:
 		// Closed without merging is someone deciding not to take the
@@ -3008,6 +3017,19 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	case "done":
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
+		if e.Reason == "pull_request_closed" {
+			// What the person waited past is not asked about again: not by
+			// the close's own pr.feedback still waiting for awaitPullRequest,
+			// nor by a later round's pullRequestEnded. Only the closes they
+			// were asked about: one since then is asked about with the rest.
+			states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			if countStates(states).closed == e.counts().closed {
+				st.waitPastClosed(states)
+			}
+		}
 		if e.Reason == ReasonPullRequestMoved && st.Integration == nil {
 			// The fix stays on its candidate branch: not the pull request's.
 			// An integration's comments were never its fixer's: kept.

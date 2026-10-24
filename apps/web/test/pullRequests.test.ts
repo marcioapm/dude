@@ -121,6 +121,12 @@ describe("activity", () => {
       .toBe("asked dude to resolve the conflicts on #41");
   });
 
+  test("a change dude opened no pull request for, past a close a person went on without, is dude's line", () => {
+    const line = pullRequestActivity(event("pull_request.action", { action: "not-opened", head: "abc" }), false);
+    expect(line).toEqual({ who: null, actorId: null, quote: undefined, byDude: true,
+      text: "opened no pull request for the fix's change in web: #41 there was closed, and a person chose to go on without it" });
+  });
+
   test("dude's base integration reads as dude's, in words, the base as a name, no internal reasons", () => {
     const merged = pullRequestActivity(event("pull_request.action", { action: "merge-base", number: undefined, base: "main", head: "abc" }), false);
     expect(merged).toEqual({ who: null, actorId: null, text: "merged main into the branch in web on GitHub; it is tested again",

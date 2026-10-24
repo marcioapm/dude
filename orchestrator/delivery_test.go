@@ -109,6 +109,7 @@ type world struct {
 	repoID    string
 	gh        *fakegithub.Server
 	web       *fakegithub.Server
+	apiRepo   *fakegithub.Server
 	marcioWeb *fakegithub.Server
 	lux       *fakelux.Server
 	log       *slog.Logger
@@ -138,26 +139,23 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, app: app, owner: owner, org: dbtest.Org(t, owner), log: worldLog(t)}
 	ctx := context.Background()
 
-	// Two bare repositories with one commit on main, as GitHub would hold
-	// them: the project's, and a second one (acme/web) a test may add.
+	// Bare repositories with one commit on main, as GitHub would hold them:
+	// the project's, and two more (acme/web, acme/api) a test may add.
 	dir := t.TempDir()
-	bare, webBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web")
+	bare, webBare, apiBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web"), bareRepo(t, dir, "api")
 	w.gh = fakegithub.New(bare, "acme/target")
 	w.web = fakegithub.New(webBare, "acme/web")
+	w.apiRepo = fakegithub.New(apiBare, "acme/api")
 	// The same repository as another owner's, for an App installed on two.
 	w.marcioWeb = fakegithub.New(webBare, "marcio/web")
 	mux := http.NewServeMux()
-	mux.Handle("/repos/acme/target", w.gh.Handler())
-	mux.Handle("/repos/acme/web", w.web.Handler())
-	mux.Handle("/repos/marcio/web", w.marcioWeb.Handler())
-	mux.Handle("/repos/acme/target/", w.gh.Handler())
-	mux.Handle("/repos/acme/web/", w.web.Handler())
-	mux.Handle("/repos/marcio/web/", w.marcioWeb.Handler())
-	mux.Handle("/acme/target.git/", w.gh.Handler())
-	mux.Handle("/acme/web.git/", w.web.Handler())
-	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
-	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
-	mux.Handle("GET /search/issues", fakegithub.Search(w.gh, w.web, w.marcioWeb))
+	for slug, s := range map[string]*fakegithub.Server{"acme/target": w.gh, "acme/web": w.web, "acme/api": w.apiRepo, "marcio/web": w.marcioWeb} {
+		mux.Handle("/repos/"+slug, s.Handler())
+		mux.Handle("/repos/"+slug+"/", s.Handler())
+		mux.Handle("/"+slug+".git/", s.Handler())
+	}
+	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.apiRepo, w.marcioWeb))
+	mux.Handle("GET /search/issues", fakegithub.Search(w.gh, w.web, w.apiRepo, w.marcioWeb))
 	mux.Handle("GET /user", w.gh.Handler())
 	// A GitHub App's endpoints, once a test connects one (asApp).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -175,6 +173,9 @@ func newWorld(t *testing.T) *world {
 	w.lux.RepoFor = func(url string) string {
 		if strings.Contains(url, "/web.git") {
 			return webBare
+		}
+		if strings.Contains(url, "/api.git") {
+			return apiBare
 		}
 		return bare
 	}
