@@ -80,7 +80,7 @@ describe("the Chat page", () => {
     await click(c.querySelector("[data-provider-row=slack]")!);
     expect(opened).toEqual(["chat/slack"]);
     const area = c.querySelector<HTMLTextAreaElement>("[data-testid=chat-instructions]")!;
-    expect(area.value).toContain("#support is almost always ABS.");
+    expect(area.value).toContain("#support is almost always about Billing (BIL).");
     // The built-in instructions are collapsed until asked for.
     expect(c.querySelectorAll("[data-testid=chat-builtin-text]").length).toBe(0);
     await click(c.querySelector("[data-testid=chat-builtin-view]")!);
@@ -92,12 +92,12 @@ describe("the Chat page", () => {
     // Save is offered only once something changed, and sends the text.
     expect(c.querySelector<HTMLButtonElement>("[data-testid=chat-instructions-save]")!.disabled).toBe(true);
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "Billing goes in ABS.");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "Billing goes in BIL.");
       area.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await click(c.querySelector("[data-testid=chat-instructions-save]")!);
     await until(() => (client.saved.length ? client.saved : null), "the save");
-    expect(client.saved).toEqual(["Billing goes in ABS."]);
+    expect(client.saved).toEqual(["Billing goes in BIL."]);
   });
 });
 

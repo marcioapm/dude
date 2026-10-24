@@ -36,7 +36,7 @@ func TestChatADeadWorkersLeaseIsReclaimedOnceItRunsOut(t *testing.T) {
 	var mu sync.Mutex
 	w.svc.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
 	advance := func(d time.Duration) { mu.Lock(); clock = clock.Add(d); mu.Unlock() }
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "T", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "T", "goal": "g"}))
 	// The first worker hangs after the routing decision, as a dead process would.
 	dead := make(chan struct{})
 	first := true
@@ -86,7 +86,7 @@ func TestChatADeadWorkersLeaseIsReclaimedOnceItRunsOut(t *testing.T) {
 // to commit finds the question answered and rolls its work back.
 func TestChatTwoClicksAtOnceFileOneChoice(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "Fix the export", "goal": "Fix it."}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "BIL", "title": "Fix the export", "goal": "Fix it."}))
 	root := w.mention("Eli", "C1", "", "the export is broken")
 	q := lastBot(t, w.fake)
 	for i := range 2 {
@@ -128,7 +128,7 @@ func TestChatTwoClicksAtOnceFileOneChoice(t *testing.T) {
 func TestChatADeadlineKeepsNothingAndTheRetryAsksAgain(t *testing.T) {
 	w := setup(t)
 	w.svc.SetDeliveryTimeout(500 * time.Millisecond)
-	task := answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "T", "goal": "g"})
+	task := answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "T", "goal": "g"})
 	w.model.queue(task, task)
 	w.model.delay = 3 * time.Second
 	_, ev := w.receive("Eli", "C1", "", "file it")

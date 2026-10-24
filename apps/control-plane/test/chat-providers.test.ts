@@ -300,12 +300,12 @@ describe("settings", () => {
       .toEqual({ builtIn: "You route a message.", additional: "", canEdit: false });
     expect((await call(memberKey, "PUT", "/v1/organization/routing-instructions", { additional: "x" })).status).toBe(403);
     expect((await call(adminKey, "PUT", "/v1/organization/routing-instructions", { additional: "x".repeat(4001) })).status).toBe(400);
-    const put = await call(adminKey, "PUT", "/v1/organization/routing-instructions", { additional: "  Billing work goes in ABS.  " });
-    expect((await put.json() as Json).additional).toBe("Billing work goes in ABS.");
+    const put = await call(adminKey, "PUT", "/v1/organization/routing-instructions", { additional: "  Billing work goes in BIL.  " });
+    expect((await put.json() as Json).additional).toBe("Billing work goes in BIL.");
     expect((await call(memberKey, "PUT", "/v1/organization/chat/slack/routing-instructions", { additional: "y" })).status).toBe(403);
     await call(adminKey, "PUT", "/v1/organization/chat/slack/routing-instructions", { additional: "Prefer sessions." });
     expect(await (await call(memberKey, "GET", "/v1/organization/chat/slack/routing-instructions")).json()).toEqual({
-      builtIn: "You route a message.", organisation: "Billing work goes in ABS.", additional: "Prefer sessions.", installed: true, canEdit: false });
+      builtIn: "You route a message.", organisation: "Billing work goes in BIL.", additional: "Prefer sessions.", installed: true, canEdit: false });
     expect((await owner`SELECT settings->>'additional_instructions' AS a FROM chat_installations WHERE id = 'chi_1'`)[0].a).toBe("Prefer sessions.");
   });
 
@@ -316,7 +316,7 @@ describe("settings", () => {
         result_kind, result_id, created_at)
       VALUES (${id}, ${ORG}, 'slack', ${id}, 'T1', 'C1', 'private', '#design', 'U2', 'Eli Park', ${memberPerson}, 'help', ${route}, 0.8, 'why',
         ${`{${adminPerson}}`}::text[], '{U9}'::text[], ${extra.result_kind ?? null}, ${extra.result_id ?? null}, now() - make_interval(mins => ${minutes}))`;
-    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_1', ${ORG}, 'Billing', 'abs', 'ABS')`;
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_1', ${ORG}, 'Billing', 'bil', 'BIL')`;
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_1', ${ORG}, 'prj_1', 7, 'Stream it')`;
     await insert("chr_1", "task", 5, { result_kind: "task", result_id: "wi_1" });
     await insert("chr_2", "not_connected", 1);
@@ -325,7 +325,7 @@ describe("settings", () => {
     const all = await (await call(adminKey, "GET", "/v1/organization/chat/requests")).json() as Json;
     expect(all.requests.map((r: Json) => r.id)).toEqual(["chr_2", "chr_1"]);
     const task = all.requests[1];
-    expect(task.result).toEqual({ kind: "task", id: "wi_1", label: "ABS-7 Stream it" });
+    expect(task.result).toEqual({ kind: "task", id: "wi_1", label: "BIL-7 Stream it" });
     expect(task.person.id).toBe(memberPerson);
     expect(task.sharedAdded.map((p: Json) => p.id)).toEqual([adminPerson]);
     expect(task.sharedSkipped).toEqual(["U9"]);

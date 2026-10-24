@@ -199,13 +199,13 @@ describe("IdentityPair, InstructionStack and ProviderList", () => {
   test("the stack is in order, the page's layer marked, the collapsed one head only, an empty one says so", async () => {
     const el = await mount(<InstructionStack label="What the model is told" layers={[
       { id: "builtin", title: "Built-in", owner: "dude's own", text: "a\nb\nc", collapsed: true },
-      { id: "org", title: "Acme's", owner: "every chat", text: "Billing goes in ABS." },
+      { id: "org", title: "Acme's", owner: "every chat", text: "Billing goes in BIL." },
       { id: "provider", title: "Slack's", owner: "Slack only", text: "", here: true },
     ]} />);
     const items = [...byRole(el, "list", "What the model is told").querySelectorAll("li")];
     expect(items.map((li) => li.getAttribute("data-layer"))).toEqual(["builtin", "org", "provider"]);
     expect(items[0]!.textContent).toBe("1Built-indude's own · 3 lines");
-    expect(items[1]!.textContent).toContain("Billing goes in ABS.");
+    expect(items[1]!.textContent).toContain("Billing goes in BIL.");
     expect(items[2]!.textContent).toContain("Nothing added");
     expect(items[2]!.textContent).toContain("This page");
   });
@@ -256,14 +256,14 @@ describe("SettingsLayout groups", () => {
 describe("Board cardLead", () => {
   test("sits on the card's first line, before its key, only where the app gives one", () => {
     const project: NavProject = { id: "p", name: "Billing", epics: [], tasks: [
-      { id: "t1", key: "ABS-1", title: "From chat", status: "received" },
-      { id: "t2", key: "ABS-2", title: "Typed in dude", status: "received" },
+      { id: "t1", key: "BIL-1", title: "From chat", status: "received" },
+      { id: "t2", key: "BIL-2", title: "Typed in dude", status: "received" },
     ] };
     const html = renderToStaticMarkup(<Board project={project} hideHeader
       cardLead={(card) => (card.task.id === "t1" ? <span data-lead="">From Slack</span> : null)} />);
     const card = (key: string) => html.slice(html.indexOf(`data-board-key="task:${key}"`), html.indexOf("</li>", html.indexOf(`data-board-key="task:${key}"`)));
     expect(card("t1").indexOf("data-lead")).toBeGreaterThan(-1);
-    expect(card("t1").indexOf("data-lead")).toBeLessThan(card("t1").indexOf(">ABS-1<"));
+    expect(card("t1").indexOf("data-lead")).toBeLessThan(card("t1").indexOf(">BIL-1<"));
     expect(card("t2").includes("data-lead")).toBe(false);
   });
 });

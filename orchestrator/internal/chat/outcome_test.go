@@ -52,7 +52,7 @@ func TestChatADeterministicFailureBeforeMakeIsAnsweredAndRecorded(t *testing.T) 
 // asker gets the link privately with the mention marked ❌.
 func TestChatGivingUpAfterTheRequestWasMadeTellsThePerson(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	w.fake.FailTimes("chat.postMessage", "internal_error", 100)
 	ts, ev := w.receive("Eli", "C1", "", "file: stream it")
 	for range 7 {
@@ -68,7 +68,7 @@ func TestChatGivingUpAfterTheRequestWasMadeTellsThePerson(t *testing.T) {
 		t.Fatalf("requests %+v", got)
 	}
 	eph := w.fake.Ephemerals()
-	if len(eph) != 1 || eph[0].User != "U2" || !strings.Contains(eph[0].Text, "Filed ABS-1 Stream it") ||
+	if len(eph) != 1 || eph[0].User != "U2" || !strings.Contains(eph[0].Text, "Filed BIL-1 Stream it") ||
 		!strings.Contains(string(eph[0].Blocks), "#/o/acme/task/"+got[0].ResultID) {
 		t.Fatalf("ephemerals %+v", eph)
 	}
@@ -84,7 +84,7 @@ func TestChatGivingUpAfterTheRequestWasMadeTellsThePerson(t *testing.T) {
 // link privately, the mention ❌, and Requests says failed, with the task kept.
 func TestChatARefusedReplyIsSentPrivatelyAndRecordedAsFailed(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	w.fake.FailNext("chat.postMessage", "msg_too_long")
 	ts, ev := w.receive("Eli", "C1", "", "file: stream it")
 	w.once()
@@ -96,7 +96,7 @@ func TestChatARefusedReplyIsSentPrivatelyAndRecordedAsFailed(t *testing.T) {
 		!strings.Contains(got[0].Reasoning, "msg_too_long") {
 		t.Fatalf("requests %+v", got)
 	}
-	if eph := w.fake.Ephemerals(); len(eph) != 1 || !strings.Contains(eph[0].Text, "Filed ABS-1 Stream it") {
+	if eph := w.fake.Ephemerals(); len(eph) != 1 || !strings.Contains(eph[0].Text, "Filed BIL-1 Stream it") {
 		t.Fatalf("ephemerals %+v", eph)
 	}
 	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "x" {
@@ -108,7 +108,7 @@ func TestChatARefusedReplyIsSentPrivatelyAndRecordedAsFailed(t *testing.T) {
 // stands, the request stays what it made, and nobody is sent a note.
 func TestChatAFailedMarkLeavesAPostedReplySuccessful(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	w.fake.FailTimes("reactions.add", "internal_error", 100)
 	_, ev := w.receive("Eli", "C1", "", "file: stream it")
 	for range chat.MaxAttempts + 2 {
@@ -125,7 +125,7 @@ func TestChatAFailedMarkLeavesAPostedReplySuccessful(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM chat_requests WHERE organization_id = $1 AND replied_at IS NOT NULL`, w.org); n != 1 {
 		t.Fatalf("%d requests replied", n)
 	}
-	if bot := w.fake.BotMessages(); len(bot) != 1 || !strings.HasPrefix(bot[0].Text, "Filed ABS-1") {
+	if bot := w.fake.BotMessages(); len(bot) != 1 || !strings.HasPrefix(bot[0].Text, "Filed BIL-1") {
 		t.Fatalf("replies %+v", bot)
 	}
 	if eph := w.fake.Ephemerals(); len(eph) != 0 {
@@ -139,7 +139,7 @@ func TestChatAFailedMarkLeavesAPostedReplySuccessful(t *testing.T) {
 // posts nor tells the asker again.
 func TestChatARetryRemembersAnEarlierRefusal(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	w.fake.FailNext("chat.postMessage", "msg_too_long")
 	ts, ev := w.receive("Eli", "C1", "", "file: stream it")
 	w.once()
@@ -167,7 +167,7 @@ func TestChatARetryRemembersAnEarlierRefusal(t *testing.T) {
 // task with foreign-key triggers off, leaving the binding behind.
 func TestChatABoundTaskGoneBeforeTheLinkRoutesAfresh(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	root := w.mention("Eli", "C1", "", "file: stream it")
 	task := w.requests()[0].ResultID
 	w.exec(`SET session_replication_role = replica`)
@@ -191,7 +191,7 @@ func TestChatABoundTaskGoneBeforeTheLinkRoutesAfresh(t *testing.T) {
 // and replied to tells nobody anything: no note, no ❌.
 func TestChatGivingUpAfterAnotherAttemptRepliedSaysNothing(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	ts, ev := w.receive("Eli", "C1", "", "file: stream it")
 	w.svc.SetBeforeMake(func(ctx context.Context) error {
 		if _, err := w.owner.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id,
@@ -220,7 +220,7 @@ func TestChatGivingUpAfterAnotherAttemptRepliedSaysNothing(t *testing.T) {
 // and forwards the link it made privately.
 func TestChatGivingUpOnAClickMarksTheAskedMention(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "Fix the export", "goal": "Fix it."}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "BIL", "title": "Fix the export", "goal": "Fix it."}))
 	root := w.mention("Eli", "C1", "", "the export is broken")
 	q := lastBot(t, w.fake)
 	w.fake.FailTimes("chat.update", "internal_error", 100)
@@ -236,7 +236,7 @@ func TestChatGivingUpOnAClickMarksTheAskedMention(t *testing.T) {
 	if r := w.fake.Reactions("C1", root); strings.Join(r, ",") != "x" {
 		t.Fatalf("reactions on the asked mention %v", r)
 	}
-	if eph := w.fake.Ephemerals(); len(eph) != 1 || !strings.Contains(eph[0].Text, "Filed ABS-1") {
+	if eph := w.fake.Ephemerals(); len(eph) != 1 || !strings.Contains(eph[0].Text, "Filed BIL-1") {
 		t.Fatalf("ephemerals %+v", eph)
 	}
 }
@@ -261,7 +261,7 @@ func TestChatGivingUpNamesAnAskerLinkedWithoutAName(t *testing.T) {
 // tried again and the question posted once. What was asked stays the
 // model's route, which the clarify request already carried.
 func TestChatARefusedQuestionEndsTheMention(t *testing.T) {
-	low := answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "Fix the export", "goal": "Fix it."})
+	low := answer(map[string]any{"route": "task", "confidence": 0.6, "project": "BIL", "title": "Fix the export", "goal": "Fix it."})
 	for _, code := range []string{"not_in_channel", "channel_not_found"} {
 		t.Run(code, func(t *testing.T) {
 			w := setup(t)
@@ -318,7 +318,7 @@ func TestChatARefusedQuestionEndsTheMention(t *testing.T) {
 // transiently posts, on the retry, the update and the reply once each.
 func TestChatAClickWhoseUpdateFailedPostsTheRestOnTheRetry(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "Fix the export", "goal": "Fix it."}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "BIL", "title": "Fix the export", "goal": "Fix it."}))
 	root := w.mention("Eli", "C1", "", "the export is broken")
 	q := lastBot(t, w.fake)
 	w.fake.FailNext("chat.update", "internal_error")
@@ -328,12 +328,12 @@ func TestChatAClickWhoseUpdateFailedPostsTheRestOnTheRetry(t *testing.T) {
 	}
 	w.due()
 	w.sweep()
-	if u := w.fake.Updates(); len(u) != 1 || u[0].Text != "Eli chose File it in ABS" {
+	if u := w.fake.Updates(); len(u) != 1 || u[0].Text != "Eli chose File it in BIL" {
 		t.Fatalf("updates %+v", u)
 	}
 	var filed int
 	for _, m := range w.fake.BotMessages() {
-		if strings.HasPrefix(m.Text, "Filed ABS-1") {
+		if strings.HasPrefix(m.Text, "Filed BIL-1") {
 			filed++
 		}
 	}

@@ -186,7 +186,7 @@ function ChatPage({ client, orgName, admin, overview, onPage, judgementTier }: {
           help={`Appended to the built-in ones, for every chat. What your organisation knows that the model can't: which channel means which project, where bugs go. Each provider can add its own after these.`}>
           <Textarea id="chat-instructions" aria-label="Additional instructions" rows={4} value={draft} readOnly={!instructions?.canEdit}
             maxLength={CHAT_INSTRUCTIONS_MAX} onChange={(e) => setDraft(e.target.value)} data-testid="chat-instructions"
-            placeholder={instructions?.canEdit ? "#support is almost always ABS." : "Nothing added."} />
+            placeholder={instructions?.canEdit ? "#support is almost always about Billing (BIL)." : "Nothing added."} />
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
           {instructions?.canEdit ? (
             <span><Button variant="primary" size="sm" disabled={busy || draft === instructions.additional} data-testid="chat-instructions-save"

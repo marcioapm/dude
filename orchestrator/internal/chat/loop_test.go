@@ -101,7 +101,7 @@ func (w *world) event(id string) eventRow {
 // model is asked once, and what was made is made once.
 func TestChatARetryActsOnTheKeptDecisionAndNeverAsksAgain(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	fails := 1
 	w.svc.SetBeforeMake(func(context.Context) error {
 		if fails > 0 {
@@ -293,7 +293,7 @@ func TestChatWaitsForTheProvidersRetryAfter(t *testing.T) {
 // brainstorm, recorded with what was asked.
 func TestChatADeterministicFailureFallsBackWithoutRetrying(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "epic": "Exports", "title": "x", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "epic": "Exports", "title": "x", "goal": "g"}))
 	w.svc.SetBeforeMake(func(ctx context.Context) error {
 		_, err := w.owner.Exec(ctx, `DELETE FROM epics WHERE id = $1`, "epc_exp_"+w.org)
 		return err
@@ -356,7 +356,7 @@ func TestChatRoutesOneThreadInOrderAndThreadsAtOnce(t *testing.T) {
 // updated once.
 func TestChatAClickSurvivesARetry(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "Fix the export", "goal": "Fix it."}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "BIL", "title": "Fix the export", "goal": "Fix it."}))
 	root := w.mention("Eli", "C1", "", "the export is broken")
 	q := lastBot(t, w.fake)
 	value := buttonValue(t, q, 0)
@@ -376,7 +376,7 @@ func TestChatAClickSurvivesARetry(t *testing.T) {
 	if got := w.requests(); len(got) != 2 || got[1].Route != "task" {
 		t.Fatalf("requests %+v", got)
 	}
-	if u := w.fake.Updates(); len(u) != 1 || u[0].Text != "Eli chose File it in ABS" {
+	if u := w.fake.Updates(); len(u) != 1 || u[0].Text != "Eli chose File it in BIL" {
 		t.Fatalf("updates %+v", u)
 	}
 }
@@ -385,7 +385,7 @@ func TestChatAClickSurvivesARetry(t *testing.T) {
 // the post failed posts the recorded question once, with the same buttons.
 func TestChatAQuestionIsRecordedBeforeItIsPosted(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "x", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "project": "BIL", "title": "x", "goal": "g"}))
 	w.fake.FailNext("chat.postMessage", "internal_error")
 	_, ev := w.receive("Eli", "C1", "", "maybe a task")
 	w.once()
@@ -411,7 +411,7 @@ func TestChatAQuestionIsRecordedBeforeItIsPosted(t *testing.T) {
 // commit rolls back everything this one made.
 func TestChatARequestRecordedMeanwhileRollsTheWorkBack(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "T", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "T", "goal": "g"}))
 	var ev string
 	w.svc.SetBeforeMake(func(ctx context.Context) error {
 		_, err := w.owner.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
@@ -456,7 +456,7 @@ func TestChatARedeliveryMakesNothingTwice(t *testing.T) {
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Ideas"}))
 	w.dm("Márcia", "ideas")
 	replay("a DM")
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "T", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "T", "goal": "g"}))
 	w.mention("Eli", "C1", "", "file it")
 	replay("a task")
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Talk"}))

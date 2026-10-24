@@ -209,7 +209,7 @@ func TestChatAGroupSharesWithEveryConnectedMember(t *testing.T) {
 // A thread bound to an epic gets the epic's link, with no model.
 func TestChatAnEpicBoundThreadGetsItsLink(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "ABS", "new_epic": map[string]any{"title": "Fast exports",
+	w.model.queue(answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "BIL", "new_epic": map[string]any{"title": "Fast exports",
 		"tasks": []map[string]any{{"ref": "a", "title": "Measure"}}}}))
 	root := w.mention("Márcia", "C1", "", "open an epic")
 	epic := w.last().ResultID
@@ -219,7 +219,7 @@ func TestChatAnEpicBoundThreadGetsItsLink(t *testing.T) {
 	if got.Route != "task_link" || got.ResultKind != "epic" || got.ResultID != epic || w.model.calls() != calls {
 		t.Fatalf("request %+v, %d model calls", got, w.model.calls())
 	}
-	if text := lastBot(t, w.fake).Text; text != "This thread is the epic ABS › Fast exports" {
+	if text := lastBot(t, w.fake).Text; text != "This thread is the epic BIL › Fast exports" {
 		t.Fatalf("reply %q", text)
 	}
 }

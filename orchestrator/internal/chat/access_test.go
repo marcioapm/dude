@@ -231,7 +231,7 @@ func TestChatAThreadBoundByAResumeAddsNobody(t *testing.T) {
 func TestChatATaskKeepsTheThreadItWasFiledFrom(t *testing.T) {
 	w := setup(t)
 	root := w.fake.Post("C1", "", "U9", "the export times out")
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Fix it", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Fix it", "goal": "g"}))
 	w.mention("Eli", "C1", root, "file it")
 	got := w.last()
 	if o := w.one(`SELECT origin->'thread'->0->>'text' FROM tasks WHERE id = $1`, got.ResultID); o != "the export times out" {
@@ -243,9 +243,9 @@ func TestChatATaskKeepsTheThreadItWasFiledFrom(t *testing.T) {
 // question in a thread, a brainstorm.
 func TestChatCapsConfidentClarifyingQuestions(t *testing.T) {
 	w := setup(t)
-	clarify := answer(map[string]any{"route": "clarify", "confidence": 0.9, "reasoning": "two ways", "project": "ABS",
+	clarify := answer(map[string]any{"route": "clarify", "confidence": 0.9, "reasoning": "two ways", "project": "BIL",
 		"question": map[string]any{"text": "Task or session?", "choices": []map[string]any{
-			{"id": "a", "label": "A task", "route": "task", "project": "ABS"}, {"id": "b", "label": "A session", "route": "brainstorm"}}}})
+			{"id": "a", "label": "A task", "route": "task", "project": "BIL"}, {"id": "b", "label": "A session", "route": "brainstorm"}}}})
 	w.model.queue(clarify, clarify, clarify, clarify)
 	root := w.mention("Eli", "C1", "", "hmm")
 	w.mention("Eli", "C1", root, "hmm again")

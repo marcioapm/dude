@@ -144,13 +144,13 @@ func TestParseEventReadsMentionsDMsAndTheAppsRemoval(t *testing.T) {
 
 func TestParseInteractionReadsAClickedChoice(t *testing.T) {
 	p := slack.New(slack.Config{})
-	payload, _ := jsonMarshal(fakeslack.Click("T1", "C1", "1.5", "1.0", "U1", "chr_1:abs"))
+	payload, _ := jsonMarshal(fakeslack.Click("T1", "C1", "1.5", "1.0", "U1", "chr_1:bil"))
 	in, err := p.ParseInteraction([]byte(url.Values{"payload": {string(payload)}}.Encode()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if in.WorkspaceID != "T1" || in.ConversationID != "C1" || in.ThreadID != "1.0" || in.MessageID != "1.5" || in.User.ID != "U1" ||
-		in.Value != "chr_1:abs" || !strings.HasPrefix(in.ID, "T1:U1:") {
+		in.Value != "chr_1:bil" || !strings.HasPrefix(in.ID, "T1:U1:") {
 		t.Fatalf("interaction %+v", in)
 	}
 	for _, bad := range []string{"", "payload=not-json", "payload=" + url.QueryEscape(`{"type":"view_submission"}`)} {
@@ -242,17 +242,17 @@ func TestRepliesEphemeralsQuestionsAndReactions(t *testing.T) {
 		t.Fatalf("ephemerals %+v", e)
 	}
 	q, err := p.PostQuestion(ctx, inst, "C1", root, chat.Question{Text: "Which project?", Choices: []chat.Choice{
-		{Label: "ABS", Value: "chr_1:0"}, {Label: "A session for me", Value: "chr_1:1"}}})
+		{Label: "BIL", Value: "chr_1:0"}, {Label: "A session for me", Value: "chr_1:1"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if b := string(fake.BotMessages()[1].Blocks); !strings.Contains(b, `"value":"chr_1:0"`) || !strings.Contains(b, "A session for me") {
 		t.Fatalf("question blocks %s", b)
 	}
-	if err := p.UpdateQuestion(ctx, inst, "C1", q, chat.ExternalUser{DisplayName: "Márcia"}, "ABS"); err != nil {
+	if err := p.UpdateQuestion(ctx, inst, "C1", q, chat.ExternalUser{DisplayName: "Márcia"}, "BIL"); err != nil {
 		t.Fatal(err)
 	}
-	if u := fake.Updates(); len(u) != 1 || u[0].Text != "Márcia chose ABS" {
+	if u := fake.Updates(); len(u) != 1 || u[0].Text != "Márcia chose BIL" {
 		t.Fatalf("updates %+v", u)
 	}
 	// 👀, then ✅ in its place; a second 👀 is no failure.

@@ -99,7 +99,7 @@ type world struct {
 	people map[string][2]string
 }
 
-// setup is Acme with Slack installed in workspace T1, the project ABS (with
+// setup is Acme with Slack installed in workspace T1, the project BIL (with
 // the epic Exports) on the Judgements tier, and people: Márcia (admin) and
 // Eli connected; Gus in Acme but not connected; Ana connected but removed
 // from Acme; Zed a Slack user dude has never heard of.
@@ -116,8 +116,8 @@ func setup(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	w.exec(`UPDATE organizations SET judgement_tier_id = $1 WHERE id = $2`, tier, w.org)
-	w.project = "prj_abs_" + w.org
-	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'Billing', 'abs', 'ABS')`, w.project, w.org)
+	w.project = "prj_bil_" + w.org
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'Billing', 'bil', 'BIL')`, w.project, w.org)
 	w.exec(`INSERT INTO epics (id, organization_id, project_id, title) VALUES ($1, $2, $3, 'Exports')`, "epc_exp_"+w.org, w.org, w.project)
 
 	w.fake = fakeslack.New("cid", "csecret")
@@ -328,7 +328,7 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 	root := w.fake.Post("C1", "", "U9", "CSV export times out for 40 meters")
 	w.fake.Post("C1", root, "U2", "same for me")
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.82, "reasoning": "needs investigating",
-		"project": "ABS", "title": "CSV export timeout"}))
+		"project": "BIL", "title": "CSV export timeout"}))
 	ts := w.mention("Márcia", "C1", root, "can you reproduce this?")
 
 	got := w.requests()
@@ -344,7 +344,7 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 		t.Fatalf("owner %s", o)
 	}
 	if n := w.count(`SELECT count(*) FROM session_projects WHERE session_id = $1 AND project_id = $2`, session, w.project); n != 1 {
-		t.Fatal("the session is not linked to ABS")
+		t.Fatal("the session is not linked to BIL")
 	}
 	origin := w.one(`SELECT origin::text FROM sessions WHERE id = $1`, session)
 	for _, want := range []string{`"provider": "slack"`, `"conversationName": "#support"`, `"Zed Outside"`, `"inDude": false`, `"by": "Eli"`} {
@@ -358,7 +358,7 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 		t.Fatalf("briefing %s", b)
 	}
 	// The model was told the thread and the projects, on the Judgements tier, and it was recorded as a judgement.
-	if sent := w.model.last(); !strings.Contains(sent, "Zed Outside (not in dude)") || !strings.Contains(sent, `ABS (Billing), epics: \"Exports\"`) ||
+	if sent := w.model.last(); !strings.Contains(sent, "Zed Outside (not in dude)") || !strings.Contains(sent, `BIL (Billing), epics: \"Exports\"`) ||
 		!strings.Contains(sent, "judge-model") {
 		t.Fatalf("sent %s", sent)
 	}
@@ -453,7 +453,7 @@ func TestChatPrivateChannelSharesTheSessionWithConnectedMembers(t *testing.T) {
 
 func TestChatTaskRouteFilesInTheBacklogAndTheBoundThreadLinksIt(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "reasoning": "one clear change", "project": "ABS",
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "reasoning": "one clear change", "project": "BIL",
 		"epic": "Exports", "title": "Stream the CSV response", "goal": "Stream it.", "criteria": []string{"40 meters under 60 s"}}))
 	root := w.mention("Eli", "C1", "", "please file: stream the CSV export")
 	got := w.requests()
@@ -472,7 +472,7 @@ func TestChatTaskRouteFilesInTheBacklogAndTheBoundThreadLinksIt(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, task); n != 0 {
 		t.Fatal("the task was started")
 	}
-	if text := lastBot(t, w.fake).Text; text != "Filed ABS-1 Stream the CSV response in Backlog" {
+	if text := lastBot(t, w.fake).Text; text != "Filed BIL-1 Stream the CSV response in Backlog" {
 		t.Fatalf("reply %q", text)
 	}
 	calls := w.model.calls()
@@ -481,7 +481,7 @@ func TestChatTaskRouteFilesInTheBacklogAndTheBoundThreadLinksIt(t *testing.T) {
 	if w.model.calls() != calls || len(got) != 2 || got[1].Route != "task_link" || got[1].ResultID != task {
 		t.Fatalf("requests %+v, model calls %d", got, w.model.calls())
 	}
-	if reply := lastBot(t, w.fake); reply.Text != "This thread is ABS-1 Stream the CSV response" ||
+	if reply := lastBot(t, w.fake); reply.Text != "This thread is BIL-1 Stream the CSV response" ||
 		!strings.Contains(string(reply.Blocks), "#/o/acme/task/"+task) {
 		t.Fatalf("reply %+v", reply)
 	}
@@ -495,7 +495,7 @@ func TestChatEpicRouteFilesTheEpicAndItsTasksWithTheirOrder(t *testing.T) {
 		{"ref": "t3", "title": "Stream the response", "goal": "g", "blocked_by": []string{"t1"}},
 		{"ref": "t4", "title": "Regression test", "goal": "g", "blocked_by": []string{"t2", "t3"}},
 	}
-	w.model.queue(answer(map[string]any{"route": "epic", "confidence": 0.88, "reasoning": "several pieces", "project": "ABS",
+	w.model.queue(answer(map[string]any{"route": "epic", "confidence": 0.88, "reasoning": "several pieces", "project": "BIL",
 		"new_epic": map[string]any{"title": "CSV exports", "description": "Make exports fast.", "tasks": tasks}}))
 	w.mention("Márcia", "C1", "", "open an epic for fast CSV exports")
 	got := w.requests()
@@ -514,7 +514,7 @@ func TestChatEpicRouteFilesTheEpicAndItsTasksWithTheirOrder(t *testing.T) {
 	if edges != "Batch the readings query → Regression test; Measure export time → Batch the readings query; Measure export time → Stream the response; Stream the response → Regression test" {
 		t.Fatalf("edges %s", edges)
 	}
-	if text := lastBot(t, w.fake).Text; text != "Opened epic ABS › CSV exports with 4 tasks in Backlog" {
+	if text := lastBot(t, w.fake).Text; text != "Opened epic BIL › CSV exports with 4 tasks in Backlog" {
 		t.Fatalf("reply %q", text)
 	}
 }
@@ -543,7 +543,7 @@ func TestChatRefusesTheUnconnectedAndNonMembersPrivately(t *testing.T) {
 	// Ana: connected, but removed from Acme. A generic refusal naming nothing of Acme.
 	w.mention("Ana", "C1", "", "help me")
 	eph = w.fake.Ephemerals()
-	if len(eph) != 2 || eph[1].User != "U4" || strings.Contains(eph[1].Text, "Acme") || strings.Contains(eph[1].Text, "ABS") {
+	if len(eph) != 2 || eph[1].User != "U4" || strings.Contains(eph[1].Text, "Acme") || strings.Contains(eph[1].Text, "BIL") {
 		t.Fatalf("ephemerals %+v", eph)
 	}
 	got := w.requests()
@@ -557,11 +557,11 @@ func TestChatRefusesTheUnconnectedAndNonMembersPrivately(t *testing.T) {
 
 func TestChatLowConfidenceAsksAndTheAskersChoiceFiles(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "reasoning": "might be a task", "project": "ABS",
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "reasoning": "might be a task", "project": "BIL",
 		"title": "Fix the export", "goal": "Fix it."}))
 	root := w.mention("Eli", "C1", "", "the export is broken")
 	q := lastBot(t, w.fake)
-	if q.Text != "Should I file the task in ABS, or start a session?" || !strings.Contains(string(q.Blocks), "File it in ABS") ||
+	if q.Text != "Should I file the task in BIL, or start a session?" || !strings.Contains(string(q.Blocks), "File it in BIL") ||
 		!strings.Contains(string(q.Blocks), "A session for me") {
 		t.Fatalf("question %+v", q)
 	}
@@ -579,14 +579,14 @@ func TestChatLowConfidenceAsksAndTheAskersChoiceFiles(t *testing.T) {
 		t.Fatal("another person answered the question")
 	}
 	w.click("Eli", "C1", q.TS, root, value)
-	if u := w.fake.Updates(); len(u) != 1 || u[0].Text != "Eli chose File it in ABS" {
+	if u := w.fake.Updates(); len(u) != 1 || u[0].Text != "Eli chose File it in BIL" {
 		t.Fatalf("updates %+v", u)
 	}
 	got = w.requests()
 	if len(got) != 2 || got[1].Route != "task" || got[1].ResultKind != "task" {
 		t.Fatalf("requests %+v", got)
 	}
-	if text := lastBot(t, w.fake).Text; text != "Filed ABS-1 Fix the export in Backlog" {
+	if text := lastBot(t, w.fake).Text; text != "Filed BIL-1 Fix the export in Backlog" {
 		t.Fatalf("reply %q", text)
 	}
 	// A second click on the answered question does nothing, and reads nothing from Slack.
@@ -617,10 +617,10 @@ func TestChatFallsBackToABrainstorm(t *testing.T) {
 		{"a project dude does not know, no projects to offer instead", answer(map[string]any{"route": "task", "confidence": 0.9,
 			"project": "NOPE", "title": "x"}), "clarify", "task", "Which project should the task go in?", ""},
 		// Refused by dude's own check, before the database could refuse it.
-		{"a cycle", answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "ABS", "new_epic": map[string]any{"title": "E",
+		{"a cycle", answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "BIL", "new_epic": map[string]any{"title": "E",
 			"tasks": []map[string]any{{"ref": "a", "title": "A", "blocked_by": []string{"b"}}, {"ref": "b", "title": "B", "blocked_by": []string{"a"}}}}}),
 			"brainstorm", "epic", "", "(the tasks' blocked_by form a cycle)"},
-		{"13 tasks", answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "ABS", "new_epic": map[string]any{"title": "E",
+		{"13 tasks", answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "BIL", "new_epic": map[string]any{"title": "E",
 			"tasks": twelve(13)}}), "clarify", "epic", "That is 13 tasks. File the first 12, or talk it through?", ""},
 		{"a session the person cannot chat in", answer(map[string]any{"route": "resume", "confidence": 0.95, "session": "ssn_nope"}),
 			"brainstorm", "resume", "", ""},
@@ -659,7 +659,7 @@ func TestChatFallsBackToABrainstorm(t *testing.T) {
 
 func TestChatAsksAtMostTwoRoundsThenBrainstorms(t *testing.T) {
 	w := setup(t)
-	unsure := answer(map[string]any{"route": "task", "confidence": 0.5, "project": "ABS", "title": "x"})
+	unsure := answer(map[string]any{"route": "task", "confidence": 0.5, "project": "BIL", "title": "x"})
 	w.model.queue(unsure, unsure, unsure)
 	root := w.mention("Eli", "C1", "", "hmm")
 	w.mention("Eli", "C1", root, "hmm again")
@@ -692,7 +692,7 @@ func TestChatADirectMessageMakesAPrivateSessionAndBindsNothing(t *testing.T) {
 
 func TestChatInstructionsAreToldInOrderAndTheAppsRemovalUninstalls(t *testing.T) {
 	w := setup(t)
-	w.exec(`UPDATE organizations SET chat_instructions = 'Acme files billing work in ABS.' WHERE id = $1`, w.org)
+	w.exec(`UPDATE organizations SET chat_instructions = 'Acme files billing work in BIL.' WHERE id = $1`, w.org)
 	w.exec(`UPDATE chat_installations SET settings = '{"additional_instructions": "From Slack, prefer sessions."}' WHERE organization_id = $1`, w.org)
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "x"}))
 	w.mention("Márcia", "C1", "", "hello")
@@ -819,7 +819,7 @@ func TestChatConnectLinksOnceAndRoutesTheKeptMention(t *testing.T) {
 	}
 	// Gus signs in as himself from the prompt's connect page: linked, and his kept mention is routed.
 	w.fake.AuthorizeAs("", "U3")
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Tidy the export page", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Tidy the export page", "goal": "g"}))
 	start, err = w.svc.BeginConnect(w.ctx, w.org, chat.Begin{Provider: "slack", Person: gus, BrowserHash: "g", Redirect: redirect, Prompt: prompt})
 	if err != nil {
 		t.Fatal(err)
@@ -834,7 +834,7 @@ func TestChatConnectLinksOnceAndRoutesTheKeptMention(t *testing.T) {
 	if len(got) != 2 || got[1].Route != "task" || got[1].Person != gus {
 		t.Fatalf("requests %+v", got)
 	}
-	if text := lastBot(t, w.fake).Text; text != "Filed ABS-1 Tidy the export page in Backlog" {
+	if text := lastBot(t, w.fake).Text; text != "Filed BIL-1 Tidy the export page in Backlog" {
 		t.Fatalf("reply %q", text)
 	}
 	// The prompt's state was spent.

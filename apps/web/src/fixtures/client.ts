@@ -790,7 +790,7 @@ export class FixtureClient extends ApiClient {
 
   // -- chat: Slack installed, you connected, a few requests -------------------
 
-  #chatInstructions = "#support is almost always ABS.\nBugs about exports go to the Exports epic.";
+  #chatInstructions = "#support is almost always about Billing (BIL).\nBugs about exports go to the Exports epic.";
   #slackInstructions = "#eng-* channels belong to engineering: prefer a task over a brainstorm there.";
   #slackInstalled = true;
   #slackLinked = true;
@@ -852,8 +852,8 @@ export class FixtureClient extends ApiClient {
     const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
     const rows: ChatRequestRow[] = [
       { id: "chr_1", provider: "slack", conversationKind: "public", conversationName: "#eng-exports", externalUserName: p(1).name, person: p(1),
-        text: "open an epic in abs so CSV exports stop timing out, with the tasks it needs", permalink: "", route: "epic", askedRoute: null,
-        confidence: 0.86, reasoning: "Several pieces of work in ABS.", rounds: 0, result: { kind: "epic", id: "epc_csv", label: "ABS › CSV exports" },
+        text: "open an epic in billing so CSV exports stop timing out, with the tasks it needs", permalink: "", route: "epic", askedRoute: null,
+        confidence: 0.86, reasoning: "Several pieces of work in BIL.", rounds: 0, result: { kind: "epic", id: "epc_csv", label: "BIL › CSV exports" },
         sharedAdded: [], sharedSkipped: [], createdAt: ago(8) },
       { id: "chr_2", provider: "slack", conversationKind: "private", conversationName: "#design-private", externalUserName: p(0).name, person: p(0),
         text: "let's think through the export settings screen together", permalink: "", route: "brainstorm", askedRoute: null, confidence: 0.79,

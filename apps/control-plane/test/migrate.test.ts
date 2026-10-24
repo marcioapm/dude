@@ -1248,7 +1248,7 @@ test("195 binds a workspace to one organisation, a provider account to one accou
     await sql`INSERT INTO accounts (id, email, name) VALUES ('acc_m', 'm@example.com', 'M'), ('acc_e', 'e@example.com', 'E')`;
     await sql`INSERT INTO people (id, organization_id, name, role, account_id) VALUES ('per_m', 'org_a', 'M', 'admin', 'acc_m'),
       ('per_e', 'org_a', 'E', 'member', 'acc_e'), ('per_o', 'org_b', 'O', 'admin', 'acc_m')`;
-    await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'ABS', 'abs', 'ABS')`;
+    await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'Billing', 'bil', 'BIL')`;
     await sql`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_a', 'org_a', 'prj_a', 1, 'T')`;
     await sql`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_a', 'org_a', 'S')`;
 

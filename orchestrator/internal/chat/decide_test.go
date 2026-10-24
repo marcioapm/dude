@@ -42,10 +42,10 @@ func TestChatEpicTasksProblemRefusesACycle(t *testing.T) {
 // A model's clarifying question may offer a task or a session: an epic or
 // resume choice carries nothing to make, so dude asks its own question.
 func TestChatModelClarifyChoicesAreTasksOrSessions(t *testing.T) {
-	w := chat.World{Projects: []chat.Project{{ID: "p1", Key: "ABS", Name: "Billing"}}, Kind: chat.KindPublic, Conversation: "C1"}
+	w := chat.World{Projects: []chat.Project{{ID: "p1", Key: "BIL", Name: "Billing"}}, Kind: chat.KindPublic, Conversation: "C1"}
 	for _, route := range []string{chat.RouteEpic, chat.RouteResume} {
 		a := chat.Answer{Route: chat.RouteClarify, Confidence: 0.9, Question: &chat.Asked{Text: "Which?", Choices: []chat.AskedChoice{
-			{ID: "x", Label: "X", Route: route, Project: "ABS"}, {ID: "s", Label: "A session", Route: chat.RouteBrainstorm}}}}
+			{ID: "x", Label: "X", Route: route, Project: "BIL"}, {ID: "s", Label: "A session", Route: chat.RouteBrainstorm}}}}
 		if d := chat.Decide(a, w, 0, false, "hm"); d.Route != chat.RouteBrainstorm || !strings.Contains(d.Problem, route) {
 			t.Fatalf("%s choice: %+v", route, d)
 		}

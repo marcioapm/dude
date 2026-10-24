@@ -32,11 +32,11 @@ const thread = [
 ];
 
 const epicBoard: NavProject = {
-  id: "prj_abs", name: "abs", epics: [{ id: "epc_csv", title: "CSV exports", tasks: [
-    { id: "t1", key: "ABS-31", title: "Measure export time and queries per meter", status: "received", people: [marcia] },
-    { id: "t2", key: "ABS-32", title: "Batch the readings query per meter", status: "received", people: [marcia] },
-    { id: "t3", key: "ABS-33", title: "Stream the CSV response", status: "received", people: [marcia] },
-  ] }], tasks: [{ id: "t4", key: "ABS-29", title: "Typed in dude", status: "received", people: [eli] }],
+  id: "prj_billing", name: "billing", epics: [{ id: "epc_csv", title: "CSV exports", tasks: [
+    { id: "t1", key: "BIL-31", title: "Measure export time and queries per meter", status: "received", people: [marcia] },
+    { id: "t2", key: "BIL-32", title: "Batch the readings query per meter", status: "received", people: [marcia] },
+    { id: "t3", key: "BIL-33", title: "Stream the CSV response", status: "received", people: [marcia] },
+  ] }], tasks: [{ id: "t4", key: "BIL-29", title: "Typed in dude", status: "received", people: [eli] }],
 };
 
 export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
@@ -99,7 +99,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           <Col style={{ gap: 8 }}>
             <RoutingLine route="brainstorm" confidence={0.82} reasoning="An investigation: reproduce it first." model="Fast · gpt-6-sol-mini" />
-            <RoutingLine route="task" confidence={0.91} reasoning="One clear change in ABS." defaultOpen />
+            <RoutingLine route="task" confidence={0.91} reasoning="One clear change in BIL." defaultOpen />
             <RoutingLine route="brainstorm" fallback="task" confidence={0.61} reasoning="Might be a task; under the 75% bar." />
             <RoutingLine route="brainstorm" confidence={0.79} reasoning="A discussion." defaultOpen
               shared={{ place: "#design-private", added: [marcia, eli, ana], skipped: ["Kim Lee", "Zed Outside"] }} />
@@ -145,7 +145,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
         note="A chat-born session in the list carries where it came from under its summary (OriginFact compact).">
         <Panes mode={mode}>
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            <SessionRow title="CSV export timeout" summary="Nothing filed yet" projects={[{ key: "ABS", name: "abs", repositories: 2 }]} state="Talking"
+            <SessionRow title="CSV export timeout" summary="Nothing filed yet" projects={[{ key: "BIL", name: "billing", repositories: 2 }]} state="Talking"
               access="organisation" org="Acme" origin={<OriginFact provider={slack} place="#support" compact />} onOpen={() => {}} />
           </ul>
         </Panes>
@@ -156,7 +156,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}>
           {() => (
             <SettingRow label="Additional instructions" help="Appended to the built-in ones, for every chat." fill>
-              <Textarea aria-label="Additional instructions" rows={3} defaultValue="#support is almost always ABS." />
+              <Textarea aria-label="Additional instructions" rows={3} defaultValue="#support is almost always about Billing (BIL)." />
               <span><Button variant="primary" size="sm">Save</Button></span>
             </SettingRow>
           )}
@@ -164,7 +164,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
         <Label>In a 600px page column</Label>
         <div style={{ width: 600, maxWidth: "100%", containerType: "inline-size" }} data-testid="cp-setting-fill-narrow">
           <SettingRow label="Additional instructions" help="Appended to the built-in ones, for every chat." fill>
-            <Textarea aria-label="Additional instructions, narrow" rows={3} defaultValue="#support is almost always ABS." />
+            <Textarea aria-label="Additional instructions, narrow" rows={3} defaultValue="#support is almost always about Billing (BIL)." />
             <span><Button variant="primary" size="sm">Save</Button></span>
           </SettingRow>
         </div>
@@ -173,7 +173,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
           <SettingsLayout scope={{ title: "Acme", subtitle: "Organisation settings" }} current="chat" onSelect={() => {}}
             items={[{ id: "chat", label: "Chat", icon: "message" }]}>
             <SettingRow label="Additional instructions" help="Appended to the built-in ones, for every chat." fill>
-              <Textarea aria-label="Additional instructions, on a page" rows={3} defaultValue="#support is almost always ABS." />
+              <Textarea aria-label="Additional instructions, on a page" rows={3} defaultValue="#support is almost always about Billing (BIL)." />
               <span><Button variant="primary" size="sm">Save</Button></span>
             </SettingRow>
           </SettingsLayout>
@@ -193,7 +193,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
           <Col style={{ gap: 12 }}>
             <InstructionStack label="What the model is told" layers={[
               { id: "builtin", title: "Built-in", owner: "dude's own", text: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10", collapsed: true, action: <a href="#cp-stack">View on Chat</a> },
-              { id: "org", title: "Acme's", owner: "every chat", text: "#support is almost always ABS.\nBugs about exports go to the Exports epic.", action: <a href="#cp-stack">Edit on Chat</a> },
+              { id: "org", title: "Acme's", owner: "every chat", text: "#support is almost always about Billing (BIL).\nBugs about exports go to the Exports epic.", action: <a href="#cp-stack">Edit on Chat</a> },
               { id: "provider", title: "Slack's", owner: "Slack only", text: "#eng-* channels belong to engineering.", here: true },
             ]} />
             <InstructionStack label="What the model is told, nothing added" layers={[
@@ -241,7 +241,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block id="cp-board" title="Board: cardLead"
-        note="A chat-born task's card carries the provider's glyph and name on its first line, before its key; ABS-29, typed in dude, has none.">
+        note="A chat-born task's card carries the provider's glyph and name on its first line, before its key; BIL-29, typed in dude, has none.">
         <Panes mode={mode}>
           <Board project={epicBoard} epic={epicBoard.epics?.[0] ?? null} hideHeader
             cardLead={(card) => (card.task.id === "t4" ? null : <span><ProviderGlyph provider={slack} size={12} inline /></span>)} />

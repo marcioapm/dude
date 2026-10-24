@@ -192,7 +192,7 @@ func TestChatReadsMembersAndNamesOnlyForTheRoutesThatUseThem(t *testing.T) {
 		}
 	}
 	task := func(title string) {
-		w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": title, "goal": "g"}))
+		w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": title, "goal": "g"}))
 	}
 	brainstorm := func(title string) {
 		w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": title}))
@@ -221,7 +221,7 @@ func TestChatWakesOnlyTheLoopsThatHaveWork(t *testing.T) {
 	var kicks, runs int
 	w.svc.Kick = func() { kicks++ }
 	w.svc.RunStarted = func() { runs++ }
-	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "T", "goal": "g"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "T", "goal": "g"}))
 	w.mention("Eli", "C1", "", "file it")
 	if kicks != 1 || runs != 0 {
 		t.Fatalf("a task: %d kicks, %d run wakes", kicks, runs)

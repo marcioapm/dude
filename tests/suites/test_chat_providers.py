@@ -141,7 +141,7 @@ def _acme(client: ApiClient, env, owner_dsn: str, org: dict) -> dict:
     _, gus = provision_person(client, env, "Gus Lee", f"gus-{tag}@example.com")
     thinker = {t["name"]: t for t in client.get("/v1/models/tiers").json()["tiers"]}["Thinker"]["id"]
     assert client.put("/v1/judgements/settings", {"tierId": thinker}).status_code == 200
-    project = client.create_project(name="Billing", slug=f"abs-{tag}", key=f"A{tag[:3].upper()}")
+    project = client.create_project(name="Billing", slug=f"billing-{tag}", key=f"A{tag[:3].upper()}")
 
     slack.authorize_as(installer=u["U1"])
     landed = _oauth(marcia, "/v1/chat/slack/install")
