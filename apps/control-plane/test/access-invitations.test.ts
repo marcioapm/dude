@@ -263,12 +263,12 @@ describe("accepting", () => {
 
   // Someone whose removal passed more sessions than one transaction locks:
   // `n` sessions owned by `email`'s person, passed to the admins, and them removed.
-  async function departedOwnerOf(email: string, prefix: string, n: number) {
+  async function departedOwnerOf(email: string, prefix: string, n: number, byAdmins = true) {
     const code = (await invite([email])).body.results[0].invitation.code;
     const person = (await as(email, "POST", `/v1/invitations/${code}/accept`, {}, null)).body.person;
     await owner.begin(async (tx) => {
       await tx`INSERT INTO sessions (id, organization_id, title, access, owned_by_admins)
-        SELECT ${prefix} || lpad(g::text, 5, '0'), ${acme}, 'S', 'organisation', true FROM generate_series(1, ${n}) g`;
+        SELECT ${prefix} || lpad(g::text, 5, '0'), ${acme}, 'S', 'organisation', ${byAdmins} FROM generate_series(1, ${n}) g`;
       await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
         SELECT ${prefix} || lpad(g::text, 5, '0'), ${person.id}, ${acme}, 'owner', now() FROM generate_series(1, ${n}) g`;
       await tx`UPDATE people SET removed_at = now() WHERE id = ${person.id}`;
@@ -279,17 +279,18 @@ describe("accepting", () => {
     count(*) FILTER (WHERE owned_by_admins)::int AS held FROM sessions WHERE id LIKE ${`${prefix}%`}`)[0] as { back: number; held: number };
 
   test("an owner back with more sessions than one transaction locks gets them all, at most PASS_BATCH locked at a time", async () => {
-    const n = PASS_BATCH + 100;
+    const n = 2 * PASS_BATCH + 100;
     const prefix = `ssn_many_${suffix}_`;
     const id = (g: number) => `${prefix}${String(g).padStart(5, "0")}`;
     const ivo = await departedOwnerOf(at("many-back"), prefix, n);
-    // A session of the second batch is held (an admin taking it over): the
-    // accept's first transaction has committed its batch by the time the
-    // next one waits, holding only the locks of that batch taken so far.
+    // A session of the third batch is held (an admin taking it over): the
+    // accept's first transaction and the loop's first have committed their
+    // batches by the time the loop's second waits, holding only the locks
+    // of its own batch taken so far.
     const held = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const holder = owner.begin(async (tx) => {
-      await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || ${id(PASS_BATCH + 50)}))`;
+      await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || ${id(2 * PASS_BATCH + 50)}))`;
       held.resolve();
       await release.promise;
     });
@@ -307,7 +308,7 @@ describe("accepting", () => {
       }, 20_000);
       const [locks] = await owner`SELECT count(*)::int AS n FROM pg_locks WHERE pid = ${waiter} AND locktype = 'advisory' AND granted`;
       expect(locks.n).toBeLessThanOrEqual(PASS_BATCH);
-      expect(await returnedOf(prefix)).toEqual({ back: PASS_BATCH, held: 100 });
+      expect(await returnedOf(prefix)).toEqual({ back: 2 * PASS_BATCH, held: 100 });
     } finally {
       release.resolve();
       await holder;
@@ -320,7 +321,9 @@ describe("accepting", () => {
   }, 60_000);
 
   test("a return that fails between its batches is finished by accepting the invitation again", async () => {
-    const n = PASS_BATCH + 100;
+    // The second accept has PASS_BATCH + 100 left: more than its own
+    // transaction locks, so the rest needs its loop.
+    const n = 2 * PASS_BATCH + 100;
     const prefix = `ssn_resume_${suffix}_`;
     const failing = `${prefix}${String(PASS_BATCH + 50).padStart(5, "0")}`;
     const una = await departedOwnerOf(at("resume-back"), prefix, n);
@@ -331,7 +334,7 @@ describe("accepting", () => {
     try {
       expect((await as(at("resume-back"), "POST", `/v1/invitations/${code}/accept`, {}, null)).status).toBe(500);
       expect([...await owner`SELECT removed_at IS NULL AS here FROM people WHERE id = ${una}`]).toEqual([{ here: true }]);
-      expect(await returnedOf(prefix)).toEqual({ back: PASS_BATCH, held: 100 });
+      expect(await returnedOf(prefix)).toEqual({ back: PASS_BATCH, held: PASS_BATCH + 100 });
     } finally {
       await owner.unsafe(`DROP TRIGGER resume_fails ON sessions; DROP FUNCTION resume_fails()`);
     }
@@ -341,6 +344,72 @@ describe("accepting", () => {
       WHERE event_type = 'session.owner_returned' AND payload->>'owner' = ${una}`;
     expect(events).toEqual({ n, sessions: n });
   }, 60_000);
+
+  test("someone removed again while their return waits between batches keeps the rest the admins'", async () => {
+    const n = PASS_BATCH + 100;
+    const prefix = `ssn_regone_${suffix}_`;
+    const id = (g: number) => `${prefix}${String(g).padStart(5, "0")}`;
+    const vi = await departedOwnerOf(at("regone-back"), prefix, n);
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holder = owner.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || ${id(PASS_BATCH + 50)}))`;
+      held.resolve();
+      await release.promise;
+    });
+    await held.promise;
+    const again = (await invite([at("regone-back")])).body.results[0].invitation.code;
+    let accepting: ReturnType<typeof as> | undefined;
+    try {
+      accepting = as(at("regone-back"), "POST", `/v1/invitations/${again}/accept`, {}, null);
+      await waitFor(async () => (await owner`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE a.datname = current_database() AND l.locktype = 'advisory' AND NOT l.granted`)[0].n > 0, 20_000);
+      expect(await returnedOf(prefix)).toEqual({ back: PASS_BATCH, held: 100 });
+      // Standing in for a removal committed while the loop's batch waits.
+      await owner`UPDATE people SET removed_at = now() WHERE id = ${vi}`;
+    } finally {
+      release.resolve();
+      await holder;
+    }
+    expect((await accepting!).body.person.id).toBe(vi);
+    expect(await returnedOf(prefix)).toEqual({ back: PASS_BATCH, held: 100 });
+    const [events] = await owner`SELECT count(*)::int AS n, count(*) FILTER (WHERE session_id > ${id(PASS_BATCH)})::int AS later FROM events
+      WHERE event_type = 'session.owner_returned' AND payload->>'owner' = ${vi}`;
+    expect(events).toEqual({ n: PASS_BATCH, later: 0 });
+  }, 60_000);
+
+  test("sessions a removal batch passes while the accept waits on the person's row are returned too", async () => {
+    const n = 3;
+    const prefix = `ssn_passed_${suffix}_`;
+    // Theirs and not yet passed: the accept's first lock finds nothing to return.
+    const wyn = await departedOwnerOf(at("passed-back"), prefix, n, false);
+    const code = (await invite([at("passed-back")])).body.results[0].invitation.code;
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    // Standing in for a removal's later batch: their row held, the sessions passed, committed.
+    const holder = owner.begin(async (tx) => {
+      await tx`SELECT 1 FROM people WHERE id = ${wyn} FOR UPDATE`;
+      held.resolve();
+      await release.promise;
+      await tx`UPDATE sessions SET owned_by_admins = true WHERE id LIKE ${`${prefix}%`}`;
+    });
+    await held.promise;
+    let accepting: ReturnType<typeof as> | undefined;
+    try {
+      accepting = as(at("passed-back"), "POST", `/v1/invitations/${code}/accept`, {}, null);
+      await waitFor(async () => (await owner`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE a.datname = current_database() AND l.locktype IN ('transactionid', 'tuple') AND NOT l.granted`)[0].n > 0, 20_000);
+      expect(await returnedOf(prefix)).toEqual({ back: n, held: 0 });
+    } finally {
+      release.resolve();
+      await holder;
+    }
+    expect((await accepting!).body.person.id).toBe(wyn);
+    expect(await returnedOf(prefix)).toEqual({ back: n, held: 0 });
+    const [events] = await owner`SELECT count(*)::int AS n, count(DISTINCT session_id)::int AS sessions FROM events
+      WHERE event_type = 'session.owner_returned' AND payload->>'owner' = ${wyn}`;
+    expect(events).toEqual({ n, sessions: n });
+  }, 30_000);
 });
 
 describe("your keys, in each organisation", () => {
