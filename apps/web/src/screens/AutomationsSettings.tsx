@@ -354,7 +354,6 @@ export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {
           <Select<"own" | PresetRole> label="Agent" value={agentAs} onValueChange={setAgentAs}
             options={[{ value: "own", label: "Its own agent" }, ...PRESET_ROLES.map((r) => ({ value: r, label: PRESET_ROLE_LABEL[r] }))]} />
         ) : null}
-        {/* A Fieldset stretches the Segmented's track to the dialog's width, as the label above it is. */}
         <Fieldset legend="When it runs"
           hint={eventsOnly ? (kind === "server" ? "A server answers GitHub events." : REVIEWER_NEEDS_PULL_REQUEST) : undefined}>
           <Segmented<"schedule" | "github"> label="When it runs" value={eventsOnly ? "github" : when} onChange={setWhen}
@@ -688,11 +687,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   );
 }
 
-/**
- * A schedule's next three runs, as the orchestrator's scheduler computes them.
- * Asked only for a complete cron and a known zone, once typing pauses: a
- * half-typed expression would be refused, and the form says what is wrong.
- */
+// Wait for valid schedule inputs to settle before asking the scheduler for its next runs.
 function ScheduleNext({ client, cron, tz }: { client: ApiClient; cron: string; tz: string }) {
   const [times, setTimes] = useState<Date[] | null>(null);
   useEffect(() => {
