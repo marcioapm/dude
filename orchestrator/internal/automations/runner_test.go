@@ -425,6 +425,50 @@ func TestAutomationAgentOnAnEventKeepsAndResumesItsSession(t *testing.T) {
 	h.until("its container is ended", func() bool { return lux.Terminated(h.luxState(first.LuxRunID)) })
 }
 
+// lux keeps no secret's value and refuses a resume that does not give
+// every declared secret again. A resumable Server declares its event file
+// and an agent its chosen project secrets: the next firing resumes the kept
+// container with each of them (the event file holding the new event), not
+// a fresh one.
+func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
+	h := newHarness(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	t.Cleanup(srv.Close)
+	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return srv.URL, nil }
+	exec(t, h.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'ACME_TOKEN', 'acme-1', 'e-1')`, h.org, h.project)
+	h.automation("aut_rsrv", "server", map[string]any{"kind": "github", "event": "pull_request"},
+		map[string]any{"session_mode": "resumable", "expiry_days": 7,
+			"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": nil}})
+	h.automation("aut_ragent", "agent", map[string]any{"kind": "github", "event": "pull_request"},
+		map[string]any{"session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Triage {{pr.title}}."}}})
+	exec(t, h.owner, `UPDATE automations SET secrets = '{ACME_TOKEN}' WHERE id IN ('aut_rsrv', 'aut_ragent')`)
+	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
+	h.until("the agent's first run succeeds", func() bool { r := h.runs("aut_ragent"); return len(r) == 1 && r[0].Status == "succeeded" })
+	h.until("the server's first event is POSTed", func() bool {
+		var posted int
+		_ = h.owner.QueryRow(context.Background(), `SELECT posted FROM automation_runs WHERE automation_id = 'aut_rsrv'`).Scan(&posted)
+		return posted == 1
+	})
+	h.runner.Wait()
+	h.advance(ServerIdle + time.Second)
+	h.until("the server's first run ends idle", func() bool { r := h.runs("aut_rsrv"); return len(r) == 1 && r[0].Status == "succeeded" })
+	first := map[string]runRow{"aut_rsrv": h.runs("aut_rsrv")[0], "aut_ragent": h.runs("aut_ragent")[0]}
+	for id, r := range first {
+		h.until(id+"'s kept container is stopped", func() bool { return h.luxState(r.LuxRunID) == "stopped" })
+	}
+
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+	for id, r := range first {
+		h.until(id+"'s second run starts", func() bool { rs := h.runs(id); return len(rs) == 2 && rs[1].Session != "" })
+		second := h.runs(id)[1]
+		if second.Session != "resumed" || second.LuxRunID != r.LuxRunID {
+			t.Errorf("%s's second run: %+v, want the kept %s resumed", id, second, r.LuxRunID)
+		}
+	}
+	h.runner.Wait()
+}
+
 // A command on a schedule: the due schedule fires once, the command runs
 // to its end in the automation's image with the event-free env, and the
 // next time is set. A failing command fails the run and tells the owner.

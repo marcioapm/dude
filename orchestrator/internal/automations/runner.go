@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -821,6 +822,11 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 }
 
 // resume takes the kept session up again with this firing's instructions.
+// lux keeps no secret's value and refuses a resume that does not give
+// every secret the Run declares: its forge tokens are minted afresh, and
+// the rest (the event file, the setup manifest, project secrets, a registry
+// login) are taken from the spec this firing would start a new Run with,
+// so the event file holds this firing's event.
 func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, error) {
 	in := lux.ResumeInput{RequestID: "automation-" + runID}
 	if a.Kind == "agent" {
@@ -830,16 +836,16 @@ func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, p
 		}
 		in.Input = prompt
 	}
+	got, err := r.Lux.Get(ctx, kept)
+	if err != nil {
+		return "", err
+	}
 	if r.Forges != nil {
 		gh, err := r.Forges.For(ctx, a.Org)
 		if err != nil {
 			return "", err
 		}
 		if gh != nil {
-			got, err := r.Lux.Get(ctx, kept)
-			if err != nil {
-				return "", err
-			}
 			if in.Secrets, err = phases.ResumeCredentials(ctx, gh, got.Spec, nil); err != nil {
 				return "", err
 			}
@@ -851,6 +857,24 @@ func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, p
 			return "", err
 		}
 		in.Secrets = append(in.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + token})
+	}
+	given := func(name string) bool {
+		return slices.ContainsFunc(in.Secrets, func(s lux.Secret) bool { return s.Name == name })
+	}
+	if slices.ContainsFunc(got.Spec.Secrets, func(s lux.StoredSecret) bool { return !given(s.Name) }) {
+		fresh, why, err := r.spec(ctx, a, runID, payloads, at)
+		if err != nil {
+			return "", err
+		}
+		if why != "" {
+			return "", errors.New(why)
+		}
+		for _, s := range fresh.Secrets {
+			declared := slices.ContainsFunc(got.Spec.Secrets, func(d lux.StoredSecret) bool { return d.Name == s.Name })
+			if declared && !given(s.Name) {
+				in.Secrets = append(in.Secrets, s)
+			}
+		}
 	}
 	if _, err := r.Lux.Resume(ctx, kept, in); err != nil {
 		return "", err

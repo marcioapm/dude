@@ -758,7 +758,10 @@ their creator.
   one session per automation (`automation_sessions`), stopped and kept at
   the end of a run and resumed by the next firing, until `expiry_days`
   (1–30) pass without a run — whether or not the automation is on. "Start
-  fresh now" lets it go.
+  fresh now" lets it go. lux keeps no secret's value, so a resume gives
+  every secret the kept Run declares again: forge tokens minted afresh, the
+  rest (event file, setup manifest, project secrets) from the spec a new
+  Run would get, so the event file holds the new event.
 - **Concurrency** (`Arrive`): queue (default), merge (the waiting run gets
   every payload, as a list), skip (a skipped run row with the reason),
   cancel and restart, send to the running agent (a resumable agent), or run
