@@ -876,8 +876,13 @@ Someone writes `@dude …` in a team chat and dude starts a session, files a
 task, opens an epic with its tasks, resumes a session or asks first, and
 replies in the thread with a link. Migration 195 holds it all, keyed by
 `provider` (an adapter's id): `chat_installations` (one workspace ↔ one
-organisation, unique across tenants; the bot token stored as forge
-credentials are, in plaintext behind RLS — see What's next), `chat_identities`
+organisation, unique across tenants; the bot token treated as the forge
+token is — behind RLS, read only by `dude_app` (the sweeper's grant names
+the routing columns alone), returned by no route, kept out of agents,
+logs, stored errors and model-call records (the Slack adapter redacts it,
+and the app's secrets, from every error it returns), and deleted with the
+installation on a disconnect, an uninstall or a revoked bot token; like
+the forge token it is plaintext at rest, see What's next), `chat_identities`
 (a provider account linked once to one account per workspace, never by
 email), `chat_connect_states` (one-time, 15 minutes, as sha256),
 `chat_events` (deliveries, keyed on the provider's event id), `chat_threads`
@@ -1186,8 +1191,8 @@ In rough priority order.
    per-Run branch and the GitHub fast-forward.
 7. **Forge credentials are stored in plaintext.** Encrypt at rest before any
    non-local use.
-8. **Chat bot tokens are too** (`chat_installations.bot_token`), as forge
-   credentials are: the same encryption should cover both.
+8. **Chat bot tokens are too** (`chat_installations.bot_token`): treated as
+   forge credentials are, and the same encryption should cover both.
 
 ## Where things are
 

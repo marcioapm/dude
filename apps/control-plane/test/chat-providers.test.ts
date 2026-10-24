@@ -295,6 +295,15 @@ describe("settings", () => {
     expect(asAdmin.people.map((p: Json) => p.handle)).toEqual(["eli"]);
     expect(asAdmin.connected).toBeNull();
     expect(JSON.stringify(asAdmin)).not.toContain("xoxb-secret");
+    // No route returns the bot token, to a member or to an admin.
+    for (const key of [memberKey, adminKey]) {
+      const paths = ["/v1/organization/chat", "/v1/organization/chat/slack", "/v1/organization/chat/slack/routing-instructions", "/v1/me/chat/slack"];
+      for (const path of key === adminKey ? [...paths, "/v1/organization/chat/requests"] : paths) {
+        const res = await call(key, "GET", path);
+        expect(res.status).toBe(200);
+        expect(await res.text()).not.toContain("xoxb");
+      }
+    }
     expect((await call(memberKey, "GET", "/v1/organization/chat/discord")).status).toBe(404);
     expect((await (await call(memberKey, "GET", "/v1/me/chat/slack")).json() as Json).connected.handle).toBe("eli");
   });

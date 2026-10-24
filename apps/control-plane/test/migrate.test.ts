@@ -1304,6 +1304,18 @@ test("195 binds a workspace to one organisation, a provider account to one accou
       return [...await tx`SELECT id FROM chat_installations ORDER BY id`];
     });
     expect(seen).toEqual([{ id: "chi_o" }]);
+
+    // The bot token, as the forge token (051): the sweeper finds a delivery's
+    // organisation by its workspace and reads no secret.
+    const asSweeper = (q: string) => sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_sweeper`;
+      return [...await tx.unsafe(q)];
+    });
+    expect(await asSweeper(`SELECT organization_id FROM chat_installations WHERE provider = 'slack' AND external_workspace_id = 'T9'`))
+      .toEqual([{ organization_id: "org_b" }]);
+    expect(await refusal(async () => await asSweeper(`SELECT bot_token FROM chat_installations`))).toContain("permission denied");
+    expect(await refusal(async () => await asSweeper(`SELECT * FROM chat_installations`))).toContain("permission denied");
+    expect(await refusal(async () => await asSweeper(`SELECT mention FROM chat_requests`))).toContain("permission denied");
   } finally {
     await sql.end();
   }

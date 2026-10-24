@@ -16,8 +16,11 @@ CREATE TABLE chat_installations (
   workspace_name        text NOT NULL DEFAULT '',
   workspace_domain      text NOT NULL DEFAULT '',
   bot_user_id           text NOT NULL DEFAULT '',
-  -- The bot token the provider issued, stored as forge_credentials.secret
-  -- is: in this row, behind row-level security, never returned by a route.
+  -- The bot token the provider issued, treated as forge_credentials.secret
+  -- is: in this row, behind row-level security, read by dude_app alone (the
+  -- sweeper's grant below names no secret, as 051 made the forge's), never
+  -- returned by a route, logged or put in an error, and deleted with the
+  -- installation. Plaintext at rest, as the forge token is.
   bot_token             text NOT NULL,
   scopes                text[] NOT NULL DEFAULT '{}',
   installed_by          text REFERENCES people(id) ON DELETE SET NULL,

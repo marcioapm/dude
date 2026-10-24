@@ -384,3 +384,20 @@ func TestTheFakeRefusesMissingScopesAndChannelsTheBotIsNotIn(t *testing.T) {
 		}
 	}
 }
+
+// A Slack answer that echoes the bot token or the app's client secret
+// (in its error, or a non-JSON body) never carries it into dude's error,
+// which is logged and stored as the installation's last failure.
+func TestAnErrorEchoesNoCredential(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	fake.FailNext("conversations.info", "invalid_auth: "+inst.Token)
+	_, err := p.Conversation(ctx, inst, "C1")
+	if err == nil || strings.Contains(err.Error(), inst.Token) || !strings.Contains(err.Error(), "[REDACTED:bot_token]") {
+		t.Fatalf("bot token echoed: %v", err)
+	}
+	fake.FailNext("oauth.v2.access", "bad_client_secret csecret")
+	if _, err := p.CompleteInstall(ctx, "code", "https://dude.example.com/cb"); err == nil || strings.Contains(err.Error(), "csecret") {
+		t.Fatalf("client secret echoed: %v", err)
+	}
+}

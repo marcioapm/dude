@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
 
 // DefaultAPIURL is Slack's Web API.
@@ -264,8 +265,38 @@ func (e *APIError) Error() string { return fmt.Sprintf("slack %s: %s", e.Method,
 
 // call POSTs one Web API method as JSON with token (form-encoded with
 // none, as the OAuth methods take client credentials) and decodes the
-// answer into out, an ok:false into an *APIError.
+// answer into out, an ok:false into an *APIError. Its error never carries
+// the token or the app's secrets, however Slack's answer echoes them: it
+// is logged and kept as the installation's last failure.
 func (p *Provider) call(ctx context.Context, token, method string, args map[string]any, out any) error {
+	return p.scrub(token, p.send(ctx, token, method, args, out))
+}
+
+// scrub is err with the token and the app's secrets redacted (as
+// [REDACTED:bot_token] and the like), keeping whether it is transient.
+func (p *Provider) scrub(token string, err error) error {
+	if err == nil {
+		return nil
+	}
+	red := redact.FromList([]redact.Secret{{Name: "bot_token", Value: token},
+		{Name: "slack.client_secret", Value: p.cfg.ClientSecret}, {Name: "slack.signing_secret", Value: p.cfg.SigningSecret}})
+	msg := err.Error()
+	clean := red.String(msg)
+	if clean == msg {
+		return err
+	}
+	var apiErr *APIError
+	scrubbed := error(errors.New(clean))
+	if errors.As(err, &apiErr) {
+		scrubbed = &APIError{Method: apiErr.Method, Code: red.String(apiErr.Code)}
+	}
+	if t := (*chat.TransientError)(nil); errors.As(err, &t) {
+		return chat.Transient(scrubbed, t.RetryAfter)
+	}
+	return scrubbed
+}
+
+func (p *Provider) send(ctx context.Context, token, method string, args map[string]any, out any) error {
 	var body io.Reader
 	contentType := "application/json; charset=utf-8"
 	if token == "" {
