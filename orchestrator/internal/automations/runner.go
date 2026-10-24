@@ -1144,6 +1144,7 @@ func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, 
 		}
 		if f.Event == nil {
 			copied := strings.TrimSpace(f.Data)
+			// Assumes the copy directly follows the reply: a record between them leaves it logged twice.
 			if kind == "agent" && f.Channel == "stdout" && copied != "" && strings.HasSuffix(strings.TrimSpace(prior+log.String()), copied) {
 				return nil
 			}
