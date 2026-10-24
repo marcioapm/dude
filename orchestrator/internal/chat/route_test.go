@@ -611,8 +611,12 @@ func TestChatLowConfidenceAsksAndTheAskersChoiceFiles(t *testing.T) {
 		t.Fatalf("updates %+v", u)
 	}
 	got = w.requests()
-	if len(got) != 2 || got[1].Route != "task" || got[1].ResultKind != "task" {
+	// The question was the model's; the choice was the asker's, with no call of its own.
+	if len(got) != 2 || got[1].Route != "task" || got[1].ResultKind != "task" || got[0].ModelCall == "" || got[1].ModelCall != "" {
 		t.Fatalf("requests %+v", got)
+	}
+	if c := w.one(`SELECT confidence::text FROM chat_requests WHERE organization_id = $1 AND route = 'task'`, w.org); c != "1" {
+		t.Fatalf("the choice's confidence %s", c)
 	}
 	if text := lastBot(t, w.fake).Text; text != "Filed BIL-1 Fix the export in Backlog" {
 		t.Fatalf("reply %q", text)

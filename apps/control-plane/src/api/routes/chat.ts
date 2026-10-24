@@ -281,10 +281,11 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
               ORDER BY created_at DESC, id DESC LIMIT ${limit}`
           : await sql`SELECT id FROM chat_requests WHERE created_at > now() - interval '30 days'
               ORDER BY created_at DESC, id DESC LIMIT ${limit}`).map((r: { id: string }) => r.id);
-    // Counted over the whole week, not over the rows listed.
+    // Counted over the whole week, not over the rows listed. A routing call
+    // is recorded on its request as model_call_id; a clarifying question's
+    // clicked choice, a bound thread and a refusal have none.
     const week = summary
-      ? (await sql`SELECT count(*)::int AS mentions,
-            count(*) FILTER (WHERE confidence IS NOT NULL AND route <> 'task_link')::int AS asked
+      ? (await sql`SELECT count(*)::int AS mentions, count(model_call_id)::int AS asked
           FROM chat_requests WHERE created_at > now() - interval '7 days'
             AND (${route}::text IS NULL OR route = ${route}) AND (${provider}::text IS NULL OR provider = ${provider})`)[0] as ChatRequestsSummary
       : null;

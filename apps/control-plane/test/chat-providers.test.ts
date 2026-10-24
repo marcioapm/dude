@@ -123,6 +123,10 @@ afterAll(async () => {
 
 const last = () => sent.at(-1)!;
 
+/** A routing call the orchestrator recorded, for a request to name as its model call. */
+const routingCall = (id: string) => owner`INSERT INTO model_calls (id, organization_id, purpose, asker, tier_name, model, question,
+    request, status, latency_ms) VALUES (${id}, ${ORG}, 'judgement', 'chat.route', 'Fast', 'judge-model', 'Route it', '{}'::jsonb, 'ok', 900)`;
+
 describe("webhooks", () => {
   test("a provider's delivery reaches the orchestrator with its body and its own headers, and its answer comes back", async () => {
     const raw = `{"type":"url_verification","challenge":"c-1"}`;
@@ -310,12 +314,14 @@ describe("settings", () => {
   });
 
   test("Requests are an admin's, newest first, filtered by provider and route", async () => {
+    await routingCall("mcl_r");
     const insert = (id: string, route: string, minutes: number, extra: { result_kind?: string; result_id?: string } = {}) => owner`
       INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, conversation_kind,
         conversation_name, external_user_id, external_user_name, person_id, text, route, confidence, reasoning, shared_added, shared_skipped,
-        result_kind, result_id, created_at)
+        result_kind, result_id, model_call_id, created_at)
       VALUES (${id}, ${ORG}, 'slack', ${id}, 'T1', 'C1', 'private', '#design', 'U2', 'Eli Park', ${memberPerson}, 'help', ${route}, 0.8, 'why',
-        ${`{${adminPerson}}`}::text[], '{U9}'::text[], ${extra.result_kind ?? null}, ${extra.result_id ?? null}, now() - make_interval(mins => ${minutes}))`;
+        ${`{${adminPerson}}`}::text[], '{U9}'::text[], ${extra.result_kind ?? null}, ${extra.result_id ?? null}, 'mcl_r',
+        now() - make_interval(mins => ${minutes}))`;
     await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_1', ${ORG}, 'Billing', 'bil', 'BIL')`;
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_1', ${ORG}, 'prj_1', 7, 'Stream it')`;
     await insert("chr_1", "task", 5, { result_kind: "task", result_id: "wi_1" });
@@ -352,17 +358,34 @@ describe("settings", () => {
     expect((await (await call(adminKey, "GET", "/v1/organization/chat/requests?route=task&summary=1")).json() as Json).week)
       .toEqual({ mentions: 2, asked: 2 });
     expect((await call(adminKey, "GET", "/v1/organization/chat/requests?limit=201")).status).toBe(400);
-    // The week asks the model only of rows with a confidence that are not a
-    // bound thread's link, counts 7 days and not 8, and keeps to its provider.
+    // The week asks the model only of rows whose routing called it (a model
+    // call recorded), counts 7 days and not 8, and keeps to its provider.
     await insert("chr_nc", "not_connected", 2);
-    await owner`UPDATE chat_requests SET confidence = NULL WHERE id = 'chr_nc'`;
+    await owner`UPDATE chat_requests SET confidence = NULL, model_call_id = NULL WHERE id = 'chr_nc'`;
     await insert("chr_tl", "task_link", 4);
+    await owner`UPDATE chat_requests SET confidence = NULL, model_call_id = NULL WHERE id = 'chr_tl'`;
     await insert("chr_8d", "brainstorm", 60 * 24 * 8);
     const week = async (qs: string) =>
       ((await (await call(adminKey, "GET", `/v1/organization/chat/requests?summary=1${qs}`)).json() as Json).week);
     expect(await week("")).toEqual({ mentions: 5, asked: 3 });
     expect(await week("&provider=discord")).toEqual({ mentions: 1, asked: 1 });
     expect(await week("&provider=slack")).toEqual({ mentions: 4, asked: 2 });
+  });
+
+  test("a clarifying question's clicked choice did not ask the model again; its row is still 100% sure", async () => {
+    await routingCall("mcl_m1");
+    await routingCall("mcl_q1");
+    const insert = (id: string, route: string, confidence: number, modelCall: string | null) => owner`
+      INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id,
+        route, confidence, model_call_id, created_at)
+      VALUES (${id}, ${ORG}, 'chatter', ${id}, 'T1', 'C1', 'U2', ${route}, ${confidence}, ${modelCall}, now() - interval '1 minute')`;
+    await insert("chr_m1", "brainstorm", 0.9, "mcl_m1");
+    await insert("chr_q1", "clarify", 0.6, "mcl_q1");
+    // The asker's click, routed with confidence 1 and no call of its own.
+    await insert("chr_c1", "task", 1, null);
+    const page = await (await call(adminKey, "GET", "/v1/organization/chat/requests?provider=chatter&summary=1")).json() as Json;
+    expect(page.week).toEqual({ mentions: 3, asked: 2 });
+    expect(page.requests.find((r: Json) => r.id === "chr_c1").confidence).toBe(1);
   });
 
   test("Requests list at most 200, newest first", async () => {
