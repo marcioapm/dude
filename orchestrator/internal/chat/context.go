@@ -172,18 +172,20 @@ func (s *Service) world(ctx context.Context, org, person string, m Mention, kind
 		if err != nil {
 			return err
 		}
-		// Read newest first along sessions_chat_recent_idx; the inlined
-		// test is a superset of session_role's owner/chat, so session_role
-		// runs only on candidates, until sessionsMax are found.
+		// Read newest first along sessions_chat_recent_idx. The CASE makes
+		// the inlined test, a superset of session_role's owner/chat, run
+		// first: the planner would otherwise call session_role on every
+		// recent chat-born session before it.
 		rows, err = tx.Query(ctx, `SELECT s.id, COALESCE(s.title, ''), s.access, COALESCE(s.origin->>'conversationId', ''),
 				COALESCE(s.origin->>'conversationKind', ''),
 				NOT EXISTS (SELECT 1 FROM unnest($3::text[]) AS c(person) WHERE COALESCE(session_role(s.id, c.person), '') NOT IN ('owner', 'chat'))
 			FROM sessions s
 			WHERE s.organization_id = current_organization_id() AND s.origin IS NOT NULL
 			  AND s.created_at > now() - make_interval(days => $2)
-			  AND (s.access = 'organisation' OR s.owned_by_admins OR EXISTS (SELECT 1 FROM session_people sp
-			        WHERE sp.session_id = s.id AND sp.person_id = $1 AND sp.accepted_at IS NOT NULL AND sp.role IN ('owner', 'chat')))
-			  AND session_role(s.id, $1) IN ('owner', 'chat') ORDER BY s.created_at DESC LIMIT $4`,
+			  AND CASE WHEN s.access = 'organisation' OR s.owned_by_admins OR EXISTS (SELECT 1 FROM session_people sp
+			        WHERE sp.session_id = s.id AND sp.person_id = $1 AND sp.accepted_at IS NOT NULL AND sp.role IN ('owner', 'chat'))
+			    THEN session_role(s.id, $1) IN ('owner', 'chat') ELSE false END
+			ORDER BY s.created_at DESC LIMIT $4`,
 			person, resumeLookback, db.NonNil(connected), sessionsMax)
 		if err != nil {
 			return err

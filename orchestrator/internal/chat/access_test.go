@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/fakeslack"
 )
 
@@ -119,6 +121,78 @@ func TestChatResumesOnlyASessionTheWholeConversationCanChatIn(t *testing.T) {
 	w.mention("Márcia", "C1", "", "anything")
 	if sent := w.model.last(); strings.Contains(sent, private) || strings.Contains(sent, design) {
 		t.Fatalf("a public channel was offered private sessions: %s", sent)
+	}
+}
+
+// The routing context offers exactly the recent chat-born sessions
+// session_role lets the person own or chat in: an organisation session,
+// one they were given chat in, an admin-owned one to an admin, their own;
+// never a pending invitation, a read-only private seat, an old session or
+// one not born in chat.
+func TestChatRoutingContextOffersWhatSessionRoleAllows(t *testing.T) {
+	w := setup(t)
+	marcia, eli, gus, ana := w.people["Márcia"][0], w.people["Eli"][0], w.people["Gus"][0], w.people["Ana"][0]
+	origin := `{"provider": "slack", "conversationId": "C1", "conversationKind": "public"}`
+	sessions := []struct {
+		name, access, owner string
+		admins, chatBorn    bool
+		age                 string
+		seats               [][3]string // person, role, accepted ('y'/'n')
+	}{
+		{"org", "organisation", gus, false, true, "1 day", nil},
+		{"chat-seat", "private", gus, false, true, "2 days", [][3]string{{eli, "chat", "y"}}},
+		{"admin-owned", "private", ana, true, true, "3 days", nil},
+		{"pending", "private", gus, false, true, "4 days", [][3]string{{eli, "chat", "n"}}},
+		{"read-seat", "private", gus, false, true, "5 days", [][3]string{{eli, "read", "y"}}},
+		{"org-read-seat", "organisation", gus, false, true, "6 days", [][3]string{{eli, "read", "y"}}},
+		{"eli-own", "private", eli, false, true, "7 days", nil},
+		{"old", "organisation", gus, false, true, "20 days", nil},
+		{"not-chat-born", "organisation", gus, false, false, "1 day", nil},
+	}
+	ids := map[string]string{}
+	for _, s := range sessions {
+		id := "ssn_" + strings.ReplaceAll(s.name, "-", "_") + "_" + w.org
+		ids[s.name] = id
+		var o any
+		if s.chatBorn {
+			o = origin
+		}
+		w.exec(`INSERT INTO sessions (id, organization_id, title, origin, access, owned_by_admins, created_at)
+			VALUES ($1, $2, $3, $4::jsonb, $5, $6, now() - $7::interval)`, id, w.org, s.name, o, s.access, s.admins, s.age)
+		w.exec(`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at) VALUES ($1, $2, $3, 'owner', now())`,
+			id, s.owner, w.org)
+		for _, seat := range s.seats {
+			w.exec(`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+				VALUES ($1, $2, $3, $4, CASE WHEN $5 = 'y' THEN now() END)`, id, seat[0], w.org, seat[1], seat[2])
+		}
+	}
+	want := map[string][]string{
+		eli:    {"org", "chat-seat", "org-read-seat", "eli-own"},
+		marcia: {"org", "admin-owned", "org-read-seat"},
+		gus:    {"org", "chat-seat", "pending", "read-seat", "org-read-seat"},
+	}
+	for person, names := range want {
+		var expected []string
+		for _, n := range names {
+			expected = append(expected, ids[n])
+		}
+		// session_role alone, over every recent chat-born session.
+		rows, err := w.owner.Query(w.ctx, `SELECT id FROM sessions WHERE organization_id = $1 AND origin IS NOT NULL
+			AND created_at > now() - interval '14 days' AND session_role(id, $2) IN ('owner', 'chat') ORDER BY created_at DESC`, w.org, person)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oracle, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := w.svc.RoutingSessions(w.ctx, w.org, person)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(oracle, ",") != strings.Join(expected, ",") || strings.Join(got, ",") != strings.Join(oracle, ",") {
+			t.Fatalf("%s: offered %v, session_role allows %v, want %v", person, got, oracle, expected)
+		}
 	}
 }
 
