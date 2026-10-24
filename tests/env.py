@@ -194,6 +194,17 @@ class ChatRouteMismatch(Exception):
     reads by changed. The suite fails on it rather than routing blind."""
 
 
+# The stub runs in run_tests.py's process and the chat suite in pytest's, so
+# a mismatch is recorded in a file under the shared log directory, one per line.
+_mismatch_lock = threading.Lock()
+
+
+def record_chat_route_mismatch(path: Path, mismatch: str) -> None:
+    line = " ".join(mismatch.split())
+    with _mismatch_lock, path.open("a") as f:
+        f.write(line + "\n")
+
+
 def _chat_route(messages: list) -> str | None:
     """The scripted answer to a chat routing call, or None for any other call.
 
@@ -303,9 +314,6 @@ class TestEnvironment:
     # It is local and deterministic, never a real model call.
     judge_server: ThreadingHTTPServer | None = field(default=None, repr=False)
     judge_thread: threading.Thread | None = field(default=None, repr=False)
-    # Chat routing calls the stub could not read (ChatRouteMismatch); the
-    # chat suite asserts there were none.
-    chat_route_mismatches: list = field(default_factory=list, repr=False)
     workspace_root: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -327,6 +335,16 @@ class TestEnvironment:
         self.orchestrator_url = f"http://127.0.0.1:{self.orchestrator_port}"
         self.orchestrator_token = f"svc-{self.run_id}"
         self.lux_key = f"lux-{self.run_id}"
+
+    @property
+    def chat_route_mismatches_path(self) -> Path:
+        return self.log_dir / f"chat-route-mismatches-{self.run_id}.log"
+
+    def chat_route_mismatches(self) -> list[str]:
+        """The routing calls the judge stub could not read (ChatRouteMismatch),
+        as recorded by whichever process runs the stub."""
+        path = self.chat_route_mismatches_path
+        return path.read_text().splitlines() if path.exists() else []
 
     # -- connection strings -------------------------------------------------
 
@@ -403,7 +421,9 @@ class TestEnvironment:
 
     def _start_judge(self) -> None:
         questions = _checks_questions()
-        mismatches = self.chat_route_mismatches
+        mismatches = self.chat_route_mismatches_path
+        # A kept log directory may hold an earlier run's file.
+        mismatches.unlink(missing_ok=True)
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -414,7 +434,8 @@ class TestEnvironment:
                 try:
                     routed = _chat_route(messages)
                 except ChatRouteMismatch as e:
-                    mismatches.append(str(e))
+                    record_chat_route_mismatch(mismatches, str(e))
+                    print(f"judge stub: {e}", file=sys.stderr)
                     self.send_response(500)
                     self.send_header("content-length", "0")
                     self.end_headers()

@@ -279,4 +279,4 @@ def test_an_unsure_mention_asks_and_the_askers_click_files_the_task(client: ApiC
 def test_the_routing_stub_read_every_routing_call(env):
     """Runs last in the file: a change to the routing call's opening or
     headings fails here by name, not as a confusing route elsewhere."""
-    assert env.chat_route_mismatches == []
+    assert env.chat_route_mismatches() == []
