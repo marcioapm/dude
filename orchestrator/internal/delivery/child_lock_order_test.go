@@ -414,6 +414,68 @@ func TestTheSyncersRestartOfAnAttributedRunAndATaskEndingSerialise(t *testing.T)
 	}
 }
 
+// #308: an ended conductor's hand-over of a message it never read to the
+// task's live conductor, while the syncer records a batch of the live one's
+// frames. The batch holds the live conductor's row and, updating it a
+// second time, checks its foreign key to the task (KEY SHARE); the
+// hand-over holds the task (MarkChildParentEndedTx) and then locks the live
+// conductor to queue the message. The task lock must not exclude the
+// batch's KEY SHARE: both commit, and the message reaches the live one.
+func TestAHandOverBesideTheSyncersBatchOnTheLiveConductorDoesNotDeadlock(t *testing.T) {
+	w := newChildWorld(t)
+	w.exec(`UPDATE runs SET status = 'failed' WHERE id = 'run_parent'`)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role)
+		VALUES ('run_live', $1, 'prj_life', 'wi_life', 3, 'running', 'agent', 'conductor')`, w.org)
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, scope)
+		VALUES ('dir_unread', $1, 'wi_life', 'run_parent', 'Keep the old rates', 'run')`, w.org)
+	ctx, cancel := context.WithTimeout(w.ctx, raceTimeout)
+	defer cancel()
+	batch, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = batch.Rollback(context.Background()) }()
+	// The batch's first write: the row is the batch's own now, so its next
+	// update re-checks the row's foreign keys.
+	touch := `UPDATE runs SET base_shas = base_shas WHERE id = 'run_live'`
+	if _, err := batch.Exec(ctx, touch); err != nil {
+		t.Fatal(err)
+	}
+	handed := make(chan error, 1)
+	ended := make(chan struct{})
+	var to string
+	go func() {
+		defer close(ended)
+		handed <- w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			if err := LockChat(ctx, tx, "wi_life"); err != nil {
+				return err
+			}
+			var err error
+			to, err = HandOver(ctx, tx, w.in.Parent.Run, true)
+			return err
+		})
+	}()
+	if err := w.waitForLockWaiter(ctx, ended); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := batch.Exec(ctx, touch); err != nil {
+		t.Fatalf("the batch's second write: %v", err)
+	}
+	if err := batch.Commit(ctx); err != nil {
+		t.Fatalf("the batch's commit: %v", err)
+	}
+	if err := <-handed; err != nil {
+		t.Fatalf("hand-over (deadlock %v): %v", isDeadlock(err), err)
+	}
+	if to != "run_live" {
+		t.Fatalf("handed to %q, want run_live", to)
+	}
+	var n int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM directives WHERE run_id = 'run_live' AND supersedes = 'dir_unread'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the live conductor has %d copies of the message (%v), want 1", n, err)
+	}
+}
+
 func assertEnderAfterChild(t *testing.T, w *childWorld, ender string, endErr error, child string) {
 	t.Helper()
 	if endErr != nil {
