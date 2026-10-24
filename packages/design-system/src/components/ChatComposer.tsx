@@ -1,9 +1,10 @@
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type HTMLAttributes, type KeyboardEvent, type MutableRefObject, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
 import { AttachmentChip, attachmentWarning, takePastedFiles, type ComposerAttachment } from "./ImageAttachments.tsx";
+import { MentionMenu, mentionOptionId, type MentionItem } from "./SessionAccess.tsx";
 import styles from "./ChatComposer.module.css";
 import trayStyles from "./ImageAttachments.module.css";
 
@@ -100,12 +101,60 @@ export interface ChatComposerProps extends Omit<HTMLAttributes<HTMLFormElement>,
    * its own: its host is the frame.
    */
   readonly variant?: "stage" | undefined;
+  /**
+   * People who can be @-mentioned; unset, "@" is plain text. An `outside`
+   * one (a private session's non-member) is offered locked: picking them
+   * writes the name but leaves them out of `mentions`.
+   */
+  readonly mentionables?: ReadonlyArray<MentionItem> | undefined;
+  /** Someone was picked from the menu; for an `outside` one the caller asks what to do (`below`). */
+  readonly onMention?: ((item: MentionItem) => void) | undefined;
+  /** The menu's heading: "Mention someone in Acme · they're notified". */
+  readonly mentionHeading?: ReactNode;
+  /** Under the field, inside the composer: a pending mention's confirm. */
+  readonly below?: ReactNode;
+  /**
+   * Set by the composer: sends what is written now, as Send does, with
+   * `shareWith` (people the owner shares the session with as it is sent,
+   * mentioned too while their name is still in the text). For the
+   * caller's own buttons in `below`.
+   */
+  readonly submitRef?: MutableRefObject<((extra?: { readonly shareWith?: ReadonlyArray<string> }) => void) | null> | undefined;
 }
 
 export type ComposerSubmission =
   | { readonly mode: "steer"; readonly text: string; readonly interrupt: boolean; readonly attachmentIds: ReadonlyArray<string> }
   | { readonly mode: "prompt"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> }
-  | { readonly mode: "chat"; readonly text: string; readonly attachmentIds: ReadonlyArray<string> };
+  | {
+    readonly mode: "chat"; readonly text: string; readonly attachmentIds: ReadonlyArray<string>;
+    /** The people picked from the menu whose "@Name" is still in the text, by id. */
+    readonly mentions?: ReadonlyArray<string>;
+    /** People the session is shared with as this is sent (`submitRef`). */
+    readonly shareWith?: ReadonlyArray<string>;
+  };
+
+/** The open mention menu: where its "@" is in the text, and what follows it up to the caret. */
+interface MentionQuery {
+  readonly at: number;
+  readonly query: string;
+}
+
+/** The "@" word the caret ends, if one is being typed: "@" at the start or after a space, then up to two words. */
+export function mentionQueryAt(text: string, caret: number): MentionQuery | null {
+  const before = text.slice(0, caret);
+  const at = before.lastIndexOf("@");
+  if (at < 0 || (at > 0 && !/\s/.test(before[at - 1]!))) return null;
+  const query = before.slice(at + 1);
+  if (query.length > 40 || /\n/.test(query) || /\s\S*\s/.test(query.trimStart())) return null;
+  return { at, query };
+}
+
+/** Whether every word typed starts some word of the name, ignoring case and accents. */
+export function nameMatches(name: string, query: string): boolean {
+  const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const words = fold(name).split(/\s+/);
+  return fold(query).split(/\s+/).filter(Boolean).every((q) => words.some((w) => w.startsWith(q)));
+}
 
 const MODE_LABEL: Record<ComposerMode, string> = {
   steer: "Steer",
@@ -169,6 +218,11 @@ export function ChatComposer({
   attachHint,
   attachDisabledReason,
   variant,
+  mentionables,
+  onMention,
+  mentionHeading,
+  below,
+  submitRef,
   className,
   ...rest
 }: ChatComposerProps) {
@@ -193,6 +247,49 @@ export function ChatComposer({
     onValueChange?.(v);
   };
 
+  // @-mentions: who was picked (by id and name), and the menu while an "@" word is typed.
+  const [picks, setPicks] = useState<ReadonlyArray<{ readonly id: string; readonly name: string }>>([]);
+  const [mention, setMention] = useState<MentionQuery | null>(null);
+  const [active, setActive] = useState(0);
+  const menuId = `${id}-mentions`;
+  const offered = mention && mentionables ? mentionables.filter((m) => nameMatches(m.person.name, mention.query)) : [];
+  // A query that matches nobody after a space has moved on from the mention, and one that is a whole name
+  // and a space was picked or typed out: the menu closes.
+  const whole = mention !== null && /\s$/.test(mention.query)
+    && offered.some((m) => m.person.name.toLowerCase() === mention.query.trim().toLowerCase());
+  const menuOpen = mention !== null && mentionables !== undefined && !whole && (offered.length > 0 || !/\s$/.test(mention.query));
+  const readMention = (el: HTMLTextAreaElement) => {
+    if (!mentionables) return;
+    const q = mentionQueryAt(el.value, el.selectionStart ?? el.value.length);
+    setMention(q);
+    if (q?.query !== mention?.query) setActive(0);
+  };
+  const pick = (item: MentionItem) => {
+    if (!mention) return;
+    const el = areaRef.current;
+    const caret = el?.selectionStart ?? text.length;
+    const written = `@${item.person.name} `;
+    const next = text.slice(0, mention.at) + written + text.slice(caret);
+    setText(next);
+    setMention(null);
+    if (!item.outside && item.person.id) setPicks((p) => [...p.filter((x) => x.id !== item.person.id), { id: item.person.id!, name: item.person.name }]);
+    onMention?.(item);
+    const at = mention.at + written.length;
+    requestAnimationFrame(() => {
+      areaRef.current?.focus();
+      areaRef.current?.setSelectionRange(at, at);
+    });
+  };
+  /** The picks still named in the text, and those shared with as it is sent. */
+  const mentionsIn = (t: string, shareWith: ReadonlyArray<string>) => {
+    const named = new Set(picks.filter((p) => t.includes(`@${p.name}`)).map((p) => p.id));
+    for (const sid of shareWith) {
+      const who = mentionables?.find((m) => m.person.id === sid);
+      if (!who || t.includes(`@${who.person.name}`)) named.add(sid);
+    }
+    return [...named];
+  };
+
   // Autosize: 1–8 lines plus padding, both read from the computed style
   // because they follow the density.
   useEffect(() => {
@@ -213,7 +310,7 @@ export function ChatComposer({
   // Enter while images upload: sent as soon as they are up.
   const [sendWhenUploaded, setSendWhenUploaded] = useState(false);
 
-  const submit = async (override?: string) => {
+  const submit = async (override?: string, extra?: { readonly shareWith?: ReadonlyArray<string> }) => {
     const t = (override ?? text).trim();
     if (disabled || busy || invalid) return;
     if (uploading > 0) {
@@ -222,9 +319,14 @@ export function ChatComposer({
     }
     if (t.length === 0 && ready.length === 0) return;
     const attachmentIds = ready;
+    const shareWith = extra?.shareWith ?? [];
+    const mentions = mentionables ? mentionsIn(t, shareWith) : [];
     const submission: ComposerSubmission =
       mode === "steer" ? { mode: "steer", text: t, interrupt, attachmentIds }
-        : mode === "chat" ? { mode: "chat", text: t, attachmentIds }
+        : mode === "chat" ? {
+          mode: "chat", text: t, attachmentIds,
+          ...(mentions.length > 0 ? { mentions } : {}), ...(shareWith.length > 0 ? { shareWith } : {}),
+        }
         : { mode: "prompt", text: t, attachmentIds };
     setBusy(true);
     let sent = false;
@@ -238,8 +340,17 @@ export function ChatComposer({
     if (sent) {
       setText("");
       setInterrupt(false);
+      setPicks([]);
+      setMention(null);
     }
   };
+  useEffect(() => {
+    if (!submitRef) return;
+    submitRef.current = (extra) => void submit(undefined, extra);
+    return () => {
+      submitRef.current = null;
+    };
+  });
 
   useEffect(() => {
     if (!sendWhenUploaded) return;
@@ -252,6 +363,24 @@ export function ChatComposer({
   }, [sendWhenUploaded, uploading, invalid, disabled]);
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (menuOpen) {
+      // While the menu is open the keys are its: Enter and Tab pick, Escape closes.
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (offered.length > 0) setActive((a) => (a + (e.key === "ArrowDown" ? 1 : offered.length - 1)) % offered.length);
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.nativeEvent.isComposing && offered[active]) {
+        e.preventDefault();
+        pick(offered[active]!);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return; // Shift+Enter is a new line
     e.preventDefault();
     void submit();
@@ -299,6 +428,10 @@ export function ChatComposer({
       }}
       {...rest}
     >
+      {menuOpen ? (
+        <MentionMenu id={menuId} items={offered} active={Math.min(active, Math.max(0, offered.length - 1))} query={mention!.query}
+          onPick={pick} onHover={setActive} heading={mentionHeading} />
+      ) : null}
       <div className={cx(styles["field"], attachments.length > 0 && styles["withTray"])}>
         {attachments.length > 0 ? (
           <div className={trayStyles["tray"]} role="list" aria-label="Images to send">
@@ -319,12 +452,22 @@ export function ChatComposer({
           placeholder={isDisabled ? disabledReason ?? "This session is finished." : placeholder ?? MODE_PLACEHOLDER[mode]}
           disabled={isDisabled}
           autoFocus={autoFocus}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            readMention(e.target);
+          }}
+          onSelect={(e) => readMention(e.currentTarget)}
+          onBlur={() => setMention(null)}
           onKeyDown={onKey}
           onPaste={onPaste}
           aria-describedby={`${id}-hint`}
+          {...(mentionables ? {
+            role: "combobox", "aria-autocomplete": "list" as const, "aria-expanded": menuOpen, "aria-controls": menuId,
+            "aria-activedescendant": menuOpen && offered.length > 0 ? mentionOptionId(menuId, Math.min(active, offered.length - 1)) : undefined,
+          } : {})}
         />
       </div>
+      {below}
 
       {invalid ? (
         <div className={trayStyles["warning"]} role="status" data-testid="attachment-warning">

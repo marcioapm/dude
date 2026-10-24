@@ -37,6 +37,7 @@ import type {
   Harness,
   SessionLink,
   SessionsList,
+  OpenSessionsList,
   TaskRepository,
   TaskSource,
   TaskSourceInput,
@@ -1787,8 +1788,9 @@ export class ApiClient {
   }
 
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
-  sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}): Promise<{ runId: string; created: boolean; questionId?: string; directiveId?: string; attachments?: AttachmentInfo[] }> {
-    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}), ...(opts.attachmentIds?.length ? { attachmentIds: opts.attachmentIds } : {}) });
+  sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string>; mentions?: ReadonlyArray<string>; shareWith?: ReadonlyArray<string> } = {}): Promise<{ runId: string; created: boolean; questionId?: string; directiveId?: string; attachments?: AttachmentInfo[] }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}), ...(opts.attachmentIds?.length ? { attachmentIds: opts.attachmentIds } : {}),
+      ...(opts.mentions?.length ? { mentions: opts.mentions } : {}), ...(opts.shareWith?.length ? { shareWith: opts.shareWith } : {}) });
   }
 
   /** Try again on a session whose agent failed, to start or to resume: a fresh agent takes what it never read. */
@@ -1844,6 +1846,21 @@ export class ApiClient {
   /** Take the session out of your own list and sidebar (or put it back): nobody else's, and nothing else changes. */
   archiveSession(id: string, archived: boolean): Promise<{ id: string; archived: boolean }> {
     return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/${archived ? "archive" : "unarchive"}`);
+  }
+
+  /** Every session open to the organisation, each with whether you joined it, and how many you joined. */
+  openSessions(): Promise<OpenSessionsList> {
+    return this.#request("GET", "/v1/brainstorms/open");
+  }
+
+  /** Open the session to everyone in the organisation: one way, the owner's (or an admin's while its admins own it). */
+  openSessionToOrganisation(id: string): Promise<{ id: string; access: "organisation"; changed: boolean }> {
+    return this.#request("PUT", `/v1/brainstorms/${encodeURIComponent(id)}/access`, { access: "organisation" });
+  }
+
+  /** An admin makes themselves the owner of a session its admins own (its owner left). */
+  takeSessionOwnership(id: string): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/take-ownership`);
   }
 
   /**

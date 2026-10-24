@@ -11,6 +11,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -134,6 +135,23 @@ func (n *Notifier) Sweep(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Each sweep on its own: one failing (a grant missing, say) is logged
+	// and reported, and the other still runs.
+	handled, sessionsErr := n.sweepSessions(ctx, public, private)
+	if sessionsErr != nil {
+		n.Log.Warn("session pushes failed", "error", sessionsErr)
+	}
+	asked, err := n.sweepAsks(ctx, public, private)
+	// What follows an owner leaving or coming back (owners.go): no push, but
+	// the same loop and its kick.
+	owners, ownersErr := n.sweepOwners(ctx)
+	if ownersErr != nil {
+		n.Log.Warn("session owner changes failed", "error", ownersErr)
+	}
+	return handled + asked + owners, errors.Join(sessionsErr, err, ownersErr)
+}
+
+func (n *Notifier) sweepAsks(ctx context.Context, public, private string) (int, error) {
 	var found []ask
 	subs := map[string][]subscription{}
 	if err := n.DB.InSystem(ctx, "notify", func(tx pgx.Tx) error {

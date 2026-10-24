@@ -236,6 +236,8 @@ export interface HumanTurn {
    * member), so it goes after their answer. Null otherwise.
    */
   heldFor: string | null;
+  /** In a brainstorm session: the people the message @-mentioned, by id. */
+  mentions?: string[];
 }
 
 export type SteerLands = "next_step" | "next_turn";
@@ -1325,6 +1327,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           // A message handed on from an earlier conductor keeps its images.
           attachments: attachmentsOf(payload.attachments),
           heldFor: typeof payload.heldFor === "string" ? payload.heldFor : null,
+          ...(Array.isArray(payload.mentions) ? { mentions: payload.mentions.filter((m): m is string => typeof m === "string") } : {}),
         };
         if (github?.login) turn.by = { id: `github:${github.login}`, name: `${github.login} (GitHub)` };
         if (directiveId) state.steersByDirective.set(directiveId, turn);

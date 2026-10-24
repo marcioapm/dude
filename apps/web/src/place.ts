@@ -28,6 +28,8 @@ export type Place =
   // is an agent's session inside a task's Run).
   | { view: "sessions" }
   | { view: "brainstorm"; id: string }
+  // The sessions open to the whole organisation (`#/sessions/open`; session ids are `ssn_…`).
+  | { view: "openSessions" }
   // dude's guide (`#/help/<page>/<section>`): the list, a page, a section of it.
   | { view: "help"; page?: string; section?: string };
 
@@ -86,6 +88,7 @@ export function parsePlace(full: string): Place | null {
   }
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return id === "others" ? { view: "inbox", tab: "others" } : { view: "inbox" };
+  if (kind === "sessions" && id === "open") return { view: "openSessions" };
   if (kind === "sessions") return id ? { view: "brainstorm", id: decodeURIComponent(id) } : { view: "sessions" };
   if (kind === "help") {
     if (!id) return { view: "help" };
@@ -131,6 +134,8 @@ function bareHash(place: Place | null): string {
       return "#/sessions";
     case "brainstorm":
       return `#/sessions/${encodeURIComponent(place.id)}`;
+    case "openSessions":
+      return "#/sessions/open";
     case "help":
       if (!place.page) return "#/help";
       return `#/help/${encodeURIComponent(place.page)}${place.section ? `/${encodeURIComponent(place.section)}` : ""}`;

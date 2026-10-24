@@ -24,6 +24,7 @@ import type { PublicContext, RequestContext, Router } from "../router.ts";
 import { getNavigation } from "./navigation.ts";
 import { attentionItems, waitingSplit, type NavProject } from "../../../../../packages/design-system/src/util/navModel.ts";
 import { endAutoStart } from "./relations.ts";
+import { kickOwnerSweep, lockOwnedSessions, PASS_BATCH, passOnSessions } from "./sessions.ts";
 import { automationsOwnerLeft } from "./automations.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
@@ -486,16 +487,30 @@ async function passOnTasks(scope: OrgScope, ctx: RequestContext, personId: strin
 /**
  * Remove someone: every key of theirs stops working at once and they
  * leave the organization's lists. Their row stays, so what they did keeps
- * their name; their tasks pass on (see `passOnTasks`).
+ * their name; their tasks pass on (see `passOnTasks`), and their sessions
+ * others can reach pass to the admins (`passOnSessions`).
+ *
+ * Someone already removed who still owns sessions that should have passed
+ * (a removal that failed between its batches) has the rest passed now:
+ * 200. Otherwise someone already removed is a 404.
  */
 export async function removePerson(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
+  let passed = 0;
+  let more = false;
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await requireAdmin(scope, ctx);
     if (id === ctx.principal.personId) return "yourself";
+    const first = await lockOwnedSessions(scope, id);
     const rows = (await scope.sql`
-      SELECT role FROM people WHERE id = ${id} AND removed_at IS NULL FOR UPDATE`) as Array<{ role: string }>;
+      SELECT role, removed_at IS NOT NULL AS removed FROM people WHERE id = ${id} FOR UPDATE`) as Array<{ role: string; removed: boolean }>;
     if (!rows[0]) return "missing";
+    if (rows[0].removed) {
+      if (first.ids.length === 0) return "missing";
+      passed += (await passOnSessions(scope, ctx, id, first.ids)).length;
+      more = first.more;
+      return "resumed";
+    }
     if (rows[0].role === "admin" && (await otherAdmins(scope, id)) === 0) return "lastAdmin";
     // Their tasks are not locked ahead: holding this person's row while
     // waiting on a task deadlocks with putTaskPeople, which holds the task
@@ -510,6 +525,12 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
     await scope.sql`UPDATE api_keys SET revoked_at = now() WHERE person_id = ${id} AND revoked_at IS NULL`;
     await scope.sql`DELETE FROM push_subscriptions WHERE person_id = ${id}`;
     await passOnTasks(scope, ctx, id);
+    // A session made theirs while this waited on their row (a handover
+    // accepted under its lock) is seen now, and locked before it is read;
+    // with more batches to come, they see it.
+    const late = first.more ? { ids: [], more: true } : await lockOwnedSessions(scope, id, PASS_BATCH, first.ids);
+    passed += (await passOnSessions(scope, ctx, id, [...first.ids, ...late.ids])).length;
+    more = first.more || late.more;
     await automationsOwnerLeft(scope, ctx, id);
     await recordAs(scope, ctx, EventTypes.PersonRemoved, { personId: id });
     return "removed";
@@ -517,7 +538,25 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
   if (out === "yourself") throw conflict("you cannot remove yourself; ask another admin");
   if (out === "missing") throw notFound(`person ${id} not found`);
   if (out === "lastAdmin") throw conflict("the organisation needs an admin; make someone else one first");
-  return noContent();
+  // Someone owning more sessions than one transaction locks: the rest pass
+  // on in transactions of their own, each re-reading under the sessions'
+  // locks that the person is still removed (an invitation accepted
+  // meanwhile keeps the rest theirs). Removed, nobody can make another
+  // session theirs (the orchestrator re-checks their row), so each batch
+  // only shrinks what is left. A failure here leaves the rest to a DELETE
+  // again (above).
+  while (more) {
+    more = await withOrg(ctx.principal.organizationId, async (scope) => {
+      const batch = await lockOwnedSessions(scope, id);
+      const [gone] = await scope.sql`SELECT 1 FROM people WHERE id = ${id} AND removed_at IS NOT NULL FOR SHARE`;
+      if (!gone) return false;
+      passed += (await passOnSessions(scope, ctx, id, batch.ids)).length;
+      return batch.more;
+    });
+  }
+  // The orchestrator's owner sweep reads what passed from the ledger; this only wakes it.
+  kickOwnerSweep(ctx.principal.organizationId);
+  return out === "resumed" ? json({ passed }) : noContent();
 }
 
 async function locate(ctx: RequestContext): Promise<Response> {

@@ -111,6 +111,8 @@ export interface SidebarRailSessions {
   readonly current?: boolean | undefined;
   /** Your latest few, named in the Sessions tooltip. */
   readonly recent?: ReadonlyArray<string> | undefined;
+  /** The organisation sessions you joined and are active in, counted in the tooltip ("2 open to everyone you joined"). */
+  readonly organisationCount?: number | undefined;
 }
 
 /** Where a `collapsible` sidebar becomes a drawer. Kept in step with Sidebar.module.css. */
@@ -336,8 +338,16 @@ export function Sidebar({
                 <Icon name="plus" size={16} />
               </SidebarRailItem>
               <SidebarRailItem label="Sessions" current={railSessions.current} onClick={railSessions.onOpenList} data-testid="rail-sessions"
-                tip={railSessions.recent?.length ? (
-                  <span className={styles["railTip"]}><b>Sessions</b>{railSessions.recent.slice(0, 4).map((t, i) => <span key={i} className={styles["railTipMuted"]}>{t}</span>)}</span>
+                tip={railSessions.recent?.length || railSessions.organisationCount ? (
+                  <span className={styles["railTip"]}>
+                    <b>Sessions</b>
+                    {(railSessions.recent ?? []).slice(0, 4).map((t, i) => <span key={i} className={styles["railTipMuted"]}>{t}</span>)}
+                    {railSessions.organisationCount ? (
+                      <span className={styles["railTipMuted"]} data-testid="rail-sessions-organisation">
+                        {railSessions.organisationCount} open to everyone you joined
+                      </span>
+                    ) : null}
+                  </span>
                 ) : undefined}>
                 <Icon name="brainstorm" size={16} />
               </SidebarRailItem>
@@ -476,6 +486,8 @@ export interface SidebarSession {
   /** In it with others; with the owner's face when it is not yours. */
   readonly shared?: boolean | undefined;
   readonly owner?: Person | null | undefined;
+  /** Open to the whole organisation: the building glyph in place of the shared one. */
+  readonly access?: "private" | "organisation" | undefined;
 }
 
 export interface SidebarSessionsProps {
@@ -488,10 +500,12 @@ export interface SidebarSessionsProps {
   readonly limit?: number | undefined;
   readonly folded?: boolean | undefined;
   readonly onFoldedChange?: ((folded: boolean) => void) | undefined;
+  /** The last row, a place: "Open to everyone", its count the active organisation sessions you have joined. Stays when folded. */
+  readonly organisation?: { readonly count: number; readonly current?: boolean | undefined; readonly onOpen: () => void } | undefined;
 }
 
 /** Recent brainstorm sessions; the heading opens the list and creates a new one. */
-export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNew, limit = 3, folded, onFoldedChange }: SidebarSessionsProps) {
+export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNew, limit = 3, folded, onFoldedChange, organisation }: SidebarSessionsProps) {
   const [localFolded, setLocalFolded] = useState(false);
   const isFolded = folded ?? localFolded;
   const recent = [...sessions].sort((a, b) => (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "")).slice(0, Math.max(0, limit));
@@ -511,8 +525,12 @@ export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNe
       </div>
       {!isFolded && recent.map((s) => (
         <SidebarLink key={s.id} icon="brainstorm" current={selected === s.id} onClick={() => onSelect(s.id)} data-session={s.id}
-          trailing={s.shared ? (
-            <span className={styles["sessionShared"]} aria-label={s.owner ? `shared, ${s.owner.name}'s` : "shared"}>
+          trailing={s.access === "organisation" ? (
+            <span className={styles["sessionShared"]} role="img" aria-label="open to everyone">
+              <Icon name="building" size={12} />
+            </span>
+          ) : s.shared ? (
+            <span className={styles["sessionShared"]} role="img" aria-label={s.owner ? `shared, ${s.owner.name}'s` : "shared"}>
               <Icon name="shared" size={12} />
               {s.owner ? <PersonAvatar person={s.owner} size={16} /> : null}
             </span>
@@ -520,6 +538,13 @@ export function SidebarSessions({ sessions, selected, onSelect, onOpenList, onNe
           {s.title}
         </SidebarLink>
       ))}
+      {organisation ? (
+        <SidebarLink icon="building" current={organisation.current} onClick={organisation.onOpen} count={organisation.count}
+          data-testid="sidebar-open-to-everyone"
+          aria-label={`Open to everyone, ${organisation.count} joined`}>
+          Open to everyone
+        </SidebarLink>
+      ) : null}
     </nav>
   );
 }

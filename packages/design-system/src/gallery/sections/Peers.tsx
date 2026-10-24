@@ -150,6 +150,10 @@ export function PeersSection({ mode }: { readonly mode: PaneMode }) {
             <Label>EpicNoteCount at 3 and at 10</Label>
             <span className="ds-label">Epic notes<EpicNoteCount count={3} limit={10} /></span>
             <span className="ds-label">Epic notes<EpicNoteCount count={10} limit={10} /></span>
+            <Label>a section's note: muted, in sentence case, beside the count</Label>
+            <PageSection title="Joined · active" count={2} note="the sidebar's count" data-testid="gallery-section-note">
+              <span className="muted">Two sessions open to everyone you joined.</span>
+            </PageSection>
             <Label>EpicNoteRow: the agent's own note call, pinning and replacing</Label>
             <ChatAside>
               <ToolCallCard name="note" icon="pin" status="completed" summary="dude note · note 3, told to 3 agents at their next step" durationMs={70} />
