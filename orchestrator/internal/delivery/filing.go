@@ -89,7 +89,9 @@ func CreateTaskTx(ctx context.Context, tx pgx.Tx, org, projectID string, f Filer
 func EditTaskTx(ctx context.Context, tx pgx.Tx, org, taskID string, f Filer, text TaskText) error {
 	var projectID, goal string
 	var raw []byte
-	if err := tx.QueryRow(ctx, `SELECT project_id, goal, acceptance_criteria FROM tasks WHERE id = $1 FOR UPDATE`, taskID).
+	// NO KEY UPDATE: excludes the task's other writers, not inserts of
+	// rows referencing it (their foreign keys' KEY SHARE).
+	if err := tx.QueryRow(ctx, `SELECT project_id, goal, acceptance_criteria FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).
 		Scan(&projectID, &goal, &raw); err != nil {
 		return err
 	}

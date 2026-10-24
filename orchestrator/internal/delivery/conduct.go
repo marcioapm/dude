@@ -719,7 +719,7 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 	var goal string
 	var criteria []string
 	var raw []byte
-	if err := tx.QueryRow(ctx, `SELECT goal, acceptance_criteria FROM tasks WHERE id = $1 FOR UPDATE`, ref.TaskID).
+	if err := tx.QueryRow(ctx, `SELECT goal, acceptance_criteria FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, ref.TaskID).
 		Scan(&goal, &raw); err != nil {
 		return err
 	}
