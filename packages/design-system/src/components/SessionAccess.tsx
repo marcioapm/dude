@@ -45,28 +45,14 @@ export interface GeneralAccessRowProps {
  */
 export function GeneralAccessRow({ org, value, editable, onOpen, confirming, onConfirm, onCancel, busy }: GeneralAccessRowProps) {
   const labelId = useId();
-  if (value === "organisation") {
-    return (
-      <section className={styles["access"]} aria-labelledby={labelId} data-testid="general-access" data-access="organisation">
-        <span className={cx(styles["accessGlyph"], styles["accessGlyphOrg"])}><Icon name="building" size={14} /></span>
-        <div className={styles["accessBody"]}>
-          <span id={labelId} className={styles["accessLabel"]}>General access</span>
-          <b className={styles["accessValue"]}>Everyone in {org}</b>
-          <span className={styles["accessHelp"]}>
-            Every active member of {org} can open it and chat, without being added. <b>This can't be undone.</b>
-          </span>
-        </div>
-        <span className={styles["accessRole"]}>Can chat</span>
-      </section>
-    );
-  }
+  const everyone = value === "organisation";
   return (
     <>
-      <section className={styles["access"]} aria-labelledby={labelId} data-testid="general-access" data-access="private">
-        <span className={styles["accessGlyph"]}><Icon name="lock" size={14} /></span>
+      <section className={styles["access"]} aria-labelledby={labelId} data-testid="general-access" data-access={value}>
+        <span className={cx(styles["accessGlyph"], everyone && styles["accessGlyphOrg"])}><Icon name={everyone ? "building" : "lock"} size={14} /></span>
         <div className={styles["accessBody"]}>
           <span id={labelId} className={styles["accessLabel"]}>General access</span>
-          {editable ? (
+          {everyone ? <b className={styles["accessValue"]}>Everyone in {org}</b> : editable ? (
             <Select size="sm" aria-label="General access" value={confirming ? "organisation" : "private"} disabled={busy}
               data-testid="general-access-select"
               onValueChange={(v) => v === "organisation" && !confirming && onOpen?.()}
@@ -75,10 +61,14 @@ export function GeneralAccessRow({ org, value, editable, onOpen, confirming, onC
                 { value: "organisation", label: `Everyone in ${org}`, description: "Can't be undone" },
               ]} />
           ) : <b className={styles["accessValue"]}>Private</b>}
-          <span className={styles["accessHelp"]}>Only the people below can open it.</span>
+          <span className={styles["accessHelp"]}>
+            {everyone ? <>Every active member of {org} can open it and chat, without being added. <b>This can't be undone.</b></>
+              : "Only the people below can open it."}
+          </span>
         </div>
+        {everyone ? <span className={styles["accessRole"]}>Can chat</span> : null}
       </section>
-      {editable && confirming ? (
+      {!everyone && editable && confirming ? (
         <Callout tone="attention" data-testid="general-access-confirm">
           <p className={styles["confirmText"]}>{oneWay(org)}</p>
           <span className={styles["actions"]}>
