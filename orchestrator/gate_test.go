@@ -229,7 +229,7 @@ func TestAStaleStepCannotAuthorizeTheGateOverANewerAnswer(t *testing.T) {
 			<-release
 		})
 	}
-	stale := workflow.New(w.app, "stale", quiet)
+	stale := workflow.New(w.app, "stale", w.log)
 	stale.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
 
 	if status, out := w.chat(task, "Open"); status != 200 {

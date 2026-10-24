@@ -41,8 +41,11 @@ func (w *steps) endable(step workflow.Step) workflow.Step {
 			}
 		}
 		// Only with none open: a mixed end leaves the step to run, a sibling's
-		// fixer at work included, and its terminal pr.feedback to
-		// awaitPullRequest, which asks the person.
+		// fixer at work included. The person is asked about it by
+		// awaitPullRequest, from the close's terminal pr.feedback, or by the
+		// question hold (holdForQuestions) when a reviewer's question holds
+		// the step; a close they chose to wait past is not asked about again
+		// (State.WaitedPastClosed).
 		res, ended, err := w.endedBeforeOpening(ctx, sc, st)
 		if err != nil || ended {
 			return res, err
@@ -109,10 +112,31 @@ func (e *Escalation) counts() prCounts {
 	return prCounts{int(open), int(merged), int(closed)}
 }
 
+// closedNotWaitedPast says p is closed and the person did not choose to
+// wait past it (WaitedPastClosed): a close they have not been asked about.
+func (st *State) closedNotWaitedPast(p PullRequestState) bool {
+	return p.State == forge.StateClosed && !slices.Contains(st.WaitedPastClosed, p.ID)
+}
+
+// closedBeyondWait says one of states is closedNotWaitedPast.
+func (st *State) closedBeyondWait(states []PullRequestState) bool {
+	return slices.ContainsFunc(states, st.closedNotWaitedPast)
+}
+
+// waitPastClosed records the pull requests closed now as ones the person
+// chose to wait past.
+func (st *State) waitPastClosed(states []PullRequestState) {
+	for _, p := range states {
+		if st.closedNotWaitedPast(p) {
+			st.WaitedPastClosed = append(st.WaitedPastClosed, p.ID)
+		}
+	}
+}
+
 // heldPullRequestEnded ends the delivery (endLoop) when its pull requests'
-// recorded states say the loop is over: none open, or one closed (a
-// person's decision). Merged ones beside open ones are not an end: the rest
-// are still to be reviewed.
+// recorded states say the loop is over: none open, or one closed that the
+// person has not waited past (a person's decision). Merged ones beside open
+// ones are not an end: the rest are still to be reviewed.
 func (w *steps) heldPullRequestEnded(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
 	if len(st.PullRequestIDs) == 0 {
 		return workflow.Result{}, false, nil
@@ -121,7 +145,7 @@ func (w *steps) heldPullRequestEnded(ctx context.Context, sc workflow.StepContex
 	if err != nil {
 		return workflow.Result{}, false, err
 	}
-	if c := countStates(states); c.open > 0 && c.closed == 0 {
+	if c := countStates(states); c.open > 0 && !st.closedBeyondWait(states) {
 		return workflow.Result{}, false, nil
 	}
 	return w.endLoop(ctx, sc, st, states)

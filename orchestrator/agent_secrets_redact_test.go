@@ -58,7 +58,7 @@ func (w *world) leakingReviewer(value string) {
 // writes (a question to a person), hold the marker.
 func TestAnAgentsSecretPassedToDudesToolsIsRedacted(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	w.grant("IMPL_TOKEN", implToken, "implementer")
@@ -204,7 +204,7 @@ func (c *emitsDuringSubmit) Submit(ctx context.Context, spec lux.Spec, key strin
 // was rotated before it came: the Run's copy exists before lux sees it.
 func TestOutputBeforeTheSubmitAnswersIsRedactedWithTheValueSent(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	w.grant("IMPL_TOKEN", implToken, "implementer")

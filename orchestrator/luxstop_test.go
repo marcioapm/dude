@@ -335,7 +335,7 @@ func TestAMoveLuxEndedWhileDudeWasDownIsNotFailedOnItsReturn(t *testing.T) {
 	release()
 	w.waitLuxRunning(luxID)
 	time.Sleep(700 * time.Millisecond)
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent,
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: w.syncer.Agent,
 		KeepFor: w.syncer.KeepFor, MoveWait: 500 * time.Millisecond}
 	t.Cleanup(w.syncer.Stop)
 	w.until("the same implementer to finish, and review to start", func() bool {

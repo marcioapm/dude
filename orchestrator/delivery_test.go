@@ -56,6 +56,50 @@ func logSink() io.Writer {
 	return io.Discard
 }
 
+// logRing keeps a world's last logRingLines log lines, so a test that
+// fails prints the cause its components logged (an API 500's error, say)
+// without every passing test printing its logs.
+type logRing struct {
+	mu    sync.Mutex
+	lines []string
+	next  int
+	full  bool
+}
+
+const logRingLines = 200
+
+// TextHandler writes each record in one Write, newline-terminated.
+func (r *logRing) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines[r.next] = strings.TrimSuffix(string(p), "\n")
+	r.next = (r.next + 1) % len(r.lines)
+	r.full = r.full || r.next == 0
+	return len(p), nil
+}
+
+func (r *logRing) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.lines[:r.next]
+	if r.full {
+		kept = append(slices.Clone(r.lines[r.next:]), kept...)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// worldLog is a test's logger: its lines go to its own ring, printed with
+// t.Log if the test fails, and to stderr as well under DUDE_TEST_LOG.
+func worldLog(t *testing.T) *slog.Logger {
+	ring := &logRing{lines: make([]string, logRingLines)}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the world's last %d log lines:\n%s", logRingLines, ring)
+		}
+	})
+	return slog.New(slog.NewTextHandler(io.MultiWriter(ring, logSink()), nil))
+}
+
 type world struct {
 	t         *testing.T
 	app       *db.DB
@@ -65,8 +109,10 @@ type world struct {
 	repoID    string
 	gh        *fakegithub.Server
 	web       *fakegithub.Server
+	apiRepo   *fakegithub.Server
 	marcioWeb *fakegithub.Server
 	lux       *fakelux.Server
+	log       *slog.Logger
 	runtime   *workflow.Runtime
 	syncer    *phases.Syncer
 	artifacts *phases.Artifacts
@@ -90,29 +136,26 @@ type world struct {
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	app, owner := dbtest.Open(t)
-	w := &world{t: t, app: app, owner: owner, org: dbtest.Org(t, owner)}
+	w := &world{t: t, app: app, owner: owner, org: dbtest.Org(t, owner), log: worldLog(t)}
 	ctx := context.Background()
 
-	// Two bare repositories with one commit on main, as GitHub would hold
-	// them: the project's, and a second one (acme/web) a test may add.
+	// Bare repositories with one commit on main, as GitHub would hold them:
+	// the project's, and two more (acme/web, acme/api) a test may add.
 	dir := t.TempDir()
-	bare, webBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web")
+	bare, webBare, apiBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web"), bareRepo(t, dir, "api")
 	w.gh = fakegithub.New(bare, "acme/target")
 	w.web = fakegithub.New(webBare, "acme/web")
+	w.apiRepo = fakegithub.New(apiBare, "acme/api")
 	// The same repository as another owner's, for an App installed on two.
 	w.marcioWeb = fakegithub.New(webBare, "marcio/web")
 	mux := http.NewServeMux()
-	mux.Handle("/repos/acme/target", w.gh.Handler())
-	mux.Handle("/repos/acme/web", w.web.Handler())
-	mux.Handle("/repos/marcio/web", w.marcioWeb.Handler())
-	mux.Handle("/repos/acme/target/", w.gh.Handler())
-	mux.Handle("/repos/acme/web/", w.web.Handler())
-	mux.Handle("/repos/marcio/web/", w.marcioWeb.Handler())
-	mux.Handle("/acme/target.git/", w.gh.Handler())
-	mux.Handle("/acme/web.git/", w.web.Handler())
-	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
-	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
-	mux.Handle("GET /search/issues", fakegithub.Search(w.gh, w.web, w.marcioWeb))
+	for slug, s := range map[string]*fakegithub.Server{"acme/target": w.gh, "acme/web": w.web, "acme/api": w.apiRepo, "marcio/web": w.marcioWeb} {
+		mux.Handle("/repos/"+slug, s.Handler())
+		mux.Handle("/repos/"+slug+"/", s.Handler())
+		mux.Handle("/"+slug+".git/", s.Handler())
+	}
+	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.apiRepo, w.marcioWeb))
+	mux.Handle("GET /search/issues", fakegithub.Search(w.gh, w.web, w.apiRepo, w.marcioWeb))
 	mux.Handle("GET /user", w.gh.Handler())
 	// A GitHub App's endpoints, once a test connects one (asApp).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -130,6 +173,9 @@ func newWorld(t *testing.T) *world {
 	w.lux.RepoFor = func(url string) string {
 		if strings.Contains(url, "/web.git") {
 			return webBare
+		}
+		if strings.Contains(url, "/api.git") {
+			return apiBare
 		}
 		return bare
 	}
@@ -153,25 +199,25 @@ func newWorld(t *testing.T) *world {
 		VALUES ($1, $2, 'pat', 'ghp_test', $3)`, "forge_"+w.org, w.org, ghSrv.URL)
 
 	forges := forge.Resolver{DB: app}
-	w.runtime = workflow.New(app, "test", quiet)
+	w.runtime = workflow.New(app, "test", w.log)
 	store := &delivery.Store{DB: app}
 	w.runtime.Register(delivery.Workflow(store, forges))
-	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet, KeepFor: 7 * 24 * time.Hour,
+	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: w.log, KeepFor: 7 * 24 * time.Hour,
 		// The organisation's judgement tier, as main wires it: off unless a
 		// test sets one, so the checks gate skips its questions.
 		Judge: &judge.Service{DB: app},
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
-	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: quiet,
+	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: w.log,
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
 	store.SyncPullRequest = w.prs.Sync
-	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: quiet,
+	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: w.log,
 		ConsoleURL: "https://console.lux.test/"}, Forges: forges, DefaultImage: "default:img"}
 	t.Cleanup(w.previews.Stop)
-	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {},
+	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: w.log, Kick: func() {},
 		Forges: forges, PRs: w.prs, Servers: w.previews.Service}).Handler())
 	t.Cleanup(apiSrv.Close)
 	w.api = apiSrv.URL
@@ -716,7 +762,7 @@ func TestAnExitLuxWillNeverReportIsNotWaitedFor(t *testing.T) {
 
 func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = "http://10.9.8.7:3120/mcp"
 	w.syncer.Agent.ToolsService = true
@@ -817,7 +863,7 @@ func (w *world) callTool(tools, luxRunSpec string, tool string, args string) (in
 
 func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -878,7 +924,7 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 // at url, on branch, and a person approved it.
 func (w *world) approvedWeb(url, branch string) (wi, requestID string) {
 	w.t.Helper()
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -960,7 +1006,7 @@ func TestAResumedCloneSignInFailureNamesGitHub(t *testing.T) {
 
 func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -1000,7 +1046,7 @@ func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 
 func TestADeclinedRepositoryRequestIsToldToTheAgent(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -1273,7 +1319,7 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 // withTools serves dude's tools to the world's agents, as the orchestrator
 // does, reached through lux's service in their containers.
 func (w *world) withTools() {
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
 		SyncPullRequest: w.prs.Sync,
 		ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
 			return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
@@ -3139,7 +3185,7 @@ func TestInitialGitEventsSurviveAStreamReconnectWithoutDuplicates(t *testing.T) 
 		}
 	}
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "Keep working", "interrupt": true})
 	if status != 201 {
@@ -3190,7 +3236,7 @@ func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
 	})
 	// A new orchestrator: nothing is following anything.
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	w.until("the implementer to complete", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1

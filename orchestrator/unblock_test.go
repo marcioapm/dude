@@ -702,7 +702,7 @@ func TestStartWhenUnblockedFailingUnknownlyEndsAfterItsBound(t *testing.T) {
 // removes the last blocker: the removal signals it, nothing merged.
 func TestAParkedDeliveryResumesWhenItsConductorRemovesTheLastBlocker(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	blocker, task := w.task(), w.task()
 	w.deliver(task)
