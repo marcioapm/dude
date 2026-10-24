@@ -7,6 +7,8 @@ package phases
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -134,8 +136,8 @@ func AutomationSpec(ctx context.Context, c AgentConfig, reg registry.Provider, g
 	for k, v := range in.Env {
 		spec.Env[k] = v
 	}
-	for path, content := range in.Files {
-		spec.Secrets = append(spec.Secrets, lux.Secret{Name: fileSecretName(path), Value: content, As: "file", Path: path})
+	for _, path := range slices.Sorted(maps.Keys(in.Files)) {
+		spec.Secrets = append(spec.Secrets, lux.Secret{Name: fileSecretName(path), Value: in.Files[path], As: "file", Path: path})
 	}
 	spec.Secrets = append(spec.Secrets, in.Secrets...)
 	login, err := LoginFor(ctx, reg, in.Image, nil)

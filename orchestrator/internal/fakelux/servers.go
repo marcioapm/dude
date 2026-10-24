@@ -464,6 +464,7 @@ func (s *Server) runCommand(run *Run, sv *server) {
 	if _, err := s.checkout(run, spec); err != nil {
 		sv.logf("stderr", "could not check out: %v", err)
 	}
+	s.placeWorkspaceSecrets(run)
 	cmd := exec.Command(sv.Command[0], s.inWorkspace(run, sv.Command[1:])...)
 	cmd.Dir = run.workspace
 	cmd.Env = os.Environ()

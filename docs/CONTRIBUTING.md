@@ -761,7 +761,14 @@ their creator.
   fresh now" lets it go. lux keeps no secret's value, so a resume gives
   every secret the kept Run declares again: forge tokens minted afresh, the
   rest (event file, setup manifest, project secrets) from the spec a new
-  Run would get, so the event file holds the new event.
+  Run would get, so the event file holds the new event. A Run's env stays as
+  first submitted, so `DUDE_AUTOMATION_RUN`, `DUDE_DELIVERY_ID`,
+  `DUDE_EVENT_NAME` and `DUDE_EVENT_ACTION` are also written to
+  `/workspace/.dude/env.sh` (`EnvPath`), a file secret the resume gives again,
+  and the command or server line sources it first: a resumed container sees
+  this firing's values. A process that outlives the resume (one the command
+  started in the background) keeps the values it started with; it must read
+  the event file or `env.sh` again.
 - **Concurrency** (`Arrive`): queue (default), merge (the waiting run gets
   every payload, as a list), skip (a skipped run row with the reason),
   cancel and restart, send to the running agent (a resumable agent), or run

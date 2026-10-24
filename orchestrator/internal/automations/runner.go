@@ -1797,6 +1797,35 @@ func eventEnv(payloads []Payload, a Automation, runID string) map[string]string 
 	return env
 }
 
+// EnvPath is a command's or server's file of the DUDE_* values that differ
+// per firing. lux keeps a Run's env as it was first submitted, but a resume
+// gives every file secret again: the command line sources this file first,
+// so a resumed container sees this firing's run, delivery and event.
+const EnvPath = "/workspace/.dude/env.sh"
+
+// perFiring are the eventEnv names a resume must be able to change.
+var perFiring = []string{"DUDE_AUTOMATION_RUN", "DUDE_DELIVERY_ID", "DUDE_EVENT_NAME", "DUDE_EVENT_ACTION"}
+
+// envFile is EnvPath's content: an export line per perFiring value, each
+// single-quoted for sh; one this firing has none of is unset.
+func envFile(env map[string]string) string {
+	var b strings.Builder
+	for _, name := range perFiring {
+		v, ok := env[name]
+		if !ok {
+			b.WriteString("unset " + name + "\n")
+			continue
+		}
+		b.WriteString("export " + name + "='" + strings.ReplaceAll(v, "'", `'\''`) + "'\n")
+	}
+	return b.String()
+}
+
+// sourcingEnv is a command line that reads EnvPath before it runs.
+func sourcingEnv(command string) string {
+	return ". " + EnvPath + "\n" + command
+}
+
 func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, payloads []Payload) (string, error) {
 	token, hash := agenttools.RunToken(r.Agent.ToolsKey, runID, 0)
 	err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
@@ -1990,13 +2019,15 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 		in.Command, in.Port = cfg.Command, cfg.Port
 	}
 	if a.Kind != "agent" {
+		in.Command = sourcingEnv(in.Command)
 		in.Env = eventEnv(payloads, a, runID)
+		in.Files = map[string]string{EnvPath: envFile(in.Env)}
 		if len(payloads) > 0 {
 			body := []byte(payloads[len(payloads)-1].Body)
 			if len(payloads) > 1 {
 				body, _ = json.Marshal(payloads)
 			}
-			in.Files = map[string]string{EventPath: string(body)}
+			in.Files[EventPath] = string(body)
 		}
 	}
 	var gh *forge.GitHub

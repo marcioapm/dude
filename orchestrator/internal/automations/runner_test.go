@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -444,6 +446,43 @@ func TestAutomationAgentOnAnEventKeepsAndResumesItsSession(t *testing.T) {
 	exec(t, h.owner, `UPDATE automation_runs SET status = 'succeeded', ended_at = now() WHERE id = 'arn_hold'`)
 	h.until("the kept session expires at 7 days and a minute", func() bool { return sessions() == 0 })
 	h.until("its container is ended", func() bool { return lux.Terminated(h.luxState(first.LuxRunID)) })
+}
+
+// lux keeps a Run's env as first submitted. A resumed Server's process
+// still sees this firing's run, delivery and event: they come from a file
+// the resume gives again, which its command line sources.
+func TestAutomationResumedServerSeesThisFiringsEnv(t *testing.T) {
+	h := newHarness(t)
+	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	h.automation("aut_renv", "server", map[string]any{"kind": "github", "event": "pull_request"},
+		map[string]any{"session_mode": "resumable", "expiry_days": 7, "server": map[string]any{"port": 8080, "path": "/events", "health": nil,
+			"command": `echo "$DUDE_AUTOMATION_RUN $DUDE_DELIVERY_ID $DUDE_EVENT_NAME $DUDE_EVENT_ACTION" >> /workspace/got # fakelux-run`}})
+	got := func(luxRun string) []string {
+		b, _ := os.ReadFile(filepath.Join(h.fake.Workspace(luxRun), "got"))
+		return strings.Split(strings.TrimSpace(string(b)), "\n")
+	}
+	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
+	h.until("the first event is POSTed", func() bool {
+		var posted int
+		_ = h.owner.QueryRow(context.Background(), `SELECT posted FROM automation_runs WHERE automation_id = 'aut_renv'`).Scan(&posted)
+		return posted == 1
+	})
+	h.runner.Wait()
+	h.advance(ServerIdle + time.Second)
+	h.until("the first run ends idle", func() bool { r := h.runs("aut_renv"); return len(r) == 1 && r[0].Status == "succeeded" })
+	first := h.runs("aut_renv")[0]
+	h.until("the kept container is stopped", func() bool { return h.luxState(first.LuxRunID) == "stopped" })
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+	h.until("the second run resumes and its server starts", func() bool {
+		rs := h.runs("aut_renv")
+		return len(rs) == 2 && rs[1].Session == "resumed" && len(got(first.LuxRunID)) == 2
+	})
+	second := h.runs("aut_renv")[1]
+	want := []string{first.ID + " d-1 pull_request opened", second.ID + " d-2 pull_request synchronize"}
+	if lines := got(first.LuxRunID); strings.Join(lines, "|") != strings.Join(want, "|") {
+		t.Errorf("the server saw %q, want %q", lines, want)
+	}
+	h.runner.Wait()
 }
 
 // lux keeps no secret's value and refuses a resume that does not give
