@@ -272,6 +272,32 @@ func TestChatTransientFailuresBackOffThenGiveUp(t *testing.T) {
 	}
 }
 
+// Given up after the routing call was kept: the failed request still
+// links that call, so Requests counts the model as asked.
+func TestChatGivingUpAfterTheRoutingCallKeepsItsModelCall(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
+	w.svc.SetBeforeMake(func(context.Context) error {
+		return &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+	})
+	_, ev := w.receive("Eli", "C1", "", "file: stream it")
+	w.once()
+	for range chat.MaxAttempts {
+		w.due()
+		w.once()
+	}
+	if e := w.event(ev); !e.Processed || e.Attempts != chat.MaxAttempts {
+		t.Fatalf("not given up: %+v", e)
+	}
+	if w.model.calls() != 1 {
+		t.Fatalf("the model was asked %d times", w.model.calls())
+	}
+	got := w.requests()
+	if len(got) != 1 || got[0].Route != "failed" || got[0].ModelCall == "" {
+		t.Fatalf("requests %+v", got)
+	}
+}
+
 // Retry-After longer than the backoff is waited for.
 func TestChatWaitsForTheProvidersRetryAfter(t *testing.T) {
 	_, after := chat.IsTransient(chat.Transient(errors.New("x"), 40*time.Second))

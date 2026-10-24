@@ -910,6 +910,12 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 	}
 	r := &request{EventID: d.ID, Mention: m, Route: RouteFailed, Person: who.Person, UserName: who.Display, Reasoning: reason,
 		effects: []effect{ephemeralEffect(note), reactEffect(ReactionFailed)}}
+	// A routing call already made and kept is the model asked, whatever
+	// failed after it; a click's choice asked nothing.
+	var kept storedDecision
+	if d.Kind != "interaction" && len(d.Decision) > 0 && json.Unmarshal(d.Decision, &kept) == nil {
+		r.ModelCall = kept.CallID
+	}
 	if r.UserName == "" {
 		r.UserName = s.names(ctx, p, inst, []string{m.UserID})[m.UserID]
 	}
