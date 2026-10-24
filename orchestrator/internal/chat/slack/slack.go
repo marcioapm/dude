@@ -74,6 +74,11 @@ func (p *Provider) Info() chat.Info {
 	return chat.Info{ID: "slack", Name: "Slack", Glyph: "slack", WorkspaceWord: "workspace"}
 }
 
+// RequestHeaders are what Slack signs a delivery with.
+func (p *Provider) RequestHeaders() []string {
+	return []string{"X-Slack-Request-Timestamp", "X-Slack-Signature", "Content-Type"}
+}
+
 // VerifyRequest checks Slack's v0 signature over "v0:<timestamp>:<body>"
 // with the signing secret, and that the timestamp is within MaxSkew of now:
 // a replayed request is refused as an unsigned one is.

@@ -184,7 +184,9 @@ func Transient(err error, after time.Duration) error {
 type Provider interface {
 	Info() Info
 
-	// Webhooks.
+	// Webhooks. RequestHeaders are the headers VerifyRequest and the
+	// parsers read: the only ones of a delivery passed to them.
+	RequestHeaders() []string
 	VerifyRequest(h http.Header, body []byte, now time.Time) error
 	ParseEvent(body []byte) (Event, error)
 	ParseInteraction(body []byte) (Interaction, error)

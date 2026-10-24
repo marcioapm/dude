@@ -568,7 +568,9 @@ async function locate(ctx: RequestContext): Promise<Response> {
         UNION ALL SELECT 'run' FROM runs WHERE id=${ctx.params.id!}
           AND (session_id IS NULL OR session_role(session_id,${m.person_id}) IS NOT NULL)
         UNION ALL SELECT 'brainstorm' FROM sessions WHERE id=${ctx.params.id!}
-          AND session_role(id,${m.person_id}) IS NOT NULL LIMIT 1`;
+          AND session_role(id,${m.person_id}) IS NOT NULL
+        UNION ALL SELECT 'connect' FROM chat_connect_states WHERE kind = 'prompt'
+          AND state_hash = encode(sha256(convert_to(${ctx.params.id!}, 'UTF8')), 'hex') LIMIT 1`;
       if (!row) return null;
       const [organization] = await sql`SELECT id,name,slug FROM organizations WHERE id=${m.organization_id}`;
       return { organization,kind:row.kind,id:ctx.params.id };

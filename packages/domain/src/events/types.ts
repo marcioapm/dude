@@ -226,6 +226,20 @@ export const EventTypes = {
    */
   PersonSeen: "person.seen",
 
+  // Chat providers (orchestrator/internal/chat)
+  /** An admin installed a provider's app in a workspace. Payload: `{ provider, workspaceId, workspaceName }`. */
+  ChatProviderInstalled: "chat_provider.installed",
+  /**
+   * The installation went with its links and thread bindings: an admin
+   * disconnected it, or the workspace removed the app or revoked its token.
+   * Payload: `{ provider, workspaceId, workspaceName, reason }`.
+   */
+  ChatProviderRemoved: "chat_provider.removed",
+  /** A person linked their provider account. Payload: `{ provider, personId, handle }`. */
+  ChatIdentityLinked: "chat_identity.linked",
+  /** A link went: unlinked by the person, or their sign-in revoked. Payload: `{ provider, personId, reason }`. */
+  ChatIdentityUnlinked: "chat_identity.unlinked",
+
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",
   WorkflowStepStarted: "workflow.step.started",

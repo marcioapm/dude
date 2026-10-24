@@ -48,6 +48,9 @@ let orchestratorServer: ReturnType<typeof Bun.serve>;
 /** What the stand-in orchestrator was sent, in order. */
 const sent: Array<{ path: string; headers: Record<string, string>; body: string }> = [];
 let callbackAnswer: { outcome: string; slug: string; returnTo: string } = { outcome: "connected", slug: "acme", returnTo: "settings" };
+/** How the stand-in answers a webhook: as it should, refusing the signature, hanging, or failing a callback. */
+let webhookMode: "ok" | "unsigned" | "hang" = "ok";
+let callbackFails = false;
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -90,8 +93,16 @@ beforeAll(async () => {
       }
       if (path.startsWith("/internal/chat/discord")) return Response.json({ error: { code: "not_found", message: "no such chat provider" } }, { status: 404 });
       if (path.endsWith("/install") || path.endsWith("/connect")) return Response.json({ url: "https://slack.example.com/oauth?state=s" });
-      if (path.endsWith("/callback")) return Response.json(callbackAnswer);
-      if (path.endsWith("/events")) return Response.json({ challenge: "c-1" });
+      if (path.endsWith("/callback")) {
+        if (callbackFails) return Response.json({ error: { code: "internal", message: "internal error" } }, { status: 500 });
+        return Response.json(callbackAnswer);
+      }
+      if (path.endsWith("/events") || path.endsWith("/interactions")) {
+        if (webhookMode === "unsigned") return Response.json({ error: { code: "unauthorized", message: "not signed" } }, { status: 401 });
+        if (webhookMode === "hang") await Bun.sleep(4_000);
+        return Response.json(path.endsWith("/events") ? { challenge: "c-1" } : { ok: true });
+      }
+      if (path.startsWith("/internal/chat/slack/connect/state")) return Response.json({ status: "ready", workspaceName: "Acme Slack" });
       if (req.method === "DELETE") return new Response(null, { status: 204 });
       return Response.json({});
     },
@@ -127,6 +138,60 @@ describe("webhooks", () => {
     expect(got.headers.authorization).toBe("Bearer svc");
     // Nothing the caller sends becomes who is asking.
     expect(Object.keys(got.headers).filter((h) => h.includes("dude-person")).length).toBe(0);
+  });
+
+  test("any provider's x- headers are passed on, named by no provider here, the backend's own not", async () => {
+    await call(null, "POST", "/v1/webhooks/chat/slack/events", "{}",
+      { "x-other-signature": "sig", "x-forwarded-for": "10.0.0.1", "x-request-id": "r-1" });
+    const got = last().headers;
+    expect(got["x-chat-header-x-other-signature"]).toBe("sig");
+    expect(got["x-chat-header-x-forwarded-for"]).toBeUndefined();
+    expect(got["x-chat-header-x-request-id"]).toBeUndefined();
+  });
+
+  test("a click reaches the orchestrator's interactions route as the form it is", async () => {
+    const form = "payload=%7B%22type%22%3A%22block_actions%22%7D";
+    const res = await call(null, "POST", "/v1/webhooks/chat/slack/interactions", form,
+      { "content-type": "application/x-www-form-urlencoded", "x-slack-signature": "v0=1" });
+    expect(res.status).toBe(200);
+    expect(last().path).toBe("/internal/chat/slack/interactions");
+    expect(last().body).toBe(form);
+    expect(last().headers["x-chat-header-content-type"]).toBe("application/x-www-form-urlencoded");
+  });
+
+  test("the orchestrator's refusal comes back as it was, and one too slow is a 503 in under 3 s", async () => {
+    webhookMode = "unsigned";
+    try {
+      expect((await call(null, "POST", "/v1/webhooks/chat/slack/events", "{}")).status).toBe(401);
+      expect((await call(null, "POST", "/v1/webhooks/chat/slack/interactions", "payload=x")).status).toBe(401);
+      webhookMode = "hang";
+      const started = Date.now();
+      const res = await call(null, "POST", "/v1/webhooks/chat/slack/events", "{}");
+      expect(res.status).toBe(503);
+      expect(Date.now() - started).toBeLessThan(3_000);
+    } finally {
+      webhookMode = "ok";
+    }
+    expect((await call(null, "POST", "/v1/webhooks/chat/discord/events", "{}")).status).toBe(404);
+  });
+
+  test("the connect page's state is read as the signed-in person", async () => {
+    const res = await call(memberKey, "GET", "/v1/chat/slack/connect/state?state=p%2B1");
+    expect(res.status).toBe(200);
+    expect(last().path).toBe("/internal/chat/slack/connect/state?state=p%2B1");
+    expect(last().headers["x-dude-person"]).toBe(memberPerson);
+  });
+
+  test("a Connect link's state is located in its organisation, and nothing else of it", async () => {
+    const state = "prompt-state-1";
+    const hash = createHash("sha256").update(state).digest("hex");
+    await owner`INSERT INTO chat_connect_states (state_hash, organization_id, kind, provider, external_workspace_id, external_user_id, expires_at)
+      VALUES (${hash}, ${ORG}, 'prompt', 'slack', 'T1', 'U9', now() + interval '15 minutes')`;
+    const found = await call(memberKey, "GET", `/v1/locate/${state}`);
+    expect(found.status).toBe(200);
+    expect(await found.json()).toEqual({ organization: { id: ORG, name: "Acme", slug: "acme" }, kind: "connect", id: state });
+    expect((await call(memberKey, "GET", "/v1/locate/not-a-state")).status).toBe(404);
+    await owner`DELETE FROM chat_connect_states WHERE state_hash = ${hash}`;
   });
 });
 
@@ -167,6 +232,15 @@ describe("install and connect", () => {
     res = await call(null, "GET", "/v1/chat/slack/install/callback?state=st&code=cd");
     expect(res.headers.get("location")).toBe("/?chatInstall=slack&outcome=workspace_taken#/o/acme/org/settings/chat/slack");
     expect((await call(null, "GET", "/v1/chat/discord/install/callback?state=st")).status).toBe(404);
+    // The orchestrator failing: the landing says so.
+    callbackFails = true;
+    try {
+      res = await call(null, "GET", "/v1/chat/slack/connect/callback?state=st&code=cd");
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe("/?chat=slack&outcome=failed#/me/settings");
+    } finally {
+      callbackFails = false;
+    }
   });
 });
 

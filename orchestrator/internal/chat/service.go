@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -116,7 +117,13 @@ func (s *Service) Receive(ctx context.Context, providerID string, interaction bo
 	if err != nil {
 		return nil, err
 	}
-	if err := p.VerifyRequest(header, body, s.now()); err != nil {
+	only := http.Header{}
+	for _, name := range p.RequestHeaders() {
+		if v := http.Header(header).Values(name); len(v) > 0 {
+			only[http.CanonicalHeaderKey(name)] = v
+		}
+	}
+	if err := p.VerifyRequest(only, body, s.now()); err != nil {
 		return nil, refuse(401, "unauthorized", "%s", err.Error())
 	}
 	var (

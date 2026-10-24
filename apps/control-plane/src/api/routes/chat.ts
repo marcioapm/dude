@@ -182,17 +182,22 @@ function callback(kind: "install" | "connect") {
   };
 }
 
+/** Headers a webhook never passes on: the connection's, and those the backend sets itself. */
+const NOT_FORWARDED = new Set(["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "x-request-id", "x-dude-person"]);
+
 /**
- * A provider's webhook: the body as sent and the provider's headers,
- * passed on for the orchestrator to verify and store. It answers at once;
- * the routing is the orchestrator's chat loop's.
+ * A provider's webhook: the body as sent and its `x-*` and content-type
+ * headers, passed on for the orchestrator to verify and store (it keeps
+ * only those its provider names). It answers at once; the routing is the
+ * orchestrator's chat loop's.
  */
 function webhook(kind: "events" | "interactions") {
   return async (ctx: PublicContext): Promise<Response> => {
     const body = await ctx.request.text();
     const headers: Record<string, string> = {};
     for (const [k, v] of ctx.request.headers) {
-      if (/^x-(slack|signature|chat)-/i.test(k) || k === "content-type") headers[`x-chat-header-${k}`] = v;
+      const name = k.toLowerCase();
+      if ((name.startsWith("x-") && !NOT_FORWARDED.has(name)) || name === "content-type") headers[`x-chat-header-${name}`] = v;
     }
     const { url, token } = { url: config().string("DUDE_ORCHESTRATOR_URL"), token: config().string("DUDE_ORCHESTRATOR_TOKEN") };
     if (!url || !token) throw new HttpError(503, "the orchestrator is not configured", "unavailable");
@@ -257,7 +262,21 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
   const q = chatRequestsQuerySchema.safeParse(Object.fromEntries(ctx.url.searchParams));
   if (!q.success) throw new HttpError(400, "provider and route filter Requests", "bad_request");
   const { provider = null, route = null } = q.data;
-  const rows = await withOrg(ctx.principal.organizationId, ({ sql }) => sql`
+  const rows = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+    // One statement per filter, so each reads its own index range
+    // (chat_requests_route_idx, _provider_idx, _created_idx) under a reused plan.
+    const ids = (provider && route
+      ? await sql`SELECT id FROM chat_requests WHERE route = ${route} AND provider = ${provider} AND created_at > now() - interval '30 days'
+          ORDER BY created_at DESC, id DESC LIMIT 200`
+      : route
+        ? await sql`SELECT id FROM chat_requests WHERE route = ${route} AND created_at > now() - interval '30 days'
+            ORDER BY created_at DESC, id DESC LIMIT 200`
+        : provider
+          ? await sql`SELECT id FROM chat_requests WHERE provider = ${provider} AND created_at > now() - interval '30 days'
+              ORDER BY created_at DESC, id DESC LIMIT 200`
+          : await sql`SELECT id FROM chat_requests WHERE created_at > now() - interval '30 days'
+              ORDER BY created_at DESC, id DESC LIMIT 200`).map((r: { id: string }) => r.id);
+    return sql`
     SELECT r.id, r.provider, r.conversation_kind AS "conversationKind", r.conversation_name AS "conversationName",
       r.external_user_name AS "externalUserName", (SELECT person_ref(p) FROM people p WHERE p.id = r.person_id) AS person,
       r.text, r.permalink, r.route, r.asked_route AS "askedRoute", r.confidence::float8 AS confidence, r.reasoning, r.rounds,
@@ -269,10 +288,9 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
         END) END AS result,
       (SELECT COALESCE(json_agg(person_ref(p)), '[]') FROM people p WHERE p.id = ANY(r.shared_added)) AS "sharedAdded",
       r.shared_skipped AS "sharedSkipped", r.created_at AS "createdAt"
-    FROM chat_requests r
-    WHERE (${provider}::text IS NULL OR r.provider = ${provider}) AND (${route}::text IS NULL OR r.route = ${route})
-      AND r.created_at > now() - interval '30 days'
-    ORDER BY r.created_at DESC, r.id DESC LIMIT 200`);
+    FROM chat_requests r WHERE r.id = ANY(${sql.array(ids, "TEXT")})
+    ORDER BY r.created_at DESC, r.id DESC`;
+  });
   return json({ requests: rows });
 }
 
