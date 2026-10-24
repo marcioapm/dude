@@ -109,6 +109,11 @@
 .panesSingle {
   grid-template-columns: 1fr;
 }
+@media (max-width: 600px) {
+  .panesStackNarrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .pane {
   position: relative;
   padding: var(--ds-space-16);

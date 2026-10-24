@@ -656,4 +656,9 @@ def test_chat_layout_facts_a_browser_measures(gallery_page: Page, console_errors
         return {ratio: t.getBoundingClientRect().width / c.getBoundingClientRect().width,
                 stacked: label.getBoundingClientRect().bottom <= t.getBoundingClientRect().top + 1}; }""")
     assert m["ratio"] >= 0.9 and m["stacked"], m
+    # On a settings page 900px wide its column is ~620px: the row stacks by the column, not the 1440px window.
+    page_row = gallery_page.get_by_test_id("cp-setting-fill-page")
+    m = page_row.evaluate("""c => { const t = c.querySelector('textarea'), main = c.querySelector('[data-settings-main]');
+        return {ratio: t.getBoundingClientRect().width / main.getBoundingClientRect().width}; }""")
+    assert m["ratio"] >= 0.9, m
     assert console_errors == []

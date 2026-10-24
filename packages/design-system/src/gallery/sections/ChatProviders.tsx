@@ -168,11 +168,21 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
             <span><Button variant="primary" size="sm">Save</Button></span>
           </SettingRow>
         </div>
+        <Label>On a settings page 900px wide: the page column is what the row measures</Label>
+        <div style={{ width: 900, maxWidth: "100%" }} data-testid="cp-setting-fill-page">
+          <SettingsLayout scope={{ title: "Acme", subtitle: "Organisation settings" }} current="chat" onSelect={() => {}}
+            items={[{ id: "chat", label: "Chat", icon: "message" }]}>
+            <SettingRow label="Additional instructions" help="Appended to the built-in ones, for every chat." fill>
+              <Textarea aria-label="Additional instructions, on a page" rows={3} defaultValue="#support is almost always ABS." />
+              <span><Button variant="primary" size="sm">Save</Button></span>
+            </SettingRow>
+          </SettingsLayout>
+        </div>
       </Block>
 
       <Block id="cp-prompt" title="PromptText"
         note="What a model is told, read-only: mono, wrapped at the column, its own line breaks kept, scrolling down past 24 lines and never sideways. Never Markdown and never a code block: there is nothing to copy or run.">
-        <Panes mode={mode}>
+        <Panes mode={mode} stackNarrow>
           <PromptText label="Built-in instructions" text={"You route a message someone sent to dude, a software-delivery assistant, from a team chat. Answer with one JSON object and nothing else.\n\n- brainstorm: the person wants to think something through, investigate, reproduce or discuss; or nothing else fits.\n- task: one clear, bounded change in one project. Give a title, a goal and acceptance criteria.\n- epic: several pieces of work in one project, with the tasks and the order they need."} />
         </Panes>
       </Block>
