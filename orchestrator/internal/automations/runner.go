@@ -762,7 +762,7 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 				return false, nil
 			}
 			r.Log.Warn("kept automation session stayed busy; starting fresh", "automation", a.ID, "lux_run", kept)
-			if err := StartFresh(ctx, r.DB, r.Lux, a.Org, a.ID); err != nil {
+			if err := r.StartFresh(ctx, a.Org, a.ID); err != nil {
 				return false, err
 			}
 			startReason = fmt.Sprintf("its kept session was still busy after %s, so it started fresh", ResumeConflictMax)
@@ -777,7 +777,7 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 			// lux refused to resume the kept Run: it is ended, so no stopped
 			// Run is left behind, and the run starts fresh.
 			r.Log.Info("kept automation session could not be resumed; starting fresh", "automation", a.ID, "error", err)
-			if err := StartFresh(ctx, r.DB, r.Lux, a.Org, a.ID); err != nil {
+			if err := r.StartFresh(ctx, a.Org, a.ID); err != nil {
 				return false, err
 			}
 			luxRunID, session = "", ""
@@ -1086,7 +1086,10 @@ func (r *Runner) endThenStop(ctx context.Context, a Automation, runID, luxRunID 
 	return nil
 }
 
+// stopOrCancel stops (keep) or ends a run's lux Run; either way its preview
+// sign-in is forgotten: a resume starts a new placement, signed in afresh.
 func (r *Runner) stopOrCancel(ctx context.Context, luxRunID string, keep bool) {
+	r.forgetPreview(luxRunID)
 	var err error
 	if keep {
 		err = r.Lux.Stop(ctx, luxRunID)
@@ -1308,7 +1311,6 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	signIn := previewAuth{luxRunID: luxRunID, base: base}
 	if err != nil || !r.healthy(ctx, base, signIn, cfg.Health) {
 		if r.now().Sub(started) > ServerHealthMax {
-			r.forgetPreview(luxRunID)
 			r.stopOrCancel(ctx, luxRunID, keep)
 			return true, r.endServer(ctx, a, runID, "failed", "error", "its server was not healthy within 60 seconds")
 		}
@@ -1348,7 +1350,6 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}); err != nil || !ended {
 		return false, err
 	}
-	r.forgetPreview(luxRunID)
 	r.stopOrCancel(ctx, luxRunID, keep)
 	return true, nil
 }
@@ -1492,6 +1493,11 @@ func (r *Runner) previewSignIn(ctx context.Context, signIn previewAuth) error {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	res, err := client.Do(req)
 	if err != nil {
+		// The URL holds the ticket: it is no part of what is logged.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			ue.URL = signIn.base + "/.lux/auth"
+		}
 		return err
 	}
 	res.Body.Close()
@@ -1651,7 +1657,7 @@ func (r *Runner) expireSessions(ctx context.Context) (int, error) {
 	}
 	var errs []error
 	for _, k := range list {
-		if err := StartFresh(ctx, r.DB, r.Lux, k.Org, k.AutomationID); err != nil {
+		if err := r.StartFresh(ctx, k.Org, k.AutomationID); err != nil {
 			errs = append(errs, fmt.Errorf("automation %s: %w", k.AutomationID, err))
 		}
 	}
@@ -1661,22 +1667,38 @@ func (r *Runner) expireSessions(ctx context.Context) (int, error) {
 // StartFresh lets go of an automation's kept session: its lux Run is
 // cancelled and the next firing starts a new one.
 func StartFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) error {
+	_, err := startFresh(ctx, d, c, org, automationID)
+	return err
+}
+
+// StartFresh is the package's StartFresh, forgetting the cancelled lux
+// Run's preview sign-in.
+func (r *Runner) StartFresh(ctx context.Context, org, automationID string) error {
+	luxRunID, err := startFresh(ctx, r.DB, r.Lux, org, automationID)
+	if luxRunID != "" {
+		r.forgetPreview(luxRunID)
+	}
+	return err
+}
+
+// startFresh is StartFresh, saying which lux Run it let go of ("" none).
+func startFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) (string, error) {
 	var luxRunID string
 	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1 RETURNING lux_run_id`, automationID).Scan(&luxRunID)
 	})
 	if db.IsNotFound(err) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := c.Cancel(ctx, luxRunID); err != nil {
 		if le, ok := lux.AsError(err); !ok || le.Status != http.StatusNotFound {
-			return err
+			return luxRunID, err
 		}
 	}
-	return nil
+	return luxRunID, nil
 }
 
 // ---------------------------------------------------------------------------
