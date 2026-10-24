@@ -93,7 +93,7 @@ export function registerInvitationRoutes(router: Router) {
     const preview = await detail(ctx), access = ctx.principal.access!;
     let returned = false;
     let more = false;
-    const acceptOnce = () => withOrg(preview.organization.id, async (scope) => {
+    const accepted = await withOrg(preview.organization.id, async (scope) => {
       await lockPeople(scope);
       const [i] = await scope.sql`SELECT * FROM invitations WHERE code = ${ctx.params.code!} FOR UPDATE`;
       if (!i || i.revoked_at || (!i.accepted_at && new Date(i.expires_at).getTime() <= Date.now())) throw unusable();
@@ -128,7 +128,6 @@ export function registerInvitationRoutes(router: Router) {
       await scope.sql`UPDATE invitations SET accepted_at=COALESCE(accepted_at,now()), accepted_person_id=${person.id} WHERE id=${i.id}`;
       return { person: { id: person.id, role: person.role, name: person.name }, organization: preview.organization };
     });
-    const accepted = await acceptOnce();
     // The rest in transactions of their own, at most PASS_BATCH locks each,
     // each re-reading the person as still active under the sessions' locks
     // (a removal since keeps the rest the admins').
