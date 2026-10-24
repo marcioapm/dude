@@ -17,6 +17,8 @@ const IMPLICIT: Record<string, (el: Element) => boolean> = {
   columnheader: (el) => el.tagName === "TH",
   link: (el) => el.tagName === "A" && el.hasAttribute("href"),
   heading: (el) => /^H[1-6]$/.test(el.tagName),
+  list: (el) => el.tagName === "UL" || el.tagName === "OL",
+  figure: (el) => el.tagName === "FIGURE",
 };
 
 function roleOf(el: Element, role: string): boolean {

@@ -55,6 +55,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/automations"
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
+	"github.com/marciomartins/dude/orchestrator/internal/chat/slack"
 	"github.com/marciomartins/dude/orchestrator/internal/config"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -208,6 +210,8 @@ func run(log *slog.Logger) error {
 		Registry: registryLogin, Log: log}
 
 	embedder, notifier := memoryAndPush(set, database, log)
+	chatService := &chat.Service{DB: database, Providers: chat.Registry{"slack": slack.New(set.Slack)}, Judge: judgeService,
+		PublicURL: set.PublicURL, Log: log, Workers: set.ChatWorkers}
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
 	// The guide this build embeds, for search_memory: before the tools
 	// listen, so an agent's first search finds this build's text.
@@ -259,6 +263,11 @@ func run(log *slog.Logger) error {
 		{"automations-retention", time.Hour, func(ctx context.Context) (int, error) {
 			return automations.Retain(ctx, database, time.Now())
 		}},
+		// Mentions and clicks chat providers sent: routed, replied to,
+		// recorded, set.ChatWorkers at once; the loop only claims.
+		{"chat", time.Second, chatService.Sweep},
+		// Requests past 30 days and deliveries past 7, in batches.
+		{"chat-retention", time.Hour, chatService.Retain},
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {
@@ -287,6 +296,21 @@ func run(log *slog.Logger) error {
 		default:
 		}
 	}
+	chatService.Kick = serverService.Kick
+	// A delivery stored or kept wakes the chat loop alone; only a commit
+	// that started a run wakes them all.
+	for i, l := range loops {
+		if l.name == "chat" {
+			chatWake := wakers[i]
+			chatService.Kick = func() {
+				select {
+				case chatWake <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+	chatService.RunStarted = serverService.Kick
 	// lux's feed: wakes, idleness and gone servers of wakeable previews.
 	go (&servers.Feed{DB: database, Lux: luxClient, Log: log, Kick: serverService.Kick}).Run(ctx)
 	go func() {
@@ -305,7 +329,7 @@ func run(log *slog.Logger) error {
 		Handler: (&api.Server{DB: database, Lux: luxClient, Workflow: runtime, Token: set.Token, Log: log,
 			PushKeys: notifier.Keys, Forges: forges, PRs: pullRequests, Servers: serverService,
 			Embedder: embedder, Indexer: indexer, Kick: serverService.Kick,
-			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}, AgentEgress: agent.Egress, Automations: automationRunner}).Handler(),
+			LLM: llm.Client{URL: agent.LLMURL, Key: agent.LLMKey}, AgentEgress: agent.Egress, Automations: automationRunner, Chat: chatService}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	// dude's tools for agents, on a listener of their own: agents reach it

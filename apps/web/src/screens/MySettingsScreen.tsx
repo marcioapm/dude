@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTheme } from "@dude/design-system";
-import { Duration, EntityLine, OrgFace } from "@dude/design-system/components";
+import { Duration, EntityLine, OrgFace, SettingsSection } from "@dude/design-system/components";
 import { Button, Callout, Card, CardBody, CardFooter, CardHeader, Dialog, FormActions, FormStack, KeyValueList, Page, PageHeader, Select,
   type CalloutTone } from "@dude/design-system/primitives";
 import type { ApiClient, Me, Member } from "../api/client.ts";
@@ -15,6 +15,7 @@ import { useAccount } from "../accounts/context.tsx";
 import { roleWord, untilWords } from "../accounts/words.ts";
 import { useSave } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
+import { ChatConnections } from "./ChatConnections.tsx";
 
 // Notifications are on or off per organisation: the card speaks of the one this tab is in.
 const PUSH_TEXT: Record<PushState, string> = {
@@ -149,6 +150,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
   const [github, setGithub] = useState<Pick<Me, "githubLogin" | "commitEmail"> | null>(null);
   const [authorization, setAuthorization] = useState<Awaited<ReturnType<ApiClient["githubAuthorization"]>> | null>(null);
   const [read, setRead] = useState(0);
+  const [chatInstalled, setChatInstalled] = useState(false);
   const account = useAccount();
 
   useEffect(() => {
@@ -195,10 +197,17 @@ export function MySettingsScreen({ client, me, onChanged }: {
           organizations={account?.memberships.map((m) => m.name)} accessEmail={account?.authMethod === "cloudflare_access"}
           onChanged={() => { setRead((n) => n + 1); onChanged(); account?.refresh(); }} />
       ) : null}
-      {authorization?.available ? (
-        <GithubAuthorizationCard client={client} connection={authorization.connection} outcome={githubOutcome}
-          onDisconnected={() => { setGithubOutcome(null); setRead((n) => n + 1); }} />
-      ) : null}
+      <SettingsSection title={authorization?.available || chatInstalled ? "Connections" : undefined} data-testid="my-connections">
+        {authorization?.available || chatInstalled ? (
+          <p className="muted chatConnectionsIntro">Your own accounts elsewhere, so dude can act as you there and know you when you write from there.
+            {account ? ` Chat apps ${account.current.name} has added are listed here.` : ""}</p>
+        ) : null}
+        {authorization?.available ? (
+          <GithubAuthorizationCard client={client} connection={authorization.connection} outcome={githubOutcome}
+            onDisconnected={() => { setGithubOutcome(null); setRead((n) => n + 1); }} />
+        ) : null}
+        <ChatConnections client={client} me={me ? { id: me.id, name: me.name } : null} onInstalled={setChatInstalled} />
+      </SettingsSection>
       {groups.length ? <KeysSection client={keysClient} groups={groups} /> : null}
       {account && account.memberships.length + account.invitations.length > 1 ? (
         <Card data-testid="my-organisations">

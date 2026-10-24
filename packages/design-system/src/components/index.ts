@@ -221,3 +221,11 @@ export type {
 export { AdminOwned } from "./Brainstorm.tsx";
 export { GeneralAccessRow, MentionChip, MentionMenu, MentionShareConfirm, mentionOptionId, oneWay } from "./SessionAccess.tsx";
 export type { GeneralAccessRowProps, MentionItem, MentionMenuProps, MentionShareConfirmProps } from "./SessionAccess.tsx";
+export {
+  ConnectionCard, ExternalFace, ExternalThread, FactList, IdentityPair, InstructionStack, OriginFact, PromptText, ProviderGlyph, ProviderList, ROUTE_SPEC,
+  RouteBadge, RoutingLine, providerGlyph,
+} from "./Chat.tsx";
+export type {
+  ChatProvider, ChatRoute, ConnectionCardProps, ExternalMessage, ExternalThreadProps, FactListProps, IdentityPairProps, InstructionLayer,
+  InstructionStackProps, OriginFactProps, PromptTextProps, ProviderGlyphProps, ProviderListProps, RouteBadgeProps, RoutingLineProps,
+} from "./Chat.tsx";

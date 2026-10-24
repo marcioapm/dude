@@ -329,6 +329,34 @@ describe("mentions in the composer", () => {
     expect(chips.every((c) => c.closest("p") !== null)).toBe(true);
   });
 
+  test("a chat-born session's origin sits once under a human opening message, and above an agent-first transcript", async () => {
+    const origin = { provider: "slack", workspaceId: "T1", conversationId: "C1", conversationName: "#support", threadId: "1", permalink: "",
+      requestedBy: "Ana", thread: [{ by: "Ana", text: "the export times out", inDude: false }],
+      routing: { route: "brainstorm" as const, confidence: 0.9, reasoning: "talk", added: [], skipped: [], requestId: "chr_1" } };
+    const opening = ev("chat.message", { text: "look into the export" }, { type: "human", id: "u_ana" });
+    const reply = ev("agent.message", { text: "Reading the worker." }, { type: "agent", id: RUN });
+    const human = await page(new OrgClient(detail("chat", { origin }), [opening, reply]));
+    const nested = await until(() => human.querySelector("[data-testid=session-origin]"), "the origin");
+    expect(human.querySelectorAll("[data-testid=session-origin]").length).toBe(1);
+    expect(nested.hasAttribute("data-nested")).toBe(true);
+    const turn = human.querySelector("[data-testid=human-turn]")!;
+    expect(turn.compareDocumentPosition(nested) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Directly under the opening message: before the agent's first reply.
+    const firstReply = [...human.querySelectorAll("p")].find((el) => el.textContent === "Reading the worker.")!;
+    expect(firstReply).toBeTruthy();
+    expect(nested.compareDocumentPosition(firstReply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(nested.textContent).toContain("the export times out");
+    await act(async () => mounted.splice(0).forEach((u) => void u()));
+
+    const agentFirst = await page(new OrgClient(detail("chat", { origin }), [ev("agent.message", { text: "Hello." }, { type: "agent", id: RUN }),
+      ev("chat.message", { text: "later" }, { type: "human", id: "u_ana" })]));
+    const above = await until(() => agentFirst.querySelector("[data-testid=session-origin]"), "the origin");
+    await until(() => agentFirst.querySelector("[data-testid=human-turn]"), "the human turn");
+    expect(agentFirst.querySelectorAll("[data-testid=session-origin]").length).toBe(1);
+    expect(above.hasAttribute("data-nested")).toBe(false);
+    expect(above.compareDocumentPosition(agentFirst.querySelector("[data-testid=human-turn]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   test("a message from a pull request keeps its source and its chips", async () => {
     const msg = ev("chat.message", { text: "@Lin Zhao see the thread", mentions: ["u_lin"],
       github: { login: "octo", url: "https://github.com/acme/web/pull/1#c1", kind: "comment" } }, { type: "human", id: "u_ana" });

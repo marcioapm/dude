@@ -25,18 +25,21 @@ export function Panes({
   surface,
   children,
   style,
+  stackNarrow,
 }: {
   readonly mode: PaneMode;
   /** Pane background = surface instead of canvas (for things that sit on cards). */
   readonly surface?: boolean | undefined;
   readonly children: ReactNode | ((theme: ThemeMode, density: Density) => ReactNode);
   readonly style?: CSSProperties | undefined;
+  /** One pane per row on a phone, for text that needs the width. */
+  readonly stackNarrow?: boolean | undefined;
 }) {
   const paneDensity = useContext(PaneDensityContext);
   const modes: ThemeMode[] = mode === "both" ? ["dark", "light"] : [mode];
   const densities = densitiesFor(paneDensity);
   return (
-    <div className={cx(styles["panes"], modes.length === 1 && styles["panesSingle"])}>
+    <div className={cx(styles["panes"], modes.length === 1 && styles["panesSingle"], stackNarrow && styles["panesStackNarrow"])}>
       {densities.flatMap((d) =>
         modes.map((m) => (
           <div

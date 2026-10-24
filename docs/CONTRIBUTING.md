@@ -53,6 +53,7 @@ loops (`cmd/dude-orchestrator/main.go`):
 | `webhooks` | Acts on stored GitHub deliveries: syncs the pull request each is about. |
 | `automations` | Fires due schedules, matches stored deliveries against event automations, starts queued runs, follows running ones (an agent's turn, a command's exit, a Server's POSTs and idle stop), expires kept sessions. |
 | `automations-retention` | Hourly: deletes deliveries after 30 days, empties automation runs' payloads at 30 days and logs at 90. |
+| `chat` | Routes stored chat provider deliveries (mentions, kept mentions, clicked choices, an app's removal): replies, records each in Requests. |
 | `previews` | Drives branch previews on lux: creates a wakeable preview's lux servers, wakes it (resume with a sync, or submit and attach) when lux's feed says someone opened it, stops it when every server is idle, syncs a running one when its branch moves, reaps unused ones, deletes the servers and cancels the Run of an ended one. Previews from before lux#41 keep the old park-after-idle path. |
 | `lux-feed` (goroutine) | Follows lux's tenant event feed (`GET /v1/events`) from the cursor in `lux_feed`, recording wakes, idleness and gone servers of wakeable previews (`servers.Feed`). |
 | `pr-reconciler` | Re-reads open pull requests not seen for 15 minutes — the backstop for webhooks GitHub never sent. |
@@ -869,6 +870,74 @@ their creator.
 - **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90
   (`automations.Retain`, hourly).
 
+### Chat providers (Slack first)
+
+Someone writes `@dude …` in a team chat and dude starts a session, files a
+task, opens an epic with its tasks, resumes a session or asks first, and
+replies in the thread with a link. Migration 195 holds it all, keyed by
+`provider` (an adapter's id): `chat_installations` (one workspace ↔ one
+organisation, unique across tenants; the bot token stored as forge
+credentials are, in plaintext behind RLS — see What's next), `chat_identities`
+(a provider account linked once to one account per workspace, never by
+email), `chat_connect_states` (one-time, 15 minutes, as sha256),
+`chat_events` (deliveries, keyed on the provider's event id), `chat_threads`
+(a thread bound to one session, task or epic), `chat_requests` (the routing
+log, 30 days, one per delivery), `organizations.chat_instructions`, and
+`origin` on tasks, epics and sessions.
+
+**The provider interface.** `orchestrator/internal/chat` is provider-neutral:
+a `Mention`, `Event`, `Interaction`, conversation kinds (`public`,
+`private`, `group`, `dm`), `Reply`, `Question`, `Reaction`, and the
+`Provider` interface (verify and parse webhooks; read a thread, a
+conversation's kind and members, a user; post replies, ephemerals,
+questions; update a question; react; OAuth install and identity URLs and
+exchanges; revoke). Routing, the checks, binding, session access and
+Requests (`route.go`, `make.go`, `decide.go`) use only those. The Slack
+adapter is `internal/chat/slack`; `internal/fakeslack` fakes its Web API and
+OAuth pages as strictly as Slack and signs payloads (`cmd/fake-slack` serves
+it for the E2E suite). The web draws a provider from its entry (name and
+glyph id, `GET /v1/organization/chat`); shared components take it as props.
+
+**Adding a provider**: an adapter implementing `chat.Provider` in
+`internal/chat/<id>`, registered in `cmd/dude-orchestrator/main.go`'s
+`chat.Registry` under its id; its config keys (as `slack.*`); a glyph in the
+DS icon set (or it draws `integration`); its name in `apps/web/src/chatOrigin.tsx`'s
+`KNOWN_NAMES`; a fake for its tests. Nothing else changes: routes, tables,
+settings pages and Requests are by `{provider}`.
+
+**The flow.** The backend is still the only public surface: a provider's
+webhook (`POST /v1/webhooks/chat/{provider}/events|interactions`) is passed
+to the orchestrator with its body and its own headers, bounded at 2.5 s;
+`chat.Service.Receive` verifies it (Slack: v0 signature, 5-minute skew),
+answers URL verification, stores it in `chat_events` (a retry is the same
+row) and answers at once. The `chat` loop then, per delivery: installed?
+(else ignored: nothing to reply with) → linked? (else a private Connect
+button to `#/o/<org>/connect/<provider>?state=`, the mention kept against
+the state and routed once they link) → an active member? (else a generic
+private refusal) → a bound thread? (a task or epic: its link, no model; a
+session: the message and the thread since, group members joining on each
+mention) → one routing judgement (`judge.Service.Structured`: the Judgements
+tier, its redaction and `model_calls` record, asker `chat.route`), told the
+built-in instructions, the organisation's, then the provider's, with the
+thread (non-members marked), the projects and epics and the person's chat
+sessions of 14 days → checks (project, epic, session, no cycle, at most 12
+tasks, 2–4 choices; under 75% or a failed check asks while choices can be
+built and fewer than 2 were asked, else a brainstorm, as any failed call)
+→ make it (public: an organisation session; private or group: shared as
+chat with each connected member, the rest recorded skipped; DM: private,
+never bound; tasks in the Backlog, not started, with origin and blocked-by)
+→ bind the thread, reply with the link, 👀 → ✅, record the request. A
+delivery handled twice makes nothing twice (`chat_requests` is unique per
+delivery). An install or a link is begun by a signed-in browser (an HttpOnly
+cookie whose hash the state holds) and finished only in that browser.
+
+**Configuration**: `slack.signing_secret`, `slack.client_id`,
+`slack.client_secret` (both secrets), `slack.api_url` (default
+`https://slack.com/api`; the fake's in tests). The Slack app's Event
+Subscriptions and Interactivity URLs are `<public_url>/v1/webhooks/chat/slack/events`
+and `…/interactions`; its redirect URLs `<public_url>/v1/chat/slack/install/callback`
+and `…/connect/callback`; its bot scopes `slack.BotScopes`.
+
 ## Decisions already made
 
 These were settled deliberately. Change them on purpose, not by accident.
@@ -1100,6 +1169,8 @@ In rough priority order.
    per-Run branch and the GitHub fast-forward.
 7. **Forge credentials are stored in plaintext.** Encrypt at rest before any
    non-local use.
+8. **Chat bot tokens are too** (`chat_installations.bot_token`), as forge
+   credentials are: the same encryption should cover both.
 
 ## Where things are
 
@@ -1121,5 +1192,8 @@ In rough priority order.
 
 | Change what an automation matches, when it fires, or how it runs | `orchestrator/internal/automations/` (`match.go`, `cron.go`, `concurrency.go`, `runner.go`); its spec, `orchestrator/internal/phases/automation.go` |
 | Change automations' API or who may change them | `apps/control-plane/src/api/routes/automations.ts`, rules in `packages/domain/src/automations.ts` |
+| Change how a chat mention is routed | `orchestrator/internal/chat/route.go`, `decide.go`, `make.go` |
+| Add or change a chat provider | `orchestrator/internal/chat/chat.go` (the interface), `internal/chat/slack`, `internal/fakeslack` |
+| Change the chat settings pages | `apps/web/src/screens/ChatSettings.tsx`, `apps/control-plane/src/api/routes/chat.ts` |
 | Change a screen | `apps/web/src/screens/` |
 | Change a component | `packages/design-system/src/components/` |

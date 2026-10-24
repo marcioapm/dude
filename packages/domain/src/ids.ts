@@ -52,6 +52,8 @@ export const ID_PREFIXES = {
   automationRun: "arn",
   automationRequest: "arq",
   automationPromptVersion: "apv",
+  chatInstallation: "chi",
+  chatRequest: "chr",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

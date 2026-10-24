@@ -808,8 +808,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   shared glyph, and the owner's face when it is not yours, so it reads
   without colour. An organisation session shows the organisation mark in
   place of the shared one (`access="organisation"`, `org`); `origin` adds a
-  line under its summary saying where it came from. Under 600px its chips
-  go under the text and the state spans both rows.
+  line under its summary saying where it came from — for a chat-born
+  session, `OriginFact compact` ("<glyph> From Slack · #support"; the
+  gallery's "Chat providers" shows it). Under 600px its chips go under the
+  text and the state spans both rows.
 - **`SharedMark scope="organisation"`** is the building glyph and "Everyone
   in <org>" in the info ink, a `role=img` named with those words;
   `showLabel` writes them beside the glyph, as the session header does.
@@ -1123,6 +1125,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   card calls `cardMarks` and `cardStart` itself, so pass **stable
   references** (`useCallback`, or a function defined once): a new closure on
   every render of the board's parent redraws every card.
+- **Where a card came from** (`cardLead`): on its first line, before its
+  key, a small chip with its own neutral fill and edge over the card's chrome
+  — a chat-born task's provider glyph
+  and name (`ProviderGlyph inline`). The board lays whatever the lead holds
+  on the key's line. Nothing for a task typed in dude. A stable reference
+  too, as `cardMarks`.
 - One tab stop per board: ↑↓ move within a lane, ←→ across (same row, or the
   last one there is; folded lanes are skipped), Home/End, Enter/Space open.
   Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
@@ -1487,7 +1495,17 @@ here.
   where you are, and a second navigation inside it is two answers to one
   question. Read-only facts about a connection (GitHub, the embedder) are a
   `Card` with a `KeyValueList` and its actions in the footer; `SettingRow`
-  is for a value you change.
+  is for a value you change. A page whose sub-pages are its children (Chat,
+  with one page per provider and Requests) sets `page`: it opens itself, and
+  the child pages carry a `Breadcrumb size="sm"` back to it. Without `page`,
+  a group opens its first sub-page.
+- **A `SettingRow` with long free text** (routing instructions, a prompt)
+  sets `fill`: the field and its Save stack at the control column's full
+  width. When the settings page's column (`SettingsLayout`'s main, a size
+  container) is 640px or narrower — a phone, or a laptop beside the app's
+  sidebar and the settings menu — every `SettingRow` stacks: its label and
+  help above, the control the column's width, so nothing is squeezed to a
+  letter a line. Outside a settings page a row stacks under a 720px window.
 - **SearchResultRow** is the one way a search result is drawn (Memory's
   search): ArtifactRow's anatomy and open shade — a 32px row, chevron,
   rank, a `RefLead` for what it is, and the title; at the end, as muted
@@ -1825,6 +1843,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `SidebarSessions`, `AdminOwned`). `pin` is an epic note's and
   nothing else's (`EpicNote`, `EpicNoteNotice`, `EpicNoteRow`, a proposal's
   notes).
+- `slack` is the Slack provider's monochrome glyph (`ProviderGlyph`, never
+  with Slack's colours); a provider without its own glyph uses `integration`.
 
 ### Numbers and identifiers
 
@@ -2678,6 +2698,81 @@ are in `docs/design/accounts.md`):
   glyph on a sunken disc, an `h1`, a line and its `facts`; the card's
   footer holds its actions. `HowList` is how something works in a few
   named lines: a glyph, a bold lead-in, a muted sentence.
+
+### Chat providers (`components/Chat.tsx`)
+
+Shared surfaces never name a provider in words of their own: each takes a
+`provider: ChatProvider` (`{ id, name, glyph }`) and draws its glyph and
+its `name` from props, so a second provider costs an entry, not a
+component. Gallery: "Chat providers" (`gallery/sections/ChatProviders.tsx`).
+
+- **ProviderGlyph** — a chat provider's monochrome glyph in the ink of the
+  text beside it; `label` names it when it stands alone; `inline` puts the
+  glyph and the provider's name in a line of text (a Requests row's where,
+  a board card's lead) without breaking the line. `providerGlyph(id,
+  ICON_NAMES)` maps a server's id to the set, `integration` when it has none.
+- **RouteBadge** — where a mention went: a `Badge` with the route's glyph and
+  word (`ROUTE_SPEC`), so it reads without colour. Refusals and failures are
+  `subtle`; routes that made or linked something are `tinted`. `fallback`
+  adds "was Task" in muted text when dude overrode an answer under the 75%
+  bar.
+- **OriginFact** — where a session, task or epic came from outside dude:
+  "<glyph> From <provider> · #support · thread by Márcia". The whole fact is
+  the link to the permalink, with the external glyph; `compact` drops
+  "thread by" for list rows.
+- **ExternalThread** (+ **ExternalFace**) — a conversation from outside dude,
+  quoted as external text: the chrome shade and a strong left rule, as
+  `Timeline`'s quote. A linked author shows their dude face and name; anyone
+  else shows their name on neutral initials (`ExternalFace`, never an
+  identity colour; punctuation is no initial), and "not in dude". Text is
+  never rendered as Markdown. Its head reads "Quoted from <provider> ·
+  #place · N messages"; "Open in <provider>" links out with the external
+  glyph; `clip` shows the last messages with "Show N earlier". A chat-born
+  task's overview quotes its thread under the goal, as filed.
+- **RoutingLine** — dude's margin line in a chat-born transcript: "Routed as
+  a brainstorm · 82% sure", with the `ChatNotice` rule on either side. It is
+  a `<details>`; its reasoning and `model` (how the model was asked) sit
+  under it. With `shared` (a private channel or group), the line adds
+  "Shared with 4 people from #design-private; 2 are not connected", and the
+  body groups them in two rows: "Added, can chat" (faces and names) and
+  "Skipped, not connected" (`ExternalFace` and display name).
+- **FactList** — rules that are not settings, read as cases: a glyph and the
+  case on the left, what happens on the right; a `<dl>` named by `label`,
+  stacked under 720px. For what an admin should know but cannot change
+  ("Who gets the session", on the Chat page).
+- **ConnectionCard** — one account dude acts with elsewhere: a title and
+  glyph (any node, so `ProviderGlyph`), an intro, facts, the callback's
+  `outcome`, Connected or Not connected; Connect is primary until connected
+  (or while `reconnect`), Disconnect only when connected. A `Card`'s
+  surface and shadow, square as every panel, so it pairs with the GitHub
+  `Card` above it. Your settings → Connections (a `SettingsSection` with
+  its intro): GitHub, then one per chat provider the organisation
+  installed.
+- **IdentityPair** — a provider account beside the dude person it is linked
+  to, the left label the provider's name, named for assistive tech as one
+  sentence. `size="lg"` is the connect page's: two square sunken panels
+  (provider handle, display name, workspace ↔ dude face, organisation,
+  email) with the link glyph between, stacked under 480px. Its `external`
+  is the account being linked: on the connect page, the one the Connect
+  prompt was sent to. `null` when no account is known yet: the provider's
+  glyph sits in the face's place over "Your <provider> account · Signed in
+  next" and the `workspace` — never an invented handle or initials.
+- **PromptText** — instructions a model is told, read-only: a sunken mono
+  well, named by `label` and reachable by keyboard, wrapped at its column
+  with the text's own line breaks kept, scrolling down past 24 lines and
+  never sideways. Not `Markdown` and not a code block: the text is shown as
+  written, with no copy button or language chrome (the Chat page's built-in
+  instructions).
+- **InstructionStack** — what a model is told, in order: a numbered `<ol>`,
+  one row per layer with whose it is, its length and where it is changed.
+  `here` tints the layer edited on this page (info wash, "This page" badge);
+  `collapsed` shows only its head (the built-in instructions); an empty
+  layer says "Nothing added". Read-only: the layers are edited where they
+  live.
+- **ProviderList** — the Chat page's providers: a list of rows, each a
+  button with the provider's glyph in a tile, its name and detail
+  (`EntityLine`), Installed (success) or Available (neutral), and a chevron
+  to its child page.
 
 ## Page rails
 

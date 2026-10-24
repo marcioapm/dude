@@ -526,7 +526,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 				'runs', (SELECT COALESCE(json_agg(r.id ORDER BY r.created_at), '[]') FROM runs r WHERE r.session_id = s.id),
 				'costUsd', (SELECT COALESCE(sum(run_model_usd(r)), 0)::float8 FROM runs r WHERE r.session_id = s.id),
 				'messages', (SELECT count(*) FROM events e WHERE e.session_id = s.id AND e.event_type IN ('chat.message', 'agent.message')),
-				'access', s.access, 'ownedByAdmins', s.owned_by_admins)
+				'access', s.access, 'ownedByAdmins', s.owned_by_admins, 'origin', s.origin)
 			FROM sessions s WHERE s.id = $1`, id).Scan(&session); err != nil {
 			return err
 		}

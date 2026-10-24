@@ -120,7 +120,9 @@ export type IconName =
   | "chevron-left"
   | "upload"
   // agents on an epic
-  | "pin";
+  | "pin"
+  // chat providers
+  | "slack";
 
 /** Path data on a 16x16 grid. `fill` marks icons that are filled shapes. */
 const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
@@ -278,6 +280,8 @@ const PATHS: Record<IconName, { d: string; fill?: true; dashed?: true }> = {
   upload: { d: "M8 10V2.5M5 5.5l3-3 3 3M2.5 10.5v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.5" },
   /* A push pin: what is pinned for every agent on an epic. Epic notes alone. */
   pin: { d: "M9.5 2.5 13.5 6.5M10.5 3.5 7 7l-3 .5L8.5 12 9 9l3.5-3.5M6.25 9.75 2.5 13.5" },
+  /* Slack's mark as four bars in a pinwheel, each with its tab: monochrome, on the set's stroke. */
+  slack: { d: "M9.75 2.75v3.75M13.25 6.25h.01M13.25 9.75H9.5M9.75 13.25h.01M6.25 13.25V9.5M2.75 9.75h.01M2.75 6.25H6.5M6.25 2.75h.01" },
 };
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {

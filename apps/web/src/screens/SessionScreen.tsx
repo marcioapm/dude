@@ -39,6 +39,7 @@ import { SessionMachineBlock } from "./actions.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 import { useAccount } from "../accounts/context.tsx";
 import { mentionables } from "../mentions.ts";
+import { OriginLine, SessionOrigin } from "../chatOrigin.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
 const OPEN_EVERY_MS = 60_000;
@@ -325,6 +326,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
       shown, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;
+  // A chat-born session opens with the asker's message: its quote goes under it.
+  const items = interleaved(grouped, lines);
+  const firstItem = items[0];
+  const openingFirst = !!session.origin && !!firstItem && "group" in firstItem && !Array.isArray(firstItem.group) && firstItem.group.kind === "human";
   // The header: where the start is, or where it failed until a next agent is created.
   const headerStart = starting ?? conversation.startFailed;
   const startHint = readWhen(starting);
@@ -363,6 +368,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
             : shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
           {byAdmins ? <AdminOwned org={org} /> : null}
+          {session.origin ? <OriginLine origin={session.origin} compact testId="session-origin-fact" /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
           {headerStart ? <StartHeaderChip start={headerStart} /> : null}
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
@@ -438,11 +444,18 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 />
               }
             >
-              {interleaved(grouped, lines).map((item) => "node" in item
-                ? <Fragment key={item.id}>{item.node}</Fragment>
-                : Array.isArray(item.group)
-                  ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
-                  : render(item.group))}
+              {session.origin && !openingFirst ? <SessionOrigin origin={session.origin} names={(id) => people.byId.get(id) ?? null} /> : null}
+              {items.map((item, i) => {
+                const node = "node" in item
+                  ? <Fragment key={item.id}>{item.node}</Fragment>
+                  : Array.isArray(item.group)
+                    ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
+                    : render(item.group);
+                // A chat-born session's quoted thread and routing sit under the asker's opening message.
+                return i === 0 && openingFirst && session.origin ? (
+                  <Fragment key="opening">{node}<SessionOrigin origin={session.origin} names={(id) => people.byId.get(id) ?? null} nested /></Fragment>
+                ) : node;
+              })}
               {starting ? <StartRow start={starting} role="brainstorm" /> : null}
               {conversation.activity ? (
                 <ChatMessage role="brainstorm" activity={conversation.activity}
@@ -468,6 +481,11 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 <SessionPeople members={members} />
                 {everyone ? <span className="muted" data-testid="session-everyone-note">And everyone in {org}, who can chat; they appear here when they write.</span> : null}
               </SessionRailBlock>
+              {session.origin ? (
+                <SessionRailBlock label="From" data-testid="session-rail-origin">
+                  <OriginLine origin={session.origin} />
+                </SessionRailBlock>
+              ) : null}
               <SessionRailBlock label={<span className="sessionRailHead">Linked{isOwner ? (
                 <Button size="sm" variant="quiet" onClick={() => setDialog("link")} data-testid="link-open">Link</Button>) : null}</span>}>
                 {session.projects.length > 0 ? <LinkedProjects projects={session.projects} />

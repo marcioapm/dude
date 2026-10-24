@@ -1,0 +1,546 @@
+/*
+ * Chat providers on shared surfaces: a provider's glyph, where a mention
+ * went, where something came from, a thread quoted from outside dude, the
+ * routing line, rules read as cases, a connection, what a model is told,
+ * and the providers list. Regions by shade and space; the quoted thread's
+ * left rule is its one line.
+ */
+
+.glyph {
+  color: currentColor;
+  flex-shrink: 0;
+}
+/*
+ * The glyph and the provider's name as words of a line: it never breaks the
+ * line, nor grows it. An inline-flex box one line high, lowered to centre the
+ * glyph, overhangs the line box; so the span stays inline and only the glyph,
+ * at most 1em and inline-block (the reset makes an svg a block), is lowered.
+ */
+.inlineGlyph {
+  white-space: nowrap;
+}
+.inlineGlyph > .glyph {
+  display: inline-block;
+  vertical-align: -0.125em;
+  max-width: 1em;
+  max-height: 1em;
+  margin-inline-end: var(--ds-space-4);
+}
+.muted {
+  color: var(--ds-color-text-muted);
+}
+.sep {
+  color: var(--ds-color-text-muted);
+}
+
+/* RouteBadge */
+.route {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  white-space: nowrap;
+}
+.was {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+
+/* OriginFact */
+.origin {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+  text-decoration: none;
+  min-width: 0;
+}
+a.origin:hover {
+  color: var(--ds-color-text-primary);
+  text-decoration: underline;
+}
+a.origin:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--ds-radius-mark);
+}
+.external {
+  color: var(--ds-color-text-muted);
+}
+
+/* ExternalFace: neutral initials, never an identity colour. */
+.externalFace {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--ext-size);
+  height: var(--ext-size);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-sunken);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-2xs);
+  font-weight: var(--ds-weight-medium);
+}
+
+/* ExternalThread: the chrome shade and a strong left rule, as Timeline's quote. */
+.thread {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-8) var(--ds-space-12);
+  background: var(--ds-color-chrome);
+  border-left: 2px solid var(--ds-color-border-strong);
+}
+.threadHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-2) var(--ds-space-6);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.threadHead > span {
+  white-space: nowrap;
+}
+.threadLink {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-accent-text);
+}
+.threadList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.threadItem {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+}
+.threadBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+.threadBy {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-strong);
+}
+.notInDude,
+.time {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
+.threadText {
+  color: var(--ds-color-text-primary);
+  font-size: var(--ds-text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* PromptText: a model's instructions, read-only, wrapped to the column; long ones scroll down, never sideways. */
+.promptText {
+  max-height: calc(24 * var(--ds-leading-snug) * var(--ds-text-mono));
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--ds-space-12);
+  background: var(--ds-color-sunken);
+  color: var(--ds-color-text-secondary);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  line-height: var(--ds-leading-snug);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.promptText:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: 2px;
+}
+.more {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--ds-color-accent-text);
+  font-size: var(--ds-text-xs);
+}
+
+/* RoutingLine: ChatNotice's rule on either side, a details under it. */
+.routing {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  container-type: inline-size;
+}
+.routingSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  list-style: none;
+}
+.routingSummary::-webkit-details-marker {
+  display: none;
+}
+.routingSummary:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: 2px;
+}
+.rule {
+  flex: 1 1 var(--ds-space-24);
+  min-width: var(--ds-space-12);
+  height: 1px;
+  background: var(--ds-color-border-subtle);
+}
+.routingText {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-6);
+  max-width: 80%;
+}
+/* In a narrow column (a phone, or nested under a message) the summary
+   takes the full width and the rules beside it go. */
+@container (max-width: 480px) {
+  .rule {
+    display: none;
+  }
+  .routingText {
+    max-width: none;
+  }
+}
+.routingBody {
+  padding: var(--ds-space-4) var(--ds-space-12) var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.routingBody p {
+  margin: 0 0 var(--ds-space-4);
+}
+.sharedGroups {
+  margin: var(--ds-space-6) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+}
+.sharedGroup {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: var(--ds-space-12);
+}
+.sharedGroup dt {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+  padding-top: var(--ds-space-2);
+}
+.sharedGroup dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-12);
+}
+@media (max-width: 720px) {
+  .sharedGroup {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-4);
+  }
+}
+
+/* FactList: a dl, stacked under 720px. */
+.facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-surface);
+}
+.fact {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
+  gap: var(--ds-space-16);
+  padding: var(--ds-space-12);
+}
+.fact:nth-child(even) {
+  background: var(--ds-color-sunken);
+}
+.factWhen {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.factGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-size-avatar-md);
+  height: var(--ds-size-avatar-md);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-chrome);
+  color: var(--ds-color-text-secondary);
+  flex-shrink: 0;
+}
+.factThen {
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+@media (max-width: 720px) {
+  .fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-4);
+  }
+}
+
+/* ConnectionCard: a Card's surface and shadow, square as every panel. */
+.connection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-16);
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-1);
+}
+.connectionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.connectionGlyph {
+  display: inline-flex;
+  color: var(--ds-color-text-secondary);
+}
+.connectionTitle {
+  flex: 1;
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.connection p {
+  margin: 0;
+}
+.outcome {
+  padding: var(--ds-space-8) var(--ds-space-12);
+  border-radius: var(--ds-radius-control);
+  font-size: var(--ds-text-sm);
+}
+.outcome[data-tone="success"] {
+  background: var(--ds-tone-success-bg);
+  color: var(--ds-tone-success-fg);
+}
+.outcome[data-tone="attention"] {
+  background: var(--ds-tone-attention-bg);
+  color: var(--ds-tone-attention-fg);
+}
+.outcome[data-tone="danger"] {
+  background: var(--ds-tone-danger-bg);
+  color: var(--ds-tone-danger-fg);
+}
+.connectionFacts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+}
+.connectionFact {
+  display: grid;
+  grid-template-columns: minmax(96px, 160px) minmax(0, 1fr);
+  gap: var(--ds-space-12);
+}
+.connectionFact dt {
+  color: var(--ds-color-text-muted);
+}
+.connectionFact dd {
+  margin: 0;
+  color: var(--ds-color-text-primary);
+}
+.connectionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-8);
+}
+
+/* IdentityPair */
+.pair {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.pairSide {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+}
+.pairLabel {
+  color: var(--ds-color-text-muted);
+}
+/* IdentityPair lg: two square identity panels, a sunken shade each, the link between. */
+.pairLg {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ds-space-12);
+}
+.pairCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-16) var(--ds-space-12);
+  background: var(--ds-color-sunken);
+  text-align: center;
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  overflow-wrap: anywhere;
+}
+.pairCaps {
+  font-size: var(--ds-text-xs);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+}
+.pairName {
+  color: var(--ds-color-text-strong);
+}
+.pairMono {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+/* No account yet: the provider's glyph in the face's place, never invented initials. */
+.pairUnknown {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-size-avatar-lg);
+  height: var(--ds-size-avatar-lg);
+  border-radius: var(--ds-radius-full);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border);
+  color: var(--ds-color-text-secondary);
+}
+.pairLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-size-avatar-lg);
+  height: var(--ds-size-avatar-lg);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-chrome);
+  color: var(--ds-color-text-secondary);
+}
+@media (max-width: 480px) {
+  .pairLg {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+  .pairLink {
+    justify-self: center;
+  }
+}
+
+/* InstructionStack */
+.stack {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-surface);
+}
+.layer {
+  display: flex;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-12);
+}
+.layerHere {
+  background: var(--ds-tone-info-bg);
+}
+.layerNo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--ds-size-avatar-sm);
+  height: var(--ds-size-avatar-sm);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-chrome);
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-2xs);
+}
+.layerBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  flex: 1;
+}
+.layerHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-strong);
+}
+.layerAction {
+  margin-left: auto;
+}
+.layerText {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* ProviderList */
+.providers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-surface);
+}
+.providerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-12);
+  width: 100%;
+  padding: var(--ds-space-12);
+  background: none;
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+.providerRow:hover {
+  background: var(--ds-color-hover-wash);
+}
+.providerRow:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: -2px;
+}
+.providerTile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-size-avatar-lg);
+  height: var(--ds-size-avatar-lg);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-chrome);
+  color: var(--ds-color-text-primary);
+}

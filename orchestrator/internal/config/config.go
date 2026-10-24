@@ -136,6 +136,15 @@ type schema struct {
 	Factory struct {
 		Logins any `toml:"logins" env:"DUDE_FACTORY_LOGINS" kind:"list" use:"orchestrator"`
 	} `toml:"factory"`
+	Slack struct {
+		SigningSecret any `toml:"signing_secret" env:"DUDE_SLACK_SIGNING_SECRET" kind:"string" use:"orchestrator" secret:"true"`
+		ClientID      any `toml:"client_id" env:"DUDE_SLACK_CLIENT_ID" kind:"string" use:"orchestrator"`
+		ClientSecret  any `toml:"client_secret" env:"DUDE_SLACK_CLIENT_SECRET" kind:"string" use:"orchestrator" secret:"true"`
+		APIURL        any `toml:"api_url" env:"DUDE_SLACK_API_URL" kind:"string" use:"orchestrator" default:"https://slack.com/api"`
+	} `toml:"slack"`
+	Chat struct {
+		Workers any `toml:"workers" env:"DUDE_CHAT_WORKERS" kind:"int" use:"orchestrator" default:"6"`
+	} `toml:"chat"`
 	Auth struct {
 		Provider         any `toml:"provider" env:"DUDE_AUTH_PROVIDER" kind:"string" use:"backend" default:"api_key"`
 		PublicURL        any `toml:"public_url" env:"DUDE_AUTH_PUBLIC_URL" kind:"string" use:"both"`
