@@ -128,7 +128,9 @@ func TestChatResumesOnlyASessionTheWholeConversationCanChatIn(t *testing.T) {
 // session_role lets the person own or chat in: an organisation session,
 // one they were given chat in, an admin-owned one to an admin, their own;
 // never a pending invitation, a read-only private seat, an old session or
-// one not born in chat.
+// one not born in chat. The context's prefilter is a superset that only
+// narrows what session_role is asked about; this proves it is never
+// narrower, not that it is as narrow as it could be.
 func TestChatRoutingContextOffersWhatSessionRoleAllows(t *testing.T) {
 	w := setup(t)
 	marcia, eli, gus, ana := w.people["Márcia"][0], w.people["Eli"][0], w.people["Gus"][0], w.people["Ana"][0]

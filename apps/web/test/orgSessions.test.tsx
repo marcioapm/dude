@@ -341,6 +341,10 @@ describe("mentions in the composer", () => {
     expect(nested.hasAttribute("data-nested")).toBe(true);
     const turn = human.querySelector("[data-testid=human-turn]")!;
     expect(turn.compareDocumentPosition(nested) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Directly under the opening message: before the agent's first reply.
+    const firstReply = [...human.querySelectorAll("p")].find((el) => el.textContent === "Reading the worker.")!;
+    expect(firstReply).toBeTruthy();
+    expect(nested.compareDocumentPosition(firstReply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(nested.textContent).toContain("the export times out");
     await act(async () => mounted.splice(0).forEach((u) => void u()));
 
