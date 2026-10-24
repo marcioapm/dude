@@ -131,6 +131,43 @@ func TestChatARetryActsOnTheKeptDecisionAndNeverAsksAgain(t *testing.T) {
 	}
 }
 
+// A retry acting on a kept decision reuses what it was decided from: the
+// conversation, its members and the thread are not read again.
+func TestChatARetryOnAKeptDecisionReadsNothingAgain(t *testing.T) {
+	w := setup(t)
+	root := w.fake.Post("G1", "", "U9", "the export times out")
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Exports"}))
+	fails := 1
+	w.svc.SetBeforeMake(func(context.Context) error {
+		if fails > 0 {
+			fails--
+			return &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+		}
+		return nil
+	})
+	w.receive("Márcia", "G1", root, "look into it")
+	w.once()
+	methods := []string{"conversations.info", "conversations.members", "conversations.replies"}
+	before := map[string]int{}
+	for _, m := range methods {
+		before[m] = w.fake.Calls(m)
+	}
+	w.due()
+	w.once()
+	for _, m := range methods {
+		if n := w.fake.Calls(m) - before[m]; n != 0 {
+			t.Fatalf("the retry called %s %d times", m, n)
+		}
+	}
+	got := w.requests()
+	if len(got) != 1 || got[0].Route != "brainstorm" || strings.Join(got[0].Added, ",") != w.people["Eli"][0] {
+		t.Fatalf("requests %+v", got)
+	}
+	if o := w.one(`SELECT origin->'thread'->0->>'text' FROM sessions WHERE id = $1`, got[0].ResultID); o != "the export times out" {
+		t.Fatalf("thread %q", o)
+	}
+}
+
 // A reply that fails transiently is posted on the retry, alone: nothing
 // is made twice and the model is not asked again.
 func TestChatARetryPostsOnlyWhatIsLeft(t *testing.T) {

@@ -238,8 +238,10 @@ CREATE INDEX chat_requests_created_idx ON chat_requests (organization_id, create
 -- Requests filtered by route or provider read one range each.
 CREATE INDEX chat_requests_route_idx ON chat_requests (organization_id, route, created_at DESC);
 CREATE INDEX chat_requests_provider_idx ON chat_requests (organization_id, provider, created_at DESC);
--- The retention delete, across organisations.
-CREATE INDEX chat_requests_age_idx ON chat_requests (created_at);
+-- The retention delete, across organisations. BRIN gives no order, so the
+-- planner never reads the Requests list through it instead of
+-- chat_requests_created_idx (a cross-tenant btree on created_at it would).
+CREATE INDEX chat_requests_age_idx ON chat_requests USING brin (created_at);
 -- Clarify rounds are counted per thread.
 CREATE INDEX chat_requests_thread_idx ON chat_requests (provider, external_workspace_id, conversation_id, thread_id, created_at);
 ALTER TABLE chat_requests ENABLE ROW LEVEL SECURITY;
@@ -260,3 +262,5 @@ ALTER TABLE tasks ADD COLUMN origin jsonb CHECK (origin IS NULL OR jsonb_typeof(
 ALTER TABLE epics ADD COLUMN origin jsonb CHECK (origin IS NULL OR jsonb_typeof(origin) = 'object');
 -- And a session: the thread it was made from (shown as its routing line).
 ALTER TABLE sessions ADD COLUMN origin jsonb CHECK (origin IS NULL OR jsonb_typeof(origin) = 'object');
+-- The routing call's recent chat-born sessions, newest first, per organisation.
+CREATE INDEX sessions_chat_recent_idx ON sessions (organization_id, created_at DESC) WHERE origin IS NOT NULL;

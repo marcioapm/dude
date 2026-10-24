@@ -173,7 +173,26 @@ describe("Requests", () => {
     expect(text(rows[3])).toContain("Asked to connect");
     // The face is there; that its ring is not clipped is a layout fact happy-dom cannot measure (checked in the browser shots).
     expect(rows[0]!.querySelector(".chatRequestWho [role=img]")).not.toBeNull();
-    expect(asked[0]).toEqual({ provider: undefined, route: undefined });
+    expect(asked[0]).toEqual({ provider: undefined, route: undefined, limit: undefined, summary: true });
+  });
+
+  test("the summary is the server's count over the week, not the rows listed; a provider page asks for 5 rows", async () => {
+    const client = new Chatting("a");
+    const asked: Array<Parameters<typeof client.chatRequests>[0]> = [];
+    const original = client.chatRequests.bind(client);
+    client.chatRequests = async (f = {}) => {
+      asked.push(f);
+      return { ...(await original(f)), ...(f.summary ? { week: { mentions: 312, asked: 290 } } : {}) };
+    };
+    const c = await show(<Pages client={client} page="chat/requests" />, "chat-requests");
+    await until(() => c.querySelector("[data-testid=chat-requests-summary]"), "the summary");
+    expect(text(c.querySelector("[data-testid=chat-requests-summary]"))).toBe("Last 7 days · 312 mentions · 290 asked the model");
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    asked.length = 0;
+    const p = await show(<Pages client={client} page="chat/slack" />, "chat-provider-slack");
+    await until(() => p.querySelector("[data-testid=chat-request]"), "recent requests");
+    expect(asked).toEqual([{ provider: "slack", route: undefined, limit: 5, summary: undefined }]);
   });
 
   test("a row's where-line names the provider inline; its reasoning is behind a focusable ⓘ; a summary heads the list", async () => {

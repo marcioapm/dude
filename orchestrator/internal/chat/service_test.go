@@ -167,6 +167,72 @@ func TestChatReadsNamesOnceAndOnlyForStrangers(t *testing.T) {
 	}
 }
 
+// Conversation members are read only where a route needs them (an unbound
+// private or group mention, which may resume or make a session there, and
+// a mention in a session-bound thread of its own conversation), and
+// display names only for a session made there: a task- or epic-bound
+// thread, a DM and a public channel read neither.
+func TestChatReadsMembersAndNamesOnlyForTheRoutesThatUseThem(t *testing.T) {
+	w := setup(t)
+	members := []string{"U1", "U2", "UBT1"}
+	for i := range 200 {
+		id := fmt.Sprintf("UG%03d", i)
+		w.fake.AddUser(fakeslack.User{ID: id, Team: "T1", Name: id, RealName: "Guest " + id})
+		members = append(members, id)
+	}
+	w.fake.SetMembers("G1", members)
+	calls := func() [2]int { return [2]int{w.fake.Calls("conversations.members"), w.fake.Calls("users.info")} }
+	step := func(name string, want [2]int, fn func()) {
+		t.Helper()
+		before := calls()
+		fn()
+		after := calls()
+		if got := [2]int{after[0] - before[0], after[1] - before[1]}; got != want {
+			t.Fatalf("%s: conversations.members, users.info = %v, want %v", name, got, want)
+		}
+	}
+	task := func(title string) {
+		w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": title, "goal": "g"}))
+	}
+	brainstorm := func(title string) {
+		w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": title}))
+	}
+	var taskRoot, sessionRoot string
+	step("a task in a private channel", [2]int{1, 0}, func() { task("One"); taskRoot = w.mention("Eli", "G1", "", "file one") })
+	step("the task-bound thread", [2]int{0, 0}, func() { w.mention("Eli", "G1", taskRoot, "status?") })
+	if got := w.last(); got.Route != "task_link" {
+		t.Fatalf("not linked: %+v", got)
+	}
+	step("a DM", [2]int{0, 0}, func() { brainstorm("Mine"); w.dm("Márcia", "ideas") })
+	step("a public channel", [2]int{0, 0}, func() { task("Two"); w.mention("Eli", "C1", "", "file two") })
+	// A session made in G1 names its skipped members: the first 50, the same 50 each time.
+	step("a session in a private channel", [2]int{1, 50}, func() { brainstorm("Talk"); sessionRoot = w.mention("Eli", "G1", "", "talk") })
+	step("another session there", [2]int{1, 0}, func() { brainstorm("Talk more"); w.mention("Eli", "G1", "", "talk more") })
+	step("the session-bound thread", [2]int{1, 0}, func() { w.mention("Eli", "G1", sessionRoot, "more") })
+	if got := w.last(); got.Route != "resume" {
+		t.Fatalf("not into the session: %+v", got)
+	}
+}
+
+// A stored delivery wakes the chat loop (Kick); only a commit that started
+// or resumed a session's run wakes the loops that run it (RunStarted).
+func TestChatWakesOnlyTheLoopsThatHaveWork(t *testing.T) {
+	w := setup(t)
+	var kicks, runs int
+	w.svc.Kick = func() { kicks++ }
+	w.svc.RunStarted = func() { runs++ }
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "T", "goal": "g"}))
+	w.mention("Eli", "C1", "", "file it")
+	if kicks != 1 || runs != 0 {
+		t.Fatalf("a task: %d kicks, %d run wakes", kicks, runs)
+	}
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "S"}))
+	w.mention("Eli", "C1", "", "talk")
+	if kicks != 2 || runs != 1 {
+		t.Fatalf("a session: %d kicks, %d run wakes", kicks, runs)
+	}
+}
+
 // The routing context is bounded by size, and the model is told what was
 // left out.
 func TestChatRoutingContextSaysWhatItLeftOut(t *testing.T) {

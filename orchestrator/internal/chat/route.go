@@ -233,7 +233,9 @@ func (s *Service) commit(ctx context.Context, org string, p Provider, inst Insta
 	if err != nil {
 		return err
 	}
-	s.kick()
+	if r.ResultKind == "session" && s.RunStarted != nil {
+		s.RunStarted()
+	}
 	return s.deliver(ctx, org, p, inst, r.EventID)
 }
 

@@ -212,8 +212,10 @@ const retainBatch = 1000
 func (s *Service) Retain(ctx context.Context) (int, error) {
 	var n int
 	err := s.DB.InSystem(ctx, "chat-retention", func(tx pgx.Tx) error {
+		// No ORDER BY: everything past the window goes, in whatever order
+		// the BRIN index finds it.
 		tag, err := tx.Exec(ctx, `DELETE FROM chat_requests WHERE id IN (SELECT id FROM chat_requests
-			WHERE created_at < now() - $1::interval ORDER BY created_at LIMIT $2)`, requestsKept.String(), retainBatch)
+			WHERE created_at < now() - $1::interval LIMIT $2)`, requestsKept.String(), retainBatch)
 		if err != nil {
 			return err
 		}

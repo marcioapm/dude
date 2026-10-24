@@ -316,6 +316,35 @@ describe("settings", () => {
     expect(filtered.requests.map((r: Json) => r.id)).toEqual(["chr_1"]);
     expect((await (await call(adminKey, "GET", "/v1/organization/chat/requests?provider=discord")).json() as Json).requests).toEqual([]);
     expect((await call(adminKey, "GET", "/v1/organization/chat/requests?route=shout")).status).toBe(400);
+    // Each filter statement filters on what it names: a request from another provider on the same route.
+    await insert("chr_d", "task", 3);
+    await owner`UPDATE chat_requests SET provider = 'discord' WHERE id = 'chr_d'`;
+    const ids = async (qs: string) =>
+      ((await (await call(adminKey, "GET", `/v1/organization/chat/requests${qs}`)).json() as Json).requests as Json[]).map((r) => r.id);
+    expect(await ids("?route=task&provider=slack")).toEqual(["chr_1"]);
+    expect(await ids("?route=task")).toEqual(["chr_d", "chr_1"]);
+    expect(await ids("?route=not_connected")).toEqual(["chr_2"]);
+    expect(await ids("?provider=discord")).toEqual(["chr_d"]);
+    // A page of the newest few, and the week's count over every match, not over the page.
+    expect(await ids("?limit=2")).toEqual(["chr_2", "chr_d"]);
+    expect(await ids("?route=task&limit=1")).toEqual(["chr_d"]);
+    const page = await (await call(adminKey, "GET", "/v1/organization/chat/requests?limit=1&summary=1")).json() as Json;
+    expect(page.requests).toHaveLength(1);
+    expect(page.week).toEqual({ mentions: 3, asked: 3 });
+    expect((await (await call(adminKey, "GET", "/v1/organization/chat/requests?route=task&summary=1")).json() as Json).week)
+      .toEqual({ mentions: 2, asked: 2 });
+    expect((await call(adminKey, "GET", "/v1/organization/chat/requests?limit=201")).status).toBe(400);
+  });
+
+  test("Requests list at most 200, newest first", async () => {
+    await owner`
+      INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id, route, created_at)
+      SELECT 'chr_n' || lpad(g::text, 3, '0'), ${ORG}, 'slack', 'ev_n' || g, 'T1', 'C1', 'U2', 'task', now() - make_interval(secs => g / 1000.0)
+      FROM generate_series(1, 201) g`;
+    for (const qs of ["", "?route=task", "?provider=slack", "?route=task&provider=slack"]) {
+      const rows = ((await (await call(adminKey, "GET", `/v1/organization/chat/requests${qs}`)).json() as Json).requests as Json[]);
+      expect([qs, rows.length, rows[0]?.id, rows[199]?.id]).toEqual([qs, 200, "chr_n001", "chr_n200"]);
+    }
   });
 
   test("disconnect is an admin's, and unlinking one's own", async () => {

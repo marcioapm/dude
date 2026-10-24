@@ -286,6 +286,20 @@ func run(log *slog.Logger) error {
 		}
 	}
 	chatService.Kick = serverService.Kick
+	// A delivery stored or kept wakes the chat loop alone; only a commit
+	// that started a run wakes them all.
+	for i, l := range loops {
+		if l.name == "chat" {
+			chatWake := wakers[i]
+			chatService.Kick = func() {
+				select {
+				case chatWake <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+	chatService.RunStarted = serverService.Kick
 	// lux's feed: wakes, idleness and gone servers of wakeable previews.
 	go (&servers.Feed{DB: database, Lux: luxClient, Log: log, Kick: serverService.Kick}).Run(ctx)
 	go func() {

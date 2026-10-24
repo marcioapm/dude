@@ -112,6 +112,7 @@ import type {
   ChatInstallationView,
   ChatOverview,
   ChatRequestRow,
+  ChatRequestsSummary,
   ProviderRoutingInstructions,
   RoutingInstructions,
 } from "@dude/domain";
@@ -1403,10 +1404,13 @@ export class ApiClient {
     return this.#request("PUT", `/v1/organization/chat/${encodeURIComponent(provider)}/routing-instructions`, { additional });
   }
 
-  chatRequests(filter: { provider?: string | undefined; route?: string | undefined } = {}): Promise<{ requests: ChatRequestRow[] }> {
+  chatRequests(filter: { provider?: string | undefined; route?: string | undefined; limit?: number | undefined; summary?: boolean | undefined } = {}):
+    Promise<{ requests: ChatRequestRow[]; week?: ChatRequestsSummary }> {
     const params = new URLSearchParams();
     if (filter.provider) params.set("provider", filter.provider);
     if (filter.route) params.set("route", filter.route);
+    if (filter.limit) params.set("limit", String(filter.limit));
+    if (filter.summary) params.set("summary", "1");
     const qs = params.toString();
     return this.#request("GET", `/v1/organization/chat/requests${qs ? `?${qs}` : ""}`);
   }

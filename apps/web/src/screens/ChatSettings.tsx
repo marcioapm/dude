@@ -64,6 +64,7 @@ import {
   type ChatOverview,
   type ChatProvider,
   type ChatRequestRow,
+  type ChatRequestsSummary,
   type ProviderRoutingInstructions,
   type RoutingInstructions,
 } from "@dude/domain";
@@ -443,11 +444,15 @@ function RequestsTable({ client, providers, provider, route, limit, summary }: {
   summary?: boolean | undefined;
 }) {
   const [rows, setRows] = useState<ChatRequestRow[] | null>(null);
+  const [week, setWeek] = useState<ChatRequestsSummary | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     setRows(null);
-    client.chatRequests({ provider, route }).then((r) => setRows(r.requests), (err: unknown) => setProblem(errorText(err)));
-  }, [client, provider, route]);
+    client.chatRequests({ provider, route, limit, summary }).then((r) => {
+      setRows(r.requests);
+      setWeek(r.week ?? null);
+    }, (err: unknown) => setProblem(errorText(err)));
+  }, [client, provider, route, limit, summary]);
   const byId = useMemo(() => new Map(providers.map((p) => [p.id, providerView(p)])), [providers]);
   if (problem) return <Callout tone="danger">{problem}</Callout>;
   if (rows === null) return <Spinner label="Loading…" />;
@@ -455,12 +460,10 @@ function RequestsTable({ client, providers, provider, route, limit, summary }: {
     return <EmptyState title="No requests" description="Nobody has mentioned @dude in an installed chat in the last 30 days, or none matches." />;
   }
   const shown = limit ? rows.slice(0, limit) : rows;
-  const week = rows.filter((r) => Date.parse(r.createdAt) > Date.now() - 7 * 86_400_000);
-  const asked = week.filter((r) => r.confidence !== null && r.route !== "task_link").length;
   return (
     <>
-      {summary ? (
-        <p className="muted" data-testid="chat-requests-summary">Last 7 days · {week.length} {week.length === 1 ? "mention" : "mentions"} · {asked} asked the model</p>
+      {summary && week ? (
+        <p className="muted" data-testid="chat-requests-summary">Last 7 days · {week.mentions} {week.mentions === 1 ? "mention" : "mentions"} · {week.asked} asked the model</p>
       ) : null}
       <Table>
         <THead><Tr><Th>Request</Th><Th width="200px">Route</Th><Th align="right" width="64px">Sure</Th><Th>Result</Th><Th align="right">When</Th></Tr></THead>

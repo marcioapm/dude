@@ -34,8 +34,10 @@ type Service struct {
 	// relative links, which a provider shows as text.
 	PublicURL string
 	Log       *slog.Logger
-	// Wakes the loops once something was stored.
+	// Wakes the chat loop once a delivery was stored.
 	Kick func()
+	// Wakes the loops that start runs, once a commit started or resumed one.
+	RunStarted func()
 	// The clock, for tests of the 15-minute states.
 	Now func() time.Time
 	// Deliveries routed at once; DefaultWorkers when 0.

@@ -16,7 +16,9 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import {
+  CHAT_REQUESTS_MAX,
   type ChatProvider,
+  type ChatRequestsSummary,
   chatRequestsQuerySchema,
   routingInstructionsInputSchema,
 } from "@dude/domain";
@@ -260,23 +262,30 @@ async function putProviderInstructions(ctx: RequestContext): Promise<Response> {
 async function listRequests(ctx: RequestContext): Promise<Response> {
   await requireOrgAdmin(ctx);
   const q = chatRequestsQuerySchema.safeParse(Object.fromEntries(ctx.url.searchParams));
-  if (!q.success) throw new HttpError(400, "provider and route filter Requests", "bad_request");
-  const { provider = null, route = null } = q.data;
-  const rows = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+  if (!q.success) throw new HttpError(400, "provider, route, limit and summary filter Requests", "bad_request");
+  const { provider = null, route = null, limit = CHAT_REQUESTS_MAX, summary } = q.data;
+  const { rows, week } = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
     // One statement per filter, so each reads its own index range
     // (chat_requests_route_idx, _provider_idx, _created_idx) under a reused plan.
     const ids = (provider && route
       ? await sql`SELECT id FROM chat_requests WHERE route = ${route} AND provider = ${provider} AND created_at > now() - interval '30 days'
-          ORDER BY created_at DESC, id DESC LIMIT 200`
+          ORDER BY created_at DESC, id DESC LIMIT ${limit}`
       : route
         ? await sql`SELECT id FROM chat_requests WHERE route = ${route} AND created_at > now() - interval '30 days'
-            ORDER BY created_at DESC, id DESC LIMIT 200`
+            ORDER BY created_at DESC, id DESC LIMIT ${limit}`
         : provider
           ? await sql`SELECT id FROM chat_requests WHERE provider = ${provider} AND created_at > now() - interval '30 days'
-              ORDER BY created_at DESC, id DESC LIMIT 200`
+              ORDER BY created_at DESC, id DESC LIMIT ${limit}`
           : await sql`SELECT id FROM chat_requests WHERE created_at > now() - interval '30 days'
-              ORDER BY created_at DESC, id DESC LIMIT 200`).map((r: { id: string }) => r.id);
-    return sql`
+              ORDER BY created_at DESC, id DESC LIMIT ${limit}`).map((r: { id: string }) => r.id);
+    // Counted over the whole week, not over the rows listed.
+    const week = summary
+      ? (await sql`SELECT count(*)::int AS mentions,
+            count(*) FILTER (WHERE confidence IS NOT NULL AND route <> 'task_link')::int AS asked
+          FROM chat_requests WHERE created_at > now() - interval '7 days'
+            AND (${route}::text IS NULL OR route = ${route}) AND (${provider}::text IS NULL OR provider = ${provider})`)[0] as ChatRequestsSummary
+      : null;
+    const rows = await sql`
     SELECT r.id, r.provider, r.conversation_kind AS "conversationKind", r.conversation_name AS "conversationName",
       r.external_user_name AS "externalUserName", (SELECT person_ref(p) FROM people p WHERE p.id = r.person_id) AS person,
       r.text, r.permalink, r.route, r.asked_route AS "askedRoute", r.confidence::float8 AS confidence, r.reasoning, r.rounds,
@@ -290,8 +299,9 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
       r.shared_skipped AS "sharedSkipped", r.created_at AS "createdAt"
     FROM chat_requests r WHERE r.id = ANY(${sql.array(ids, "TEXT")})
     ORDER BY r.created_at DESC, r.id DESC`;
+    return { rows, week };
   });
-  return json({ requests: rows });
+  return json(week ? { requests: rows, week } : { requests: rows });
 }
 
 /** `GET /v1/me/chat/:provider`: the caller's own link. */

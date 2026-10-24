@@ -845,7 +845,7 @@ export class FixtureClient extends ApiClient {
     this.#slackInstructions = additional;
     return this.providerRoutingInstructions();
   }
-  override chatRequests(filter: { provider?: string | undefined; route?: string | undefined } = {}): ReturnType<ApiClient["chatRequests"]> {
+  override chatRequests(filter: Parameters<ApiClient["chatRequests"]>[0] = {}): ReturnType<ApiClient["chatRequests"]> {
     const p = (i: number) => ({ id: PEOPLE[i % PEOPLE.length]!.id, name: PEOPLE[i % PEOPLE.length]!.name, photoUrl: null, online: i === 0 });
     const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
     const rows: ChatRequestRow[] = [
@@ -864,7 +864,12 @@ export class FixtureClient extends ApiClient {
         text: "@dude summarise this thread into a bug", permalink: "", route: "not_connected", askedRoute: null, confidence: null,
         reasoning: "Their account is not connected.", rounds: 0, result: null, sharedAdded: [], sharedSkipped: [], createdAt: ago(420) },
     ];
-    return Promise.resolve({ requests: rows.filter((r) => (!filter.provider || r.provider === filter.provider) && (!filter.route || r.route === filter.route)) });
+    const matched = rows.filter((r) => (!filter.provider || r.provider === filter.provider) && (!filter.route || r.route === filter.route));
+    const week = matched.filter((r) => Date.parse(r.createdAt) > Date.now() - 7 * 86_400_000);
+    return Promise.resolve({
+      requests: filter.limit ? matched.slice(0, filter.limit) : matched,
+      ...(filter.summary ? { week: { mentions: week.length, asked: week.filter((r) => r.confidence !== null && r.route !== "task_link").length } } : {}),
+    });
   }
 
   // -- servers --------------------------------------------------------------
