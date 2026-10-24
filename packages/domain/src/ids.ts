@@ -48,6 +48,8 @@ export const ID_PREFIXES = {
   feedbackReply: "fbr",
   modelCall: "mcl",
   reviewQuestion: "rvq",
+  chatInstallation: "chi",
+  chatRequest: "chr",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
