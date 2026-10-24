@@ -768,9 +768,10 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 			startReason = fmt.Sprintf("its kept session was still busy after %s, so it started fresh", ResumeConflictMax)
 			luxRunID, session, err = "", "", nil
 		}
-		if _, isLux := lux.AsError(err); err != nil && !isLux {
-			// Not lux's answer (the database, a forge token, lux out of
-			// reach): tried again next pass, the kept session untouched.
+		if le, isLux := lux.AsError(err); err != nil && (!isLux || le.Retryable()) {
+			// Not lux's answer (the database, a forge token), or lux out of
+			// reach, failing or busy (unreachable, 5xx, 429): tried again
+			// next pass, the kept session untouched.
 			return false, err
 		}
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -179,4 +180,71 @@ type refuseResume struct{ lux.Client }
 
 func (refuseResume) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
 	return lux.Run{}, &lux.Error{Status: http.StatusUnprocessableEntity, Code: "not_resumable", Message: "the run's snapshot is gone"}
+}
+
+// outage is a lux out of reach on resume (unreachable) or answering its
+// Get with 503, while down is set.
+type outage struct {
+	lux.Client
+	down     *atomic.Bool
+	viaGet   bool
+	attempts *atomic.Int32
+}
+
+func (o outage) Get(ctx context.Context, id string) (lux.Run, error) {
+	if o.viaGet && o.down.Load() {
+		o.attempts.Add(1)
+		return lux.Run{}, &lux.Error{Status: http.StatusServiceUnavailable, Code: "unavailable", Message: "luxd is restarting"}
+	}
+	return o.Client.Get(ctx, id)
+}
+
+func (o outage) Resume(ctx context.Context, id string, in lux.ResumeInput) (lux.Run, error) {
+	if !o.viaGet && o.down.Load() {
+		o.attempts.Add(1)
+		return lux.Run{}, &lux.Error{Status: 0, Code: "unreachable", Message: "dial tcp: connection refused"}
+	}
+	return o.Client.Resume(ctx, id, in)
+}
+
+// A lux out of reach, or answering 5xx, while a run resumes is not lux
+// refusing the resume: the kept session and its stopped container stay,
+// the run waits queued, and the next pass with lux back resumes it.
+func TestAutomationResumeDuringALuxOutageKeepsTheSession(t *testing.T) {
+	for _, viaGet := range []bool{false, true} {
+		name := map[bool]string{false: "resume unreachable", true: "get 503"}[viaGet]
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			id := map[bool]string{false: "aut_out_resume", true: "aut_out_get"}[viaGet]
+			_, first := keptServer(t, h, id)
+			o := outage{Client: h.lux, down: new(atomic.Bool), viaGet: viaGet, attempts: new(atomic.Int32)}
+			o.down.Store(true)
+			h.runner.Lux = o
+			h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+			for i := 0; i < 50 && o.attempts.Load() < 3; i++ {
+				_, _ = h.runner.Sweep(context.Background())
+				time.Sleep(10 * time.Millisecond)
+			}
+			if o.attempts.Load() < 3 {
+				t.Fatalf("%d resume attempts during the outage, want 3", o.attempts.Load())
+			}
+			rs := h.runs(id)
+			if len(rs) != 2 || rs[1].Status != "queued" || rs[1].Session != "" {
+				t.Fatalf("runs during the outage: %+v", rs)
+			}
+			var kept string
+			if err := h.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM automation_sessions WHERE automation_id = $1`, id).Scan(&kept); err != nil || kept != first.LuxRunID {
+				t.Fatalf("kept session %q %v, want %s", kept, err, first.LuxRunID)
+			}
+			if s := h.luxState(first.LuxRunID); s != "stopped" {
+				t.Fatalf("the kept container is %s during the outage", s)
+			}
+			o.down.Store(false)
+			h.until("the run resumes once lux is back", func() bool { r := h.runs(id); return len(r) == 2 && r[1].Session != "" })
+			if r := h.runs(id)[1]; r.Session != "resumed" || r.LuxRunID != first.LuxRunID {
+				t.Errorf("second run %+v, want the kept %s resumed", r, first.LuxRunID)
+			}
+			h.runner.Wait()
+		})
+	}
 }
