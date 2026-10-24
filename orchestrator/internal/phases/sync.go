@@ -1400,6 +1400,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var findings []delivery.Finding
 	var lastFix []delivery.FixRange
 	var writerChecks string
+	var retestsAfresh bool
 	var questions []delivery.EarlierQuestion
 	var peopleFeedback []delivery.FeedbackItem
 	var feedback []forge.ActionableFeedback
@@ -1550,6 +1551,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			if writerChecks, err = delivery.WriterChecksTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
 				return err
 			}
+			if retestsAfresh, err = delivery.RetestsAfreshTx(ctx, tx, r.ID); err != nil {
+				return err
+			}
 		}
 		// A review after a fix is told that fix's commits, to answer
 		// caused_by_fix by.
@@ -1568,6 +1572,15 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			if questions, err = delivery.EarlierQuestionsTx(ctx, tx, r.ID); err != nil {
 				return err
 			}
+		}
+		// A fix Run's checks' log tails, kept apart from pr_feedback
+		// (runs.check_logs): read only on submit, for its init.
+		if stored == nil && r.Phase == delivery.PhaseFix {
+			var checkLogs map[string]string
+			if err := tx.QueryRow(ctx, `SELECT check_logs FROM runs WHERE id = $1`, r.ID).Scan(&checkLogs); err != nil {
+				return fmt.Errorf("load the check logs: %w", err)
+			}
+			feedback = delivery.WithCheckLogs(feedback, checkLogs)
 		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
@@ -1632,7 +1645,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
-		WriterChecks: writerChecks, Questions: questions,
+		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of
@@ -1651,7 +1664,6 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		// A resume sends no prompt: only a submit's says where it runs.
 		promptIn.Machine = s.machineLine(ctx, in.Machine, sizes, orgName, promptIn.CLI && !promptIn.Child)
 	}
-	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if stored == nil {
 		// Pinned to the Run: lux keeps the submitted spec, and its init,
 		// for every placement; a resume sends none.
@@ -1662,7 +1674,11 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		instructions := instructionsIn.InstructionsInput()
 		instructions.Grants = &grants
 		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructions)
+		// The failing checks' log files go in the init beside the
+		// instruction file, in what room it leaves; the prompt names them.
+		promptIn.PRFeedback, in.CheckLogs = checkLogsInit(workspaceDir, promptIn.PRFeedback, initRoom(s.Agent, in))
 	}
+	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
 		// the machine's paragraph as a phase's does.

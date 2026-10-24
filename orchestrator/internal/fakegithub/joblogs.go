@@ -1,8 +1,10 @@
 package fakegithub
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +27,17 @@ type Annotation struct {
 func ActionsJob() CheckRun {
 	return CheckRun{App: "github-actions", Annotations: []Annotation{{Path: ".github", Line: 442, Level: "failure",
 		Message: "Process completed with exit code 1."}}}
+}
+
+// NoisyActionsJob is an Actions job that failed by its exit code as GitHub
+// reports most jobs now: a deprecation warning and a runner-label notice
+// beside the exit code's failure (JERV-1, 2026-10-23).
+func NoisyActionsJob() CheckRun {
+	return CheckRun{App: "github-actions", Annotations: []Annotation{
+		{Path: ".github", Line: 2, Level: "warning", Message: "Node.js 20 is deprecated. The following actions are running on Node.js 20 and may not work as expected: actions/checkout@v4."},
+		{Path: ".github", Line: 243, Level: "failure", Message: "Process completed with exit code 1."},
+		{Path: ".github", Line: 1, Level: "notice", Message: "The ubuntu-latest label will migrate to Ubuntu 26.04 in the coming weeks."},
+	}}
 }
 
 // SetJobLog gives job id a log, served from downloads (LogDownloads' URL);
@@ -50,7 +63,12 @@ func (s *Server) checkRun(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	s.mu.Lock()
 	run, ok := s.CheckRuns[id]
+	status := s.CheckRunStatus
 	s.mu.Unlock()
+	if status != 0 {
+		fail(w, status, http.StatusText(status))
+		return
+	}
 	if !ok {
 		write(w, 200, map[string]any{"output": map[string]string{"title": "1 test failed",
 			"summary": "TestGreeting: expected hello, got hi", "text": ""}})
@@ -86,17 +104,17 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	s.mu.Lock()
 	log, ok := s.JobLogs[id]
-	host, status := s.LogHost, s.LogStatus
+	host, status, message, sig := s.LogHost, s.LogStatus, s.LogMessage, cmp.Or(s.LogSignature, "short-lived")
 	s.mu.Unlock()
 	switch {
 	case status != 0:
-		fail(w, status, http.StatusText(status))
+		fail(w, status, cmp.Or(message, http.StatusText(status)))
 	case !ok:
 		fail(w, 404, "Not Found")
 	case log == "":
 		fail(w, 410, "Logs have expired")
 	default:
-		w.Header().Set("Location", fmt.Sprintf("%s/%s/jobs/%d/log?sig=short-lived", host, s.Slug, id))
+		w.Header().Set("Location", fmt.Sprintf("%s/%s/jobs/%d/log?sig=%s", host, s.Slug, id, url.QueryEscape(sig)))
 		w.WriteHeader(http.StatusFound)
 	}
 }

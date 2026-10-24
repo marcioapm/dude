@@ -6,7 +6,7 @@ preview is another origin, https://web-shop.preview.test, answered by Playwright
 with preview_page.html plus the tag lux would inject, which loads the overlay from
 dude's origin. Everything between them is the browser's own postMessage.
 
-It drives: Comment on the Servers tab -> pick an element -> save -> the draft in
+It drives: the Servers tab's server link -> pick an element -> save -> the draft in
 dude's tray and on the Feedback tab with its picture -> Show on preview; a page
 opened directly shows the no-opener panel; a message from another origin is
 ignored; Restart and the unavailable reason. Screenshots go to
@@ -181,7 +181,7 @@ class CommentingOnAPreview(unittest.TestCase):
     def test_comment_pick_save_then_show_on_preview(self):
         ctx, page = self.context()
         self.watch(page)
-        comment = page.get_by_test_id("comment-on-server").first
+        comment = page.get_by_test_id("server-url").first
         expect(comment).to_be_visible(timeout=20_000)
         expect(page.get_by_test_id("server-preview").first).to_have_attribute("rel", "noopener noreferrer")
         shoot(page, "dude-servers-comment")
@@ -254,6 +254,14 @@ class CommentingOnAPreview(unittest.TestCase):
         expect(draft.locator("[data-testid=fb-preview] img")).to_have_attribute("src", re.compile("^blob:"))
         shoot(page, "dude-feedback-tab")
 
+        # Page opens the item's exact URL with commenting too (not a plain noopener tab).
+        page_link = draft.get_by_test_id("fb-preview-page")
+        page_link.click()
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertEqual(pv.url, page_link.get_attribute("href"))
+        self.assertEqual(len([p for p in ctx.pages if p.url.startswith(PREVIEW)]), 1)
+        page.bring_to_front()
+
         # Show on preview marks it on the page that is open (the tray's list, opened above, is put away first: it floats over the page's foot).
         tray.get_by_role("button", name="Hide").click()
         draft.get_by_test_id("fb-show-on-preview").click()
@@ -276,7 +284,7 @@ class CommentingOnAPreview(unittest.TestCase):
     def test_the_picture_draws_a_pseudo_element_a_canvas_and_a_video_frame(self):
         ctx, page = self.context()
         self.watch(page)
-        comment = page.get_by_test_id("comment-on-server").first
+        comment = page.get_by_test_id("server-url").first
         expect(comment).to_be_visible(timeout=20_000)
         with ctx.expect_page() as opened:
             comment.click()
@@ -331,7 +339,7 @@ class CommentingOnAPreview(unittest.TestCase):
         ctx.add_init_script(f"""if (location.origin === '{PREVIEW}') new MutationObserver((_, o) => {{
           if (document.querySelector('dude-preview-overlay')) {{ o.disconnect(); history.replaceState({{}}, '', '/home'); }}
         }}).observe(document, {{ childList: true, subtree: true }})""")
-        comment = page.get_by_test_id("comment-on-server").first
+        comment = page.get_by_test_id("server-url").first
         expect(comment).to_be_visible(timeout=20_000)
         with ctx.expect_page() as opened:
             comment.click()
@@ -341,6 +349,72 @@ class CommentingOnAPreview(unittest.TestCase):
         expect(page.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
         # Ana's comment is on /, not /home: no pin here.
         self.assertEqual(ov_count(pv, "ov-pin"), 0)
+        self.assertEqual(self.errors, [])
+
+    def test_go_to_dude_brings_dudes_tab_forward(self):
+        ctx, page = self.context()
+        self.watch(page)
+        comment = page.get_by_test_id("server-url").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        # Playwright emulates focus for every page by default, so each says it has it: off, the browser's own focus is read.
+        for p in (page, pv):
+            ctx.new_cdp_session(p).send("Emulation.setFocusEmulationEnabled", {"enabled": False})
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        pv.bring_to_front()
+        pv.wait_for_function("() => document.hasFocus()")
+        self.assertFalse(page.evaluate("() => document.hasFocus()"))
+        dude_url = page.url
+        ov_click(pv, "ov-comment")
+        pv.hover("button.greet")
+        pv.mouse.click(*self.center(pv, "button.greet"))
+        wait_ov(pv, "ov-comment-box")
+        pv.keyboard.type("Go to dude after this.")
+        pv.keyboard.press("Control+Enter")
+        wait_ov(pv, "ov-saved")
+        pages = len(ctx.pages)
+        ov_click(pv, "ov-go-dude")
+        # dude's tab has the focus now, the preview not; nothing was opened and dude was not navigated.
+        page.wait_for_function("() => document.hasFocus()", timeout=5_000)
+        self.assertFalse(pv.evaluate("() => document.hasFocus()"))
+        self.assertEqual(len(ctx.pages), pages)
+        self.assertEqual(page.url, dude_url)
+        expect(page.get_by_test_id("fb-tray")).to_have_attribute("data-count", "1")
+        self.assertEqual(self.errors, [])
+
+    def test_enter_on_the_link_opens_it_and_a_second_click_brings_it_forward_unreloaded(self):
+        ctx, page = self.context()
+        self.watch(page)
+        link = page.get_by_test_id("server-url").first
+        expect(link).to_be_visible(timeout=20_000)
+        # Keyboard activation: Enter on the focused link is a click the comment tool takes, not a plain tab.
+        link.focus()
+        with ctx.expect_page() as opened:
+            page.keyboard.press("Enter")
+        pv = opened.value
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertIsNotNone(pv.evaluate("() => window.opener"))
+        expect(page.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
+        # The person moves on in the preview and starts a comment there.
+        pv.evaluate("() => { window.__marker = 'kept'; history.pushState({}, '', '/cart'); }")
+        ov_click(pv, "ov-comment")
+        pv.hover("button.greet")
+        pv.mouse.click(*self.center(pv, "button.greet"))
+        wait_ov(pv, "ov-comment-box")
+        pv.keyboard.type("Half a thought")
+        url = pv.url
+        pages = len(ctx.pages)
+        # Back in dude, the server's links again: the window comes forward as it is.
+        page.bring_to_front()
+        for testid in ("server-url", "server-preview"):
+            page.get_by_test_id(testid).first.click()
+            page.wait_for_timeout(500)
+            self.assertEqual(len(ctx.pages), pages, testid)
+            self.assertEqual(pv.url, url, testid)
+            self.assertEqual(pv.evaluate("() => window.__marker"), "kept", testid)
+            self.assertEqual(ov(pv, "r => r.querySelector('[data-testid=ov-comment-box] textarea').value"), "Half a thought", testid)
         self.assertEqual(self.errors, [])
 
     def test_a_preview_opened_directly_says_to_open_it_from_dude(self):
@@ -353,6 +427,15 @@ class CommentingOnAPreview(unittest.TestCase):
         self.assertEqual(ov_count(pv, "ov-comment"), 0)
         self.assertEqual(ov_count(pv, "ov-save"), 0)
         shoot(pv, "overlay-no-opener", themes=False)
+        # No task is known here: Open dude is an honest link to dude's origin in a new tab.
+        box = ov(pv, """r => { const a = r.querySelector('[data-k=open-dude]'); const b = a.getBoundingClientRect();
+          return { href: a.href, x: b.x + b.width / 2, y: b.y + b.height / 2 }; }""")
+        self.assertEqual(box["href"], f"{DUDE}/")
+        with ctx.expect_page() as opened:
+            pv.mouse.click(box["x"], box["y"])
+        opened.value.wait_for_url(f"{DUDE}/**", wait_until="domcontentloaded")
+        self.assertEqual(opened.value.url.split("#")[0], f"{DUDE}/")
+        self.assertIsNone(opened.value.evaluate("() => window.opener"))
         self.assertEqual(self.errors, [])
 
     def test_the_overlay_follows_the_os_then_dudes_theme_live(self):
@@ -374,7 +457,7 @@ class CommentingOnAPreview(unittest.TestCase):
 
         # Opened from dude: dude's resolved theme wins over the preview's OS, and follows dude when it changes.
         page.emulate_media(color_scheme="dark")
-        comment = page.get_by_test_id("comment-on-server").first
+        comment = page.get_by_test_id("server-url").first
         expect(comment).to_be_visible(timeout=20_000)
         with ctx.expect_page() as opened:
             comment.click()
@@ -419,7 +502,7 @@ class CommentingOnAPreview(unittest.TestCase):
         ctx2, page2 = self.context("comment-off")
         self.watch(page2)
         expect(page2.get_by_test_id("commenting-unavailable").first).to_have_text("Commenting on previews needs auth.public_url")
-        self.assertEqual(page2.get_by_test_id("comment-on-server").count(), 0)
+        expect(page2.get_by_test_id("server-url").first).to_have_attribute("rel", "noopener noreferrer")
         shoot(page2, "dude-commenting-unavailable")
         page2.goto(f"{DUDE}/#/task/{TASK}/overview")
         expect(page2.get_by_test_id("servers-summary")).to_be_visible()
@@ -429,7 +512,7 @@ class CommentingOnAPreview(unittest.TestCase):
         ctx, page = self.context()
         page.set_viewport_size({"width": 390, "height": 844})
         self.watch(page)
-        comment = page.get_by_test_id("comment-on-server").first
+        comment = page.get_by_test_id("server-url").first
         expect(comment).to_be_visible(timeout=20_000)
         with ctx.expect_page() as opened:
             comment.click()

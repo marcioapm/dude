@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -31,17 +32,24 @@ var (
 	// Colour and cursor codes (CSI), and terminal titles and links (OSC).
 	ansiEscape = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
 	// The one annotation GitHub gives a job that failed by its exit code:
-	// it says nothing about why.
+	// it says nothing about why, and its log ends with the same line.
 	exitCodeAnnotation = regexp.MustCompile(`^Process completed with exit code \d+\.?$`)
 )
 
 // checkRun is a check run as GitHub reports it: its app, and what it said
-// (output and annotations), written as CheckOutput gives it. Generic: it
-// said nothing but that its process exited non-zero.
+// (output and annotations), written as CheckOutput gives it. For an
+// Actions job, said keeps only failure-level annotations: GitHub adds a
+// warning or notice (a deprecated Node.js, a runner label's migration) to
+// almost every job, and they say nothing about why it failed. exitOnly
+// holds the lines of said that are the exit-code annotation alone.
 type checkRun struct {
 	app, said string
-	generic   bool
+	exitOnly  []string
 }
+
+// failureLevel says an annotation reports a failure, not a warning or
+// notice.
+func failureLevel(level string) bool { return level == "failure" || level == "error" }
 
 func (g *GitHub) readCheckRun(ctx context.Context, slug string, runID int64) (checkRun, error) {
 	var run struct {
@@ -69,7 +77,7 @@ func (g *GitHub) readCheckRun(ctx context.Context, slug string, runID int64) (ch
 			return checkRun{}, err
 		}
 	}
-	out := checkRun{generic: true}
+	var out checkRun
 	if run.App != nil {
 		out.app = run.App.Slug
 	}
@@ -77,45 +85,118 @@ func (g *GitHub) readCheckRun(ctx context.Context, slug string, runID int64) (ch
 	for _, part := range []string{run.Output.Title, run.Output.Summary, run.Output.Text} {
 		if part = strings.TrimSpace(part); part != "" {
 			b.WriteString(part + "\n")
-			if !exitCodeAnnotation.MatchString(part) {
-				out.generic = false
+			if exitCodeAnnotation.MatchString(part) {
+				out.exitOnly = append(out.exitOnly, part)
 			}
 		}
 	}
 	for _, a := range annotations {
-		fmt.Fprintf(&b, "%s:%d: %s: %s\n", a.Path, a.Line, a.Level, a.Message)
-		if !exitCodeAnnotation.MatchString(strings.TrimSpace(a.Message)) {
-			out.generic = false
+		if out.app == ActionsApp && !failureLevel(a.Level) {
+			continue
+		}
+		line := fmt.Sprintf("%s:%d: %s: %s", a.Path, a.Line, a.Level, a.Message)
+		b.WriteString(line + "\n")
+		if exitCodeAnnotation.MatchString(strings.TrimSpace(a.Message)) {
+			out.exitOnly = append(out.exitOnly, line)
 		}
 	}
 	out.said = strings.TrimSpace(b.String())
 	return out, nil
 }
 
-// CheckOutput is what a failed check run says about why: its summary and
-// text, and its annotations (file, line, message). For a GitHub Actions
-// job that says only that it exited non-zero, the end of its log instead
-// (JobLogTail), when GitHub gives it. Truncated: a fixer wants the
-// reason, not the whole log.
-func (g *GitHub) CheckOutput(ctx context.Context, slug string, runID int64, limit int) (string, error) {
+// CheckOutput is what a failed check run says about why, for a fixer. For
+// a GitHub Actions job, always the end of its log (JobLogTail) after its
+// output and failure-level annotations; a log GitHub will not give, or
+// could not give now, leaves those with Unread saying why. For any other
+// check, its summary, text and annotations as it reported them. A read
+// that degraded for a failure that may pass (Transient) comes with that
+// error, for the caller to log; the read is still the one to use.
+func (g *GitHub) CheckOutput(ctx context.Context, slug string, runID int64, limit int) (CheckLogRead, error) {
 	run, err := g.readCheckRun(ctx, slug, runID)
 	if err != nil {
-		return "", err
+		return CheckLogRead{Unread: checkRunUnread(err)}, err
 	}
-	if run.generic {
-		log, err := g.checkLogResult(ctx, slug, runID, run, limit)
-		return log.Text, err
+	read, err := g.checkLogResult(ctx, slug, runID, run, limit)
+	if err != nil {
+		// The log alone failed: what the check run said still stands.
+		read = CheckLogRead{Source: "check_run", Actions: true, Said: run.said, Unread: UnreadReason(err)}
+		read.Text = read.Cut(limit)
 	}
-	return truncate(run.said, limit), nil
+	return read, err
 }
 
 // CheckLogRead is a check as an agent reads it: the end of its job's log
 // (Source "log"), or, for a check that is not an Actions job or whose log
 // GitHub will not give, what its check run said ("check_run").
 type CheckLogRead struct {
+	// Text is Said then Tail, at most the read's limit (Cut).
 	Source, Text string
 	// Actions: the check is a GitHub Actions job.
 	Actions bool
+	// Said is what the check run said worth reading (for an Actions job,
+	// its output and failure-level annotations); Tail, its job's log tail.
+	Said, Tail string
+	// Unread is why an Actions job's log, or the check run itself, could
+	// not be read, in dude's words (UnreadReason); "" when it was.
+	Unread string
+}
+
+// Cut is Said then Tail in at most limit bytes: Said's first lines, up to
+// half of limit when there is a tail, and the end of Tail in the rest.
+func (r CheckLogRead) Cut(limit int) string {
+	switch {
+	case r.Tail == "":
+		return truncate(r.Said, limit)
+	case r.Said == "":
+		return truncate(r.Tail, limit)
+	}
+	head := r.Said
+	if limit > 0 && len(head) > limit/2 {
+		head = head[:limit/2]
+		if i := strings.LastIndexByte(head, '\n'); i > 0 {
+			head = head[:i]
+		}
+		head += "\n…"
+	}
+	rest := 0
+	if limit > 0 {
+		rest = max(limit-len(head)-1, 1)
+	}
+	return head + "\n" + truncate(r.Tail, rest)
+}
+
+// UnreadReason says, for a person or an agent, why GitHub did not give a
+// check's log: from the status alone, never GitHub's message or body,
+// which may echo what was sent.
+func UnreadReason(err error) string {
+	var e *Error
+	switch {
+	case err == nil:
+		return ""
+	case Transient(err):
+		return "GitHub was unavailable"
+	case !errors.As(err, &e):
+		return "the read failed before GitHub answered"
+	case e.Status == http.StatusUnauthorized:
+		return "GitHub refused dude's credential"
+	case e.Status == http.StatusForbidden:
+		return "GitHub refused: no Actions: Read permission"
+	case e.Status == http.StatusNotFound:
+		return "GitHub has no log for this job"
+	case e.Status == http.StatusGone:
+		return "the log has expired"
+	}
+	return fmt.Sprintf("GitHub refused the read (HTTP %d)", e.Status)
+}
+
+// checkRunUnread is UnreadReason for the check run itself, read before
+// its log: a refusal there is of the Checks permission, not Actions.
+func checkRunUnread(err error) string {
+	var e *Error
+	if Transient(err) || !errors.As(err, &e) {
+		return UnreadReason(err)
+	}
+	return fmt.Sprintf("GitHub refused to show the check run (HTTP %d)", e.Status)
 }
 
 // CheckLog reads a check run for an agent: an Actions job's log tail,
@@ -133,20 +214,42 @@ func (g *GitHub) CheckLog(ctx context.Context, slug string, runID int64, limit i
 	return g.checkLogResult(ctx, slug, runID, run, limit)
 }
 
+// checkLogResult reads an Actions job's log whatever its check run said,
+// and keeps its check run's words before it, less the exit-code line the
+// log ends with. A log GitHub will not give leaves the check run's words
+// and why; a failure that may pass is returned.
 func (g *GitHub) checkLogResult(ctx context.Context, slug string, runID int64, run checkRun, limit int) (CheckLogRead, error) {
-	out := CheckLogRead{Source: "check_run", Actions: run.app == ActionsApp}
+	out := CheckLogRead{Source: "check_run", Actions: run.app == ActionsApp, Said: run.said}
 	if out.Actions {
 		tail, err := g.JobLogTail(ctx, slug, runID, limit)
 		switch {
 		case err == nil && tail != "":
-			out.Source, out.Text = "log", tail
-			return out, nil
-		case err != nil && !logGone(err):
+			out.Source, out.Tail = "log", tail
+			out.Said = withoutLines(run.said, run.exitOnly)
+		case err == nil:
+			out.Unread = "the log is empty"
+		case logGone(err):
+			out.Unread = UnreadReason(err)
+		default:
 			return CheckLogRead{}, err
 		}
 	}
-	out.Text = truncate(run.said, limit)
+	out.Text = out.Cut(limit)
 	return out, nil
+}
+
+// withoutLines is text less each of its lines that is in drop.
+func withoutLines(text string, drop []string) string {
+	if len(drop) == 0 {
+		return text
+	}
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		if !slices.Contains(drop, line) {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 // logGone says GitHub will not give a job's log: no permission to read
@@ -282,4 +385,20 @@ func cleanLogLine(line []byte) string {
 	line = logTimestamp.ReplaceAll(line, nil)
 	line = ansiEscape.ReplaceAll(line, nil)
 	return strings.ToValidUTF8(string(line), "\uFFFD")
+}
+
+// CleanLog is text as cleanLogLine leaves each of its lines, without the
+// other control characters (NUL, BEL…) a terminal would not show: what is
+// written into a fixer's workspace as a file.
+func CleanLog(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.Map(func(r rune) rune {
+			if r < 0x20 && r != '\t' || r == 0x7f {
+				return -1
+			}
+			return r
+		}, cleanLogLine([]byte(line)))
+	}
+	return strings.Join(lines, "\n")
 }

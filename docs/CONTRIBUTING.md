@@ -414,11 +414,38 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   round has none, to the policy's required reviewer the round has, else its
   first. Those it judges fixed are resolved (`phases.RecordFindings`). That
   rule is what lets the loop converge.
+- **A later review round's reviewers come from its own change**
+  (`RoundReviewers`, `steps.roundReviewers`): after the attempt's first
+  completed review round, a round runs `alwaysReviewers`, the categories of
+  its attempted findings, the conditional rules matched against the paths
+  changed since the previous review round's checkouts (`Store.RoundDelta`,
+  one GitHub compare per repository, cached in `roundDelta` and shared with
+  the resumption's line count), and `requiredReviewers` when one of those
+  paths is outside `nonProductPaths` (matched against the in-repo path
+  only, unlike conditional rules, so `docs/**` does not cover a repository
+  named `docs`). Unmeasurable (no forge, refused, truncated) or over
+  `MaxResumeDeltaLines`: the first round's `ReviewersFor`. A retry, a
+  directed review and the simplifier's range keep their own categories.
+  The round's `run.created` carries `reasons`; a round with no reviewer
+  goes straight to `awaitReview`, unless a gate waits on a completed review
+  at its heads (`st.Candidate`, or an untested conductor head): then
+  `requiredReviewers` run, else the first round's (`steps.gateReviewers`).
+  The choice is kept in the Owned `reviewChoice` with the round's creation
+  key and heads, so a replayed step at those heads creates the same round.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
   change request or a failing check. Merged → task `done`; closed →
-  `aborted`. Under the conductor, ready to merge (or no longer) is dude's
+  `aborted`. Once none is left open, the end reaches the delivery at
+  whatever step it is parked on (`delivery/pr_ended.go`): live phase Runs
+  are aborted, a pending conductor decision dropped and an escalation
+  withdrawn (`task.decided` by the system), and a finished fix is dropped
+  rather than opened or promoted. One closed beside one still open is the
+  pull request wait's to ask a person about (or, held by a reviewer's
+  question, that hold's); the step at work goes on.
+  dude's own closes (Start over, Close) reach no live
+  delivery: the syncer signals only the one on the pull request's branch.
+  Under the conductor, ready to merge (or no longer) is dude's
   line in Chat (`chat.notice`) and wakes nobody; a pull request merged or
   closed wakes it once (`pr_merged`, `pr_closed`). A comment that
   mentions `@dude` (or a factory login), by someone who may wake a fixer,

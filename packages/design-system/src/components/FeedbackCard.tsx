@@ -9,6 +9,7 @@ import { useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } fro
 import type { FeedbackAnchor, FeedbackCodeAnchor, FeedbackPreviewAnchor, FeedbackStatus } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { plural } from "../util/format.ts";
+import { openLinkWith } from "../util/openLink.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
@@ -124,8 +125,14 @@ export function FeedbackExcerpt({ anchor, note }: { readonly anchor: Pick<Feedba
   );
 }
 
-/** A preview item's page: where, which element, which component, and its picture when the app has one. */
-export function FeedbackPreview({ anchor, imageUrl }: { readonly anchor: FeedbackPreviewAnchor; readonly imageUrl?: string | undefined }) {
+/**
+ * A preview item's page: where, which element, which component, and its
+ * picture when the app has one. `onOpen` is the app's own way to open the
+ * page, called on a plain left click of its link (false leaves it to the link).
+ */
+export function FeedbackPreview({ anchor, imageUrl, onOpen }: {
+  readonly anchor: FeedbackPreviewAnchor; readonly imageUrl?: string | undefined; readonly onOpen?: ((url: string) => boolean) | undefined;
+}) {
   const vw = anchor.viewport?.width;
   const vh = anchor.viewport?.height;
   return (
@@ -133,7 +140,8 @@ export function FeedbackPreview({ anchor, imageUrl }: { readonly anchor: Feedbac
       {imageUrl ? <img className={styles["shot"]} src={imageUrl} alt="The page as it was, the element marked" /> : null}
       <dl className={styles["facts"]}>
         <dt>Page</dt>
-        <dd><a href={anchor.url} target="_blank" rel="noreferrer" className={cx(styles["mono"], styles["clip"])} title={anchor.url}>{anchor.url.replace(/^https?:\/\//, "")}</a>
+        <dd><a href={anchor.url} target="_blank" rel="noreferrer" className={cx(styles["mono"], styles["clip"])} title={anchor.url}
+          onClick={openLinkWith(onOpen, anchor.url)} data-testid="fb-preview-page">{anchor.url.replace(/^https?:\/\//, "")}</a>
           {vw && vh ? <span className={styles["muted"]}> · {vw}×{vh}</span> : null}</dd>
         {anchor.selector ? <><dt>Element</dt><dd className={cx(styles["mono"], styles["clip"])} title={anchor.selector}>{anchor.selector}</dd></> : null}
         {anchor.text ? <><dt>Text</dt><dd>“{anchor.text}”</dd></> : null}
@@ -289,6 +297,8 @@ export interface FeedbackCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
   readonly readOnly?: boolean | undefined;
   /** The page an item points at, when the app has its picture. */
   readonly imageUrl?: string | undefined;
+  /** A preview item's Page link opened the app's way (FeedbackPreview's `onOpen`). */
+  readonly onOpenPage?: ((url: string) => boolean) | undefined;
   /**
    * Back to where it is: a code item's lines in the diff (Show in diff), a
    * preview item's element on the page (Show on preview, drafts too).
@@ -313,7 +323,7 @@ const PLACEMENT_WORDS = {
 } as const;
 
 /** One item: who wrote it and when, where it went, its status, what it is on, its words and thread, and what can be done with it. */
-export function FeedbackCard({ item, thread = [], inline, placement, readOnly, imageUrl, onJump, onReply, onResolve, onReopen, onSaveDraft, onDelete,
+export function FeedbackCard({ item, thread = [], inline, placement, readOnly, imageUrl, onOpenPage, onJump, onReply, onResolve, onReopen, onSaveDraft, onDelete,
   editing: editingGiven, onEditingChange, maxLength, now = Date.now(), className, ...rest }: FeedbackCardProps) {
   const [ownEditing, setOwnEditing] = useState(false);
   const editing = editingGiven ?? ownEditing;
@@ -363,7 +373,7 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
       </header>
       {inline ? null : <div className={styles["anchorRow"]}><FeedbackAnchorLine anchor={a} onJump={a.kind === "general" ? undefined : onJump} /></div>}
       {a.kind === "code" && (!inline || placement) ? <FeedbackExcerpt anchor={a} note={placement ? PLACEMENT_WORDS[placement] : undefined} /> : null}
-      {a.kind === "preview" ? <FeedbackPreview anchor={a} imageUrl={imageUrl} /> : null}
+      {a.kind === "preview" ? <FeedbackPreview anchor={a} imageUrl={imageUrl} onOpen={onOpenPage} /> : null}
       {draft && editing && onSaveDraft ? (
         <CommentEditor where={<>Edit your draft</>} value={text} onChange={setText} saveLabel="Save" saving={busy === "save"} maxLength={maxLength}
           problem={problem} onCancel={() => { setText(item.body); setProblem(null); setEditing(false); }}

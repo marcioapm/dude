@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -255,6 +256,44 @@ func TestAPullRequestFixResumesTheLastFixerFastForwardedPastTheSimplifier(t *tes
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND base_shas->>'target' = $2
 		AND push_result @> '{"results":[{"status":"pushed"}]}'`, prFix.ID, simplified); n != 1 {
 		t.Fatal("the resumed fixer did not start from the simplifier's head and push")
+	}
+}
+
+func TestAResumedPullRequestFixHasOnlyThisRoundsCheckExcerpt(t *testing.T) {
+	w := resuming(t)
+	w.grant("FIX_TOKEN", "fix-test-not-a-real-token", "fixer")
+	w.gh.SetChecks("run:success")
+	wi := w.task()
+	w.names(wi, w.repoID)
+	w.start(wi, resumingPolicy())
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+	})
+	w.gh.SetJobLog(77, "current-round: AssertionError: 3 != 2\n##[error]Process completed with exit code 1.\n", downloads.URL)
+	w.gh.SetChecks("run:failure")
+	w.until("the resumed CI fix", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'
+			AND pr_feedback <> '[]'::jsonb AND continues_how = 'resume'`, wi) == 1
+	})
+	var text string
+	if err := w.owner.QueryRow(context.Background(), `SELECT d.text FROM directives d JOIN runs r ON r.id = d.run_id
+		WHERE r.task_id = $1 AND r.phase = 'fix' AND r.pr_feedback <> '[]'::jsonb`, wi).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"current-round: AssertionError: 3 != 2", "the excerpt below is all you have for this round",
+		"Any files under `/workspace/.dude/checks/` are from earlier rounds and are not this failure."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("directive lacks %q:\n%s", want, text)
+		}
+	}
+	for _, noise := range []string{"Node.js 20", "ubuntu-latest", "warning", "notice", "The last "} {
+		if strings.Contains(text, noise) {
+			t.Errorf("directive contains %q:\n%s", noise, text)
+		}
 	}
 }
 
