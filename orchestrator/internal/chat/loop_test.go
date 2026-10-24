@@ -339,6 +339,27 @@ func TestChatAQuestionIsRecordedBeforeItIsPosted(t *testing.T) {
 	}
 }
 
+// A request recorded by another process between this one's check and its
+// commit rolls back everything this one made.
+func TestChatARequestRecordedMeanwhileRollsTheWorkBack(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "T", "goal": "g"}))
+	var ev string
+	w.svc.SetBeforeMake(func(ctx context.Context) error {
+		_, err := w.owner.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
+			external_user_id, route) VALUES ('chr_other', $1, 'slack', $2, 'T1', 'C1', 'U2', 'task')`, w.org, ev)
+		return err
+	})
+	_, ev = w.receive("Eli", "C1", "", "file it")
+	w.once()
+	if n := w.count(`SELECT count(*) FROM tasks WHERE organization_id = $1`, w.org); n != 0 {
+		t.Fatalf("%d tasks filed under a request another process recorded", n)
+	}
+	if n := w.count(`SELECT count(*) FROM chat_threads WHERE organization_id = $1`, w.org); n != 0 {
+		t.Fatal("the thread was bound")
+	}
+}
+
 // A delivery handled again (a crash between its work and marking it
 // done) makes nothing twice, on every path: a DM's session, a task, and a
 // message into a bound thread's session.
