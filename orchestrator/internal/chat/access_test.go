@@ -47,7 +47,12 @@ func TestChatResumesOnlyASessionTheWholeConversationCanChatIn(t *testing.T) {
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Pair"}))
 	w.mention("Márcia", "M1", "", "pair talk")
 	pair := w.last().ResultID
-
+	// A private channel's session made while Márcia was its only member: Eli cannot chat in it.
+	w.fake.SetMembers("G1", []string{"U1", "UBT1"})
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Alone"}))
+	w.mention("Márcia", "G1", "", "alone talk")
+	alone := w.last().ResultID
+	w.fake.SetMembers("G1", []string{"U1", "U2", "U3", "U9", "UBT1"})
 	cases := []struct {
 		name, conv, session string
 		resumed             bool
@@ -66,6 +71,8 @@ func TestChatResumesOnlyASessionTheWholeConversationCanChatIn(t *testing.T) {
 		{"private channel into a session every member chats in", "G1", pair, true},
 		// A public channel shares with the organisation: only an organisation session.
 		{"public channel into a private channel's session", "C1", design, false},
+		// A connected member of the group (Eli) cannot chat in it: not resumable from there.
+		{"group into a session not every member chats in", "M1", alone, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -93,6 +100,19 @@ func TestChatResumesOnlyASessionTheWholeConversationCanChatIn(t *testing.T) {
 	// Nobody but Márcia was ever given her DM session.
 	if n := w.count(`SELECT count(*) FROM session_people WHERE session_id = $1 AND person_id <> $2`, private, marcia); n != 0 {
 		t.Fatalf("%d others in the DM session", n)
+	}
+	// Once Gus connects, the private channel G1 has a connected member who
+	// is not in the group's session: it is no longer resumable from there.
+	gusAccount := w.one(`SELECT account_id FROM people WHERE id = $1`, w.people["Gus"][0])
+	w.exec(`INSERT INTO chat_identities (organization_id, provider, external_workspace_id, external_user_id, account_id, person_id)
+		VALUES ($1, 'slack', 'T1', 'U3', $2, $3)`, w.org, gusAccount, w.people["Gus"][0])
+	w.model.queue(resume(pair))
+	w.mention("Márcia", "G1", "", "continue that")
+	if got := w.last(); got.Route != "brainstorm" || got.AskedRoute != "resume" || got.ResultID == pair {
+		t.Fatalf("private channel resumed a session Gus cannot chat in: %+v", got)
+	}
+	if r := w.one(`SELECT session_role($1, $2)`, pair, w.people["Gus"][0]); r != "" {
+		t.Fatalf("Gus got %q in the group's session", r)
 	}
 	// The model is offered only what the conversation may resume.
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "x"}))

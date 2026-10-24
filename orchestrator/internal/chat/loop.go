@@ -138,9 +138,11 @@ func (s *Service) handle(parent context.Context, d claimed) {
 			return
 		case transient:
 			s.log().Error("chat delivery failed; giving up", "provider", d.Provider, "event", d.ID, "attempts", d.Attempts+1, "error", err)
-			s.giveUp(settle, d)
+			s.giveUp(settle, d, err, true)
 		default:
+			// Trying again would fail the same way: the person is told now.
 			s.log().Warn("chat delivery failed", "provider", d.Provider, "event", d.ID, "error", err)
+			s.giveUp(settle, d, err, false)
 		}
 	}
 	s.settle(settle, d, err, 0)

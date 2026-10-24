@@ -605,9 +605,15 @@ func (s *Service) CompleteConnect(ctx context.Context, c Callback) (Landing, err
 		if len(st.Pending) == 0 || st.ExternalUser != who.ID {
 			return nil
 		}
-		// The kept mention, routed by the chat loop as if it came now.
-		_, err = tx.Exec(ctx, `INSERT INTO chat_events (provider, event_id, organization_id, kind, payload)
-			VALUES ($1, $2, $3, 'mention', $4) ON CONFLICT DO NOTHING`, c.Provider, "connect:"+hashState(c.State), st.Org, st.Pending)
+		// The kept mention, routed by the chat loop as if it came now, in
+		// order with its thread's later mentions.
+		key := ""
+		var kept Mention
+		if json.Unmarshal(st.Pending, &kept) == nil {
+			key = threadKey(c.Provider, kept.WorkspaceID, kept.ConversationID, kept.ThreadID)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO chat_events (provider, event_id, organization_id, kind, payload, thread_key)
+			VALUES ($1, $2, $3, 'mention', $4, $5) ON CONFLICT DO NOTHING`, c.Provider, "connect:"+hashState(c.State), st.Org, st.Pending, key)
 		return err
 	})
 	if err != nil {

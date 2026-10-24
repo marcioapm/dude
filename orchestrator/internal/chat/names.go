@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 )
@@ -47,12 +48,14 @@ func (c *nameCache) put(key, name string, now time.Time) {
 }
 
 // names is each user's display name; a user whose read failed reads as
-// their id, and is not cached.
+// their id, and is not cached. The namesMax read are the first uncached in
+// id order, so a large conversation reads the same ones each time rather
+// than rotating through its members.
 func (s *Service) names(ctx context.Context, p Provider, inst Installation, users []string) map[string]string {
 	out := make(map[string]string, len(users))
 	var missing []string
 	now := s.now()
-	for _, u := range users {
+	for _, u := range slices.Sorted(slices.Values(users)) {
 		out[u] = u
 		if n, ok := s.nameCache.get(inst.ID+"\x1f"+u, now); ok {
 			out[u] = n

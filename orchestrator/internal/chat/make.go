@@ -89,6 +89,9 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 	var members []string
 	if d.Route == RouteBrainstorm && (r.Kind == KindPrivate || r.Kind == KindGroup) {
 		members = r.members
+		if r.memberNames == nil {
+			s.memberNames(ctx, p, inst, r)
+		}
 	}
 	r.ID = ids.New(ids.ChatRequest)
 	origin := Origin{Provider: m.Provider, WorkspaceID: m.WorkspaceID, ConversationID: m.ConversationID, ConversationName: r.ConversationName,

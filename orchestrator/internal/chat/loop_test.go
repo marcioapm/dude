@@ -156,6 +156,28 @@ func TestChatARetryPostsOnlyWhatIsLeft(t *testing.T) {
 	}
 }
 
+// A retry after the reply was posted and the ✅ failed transiently posts
+// only the ✅: the reply is not posted twice.
+func TestChatARetryAfterAPostedReplyPostsOnlyTheMark(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Hello"}))
+	// The 👀 (only noted) and then the ✅ fail.
+	w.fake.FailTimes("reactions.add", "internal_error", 2)
+	ts, ev := w.receive("Márcia", "C1", "", "hello")
+	w.once()
+	if e := w.event(ev); e.Processed || e.Attempts != 1 || len(w.fake.BotMessages()) != 1 {
+		t.Fatalf("after the failed mark: %+v, %d replies", e, len(w.fake.BotMessages()))
+	}
+	w.due()
+	w.once()
+	if n := len(w.fake.BotMessages()); n != 1 || w.model.calls() != 1 || !w.event(ev).Processed {
+		t.Fatalf("%d replies, %d model calls", n, w.model.calls())
+	}
+	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "white_check_mark" {
+		t.Fatalf("reactions %v", r)
+	}
+}
+
 // A transient failure is tried again after a backoff that doubles (or the
 // provider's Retry-After), MaxAttempts times, then given up: the person is
 // told privately and Requests says failed.

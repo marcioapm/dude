@@ -525,6 +525,11 @@ func TestChatRefusesTheUnconnectedAndNonMembersPrivately(t *testing.T) {
 	if r := w.fake.Reactions("C1", ts); len(r) != 0 {
 		t.Fatalf("a refusal left %v", r)
 	}
+	// Once sent, the prompt's state is not kept in plain text.
+	if n := w.count(`SELECT count(*) FROM chat_requests WHERE route = 'not_connected' AND organization_id = $1
+		AND effects::text NOT LIKE '%state=%' AND effects->0->>'done' = 'true'`, w.org); n != 1 {
+		t.Fatal("the Connect link's state is kept in the request's effects")
+	}
 	// Ana: connected, but removed from Acme. A generic refusal naming nothing of Acme.
 	w.mention("Ana", "C1", "", "help me")
 	eph = w.fake.Ephemerals()
