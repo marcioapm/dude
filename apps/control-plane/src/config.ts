@@ -96,6 +96,7 @@ export const KEYS: readonly Key[] = [
   key("slack.client_id", "DUDE_SLACK_CLIENT_ID", "string", "orchestrator"),
   key("slack.client_secret", "DUDE_SLACK_CLIENT_SECRET", "string", "orchestrator", "", true),
   key("slack.api_url", "DUDE_SLACK_API_URL", "string", "orchestrator", "https://slack.com/api"),
+  key("chat.workers", "DUDE_CHAT_WORKERS", "int", "orchestrator", "6"),
   key("auth.provider", "DUDE_AUTH_PROVIDER", "string", "backend", "api_key"),
   key("auth.public_url", "DUDE_AUTH_PUBLIC_URL", "string", "both"),
   key("auth.super_admins", "DUDE_AUTH_SUPER_ADMINS", "list", "backend"),
