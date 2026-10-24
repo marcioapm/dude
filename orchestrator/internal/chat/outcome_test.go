@@ -131,6 +131,65 @@ func TestChatAFailedMarkLeavesAPostedReplySuccessful(t *testing.T) {
 	}
 }
 
+// A clarifying question the provider refuses outright ends the mention:
+// the asker is told privately, the mention is ❌, Requests says failed
+// with what was asked, and nothing is tried again. A transient failure is
+// tried again and the question posted once. What was asked stays the
+// model's route, which the clarify request already carried.
+func TestChatARefusedQuestionEndsTheMention(t *testing.T) {
+	low := answer(map[string]any{"route": "task", "confidence": 0.6, "project": "ABS", "title": "Fix the export", "goal": "Fix it."})
+	for _, code := range []string{"not_in_channel", "channel_not_found"} {
+		t.Run(code, func(t *testing.T) {
+			w := setup(t)
+			w.model.queue(low)
+			w.fake.FailNext("chat.postMessage", code)
+			ts, ev := w.receive("Eli", "C1", "", "the export is broken")
+			w.once()
+			if e := w.event(ev); !e.Processed || e.Attempts != 0 {
+				t.Fatalf("delivery %+v", e)
+			}
+			got := w.requests()
+			if len(got) != 1 || got[0].Route != "failed" || got[0].AskedRoute != "task" || !strings.Contains(got[0].Reasoning, code) {
+				t.Fatalf("requests %+v", got)
+			}
+			if eph := w.fake.Ephemerals(); len(eph) != 1 || eph[0].User != "U2" || !strings.Contains(eph[0].Text, "couldn't ask its question") {
+				t.Fatalf("ephemerals %+v", eph)
+			}
+			if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "x" {
+				t.Fatalf("reactions %v", r)
+			}
+			if n := len(w.fake.BotMessages()); n != 0 {
+				t.Fatalf("%d messages posted", n)
+			}
+			w.due()
+			if n := w.once(); n != 0 || w.model.calls() != 1 {
+				t.Fatalf("claimed again %d, %d model calls", n, w.model.calls())
+			}
+		})
+	}
+	t.Run("transient", func(t *testing.T) {
+		w := setup(t)
+		w.model.queue(low)
+		w.fake.FailNext("chat.postMessage", "internal_error")
+		_, ev := w.receive("Eli", "C1", "", "the export is broken")
+		w.once()
+		if e := w.event(ev); e.Processed || e.Attempts != 1 {
+			t.Fatalf("after the failed question: %+v", e)
+		}
+		w.due()
+		w.once()
+		if e := w.event(ev); !e.Processed {
+			t.Fatalf("not processed: %+v", e)
+		}
+		if got := w.requests(); len(got) != 1 || got[0].Route != "clarify" {
+			t.Fatalf("requests %+v", got)
+		}
+		if bot := w.fake.BotMessages(); len(bot) != 1 || !strings.Contains(bot[0].Text, "Should I file") || len(w.fake.Ephemerals()) != 0 {
+			t.Fatalf("messages %+v, ephemerals %+v", bot, w.fake.Ephemerals())
+		}
+	})
+}
+
 // A click whose routing committed but whose question update failed
 // transiently posts, on the retry, the update and the reply once each.
 func TestChatAClickWhoseUpdateFailedPostsTheRestOnTheRetry(t *testing.T) {

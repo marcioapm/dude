@@ -104,7 +104,7 @@ func (s *Service) deliver(ctx context.Context, org string, p Provider, inst Inst
 			err = p.UpdateQuestion(ctx, inst, m.ConversationID, e.Message, e.ChosenBy, e.Text)
 		case "react":
 			r := e.Reaction
-			if failed && r == ReactionDone {
+			if failed && (r == ReactionDone || r == ReactionCleared) {
 				r = ReactionFailed
 			}
 			if m.MessageID != "" {
