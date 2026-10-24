@@ -148,7 +148,7 @@ export const EventTypes = {
   BrainstormCreated: "session.created",
   /** The owner invited people. Payload: `{ people, role }`; role `owner` for a handover waiting on its acceptance. */
   BrainstormShared: "session.shared",
-  /** Payload: `{ person }`. */
+  /** Payload: `{ person, via? }`; `via: "organisation"` when a member of the organisation joined an organisation session by writing in it. */
   BrainstormJoined: "session.joined",
   /** Payload: `{ person }`. */
   BrainstormDeclined: "session.declined",
@@ -205,6 +205,19 @@ export const EventTypes = {
    * ledger, and only to the session's members. Payload: `{ personId, open }`.
    */
   BrainstormOpen: "session.open",
+  /** The owner opened the session to the organisation, one way. Payload: `{ access: "organisation" }`. */
+  BrainstormAccessChanged: "session.access_changed",
+  /** Its owner was removed from the organisation: its admins own it. Payload: `{ owner, ownerName }`. */
+  BrainstormOwnerLeft: "session.owner_left",
+  /** An admin took over an admin-owned session. Payload: `{ from, to, toName }`. */
+  BrainstormOwnerTaken: "session.owner_taken",
+  /** The owner who left came back while its admins still owned it: it is theirs again. By the system. Payload: `{ owner }`. */
+  BrainstormOwnerReturned: "session.owner_returned",
+  /**
+   * A message mentioned someone not looking at the session: the notifier
+   * sends them a Web Push. Payload: `{ person, by, byName, title, text }`.
+   */
+  BrainstormMentioned: "session.mentioned",
 
   // People
   /** An admin added someone. Payload: `{ personId, role }`. */

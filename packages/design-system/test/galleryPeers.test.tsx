@@ -46,4 +46,10 @@ test("every Peers block renders in dark and light, comfortable and compact", asy
   expect([...first("pe-thread").querySelectorAll('[data-testid="peer-thread"]')].map((t) => t.getAttribute("data-state")))
     .toEqual(["waiting", "open", "answered", "answered"]);
   expect([...first("pe-list").querySelectorAll("ul[data-variant]")].map((l) => l.getAttribute("data-variant"))).toEqual(["tool", "page", "rail"]);
+  // A Section's note sits beside its count, outside the capitals' heading.
+  const noted = first("pe-note").querySelector("[data-testid=gallery-section-note]")!;
+  const heading = noted.querySelector("h2")!;
+  expect(heading.textContent).toContain("Joined · active");
+  const note = [...noted.querySelectorAll("span")].find((s) => s.textContent === "the sidebar's count");
+  expect(note && !heading.contains(note)).toBe(true);
 });

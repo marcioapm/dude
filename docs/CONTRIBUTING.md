@@ -670,6 +670,82 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   use the people's minute read is the heartbeat; background polling stops
   while hidden (`useVisibleInterval`), not every event-driven request.
 
+### Organisation sessions, admin-owned sessions and mentions
+
+A brainstorm session's **general access** (`sessions.access`, migration 190)
+is `private` (its accepted people) or `organisation` (every active member of
+its organisation can open it and chat). The change is one way: `PUT
+/internal/sessions/{id}/access` takes only `organisation` (anything else is
+409), and the `sessions_access_one_way` trigger refuses going back whoever
+writes the row. Who may do what is `session_role()` alone, which the
+orchestrator (`delivery.SessionRole`), the ledger's visibility, artifacts and
+the notifier all read: in an organisation session a `read` member counts as
+`chat` and any active member without a row is `chat`; someone removed, or of
+another organisation, has no role whatever rows they left. Writing as a
+non-member inserts their `chat` row under the session's lock
+(`delivery.JoinByWriting`, `session.joined` with `via: organisation`).
+`GET /internal/sessions/open` lists the open sessions with `joined` per row;
+the sidebar's Open to everyone count is those joined and not archived.
+
+**When the owner is removed** from the organisation (`removePerson` →
+`passOnSessions`, in the removal's transaction), each session of theirs that
+someone else can reach — open to the organisation, or with any other row —
+gets `owned_by_admins` (`session.owner_left`); a private one nobody else is in
+is archived with them. While it is set every active admin is `owner` in
+`session_role()` (and may open it); `POST …/take-ownership` makes one of them
+the owner row and clears it (`session.owner_taken`), else 409. Handing it on
+waits until an admin has taken it. `removePerson` takes the `session:`
+advisory lock (`lockOwnedSessions`, before the person's row) of each owned
+session its leaving changes, at most 500 a transaction (the rest pass in
+transactions of their own), and voids the departed owner's pending handover.
+A removal that fails between batches is finished by `DELETE` again (200,
+`{passed}`); otherwise an already removed person is a 404. The backend never
+waits on the orchestrator here: it only kicks it (unawaited, 1 s). The
+orchestrator's owner sweep (`notify/owners.go`, in the notify loop, its own
+watermark `session_owner_sweep` and done set `session_owner_done`, migration
+192) reads `session.owner_left`, `session.owner_returned` and `person.removed`
+from the ledger: it tells each session's live agent
+(`notices/told/session-owner-left` / `-returned`) once, unless an owner change
+was recorded for the session since, and withdraws every open question put to
+a removed person by name, in any session. A change that keeps failing is
+counted (`session_owner_attempts`, migration 194) and given up, logged as
+`session owner change given up` with its cursor and error, once it has failed
+five times and first failed over ten minutes ago. The orchestrator's
+handover, accept and take-ownership hold the new owner's `people` row FOR
+SHARE under the session lock, so a removal either refuses them or sees the
+session as theirs; take-ownership also holds the departed owner's row FOR
+SHARE, so an invitation bringing them back is waited for (409 `owner_active`).
+Take-ownership withdraws what was put to the departed
+owner and tells the agent through `notices/told/session-owner`. An owner
+invited back while its admins still own the session owns it again: the
+invitation's transaction takes the `session:` locks of at most 500 of those
+sessions before the person's row, clears `owned_by_admins` and records
+`session.owner_returned` (which the owner sweep tells the agent); the rest
+follow in transactions of their own of at most 500, each stopping if the
+person was removed again meanwhile, plus one more pass after coming back for
+sessions a removal batch passed while the accept waited on the row. A return
+that fails between batches (a multiple of 500 back, the person active, the
+rest still `owned_by_admins`) is finished by accepting the same invitation
+again, as a removal is by `DELETE` again, or by an admin taking each session
+over: nothing periodic resumes it. Writing a message, answering, filing and
+Try again join an organisation session; renaming takes an owner or chat row
+(or an admin while its admins own it).
+
+**Mentions** ride on a session message (`mentions`, `shareWith`: person ids).
+`shareWith` is the owner's only (403, nothing sent) and adds each as accepted
+`chat` in the message's transaction. Each mention of someone `session_role()`
+admits (others are dropped silently) is a `session_mentions` row, listed in
+`GET /internal/sessions`'s `mentions` while unseen and while the person does
+not have the session open; their page's open heartbeat (`setOpen`, which also
+covers non-members through `session_viewers`) marks it seen. A
+`session.mentioned` event is written only when they did not have it open.
+The notifier pushes it from a sweep of its own (`notify/sessions.go`: its
+own watermark `push_config.session_after_cursor` and sent set
+`push_session_sent`, and index `events_session_mentioned_idx`, migration
+191), which also sends a question put to nobody by name to every active
+admin while the session's admins own it. The agent reads the words as written; `mentions`
+is metadata on the `chat.message`, for the chips.
+
 ### Automations
 
 Work nobody started by hand (migration 183; `orchestrator/internal/automations`,
@@ -1054,6 +1130,9 @@ In rough priority order.
 | Change the scripted agent | `orchestrator/internal/fakeagent` |
 | Add an event type | `packages/domain/src/events/types.ts` and the Go constants that write it |
 | Change the sidebar/board data | `apps/control-plane/src/api/routes/navigation.ts` |
+| Change who may read or chat in a session | `session_role()` (`migrations/190_org_sessions.sql`), `orchestrator/internal/delivery/session_access.go` |
+| Change what a session mention does | `orchestrator/internal/delivery/session_mentions.go`, `notify.go`'s `asks` |
+
 | Change what an automation matches, when it fires, or how it runs | `orchestrator/internal/automations/` (`match.go`, `cron.go`, `concurrency.go`, `runner.go`); its spec, `orchestrator/internal/phases/automation.go` |
 | Change automations' API or who may change them | `apps/control-plane/src/api/routes/automations.ts`, rules in `packages/domain/src/automations.ts` |
 | Change a screen | `apps/web/src/screens/` |

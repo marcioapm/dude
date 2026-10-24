@@ -92,6 +92,12 @@
   text-transform: none;
   letter-spacing: normal;
 }
+/* What the section is, beside its label and out of its capitals. */
+.sectionNote {
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+}
 
 .callout {
   display: flex;

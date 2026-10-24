@@ -48,6 +48,10 @@ It came from the pull request, not Chat, and hands you no decisions: answer it t
 
 {{- define "notices/told/session-owner"}}{{.To}} owns this session now. {{.From}} {{if .Left}}left it{{else if .Read}}stays in it and can read{{else}}stays in it and can chat{{end}}. Edits you propose are filed by whoever owns the task, as before.{{end}}
 
+{{- define "notices/told/session-owner-left"}}{{.}} left the organisation. Its admins own this session now: a question for its owner goes to them, until one of them makes themselves its owner.{{end}}
+
+{{- define "notices/told/session-owner-returned"}}{{.}} is back in the organisation and owns this session again: a question for its owner goes to them.{{end}}
+
 {{- define "notices/told/picked-up"}}This task was stopped, and {{.Who}} picked it back up{{with .Note}}, saying: {{printf "%q" .}}{{else}}.{{end}}
 {{- if .Attempt}} They started it over as attempt {{.Attempt}}, and you are its conductor.
 {{- with .Earlier}} What attempt {{.N}} did: {{if .Runs}}{{join .Runs ", "}}{{else}}no Run{{end}}{{range .PullRequests}}; pull request {{.Repo}}#{{.Number}} {{if .Kept}}stays open: this attempt goes on with it, on its branch{{else}}was closed{{end}}{{end}}.{{end}} Its delivery waits on your first decision: read the task, the conversation so far and the code, then start the work (start_phase), or ask {{.Who}} what you need to know.

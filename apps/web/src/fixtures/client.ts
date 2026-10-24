@@ -22,6 +22,8 @@ import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, F
 import { RUN_KEY } from "./scenario.ts";
 import { FixtureAutomations } from "./automations.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
+import type { OpenSessionsList } from "@dude/domain";
+import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type StopRequest, type StopResult, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
@@ -240,6 +242,7 @@ export class FixtureClient extends ApiClient {
   #session: SessionDetail | null = null;
 
   override getSession(id: string): Promise<SessionDetail> {
+    if (localStorage.getItem(RUN_KEY) === "org-sessions" && ORG_SESSIONS[id]) return Promise.resolve(ORG_SESSIONS[id]);
     return this.#session && id === this.#session.session.id ? Promise.resolve(this.#session)
       : Promise.reject(new ApiError(404, "not_found", "No such session."));
   }
@@ -506,6 +509,9 @@ export class FixtureClient extends ApiClient {
 
   /** The scope's events after a cursor, as the API and the stream's backfill both answer. A test's client adds its own. */
   protected ledgerFor({ runId, taskId, sessionId, after = 0 }: LedgerQuery): PersistedEvent[] {
+    if (sessionId && localStorage.getItem(RUN_KEY) === "org-sessions" && ORG_SESSIONS[sessionId]) {
+      return orgSessionEvents().filter((e) => e.sessionId === sessionId && e.cursor > after);
+    }
     return this.#events.filter((e) => e.cursor > after && (!runId || e.runId === runId) && (!taskId || e.taskId === taskId)
       && (!sessionId || e.sessionId === sessionId));
   }
@@ -550,7 +556,12 @@ export class FixtureClient extends ApiClient {
   }
   // The mockups' world has no brainstorm sessions; a test's client adds its own.
   override sessions(): Promise<SessionsList> {
+    if (localStorage.getItem(RUN_KEY) === "org-sessions") return Promise.resolve(orgSessionsList());
     return Promise.resolve({ sessions: [], invitations: [], questions: [] });
+  }
+  // `dude.fixtures.run` = org-sessions: the sessions open to everyone (fixtures/orgSessions.ts); none otherwise.
+  override openSessions(): Promise<OpenSessionsList> {
+    return Promise.resolve(localStorage.getItem(RUN_KEY) === "org-sessions" ? openSessionsList() : { sessions: [], joined: 0 });
   }
   override sessionOpen(_id: string, open: boolean) {
     return Promise.resolve({ open });

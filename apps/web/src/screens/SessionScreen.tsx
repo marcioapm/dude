@@ -14,8 +14,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, ModelPicker, ProposalCard, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type ModelChoice, type ProposalCardItem, type ProposalRelation,
+  AdminOwned, AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, MentionShareConfirm, ModelPicker, ProposalCard, PublishedFiles,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
@@ -37,6 +37,8 @@ import { NotFound } from "./NotFound.tsx";
 import { EventLog, asides, clock, conversationOption, eventsOption, interleaved, questionTurnSelector, renderTurn, viewedContext, type SteerActions, type ViewedTurn } from "./RunScreen.tsx";
 import { SessionMachineBlock } from "./actions.tsx";
 import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
+import { useAccount } from "../accounts/context.tsx";
+import { mentionables } from "../mentions.ts";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
 const OPEN_EVERY_MS = 60_000;
@@ -51,6 +53,8 @@ const SESSION_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormFiled, EventTypes.BrainstormRenamed, EventTypes.BrainstormModelChanged, EventTypes.BrainstormModelFallback,
   EventTypes.MachineRequested, EventTypes.MachineRaised, EventTypes.MachineRefused, EventTypes.MachineReset,
   EventTypes.BrainstormModelApplied,
+  EventTypes.BrainstormAccessChanged, EventTypes.BrainstormOwnerLeft, EventTypes.BrainstormOwnerTaken,
+  EventTypes.BrainstormOwnerReturned,
   EventTypes.RunCreated, EventTypes.RunStarted, EventTypes.RunCompleted,
   EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.RunPaused, EventTypes.RunResumed, EventTypes.QuestionAsked,
   EventTypes.QuestionAnswered, EventTypes.QuestionClosed, "run.parked", "run.unparked",
@@ -151,17 +155,25 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const tray = useImageTray(client, sessionId, limits, "brainstorms");
   const images = useSentImages(client);
   const [imageViewing, setImageViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
-  const send = useCallback(async (text: string, aside = false, attachmentIds: ReadonlyArray<string> = []) => {
+  const send = useCallback(async (text: string, aside = false, attachmentIds: ReadonlyArray<string> = [],
+    mentioned: { mentions?: ReadonlyArray<string>; shareWith?: ReadonlyArray<string> } = {}) => {
     setProblem(null);
     try {
-      await client.sessionChat(sessionId, text, { aside, attachmentIds });
+      await client.sessionChat(sessionId, text, { aside, attachmentIds, ...mentioned });
       tray.clear(attachmentIds);
+      // Shared as it was sent: the people in it changed.
+      if (mentioned.shareWith?.length) void load();
       return true;
     } catch (err) {
       setProblem(`Could not send the message: ${errorText(err)}`);
       return false;
     }
-  }, [client, sessionId, tray]);
+  }, [client, sessionId, tray, load]);
+  // A private session's non-member picked in the composer: the confirm under it, and how to send.
+  const [pendingMention, setPendingMention] = useState<MentionItem | null>(null);
+  const submitRef = useRef<((extra?: { readonly shareWith?: ReadonlyArray<string> }) => void) | null>(null);
+  const account = useAccount();
+  const org = account?.current.name ?? "the organisation";
 
   // Try again on an agent that failed to start or to resume: a fresh one takes what it never read.
   const [retrying, setRetrying] = useState(false);
@@ -322,29 +334,47 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
   const shared = session.people.filter((m) => m.accepted).length > 1;
+  const access = session.access ?? "private";
+  const everyone = access === "organisation";
+  const byAdmins = session.ownedByAdmins === true;
   const members = session.people.map((m) => ({
-    person: people.byId.get(m.person.id) ?? m.person, role: m.role, open: m.open, invited: !m.accepted, you: m.person.id === you.id,
+    person: people.byId.get(m.person.id) ?? m.person, role: everyone && m.role === "read" ? "chat" as const : m.role, open: m.open,
+    invited: !m.accepted, you: m.person.id === you.id,
+    // The owner of record of a session its admins own has left: no access.
+    ...(byAdmins && m.role === "owner" ? { left: org } : {}),
   }));
+  const offered = reader ? undefined : mentionables(you.id, session.people, people.all, access);
+  const ownerName = owner && !byAdmins ? owner.person.name : `${org}'s admins`;
+  // Not one of its people (an organisation session never joined, or an
+  // admin of one its admins own): nothing of theirs to archive. Renaming
+  // follows the server's word when it gives one (a reader lifted to chat
+  // may not); else an owner or chat row, or an admin while its admins own it.
+  const notIn = you.member === false;
+  const mayRename = you.mayRename ?? (!reader && (!notIn || (byAdmins && isOwner)));
 
   return (
     <div className="screen sessionScreen" data-testid="session-screen" data-role={you.role}>
       <ScreenHeader
         fillTitle
         title={<SessionTitle title={session.title} untitled={UNTITLED_SESSION} maxLength={200}
-          onRename={reader ? undefined : rename} />}
+          onRename={mayRename ? rename : undefined} />}
         meta={<>
-          {shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
+          {everyone ? <SharedMark scope="organisation" org={org} showLabel />
+            : shared ? <SharedMark owner={owner && owner.person.id !== you.id ? owner.person : undefined}
             label={`Shared with ${session.people.filter((m) => m.accepted).length - 1}`} /> : null}
+          {byAdmins ? <AdminOwned org={org} /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
           {headerStart ? <StartHeaderChip start={headerStart} /> : null}
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>
-          <Button size="sm" variant="quiet" disabled={archiving} onClick={() => void archive(!you.archived)}
-            data-testid={you.archived ? "session-unarchive" : "session-archive"}>
-            {you.archived ? "Unarchive" : "Archive"}
-          </Button>
-          {isOwner ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : null}
+          {notIn ? null : (
+            <Button size="sm" variant="quiet" disabled={archiving} onClick={() => void archive(!you.archived)}
+              data-testid={you.archived ? "session-unarchive" : "session-archive"}>
+              {you.archived ? "Unarchive" : "Archive"}
+            </Button>
+          )}
+          {isOwner || byAdmins ? <Button size="sm" variant="secondary" onClick={() => setDialog("share")} data-testid="share-open">Share</Button> : null}
         </>}
       />
       {/* A dropped image anywhere on the conversation goes into the composer's tray. */}
@@ -379,9 +409,22 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                   disabledReason={reader ? readOnly : undefined}
                   // A session has no task: the chat composer's own words would say "this task".
                   placeholder={others ? `Waiting for ${firstName(others.to?.name ?? "someone")} to answer: what you write goes after it.`
-                    : "Message the brainstorm…"}
+                    : offered ? "Message the brainstorm… (@ to mention someone)" : "Message the brainstorm…"}
                   // Written beside your own open question ("Write to the agent instead"): aside, never the answer.
-                  onSubmit={({ text, attachmentIds }) => send(text, yours !== null, attachmentIds)}
+                  onSubmit={(s) => {
+                    setPendingMention(null);
+                    return send(s.text, yours !== null, s.attachmentIds,
+                      s.mode === "chat" ? { ...(s.mentions ? { mentions: s.mentions } : {}), ...(s.shareWith ? { shareWith: s.shareWith } : {}) } : {});
+                  }}
+                  mentionables={offered}
+                  mentionHeading={everyone ? `Mention someone in ${org} · they're notified` : "Mention someone · they're notified"}
+                  onMention={(m) => setPendingMention(m.outside ? m : null)}
+                  submitRef={submitRef}
+                  below={pendingMention ? (
+                    <MentionShareConfirm person={pendingMention.person} owner={isOwner} ownerName={ownerName}
+                      onShare={() => submitRef.current?.({ shareWith: [pendingMention.person.id!] })}
+                      onPlain={() => submitRef.current?.()} onCancel={() => setPendingMention(null)} />
+                  ) : undefined}
                   attachments={tray.attachments}
                   onAttachFiles={tray.add}
                   onRemoveAttachment={tray.remove}
@@ -419,9 +462,11 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
               />
             ) : null}
             <SessionRail className="runRail" aria-label="The session" data-testid="session-rail">
-              <SessionRailBlock label={<span className="sessionRailHead">People{isOwner ? (
+              <SessionRailBlock label={<span className="sessionRailHead">People{isOwner || byAdmins ? (
                 <Button size="sm" variant="quiet" onClick={() => setDialog("share")}>Share</Button>) : null}</span>}>
+                {byAdmins ? <AdminOwned org={org} /> : null}
                 <SessionPeople members={members} />
+                {everyone ? <span className="muted" data-testid="session-everyone-note">And everyone in {org}, who can chat; they appear here when they write.</span> : null}
               </SessionRailBlock>
               <SessionRailBlock label={<span className="sessionRailHead">Linked{isOwner ? (
                 <Button size="sm" variant="quiet" onClick={() => setDialog("link")} data-testid="link-open">Link</Button>) : null}</span>}>
@@ -479,10 +524,13 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
       </div>
       </AttachDropZone>
       <ArtifactViewer client={client} files={files} open={viewing} onOpenChange={setViewing} />
-      {isOwner ? (
+      {isOwner || byAdmins ? (
         <>
-          <ShareDialog client={client} detail={detail} open={dialog === "share"} onClose={() => setDialog(null)}
-            onChanged={() => void load()} onMakeOwner={(m) => {
+          <ShareDialog client={client} detail={detail} org={org} open={dialog === "share"} onClose={() => setDialog(null)}
+            onChanged={() => {
+              void load();
+              onChanged();
+            }} onMakeOwner={(m) => {
               setDialog(null);
               setHanding(m);
             }} />
@@ -537,7 +585,15 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
       return `${by} shared this with ${who.join(", ")} (${p.role === "read" ? "can read" : "can chat"}).`;
     }
     case EventTypes.BrainstormJoined:
-      return `${name(p.person)} joined.`;
+      return p.via === "organisation" ? `${name(p.person)} joined by writing: everyone in the organisation can chat here.` : `${name(p.person)} joined.`;
+    case EventTypes.BrainstormAccessChanged:
+      return `${by} opened this session to everyone in the organisation. That can't be undone.`;
+    case EventTypes.BrainstormOwnerLeft:
+      return `${typeof p.ownerName === "string" ? p.ownerName : "Its owner"} left the organisation: its admins own this session now.`;
+    case EventTypes.BrainstormOwnerTaken:
+      return `${typeof p.toName === "string" ? p.toName : name(p.to)} took this session over as its owner.`;
+    case EventTypes.BrainstormOwnerReturned:
+      return `${name(p.owner)} is back in the organisation and owns this session again.`;
     case EventTypes.BrainstormDeclined:
       return `${name(p.person)} declined.`;
     case EventTypes.BrainstormMemberRemoved:

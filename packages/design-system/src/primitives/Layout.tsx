@@ -68,10 +68,12 @@ export interface SectionProps extends Omit<HTMLAttributes<HTMLElement>, "title">
   readonly countNoun?: string | undefined;
   /** On the right of the title. */
   readonly actions?: ReactNode;
+  /** After the title and count, muted and in sentence case: what the group is ("the sidebar's count"). */
+  readonly note?: ReactNode;
 }
 
 /** A titled part of a page. */
-export function Section({ title, count, limit, countNoun, actions, className, children, ...rest }: SectionProps) {
+export function Section({ title, count, limit, countNoun, actions, note, className, children, ...rest }: SectionProps) {
   const titleId = useId();
   return (
     <section className={cx(styles["section"], className)} aria-labelledby={title ? titleId : undefined} {...rest}>
@@ -88,6 +90,7 @@ export function Section({ title, count, limit, countNoun, actions, className, ch
               ) : count !== undefined ? <span className={styles["sectionCount"]}>{count}</span> : null}
             </h2>
           ) : null}
+          {note ? <span className={styles["sectionNote"]}>{note}</span> : null}
           {actions ? <div className={styles["actions"]}>{actions}</div> : null}
         </div>
       ) : null}

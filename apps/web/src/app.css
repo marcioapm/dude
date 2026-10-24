@@ -1909,3 +1909,34 @@ body {
   color: var(--ds-color-text-primary);
   text-decoration: underline;
 }
+
+/* The Share dialog: General access and its callouts, spaced from the people
+   below; a member's note on its own line under their name. */
+.sessionShareAccess {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  margin-bottom: var(--ds-space-12);
+}
+.sessionShareNote {
+  display: block;
+  font-size: var(--ds-text-sm);
+}
+/* A member's row: the name takes the width it needs (min-width 0 so it can
+   shrink and wrap), and the role, Make owner… and Remove wrap under it as
+   one group, to the right, when the row is too narrow for both. */
+.sessionShareMembers li {
+  flex-wrap: wrap;
+}
+.sessionShareMembers li > span:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sessionShareActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ds-space-8);
+  margin-left: auto;
+}

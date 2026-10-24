@@ -8,7 +8,7 @@ import { AgentAvatar, ROLE_LABEL, type AvatarKind } from "./AgentAvatar.tsx";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { ActivityIndicator, type ActivityIndicatorProps } from "./ActivityIndicator.tsx";
 import { CostDisplay, Duration, TokenCount } from "./Numbers.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { Markdown, type MarkdownMention } from "./Markdown.tsx";
 import styles from "./ChatMessage.module.css";
 
 export type ChatMessageKind = "agent" | "human" | "system";
@@ -114,6 +114,8 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
    * which the app owns (the design system carries no brand image).
    */
   readonly avatar?: ReactNode;
+  /** People the text @-mentions: each "@<name>" in it is drawn as their chip (`MentionChip`), in place. */
+  readonly mentions?: ReadonlyArray<MarkdownMention> | undefined;
 }
 
 const INTENT_LABEL: Record<HumanIntent, string | null> = {
@@ -180,6 +182,7 @@ export function ChatMessage({
   actions,
   person,
   avatar,
+  mentions,
   className,
   ...rest
 }: ChatMessageProps) {
@@ -297,7 +300,7 @@ export function ChatMessage({
           {children !== undefined ? (
             <div className={styles["body"]}>{children}</div>
           ) : content !== undefined && (content.length > 0 || streaming) ? (
-            <Markdown source={content} streaming={streaming} breaks={k === "human"} unmeasured className={styles["body"]} />
+            <Markdown source={content} streaming={streaming} breaks={k === "human"} unmeasured className={styles["body"]} mentions={mentions} />
           ) : null}
         </ClampedBody>
         {queued ? (
