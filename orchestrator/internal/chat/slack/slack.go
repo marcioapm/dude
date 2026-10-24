@@ -63,6 +63,12 @@ func New(cfg Config) *Provider {
 
 var _ chat.Provider = (*Provider)(nil)
 
+// Configured is whether the app's credentials are set: without them Slack
+// is listed but cannot be installed.
+func (p *Provider) Configured() bool {
+	return p.cfg.ClientID != "" && p.cfg.ClientSecret != "" && p.cfg.SigningSecret != ""
+}
+
 // Info is Slack as shared surfaces draw it.
 func (p *Provider) Info() chat.Info {
 	return chat.Info{ID: "slack", Name: "Slack", Glyph: "slack", WorkspaceWord: "workspace"}
@@ -496,7 +502,8 @@ func (p *Provider) UpdateQuestion(ctx context.Context, inst chat.Installation, c
 var reactionNames = map[chat.Reaction]string{chat.ReactionWorking: "eyes", chat.ReactionDone: "white_check_mark", chat.ReactionFailed: "x"}
 
 // React marks a message: working (👀), then done (✅) or failed (❌), each
-// replacing the working mark. A mark already there is no failure.
+// replacing the working mark, or cleared (the working mark taken off). A
+// mark already there is no failure.
 func (p *Provider) React(ctx context.Context, inst chat.Installation, conversation, message string, r chat.Reaction) error {
 	if r != chat.ReactionWorking {
 		err := p.call(ctx, inst.Token, "reactions.remove", map[string]any{"channel": conversation, "timestamp": message,
@@ -504,6 +511,9 @@ func (p *Provider) React(ctx context.Context, inst chat.Installation, conversati
 		if apiErr := (*APIError)(nil); err != nil && !(errors.As(err, &apiErr) && apiErr.Code == "no_reaction") {
 			return err
 		}
+	}
+	if r == chat.ReactionCleared {
+		return nil
 	}
 	err := p.call(ctx, inst.Token, "reactions.add", map[string]any{"channel": conversation, "timestamp": message,
 		"name": reactionNames[r]}, nil)

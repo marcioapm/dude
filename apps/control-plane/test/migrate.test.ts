@@ -1202,8 +1202,8 @@ test("195 binds a workspace to one organisation, a provider account to one accou
     expect(await refusal(async () => await bind("3.0", null, null))).toContain("chat_threads_check");
     expect(await refusal(async () => await bind("1.0", null, "wi_a"))).toContain("chat_threads_pkey");
 
-    expect(await refusal(async () => await sql`INSERT INTO chat_requests (id, organization_id, provider, external_workspace_id,
-      conversation_id, external_user_id, route) VALUES ('chr_x', 'org_a', 'slack', 'T1', 'C1', 'U1', 'shout')`)).toContain("chat_requests_route_check");
+    expect(await refusal(async () => await sql`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id,
+      conversation_id, external_user_id, route) VALUES ('chr_x', 'org_a', 'slack', 'Ev1', 'T1', 'C1', 'U1', 'shout')`)).toContain("chat_requests_route_check");
     expect(await refusal(async () => await sql`UPDATE tasks SET origin = '"slack"'::jsonb WHERE id = 'wi_a'`)).toContain("tasks_origin_check");
     expect(await refusal(async () => await sql`UPDATE organizations SET chat_instructions = ${"x".repeat(4001)} WHERE id = 'org_a'`))
       .toContain("organizations_chat_instructions_check");

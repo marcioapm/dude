@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
@@ -71,6 +72,8 @@ type Server struct {
 	LLM llm.Client
 	// The operator's agent egress (agent.egress), for the Network page.
 	AgentEgress []string
+	// Chat providers: installs, links and their webhooks; nil has none.
+	Chat *chat.Service
 }
 
 func (s *Server) Handler() http.Handler {
@@ -136,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 	s.sessionRoutes(mux)
 	s.noteRoutes(mux)
 	s.feedbackRoutes(mux)
+	s.chatProviderRoutes(mux)
 	// dude's own stance for each role: the one section of its instruction
 	// file a saved prompt takes the place of, and where a first edit starts.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {

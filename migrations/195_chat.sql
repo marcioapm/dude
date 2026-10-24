@@ -86,6 +86,12 @@ CREATE TABLE chat_connect_states (
   -- Where the callback lands: Your settings, or the connect page.
   return_to             text NOT NULL DEFAULT 'settings' CHECK (return_to IN ('settings', 'connect')),
   pending_mention       jsonb,
+  -- An install's or sign-in's: the sha256 of a cookie set on the browser
+  -- that started it, so a callback is finished only in that browser; and
+  -- the redirect address the provider was given, which its token exchange
+  -- must repeat.
+  browser_hash          text,
+  redirect_uri          text,
   created_at            timestamptz NOT NULL DEFAULT now(),
   expires_at            timestamptz NOT NULL DEFAULT now() + interval '15 minutes',
   CHECK (kind <> 'oauth' OR person_id IS NOT NULL),
@@ -106,7 +112,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
   SELECT organization_id, expires_at <= now() FROM chat_connect_states WHERE state_hash = p_state_hash
 $$;
 REVOKE ALL ON FUNCTION chat_connect_state_org(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION chat_connect_state_org(text) TO dude_app;
+GRANT EXECUTE ON FUNCTION chat_connect_state_org(text) TO dude_app, dude_sweeper;
 
 -- Deliveries from a provider (its events and interactions), stored before
 -- they are acted on, as webhook_deliveries are GitHub's: the backend hands
@@ -172,6 +178,9 @@ CREATE TABLE chat_requests (
   id                    text PRIMARY KEY,
   organization_id       text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   provider              text NOT NULL,
+  -- The delivery it answers (an event, a kept mention, a clicked choice):
+  -- one request each, so a delivery handled twice makes nothing twice.
+  event_id              text NOT NULL,
   external_workspace_id text NOT NULL,
   conversation_id       text NOT NULL,
   conversation_kind     text CHECK (conversation_kind IN ('public', 'private', 'group', 'dm')),
@@ -196,7 +205,14 @@ CREATE TABLE chat_requests (
   shared_added          text[] NOT NULL DEFAULT '{}',
   shared_skipped        text[] NOT NULL DEFAULT '{}',
   model_call_id         text REFERENCES model_calls(id) ON DELETE SET NULL,
-  created_at            timestamptz NOT NULL DEFAULT now()
+  -- The neutral mention, kept so a clarifying answer can route it again,
+  -- and the question asked with its choices and the message it is in.
+  mention               jsonb,
+  question              jsonb,
+  question_message_id   text,
+  answered_at           timestamptz,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (provider, event_id)
 );
 CREATE INDEX chat_requests_created_idx ON chat_requests (organization_id, created_at DESC);
 -- Clarify rounds are counted per thread.
