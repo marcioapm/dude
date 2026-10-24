@@ -15,6 +15,7 @@ import {
   FlowSteps,
   IdentityPair,
   InstructionStack,
+  Markdown,
   PersonAvatar,
   ProviderGlyph,
   ProviderList,
@@ -28,14 +29,19 @@ import {
   type ChatRoute as RouteView,
   type SettingsNavItem,
 } from "@dude/design-system/components";
-import { ICON_NAMES, formatTimestamp } from "@dude/design-system";
+import { ICON_NAMES, Icon, formatTimestamp } from "@dude/design-system";
 import {
   Badge,
   Button,
   Callout,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
   Dialog,
   EmptyState,
   FormStack,
+  IconButton,
   KeyValueList,
   Select,
   Spinner,
@@ -45,6 +51,7 @@ import {
   Th,
   THead,
   Textarea,
+  Tooltip,
   Tr,
 } from "@dude/design-system/primitives";
 import {
@@ -169,29 +176,25 @@ function ChatPage({ client, orgName, admin, overview, onPage, judgementTier }: {
         { title: "One routing call", children: <>Brainstorm, task, epic, resume or a question; checked by dude, then the link in the thread.{admin ? <> Every call is in <TextButton onClick={() => onPage(REQUESTS_PAGE)}>Requests</TextButton>.</> : null}</> },
       ]} />
       <SettingsSection title="Routing">
-        <SettingRow label="Built-in instructions" help="dude's own, kept up to date with dude. Read-only.">
-          <FormStack>
-            <span data-testid="chat-builtin-summary">{lines} lines · routes, confidence, reasoning{" "}
-              <TextButton onClick={() => setBuiltInOpen((o) => !o)} data-testid="chat-builtin-view">{builtInOpen ? "Hide" : "View"}</TextButton></span>
-            {builtInOpen && instructions ? <pre className="chatBuiltIn" data-testid="chat-builtin-text">{instructions.builtIn}</pre> : null}
-          </FormStack>
+        <SettingRow label="Built-in instructions" help="dude's own, kept up to date with dude. Read-only." fill>
+          <span data-testid="chat-builtin-summary">{lines} lines · routes, confidence, reasoning{" "}
+            <TextButton onClick={() => setBuiltInOpen((o) => !o)} data-testid="chat-builtin-view">{builtInOpen ? "Hide" : "View"}</TextButton></span>
+          {builtInOpen && instructions ? <div data-testid="chat-builtin-text"><Markdown source={"```text\n" + instructions.builtIn + "\n```"} /></div> : null}
         </SettingRow>
-        <SettingRow label="Additional instructions" htmlFor="chat-instructions"
+        <SettingRow label="Additional instructions" htmlFor="chat-instructions" fill
           help={`Appended to the built-in ones, for every chat. What your organisation knows that the model can't: which channel means which project, where bugs go. Each provider can add its own after these.`}>
-          <FormStack>
-            <Textarea id="chat-instructions" aria-label="Additional instructions" rows={4} value={draft} readOnly={!instructions?.canEdit}
-              maxLength={CHAT_INSTRUCTIONS_MAX} onChange={(e) => setDraft(e.target.value)} data-testid="chat-instructions"
-              placeholder={instructions?.canEdit ? "#support is almost always ABS." : "Nothing added."} />
-            {problem ? <Callout tone="danger">{problem}</Callout> : null}
-            {instructions?.canEdit ? (
-              <span><Button variant="primary" size="sm" disabled={busy || draft === instructions.additional} data-testid="chat-instructions-save"
-                onClick={() => void save(async () => {
-                  const next = await client.setRoutingInstructions(draft);
-                  setInstructions(next);
-                  setDraft(next.additional);
-                }, undefined, "Routing instructions saved")}>Save</Button></span>
-            ) : null}
-          </FormStack>
+          <Textarea id="chat-instructions" aria-label="Additional instructions" rows={4} value={draft} readOnly={!instructions?.canEdit}
+            maxLength={CHAT_INSTRUCTIONS_MAX} onChange={(e) => setDraft(e.target.value)} data-testid="chat-instructions"
+            placeholder={instructions?.canEdit ? "#support is almost always ABS." : "Nothing added."} />
+          {problem ? <Callout tone="danger">{problem}</Callout> : null}
+          {instructions?.canEdit ? (
+            <span><Button variant="primary" size="sm" disabled={busy || draft === instructions.additional} data-testid="chat-instructions-save"
+              onClick={() => void save(async () => {
+                const next = await client.setRoutingInstructions(draft);
+                setInstructions(next);
+                setDraft(next.additional);
+              }, undefined, "Routing instructions saved")}>Save</Button></span>
+          ) : null}
         </SettingRow>
         <SettingRow label="Fixed" help="The same for every organisation and every chat.">
           <KeyValueList data-testid="chat-facts" items={[
@@ -234,6 +237,7 @@ function ProviderPage({ client, provider, orgName, onPage, onChanged }: {
   const [instructions, setInstructions] = useState<(ProviderRoutingInstructions & { installed: boolean }) | null>(null);
   const [draft, setDraft] = useState("");
   const [disconnecting, setDisconnecting] = useState(false);
+  const [showPeople, setShowPeople] = useState(false);
   const { busy, problem: saveProblem, save } = useSave();
   const [outcome, setOutcome] = useState(() => {
     const q = new URLSearchParams(window.location.search);
@@ -282,38 +286,41 @@ function ProviderPage({ client, provider, orgName, onPage, onChanged }: {
           </FormStack>
         </Callout>
       ) : null}
-      <section className="chatInstallCard" aria-label={`${provider.name} installation`} data-testid="chat-installation">
-        <header className="chatInstallHead">
-          <ProviderGlyph provider={pv} size={16} /><b>{provider.name}</b>
-          <Badge tone={view.installed ? "success" : "neutral"} emphasis="subtle" icon={view.installed ? "check" : undefined} size="sm">
-            {view.installed ? "Installed" : "Not installed"}</Badge>
-        </header>
-        {view.installed ? (
-          <KeyValueList items={[
-            { label: provider.workspaceWord[0]!.toUpperCase() + provider.workspaceWord.slice(1), value: <span data-testid="chat-workspace">{view.workspaceName}{view.workspaceDomain ? ` · ${view.workspaceDomain}` : ""}</span> },
-            { label: "Installed by", value: view.installedBy ? <EntityLine size="sm" lead={<PersonAvatar person={view.installedBy} size={20} />} name={view.installedBy.name}
-              detail={view.installedAt ? formatTimestamp(view.installedAt, "date") : undefined} /> : "—" },
-            ...(view.canEdit ? [
-              { label: "Events URL", value: eventsUrl, mono: true },
-              { label: "Interactions URL", value: interactionsUrl, mono: true },
-              { label: "Bot token", value: "stored" },
-            ] : []),
-            { label: "People connected", value: <span data-testid="chat-connected-count">{view.connectedCount}</span> },
-          ]} />
-        ) : (
-          <p className="muted">{view.canEdit
-            ? `Install dude's app in your ${provider.name} ${provider.workspaceWord}: one ${provider.workspaceWord} per organisation. Its people then connect their own accounts.`
-            : `${provider.name} is not set up for ${orgName}.`}</p>
-        )}
-        {health ? (
-          <Callout tone={health.failedToday ? "attention" : "success"} data-testid="chat-health">
-            {health.lastEventAt ? `Events reaching dude · last event ${formatTimestamp(health.lastEventAt, "relative")}` : "No event has reached dude yet"}
-            {` · ${health.failedToday} failed today`}{health.lastFailure ? ` · last: ${health.lastFailure}` : ""}
-          </Callout>
-        ) : null}
-        {saveProblem ? <Callout tone="danger">{saveProblem}</Callout> : null}
+      <Card data-testid="chat-installation" aria-label={`${provider.name} installation`}>
+        <CardHeader title={<span className="chatCardTitle"><ProviderGlyph provider={pv} size={16} />{provider.name}</span>}
+          actions={<Badge tone={view.installed ? "success" : "neutral"} emphasis="subtle" icon={view.installed ? "check" : undefined} size="sm">
+            {view.installed ? "Installed" : "Not installed"}</Badge>} />
+        <CardBody>
+          <FormStack>
+            {view.installed ? (
+              <KeyValueList items={[
+                { label: provider.workspaceWord[0]!.toUpperCase() + provider.workspaceWord.slice(1), value: <span data-testid="chat-workspace">{view.workspaceName}{view.workspaceDomain ? ` · ${view.workspaceDomain}` : ""}</span> },
+                { label: "Installed by", value: view.installedBy ? <EntityLine size="sm" lead={<PersonAvatar person={view.installedBy} size={20} />} name={view.installedBy.name}
+                  detail={view.installedAt ? formatTimestamp(view.installedAt, "date") : undefined} /> : "—" },
+                ...(view.botUser ? [{ label: "Bot user", value: <span data-testid="chat-bot-user">@dude · {view.botUser}</span> }] : []),
+                ...(view.canEdit ? [
+                  { label: "Events URL", value: eventsUrl, mono: true },
+                  { label: "Interactions URL", value: interactionsUrl, mono: true },
+                  { label: "Bot token", value: "stored" },
+                ] : []),
+              ]} />
+            ) : (
+              <p className="muted">{view.canEdit
+                ? `Install dude's app in your ${provider.name} ${provider.workspaceWord}: one ${provider.workspaceWord} per organisation. Its people then connect their own accounts.`
+                : `${provider.name} is not set up for ${orgName}.`}</p>
+            )}
+            {health ? (
+              <Callout tone={health.failedToday ? "attention" : "success"} data-testid="chat-health">
+                {health.lastEventAt ? `Events reaching dude · last event ${formatTimestamp(health.lastEventAt, "relative")}` : "No event has reached dude yet"}
+                {` · ${health.failedToday} failed today`}{health.lastFailure ? ` · last: ${health.lastFailure}` : ""}
+              </Callout>
+            ) : null}
+            {saveProblem ? <Callout tone="danger">{saveProblem}</Callout> : null}
+            {view.canEdit && !view.configured ? <span className="muted">The operator has not configured {provider.name}'s app.</span> : null}
+          </FormStack>
+        </CardBody>
         {view.canEdit ? (
-          <footer className="chatInstallActions">
+          <CardFooter>
             {!view.installed ? (
               <Button variant="primary" disabled={busy || !view.configured} data-testid="chat-install"
                 onClick={() => void save(async () => window.location.assign((await client.installChat(provider.id)).url))}>
@@ -322,30 +329,27 @@ function ProviderPage({ client, provider, orgName, onPage, onChanged }: {
             ) : (
               <Button variant="danger" disabled={busy} onClick={() => setDisconnecting(true)} data-testid="chat-disconnect">Disconnect…</Button>
             )}
-            {!view.configured ? <span className="muted">The operator has not configured {provider.name}'s app.</span> : null}
-          </footer>
+          </CardFooter>
         ) : null}
-      </section>
+      </Card>
       {view.installed && instructions ? (
         <SettingsSection title={`Routing for ${provider.name}`}>
           <p className="muted">Routing is the same for every chat: its model, instructions and limits are on the <TextButton onClick={() => onPage(CHAT_PAGE)}>Chat page</TextButton>. Here, only what {provider.name} adds.</p>
-          <SettingRow label={`Additional instructions for ${provider.name}`} htmlFor="chat-provider-instructions"
+          <SettingRow label={`Additional instructions for ${provider.name}`} htmlFor="chat-provider-instructions" fill
             help={`Appended after ${orgName}'s, for mentions in ${provider.name} only: its channel names, its conventions.`}>
-            <FormStack>
-              <Textarea id="chat-provider-instructions" aria-label={`Additional instructions for ${provider.name}`} rows={3} value={draft}
-                readOnly={!instructions.canEdit} maxLength={CHAT_INSTRUCTIONS_MAX} onChange={(e) => setDraft(e.target.value)}
-                data-testid="chat-provider-instructions" placeholder={instructions.canEdit ? "" : "Nothing added."} />
-              {instructions.canEdit ? (
-                <span><Button variant="primary" size="sm" disabled={busy || draft === instructions.additional} data-testid="chat-provider-instructions-save"
-                  onClick={() => void save(async () => {
-                    const next = await client.setProviderRoutingInstructions(provider.id, draft);
-                    setInstructions(next);
-                    setDraft(next.additional);
-                  }, undefined, `${provider.name} instructions saved`)}>Save</Button></span>
-              ) : null}
-            </FormStack>
+            <Textarea id="chat-provider-instructions" aria-label={`Additional instructions for ${provider.name}`} rows={3} value={draft}
+              readOnly={!instructions.canEdit} maxLength={CHAT_INSTRUCTIONS_MAX} onChange={(e) => setDraft(e.target.value)}
+              data-testid="chat-provider-instructions" placeholder={instructions.canEdit ? "" : "Nothing added."} />
+            {instructions.canEdit ? (
+              <span><Button variant="primary" size="sm" disabled={busy || draft === instructions.additional} data-testid="chat-provider-instructions-save"
+                onClick={() => void save(async () => {
+                  const next = await client.setProviderRoutingInstructions(provider.id, draft);
+                  setInstructions(next);
+                  setDraft(next.additional);
+                }, undefined, `${provider.name} instructions saved`)}>Save</Button></span>
+            ) : null}
           </SettingRow>
-          <SettingRow label="What the model is told" help={`In this order, for every mention in ${provider.name}. Read-only.`}>
+          <SettingRow label="What the model is told" help={`In this order, for every mention in ${provider.name}. Read-only.`} fill>
             <InstructionStack label="What the model is told" layers={[
               { id: "builtin", title: "Built-in", owner: "dude's own", text: instructions.builtIn, collapsed: true,
                 action: <TextButton onClick={() => onPage(CHAT_PAGE)}>View on Chat</TextButton> },
@@ -356,20 +360,34 @@ function ProviderPage({ client, provider, orgName, onPage, onChanged }: {
           </SettingRow>
         </SettingsSection>
       ) : null}
-      {view.people && view.people.length ? (
+      {view.installed ? (
         <SettingsSection title="People">
-          <ul className="plainRows" role="list" data-testid="chat-people">
-            {view.people.map((p) => (
-              <li key={p.person.id} className="plainRow">
-                <IdentityPair provider={pv} external={{ handle: p.handle }} person={p.person} />
-              </li>
-            ))}
-          </ul>
+          <SettingRow label="Connected people" fill
+            help={`Each person connects their own ${provider.name} account in Your settings. Others are asked to when they mention @dude.`}>
+            <span data-testid="chat-connected-count"><b>{view.connectedCount}</b> {view.connectedCount === 1 ? "person" : "people"} connected
+              {view.people && view.people.length ? <>{" "}<TextButton onClick={() => setShowPeople((s) => !s)} data-testid="chat-people-show">
+                {showPeople ? "Hide" : "Show who"}</TextButton></> : null}</span>
+            {showPeople && view.people ? (
+              <ul className="plainRows" role="list" data-testid="chat-people">
+                {view.people.map((p) => (
+                  <li key={p.person.id} className="plainRow">
+                    <IdentityPair provider={pv} external={{ handle: p.handle }} person={p.person} />
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </SettingRow>
+        </SettingsSection>
+      ) : null}
+      {view.installed && view.canEdit ? (
+        <SettingsSection title={`Recent requests from ${provider.name}`}
+          actions={<TextButton onClick={() => onPage(REQUESTS_PAGE)}>All requests</TextButton>}>
+          <RequestsTable client={client} providers={[provider]} provider={provider.id} limit={5} />
         </SettingsSection>
       ) : null}
       {disconnecting ? (
         <Dialog open onOpenChange={(o) => !o && setDisconnecting(false)} tone="danger" size="sm" title={`Disconnect ${provider.name}?`}
-          description={`dude stops answering in ${view.workspaceName ?? provider.name} and its token is revoked. People's connections and bound threads are kept for a reinstall of the same ${provider.workspaceWord}.`}
+          description={`dude stops answering in ${view.workspaceName ?? provider.name} and its token is revoked. People's connections and bound threads go with it, so another organisation may add this ${provider.workspaceWord}; what was made keeps where it came from.`}
           footer={<>
             <Button variant="quiet" onClick={() => setDisconnecting(false)}>Cancel</Button>
             <Button variant="danger" solid disabled={busy} data-testid="chat-disconnect-confirm" onClick={() => void save(() => client.disconnectChat(provider.id), () => {
@@ -394,14 +412,6 @@ const EVERY = "__every__";
 function RequestsPage({ client, providers, onPage }: { client: ApiClient; providers: ChatProvider[]; onPage: (page: string) => void }) {
   const [provider, setProvider] = useState(EVERY);
   const [route, setRoute] = useState(EVERY);
-  const [rows, setRows] = useState<ChatRequestRow[] | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  useEffect(() => {
-    setRows(null);
-    client.chatRequests({ provider: provider === EVERY ? undefined : provider, route: route === EVERY ? undefined : route })
-      .then((r) => setRows(r.requests), (err: unknown) => setProblem(errorText(err)));
-  }, [client, provider, route]);
-  const byId = useMemo(() => new Map(providers.map((p) => [p.id, providerView(p)])), [providers]);
   return (
     <div className="settingsPage" data-testid="chat-requests">
       <Breadcrumb size="sm" items={[{ id: "chat", label: "Chat", icon: "message", onSelect: () => onPage(CHAT_PAGE) }, { id: "requests", label: "Requests" }]} />
@@ -413,46 +423,89 @@ function RequestsPage({ client, providers, onPage }: { client: ApiClient; provid
         <Select aria-label="Route" size="sm" value={route} onValueChange={setRoute} data-testid="chat-requests-route"
           options={[{ value: EVERY, label: "Every route" }, ...CHAT_ROUTES.map((r) => ({ value: r, label: ROUTE_WORD[r]! }))]} />
       </div>
-      {problem ? <Callout tone="danger">{problem}</Callout> : rows === null ? <Spinner label="Loading…" /> : rows.length === 0 ? (
-        <EmptyState title="No requests" description="Nobody has mentioned @dude in an installed chat in the last 30 days, or none matches." />
-      ) : (
-        <Table>
-          <THead><Tr><Th>Request</Th><Th>Route</Th><Th align="right">Sure</Th><Th>Result</Th><Th align="right">When</Th></Tr></THead>
-          <TBody>
-            {rows.map((r) => {
-              const pv = byId.get(r.provider) ?? { id: r.provider, name: r.provider, glyph: "integration" as const };
-              return (
-                <Tr key={r.id} data-testid="chat-request" data-route={r.route}>
-                  <Td wrap>
-                    {/* Padding on the row keeps the face's online ring inside the cell's clip. */}
-                    <span className="chatRequestWho">
-                      {r.person ? <PersonAvatar person={r.person} size={24} /> : <span className="chatRequestNoFace" aria-hidden />}
-                      <span className="chatRequestText">
-                        <span className="chatRequestQuote">“{r.text}”</span>
-                        <span className="muted chatRequestWhere">{r.person?.name ?? r.externalUserName} · <ProviderGlyph provider={pv} size={11} /> {pv.name}
-                          {r.conversationName ? ` · ${r.conversationName}` : ""}</span>
-                      </span>
-                    </span>
-                  </Td>
-                  <Td>
-                    <span className="chatRequestRoute">
-                      <RouteBadge route={routeView(r.route)} fallback={r.askedRoute ? routeView(r.askedRoute) : null} />
-                      {r.route === "task_link" || (r.route === "resume" && r.confidence === null) ? <span className="muted">Bound thread · no model</span> : null}
-                      {r.sharedAdded.length || r.sharedSkipped.length ? <span className="muted">Shared with {r.sharedAdded.length}{r.sharedSkipped.length ? ` · ${r.sharedSkipped.length} not connected` : ""}</span> : null}
-                      {r.route === "clarify" ? <span className="muted">{r.rounds} {r.rounds === 1 ? "round" : "rounds"} asked</span> : null}
-                    </span>
-                  </Td>
-                  <Td align="right" mono>{r.confidence === null ? "—" : `${Math.round(r.confidence * 100)}%`}</Td>
-                  <Td wrap>{r.result ? <a href={resultHref(r.result)} data-testid="chat-request-result">{r.result.label ?? r.result.id}</a>
-                    : <span className="muted">{r.route === "not_connected" ? "Asked to connect" : r.route.startsWith("not_") ? "Refused privately" : "—"}</span>}</Td>
-                  <Td align="right" muted><span title={r.reasoning}>{formatTimestamp(r.createdAt, "relative")}</span></Td>
-                </Tr>
-              );
-            })}
-          </TBody>
-        </Table>
-      )}
+      <RequestsTable client={client} providers={providers} provider={provider === EVERY ? undefined : provider} route={route === EVERY ? undefined : route}
+        summary />
     </div>
+  );
+}
+
+const RESULT_ICON = { session: "brainstorm", task: "inbox", epic: "layers" } as const;
+
+/** Requests as a table: the person and where, the route, how sure, what it made, when; the reasoning behind ⓘ. */
+function RequestsTable({ client, providers, provider, route, limit, summary }: {
+  client: ApiClient;
+  providers: ChatProvider[];
+  provider?: string | undefined;
+  route?: string | undefined;
+  /** Only the newest so many. */
+  limit?: number | undefined;
+  /** The last 7 days' count over the table. */
+  summary?: boolean | undefined;
+}) {
+  const [rows, setRows] = useState<ChatRequestRow[] | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    setRows(null);
+    client.chatRequests({ provider, route }).then((r) => setRows(r.requests), (err: unknown) => setProblem(errorText(err)));
+  }, [client, provider, route]);
+  const byId = useMemo(() => new Map(providers.map((p) => [p.id, providerView(p)])), [providers]);
+  if (problem) return <Callout tone="danger">{problem}</Callout>;
+  if (rows === null) return <Spinner label="Loading…" />;
+  if (rows.length === 0) {
+    return <EmptyState title="No requests" description="Nobody has mentioned @dude in an installed chat in the last 30 days, or none matches." />;
+  }
+  const shown = limit ? rows.slice(0, limit) : rows;
+  const week = rows.filter((r) => Date.parse(r.createdAt) > Date.now() - 7 * 86_400_000);
+  const asked = week.filter((r) => r.confidence !== null && r.route !== "task_link").length;
+  return (
+    <>
+      {summary ? (
+        <p className="muted" data-testid="chat-requests-summary">Last 7 days · {week.length} {week.length === 1 ? "mention" : "mentions"} · {asked} asked the model</p>
+      ) : null}
+      <Table>
+        <THead><Tr><Th>Request</Th><Th width="200px">Route</Th><Th align="right" width="64px">Sure</Th><Th>Result</Th><Th align="right" width="120px">When</Th></Tr></THead>
+        <TBody>
+          {shown.map((r) => {
+            const pv = byId.get(r.provider) ?? { id: r.provider, name: r.provider, glyph: "integration" as const };
+            return (
+              <Tr key={r.id} data-testid="chat-request" data-route={r.route}>
+                <Td wrap>
+                  <span className="chatRequestWho">
+                    {r.person ? <PersonAvatar person={r.person} size={24} /> : <span className="chatRequestNoFace" aria-hidden />}
+                    <span className="chatRequestText">
+                      <span className="chatRequestQuote">“{r.text}”</span>
+                      <span className="muted chatRequestWhere" data-testid="chat-request-where">{r.person?.name ?? r.externalUserName} · <ProviderGlyph provider={pv} size={11} inline />
+                        {r.conversationName ? ` · ${r.conversationName}` : ""}</span>
+                    </span>
+                  </span>
+                </Td>
+                <Td wrap>
+                  <span className="chatRequestRoute">
+                    <RouteBadge route={routeView(r.route)} fallback={r.askedRoute ? routeView(r.askedRoute) : null} />
+                    {r.route === "task_link" || (r.route === "resume" && r.confidence === null) ? <span className="muted">Bound thread · no model</span> : null}
+                    {r.sharedAdded.length || r.sharedSkipped.length ? <span className="muted">Shared with {r.sharedAdded.length}{r.sharedSkipped.length ? ` · ${r.sharedSkipped.length} not connected` : ""}</span> : null}
+                    {r.route === "clarify" ? <span className="muted">{r.rounds} {r.rounds === 1 ? "round" : "rounds"} asked</span> : null}
+                  </span>
+                </Td>
+                <Td align="right" mono>{r.confidence === null ? "—" : `${Math.round(r.confidence * 100)}%`}</Td>
+                <Td wrap>{r.result ? (
+                  <a href={resultHref(r.result)} data-testid="chat-request-result" className="chatRequestResult">
+                    <Icon name={RESULT_ICON[r.result.kind]} size={12} />{r.result.label ?? r.result.id}</a>
+                ) : <span className="muted">{r.route === "not_connected" ? "Asked to connect" : r.route.startsWith("not_") ? "Refused privately" : "—"}</span>}</Td>
+                <Td align="right" muted>
+                  <span className="chatRequestWhen">{formatTimestamp(r.createdAt, "relative")}
+                    {r.reasoning ? (
+                      <Tooltip content={r.reasoning}>
+                        <IconButton size="sm" icon="info" label={`Why: ${r.reasoning}`} data-testid="chat-request-why" />
+                      </Tooltip>
+                    ) : null}</span>
+                </Td>
+              </Tr>
+            );
+          })}
+        </TBody>
+      </Table>
+    </>
   );
 }
 

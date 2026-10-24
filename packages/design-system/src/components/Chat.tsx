@@ -32,15 +32,18 @@ export interface ProviderGlyphProps {
   readonly size?: number | undefined;
   /** Its own accessible name (the provider's), when it stands alone; beside its name it is decorative. */
   readonly label?: boolean | undefined;
+  /** In a line of text: on the text's line, with the provider's name after it. */
+  readonly inline?: boolean | undefined;
   readonly className?: string | undefined;
 }
 
 /** A provider's monochrome glyph, in the ink of the text beside it. */
-export function ProviderGlyph({ provider, size = 14, label, className }: ProviderGlyphProps) {
-  return (
+export function ProviderGlyph({ provider, size = 14, label, inline, className }: ProviderGlyphProps) {
+  const glyph = (
     <Icon name={provider.glyph} size={size} className={cx(styles["glyph"], className)} data-provider={provider.id}
       {...(label ? { title: provider.name } : {})} />
   );
+  return inline ? <span className={styles["inlineGlyph"]}>{glyph}{provider.name}</span> : glyph;
 }
 
 /** Where a mention went. */
@@ -109,11 +112,12 @@ export function OriginFact({ provider, place, by, href, compact, testId }: Origi
   );
 }
 
-/** Someone outside dude, on neutral initials: never an identity colour. */
+/** Someone outside dude, on neutral initials: never an identity colour. Punctuation ("Priya (Support)") is no initial. */
 export function ExternalFace({ name, size = 24 }: { readonly name: string; readonly size?: 20 | 24 | 32 | undefined }) {
+  const letters = name.replace(/[^\p{L}\p{N}\s]+/gu, " ").trim() || name;
   return (
     <span className={styles["externalFace"]} style={{ ["--ext-size" as string]: `${size}px` }} role="img" aria-label={`${name}, not in dude`} title={`${name} · not in dude`}>
-      {initialsOf(name)}
+      {initialsOf(letters)}
     </span>
   );
 }
@@ -149,8 +153,13 @@ export function ExternalThread({ provider, place, messages, href, label, clip }:
     <figure className={styles["thread"]} aria-label={label ?? `Thread in ${place} on ${provider.name}`}>
       <figcaption className={styles["threadHead"]}>
         <ProviderGlyph provider={provider} size={12} />
+        <span>Quoted from {provider.name}</span>
+        <span className={styles["sep"]} aria-hidden>·</span>
         <span>{place}</span>
-        {href ? <a className={styles["threadLink"]} href={href} target="_blank" rel="noreferrer noopener">Open in {provider.name}</a> : null}
+        <span className={styles["sep"]} aria-hidden>·</span>
+        <span>{messages.length} {messages.length === 1 ? "message" : "messages"}</span>
+        {href ? <a className={styles["threadLink"]} href={href} target="_blank" rel="noreferrer noopener">Open in {provider.name}
+          <Icon name="external" size={10} /></a> : null}
       </figcaption>
       {hidden > 0 ? (
         <button type="button" className={styles["more"]} onClick={() => setAll(true)}>Show {hidden} earlier</button>
@@ -178,7 +187,8 @@ export interface RoutingLineProps {
   readonly route: ChatRoute;
   readonly confidence?: number | null | undefined;
   readonly reasoning: string;
-  readonly model?: string | null | undefined;
+  /** How the model was asked, as a line under the reasoning: "Asked judge-model once, on the Judgements tier." */
+  readonly model?: ReactNode;
   readonly fallback?: ChatRoute | null | undefined;
   readonly defaultOpen?: boolean | undefined;
   /** A private channel's or group's: who was added, who was skipped (not connected). */
@@ -211,16 +221,26 @@ export function RoutingLine({ route, confidence, reasoning, model, fallback, def
       </summary>
       <div className={styles["routingBody"]}>
         <p>{reasoning}</p>
-        {model ? <p className={styles["muted"]}>Asked {model}</p> : null}
+        {model ? <p className={styles["muted"]}>{model}</p> : null}
         {shared && (shared.added.length || skipped) ? (
-          <ul className={styles["sharedList"]} aria-label="Who it was shared with">
-            {shared.added.map((p) => (
-              <li key={p.id ?? p.name}><EntityLine size="sm" lead={<PersonAvatar person={p} size={20} ring={false} />} name={p.name} detail="added · can chat" /></li>
-            ))}
-            {shared.skipped.map((n) => (
-              <li key={n}><EntityLine size="sm" lead={<ExternalFace name={n} size={20} />} name={n} detail="skipped · not connected" /></li>
-            ))}
-          </ul>
+          <dl className={styles["sharedGroups"]} aria-label="Who it was shared with">
+            {shared.added.length ? (
+              <div className={styles["sharedGroup"]}>
+                <dt>Added, can chat</dt>
+                <dd>{shared.added.map((p) => (
+                  <EntityLine key={p.id ?? p.name} size="sm" lead={<PersonAvatar person={p} size={20} ring={false} />} name={p.name} />
+                ))}</dd>
+              </div>
+            ) : null}
+            {skipped ? (
+              <div className={styles["sharedGroup"]}>
+                <dt>Skipped, not connected</dt>
+                <dd>{shared.skipped.map((n) => (
+                  <EntityLine key={n} size="sm" lead={<ExternalFace name={n} size={20} />} name={n} />
+                ))}</dd>
+              </div>
+            ) : null}
+          </dl>
         ) : null}
       </div>
     </details>
@@ -307,14 +327,38 @@ export function ConnectionCard({ title, glyph, intro, facts, outcome, connected,
 export interface IdentityPairProps {
   /** The left side's label: the provider's name. */
   readonly provider: ChatProvider;
-  readonly external: { readonly handle: string; readonly display?: string | undefined };
-  readonly person: Person;
+  readonly external: { readonly handle: string; readonly display?: string | undefined; readonly workspace?: string | undefined };
+  readonly person: Person & { readonly email?: string | undefined; readonly organisation?: string | undefined };
+  /** `lg`: two identity cards with the link between, for the page whose point is the link. */
+  readonly size?: "md" | "lg" | undefined;
 }
 
 /** A provider account and the dude person it is linked to. */
-export function IdentityPair({ provider, external, person }: IdentityPairProps) {
+export function IdentityPair({ provider, external, person, size = "md" }: IdentityPairProps) {
+  const label = `${provider.name} @${external.handle} is ${person.name} in dude`;
+  if (size === "lg") {
+    return (
+      <div className={styles["pairLg"]} role="group" aria-label={label} data-testid="identity-pair">
+        <div className={styles["pairCard"]}>
+          <span className={styles["pairCaps"]}>{provider.name}</span>
+          <ExternalFace name={external.display || external.handle} size={32} />
+          <b className={styles["pairName"]}>@{external.handle}</b>
+          {external.display ? <span className={styles["muted"]}>{external.display}</span> : null}
+          {external.workspace ? <span className={styles["pairMono"]}>{external.workspace}</span> : null}
+        </div>
+        <span className={styles["pairLink"]} aria-hidden><Icon name="link" size={14} /></span>
+        <div className={styles["pairCard"]}>
+          <span className={styles["pairCaps"]}>dude</span>
+          <PersonAvatar person={person} size={32} />
+          <b className={styles["pairName"]}>{person.name}</b>
+          {person.organisation ? <span className={styles["muted"]}>{person.organisation}</span> : null}
+          {person.email ? <span className={styles["muted"]}>{person.email}</span> : null}
+        </div>
+      </div>
+    );
+  }
   return (
-    <span className={styles["pair"]} aria-label={`${provider.name} @${external.handle} is ${person.name} in dude`}>
+    <span className={styles["pair"]} aria-label={label}>
       <span className={styles["pairSide"]}>
         <ProviderGlyph provider={provider} size={14} />
         <span><span className={styles["pairLabel"]}>{provider.name}</span> @{external.handle}</span>

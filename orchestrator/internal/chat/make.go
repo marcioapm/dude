@@ -126,7 +126,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE tasks SET origin = $2 WHERE id = $1`, id, origin); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE tasks SET origin = $2 WHERE id = $1`, id, withQuoted(origin, t)); err != nil {
 				return err
 			}
 			r.ResultKind, r.ResultID = "task", id
@@ -195,6 +195,13 @@ func threadQuote(t threadContext) string {
 		return ""
 	}
 	return "Earlier in the thread:\n" + t.render()
+}
+
+// withQuoted is an origin carrying the thread as it was filed, for the
+// task page's quote of it.
+func withQuoted(o Origin, t threadContext) Origin {
+	o.Thread = t.Messages
+	return o
 }
 
 // withThread is a task's goal with the thread it came from quoted under it.

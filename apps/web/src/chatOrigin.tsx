@@ -5,11 +5,10 @@
  * provider is named only by its entry (name and glyph), never here.
  */
 
-import { useEffect, useState } from "react";
 import { ExternalThread, OriginFact, ProviderGlyph, RoutingLine, providerGlyph, type ChatProvider, type ChatRoute } from "@dude/design-system/components";
 import { ICON_NAMES } from "@dude/design-system";
+import { Callout } from "@dude/design-system/primitives";
 import type { ChatOrigin, SessionChatOrigin } from "@dude/domain";
-import type { ApiClient } from "./api/client.ts";
 
 /** Providers dude knows by id, for the screens that have only an origin's provider id. */
 const KNOWN_NAMES: Record<string, string> = { slack: "Slack" };
@@ -25,23 +24,45 @@ export function OriginLine({ origin, compact, testId }: { origin: ChatOrigin; co
     href={origin.permalink || null} compact={compact} testId={testId} />;
 }
 
-/** An epic's origin in its header's meta, read from the project's epics; nothing for one made in dude. */
-export function EpicOrigin({ client, projectId, epicId }: { client: ApiClient; projectId: string; epicId: string }) {
-  const [origin, setOrigin] = useState<ChatOrigin | null>(null);
-  useEffect(() => {
-    let current = true;
-    client.listEpics(projectId).then((r) => current && setOrigin(r.epics.find((e) => e.id === epicId)?.origin ?? null), () => undefined);
-    return () => {
-      current = false;
-    };
-  }, [client, projectId, epicId]);
-  return origin ? <OriginLine origin={origin} testId="epic-origin" /> : null;
+/** An epic's origin in its header's meta, from navigation; nothing for one made in dude. */
+export function EpicOrigin({ origin }: { origin: Pick<ChatOrigin, "provider" | "conversationName" | "permalink" | "requestedBy"> | null | undefined }) {
+  return origin ? <OriginFact provider={originProvider(origin.provider)} place={origin.conversationName || "a conversation"}
+    by={origin.requestedBy || null} href={origin.permalink || null} testId="epic-origin" /> : null;
 }
 
-/** A board card's lead: the provider's glyph and name. */
+/** A board card's lead: the provider's glyph and name, on the key's line. */
 export function OriginLead({ provider }: { provider: string }) {
-  const p = originProvider(provider);
-  return <span data-testid="card-origin"><ProviderGlyph provider={p} size={12} />{p.name}</span>;
+  return <span data-testid="card-origin"><ProviderGlyph provider={originProvider(provider)} size={12} inline /></span>;
+}
+
+/** The quoted thread an origin carries, as external text; nothing when it carries none. */
+function OriginThread({ origin, names, clip }: { origin: ChatOrigin; names: (id: string) => { id: string; name: string } | null; clip?: number }) {
+  if (!origin.thread?.length) return null;
+  return (
+    <ExternalThread provider={originProvider(origin.provider)} place={origin.conversationName} href={origin.permalink || null} clip={clip}
+      messages={origin.thread.map((m) => ({ by: { display: m.by, person: m.inDude && m.person ? names(m.person) ?? { id: m.person, name: m.by } : null }, text: m.text }))} />
+  );
+}
+
+/**
+ * A chat-filed task's overview, under its goal: where it was filed from
+ * and the thread as it was filed.
+ */
+export function TaskOrigin({ origin, names }: { origin: ChatOrigin; names: (id: string) => { id: string; name: string } | null }) {
+  const p = originProvider(origin.provider);
+  return (
+    <section className="taskBlock" aria-label={`The ${p.name} thread, as filed`} data-testid="task-origin-thread">
+      <Callout tone="info" data-testid="task-origin-callout">
+        Filed from {p.name}{origin.requestedBy ? ` by ${origin.requestedBy}'s mention` : ""} in {origin.conversationName || "a conversation"}, in the Backlog. Nothing runs until someone starts it.
+      </Callout>
+      {origin.thread?.length ? (
+        <>
+          <h2 className="ds-label">The {p.name} thread, as filed</h2>
+          <OriginThread origin={origin} names={names} />
+        </>
+      ) : null}
+    </section>
+  );
 }
 
 /**
@@ -50,17 +71,15 @@ export function OriginLead({ provider }: { provider: string }) {
  * `names` resolves the added people's ids to people.
  */
 export function SessionOrigin({ origin, names }: { origin: SessionChatOrigin; names: (id: string) => { id: string; name: string } | null }) {
-  const p = originProvider(origin.provider);
   const routing = origin.routing;
   const group = origin.conversationKind === "private" || origin.conversationKind === "group";
+  const asked = routing && routing.confidence !== null && routing.route !== "failed";
   return (
     <div className="sessionOrigin" data-testid="session-origin">
-      {origin.thread?.length ? (
-        <ExternalThread provider={p} place={origin.conversationName} href={origin.permalink || null} clip={6}
-          messages={origin.thread.map((m) => ({ by: { display: m.by, person: m.inDude && m.person ? names(m.person) ?? { id: m.person, name: m.by } : null }, text: m.text }))} />
-      ) : null}
+      <OriginThread origin={origin} names={names} clip={6} />
       {routing ? (
         <RoutingLine route={routing.route as ChatRoute} confidence={routing.confidence} reasoning={routing.reasoning}
+          model={asked ? "Asked the model once, on the Judgements tier. Recorded in Organisation settings → Chat → Requests." : null}
           fallback={(routing.askedRoute as ChatRoute | undefined) ?? null}
           shared={group ? { place: origin.conversationName, added: routing.added.flatMap((id) => names(id) ?? []), skipped: routing.skippedNames ?? routing.skipped } : null} />
       ) : null}

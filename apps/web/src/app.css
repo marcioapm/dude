@@ -1803,40 +1803,12 @@ body {
   margin-left: auto;
 }
 
-/* Chat settings: the provider's installation card, the built-in
-   instructions shown, the admins to ask, Requests' filters and rows. */
-.chatInstallCard {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-12);
-  padding: var(--ds-space-16);
-  margin-block: var(--ds-space-16);
-  background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-control);
-}
-.chatInstallHead {
-  display: flex;
+/* Chat settings: the provider card's title, the admins to ask, Requests'
+   filters and rows. */
+.chatCardTitle {
+  display: inline-flex;
   align-items: center;
   gap: var(--ds-space-8);
-}
-.chatInstallHead > :last-child {
-  margin-left: auto;
-}
-.chatInstallActions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ds-space-8);
-}
-.chatBuiltIn {
-  margin: 0;
-  max-height: 320px;
-  overflow: auto;
-  padding: var(--ds-space-12);
-  background: var(--ds-color-sunken);
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-xs);
-  white-space: pre-wrap;
 }
 .chatAdmins {
   display: flex;
@@ -1877,12 +1849,14 @@ body {
 .chatRequestWhere {
   font-size: var(--ds-text-xs);
 }
-.connectPage {
-  max-width: 560px;
-  margin: var(--ds-space-48) auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-16);
+.chatRequestResult,
+.chatRequestWhen {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.chatRequestWhen {
+  white-space: nowrap;
 }
 .chatConnections {
   display: flex;

@@ -85,7 +85,7 @@ async function installation(ctx: RequestContext): Promise<Response> {
   const admin = await isOrgAdmin(ctx);
   const out = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
     const [i] = await sql`SELECT i.external_workspace_id AS "workspaceId", i.workspace_name AS "workspaceName",
-        i.workspace_domain AS "workspaceDomain", i.installed_at AS "installedAt", i.scopes,
+        i.workspace_domain AS "workspaceDomain", i.installed_at AS "installedAt", i.scopes, NULLIF(i.bot_user_id, '') AS "botUser",
         (SELECT person_ref(p) FROM people p WHERE p.id = i.installed_by) AS "installedBy",
         i.last_event_at AS "lastEventAt", CASE WHEN i.failures_day = current_date THEN i.failed_today ELSE 0 END AS "failedToday",
         i.last_failure AS "lastFailure"
@@ -98,7 +98,7 @@ async function installation(ctx: RequestContext): Promise<Response> {
       WHERE c.provider = ${provider.id} AND c.external_workspace_id = ${i.workspaceId} ORDER BY p.name`;
     const mine = people.find((p: { mine: boolean }) => p.mine);
     return {
-      installed: true, admins, workspaceName: i.workspaceName, workspaceDomain: i.workspaceDomain, installedAt: i.installedAt,
+      installed: true, admins, workspaceName: i.workspaceName, workspaceDomain: i.workspaceDomain, installedAt: i.installedAt, botUser: i.botUser,
       installedBy: i.installedBy, scopes: i.scopes, connectedCount: people.length,
       connected: mine ? { handle: mine.handle, displayName: mine.displayName, linkedAt: mine.linkedAt } : null,
       health: admin ? { lastEventAt: i.lastEventAt, failedToday: i.failedToday, lastFailure: i.lastFailure } : null,
@@ -107,7 +107,7 @@ async function installation(ctx: RequestContext): Promise<Response> {
   });
   return json({
     provider: strip(provider), canEdit: admin, configured: provider.configured,
-    workspaceName: null, workspaceDomain: null, installedAt: null, installedBy: null, scopes: [], connectedCount: 0,
+    workspaceName: null, workspaceDomain: null, installedAt: null, installedBy: null, botUser: null, scopes: [], connectedCount: 0,
     connected: null, health: null, people: null, ...out,
   });
 }

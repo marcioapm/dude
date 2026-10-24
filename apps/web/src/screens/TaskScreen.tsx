@@ -107,7 +107,7 @@ import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
-import { OriginLine } from "../chatOrigin.tsx";
+import { OriginLine, TaskOrigin } from "../chatOrigin.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -652,6 +652,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
             {item.key ? <span className="ds-mono" title={item.id}>{item.key}</span> : null}
+            {item.origin ? <OriginLine origin={item.origin} testId="task-header-origin" /> : null}
             {many ? (
               <AttemptPicker client={client} taskId={taskId} item={item} byId={byId} attempts={attempts} prs={allPrs} events={events} people={people}
                 value={shown} onChange={(n) => pickAttempt(n)} />
@@ -775,6 +776,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                   </div>
                 </section>
               ) : null}
+              {item.origin ? <TaskOrigin origin={item.origin} names={(id) => people.byId.get(id) ?? null} /> : null}
               {item.acceptanceCriteria.length > 0 ? (
                 <section className="taskBlock" aria-label="Acceptance criteria">
                   <h2 className="ds-label">Acceptance criteria</h2>

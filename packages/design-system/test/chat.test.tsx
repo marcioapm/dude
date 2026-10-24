@@ -100,6 +100,13 @@ describe("ExternalThread", () => {
     expect(el.textContent).toContain("**not bold**");
     expect(el.querySelectorAll("strong").length).toBe(0);
     expect(byRole(el, "link", "Open in Slack").getAttribute("href")).toBe("https://example.com/t");
+    // Its head says where it is quoted from and how long it is.
+    expect(el.querySelector("figcaption")!.textContent).toBe("Quoted from Slack·#support·3 messagesOpen in Slack");
+  });
+
+  test("an outside name's punctuation is no initial", async () => {
+    const el = await mount(<ExternalThread provider={slack} place="#support" messages={[{ by: { display: "Priya (Support)" }, text: "x" }]} />);
+    expect(byRole(el, "img", "Priya (Support), not in dude").textContent).toBe("PS");
   });
 });
 
@@ -109,11 +116,12 @@ describe("RoutingLine", () => {
       shared={{ place: "#design-private", added: [marcia, eli], skipped: ["Gus", "Zed"] }} />);
     const summary = el.querySelector("summary")!.textContent!.replace(/\s+/g, " ").trim();
     expect(summary).toBe("Routed as a brainstorm · 82% sure· Shared with 2 people from #design-private; 2 are not connected");
-    const list = byRole(el, "list", "Who it was shared with");
-    expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
-      "MCMárcia Costaadded · can chat", "EPEli Parkadded · can chat", "GUGusskipped · not connected", "ZEZedskipped · not connected"]);
+    const groups = el.querySelector("[aria-label='Who it was shared with']")!;
+    expect([...groups.querySelectorAll("dt")].map((d) => d.textContent)).toEqual(["Added, can chat", "Skipped, not connected"]);
+    expect([...groups.querySelectorAll("dd")].map((d) => d.textContent)).toEqual(["MCMárcia CostaEPEli Park", "GUGusZEZed"]);
     // Skipped people are on neutral initials, named as outside dude.
-    expect(allByRole(list, "img").map(accessibleName).slice(2)).toEqual(["Gus, not in dude", "Zed, not in dude"]);
+    expect(allByRole(groups as HTMLElement, "img").map(accessibleName).slice(2)).toEqual(["Gus, not in dude", "Zed, not in dude"]);
+    expect(el.textContent).toContain("Fast · gpt-6");
     const fallback = text(renderToStaticMarkup(<RoutingLine route="brainstorm" fallback="task" confidence={0.6} reasoning="x" />));
     expect(fallback).toContain("was Task");
     expect(text(renderToStaticMarkup(<RoutingLine route="brainstorm" reasoning="x" shared={{ place: "#a", added: [eli], skipped: [] }} />)))
@@ -156,6 +164,17 @@ describe("IdentityPair, InstructionStack and ProviderList", () => {
   test("the pair says which account is whom", () => {
     const h = renderToStaticMarkup(<IdentityPair provider={slack} external={{ handle: "eli" }} person={eli} />);
     expect(h).toContain('aria-label="Slack @eli is Eli Park in dude"');
+  });
+
+  test("the large pair is two named sides, the provider's and dude's, as one group", async () => {
+    const el = await mount(<IdentityPair size="lg" provider={slack} external={{ handle: "eli", display: "Eli Park", workspace: "acme.slack.com" }}
+      person={{ ...eli, email: "eli@example.com", organisation: "Acme" }} />);
+    const group = byRole(el, "group", "Slack @eli is Eli Park in dude");
+    expect(group.textContent).toBe("SlackEP@eliEli Parkacme.slack.comdudeEPEli ParkAcmeeli@example.com");
+  });
+
+  test("an inline glyph carries the provider's name in the line", () => {
+    expect(text(renderToStaticMarkup(<span>Ana · <ProviderGlyph provider={other} size={11} inline /> · #ops</span>))).toBe("Ana · Chatter · #ops");
   });
 
   test("the stack is in order, the page's layer marked, the collapsed one head only, an empty one says so", async () => {

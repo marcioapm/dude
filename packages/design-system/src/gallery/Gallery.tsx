@@ -307,6 +307,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["cp-routing", "RoutingLine"],
       ["cp-facts", "FactList"],
       ["cp-connection", "ConnectionCard / IdentityPair"],
+      ["cp-session-row", "SessionRow: origin"],
+      ["cp-setting-fill", "SettingRow fill"],
       ["cp-stack", "InstructionStack"],
       ["cp-providers", "ProviderList"],
       ["cp-settings", "Settings: a page group"],

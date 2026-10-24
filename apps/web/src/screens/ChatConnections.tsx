@@ -14,7 +14,12 @@ import { useSave } from "../hooks/useSave.tsx";
 import { CONNECT_FAILED, CONNECT_OUTCOME } from "./ConnectScreen.tsx";
 import { providerView } from "./ChatSettings.tsx";
 
-export function ChatConnections({ client, me }: { client: ApiClient; me?: { id: string; name: string } | null }) {
+export function ChatConnections({ client, me, onInstalled }: {
+  client: ApiClient;
+  me?: { id: string; name: string } | null;
+  /** Whether any chat provider is installed, once read: the Connections heading shows for one. */
+  onInstalled?: (any: boolean) => void;
+}) {
   const [overview, setOverview] = useState<ChatOverview | null>(null);
   const [read, setRead] = useState(0);
   const [outcome, setOutcome] = useState(() => {
@@ -33,7 +38,9 @@ export function ChatConnections({ client, me }: { client: ApiClient; me?: { id: 
     void client.chatOverview().then(setOverview, () => setOverview(null));
   }, [client, read]);
   const installed = overview?.providers.filter((p) => p.installed) ?? [];
-  if (installed.length === 0) return null;
+  const any = installed.length > 0;
+  useEffect(() => onInstalled?.(any), [onInstalled, any]);
+  if (!any) return null;
   return (
     <section className="chatConnections" aria-label="Connections" data-testid="chat-connections">
       {installed.map((p) => (
@@ -67,7 +74,9 @@ function ChatConnection({ client, entry, me, outcome, onChanged }: {
         connected={Boolean(entry.connected)} busy={busy}
         facts={entry.connected ? [{ label: "Connected as", value: me
           ? <IdentityPair provider={pv} external={{ handle: entry.connected.handle }} person={{ id: me.id, name: me.name }} />
-          : `@${entry.connected.handle}` }] : undefined}
+          : `@${entry.connected.handle}` },
+        ...(entry.workspaceName ? [{ label: entry.provider.workspaceWord.charAt(0).toUpperCase() + entry.provider.workspaceWord.slice(1), value: entry.workspaceName }] : [])]
+          : undefined}
         connectLabel={`Connect ${name}`} disconnectLabel={`Disconnect ${name}…`}
         onConnect={entry.connected ? undefined : () => void save(async () => window.location.assign((await client.connectChat(entry.provider.id)).url))}
         onDisconnect={() => setDisconnecting(true)} />

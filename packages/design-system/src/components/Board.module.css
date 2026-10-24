@@ -427,14 +427,26 @@
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }
-/* cardLead: where the card came from, before its key. */
+/* cardLead: where the card came from, a small tinted chip inline before its
+   key. Whatever the lead holds (a glyph and a word, wrapped or not) lays out
+   on the key's line. */
 .lead {
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-4);
-  color: var(--ds-color-text-muted);
+  padding: 0 var(--ds-space-4);
+  background: var(--ds-color-chrome);
+  border-radius: var(--ds-radius-mark);
+  color: var(--ds-color-text-secondary);
   font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-tight);
   flex-shrink: 0;
+}
+.lead > *,
+.lead svg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
 }
 /* Never squeezed to a letter: below 8ch the mark at the end wraps under it, and the epic takes the line. */
 .epic {

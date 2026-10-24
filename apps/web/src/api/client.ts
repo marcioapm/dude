@@ -571,7 +571,7 @@ export type AdminPerson = PersonRef & { email: string | null; role: PersonRole; 
 /** Where an id lives among your organisations. `GET /v1/locate/:id`. */
 export interface Located {
   organization: { id: string; name: string; slug: string };
-  kind: "task" | "project" | "epic" | "run" | "brainstorm";
+  kind: "task" | "project" | "epic" | "run" | "brainstorm" | "connect";
   id: string;
 }
 

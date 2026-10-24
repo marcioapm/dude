@@ -130,6 +130,19 @@ func TestChatAThreadBoundByAResumeAddsNobody(t *testing.T) {
 	}
 }
 
+// A task filed from a thread keeps the thread, as it was filed, on its
+// origin: the task page quotes it.
+func TestChatATaskKeepsTheThreadItWasFiledFrom(t *testing.T) {
+	w := setup(t)
+	root := w.fake.Post("C1", "", "U9", "the export times out")
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Fix it", "goal": "g"}))
+	w.mention("Eli", "C1", root, "file it")
+	got := w.last()
+	if o := w.one(`SELECT origin->'thread'->0->>'text' FROM tasks WHERE id = $1`, got.ResultID); o != "the export times out" {
+		t.Fatalf("thread on the origin: %q", o)
+	}
+}
+
 // A confident clarify is capped like an unsure answer: on the third
 // question in a thread, a brainstorm.
 func TestChatCapsConfidentClarifyingQuestions(t *testing.T) {

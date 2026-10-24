@@ -39,6 +39,8 @@ interface EpicRow {
   id: string;
   projectId: string;
   title: string;
+  /** Where it came from outside dude (epics.origin), null for one made in dude. */
+  origin: Record<string, unknown> | null;
 }
 
 interface TaskRow {
@@ -214,7 +216,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     // every count (tracking-work.md, "Archive"). Their edges still count
     // below: an archived blocker still blocks.
     const epics = (await sql`
-      SELECT id, project_id AS "projectId", title FROM epics WHERE archived_at IS NULL
+      SELECT id, project_id AS "projectId", title, origin - 'thread' AS origin FROM epics WHERE archived_at IS NULL
       ORDER BY position, created_at`) as EpicRow[];
 
     // `statusSince` is when the task last changed status, read from the
@@ -393,6 +395,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
       epics: (epicsByProject.get(p.id) ?? []).map((e) => ({
         id: e.id,
         title: e.title,
+        ...(e.origin ? { origin: e.origin } : {}),
         tasks: (tasksByEpic.get(e.id) ?? []).map(buildTask),
       })),
       tasks: (tasksByProject.get(p.id) ?? []).map(buildTask),

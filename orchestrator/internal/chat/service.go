@@ -641,7 +641,7 @@ func (s *Service) ConnectState(ctx context.Context, org, providerID, person, sta
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"provider": p.Info(), "workspaceName": nil, "connected": nil}
+	out := map[string]any{"provider": p.Info(), "workspaceName": nil, "connected": nil, "backUrl": nil}
 	var stateOrg string
 	var expired bool
 	err = s.DB.InSystem(ctx, "chat-connect-state", func(tx pgx.Tx) error {
@@ -662,6 +662,19 @@ func (s *Service) ConnectState(ctx context.Context, org, providerID, person, sta
 			return err
 		}
 		out["workspaceName"] = inst.WorkspaceName
+		// Where "Back to <provider>" goes: the message that offered the button.
+		var pending []byte
+		if err := tx.QueryRow(ctx, `SELECT pending_mention FROM chat_connect_states WHERE state_hash = $1 AND kind = 'prompt'`,
+			hashState(state)).Scan(&pending); err == nil && len(pending) > 0 {
+			var m Mention
+			if json.Unmarshal(pending, &m) == nil {
+				if link := p.Permalink(inst, m.ConversationID, m.MessageID, m.ThreadID); link != "" {
+					out["backUrl"] = link
+				}
+			}
+		} else if err != nil && !db.IsNotFound(err) {
+			return err
+		}
 		var handle, name string
 		err = tx.QueryRow(ctx, `SELECT i.handle, i.display_name FROM chat_identities i JOIN people me ON me.account_id = i.account_id
 			WHERE me.id = $1 AND i.provider = $2 AND i.external_workspace_id = $3`, person, providerID, inst.WorkspaceID).Scan(&handle, &name)

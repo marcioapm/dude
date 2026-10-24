@@ -52,12 +52,14 @@ export const chatOriginSchema = z.object({
   permalink: z.string(),
   /** The provider display name of who asked. */
   requestedBy: z.string(),
+  /** The thread as it was filed (a task's, a session's). */
+  thread: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean() }))
+    .optional(),
 });
 export type ChatOrigin = z.infer<typeof chatOriginSchema>;
 
 /** A chat-born session's origin: the thread as the session was given it, and how it was routed. */
 export interface SessionChatOrigin extends ChatOrigin {
-  thread?: Array<{ by: string; handle?: string; person?: string; text: string; inDude: boolean }>;
   routing?: {
     route: ChatRoute;
     askedRoute?: ChatRoute;
@@ -99,6 +101,8 @@ export interface ChatInstallationView {
   workspaceDomain: string | null;
   installedAt: string | null;
   installedBy: PersonRef | null;
+  /** The app's bot user at the provider, by its id there. */
+  botUser?: string | null;
   scopes: string[];
   connectedCount: number;
   connected: { handle: string; displayName: string; linkedAt: string } | null;
@@ -159,6 +163,8 @@ export interface ChatConnectStateView {
   provider: ChatProvider;
   workspaceName: string | null;
   connected: { handle: string; displayName: string } | null;
+  /** The message that offered the Connect button, at the provider: "Back to <provider>". */
+  backUrl?: string | null;
 }
 
 /**

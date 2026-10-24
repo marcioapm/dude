@@ -490,7 +490,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
   } else if (place?.view === "connect") {
-    main = <ConnectScreen client={client} provider={place.provider} state={place.state} onSettings={() => go({ view: "mySettings" })} />;
+    main = <ConnectScreen client={client} provider={place.provider} state={place.state} onSettings={() => go({ view: "mySettings" })}
+      me={people.me ? { ...people.me, organisation: account?.current.name } : null} onSignOut={onSignOut} />;
   } else if (place?.view === "help") {
     main = <HelpScreen client={client} page={place.page} section={place.section} onPage={(page) => go({ view: "help", page })}
       onSection={(page, section) => go({ view: "help", page, section })} />;
@@ -628,7 +629,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             { id: project.id, label: project.name, onSelect: () => go(inTree({ kind: "project", id: project.id })) },
             { id: epic.id, label: epic.title, icon: "layers" },
           ]} />}
-          meta={<><EpicOrigin client={client} projectId={project.id} epicId={epic.id} /><Segmented<EpicView> size="sm" label="Epic view" tabs="epic" value={epicView} data-testid="epic-view"
+          meta={<><EpicOrigin origin={epic.origin} /><Segmented<EpicView> size="sm" label="Epic view" tabs="epic" value={epicView} data-testid="epic-view"
             onChange={(v) => go({ view: "tree", ref: { kind: "epic", id: epic.id }, ...(v === "coordination" ? { epicView: v } : {}) }, true)}
             options={[
               { value: "board", label: "Board" },

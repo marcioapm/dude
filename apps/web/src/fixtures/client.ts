@@ -807,6 +807,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ provider: SLACK, installed: this.#slackInstalled, canEdit: true, configured: true,
       workspaceName: this.#slackInstalled ? "Acme" : null, workspaceDomain: this.#slackInstalled ? "acme-hq" : null,
       installedAt: this.#slackInstalled ? "2026-10-09T09:00:00Z" : null, installedBy: this.#slackInstalled ? you : null,
+      botUser: this.#slackInstalled ? "UB0DUDE" : null,
       scopes: [], connectedCount: this.#slackInstalled ? 7 : 0, connected: null, admins: [you],
       health: this.#slackInstalled ? { lastEventAt: new Date(Date.now() - 120_000).toISOString(), failedToday: 0, lastFailure: null } : null,
       people: this.#slackInstalled ? [{ person: you, handle: "marcio", displayName: you.name, linkedAt: "2026-10-09T09:05:00Z" }] : null });

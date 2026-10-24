@@ -20,7 +20,7 @@ import { FixtureClient } from "../src/fixtures/client.ts";
 import { ChatPages, chatNav, useChatOverview } from "../src/screens/ChatSettings.tsx";
 import { ChatConnections } from "../src/screens/ChatConnections.tsx";
 import { ConnectScreen } from "../src/screens/ConnectScreen.tsx";
-import { SessionOrigin } from "../src/chatOrigin.tsx";
+import { SessionOrigin, TaskOrigin } from "../src/chatOrigin.tsx";
 import { parsePlace, formatPlace } from "../src/place.ts";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -111,6 +111,24 @@ describe("a provider's page", () => {
     expect(c.querySelectorAll("[data-testid=chat-disconnect]").length).toBe(1);
   });
 
+  test("its card says the bot user, the people connected behind Show who, and its recent requests", async () => {
+    const c = await show(<Pages client={new Chatting("a")} page="chat/slack" />, "chat-provider-slack");
+    expect(text(c.querySelector("[data-testid=chat-bot-user]"))).toBe("@dude · UB0DUDE");
+    expect(text(c.querySelector("[data-testid=chat-connected-count]"))).toContain("7 people connected");
+    expect(c.querySelectorAll("[data-testid=chat-people]").length).toBe(0);
+    await click(c.querySelector("[data-testid=chat-people-show]")!);
+    expect(c.querySelectorAll("[data-testid=chat-people] li").length).toBe(1);
+    await until(() => c.querySelector("section[aria-label] [data-testid=chat-request], [data-testid=chat-request]"), "recent requests");
+    expect(text(c)).toContain("Recent requests from Slack");
+    expect(c.querySelectorAll("[data-testid=chat-request]").length).toBeLessThanOrEqual(5);
+  });
+
+  test("long instructions take the control column: their row fills it", async () => {
+    const c = await show(<Pages client={new Chatting("a")} page="chat/slack" />, "chat-provider-slack");
+    const area = c.querySelector("[data-testid=chat-provider-instructions]")!;
+    expect(area.closest("[data-fill=true]")).not.toBeNull();
+  });
+
   test("not installed: an admin may add it; a member is asked to ask an admin, by name", async () => {
     const admin = new Chatting("a");
     admin.installed = false;
@@ -156,6 +174,18 @@ describe("Requests", () => {
     // The face is there; that its ring is not clipped is a layout fact happy-dom cannot measure (checked in the browser shots).
     expect(rows[0]!.querySelector(".chatRequestWho [role=img]")).not.toBeNull();
     expect(asked[0]).toEqual({ provider: undefined, route: undefined });
+  });
+
+  test("a row's where-line names the provider inline; its reasoning is behind a focusable ⓘ; a summary heads the list", async () => {
+    const c = await show(<Pages client={new Chatting("a")} page="chat/requests" />, "chat-requests");
+    await until(() => c.querySelector("[data-testid=chat-request]"), "a request");
+    const where = c.querySelector("[data-testid=chat-request-where]")!;
+    expect(text(where)).toMatch(/^.+ · Slack · #/);
+    expect(where.querySelector("[data-provider=slack]")).not.toBeNull();
+    const why = c.querySelector<HTMLButtonElement>("[data-testid=chat-request-why]")!;
+    expect(why.tagName).toBe("BUTTON");
+    expect(why.getAttribute("aria-label")).toMatch(/^Why: /);
+    expect(text(c.querySelector("[data-testid=chat-requests-summary]"))).toMatch(/^Last 7 days · \d+ mentions? · \d+ asked the model$/);
   });
 
   test("is an admin's: a member is told so", async () => {
@@ -213,9 +243,54 @@ describe("Connections and the connect page", () => {
     expect(c.querySelectorAll("[data-testid=chat-connect-go]").length).toBe(0);
   });
 
+  test("the connect page shows the two accounts being linked, who is signed in, Not you?, and Back to the provider once linked", async () => {
+    const me = { id: "per_m", name: "Márcia Costa", email: "marcia@example.com", organisation: "Acme" };
+    let signedOut = false;
+    const ready = new (class extends Chatting {
+      override chatConnectState() {
+        return Promise.resolve({ status: "ready" as const, provider: { id: "slack", name: "Slack", glyph: "slack", workspaceWord: "workspace" },
+          workspaceName: "Acme", connected: null, backUrl: "https://acme.slack.com/archives/C1/p1" });
+      }
+    })("a");
+    let c = await show(<ConnectScreen client={ready} provider="slack" state="st-9" onSettings={() => {}} me={me} onSignOut={() => (signedOut = true)} />,
+      "chat-connect");
+    const pair = c.querySelector("[data-testid=identity-pair]")!;
+    expect(pair.getAttribute("aria-label")).toBe("Slack @you is Márcia Costa in dude");
+    expect(text(pair)).toContain("marcia@example.com");
+    expect(text(c.querySelector("[data-testid=chat-connect-who]"))).toBe("Signed in to dude as marcia@example.com · Not you?");
+    await click(c.querySelector("[data-testid=chat-connect-not-you]")!);
+    expect(signedOut).toBe(true);
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    // After the sign-in the state is spent: Back goes where the button was, remembered from before.
+    const linked = new (class extends Chatting {
+      override chatConnectState() {
+        return Promise.resolve({ status: "connected" as const, provider: { id: "slack", name: "Slack", glyph: "slack", workspaceWord: "workspace" },
+          workspaceName: "Acme", connected: { handle: "marcia", displayName: "Márcia Costa" } });
+      }
+    })("a");
+    c = await show(<ConnectScreen client={linked} provider="slack" state="st-9" onSettings={() => {}} me={me} />, "chat-connect");
+    expect(c.querySelector("[data-testid=chat-connect-back]")!.getAttribute("href")).toBe("https://acme.slack.com/archives/C1/p1");
+    expect(c.querySelector("[data-testid=identity-pair]")!.getAttribute("aria-label")).toBe("Slack @marcia is Márcia Costa in dude");
+  });
+
   test("the connect place round-trips with its state", () => {
     expect(parsePlace("#/o/acme/connect/slack?state=abc")).toEqual({ view: "connect", provider: "slack", state: "abc" });
     expect(formatPlace({ view: "connect", provider: "slack", state: "a b" })).toBe("#/connect/slack?state=a%20b");
+  });
+});
+
+describe("a chat-filed task", () => {
+  test("says where it was filed from and quotes the thread as filed", async () => {
+    const origin = { provider: "slack", workspaceId: "T1", conversationId: "C1", conversationName: "#support", threadId: "1.0",
+      permalink: "https://acme.slack.com/archives/C1/p1", requestedBy: "Ana",
+      thread: [{ by: "Priya (Support)", text: "exports spin then fail", inDude: false }, { by: "Ana", person: "per_ana", text: "720 rows", inDude: true }] };
+    const c = await show(<TaskOrigin origin={origin} names={(id) => (id === "per_ana" ? { id, name: "Ana Ribeiro" } : null)} />, "task-origin-thread");
+    expect(text(c.querySelector("[data-testid=task-origin-callout]"))).toBe(
+      "Filed from Slack by Ana's mention in #support, in the Backlog. Nothing runs until someone starts it.");
+    expect(text(c.querySelector("figure figcaption"))).toBe("Quoted from Slack·#support·2 messagesOpen in Slack");
+    expect(c.querySelector("[aria-label='Priya (Support), not in dude']")!.textContent).toBe("PS");
+    expect(text(c.querySelector("figure"))).toContain("Ana Ribeiro");
   });
 });
 
@@ -232,7 +307,8 @@ describe("a chat-born session", () => {
     expect(c.querySelector("[aria-label='Zed Outside, not in dude']")).not.toBeNull();
     expect(text(c.querySelector("[data-testid=routing-line] summary"))).toContain("Routed as a brainstorm · 79% sure");
     expect(text(c.querySelector("[data-testid=routing-shared]"))).toBe("· Shared with 1 person from #design-private; 1 is not connected");
-    expect(text(c.querySelector("[data-testid=routing-line]"))).toContain("Gusskipped · not connected");
+    expect(text(c.querySelector("[data-testid=routing-line]"))).toContain("Skipped, not connectedGUGus");
+    expect(text(c.querySelector("[data-testid=routing-line]"))).toContain("Asked the model once, on the Judgements tier.");
   });
 });
 

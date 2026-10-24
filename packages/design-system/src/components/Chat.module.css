@@ -10,6 +10,14 @@
   color: currentColor;
   flex-shrink: 0;
 }
+/* The glyph and the provider's name as words of a line: it never breaks the line. */
+.inlineGlyph {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  vertical-align: -0.125em;
+  white-space: nowrap;
+}
 .muted {
   color: var(--ds-color-text-muted);
 }
@@ -87,6 +95,9 @@ a.origin:focus-visible {
 }
 .threadLink {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
   color: var(--ds-color-accent-text);
 }
 .threadList {
@@ -176,13 +187,33 @@ a.origin:focus-visible {
 .routingBody p {
   margin: 0 0 var(--ds-space-4);
 }
-.sharedList {
+.sharedGroups {
   margin: var(--ds-space-6) 0 0;
-  padding: 0;
-  list-style: none;
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-4);
+  gap: var(--ds-space-8);
+}
+.sharedGroup {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: var(--ds-space-12);
+}
+.sharedGroup dt {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+  padding-top: var(--ds-space-2);
+}
+.sharedGroup dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-12);
+}
+@media (max-width: 720px) {
+  .sharedGroup {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-4);
+  }
 }
 
 /* FactList: a dl, stacked under 720px. */
@@ -230,14 +261,14 @@ a.origin:focus-visible {
   }
 }
 
-/* ConnectionCard */
+/* ConnectionCard: a Card's surface and shadow, square as every panel. */
 .connection {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-12);
   padding: var(--ds-space-16);
   background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-control);
+  box-shadow: var(--ds-shadow-1);
 }
 .connectionHead {
   display: flex;
@@ -315,6 +346,58 @@ a.origin:focus-visible {
 .pairLabel {
   color: var(--ds-color-text-muted);
 }
+/* IdentityPair lg: two square identity panels, a sunken shade each, the link between. */
+.pairLg {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ds-space-12);
+}
+.pairCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-6);
+  padding: var(--ds-space-16) var(--ds-space-12);
+  background: var(--ds-color-sunken);
+  text-align: center;
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  overflow-wrap: anywhere;
+}
+.pairCaps {
+  font-size: var(--ds-text-xs);
+  letter-spacing: var(--ds-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ds-color-text-muted);
+}
+.pairName {
+  color: var(--ds-color-text-strong);
+}
+.pairMono {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.pairLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-size-avatar-lg);
+  height: var(--ds-size-avatar-lg);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-chrome);
+  color: var(--ds-color-text-secondary);
+}
+@media (max-width: 480px) {
+  .pairLg {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+  .pairLink {
+    justify-self: center;
+  }
+}
 
 /* InstructionStack */
 .stack {
@@ -324,7 +407,6 @@ a.origin:focus-visible {
   display: flex;
   flex-direction: column;
   background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-control);
 }
 .layer {
   display: flex;
@@ -379,7 +461,6 @@ a.origin:focus-visible {
   display: flex;
   flex-direction: column;
   background: var(--ds-color-surface);
-  border-radius: var(--ds-radius-control);
 }
 .providerRow {
   display: flex;

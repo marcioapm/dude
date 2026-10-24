@@ -4,9 +4,12 @@ import {
   ConnectionCard, ExternalThread, FactList, IdentityPair, InstructionStack, OriginFact, ProviderGlyph, ProviderList, ROUTE_SPEC, RouteBadge,
   RoutingLine, type ChatProvider, type ChatRoute,
 } from "../../components/Chat.tsx";
-import { SettingsLayout } from "../../components/Settings.tsx";
+import { SettingRow, SettingsLayout } from "../../components/Settings.tsx";
 import { Board } from "../../components/Board.tsx";
 import { Breadcrumb } from "../../components/Breadcrumb.tsx";
+import { SessionRow } from "../../components/Brainstorm.tsx";
+import { Button } from "../../primitives/Button.tsx";
+import { Textarea } from "../../primitives/Textarea.tsx";
 import type { NavProject } from "../../util/navModel.ts";
 
 /*
@@ -47,6 +50,10 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
           <Row>
             {[12, 14, 16].map((s) => <span key={s} style={{ display: "inline-flex", gap: 8 }}><ProviderGlyph provider={slack} size={s} /><ProviderGlyph provider={other} size={s} /></span>)}
             <ProviderGlyph provider={slack} size={16} label />
+          </Row>
+          <Row>
+            <span>Ana Ribeiro · <ProviderGlyph provider={slack} size={11} inline /> · #eng-exports</span>
+            <span>Eli Park · <ProviderGlyph provider={other} size={11} inline /> · #ops</span>
           </Row>
         </Panes>
       </Block>
@@ -124,7 +131,32 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
               connectLabel="Connect Slack" disconnectLabel="Disconnect Slack…" onConnect={() => {}} onDisconnect={() => {}} />
             <ConnectionCard title="Chatter" glyph={<ProviderGlyph provider={other} size={16} />} intro="Mentions of @dude in Chatter act as you."
               connected facts={[{ label: "Connected as", value: "@eli" }]} connectLabel="Connect Chatter" disconnectLabel="Disconnect Chatter…" onDisconnect={() => {}} />
+            <Label>IdentityPair lg: the connect page</Label>
+            <IdentityPair size="lg" provider={slack} external={{ handle: "marcia", display: "Márcia Costa", workspace: "acme-hq.slack.com" }}
+              person={{ ...marcia, email: "marcia@example.com", organisation: "Acme" }} />
           </Col>
+        </Panes>
+      </Block>
+
+      <Block id="cp-session-row" title="SessionRow: origin"
+        note="A chat-born session in the list carries where it came from under its summary (OriginFact compact).">
+        <Panes mode={mode}>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            <SessionRow title="CSV export timeout" summary="Nothing filed yet" projects={[{ key: "ABS", name: "abs", repositories: 2 }]} state="Talking"
+              access="organisation" org="Acme" origin={<OriginFact provider={slack} place="#support" compact />} onOpen={() => {}} />
+          </ul>
+        </Panes>
+      </Block>
+
+      <Block id="cp-setting-fill" title="SettingRow fill"
+        note="Long free text takes the control column's full width, its Save under it; under 720px the row stacks, label above.">
+        <Panes mode={mode}>
+          {() => (
+            <SettingRow label="Additional instructions" help="Appended to the built-in ones, for every chat." fill>
+              <Textarea aria-label="Additional instructions" rows={3} defaultValue="#support is almost always ABS." />
+              <span><Button variant="primary" size="sm">Save</Button></span>
+            </SettingRow>
+          )}
         </Panes>
       </Block>
 
@@ -185,7 +217,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
         note="A chat-born task's card carries the provider's glyph and name on its first line, before its key; ABS-29, typed in dude, has none.">
         <Panes mode={mode}>
           <Board project={epicBoard} epic={epicBoard.epics?.[0] ?? null} hideHeader
-            cardLead={(card) => (card.task.id === "t4" ? null : <><ProviderGlyph provider={slack} size={12} />Slack</>)} />
+            cardLead={(card) => (card.task.id === "t4" ? null : <span><ProviderGlyph provider={slack} size={12} inline /></span>)} />
         </Panes>
       </Block>
     </Section>

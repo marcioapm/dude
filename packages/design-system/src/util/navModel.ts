@@ -148,6 +148,8 @@ export function shownDriver(task: NavTask): NavTask["driver"] {
 export interface NavEpic {
   readonly id: string;
   readonly title: string;
+  /** Where it came from outside dude (a chat provider's origin), when it did. */
+  readonly origin?: { readonly provider: string; readonly conversationName: string; readonly permalink: string; readonly requestedBy: string } | undefined;
   readonly tasks: ReadonlyArray<NavTask>;
 }
 

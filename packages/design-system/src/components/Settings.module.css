@@ -252,6 +252,26 @@
 .rowControlBlock {
   display: block;
 }
+/* A field that takes the column's width (long free text). */
+.rowControlFill {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.rowControlFill > * {
+  max-width: none;
+  width: 100%;
+}
+/* A phone: the label above its control, each the page's width. */
+@media (max-width: 719.98px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-8);
+  }
+  .rowLabel {
+    padding-top: 0;
+  }
+}
 
 .inherited,
 .overridden {
