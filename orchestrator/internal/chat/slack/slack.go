@@ -562,16 +562,22 @@ func (p *Provider) UpdateQuestion(ctx context.Context, inst chat.Installation, c
 		"blocks": []any{map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}}}, nil)
 }
 
-var reactionNames = map[chat.Reaction]string{chat.ReactionWorking: "eyes", chat.ReactionDone: "white_check_mark", chat.ReactionFailed: "x"}
+var reactionNames = map[chat.Reaction]string{chat.ReactionWorking: "eyes", chat.ReactionBooting: "hourglass_flowing_sand",
+	chat.ReactionDone: "white_check_mark", chat.ReactionFailed: "x"}
 
-// React marks a message: working (👀), then done (✅) or failed (❌), each
-// replacing the working mark, or cleared (the working mark taken off). A
-// mark already there is no failure.
+// React marks a message: working (👀), booting (⏳ in its place), then done
+// (✅) or failed (❌) in place of either, or cleared (either taken off). A
+// mark already there, or one already gone, is no failure.
 func (p *Provider) React(ctx context.Context, inst chat.Installation, conversation, message string, r chat.Reaction) error {
 	if r != chat.ReactionWorking {
-		err := p.call(ctx, inst.Token, "reactions.remove", map[string]any{"channel": conversation, "timestamp": message,
-			"name": reactionNames[chat.ReactionWorking]}, nil)
-		if apiErr := (*APIError)(nil); err != nil && !(errors.As(err, &apiErr) && apiErr.Code == "no_reaction") {
+		// 👀 and ⏳ are never on together (⏳ goes on only once 👀 is off),
+		// so ⏳ is looked for only when 👀 was not there: a mark that never
+		// booted costs no second call.
+		gone, err := p.unreact(ctx, inst, conversation, message, chat.ReactionWorking)
+		if err == nil && gone && r != chat.ReactionBooting {
+			_, err = p.unreact(ctx, inst, conversation, message, chat.ReactionBooting)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -584,6 +590,16 @@ func (p *Provider) React(ctx context.Context, inst chat.Installation, conversati
 		return nil
 	}
 	return err
+}
+
+// unreact takes mark r off the message; gone says it was not there.
+func (p *Provider) unreact(ctx context.Context, inst chat.Installation, conversation, message string, r chat.Reaction) (gone bool, err error) {
+	err = p.call(ctx, inst.Token, "reactions.remove", map[string]any{"channel": conversation, "timestamp": message,
+		"name": reactionNames[r]}, nil)
+	if apiErr := (*APIError)(nil); errors.As(err, &apiErr) && apiErr.Code == "no_reaction" {
+		return true, nil
+	}
+	return false, err
 }
 
 // webBase is where the browser authorizes: the API's parent.

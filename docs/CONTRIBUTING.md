@@ -937,17 +937,27 @@ delivery). An install or a link is begun by a signed-in browser (an HttpOnly
 cookie whose hash the state holds) and finished only in that browser.
 
 **Reactions follow the work.** 👀 goes on the mention as the loop's first
-stage of a delivery (never in the webhook request), once:
-`chat_events.working_at` is claimed before it is put, and a mention kept for
-a Connect carries it over. Then, by what the mention made: a session (new,
+stage of a delivery (never in the webhook request), once per delivery:
+`chat_events.working_at` is claimed before it is put. A mention kept for a
+Connect loses its 👀 with the Connect prompt and gets it back when the kept
+delivery is routed. Then, by what the mention made: a session (new,
 shared, private, or a message into a bound or resumed one) keeps 👀 after
 the reply with the link, and the `chat-reactions` loop
-(`Service.SettleMarks`, 50 waiting requests a pass) swaps it for ✅ on the
-session agent's first `agent.message` or `agent.tool.called` after the
-mention's message (`chat_requests.awaits_session_after`, read through
-`events_session_cursor_idx`), for ❌ when its agent ends first, and leaves
-👀 after 24 hours of neither; each is recorded (`mark_settled`) before the
-provider is called, so it is put once. A task, an epic or a bound thread's
+(`Service.SettleMarks`, 50 waiting requests a pass) follows the session's
+own agent (its brainstorm Runs, not the investigators it starts):
+- ⏳ in place of 👀 while that agent boots (pending, scheduled or starting;
+  paused and due back for the message; or resumed and lux not yet running
+  it), once per request (`chat_requests.booting_marked_at`). An agent
+  already running goes straight from 👀 to ✅;
+- ✅ on the agent's first `agent.message` or `agent.tool.called` after the
+  mention's message (`chat_requests.awaits_session_after`, read through
+  `events_session_cursor_idx`);
+- ❌ when no brainstorm Run is live and none holds an unread message the
+  syncer will hand to a successor;
+- the mark left as it is after 24 hours of neither.
+
+Each is recorded (`mark_settled`, `booting_marked_at`) before the provider is
+called, so it is put once. A task, an epic or a bound thread's
 link: nothing runs, ✅ with the reply. A clarifying question: the question
 is the answer, the 👀 is cleared. Refusals: cleared, with the private note.
 A mark is cosmetic: no route or outcome depends on it, and a failed one is

@@ -264,10 +264,39 @@ func TestRepliesEphemeralsQuestionsAndReactions(t *testing.T) {
 	if got := fake.Reactions("C1", root); strings.Join(got, ",") != "eyes" {
 		t.Fatalf("reactions %v", got)
 	}
+	// ⏳ in place of 👀, and ✅ in place of ⏳.
+	if err := p.React(ctx, inst, "C1", root, chat.ReactionBooting); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Reactions("C1", root); strings.Join(got, ",") != "hourglass_flowing_sand" {
+		t.Fatalf("reactions %v", got)
+	}
 	if err := p.React(ctx, inst, "C1", root, chat.ReactionDone); err != nil {
 		t.Fatal(err)
 	}
 	if got := fake.Reactions("C1", root); strings.Join(got, ",") != "white_check_mark" {
+		t.Fatalf("reactions %v", got)
+	}
+	// 👀 then ✅ directly, without looking for a ⏳.
+	direct := fake.Post("C1", "", "U1", "y")
+	if err := p.React(ctx, inst, "C1", direct, chat.ReactionWorking); err != nil {
+		t.Fatal(err)
+	}
+	removes := fake.Calls("reactions.remove")
+	if err := p.React(ctx, inst, "C1", direct, chat.ReactionDone); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Reactions("C1", direct); strings.Join(got, ",") != "white_check_mark" || fake.Calls("reactions.remove") != removes+1 {
+		t.Fatalf("reactions %v, %d removes", got, fake.Calls("reactions.remove")-removes)
+	}
+	// ⏳ cleared.
+	cleared := fake.Post("C1", "", "U1", "z")
+	for _, r := range []chat.Reaction{chat.ReactionWorking, chat.ReactionBooting, chat.ReactionCleared} {
+		if err := p.React(ctx, inst, "C1", cleared, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := fake.Reactions("C1", cleared); len(got) != 0 {
 		t.Fatalf("reactions %v", got)
 	}
 	// Done with no working mark to take off: still done.

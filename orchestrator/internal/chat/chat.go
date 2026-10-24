@@ -148,9 +148,10 @@ type Question struct {
 	Choices []Choice
 }
 
-// Reactions dude puts on a mention: working on it, done, failed; cleared
-// takes the working mark off and puts nothing (a private refusal says
-// nothing in public).
+// Reactions dude puts on a mention: working on it, its session's agent
+// booting, done, failed; cleared takes the working or booting mark off and
+// puts nothing (a private refusal says nothing in public). Booting, done,
+// failed and cleared each replace the mark before them.
 type Reaction int
 
 const (
@@ -158,6 +159,7 @@ const (
 	ReactionDone
 	ReactionFailed
 	ReactionCleared
+	ReactionBooting
 )
 
 // ErrUnverified is a delivery whose signature or timestamp does not hold.

@@ -15,10 +15,11 @@ import (
 // once (chat_events.working_at), then:
 //   - a session (a new organisation, shared or private session, or a
 //     message into a bound or resumed one): 👀 stays after the reply with
-//     the link; SettleMarks puts ✅ on the session agent's first
-//     agent.message or agent.tool.called after the mention went in, ❌
-//     when its agent ends first, and leaves 👀 after markWaitLimit of
-//     neither;
+//     the link; SettleMarks swaps it for ⏳ while the session's agent boots
+//     (once per request, chat_requests.booting_marked_at), and puts ✅ in
+//     place of either on the session agent's first agent.message or
+//     agent.tool.called after the mention went in, ❌ when its agent ends
+//     first, and leaves the mark after markWaitLimit of neither;
 //   - a task, an epic or a bound thread's task_link: nothing runs, so ✅
 //     goes with the reply;
 //   - a clarifying question: the question is the answer, the 👀 is cleared;
@@ -60,12 +61,13 @@ type markPage struct {
 }
 
 // SettleMarks swaps the marks of replied requests whose session showed
-// life (✅) or whose agent ended with nothing said or done (❌), and stops
-// waiting on those past markWaitLimit (left 👀): at most markBatch
-// requests per pass. Each is settled on its row first, in its own
-// transaction, and the provider called after that commits, so no
-// transaction is held across a provider call and a mark is put at most
-// once whatever restarts. It returns how many it settled.
+// life (✅) or whose agent ended with nothing said or done (❌), stops
+// waiting on those past markWaitLimit (mark left), and puts ⏳ on those
+// whose agent is booting: at most markBatch requests per pass. Each is
+// recorded on its row first, in its own transaction, and the provider
+// called after that commits, so no transaction is held across a provider
+// call and a mark is put at most once whatever restarts. It returns how
+// many it settled.
 func (s *Service) SettleMarks(ctx context.Context) (int, error) {
 	var batch []awaiting
 	from := s.marks
@@ -109,17 +111,30 @@ func (s *Service) SettleMarks(ctx context.Context) (int, error) {
 //   - ended: no live brainstorm Run is left (runs_live_brainstorm_idx) and
 //     no ended one holds an unread message the syncer will hand to a
 //     successor (delivery.UnheardBrainstorm: completed or failed, through
-//     runs_session_idx and directives_unsettled_idx).
+//     runs_session_idx and directives_unsettled_idx);
+//   - booting: the live brainstorm Run (at most one, runs_live_brainstorm_idx)
+//     has no running agent to read the message yet: pending, scheduled or
+//     starting; paused and due back for it (asked to resume, parked between
+//     turns, which resumes for an unsent message, or paused by dude to
+//     bring a repository or move machine, which resumes at once); or
+//     resumed and lux not reporting it running yet (lux_state resuming,
+//     scheduled...). A Run paused waiting on a person's answer is not
+//     booting.
 const sessionProbe = `SELECT
 	EXISTS (SELECT 1 FROM events e WHERE e.session_id = $1 AND e.cursor > $2
 		AND e.event_type IN ('agent.message', 'agent.tool.called')
 		AND EXISTS (SELECT 1 FROM runs r WHERE r.id = e.run_id AND r.role = 'brainstorm' AND r.kind = 'agent')),
 	NOT EXISTS (SELECT 1 FROM runs r WHERE r.session_id = $1 AND ` + delivery.LiveBrainstorm + `)
 	AND NOT EXISTS (SELECT 1 FROM runs r JOIN directives d ON d.run_id = r.id WHERE r.session_id = $1
-		AND r.role = 'brainstorm' AND r.status IN ('completed', 'failed') AND d.delivered_at IS NULL AND d.failed_at IS NULL)`
+		AND r.role = 'brainstorm' AND r.status IN ('completed', 'failed') AND d.delivered_at IS NULL AND d.failed_at IS NULL),
+	EXISTS (SELECT 1 FROM runs r WHERE r.session_id = $1 AND ` + delivery.LiveBrainstorm + ` AND (
+		r.status IN ('pending', 'scheduled', 'starting')
+		OR r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('session', 'repository', 'machine'))
+		OR r.status = 'running' AND COALESCE(r.lux_state, '') <> 'running'))`
 
 // settleMark decides one request's mark and, once it is decided and
-// recorded, puts it.
+// recorded, puts it: ✅ or ❌ when settled, else ⏳ once while its
+// session's agent boots. It reports whether the mark was settled.
 func (s *Service) settleMark(ctx context.Context, a awaiting) (bool, error) {
 	var (
 		outcome string
@@ -128,10 +143,11 @@ func (s *Service) settleMark(ctx context.Context, a awaiting) (bool, error) {
 		ok      bool
 	)
 	err := s.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		var spoke, ended bool
-		if err := tx.QueryRow(ctx, sessionProbe, a.Session, a.After).Scan(&spoke, &ended); err != nil {
+		var spoke, ended, booting bool
+		if err := tx.QueryRow(ctx, sessionProbe, a.Session, a.After).Scan(&spoke, &ended, &booting); err != nil {
 			return err
 		}
+		set := `mark_settled = $2, mark_settled_at = now() WHERE id = $1 AND mark_settled_at IS NULL`
 		outcome = "done"
 		if !spoke {
 			switch {
@@ -139,16 +155,23 @@ func (s *Service) settleMark(ctx context.Context, a awaiting) (bool, error) {
 				outcome = "failed"
 			case s.now().Sub(a.CreatedAt) > markWaitLimit:
 				outcome = "expired"
+			case booting:
+				outcome = "booting"
+				set = `booting_marked_at = now() WHERE id = $1 AND mark_settled_at IS NULL AND booting_marked_at IS NULL`
 			default:
 				outcome = ""
 				return nil
 			}
 		}
+		args := []any{a.ID}
+		if outcome != "booting" {
+			args = append(args, outcome)
+		}
 		var mRaw []byte
-		err := tx.QueryRow(ctx, `UPDATE chat_requests SET mark_settled = $2, mark_settled_at = now()
-			WHERE id = $1 AND mark_settled_at IS NULL RETURNING mention`, a.ID, outcome).Scan(&mRaw)
+		err := tx.QueryRow(ctx, `UPDATE chat_requests SET `+set+` RETURNING mention`, args...).Scan(&mRaw)
 		if db.IsNotFound(err) {
-			// Settled by another pass meanwhile, or gone with retention.
+			// Settled or hourglassed by another pass meanwhile, or gone with
+			// retention.
 			outcome = ""
 			return nil
 		}
@@ -164,17 +187,15 @@ func (s *Service) settleMark(ctx context.Context, a awaiting) (bool, error) {
 	if err != nil || outcome == "" {
 		return false, err
 	}
+	settled := outcome != "booting"
 	p, perr := s.provider(a.Provider)
 	if outcome == "expired" || !ok || perr != nil || m.MessageID == "" {
-		return true, nil
+		return settled, nil
 	}
-	mark := ReactionDone
-	if outcome == "failed" {
-		mark = ReactionFailed
-	}
+	mark := map[string]Reaction{"done": ReactionDone, "failed": ReactionFailed, "booting": ReactionBooting}[outcome]
 	if err := p.React(ctx, inst, m.ConversationID, m.MessageID, mark); err != nil {
 		s.noteFailure(ctx, a.Org, a.Provider, err)
 		s.log().Warn("marking a chat mention failed", "provider", a.Provider, "request", a.ID, "error", err)
 	}
-	return true, nil
+	return settled, nil
 }

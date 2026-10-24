@@ -50,8 +50,8 @@ func (w *world) marks(channel, ts string) string {
 	return strings.Join(w.fake.Reactions(channel, ts), ",")
 }
 
-// A session's mention keeps its 👀 after the reply, and swaps it for ✅
-// once, on the agent's first reply.
+// A session's mention keeps its 👀 after the reply, swaps it for ⏳ while
+// the new agent boots, and for ✅ once, on the agent's first reply.
 func TestChatASessionsMarkFollowsItsAgentsFirstReply(t *testing.T) {
 	w := setup(t)
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
@@ -64,9 +64,14 @@ func TestChatASessionsMarkFollowsItsAgentsFirstReply(t *testing.T) {
 	if m := w.marks("C1", ts); m != "eyes" {
 		t.Fatalf("right after routing: %s", m)
 	}
+	// The new agent is pending: ⏳ in place of 👀, and not settled.
+	if n := w.settle(); n != 0 || w.marks("C1", ts) != "hourglass_flowing_sand" {
+		t.Fatalf("settled %d while the agent boots: %s", n, w.marks("C1", ts))
+	}
 	// An event of the session that is not the agent's output settles nothing.
+	w.agentIs(session, "running", "running")
 	w.agentSays(session, "agent.thought")
-	if n := w.settle(); n != 0 || w.marks("C1", ts) != "eyes" {
+	if n := w.settle(); n != 0 || w.marks("C1", ts) != "hourglass_flowing_sand" {
 		t.Fatalf("settled %d before the agent spoke: %s", n, w.marks("C1", ts))
 	}
 	w.agentSays(session, "agent.message")
@@ -88,8 +93,8 @@ func TestChatASessionsMarkFollowsItsAgentsFirstReply(t *testing.T) {
 	if w.fake.Calls("reactions.add") != adds || w.fake.Calls("reactions.remove") != removes {
 		t.Fatal("a settled mark was put again")
 	}
-	// A mention into the bound session waits for output after it: the
-	// replies before it do not count.
+	// A mention into the bound session, whose agent is running, waits for
+	// output after it with no ⏳: the replies before it do not count.
 	second := w.mention("Eli", "C1", ts, "and the CSV?")
 	if got := w.requests(); len(got) != 2 || got[1].Route != "resume" {
 		t.Fatalf("requests %+v", got)
@@ -103,6 +108,109 @@ func TestChatASessionsMarkFollowsItsAgentsFirstReply(t *testing.T) {
 	}
 }
 
+// agentIs sets the session's brainstorm Run's status and lux state, as the
+// syncer records them.
+func (w *world) agentIs(session, status, luxState string) {
+	w.t.Helper()
+	w.exec(`UPDATE runs SET status = $2::run_status, lux_state = NULLIF($3, '') WHERE session_id = $1 AND role = 'brainstorm'`,
+		session, status, luxState)
+}
+
+// ⏳ is for an agent that will answer once it is up: booting, or resuming
+// from a pause for the message. A running agent, or one paused for some
+// other reason, keeps 👀.
+func TestChatTheHourglassIsForAnAgentBooting(t *testing.T) {
+	for _, c := range []struct {
+		name, status, lux, control, pause string
+		booting                           bool
+	}{
+		{"pending", "pending", "", "none", "", true},
+		{"scheduled", "scheduled", "scheduled", "none", "", true},
+		{"starting", "starting", "provisioning", "none", "", true},
+		{"resumed, lux not up yet", "running", "resuming", "none", "", true},
+		{"paused, asked to resume", "paused", "stopped", "resume", "", true},
+		{"parked between turns", "paused", "stopped", "none", "session", true},
+		{"paused to bring a repository", "paused", "stopped", "none", "repository", true},
+		{"running", "running", "running", "none", "", false},
+		{"paused for a person", "paused", "stopped", "none", "person", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := setup(t)
+			w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+			ts := w.mention("Márcia", "C1", "", "why are exports slow?")
+			session := w.requests()[0].ResultID
+			w.agentIs(session, c.status, c.lux)
+			w.exec(`UPDATE runs SET control = $2::run_control, dude_pause = NULLIF($3, '') WHERE session_id = $1`, session, c.control, c.pause)
+			want := "eyes"
+			if c.booting {
+				want = "hourglass_flowing_sand"
+			}
+			if n := w.settle(); n != 0 || w.marks("C1", ts) != want {
+				t.Fatalf("settled %d: %s, want %s", n, w.marks("C1", ts), want)
+			}
+			if at := w.one(`SELECT booting_marked_at::text FROM chat_requests WHERE organization_id = $1`, w.org); (at != "") != c.booting {
+				t.Fatalf("booting_marked_at %q", at)
+			}
+		})
+	}
+}
+
+// ⏳ is put once per request, whatever passes and restarts follow, and is
+// swapped for ✅ or ❌ like 👀.
+func TestChatTheHourglassIsPutOnce(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.requests()[0].ResultID
+	adds := w.fake.Calls("reactions.add")
+	w.settle()
+	restarted := &chat.Service{DB: w.svc.DB, Providers: w.svc.Providers}
+	for _, s := range []*chat.Service{w.svc, restarted, w.svc} {
+		if n, err := s.SettleMarks(w.ctx); err != nil || n != 0 {
+			t.Fatalf("a later pass settled %d: %v", n, err)
+		}
+	}
+	if n := w.fake.Calls("reactions.add") - adds; n != 1 || w.marks("C1", ts) != "hourglass_flowing_sand" {
+		t.Fatalf("%d marks put while booting: %s", n, w.marks("C1", ts))
+	}
+	// Running, then paused for the message again: booting again, no second ⏳.
+	w.agentIs(session, "running", "running")
+	w.settle()
+	w.agentIs(session, "paused", "stopped")
+	w.exec(`UPDATE runs SET control = 'resume' WHERE session_id = $1`, session)
+	if w.settle(); w.fake.Calls("reactions.add")-adds != 1 {
+		t.Fatalf("%d marks put after a second boot", w.fake.Calls("reactions.add")-adds)
+	}
+	w.agentSays(session, "agent.message")
+	if n := w.settle(); n != 1 || w.marks("C1", ts) != "white_check_mark" {
+		t.Fatalf("settled %d after the reply: %s", n, w.marks("C1", ts))
+	}
+}
+
+// A ⏳ the provider refuses is noted, never tried again, and fails nothing:
+// the ✅ still follows.
+func TestChatAFailedHourglassIsOnlyNoted(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.requests()[0].ResultID
+	w.fake.FailNext("reactions.add", "internal_error")
+	adds := w.fake.Calls("reactions.add")
+	if n := w.settle(); n != 0 || w.count(`SELECT failed_today FROM chat_installations WHERE organization_id = $1`, w.org) == 0 {
+		t.Fatalf("settled %d, failure not noted", n)
+	}
+	if w.settle(); w.fake.Calls("reactions.add")-adds != 1 {
+		t.Fatalf("the ⏳ was tried %d times", w.fake.Calls("reactions.add")-adds)
+	}
+	if got := w.requests(); got[0].Route != "brainstorm" {
+		t.Fatalf("requests %+v", got)
+	}
+	w.agentSays(session, "agent.message")
+	if n := w.settle(); n != 1 || w.marks("C1", ts) != "white_check_mark" {
+		t.Fatalf("settled %d after the reply: %s", n, w.marks("C1", ts))
+	}
+}
+
 // The session's agent is its brainstorm Run: an investigator it started
 // acting is not the agent answering.
 func TestChatASessionChildsOutputSettlesNothing(t *testing.T) {
@@ -110,6 +218,7 @@ func TestChatASessionChildsOutputSettlesNothing(t *testing.T) {
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
 	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
 	session := w.requests()[0].ResultID
+	w.agentIs(session, "running", "running")
 	w.childSays(session, "agent.tool.called")
 	w.childSays(session, "agent.message")
 	if n := w.settle(); n != 0 || w.marks("C1", ts) != "eyes" {
@@ -152,7 +261,7 @@ func TestChatAMessageHandedToASuccessorWaitsForItsAnswer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if n := w.settle(); n != 0 || w.marks("C1", second) != "eyes" {
+	if n := w.settle(); n != 0 || w.marks("C1", second) != "hourglass_flowing_sand" {
 		t.Fatalf("settled %d while the successor starts: %s", n, w.marks("C1", second))
 	}
 	w.agentSays(session, "agent.message")
@@ -231,13 +340,14 @@ func TestChatASessionPickedByClickIsMarkedAgain(t *testing.T) {
 	}
 }
 
-// A session whose agent ends before saying or doing anything gets ❌.
+// A session whose agent ends before saying or doing anything gets ❌, in
+// place of the ⏳ it had while booting.
 func TestChatASessionsAgentEndingSilentGetsTheFailedMark(t *testing.T) {
 	w := setup(t)
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
 	ts := w.mention("Márcia", "G1", "", "let's think about exports")
 	session := w.requests()[0].ResultID
-	if n := w.settle(); n != 0 || w.marks("G1", ts) != "eyes" {
+	if n := w.settle(); n != 0 || w.marks("G1", ts) != "hourglass_flowing_sand" {
 		t.Fatalf("settled %d while the agent starts: %s", n, w.marks("G1", ts))
 	}
 	w.exec(`UPDATE runs SET status = 'failed' WHERE session_id = $1`, session)

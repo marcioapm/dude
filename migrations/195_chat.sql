@@ -244,6 +244,10 @@ CREATE TABLE chat_requests (
   -- its agent ending first ❌, and 24 hours of neither leaves 👀
   -- (expired). NULL: nothing to wait for; the mark went with the reply.
   awaits_session_after  bigint,
+  -- When its 👀 was swapped for ⏳ because the session's agent was booting
+  -- (starting, or resuming from a pause): set once, before the provider is
+  -- called, so ⏳ is put at most once.
+  booting_marked_at     timestamptz,
   mark_settled          text CHECK (mark_settled IN ('done', 'failed', 'expired')),
   mark_settled_at       timestamptz,
   created_at            timestamptz NOT NULL DEFAULT now(),
