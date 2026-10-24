@@ -133,7 +133,7 @@ func (w *world) secondOrchestrator(runID, web, holdAt string) (*gateLux, *server
 	w.t.Helper()
 	g := newGateLux(w.previews.Lux, w.lux)
 	g.holdAt = holdAt
-	other := &servers.Previews{Service: &servers.Service{DB: w.app, Lux: g, Log: quiet, PreviewDomain: previewDomain},
+	other := &servers.Previews{Service: &servers.Service{DB: w.app, Lux: g, Log: w.log, PreviewDomain: previewDomain},
 		Forges: w.previews.Forges, DefaultImage: "default:img"}
 	w.t.Cleanup(other.Stop)
 	w.lux.RequestServer(web, "/")

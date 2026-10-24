@@ -69,7 +69,7 @@ func TestAFeedEventCommittedLateIsNotLostOnReconnect(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `INSERT INTO lux_feed (id, after_event_id) VALUES ('default', 4)`)
 	l := &scriptedLux{}
-	f := &servers.Feed{DB: w.app, Lux: l, Log: quiet, CursorEvery: time.Nanosecond}
+	f := &servers.Feed{DB: w.app, Lux: l, Log: w.log, CursorEvery: time.Nanosecond}
 	l.commit(feedEvent(6, time.Now()))
 	_ = f.Once(context.Background())
 	l.commit(feedEvent(5, time.Now().Add(-time.Second)))
@@ -90,7 +90,7 @@ func TestTheFeedCursorIsTheHighestSettledId(t *testing.T) {
 	l := &scriptedLux{}
 	l.commit(feedEvent(10, old), feedEvent(12, old), feedEvent(11, young), feedEvent(13, young))
 	mustExec(t, w.owner, `INSERT INTO lux_feed (id, after_event_id) VALUES ('default', 9)`)
-	f := &servers.Feed{DB: w.app, Lux: l, Log: quiet, Settle: time.Minute, CursorEvery: time.Nanosecond}
+	f := &servers.Feed{DB: w.app, Lux: l, Log: w.log, Settle: time.Minute, CursorEvery: time.Nanosecond}
 	_ = f.Once(context.Background())
 	if c := w.feedCursor(); c != 12 {
 		t.Fatalf("cursor %d after 10 and 12 settled, 11 and 13 not; want 12", c)
@@ -106,7 +106,7 @@ func TestTheFeedCursorIsWrittenAtMostOncePerInterval(t *testing.T) {
 	for id := int64(100); id < 110; id++ {
 		l.commit(feedEvent(id, time.Now().Add(-time.Hour)))
 	}
-	f := &servers.Feed{DB: w.app, Lux: l, Log: quiet, CursorEvery: time.Hour}
+	f := &servers.Feed{DB: w.app, Lux: l, Log: w.log, CursorEvery: time.Hour}
 	_ = f.Once(context.Background())
 	if c := w.feedCursor(); c != 100 {
 		t.Fatalf("cursor %d; want 100, the first write, and none other within the hour", c)
@@ -121,7 +121,7 @@ func TestAFeedFollowerBehindLeavesTheCursor(t *testing.T) {
 	l.commit(feedEvent(11, time.Now().Add(-time.Hour)))
 	// Another replica moves the cursor on after this one read it.
 	ahead := &aheadLux{scriptedLux: l, before: func() { mustExec(t, w.owner, `UPDATE lux_feed SET after_event_id = 5000`) }}
-	f := &servers.Feed{DB: w.app, Lux: ahead, Log: quiet, CursorEvery: time.Nanosecond}
+	f := &servers.Feed{DB: w.app, Lux: ahead, Log: w.log, CursorEvery: time.Nanosecond}
 	_ = f.Once(context.Background())
 	if l.afters[0] != 10 {
 		t.Fatalf("followed from %d, want the stored 10", l.afters[0])

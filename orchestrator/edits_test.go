@@ -630,7 +630,7 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 		e := newEditing(t)
 		paused, resume := make(chan struct{}), make(chan struct{})
 		var once sync.Once
-		tools := httptest.NewServer((&agenttools.Server{DB: e.app, Log: quiet, BeforeCall: func(tool string) {
+		tools := httptest.NewServer((&agenttools.Server{DB: e.app, Log: e.log, BeforeCall: func(tool string) {
 			if tool == "publish" {
 				once.Do(func() { close(paused); <-resume })
 			}

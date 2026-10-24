@@ -11,6 +11,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -143,6 +144,62 @@ func TestStartingOverClosesAttemptOnesPullRequestWithoutEndingTheTask(t *testing
 				w.assertStartedOverCleanly(task, since)
 			})
 		}
+	}
+}
+
+// #305: Start over from a conductor task its Stop kept the conductor of,
+// while the syncer records a batch of that conductor's frames. The batch
+// holds the conductor's row and, updating it a second time, checks the
+// row's foreign key to the task (KEY SHARE); the restart holds the task and
+// lets the kept conductor go (ReleaseKeptTx), which waits on the batch.
+// The restart's task lock must not exclude the batch's KEY SHARE: both
+// commit, and the restart answers 200, not a deadlock's 500.
+func TestStartingOverBesideTheSyncersBatchOnTheKeptConductorDoesNotDeadlock(t *testing.T) {
+	w := conducting(t)
+	task := w.conductedFeedback()
+	ana := w.ownedBy(task, "Ana")
+	w.stop(ana, task, map[string]any{})
+	conductor := w.str(`SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND status = 'aborted' AND keep`, task)
+	if conductor == "" {
+		t.Fatalf("Stop kept no conductor\n%s", w.describeRuns())
+	}
+	ctx := context.Background()
+	batch, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = batch.Rollback(ctx) }()
+	// The batch's first write to the Run: the row is the batch's own now,
+	// so its next update re-checks the row's foreign keys.
+	touch := `UPDATE runs SET base_shas = base_shas WHERE id = $1`
+	if _, err := batch.Exec(ctx, touch, conductor); err != nil {
+		t.Fatal(err)
+	}
+	restarted := make(chan int, 1)
+	go func() {
+		status, body := w.callAs(ana, "/internal/tasks/"+task+"/recover", map[string]any{"action": "restart", "decider": "policy"})
+		if status != 200 {
+			t.Logf("restart: %d %v", status, body)
+		}
+		restarted <- status
+	}()
+	w.blockedBehind(batch)
+	if _, err := batch.Exec(ctx, touch, conductor); err != nil {
+		t.Fatalf("the batch's second write: %v", err)
+	}
+	if err := batch.Commit(ctx); err != nil {
+		t.Fatalf("the batch's commit: %v", err)
+	}
+	select {
+	case status := <-restarted:
+		if status != 200 {
+			t.Fatalf("restart: %d", status)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the restart did not finish after the batch committed")
+	}
+	if s, _ := w.attemptDelivery(task, 2); s != "running" && s != "waiting" {
+		t.Errorf("attempt 2's delivery is %q", s)
 	}
 }
 

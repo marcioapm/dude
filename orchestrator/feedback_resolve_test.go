@@ -52,7 +52,7 @@ func (w *world) resolveAsItPublishesIn(gh *fakegithub.Server, repo, task, item s
 	if baseOf == "" {
 		baseOf = "target"
 	}
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	w.t.Cleanup(tools.Close)
 	ar := &agentResolve{}
 	ctx := context.Background()

@@ -37,7 +37,7 @@ func (w *world) toolsWithSync() string {
 // for lux's reports; zero is sync_base's own bound.
 func (w *world) toolsWithSyncWaiting(wait time.Duration) string {
 	w.t.Helper()
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase,
 		SyncBaseWait: wait}).Handler())
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
@@ -241,7 +241,7 @@ func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 	w := conducting(t)
 	w.onModel("qa_browser", "fake/scripted")
 	// The conductor's tools and sync_base for the integration fixer.
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
 		SyncPullRequest: w.prs.Sync, SyncBase: w.syncer.SyncBase}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
@@ -360,7 +360,7 @@ func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
 func TestAFixAfterACleanBeforePRMergesFailedTestReachesAnOpenPullRequestOnlyByPromotion(t *testing.T) {
 	w := conducting(t)
 	w.onModel("qa_browser", "fake/scripted")
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
 		SyncPullRequest: w.prs.Sync, SyncBase: w.syncer.SyncBase}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
@@ -1035,7 +1035,7 @@ func TestUnknownMergeabilityAtValidationWaitsThenEscalatesAConflict(t *testing.T
 func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldSyncs = true
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Lux: w.syncer.Lux,
 		SyncBase: w.syncer.SyncBase, SyncBaseWait: time.Millisecond}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
