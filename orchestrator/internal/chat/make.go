@@ -271,7 +271,7 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who a
 		}
 	}
 	origin.Routing = &routingFacts{Route: r.Route, AskedRoute: r.AskedRoute, Confidence: r.Confidence, Reasoning: r.Reasoning,
-		Added: nonNil(r.Added), Skipped: nonNil(r.Skipped), SkippedNames: skippedNames, RequestID: r.ID}
+		Added: db.NonNil(r.Added), Skipped: db.NonNil(r.Skipped), SkippedNames: skippedNames, RequestID: r.ID}
 	if _, err := tx.Exec(ctx, `UPDATE sessions SET origin = $2 WHERE id = $1`, id, origin); err != nil {
 		return "", "", err
 	}
@@ -285,13 +285,6 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who a
 		return "", "", err
 	}
 	return id, title, nil
-}
-
-func nonNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
 }
 
 // createEpic files the epic and its tasks in the project, each owned by
