@@ -18,6 +18,10 @@
 #                              a deployment tool reads it before relying on
 #                              a subcommand an older release lacks
 #
+#   dude-cli_<version>_{darwin,linux}_{arm64,amd64}.tar.gz
+#     bin/dude                 the people's CLI (cmd/dude-cli), Go, static:
+#                              drives a dude server over its public API
+#
 # Unpacking a tarball into a prefix gives that layout under it.
 # The bun binaries link glibc dynamically; the Go ones link nothing.
 set -euo pipefail
@@ -104,7 +108,22 @@ for arch in arm64 amd64; do
   rm -rf "$work"
 done
 
-(cd "$DIST" && "${SHA256[@]}" dude_*.tar.gz > SHA256SUMS)
+for os in darwin linux; do
+  for arch in arm64 amd64; do
+    echo "building dude-cli for $os/$arch"
+    work="$DIST/work-cli-$os-$arch"
+    mkdir -p "$work/bin"
+    (cd "$ROOT/orchestrator" && CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+      go build -trimpath -ldflags "$GO_LDFLAGS" -o "$work/bin/dude" ./cmd/dude-cli)
+    cp "$ROOT/LICENSE" "$work/LICENSE"
+    chmod 0755 "$work/bin/dude"
+    chmod 0644 "$work/LICENSE"
+    "$TAR" "${TAR_REPRO_FLAGS[@]}" -C "$work" -cf - LICENSE bin | gzip -9n > "$DIST/dude-cli_${VERSION}_${os}_${arch}.tar.gz"
+    rm -rf "$work"
+  done
+done
+
+(cd "$DIST" && "${SHA256[@]}" dude_*.tar.gz dude-cli_*.tar.gz > SHA256SUMS)
 
 echo "dist/:"
 ls -la "$DIST"

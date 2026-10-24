@@ -44,7 +44,8 @@ an append-only ledger, streamed live to the UI.
 ## Layout
 
 ```
-orchestrator/         Go: the workflow runtime, delivery, policy, prompts, lux client, PR sync
+orchestrator/         Go: the workflow runtime, delivery, policy, prompts, lux client, PR sync,
+                      and both CLIs: cmd/dude (an agent's, in its Run) and cmd/dude-cli (a person's)
 apps/control-plane/   Bun + TypeScript: the public API, the board, settings, live events, webhooks
 apps/web/             React web app: sidebar, board, delivery view, agent chat
 packages/domain/      Shared types and the event vocabulary
@@ -273,12 +274,36 @@ binaries are static; the Bun ones are `bun build --compile` and need glibc. Ever
 binary answers `--version`. The tarballs are reproducible: the same commit
 builds the same bytes.
 
+It also builds `dude-cli_<version>_{darwin,linux}_{arm64,amd64}.tar.gz`, each
+holding `bin/dude`: the CLI people run on their own machines to drive a dude
+server over its public API (`orchestrator/cmd/dude-cli`). It shares a name
+with the agent CLI inside a Run (`orchestrator/cmd/dude`), but not its commands.
+See "The dude CLI" below.
+
 `.github/workflows/release.yml` runs on every `v*` tag. It builds the
 tarballs, smoke-tests the amd64 one (`scripts/smoke-release.sh`), and
 publishes the tarballs and `SHA256SUMS` as a GitHub Release. It builds no
 image: agents run an image the operator builds and hosts, for which
 `images/runtime` is an example (`scripts/runtime-image.sh [tag]` builds the
 `dude` CLI, then the image, locally).
+
+### The dude CLI
+
+```
+cd orchestrator && go build -o ~/.local/bin/dude ./cmd/dude-cli
+dude login https://dude.absmartly.dev   # paste a key from Your settings → Keys
+dude projects
+dude create ABS --title "…" --goal - --criterion "…" --start <<'EOF'
+…
+EOF
+dude show ABS-12
+```
+
+`dude login` keeps one key per organisation, in the macOS keychain, the Secret
+Service keyring on Linux, or the Windows Credential Manager (in
+`~/.config/dude/credentials.toml` where there is none). Commands act in the last
+organisation logged in to, or `--org` / `DUDE_ORG`. Every command, and how keys
+are kept, is in [`docs/cli.md`](docs/cli.md).
 
 Deploying a release — its layout, every setting, the database roles and the
 order of an upgrade — is in [`docs/operations.md`](docs/operations.md).

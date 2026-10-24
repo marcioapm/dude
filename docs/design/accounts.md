@@ -691,24 +691,23 @@ lands on *No organisation*.
 
 ### A CLI key, and using it
 
-The CLI below is future work. Today a key is a bearer token for scripts and
-the HTTP API: the reveal shows `curl -H "authorization: Bearer <key>" <origin>/v1/me`.
-
 1. Your settings → Keys (screen 4): keys grouped by organisation, each
    group with **New key for Acme**.
 2. Name it ("Laptop"), Create: the key is shown once, with Copy and the line
    to use it: `dude login https://dude.acme.dev` (then paste).
-3. `dude login` asks for the key, calls `GET /v1/me` with it, and stores it
-   under the organisation's slug (`~/.config/dude/credentials.toml`,
-   `[acme]`). Logging in with a Northwind key adds `[northwind]`.
+3. `dude login` asks for the key, calls `GET /v1/me` with it, and keeps it
+   under the organisation's slug. `~/.config/dude/credentials.toml` lists
+   the organisations and their URLs (`[acme]`). The key itself goes in the
+   OS's keystore (macOS keychain, the Secret Service on Linux, the Windows
+   Credential Manager), and only in the file where there is none. Logging in
+   with a Northwind key adds `[northwind]`.
 4. The CLI acts in the organisation of the key it sends: the last one logged
-   in, or `--org northwind` / `DUDE_ORG`. `dude whoami` prints the account,
-   organisation and role.
+   in, or `--org northwind` / `DUDE_ORG` (`dude use` changes the default).
+   `dude whoami` prints the account, organisation and role.
 
-Today's `dude` binary is the agent's CLI inside a Run's container
-(`orchestrator/cmd/dude`); a person's CLI with `login` does not exist yet.
-This is the shape it takes when it does; nothing about keys has to change
-for it.
+The CLI is `orchestrator/cmd/dude-cli`, installed as `dude`; its reference
+is [`docs/cli.md`](../cli.md). It is not the agent's CLI inside a Run's
+container (`orchestrator/cmd/dude`). Keys did not change for it.
 
 ### Super-admin
 
