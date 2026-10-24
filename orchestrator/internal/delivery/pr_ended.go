@@ -41,8 +41,10 @@ func (w *steps) endable(step workflow.Step) workflow.Step {
 			}
 		}
 		// Only with none open: a mixed end leaves the step to run, a sibling's
-		// fixer at work included, and its terminal pr.feedback to
-		// awaitPullRequest, which asks the person.
+		// fixer at work included. The person is asked about it by
+		// awaitPullRequest, from the close's terminal pr.feedback, or by the
+		// question hold (holdForQuestions) when a reviewer's question holds
+		// the step.
 		res, ended, err := w.endedBeforeOpening(ctx, sc, st)
 		if err != nil || ended {
 			return res, err
