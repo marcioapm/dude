@@ -194,53 +194,44 @@ export async function passOnSessions(scope: OrgScope, ctx: RequestContext, perso
 }
 
 /**
- * The orchestrator's lock on each session its admins own whose owner of
- * record is a removed person of `accountId`: the sessions an invitation
- * accept by that account would return. Taken in id order before the
- * person's row, the order the orchestrator's owner changes take them in
- * (take-ownership, a handover, Make owner: the session's lock, then the
- * person's row), so an admin taking one over and the owner coming back
+ * The orchestrator's lock on each session its admins own with `personId`
+ * as its owner of record: what their coming back returns. At most `limit`,
+ * in id order, like `lockOwnedSessions`; `more` says others remain. Taken
+ * before the person's row, the order the orchestrator's owner changes take
+ * them in (take-ownership, a handover, Make owner: the session's lock, then
+ * the person's row), so an admin taking one over and the owner coming back
  * settle one after the other.
  */
-export async function lockReturnable(scope: OrgScope, accountId: string): Promise<string[]> {
+export async function lockReturnable(scope: OrgScope, personId: string, limit = PASS_BATCH): Promise<{ ids: string[]; more: boolean }> {
   const rows = (await scope.sql`
-    SELECT s.id FROM people p JOIN session_people me ON me.person_id = p.id AND me.role = 'owner'
-      JOIN sessions s ON s.id = me.session_id
-    WHERE p.account_id = ${accountId} AND p.removed_at IS NOT NULL AND s.owned_by_admins
-    ORDER BY s.id`) as Array<{ id: string }>;
-  const ids = rows.map((r) => r.id);
+    SELECT s.id FROM session_people me JOIN sessions s ON s.id = me.session_id
+    WHERE me.person_id = ${personId} AND me.role = 'owner' AND s.owned_by_admins
+    ORDER BY s.id LIMIT ${limit + 1}`) as Array<{ id: string }>;
+  const ids = rows.slice(0, limit).map((r) => r.id);
   if (ids.length > 0) {
     await scope.sql`SELECT pg_advisory_xact_lock(hashtext('session:' || x.id))
       FROM unnest(${scope.sql.array(ids, "TEXT")}::text[]) WITH ORDINALITY AS x(id, n) ORDER BY x.n`;
   }
-  return ids;
+  return { ids, more: rows.length > limit };
 }
-
-/** A session to return that `lockReturnable` did not lock is held elsewhere; the accept tries again. */
-export class ReturnRaced extends Error {}
 
 /**
  * Someone removed from the organisation is back (an invitation accepted,
- * in its transaction, which holds their row): each session its admins own
- * with them still its owner of record is theirs again (`owned_by_admins`
+ * in a transaction holding their row as active): of the sessions `locked`
+ * (`lockReturnable`), re-read under those locks, each its admins still own
+ * with them its owner of record is theirs again (`owned_by_admins`
  * cleared, `session.owner_returned` by the system, which the orchestrator's
  * owner sweep tells the agent). A session an admin already took over has
- * another owner row and is not touched. `locked` is what `lockReturnable`
- * locked; one found beyond it is locked without waiting (the person's row
- * is held), else `ReturnRaced`. Returns the sessions returned.
+ * another owner row and is not touched. Returns the sessions returned.
  */
 export async function returnSessions(scope: OrgScope, personId: string, locked: string[]): Promise<string[]> {
+  if (locked.length === 0) return [];
   const found = (await scope.sql`
     SELECT s.id FROM session_people me JOIN sessions s ON s.id = me.session_id
     WHERE me.person_id = ${personId} AND me.role = 'owner' AND s.owned_by_admins
+      AND s.id = ANY(${scope.sql.array(locked, "TEXT")})
     ORDER BY s.id`) as Array<{ id: string }>;
   const ids = found.map((r) => r.id);
-  const extra = ids.filter((id) => !locked.includes(id));
-  if (extra.length > 0) {
-    const [got] = await scope.sql`SELECT bool_and(pg_try_advisory_xact_lock(hashtext('session:' || x))) AS ok
-      FROM unnest(${scope.sql.array(extra, "TEXT")}::text[]) x`;
-    if (!got?.ok) throw new ReturnRaced();
-  }
   if (ids.length === 0) return [];
   await scope.sql`UPDATE sessions SET owned_by_admins = false, updated_at = now() WHERE id = ANY(${scope.sql.array(ids, "TEXT")})`;
   for (const id of ids) {

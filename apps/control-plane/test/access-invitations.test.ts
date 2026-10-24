@@ -6,6 +6,7 @@ import type { Router } from "../src/api/router.ts";
 import { closePool, setPool } from "../src/db/client.ts";
 import { Config, useConfig } from "../src/config.ts";
 import { Edge, OPERATOR, ORIGIN, cookie, databases, fullRouter, invitation, member, rsaKey, sign, waitFor, type Key } from "./access-harness.ts";
+import { PASS_BATCH } from "../src/api/routes/sessions.ts";
 
 const suffix = Bun.randomUUIDv7("hex").slice(-12);
 const acme = `org_inv_${suffix}`;
@@ -251,6 +252,87 @@ describe("accepting", () => {
       stand.stop(true);
     }
   });
+
+  // Someone whose removal passed more sessions than one transaction locks:
+  // `n` sessions owned by `email`'s person, passed to the admins, and them removed.
+  async function departedOwnerOf(email: string, prefix: string, n: number) {
+    const code = (await invite([email])).body.results[0].invitation.code;
+    const person = (await as(email, "POST", `/v1/invitations/${code}/accept`, {}, null)).body.person;
+    await owner.begin(async (tx) => {
+      await tx`INSERT INTO sessions (id, organization_id, title, access, owned_by_admins)
+        SELECT ${prefix} || lpad(g::text, 5, '0'), ${acme}, 'S', 'organisation', true FROM generate_series(1, ${n}) g`;
+      await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+        SELECT ${prefix} || lpad(g::text, 5, '0'), ${person.id}, ${acme}, 'owner', now() FROM generate_series(1, ${n}) g`;
+      await tx`UPDATE people SET removed_at = now() WHERE id = ${person.id}`;
+    });
+    return person.id as string;
+  }
+  const returnedOf = async (prefix: string) => (await owner`SELECT count(*) FILTER (WHERE NOT owned_by_admins)::int AS back,
+    count(*) FILTER (WHERE owned_by_admins)::int AS held FROM sessions WHERE id LIKE ${`${prefix}%`}`)[0] as { back: number; held: number };
+
+  test("an owner back with more sessions than one transaction locks gets them all, at most PASS_BATCH locked at a time", async () => {
+    const n = PASS_BATCH + 100;
+    const prefix = `ssn_many_${suffix}_`;
+    const id = (g: number) => `${prefix}${String(g).padStart(5, "0")}`;
+    const ivo = await departedOwnerOf(at("many-back"), prefix, n);
+    // A session of the second batch is held (an admin taking it over): the
+    // accept's first transaction has committed its batch by the time the
+    // next one waits, holding only the locks of that batch taken so far.
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holder = owner.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || ${id(PASS_BATCH + 50)}))`;
+      held.resolve();
+      await release.promise;
+    });
+    await held.promise;
+    const again = (await invite([at("many-back")])).body.results[0].invitation.code;
+    let accepting: ReturnType<typeof as> | undefined;
+    try {
+      accepting = as(at("many-back"), "POST", `/v1/invitations/${again}/accept`, {}, null);
+      let waiter = 0;
+      await waitFor(async () => {
+        const [row] = await owner`SELECT l.pid FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+          WHERE a.datname = current_database() AND l.locktype = 'advisory' AND NOT l.granted`;
+        waiter = row?.pid ?? 0;
+        return waiter > 0;
+      }, 20_000);
+      const [locks] = await owner`SELECT count(*)::int AS n FROM pg_locks WHERE pid = ${waiter} AND locktype = 'advisory' AND granted`;
+      expect(locks.n).toBeLessThanOrEqual(PASS_BATCH);
+      expect(await returnedOf(prefix)).toEqual({ back: PASS_BATCH, held: 100 });
+    } finally {
+      release.resolve();
+      await holder;
+    }
+    expect((await accepting!).body.person.id).toBe(ivo);
+    expect(await returnedOf(prefix)).toEqual({ back: n, held: 0 });
+    const [events] = await owner`SELECT count(*)::int AS n, count(DISTINCT session_id)::int AS sessions FROM events
+      WHERE event_type = 'session.owner_returned' AND payload->>'owner' = ${ivo}`;
+    expect(events).toEqual({ n, sessions: n });
+  }, 60_000);
+
+  test("a return that fails between its batches is finished by accepting the invitation again", async () => {
+    const n = PASS_BATCH + 100;
+    const prefix = `ssn_resume_${suffix}_`;
+    const failing = `${prefix}${String(PASS_BATCH + 50).padStart(5, "0")}`;
+    const una = await departedOwnerOf(at("resume-back"), prefix, n);
+    const code = (await invite([at("resume-back")])).body.results[0].invitation.code;
+    await owner.unsafe(`CREATE FUNCTION resume_fails() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.id = '${failing}' AND NOT NEW.owned_by_admins THEN RAISE EXCEPTION 'batch 2 failed'; END IF; RETURN NEW; END $$`);
+    await owner.unsafe(`CREATE TRIGGER resume_fails BEFORE UPDATE ON sessions FOR EACH ROW EXECUTE FUNCTION resume_fails()`);
+    try {
+      expect((await as(at("resume-back"), "POST", `/v1/invitations/${code}/accept`, {}, null)).status).toBe(500);
+      expect([...await owner`SELECT removed_at IS NULL AS here FROM people WHERE id = ${una}`]).toEqual([{ here: true }]);
+      expect(await returnedOf(prefix)).toEqual({ back: PASS_BATCH, held: 100 });
+    } finally {
+      await owner.unsafe(`DROP TRIGGER resume_fails ON sessions; DROP FUNCTION resume_fails()`);
+    }
+    expect((await as(at("resume-back"), "POST", `/v1/invitations/${code}/accept`, {}, null)).body.person.id).toBe(una);
+    expect(await returnedOf(prefix)).toEqual({ back: n, held: 0 });
+    const [events] = await owner`SELECT count(*)::int AS n, count(DISTINCT session_id)::int AS sessions FROM events
+      WHERE event_type = 'session.owner_returned' AND payload->>'owner' = ${una}`;
+    expect(events).toEqual({ n, sessions: n });
+  }, 60_000);
 });
 
 describe("your keys, in each organisation", () => {
