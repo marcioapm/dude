@@ -50,6 +50,28 @@ func (w *world) marks(channel, ts string) string {
 	return strings.Join(w.fake.Reactions(channel, ts), ",")
 }
 
+func (w *world) sessionMention() (ts, session string) {
+	w.t.Helper()
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	ts = w.mention("Márcia", "C1", "", "why are exports slow?")
+	return ts, w.requests()[0].ResultID
+}
+
+func (w *world) handOver(session string) string {
+	w.t.Helper()
+	var ended string
+	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(w.ctx, `SELECT id FROM runs WHERE session_id = $1 AND role = 'brainstorm'`, session).Scan(&ended); err != nil {
+			return err
+		}
+		_, err := delivery.SessionHandOver(w.ctx, tx, delivery.RunRef{Org: w.org, SessionID: session, RunID: ended})
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return ended
+}
+
 // A session's mention keeps its 👀 after the reply, swaps it for ⏳ while
 // the new agent boots, and for ✅ once, on the agent's first reply.
 func TestChatASessionsMarkFollowsItsAgentsFirstReply(t *testing.T) {
@@ -137,9 +159,7 @@ func TestChatTheHourglassIsForAnAgentBooting(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := setup(t)
-			w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-			ts := w.mention("Márcia", "C1", "", "why are exports slow?")
-			session := w.requests()[0].ResultID
+			ts, session := w.sessionMention()
 			w.agentIs(session, c.status, c.lux)
 			w.exec(`UPDATE runs SET control = $2::run_control, dude_pause = NULLIF($3, '') WHERE session_id = $1`, session, c.control, c.pause)
 			want := "eyes"
@@ -160,9 +180,7 @@ func TestChatTheHourglassIsForAnAgentBooting(t *testing.T) {
 // swapped for ✅ or ❌ like 👀.
 func TestChatTheHourglassIsPutOnce(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	ts, session := w.sessionMention()
 	adds := w.fake.Calls("reactions.add")
 	w.settle()
 	restarted := &chat.Service{DB: w.svc.DB, Providers: w.svc.Providers}
@@ -192,9 +210,7 @@ func TestChatTheHourglassIsPutOnce(t *testing.T) {
 // the ✅ still follows.
 func TestChatAFailedHourglassIsOnlyNoted(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	ts, session := w.sessionMention()
 	w.fake.FailNext("reactions.add", "internal_error")
 	adds := w.fake.Calls("reactions.add")
 	if n := w.settle(); n != 0 || w.count(`SELECT failed_today FROM chat_installations WHERE organization_id = $1`, w.org) == 0 {
@@ -216,9 +232,7 @@ func TestChatAFailedHourglassIsOnlyNoted(t *testing.T) {
 // acting is not the agent answering.
 func TestChatASessionChildsOutputSettlesNothing(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	ts, session := w.sessionMention()
 	w.agentIs(session, "running", "running")
 	w.childSays(session, "agent.tool.called")
 	w.childSays(session, "agent.message")
@@ -235,9 +249,7 @@ func TestChatASessionChildsOutputSettlesNothing(t *testing.T) {
 // the end: the syncer hands the message to a successor, whose answer is ✅.
 func TestChatAMessageHandedToASuccessorWaitsForItsAnswer(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	root := w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	root, session := w.sessionMention()
 	w.agentSays(session, "agent.message")
 	if n := w.settle(); n != 1 {
 		t.Fatalf("settled %d", n)
@@ -252,16 +264,7 @@ func TestChatAMessageHandedToASuccessorWaitsForItsAnswer(t *testing.T) {
 	if n := w.settle(); n != 0 || w.marks("C1", second) != "eyes" {
 		t.Fatalf("settled %d before the hand-over: %s", n, w.marks("C1", second))
 	}
-	var ended string
-	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(w.ctx, `SELECT id FROM runs WHERE session_id = $1 AND role = 'brainstorm'`, session).Scan(&ended); err != nil {
-			return err
-		}
-		_, err := delivery.SessionHandOver(w.ctx, tx, delivery.RunRef{Org: w.org, SessionID: session, RunID: ended})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	w.handOver(session)
 	if n := w.settle(); n != 0 || w.marks("C1", second) != "hourglass_flowing_sand" {
 		t.Fatalf("settled %d while the successor starts: %s", n, w.marks("C1", second))
 	}
@@ -364,9 +367,7 @@ func TestChatASessionsAgentEndingSilentGetsTheFailedMark(t *testing.T) {
 // output came first, whatever followed.
 func TestChatASessionsAgentAnsweringThenEndingIsDone(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	ts, session := w.sessionMention()
 	w.agentSays(session, "agent.message")
 	w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE session_id = $1 AND role = 'brainstorm'`, session)
 	if n := w.settle(); n != 1 || w.marks("C1", ts) != "white_check_mark" {
@@ -378,9 +379,7 @@ func TestChatASessionsAgentAnsweringThenEndingIsDone(t *testing.T) {
 // hand-over settled the first agent's directive, so nothing holds it back.
 func TestChatASuccessorEndingSilentGetsTheFailedMark(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	root := w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	root, session := w.sessionMention()
 	w.agentSays(session, "agent.message")
 	if n := w.settle(); n != 1 {
 		t.Fatalf("settled %d", n)
@@ -388,16 +387,7 @@ func TestChatASuccessorEndingSilentGetsTheFailedMark(t *testing.T) {
 	w.exec(`UPDATE directives SET delivered_at = now() WHERE run_id IN (SELECT id FROM runs WHERE session_id = $1)`, session)
 	second := w.mention("Eli", "C1", root, "and the CSV?")
 	w.exec(`UPDATE runs SET status = 'failed', ended_at = now() WHERE session_id = $1`, session)
-	var ended string
-	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(w.ctx, `SELECT id FROM runs WHERE session_id = $1 AND role = 'brainstorm'`, session).Scan(&ended); err != nil {
-			return err
-		}
-		_, err := delivery.SessionHandOver(w.ctx, tx, delivery.RunRef{Org: w.org, SessionID: session, RunID: ended})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	ended := w.handOver(session)
 	if n := w.settle(); n != 0 || w.marks("C1", second) != "hourglass_flowing_sand" {
 		t.Fatalf("settled %d while the successor starts: %s", n, w.marks("C1", second))
 	}
@@ -413,9 +403,7 @@ func TestChatASuccessorEndingSilentGetsTheFailedMark(t *testing.T) {
 // hold back ❌.
 func TestChatAnAbortedAgentsUnreadMessageGetsTheFailedMark(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	root := w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	root, session := w.sessionMention()
 	w.agentSays(session, "agent.message")
 	if n := w.settle(); n != 1 {
 		t.Fatalf("settled %d", n)
@@ -435,8 +423,7 @@ func TestChatAnAbortedAgentsUnreadMessageGetsTheFailedMark(t *testing.T) {
 // else is invented.
 func TestChatASessionsMarkStopsWaitingAfterADay(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
+	ts, _ := w.sessionMention()
 	w.exec(`UPDATE chat_requests SET created_at = now() - interval '25 hours' WHERE organization_id = $1`, w.org)
 	adds := w.fake.Calls("reactions.add")
 	if n := w.settle(); n != 1 || w.marks("C1", ts) != "eyes" || w.fake.Calls("reactions.add") != adds {
@@ -454,9 +441,7 @@ func TestChatASessionsMarkStopsWaitingAfterADay(t *testing.T) {
 // A failed mark is noted, never failed: the request stays what it made.
 func TestChatAFailedSessionMarkIsOnlyNoted(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
-	w.mention("Márcia", "C1", "", "why are exports slow?")
-	session := w.requests()[0].ResultID
+	_, session := w.sessionMention()
 	w.agentSays(session, "agent.message")
 	w.fake.FailTimes("reactions.add", "internal_error", 100)
 	if n := w.settle(); n != 1 {
