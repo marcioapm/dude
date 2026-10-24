@@ -67,10 +67,41 @@ func (n *Notifier) sweepOwners(ctx context.Context) (int, error) {
 			err = n.tellOwnerChange(ctx, c)
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s %d: %w", c.Type, c.Cursor, err))
+			errs = append(errs, n.ownerFailed(ctx, c, err))
 		}
 	}
 	return len(found), errors.Join(errors.Join(errs...), n.advanceOwners(ctx))
+}
+
+// ownerAttempts is how many times a change is tried before it is given up.
+const ownerAttempts = 5
+
+// ownerFailed counts a failed attempt at c; at the ownerAttempts-th it
+// logs c and marks it done, so a change that fails every time does not
+// hold the watermark (and, a hundred of them, every later change) for
+// good. Returns what to report: nil once given up.
+func (n *Notifier) ownerFailed(ctx context.Context, c ownerChange, cause error) error {
+	failed := fmt.Errorf("%s %d: %w", c.Type, c.Cursor, cause)
+	var attempts int
+	if err := n.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `INSERT INTO session_owner_attempts (cursor, organization_id, attempts) VALUES ($1, $2, 1)
+			ON CONFLICT (cursor) DO UPDATE SET attempts = session_owner_attempts.attempts + 1 RETURNING attempts`,
+			c.Cursor, c.Org).Scan(&attempts); err != nil {
+			return err
+		}
+		if attempts < ownerAttempts {
+			return nil
+		}
+		_, err := markOwnerDone(ctx, tx, c)
+		return err
+	}); err != nil {
+		return errors.Join(failed, err)
+	}
+	if attempts < ownerAttempts {
+		return failed
+	}
+	n.Log.Warn("session owner change given up", "cursor", c.Cursor, "type", c.Type, "attempts", attempts, "error", cause)
+	return nil
 }
 
 func (n *Notifier) tellOwnerChange(ctx context.Context, c ownerChange) error {
@@ -164,6 +195,10 @@ func (n *Notifier) advanceOwners(ctx context.Context) error {
 			return err
 		}
 		_, err := tx.Exec(ctx, `DELETE FROM session_owner_done WHERE cursor <= (SELECT after_cursor FROM session_owner_sweep)`)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `DELETE FROM session_owner_attempts WHERE cursor <= (SELECT after_cursor FROM session_owner_sweep)`)
 		return err
 	})
 }
