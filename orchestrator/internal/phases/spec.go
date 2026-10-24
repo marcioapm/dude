@@ -681,11 +681,8 @@ func openCodeWorkload(c AgentConfig, in specInput, spec *lux.Spec) {
 	}
 }
 
-// harnessSecrets are the secrets a Run's harness declares: the LLM key
-// under the name its harness reads (DUDE_LLM_KEY, ANTHROPIC_API_KEY or
-// OPENAI_API_KEY), and Codex's config.toml. None for the scripted agent.
-// A resume gives the same again (AutomationResumeSecrets; a phase Run's
-// from its fresh spec), since lux keeps no value.
+// harnessSecrets supplies the harness-specific LLM key and Codex config.toml.
+// Submit and resume both need these values; lux does not retain them.
 func harnessSecrets(c AgentConfig, in specInput) []lux.Secret {
 	if fakeagent.Is(in.Model) {
 		return nil

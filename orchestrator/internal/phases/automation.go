@@ -155,12 +155,9 @@ func automationAgentInput(in AutomationSpecInput) specInput {
 	return si
 }
 
-// AutomationResumeSecrets are the values a resume of an automation's kept
-// Run gives again for what AutomationSpec declared from in, minting no
-// forge token (ResumeCredentials does that from the stored spec): its
-// files, chosen project secrets, an agent's harness secrets, the setup
-// manifest when the Run declares one, and the registry login it was
-// started with.
+// AutomationResumeSecrets supplies current file, project, harness and setup
+// values and the stored registry login. ResumeCredentials mints forge tokens
+// separately from the stored spec.
 func AutomationResumeSecrets(ctx context.Context, c AgentConfig, reg registry.Provider, in AutomationSpecInput, stored lux.StoredSpec) ([]lux.Secret, error) {
 	var out []lux.Secret
 	for _, path := range slices.Sorted(maps.Keys(in.Files)) {

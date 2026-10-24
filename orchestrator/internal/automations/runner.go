@@ -851,16 +851,10 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 	return true, nil
 }
 
-// resume takes the kept session up again with this firing's instructions.
-// lux keeps no secret's value and refuses a resume that does not give
-// every secret the Run declares: its forge tokens are minted afresh from
-// the stored spec, and the rest it declares (the event and env files, the
-// setup manifest, project secrets, an agent's harness secrets, a registry
-// login) are this firing's values. Only names the kept Run declares are
-// given: lux would declare any other and require it on every later resume,
-// so the kept Run's secrets stay fixed until Start fresh. why says what
-// stops this firing from running at all (an image still building, no
-// tier), resumed or fresh.
+// resume supplies this firing's instructions and every declared secret:
+// fresh forge tokens and current file, project, harness and registry values.
+// Other secret names are excluded: lux would declare them for all later resumes.
+// why names a condition that also prevents a fresh start (unbuilt image, no tier).
 func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, string, error) {
 	in := lux.ResumeInput{RequestID: "automation-" + runID}
 	if a.Kind == "agent" {
@@ -1721,12 +1715,9 @@ func (r *Runner) StartFresh(ctx context.Context, org, automationID string) error
 	return err
 }
 
-// startFresh is StartFresh, saying which lux Run it let go of ("" none).
-// The row goes once the cancel succeeds or lux answers it at all: a lux out
-// of reach, failing or busy keeps it, so the next Start fresh or sweep tries
-// again rather than leaving a stopped Run nothing names; any other answer
-// (no such Run, not cancellable) is lux saying it will not end it, and a
-// row kept for it would block every later firing.
+// startFresh returns the lux Run let go of ("" for none). Retryable cancel
+// errors keep the session for another attempt; other refusals release it
+// so an uncancellable Run cannot block later firings.
 func startFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) (string, error) {
 	var luxRunID string
 	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -1900,11 +1891,6 @@ func envFile(env map[string]string) string {
 		b.WriteString("export " + name + "='" + strings.ReplaceAll(v, "'", `'\''`) + "'\n")
 	}
 	return b.String()
-}
-
-// sourcingEnv is a command line that reads EnvPath before it runs.
-func sourcingEnv(command string) string {
-	return ". " + EnvPath + "\n" + command
 }
 
 func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, payloads []Payload) (string, error) {
@@ -2120,7 +2106,7 @@ func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payl
 		in.Command, in.Port = cfg.Command, cfg.Port
 	}
 	if a.Kind != "agent" {
-		in.Command = sourcingEnv(in.Command)
+		in.Command = ". " + EnvPath + "\n" + in.Command
 		in.Env = eventEnv(payloads, a, runID)
 		in.Files = map[string]string{EnvPath: envFile(in.Env)}
 		if len(payloads) > 0 {
