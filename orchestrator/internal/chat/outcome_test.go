@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -128,6 +129,34 @@ func TestChatAFailedMarkLeavesAPostedReplySuccessful(t *testing.T) {
 	}
 	if eph := w.fake.Ephemerals(); len(eph) != 0 {
 		t.Fatalf("ephemerals %+v", eph)
+	}
+}
+
+// A refusal recorded on one attempt is final: an attempt after the worker
+// died (the reply refused and marked so, the mark and the request's
+// outcome not written yet) reads it, marks ❌, records failed, and neither
+// posts nor tells the asker again.
+func TestChatARetryRemembersAnEarlierRefusal(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.fake.FailNext("chat.postMessage", "msg_too_long")
+	ts, ev := w.receive("Eli", "C1", "", "file: stream it")
+	w.once()
+	w.exec(`UPDATE chat_requests SET route = 'task', asked_route = NULL, reasoning = '', replied_at = NULL,
+			effects = jsonb_set(effects, '{1}', $3::jsonb)
+		WHERE organization_id = $1 AND event_id = $2`, w.org, ev, `{"kind":"react","reaction":`+fmt.Sprint(int(chat.ReactionDone))+`}`)
+	w.exec(`UPDATE chat_events SET processed_at = NULL, claimed_until = NULL WHERE organization_id = $1 AND event_id = $2`, w.org, ev)
+	posts := w.fake.Calls("chat.postMessage")
+	w.once()
+	got := w.requests()
+	if len(got) != 1 || got[0].Route != "failed" || got[0].AskedRoute != "task" || !strings.Contains(got[0].Reasoning, "msg_too_long") {
+		t.Fatalf("requests %+v", got)
+	}
+	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "x" {
+		t.Fatalf("reactions %v", r)
+	}
+	if eph := w.fake.Ephemerals(); len(eph) != 1 || w.fake.Calls("chat.postMessage") != posts {
+		t.Fatalf("ephemerals %+v, %d posts", eph, w.fake.Calls("chat.postMessage")-posts)
 	}
 }
 
