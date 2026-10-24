@@ -24,6 +24,8 @@ type App struct {
 	Key  *rsa.PublicKey
 	// BotUserID is the id GET /users/<slug>[bot] answers.
 	BotUserID int64
+	// Events are what GET /app says the App is subscribed to.
+	Events []string
 
 	mu sync.Mutex
 	// Installations by account login (lower case); a repository belongs to
@@ -92,7 +94,13 @@ func AppPath(path string) bool {
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", a.withJWT(func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, map[string]any{"id": a.ID, "slug": a.Slug})
+		a.mu.Lock()
+		events := a.Events
+		a.mu.Unlock()
+		if events == nil {
+			events = []string{}
+		}
+		write(w, 200, map[string]any{"id": a.ID, "slug": a.Slug, "events": events})
 	}))
 	mux.HandleFunc("GET /app/installations", a.withJWT(func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()

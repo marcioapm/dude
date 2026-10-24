@@ -1,0 +1,277 @@
+/*
+ * Automations' marks and fields: words and glyphs on the text colours, a
+ * glob chip on the info tone, the list switch on the accent. No tone of
+ * their own: an automation's state is its runs' (StatusMark).
+ */
+
+.muted {
+  color: var(--ds-color-text-muted);
+}
+
+.kind,
+.trigger,
+.session,
+.owner,
+.scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  white-space: nowrap;
+  color: var(--ds-color-text-primary);
+}
+.kindIcon {
+  flex: none;
+  color: var(--ds-color-text-muted);
+}
+.session {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+
+.scope {
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8) 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-tone-neutral-bg);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.scopeIcon {
+  flex: none;
+}
+.triggerWrap {
+  display: inline;
+  white-space: normal;
+}
+/* The glyph and the first word: the line never breaks between them. A first
+   word wider than the cell (a long event name) breaks inside itself rather
+   than overflowing into the cell's ellipsis. */
+.triggerLead {
+  white-space: nowrap;
+}
+.triggerLead > span {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.triggerLead > .kindIcon {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-inline-end: var(--ds-space-6);
+}
+/* Space the separator after its explicit line-break opportunity. */
+.triggerWrap > wbr + span {
+  margin-inline-start: var(--ds-space-6);
+}
+.scope[data-scope="organization"] {
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+}
+.scopeName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ownerHeld {
+  color: var(--ds-tone-info-fg);
+}
+.heldFace {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--ds-size-avatar-sm);
+  height: var(--ds-size-avatar-sm);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-tone-info-bg);
+  color: var(--ds-tone-info-fg);
+}
+
+.nextRuns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+
+.chips {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-height: var(--ds-size-control-md);
+  padding: var(--ds-space-4) var(--ds-space-6);
+  background: var(--ds-color-field-bg);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  cursor: text;
+}
+.chips:hover {
+  border-color: var(--ds-color-border-strong);
+}
+.chips:focus-within {
+  border-color: var(--ds-color-accent);
+  box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-selection);
+}
+.chipsDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  max-width: 100%;
+  min-height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-2) 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-active-wash);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-primary);
+}
+.chip[data-glob="true"] {
+  background: var(--ds-tone-info-bg);
+  box-shadow: inset 0 0 0 1px var(--ds-tone-info-border);
+  color: var(--ds-tone-info-fg);
+}
+.chipCount {
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-secondary);
+}
+.chipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ds-size-icon-lg);
+  height: var(--ds-size-icon-lg);
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-full);
+  background: none;
+  color: inherit;
+}
+.chipRemove:hover {
+  background: var(--ds-color-hover-wash);
+}
+.chipRemove:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+}
+.chipsField {
+  flex: 1;
+  min-width: calc(var(--ds-size-control-md) * 4);
+  height: var(--ds-size-chip);
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--ds-color-text-primary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+}
+.chipsField::placeholder {
+  color: var(--ds-color-text-muted);
+}
+.suggest {
+  position: absolute;
+  top: calc(100% + var(--ds-space-4));
+  left: 0;
+  right: 0;
+  z-index: var(--ds-z-dropdown);
+  max-height: calc(var(--ds-size-row-item) * 8);
+  overflow: auto;
+  padding: var(--ds-space-4);
+  background: var(--ds-color-overlay);
+  border-radius: var(--ds-radius-float);
+  box-shadow: var(--ds-shadow-2);
+}
+.suggestGroup {
+  padding: var(--ds-space-4) var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.suggestOption {
+  padding: var(--ds-space-4) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  font-size: var(--ds-text-sm);
+  cursor: pointer;
+}
+.suggestOption:hover {
+  background: var(--ds-color-hover-wash);
+}
+
+.repoFilter,
+.schedule {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  width: 100%;
+}
+.scheduleLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+}
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.time {
+  inline-size: calc(var(--ds-size-control-md) * 2.5);
+}
+.advanced {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ds-color-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.advanced:disabled {
+  color: inherit;
+}
+.problem {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-tone-danger-fg);
+}
+
+.days {
+  display: inline-flex;
+  gap: var(--ds-space-2);
+}
+.day {
+  min-width: var(--ds-size-control-lg);
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-6);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+}
+.day:hover {
+  background: var(--ds-color-hover-wash);
+}
+.day:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: 1px;
+}
+.dayOn {
+  background: var(--ds-color-active-wash);
+  border-color: var(--ds-color-accent);
+  color: var(--ds-color-text-strong);
+}
+.day:disabled {
+  cursor: not-allowed;
+}

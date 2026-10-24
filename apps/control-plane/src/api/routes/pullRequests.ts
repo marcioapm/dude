@@ -359,18 +359,6 @@ async function putCredential(ctx: RequestContext): Promise<Response> {
 // Webhooks
 // ---------------------------------------------------------------------------
 
-/** Events that can change what dude does about a pull request. */
-const RELEVANT = new Set([
-  "pull_request",
-  "pull_request_review",
-  "pull_request_review_comment",
-  "pull_request_review_thread",
-  "issue_comment",
-  "check_suite",
-  "check_run",
-  "status",
-]);
-
 /** Constant-time check of GitHub's X-Hub-Signature-256 against the body. */
 export function verifySignature(secret: string, body: string, header: string | null): boolean {
   if (!secret || !header?.startsWith("sha256=")) return false;
@@ -408,7 +396,9 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
   if (!signed) throw unauthorized("webhook signature does not match");
   if (event === "ping") return json({ ok: true });
   if (event === "github_app_authorization") return revokeAuthorization(ctx, organizationId, deliveryId, body);
-  if (!RELEVANT.has(event) || !deliveryId) return json({ ok: true, ignored: event });
+  // Every event is stored (automations may trigger on any); the orchestrator
+  // syncs pull requests from the ones that can change one.
+  if (!event || !deliveryId) return json({ ok: true, ignored: event });
 
   let payload: unknown;
   try {
