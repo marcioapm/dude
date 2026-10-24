@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from helpers import ApiClient, execute, provision_person, query, wait_until
@@ -207,6 +208,5 @@ def test_a_minutely_schedule_fires_stops_when_off_and_run_now_queues_behind_a_li
     count = len([r for r in _runs(client, a["id"]) if r["source"] == "schedule"])
     # Past the next minute's boundary, off: nothing more fired.
     execute(env.owner_dsn, "UPDATE automations SET next_run_at = now() - interval '1 second' WHERE id = %s", (a["id"],))
-    import time
     time.sleep(5)
     assert len([r for r in _runs(client, a["id"]) if r["source"] == "schedule"]) == count

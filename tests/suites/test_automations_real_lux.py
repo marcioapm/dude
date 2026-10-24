@@ -10,6 +10,10 @@ concurrency modes ending and feeding real Runs.
 Opt-in with `run_tests.py --lux` against a lux started with
 `--serve --preview-local PORT` (so it has a preview domain). Agent tools
 also need DUDE_TEST_TOOLS_HOST: an address of this machine lux's hosts reach.
+
+Not here: a Webhook-only automation runs no container, and a schedule's
+firing is the orchestrator's own clock. Both are proven against the fake lux
+in test_automations.py, whose orchestrator is the same binary.
 """
 
 from __future__ import annotations
@@ -119,7 +123,7 @@ def test_a_command_on_push_sees_its_event_file_and_env_in_a_real_container(clien
     }, project_id=project["id"])
 
     # A push to another branch: the branch filter skips it (no run at all).
-    _push(gh, branch="feature/x")
+    feature = _push(gh, branch="feature/x")
     delivery = _push(gh, branch="main")
 
     run = wait_until(lambda: next((r for r in _runs(client, a["id"]) if r["status"] in ENDED), None),
@@ -132,8 +136,9 @@ def test_a_command_on_push_sees_its_event_file_and_env_in_a_real_container(clien
     assert "ref=refs/heads/main" in log, log
     # It ran in the project's checkout: the repository's README is there.
     assert "cwd=/workspace/repos/target" in log and "README" in log, log
-    # Only the main push ran: the feature push was filtered out.
-    time.sleep(3)
+    # Only the main push ran: the feature push, read first, was filtered out.
+    wait_until(lambda: not query(env.owner_dsn, "SELECT 1 FROM webhook_deliveries WHERE id = %s AND automations_at IS NULL",
+                                 (feature,)), timeout=30, interval=0.5, message="the feature push was never read")
     runs = _runs(client, a["id"])
     assert [r["id"] for r in runs] == [run["id"]], runs
     # The container really ended.
@@ -145,14 +150,18 @@ def test_a_command_on_push_sees_its_event_file_and_env_in_a_real_container(clien
 # 2. Server on push
 # ---------------------------------------------------------------------------
 
-# A server in busybox: every request is answered 200 by a handler that keeps
-# the request line and body in /tmp/got (for the run's own requests).
+# A server in busybox: every request is answered 200. A request with a body
+# (dude's POSTs, not the health GET) is kept in /workspace/got, the kept
+# volume, as its X-GitHub-Delivery and the event file's ref; the answer
+# lists every delivery kept so far, so a resumed container's answer shows
+# the first event it got before it stopped and the second it got after.
 SERVER = (
     "printf '%s\\n' '#!/bin/sh' "
-    "'read -r line; len=0; while read -r h; do h=$(printf %s \"$h\" | tr -d \"\\r\"); [ -z \"$h\" ] && break; "
-    "case \"$h\" in [Cc]ontent-[Ll]ength:*) len=${h#*: };; esac; done; "
-    "body=$(head -c \"$len\"); echo \"$line $body\" >> /tmp/got; "
-    "printf \"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nok\"' > /tmp/h.sh; "
+    "'read -r line; len=0; d=; while read -r h; do h=$(printf %s \"$h\" | tr -d \"\\r\"); [ -z \"$h\" ] && break; "
+    "case \"$h\" in [Cc]ontent-[Ll]ength:*) len=${h#*: };; [Xx]-[Gg]it[Hh]ub-[Dd]elivery:*) d=${h#*: };; esac; done; "
+    "body=$(head -c \"$len\"); [ \"$len\" -gt 0 ] && echo \"$d $DUDE_DELIVERY_ID\" >> /workspace/got; "
+    "out=$(tr \"\\n\" \" \" < /workspace/got 2>/dev/null); out=\"ok ${out:-none}\"; "
+    "printf \"HTTP/1.1 200 OK\\r\\nContent-Length: ${#out}\\r\\nConnection: close\\r\\n\\r\\n%s\" \"$out\"' > /tmp/h.sh; "
     "chmod +x /tmp/h.sh; while true; do nc -l -p 8080 -e /tmp/h.sh; done"
 )
 
@@ -185,17 +194,19 @@ def test_a_server_automation_serves_on_real_lux_and_stops_when_idle(client: ApiC
         print("runs:", [(r["status"], r.get("reason")) for r in runs])
     req = detail["requests"][0]
     assert req["deliveryId"] == first and 200 <= (req["httpStatus"] or 0) < 300, detail["requests"]
-    assert req["responseExcerpt"] == "ok", req
+    # The server got the push, with this firing's DUDE_DELIVERY_ID.
+    assert req["responseExcerpt"].split() == ["ok", first, first], req
     assert detail["containerStartedAt"], detail
 
-    # Idle 30 s after the last request: the container is stopped, the run ends.
+    # Idle 30 s after the last request: the container is stopped, the run ends
+    # within a sweep and lux's stop of that.
     t_last = time.time()
     ended = _ended(client, a["id"], detail["id"], timeout=120)
     idle_for = time.time() - t_last
     assert ended["status"] == "succeeded", ended
     detail = _detail(client, a["id"], detail["id"])
     assert detail["stopReason"] == "idle" and detail["containerStoppedAt"], detail
-    assert idle_for >= 25, idle_for
+    assert 25 <= idle_for < 50, idle_for
     lux_run = _lux_run_of(env, detail["id"])
     want = ("stopped",) if session == "resumable" else ("cancelled", "terminated")
     wait_until(lambda: _lux_state(env, lux_run) in want, timeout=120, interval=1,
@@ -208,10 +219,15 @@ def test_a_server_automation_serves_on_real_lux_and_stops_when_idle(client: ApiC
     d2 = wait_until(lambda: (lambda d: d if d["requests"] else None)(_detail(client, a["id"], run2["id"])),
                     timeout=240, interval=2, message="the second push was never POSTed")
     assert d2["requests"][0]["deliveryId"] == second and 200 <= (d2["requests"][0]["httpStatus"] or 0) < 300, d2
+    got = d2["requests"][0]["responseExcerpt"].split()
     if session == "resumable":
         assert d2["session"] == "resumed" and _lux_run_of(env, run2["id"]) == lux_run, d2
+        # The same container's volume kept the first event; the resumed server
+        # got the second, and sees the second firing's DUDE_DELIVERY_ID.
+        assert got == ["ok", first, first, second, second], got
     else:
         assert d2["session"] == "ephemeral" and _lux_run_of(env, run2["id"]) != lux_run, d2
+        assert got == ["ok", second, second], got
     _ended(client, a["id"], run2["id"], timeout=120)
 
 
@@ -308,7 +324,7 @@ def test_a_resumable_agent_resumes_starts_fresh_and_expires_on_real_lux(client: 
     wait_until(lambda: _lux_state(env, kept) == "stopped", timeout=120, interval=1, message="the resumed session was not stopped again")
 
     # Start fresh: the kept container is ended; the next run is new.
-    assert client.post(f"/v1/automations/{a['id']}/start-fresh").status_code in (200, 204)
+    assert client.post(f"/v1/automations/{a['id']}/start-fresh").status_code == 204
     wait_until(lambda: _lux_state(env, kept) in ("cancelled", "terminated"), timeout=120, interval=1,
                message="Start fresh left the kept container")
     assert client.get(f"/v1/automations/{a['id']}/runs").json()["session"] is None
@@ -400,13 +416,14 @@ def test_parallel_runs_up_to_n_containers_at_once(client: ApiClient, env, lux_fo
     for _ in range(3):
         _push(gh)
     running = _running(client, a["id"], n=2)
-    assert len({_lux_run_of(env, r["id"]) for r in running}) == 2
-    for r in running:
-        wait_until(lambda r=r: _lux_state(env, _lux_run_of(env, r["id"])) == "running", timeout=120, interval=1,
-                   message="a parallel container never ran")
+    # Read at once, while both are well inside their 25 s: two run, one waits.
     runs = _runs(client, a["id"])
     assert [r["status"] for r in runs].count("queued") == 1, runs
     assert [r["status"] for r in runs].count("running") == 2, runs
+    assert len({_lux_run_of(env, r["id"]) for r in running}) == 2
+    for r in running:
+        wait_until(lambda r=r: _lux_state(env, _lux_run_of(env, r["id"])) in ("running", "succeeded"), timeout=120, interval=1,
+                   message="a parallel container never ran")
     for r in runs:
         assert _ended(client, a["id"], r["id"], timeout=300)["status"] == "succeeded"
 
@@ -435,7 +452,7 @@ def test_send_gives_the_running_agent_the_second_event(client: ApiClient, env, l
 
 def test_a_test_event_runs_on_its_own_and_leaves_the_kept_session(client: ApiClient, env, lux_forge):
     project, gh = lux_forge
-    a = _agent(client, project["id"], "Live and tested", "Look at {{event.action}}\nsleep: 20",
+    a = _agent(client, project["id"], "Live and tested", "Look at {{event.action}}\nsleep: 60",
                sessionMode="resumable", expiryDays=3)
     assert gh.send_webhook("issues", {"action": "opened", "issue": {"number": 1}, "sender": {"login": "ana"}}) == 202
     live = _running(client, a["id"])[0]
@@ -452,20 +469,14 @@ def test_a_test_event_runs_on_its_own_and_leaves_the_kept_session(client: ApiCli
     assert started["source"] == "test" and started["session"] == "ephemeral", started
     assert _lux_run_of(env, test_run) != kept
     assert next(r for r in _runs(client, a["id"]) if r["id"] == live["id"])["status"] == "running"
-    assert _ended(client, a["id"], test_run, timeout=240)["status"] == "succeeded"
-    assert _ended(client, a["id"], live["id"], timeout=240)["status"] == "succeeded"
+    test_ended = _ended(client, a["id"], test_run, timeout=240)
+    live_ended = _ended(client, a["id"], live["id"], timeout=240)
+    assert test_ended["status"] == live_ended["status"] == "succeeded", (test_ended, live_ended)
+    # They overlapped: the test run started before the live one ended.
+    assert test_ended["startedAt"] < live_ended["endedAt"], (test_ended, live_ended)
     # The kept session is the event run's, untouched by the test.
     rows = query(env.owner_dsn, "SELECT lux_run_id FROM automation_sessions WHERE automation_id = %s", (a["id"],))
     assert [r["lux_run_id"] for r in rows] == [kept], rows
     wait_until(lambda: _lux_state(env, kept) == "stopped", timeout=120, interval=1, message="the kept session was not kept")
     wait_until(lambda: _lux_state(env, _lux_run_of(env, test_run)) in ("cancelled", "terminated"), timeout=120, interval=1,
                message="the test run's container was not ended")
-
-
-# ---------------------------------------------------------------------------
-# 6, 7. Webhook and schedule: no container, nothing lux-specific
-# ---------------------------------------------------------------------------
-
-def test_webhook_and_schedule_need_no_container():
-    pytest.skip("a Webhook-only automation runs no container and a schedule's firing is the orchestrator's own clock: "
-                "both are proven against the fake lux in test_automations.py, whose orchestrator is the same binary")

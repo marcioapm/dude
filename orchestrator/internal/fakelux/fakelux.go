@@ -3047,21 +3047,21 @@ func missingSecrets(rawSpec json.RawMessage, given []lux.Secret) []string {
 	return missing
 }
 
-// undeclaredSecrets are the names a resume gives that the Run never
-// declared, nor does a repository the same resume adds name as its
-// credential: lux refuses them rather than hold a value nothing reads.
+// undeclaredSecrets are the names a resume that adds no repository gives
+// and the Run never declared: lux refuses them rather than hold a value
+// nothing reads. A resume adding repositories may bring their credentials
+// and the setup manifest with them, and is not checked here.
 func undeclaredSecrets(rawSpec json.RawMessage, given []lux.Secret, git *struct {
 	Repositories []map[string]any `json:"repositories"`
 }) []string {
+	if git != nil && len(git.Repositories) > 0 {
+		return nil
+	}
 	var spec lux.Spec
 	_ = json.Unmarshal(rawSpec, &spec)
 	var out []string
 	for _, g := range given {
-		declared := slices.ContainsFunc(spec.Secrets, func(sec lux.Secret) bool { return sec.Name == g.Name })
-		if git != nil {
-			declared = declared || slices.ContainsFunc(git.Repositories, func(r map[string]any) bool { return r["credential"] == g.Name })
-		}
-		if !declared {
+		if !slices.ContainsFunc(spec.Secrets, func(sec lux.Secret) bool { return sec.Name == g.Name }) {
 			out = append(out, g.Name)
 		}
 	}
