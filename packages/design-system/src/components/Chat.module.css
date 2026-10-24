@@ -10,13 +10,21 @@
   color: currentColor;
   flex-shrink: 0;
 }
-/* The glyph and the provider's name as words of a line: it never breaks the line. */
+/*
+ * The glyph and the provider's name as words of a line: it never breaks the
+ * line, nor grows it. An inline-flex box one line high, lowered to centre the
+ * glyph, overhangs the line box; so the span stays inline and only the glyph,
+ * at most 1em and inline-block (the reset makes an svg a block), is lowered.
+ */
 .inlineGlyph {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-4);
-  vertical-align: -0.125em;
   white-space: nowrap;
+}
+.inlineGlyph > .glyph {
+  display: inline-block;
+  vertical-align: -0.125em;
+  max-width: 1em;
+  max-height: 1em;
+  margin-inline-end: var(--ds-space-4);
 }
 .muted {
   color: var(--ds-color-text-muted);
