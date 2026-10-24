@@ -479,6 +479,31 @@ func ConductorScript(briefing string) string {
 	return b.String() + "echo " + ConductorReply(task, message)
 }
 
+// AutomationScript is the scripted agent of an automation, as a lux-fake
+// script: the tools its prompt names (ConductorCalls) are called through
+// lux's service socket, a "sleep: N" line keeps its turn busy N seconds,
+// and it replies AutomationReply. A later input (Concurrency: send) is
+// echoed, as lux-fake echoes every prompt after its first.
+func AutomationScript(prompt string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(prompt, "\n") {
+		if n, ok := strings.CutPrefix(strings.TrimSpace(line), AutomationSleepPrefix); ok {
+			fmt.Fprintf(&b, "sleep %s\n", strings.TrimSpace(n))
+		}
+	}
+	for _, c := range ConductorCalls(prompt) {
+		fmt.Fprintf(&b, "http dude POST /tools/%s %s\n", c[0], c[1])
+	}
+	return b.String() + "echo " + AutomationReply
+}
+
+// AutomationSleepPrefix starts a line of a scripted automation's prompt
+// that keeps its turn busy for that many seconds (a real lux only).
+const AutomationSleepPrefix = "sleep: "
+
+// AutomationReply is what the scripted automation agent says after its calls.
+const AutomationReply = "Automation done."
+
 // sessionTitle is the session's title a session agent's briefing opens
 // with, "Untitled session" for one not named yet, and whether it is one.
 func sessionTitle(briefing string) (string, bool) {

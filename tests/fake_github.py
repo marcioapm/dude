@@ -146,6 +146,8 @@ class FakeGitHub:
         self.pulls: dict[int, PullRequest] = {}
         self.hooks: list[dict] = []
         self.deliveries: list[tuple[str, int]] = []
+        # The X-GitHub-Delivery GUID of the last webhook sent: dude stores it by that id.
+        self.last_delivery_id = ""
         self.siblings: dict[str, "FakeGitHub"] = {}
         # CI, by commit: each check by name — a check run (GitHub Actions,
         # an app) or a commit status.
@@ -541,10 +543,11 @@ class FakeGitHub:
         body = json.dumps({**payload, "repository": {"full_name": f"{self.owner}/{self.repo}"}}).encode()
         key = (secret if secret is not None else secret_value or "").encode()
         signature = "sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
+        self.last_delivery_id = str(uuid.uuid4())
         resp = requests.post(url, data=body, timeout=10, headers={
             "content-type": "application/json",
             "x-github-event": event,
-            "x-github-delivery": str(uuid.uuid4()),
+            "x-github-delivery": self.last_delivery_id,
             "x-hub-signature-256": signature,
         })
         self.deliveries.append((event, resp.status_code))
@@ -940,6 +943,18 @@ class FakeGitHub:
                 reply = re.fullmatch(rf"{prefix}/pulls/(\d+)/comments/(\d+)/replies", self.path)
                 if m or reply:
                     number = int((m or reply)[1])
+                    if m and number in gh.issues:
+                        # An issue's conversation, as GitHub's issues API comments on either.
+                        with gh._lock:
+                            gh._next_id += 1
+                            comment = {"id": gh._next_id, "body": body.get("body", ""), "user": {"login": gh.token_login},
+                                       "created_at": _now(),
+                                       "html_url": f"https://github.test/{gh.owner}/{gh.repo}/issues/{number}#issuecomment-{gh._next_id}"}
+                            gh.issues[number].comments.append(comment)
+                        gh.send_webhook("issue_comment", {"action": "created", "issue": {"number": number}})
+                        return self._send(201, comment)
+                    if number not in gh.pulls:
+                        return self._send(404, {"message": "Not Found"})
                     pr = gh.pulls[number]
                     with gh._lock:
                         parent = next((c for c in pr.comments if reply and c["id"] == int(reply[2]) and c["path"]), None)
