@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { harnessSchema } from "./harnesses.ts";
+import { chatOriginSchema } from "./chat.ts";
 
 /**
  * Product hierarchy — plan §39.
@@ -260,6 +261,8 @@ export const epicSchema = z.object({
   description: z.string().default(""),
   /** Its place among the project's epics, 0 first: a statement of priority. */
   position: z.number().int().default(0),
+  /** Where it came from outside dude: a chat thread; null for one made in dude. */
+  origin: chatOriginSchema.nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
 });
 export type Epic = z.infer<typeof epicSchema>;
@@ -472,6 +475,8 @@ export const taskSchema = z.object({
   archivedAt: z.string().nullable().default(null),
   archivedBy: personRefSchema.nullable().default(null),
   closedBy: personRefSchema.nullable().default(null),
+  /** Where it came from outside dude: a chat thread (chat.ts); null for one made in dude. */
+  origin: chatOriginSchema.nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });

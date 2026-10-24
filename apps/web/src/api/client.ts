@@ -107,6 +107,14 @@ import type {
   TaskRelations,
   TaskStatus,
 } from "@dude/domain";
+import type {
+  ChatConnectStateView,
+  ChatInstallationView,
+  ChatOverview,
+  ChatRequestRow,
+  ProviderRoutingInstructions,
+  RoutingInstructions,
+} from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 
 /** A page of dude's guide; its sections' text only when one page is read (the intro's anchor and heading are ""). */
@@ -1345,6 +1353,62 @@ export class ApiClient {
   /** The test question, asked of a tier as a judgement would be; not recorded. */
   testJudgement(tierId: string): Promise<JudgementTestResult> {
     return this.#request("POST", "/v1/judgements/test", { tierId });
+  }
+
+  // -- chat providers ---------------------------------------------------------
+
+  chatOverview(): Promise<ChatOverview> {
+    return this.#request("GET", "/v1/organization/chat");
+  }
+
+  chatInstallation(provider: string): Promise<ChatInstallationView> {
+    return this.#request("GET", `/v1/organization/chat/${encodeURIComponent(provider)}`);
+  }
+
+  /** An admin installing a provider's app: the provider's page to send the browser to. */
+  installChat(provider: string): Promise<{ url: string }> {
+    return this.#request("POST", `/v1/chat/${encodeURIComponent(provider)}/install`, {});
+  }
+
+  disconnectChat(provider: string): Promise<void> {
+    return this.#request("DELETE", `/v1/organization/chat/${encodeURIComponent(provider)}`);
+  }
+
+  /** Linking your provider account; `prompt` is the connect page's state, whose kept mention is routed once linked. */
+  connectChat(provider: string, prompt?: string): Promise<{ url: string }> {
+    return this.#request("POST", `/v1/chat/${encodeURIComponent(provider)}/connect`, prompt ? { prompt } : {});
+  }
+
+  unlinkChat(provider: string): Promise<void> {
+    return this.#request("DELETE", `/v1/me/chat/${encodeURIComponent(provider)}`);
+  }
+
+  chatConnectState(provider: string, state: string): Promise<ChatConnectStateView> {
+    return this.#request("GET", `/v1/chat/${encodeURIComponent(provider)}/connect/state?state=${encodeURIComponent(state)}`);
+  }
+
+  routingInstructions(): Promise<RoutingInstructions> {
+    return this.#request("GET", "/v1/organization/routing-instructions");
+  }
+
+  setRoutingInstructions(additional: string): Promise<RoutingInstructions> {
+    return this.#request("PUT", "/v1/organization/routing-instructions", { additional });
+  }
+
+  providerRoutingInstructions(provider: string): Promise<ProviderRoutingInstructions & { installed: boolean }> {
+    return this.#request("GET", `/v1/organization/chat/${encodeURIComponent(provider)}/routing-instructions`);
+  }
+
+  setProviderRoutingInstructions(provider: string, additional: string): Promise<ProviderRoutingInstructions & { installed: boolean }> {
+    return this.#request("PUT", `/v1/organization/chat/${encodeURIComponent(provider)}/routing-instructions`, { additional });
+  }
+
+  chatRequests(filter: { provider?: string | undefined; route?: string | undefined } = {}): Promise<{ requests: ChatRequestRow[] }> {
+    const params = new URLSearchParams();
+    if (filter.provider) params.set("provider", filter.provider);
+    if (filter.route) params.set("route", filter.route);
+    const qs = params.toString();
+    return this.#request("GET", `/v1/organization/chat/requests${qs ? `?${qs}` : ""}`);
   }
 
   // -- images: the organization's library ------------------------------------

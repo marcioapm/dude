@@ -30,7 +30,9 @@ export type Place =
   // The sessions open to the whole organisation (`#/sessions/open`; session ids are `ssn_…`).
   | { view: "openSessions" }
   // dude's guide (`#/help/<page>/<section>`): the list, a page, a section of it.
-  | { view: "help"; page?: string; section?: string };
+  | { view: "help"; page?: string; section?: string }
+  // Where a chat provider's private Connect button lands (`#/connect/<provider>?state=…`).
+  | { view: "connect"; provider: string; state: string };
 
 /** The task tabs a URL can name; Overview is the task's own URL. */
 export type TaskTab = "chat" | "findings" | "sessions" | "feedback" | "files" | "servers" | "activity";
@@ -88,6 +90,7 @@ export function parsePlace(full: string): Place | null {
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return id === "others" ? { view: "inbox", tab: "others" } : { view: "inbox" };
   if (kind === "sessions" && id === "open") return { view: "openSessions" };
+  if (kind === "connect" && id) return { view: "connect", provider: decodeURIComponent(id), state: new URLSearchParams(query).get("state") ?? "" };
   if (kind === "sessions") return id ? { view: "brainstorm", id: decodeURIComponent(id) } : { view: "sessions" };
   if (kind === "help") {
     if (!id) return { view: "help" };
@@ -133,6 +136,8 @@ function bareHash(place: Place | null): string {
       return `#/sessions/${encodeURIComponent(place.id)}`;
     case "openSessions":
       return "#/sessions/open";
+    case "connect":
+      return `#/connect/${encodeURIComponent(place.provider)}${place.state ? `?state=${encodeURIComponent(place.state)}` : ""}`;
     case "help":
       if (!place.page) return "#/help";
       return `#/help/${encodeURIComponent(place.page)}${place.section ? `/${encodeURIComponent(place.section)}` : ""}`;

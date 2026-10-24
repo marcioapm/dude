@@ -55,6 +55,23 @@ export const chatOriginSchema = z.object({
 });
 export type ChatOrigin = z.infer<typeof chatOriginSchema>;
 
+/** A chat-born session's origin: the thread as the session was given it, and how it was routed. */
+export interface SessionChatOrigin extends ChatOrigin {
+  thread?: Array<{ by: string; handle?: string; person?: string; text: string; inDude: boolean }>;
+  routing?: {
+    route: ChatRoute;
+    askedRoute?: ChatRoute;
+    confidence: number | null;
+    reasoning: string;
+    /** Person ids added, and provider user ids skipped (not connected). */
+    added: string[];
+    skipped: string[];
+    /** The skipped people's display names, in `skipped`'s order. */
+    skippedNames?: string[];
+    requestId: string;
+  };
+}
+
 /** `GET /v1/organization/chat`: each provider dude has, installed here or not. */
 export interface ChatProviderEntry {
   provider: ChatProvider;
@@ -76,6 +93,8 @@ export interface ChatInstallationView {
   provider: ChatProvider;
   installed: boolean;
   canEdit: boolean;
+  /** The operator configured this provider's app (its credentials); without it nobody can install. */
+  configured: boolean;
   workspaceName: string | null;
   workspaceDomain: string | null;
   installedAt: string | null;

@@ -50,6 +50,8 @@ interface TaskRow {
   status: string;
   /** Why a person ended it, beside the status; null while it hasn't. */
   resolution: TaskResolution | null;
+  /** The chat provider it came from (tasks.origin), null for one made in dude. */
+  originProvider: string | null;
   /** Everyone on it, the owner first. */
   people: PersonRef[];
   statusSince: string;
@@ -220,7 +222,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     // reasons that are not a column change.
     const tasks = (await sql`
       SELECT w.id, p.key_prefix || '-' || w.number AS key,
-             w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status, w.resolution,
+             w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status, w.resolution, w.origin->>'provider' AS "originProvider",
              ${sql.unsafe(peopleJson("w"))}, ${sql.unsafe(escalationJson("w"))},
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e
@@ -343,6 +345,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         status: w.status,
         ...(w.resolution ? { resolution: w.resolution } : {}),
         ...(rel?.duplicateOf ? { duplicateOf: rel.duplicateOf } : {}),
+        ...(w.originProvider ? { originProvider: w.originProvider } : {}),
         statusSince: w.statusSince,
         costUsd: costByTask.get(w.id) ?? 0,
         // Who is on it, the owner first: the person it waits on when an

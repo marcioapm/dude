@@ -8,6 +8,7 @@ import type { Harness } from "./harnesses.ts";
 import type { PersonRef } from "./hierarchy.ts";
 import type { AskItem } from "./questions.ts";
 import type { AgentMachine } from "./machines.ts";
+import type { SessionChatOrigin } from "./chat.ts";
 
 /** What a member may do: the owner (exactly one), write and file, or read. */
 export type SessionRole = "owner" | "chat" | "read";
@@ -252,6 +253,8 @@ export interface SessionDetail {
     /** Absent from an older orchestrator: private. */
     access?: SessionAccess;
     ownedByAdmins?: boolean;
+    /** Made from a chat mention: where, the thread as quoted, and how it was routed; null otherwise. */
+    origin?: SessionChatOrigin | null;
   };
   /** `role` is what you may do (an organisation session lifts `read` to `chat`); `member` is false when you are not one of its people yet; `mayRename` is the rename route's own rule (a lifted reader may not). */
   you: { id: string; role: SessionRole; archived: boolean; member?: boolean; admin?: boolean; mayRename?: boolean };

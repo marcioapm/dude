@@ -107,6 +107,7 @@ import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
+import { OriginLine } from "../chatOrigin.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -839,6 +840,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
               <PageRail aria-label="Pull requests, machines and servers">
                 <PageRailBlock label="This task"><KeyValueList data-testid="task-facts" items={[
                   ...(owner ? [{ label: "Owner", value: owner.name }] : []),
+                  // Filed from a chat thread: where, linked to it.
+                  ...(item.origin ? [{ label: "From", value: <OriginLine origin={item.origin} testId="task-origin" /> }] : []),
                   // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
                   ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
                     <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} />

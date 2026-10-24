@@ -40,6 +40,7 @@ import { JudgementsPage, useJudgementSettings } from "./JudgementsSettings.tsx";
 import { ImagesPage, queueCount, useImages } from "./ImagesSettings.tsx";
 import { useImageChoices } from "../images.tsx";
 import { NetworkPage } from "./NetworkSettings.tsx";
+import { ChatPages, chatNav, isChatPage, useChatOverview } from "./ChatSettings.tsx";
 
 // The first is where the screen opens: who is in the organization, then
 // GitHub, what a new organization sets up first.
@@ -61,7 +62,10 @@ export interface OrganizationSettingsScreenProps {
 }
 
 export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged, projects, page: given, sub, onPage, onOpenRun }: OrganizationSettingsScreenProps) {
-  const page = settingsPage(given, PAGES);
+  // Chat's pages are "chat" and "chat/<provider>" (the place's page and sub): the frame's page is the whole of it.
+  const chatPage = given === "chat" ? (sub ? `chat/${sub}` : "chat") : null;
+  const page = chatPage ?? settingsPage(given, PAGES);
+  const chat = useChatOverview(client);
   const index = useIndexSummary(client);
   const { scope, problem } = useSettings(client, () => client.organizationSettings(), (p) => client.updateOrganizationSettings(p));
   const settings = scope?.settings;
@@ -103,7 +107,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
       loading={false}
       problem={null}
       page={page}
-      onPage={onPage}
+      onPage={(next) => (isChatPage(next) && next !== "chat" ? onPage("chat", next.slice("chat/".length)) : onPage(next))}
       scope={{ title: orgName, subtitle: "Organisation settings",
         leading: account ? <OrgFace org={orgOf(account.current)} size={32} aria-hidden /> : <AgentAvatar role="conductor" size="lg" /> }}
       items={[
@@ -111,6 +115,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         ...(admin ? [{ id: "invitations", label: "Invitations", icon: "link" as const, note: pending ? `${pending} pending` : undefined }] : []),
         { id: "general", label: "General", icon: "settings" },
         { id: "github", label: "GitHub", icon: "git-branch" },
+        chatNav(chat.overview, admin),
         agentsNav(settings),
         { id: "network", label: "Network", icon: "globe" },
         { id: "models", label: "Models", icon: "sparkle", note: models.tiers?.tiers.length || undefined },
@@ -121,7 +126,11 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         memoryNav(index.status?.failed),
       ]}
     >
-      {isMemoryPage(page) ? (
+      {isChatPage(page) ? (
+        <ChatPages client={client} page={page} orgName={orgName} admin={admin} overview={chat} onChanged={() => undefined}
+          onPage={(next) => (next !== "chat" && isChatPage(next) ? onPage("chat", next.slice("chat/".length)) : onPage(next))}
+          judgementTier={judgementTier ? { name: judgementTier.name, model: judgementTier.model ?? null } : null} />
+      ) : isMemoryPage(page) ? (
         // A page with another audience says so itself: Memory says who may do what there.
         <MemoryPages client={client} page={page} projects={projects} admin={me?.role === "admin"} index={index} onPage={onPage}
           scope={{ kind: "organization", name: settings?.organization.name ?? "the organisation" }} />
@@ -132,7 +141,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
       ) : page === "judgements" ? (
         // Judgements says who may change the tier itself.
         <JudgementsPage client={client} orgName={orgName} tiers={models.tiers?.tiers ?? null} tiersProblem={models.problem}
-          judgement={judgement} onManageTiers={admin ? () => onPage("models") : undefined}
+          judgement={judgement} onManageTiers={admin ? () => onPage("models") : undefined} onChat={() => onPage("chat")}
           onChanged={() => void client.modelTiers().then(models.setTiers, () => undefined)} />
       ) : page === "images" ? (
         <ImagesPage client={client} orgName={settings?.organization.name ?? "the organisation"} images={images} sub={sub}

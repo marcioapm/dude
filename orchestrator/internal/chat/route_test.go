@@ -417,6 +417,9 @@ func TestChatPrivateChannelSharesTheSessionWithConnectedMembers(t *testing.T) {
 	if o := w.one(`SELECT origin->'routing'->>'skipped' FROM sessions WHERE id = $1`, session); o != `["U3", "U9"]` {
 		t.Fatalf("routing line skipped %s", o)
 	}
+	if o := w.one(`SELECT origin->'routing'->>'skippedNames' FROM sessions WHERE id = $1`, session); o != `["Gus", "Zed Outside"]` {
+		t.Fatalf("routing line skipped names %s", o)
+	}
 
 	// Gus connects later and mentions dude in the thread: he is added, and
 	// his message goes in. Eli leaving the channel keeps his access.

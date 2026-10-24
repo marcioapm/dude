@@ -40,7 +40,9 @@ type routingFacts struct {
 	Reasoning  string   `json:"reasoning"`
 	Added      []string `json:"added"`
 	Skipped    []string `json:"skipped"`
-	RequestID  string   `json:"requestId"`
+	// The skipped people's display names, in Skipped's order, for the routing line.
+	SkippedNames []string `json:"skippedNames"`
+	RequestID    string   `json:"requestId"`
 }
 
 // make carries a decision out: a session (with access from where the
@@ -52,11 +54,21 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 		r.Route = d.Route
 	}
 	var members []string
+	names := map[string]string{}
 	if d.Route == RouteBrainstorm && (r.Kind == KindPrivate || r.Kind == KindGroup) {
 		var err error
 		if members, err = p.ListMembers(ctx, inst, m.ConversationID); err != nil {
 			s.noteFailure(ctx, org, m.Provider, err)
 			return err
+		}
+		// Display names for the routing line's skipped people, at most 50 asked.
+		for i, u := range members {
+			if i == 50 {
+				break
+			}
+			if who, err := p.User(ctx, inst, u); err == nil {
+				names[u] = who.Name()
+			}
 		}
 	}
 	r.ID = ids.New(ids.ChatRequest)
@@ -67,7 +79,7 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		switch d.Route {
 		case RouteBrainstorm:
-			id, title, err := s.startSession(ctx, tx, org, inst, who, r, t, d, origin, members)
+			id, title, err := s.startSession(ctx, tx, org, inst, who, r, t, d, origin, members, names)
 			if err != nil {
 				return err
 			}
@@ -196,7 +208,7 @@ func withThread(goal string, t threadContext) string {
 // conversation; a DM's private), its first message the mention with the
 // thread quoted.
 func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, inst Installation, who asker, r *request, t threadContext,
-	d Decision, origin Origin, members []string) (string, string, error) {
+	d Decision, origin Origin, members []string, names map[string]string) (string, string, error) {
 	id := ids.New(ids.Session)
 	title := clip(trimmed(d.Title), 120)
 	if title == "" {
@@ -236,8 +248,16 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, inst 
 		}
 	}
 	origin.Thread = t.Messages
+	skippedNames := []string{}
+	for _, u := range r.Skipped {
+		if n, ok := names[u]; ok {
+			skippedNames = append(skippedNames, n)
+		} else {
+			skippedNames = append(skippedNames, u)
+		}
+	}
 	origin.Routing = &routingFacts{Route: r.Route, AskedRoute: r.AskedRoute, Confidence: r.Confidence, Reasoning: r.Reasoning,
-		Added: nonNil(r.Added), Skipped: nonNil(r.Skipped), RequestID: r.ID}
+		Added: nonNil(r.Added), Skipped: nonNil(r.Skipped), SkippedNames: skippedNames, RequestID: r.ID}
 	if _, err := tx.Exec(ctx, `UPDATE sessions SET origin = $2 WHERE id = $1`, id, origin); err != nil {
 		return "", "", err
 	}

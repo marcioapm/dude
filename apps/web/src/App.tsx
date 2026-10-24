@@ -33,6 +33,11 @@ import { InboxScreen } from "./screens/InboxScreen.tsx";
 import { NotFound } from "./screens/NotFound.tsx";
 import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
+import { ConnectScreen } from "./screens/ConnectScreen.tsx";
+import { EpicOrigin, OriginLead } from "./chatOrigin.tsx";
+
+/** A chat-born card's lead: defined once, so the memoised cards keep their props. */
+const cardLead = (card: BoardCard) => (card.task.originProvider ? <OriginLead provider={card.task.originProvider} /> : null);
 import { HelpScreen } from "./screens/HelpScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
@@ -484,6 +489,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       onPage={(page, sub) => go(sub ? { view: "orgSettings", page, sub } : { view: "orgSettings", page }, !sub)} />;
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
+  } else if (place?.view === "connect") {
+    main = <ConnectScreen client={client} provider={place.provider} state={place.state} onSettings={() => go({ view: "mySettings" })} />;
   } else if (place?.view === "help") {
     main = <HelpScreen client={client} page={place.page} section={place.section} onPage={(page) => go({ view: "help", page })}
       onSection={(page, section) => go({ view: "help", page, section })} />;
@@ -573,6 +580,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         onFilterChange={setBoardFilter}
         onHighlightChange={litCard.set}
         cardStart={cardStart}
+        cardLead={cardLead}
         archivedHint={!epic && project.archivedCount ? (
           <Button size="sm" variant="quiet" aria-expanded={showArchived} data-testid="archived-hint"
             onClick={() => setShowArchived((s) => !s)}>
@@ -620,12 +628,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             { id: project.id, label: project.name, onSelect: () => go(inTree({ kind: "project", id: project.id })) },
             { id: epic.id, label: epic.title, icon: "layers" },
           ]} />}
-          meta={<Segmented<EpicView> size="sm" label="Epic view" tabs="epic" value={epicView} data-testid="epic-view"
+          meta={<><EpicOrigin client={client} projectId={project.id} epicId={epic.id} /><Segmented<EpicView> size="sm" label="Epic view" tabs="epic" value={epicView} data-testid="epic-view"
             onChange={(v) => go({ view: "tree", ref: { kind: "epic", id: epic.id }, ...(v === "coordination" ? { epicView: v } : {}) }, true)}
             options={[
               { value: "board", label: "Board" },
               { value: "coordination", label: <>Coordination<OpenWaits client={client} epicId={epic.id} version={version} /></> },
-            ]} />}
+            ]} /></>}
           actions={<>
             <Button size="sm" variant="quiet" leadingIcon="edit" data-testid="edit-epic-button"
               onClick={() => act({ kind: "editEpic", epic: epicRef(project.id, epic) })}>
@@ -906,6 +914,8 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
       return "A session";
     case "openSessions":
       return "Open to everyone";
+    case "connect":
+      return "Connect";
     case "projectSettings":
       return [projects?.find((p) => p.id === place.projectId)?.name, "Settings"].filter(Boolean).join(" · ");
     case "tree": {

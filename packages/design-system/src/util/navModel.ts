@@ -100,6 +100,8 @@ export interface NavTask {
   readonly resolution?: TaskResolution | undefined;
   /** Closed as a duplicate: the key of the task it duplicates. */
   readonly duplicateOf?: string | undefined;
+  /** The chat provider it came from, by id, for the board card's lead; absent for one made in dude. */
+  readonly originProvider?: string | undefined;
 }
 
 /** A related task, as a chip, a menu and the strip name it. */

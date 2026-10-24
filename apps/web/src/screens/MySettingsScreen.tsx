@@ -15,6 +15,7 @@ import { useAccount } from "../accounts/context.tsx";
 import { roleWord, untilWords } from "../accounts/words.ts";
 import { useSave } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
+import { ChatConnections } from "./ChatConnections.tsx";
 
 // Notifications are on or off per organisation: the card speaks of the one this tab is in.
 const PUSH_TEXT: Record<PushState, string> = {
@@ -199,6 +200,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
         <GithubAuthorizationCard client={client} connection={authorization.connection} outcome={githubOutcome}
           onDisconnected={() => { setGithubOutcome(null); setRead((n) => n + 1); }} />
       ) : null}
+      <ChatConnections client={client} me={me ? { id: me.id, name: me.name } : null} />
       {groups.length ? <KeysSection client={keysClient} groups={groups} /> : null}
       {account && account.memberships.length + account.invitations.length > 1 ? (
         <Card data-testid="my-organisations">
