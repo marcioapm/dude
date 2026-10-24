@@ -125,20 +125,21 @@ func TestARelateItemIsFiledAsAnEdge(t *testing.T) {
 	}
 }
 
-// #308: Filing a card that names an existing task and makes a new one,
+// #308: Filing a card that edits an existing task and makes a new one,
 // while an agent's create_task in the same project relates its new task to
 // that existing one. The agent holds the project's row (its next number)
 // and its relation's insert checks the foreign key to the existing task
-// (KEY SHARE). Filing holds the named task and, making its new task, waits
-// on the project's row. Filing's task lock must not exclude that KEY
-// SHARE: both commit, and the file answers 200, not a deadlock's 500.
+// (KEY SHARE). Filing holds the named task (readFileFacts, then EditTaskTx
+// on the same row) and, making its new task, waits on the project's row.
+// Neither of filing's task locks may exclude that KEY SHARE: both commit,
+// and the file answers 200, not a deadlock's 500.
 func TestFilingBesideAnAgentRelatingToTheNamedTaskDoesNotDeadlock(t *testing.T) {
 	s := newSessionWorld(t)
 	id := s.session()
 	named := s.taskIn(s.project, "Meter", s.marcio)
 	other := s.taskIn(s.project, "Rates", s.marcio)
 	proposal := s.proposal(id, []delivery.ProposalItem{
-		{Kind: "comment", Task: s.keyOf(named), Text: "Count by the hour"},
+		{Kind: "edit", Task: s.keyOf(named), After: &delivery.TaskText{Goal: ptr("Meter the usage, counted by the hour")}},
 		{Kind: "task", Project: "BL", Title: "Line items", Goal: "Line items for the invoice, from the meter's rows"},
 	})
 	ctx := context.Background()
