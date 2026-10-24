@@ -111,7 +111,9 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 	var parentAttempt int
 	// Chat, the parent Run, the delivery, then the task: the Run before
 	// the delivery as a publish takes them, the delivery before the task
-	// as every other holder of both does (LockEscalationTx).
+	// as every other holder of both does (LockEscalationTx). The task NO
+	// KEY UPDATE: it serialises with the task's status writers, not with
+	// rows referencing the task (their foreign keys' KEY SHARE).
 	err = tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.phase IS NULL
 			AND r.source_kind IS NULL AND r.replaced_by IS NULL AND r.control <> 'abort'
 			AND NOT COALESCE(`+Ending+`, false), r.attempt
@@ -134,7 +136,7 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 		betweenLocks()
 	}
 	var status string
-	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, ref.TaskID).Scan(&status); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, ref.TaskID).Scan(&status); err != nil {
 		return "", err
 	}
 	if Ended(status) {
