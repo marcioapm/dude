@@ -320,6 +320,15 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 	} else {
 		r.UserName = s.names(ctx, p, inst, []string{m.UserID})[m.UserID]
 	}
+	if !who.Linked || who.Person == "" {
+		// A refusal names where it was refused when the provider says; a
+		// failed lookup records it unnamed rather than holding it back.
+		if conv, err := p.Conversation(ctx, inst, m.ConversationID); err != nil {
+			s.noteFailure(ctx, org, m.Provider, err)
+		} else {
+			r.Kind, r.ConversationName = conv.Kind, conv.Name
+		}
+	}
 	if !who.Linked {
 		return s.promptConnect(ctx, org, p, inst, r)
 	}

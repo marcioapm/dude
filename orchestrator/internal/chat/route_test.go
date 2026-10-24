@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -552,6 +553,33 @@ func TestChatRefusesTheUnconnectedAndNonMembersPrivately(t *testing.T) {
 	}
 	if w.model.calls() != 0 || len(w.fake.BotMessages()) != 0 {
 		t.Fatalf("a refusal asked the model or replied in public")
+	}
+}
+
+func TestChatARefusalNamesItsConversation(t *testing.T) {
+	w := setup(t)
+	w.fake.AddConversation(fakeslack.Conversation{ID: "G2", Team: "T1", Name: "billing-private", Kind: "private", Members: []string{"U4", "UBT1"}})
+	w.mention("Gus", "C1", "", "help me")
+	w.mention("Ana", "G2", "", "help me")
+	// A failed lookup still records the refusal, unnamed.
+	w.fake.FailNext("conversations.info", "internal_error")
+	w.mention("Gus", "C1", "", "help again")
+	rows, err := w.owner.Query(w.ctx, `SELECT route, COALESCE(conversation_kind, ''), conversation_name FROM chat_requests
+		WHERE organization_id = $1 ORDER BY created_at, id`, w.org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ Route, Kind, Name string }
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []row{{"not_connected", "public", "#support"}, {"not_member", "private", "#billing-private"}, {"not_connected", "", ""}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("requests %v, want %v", got, want)
+	}
+	if eph := w.fake.Ephemerals(); len(eph) != 3 {
+		t.Fatalf("%d refusals told", len(eph))
 	}
 }
 
