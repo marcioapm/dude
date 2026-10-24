@@ -371,7 +371,8 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 		!strings.Contains(string(reply.Blocks), "https://dude.example.com/#/o/acme/sessions/"+session) || !strings.Contains(string(reply.Blocks), "Open in dude") {
 		t.Fatalf("reply %+v", reply)
 	}
-	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "white_check_mark" {
+	// The session's agent has said nothing yet: the 👀 stays.
+	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "eyes" {
 		t.Fatalf("reactions %v", r)
 	}
 	if b := w.one(`SELECT session_id FROM chat_threads WHERE conversation_id = 'C1' AND thread_id = $1`, root); b != session {

@@ -266,6 +266,9 @@ func run(log *slog.Logger) error {
 		// Mentions and clicks chat providers sent: routed, replied to,
 		// recorded, set.ChatWorkers at once; the loop only claims.
 		{"chat", time.Second, chatService.Sweep},
+		// The marks of mentions that made or resumed a session: ✅ on its
+		// agent's first output, a page of 50 waiting requests a pass.
+		{"chat-reactions", 2 * time.Second, chatService.SettleMarks},
 		// Requests past 30 days and deliveries past 7, in batches.
 		{"chat-retention", time.Hour, chatService.Retain},
 		{"notify", 2 * time.Second, notifier.Sweep},

@@ -182,7 +182,7 @@ func TestChatABoundTaskGoneBeforeTheLinkRoutesAfresh(t *testing.T) {
 	if len(got) != 2 || got[1].Route != "brainstorm" || got[1].ResultKind != "session" || w.model.calls() != 2 {
 		t.Fatalf("requests %+v, %d model calls", got, w.model.calls())
 	}
-	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "white_check_mark" || len(w.fake.Ephemerals()) != 0 {
+	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "eyes" || len(w.fake.Ephemerals()) != 0 {
 		t.Fatalf("reactions %v, ephemerals %+v", r, w.fake.Ephemerals())
 	}
 }

@@ -62,7 +62,7 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 		return err
 	}
 	s.log().Warn("a chat decision could not be made", "organization", org, "route", d.Route, "error", err)
-	r.ResultKind, r.ResultID, r.Added, r.Skipped = "", "", nil, nil
+	r.ResultKind, r.ResultID, r.Added, r.Skipped, r.AwaitsAfter = "", "", nil, nil, nil
 	if d.Route != RouteBrainstorm {
 		r.AskedRoute = d.Route
 		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + clip(err.Error(), 300) + ")")
@@ -147,6 +147,12 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 		}
 		reply.LinkLabel = "Open in dude"
 		r.effects = []effect{replyEffect(reply), reactEffect(ReactionDone)}
+		if r.ResultKind == "session" {
+			if err := awaitSession(ctx, tx, r); err != nil {
+				return err
+			}
+			r.effects[1] = sessionMark(pick)
+		}
 		// A DM is never bound: a thread forwarded into one routes afresh.
 		if m.Direct {
 			return nil

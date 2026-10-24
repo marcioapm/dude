@@ -246,4 +246,6 @@ type serviceState struct {
 	beforeMake func(ctx context.Context) error
 	// DeliveryTimeout, shortened by tests.
 	deliveryTimeout time.Duration
+	// Where SettleMarks reads its next page; only its loop calls it.
+	marks markPage
 }

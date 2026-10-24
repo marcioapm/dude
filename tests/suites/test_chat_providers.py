@@ -175,8 +175,13 @@ def test_an_admin_installs_one_workspace_and_members_link_their_own_accounts(cli
 def test_a_public_channel_mention_opens_an_organisation_session_and_replies_with_its_link(client: ApiClient, env, owner_dsn: str, org: dict):
     acme = _acme(client, env, owner_dsn, org)
     slack, u, team = acme["slack"], acme["u"], acme["team"]
+    # The session's agent is the scripted one, which answers its first message.
+    scripted = client.tier_for("fake/scripted")
+    assert client.patch("/v1/settings/organization", {"roles": {"brainstorm": {"tier": scripted}}}).status_code == 200
     root = slack.say(f"C{team}", "", u["U9"], "CSV export times out for 40 meters")
     ts = slack.mention(f"C{team}", root, u["U1"], "can you reproduce this?")
+    # 👀 as soon as dude takes the mention.
+    assert wait_until(lambda: "eyes" in (slack.state()["reactions"].get(f"C{team}:{ts}") or []), message="👀")
     [req] = _requests(acme["marcia"], 1)
     assert req["route"] == "brainstorm" and req["result"]["kind"] == "session" and req["conversationKind"] == "public"
     session = req["result"]["id"]
@@ -185,7 +190,10 @@ def test_a_public_channel_mention_opens_an_organisation_session_and_replies_with
     reply = wait_until(lambda: [m for m in slack.bot_messages(f"C{team}") if session in json.dumps(m.get("Blocks"))], message="the reply")[0]
     assert reply["ThreadTS"] == root and "open to everyone" in reply["Text"]
     assert f"#/o/{org['client'].get('/v1/me').json()['organization']['slug']}/sessions/{session}" in json.dumps(reply["Blocks"])
-    assert wait_until(lambda: slack.state()["reactions"].get(f"C{team}:{ts}") == ["white_check_mark"], message="✅")
+    # ✅ once the session's agent has answered, in place of the 👀.
+    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM events WHERE session_id = %s AND event_type = 'agent.message'", (session,)),
+               timeout=60, message="the session's agent never answered")
+    assert wait_until(lambda: slack.state()["reactions"].get(f"C{team}:{ts}") == ["white_check_mark"], timeout=30, message="✅")
     # Eli, who was never added, reads it as an organisation member (the web's session page reads this).
     assert acme["eli"].get(f"/v1/brainstorms/{session}").status_code == 200
 
@@ -214,6 +222,8 @@ def test_a_task_bound_thread_answers_with_the_tasks_link_and_no_model(client: Ap
     task = req["result"]["id"]
     [t] = query(owner_dsn, "SELECT status::text AS status, origin->>'provider' AS provider FROM tasks WHERE id = %s", (task,))
     assert t == {"status": "received", "provider": "slack"}
+    # Nothing runs for a task: ✅ with the reply.
+    assert wait_until(lambda: slack.state()["reactions"].get(f"C{team}:{root}") == ["white_check_mark"], message="the task's ✅")
     calls = query(owner_dsn, "SELECT count(*) AS n FROM model_calls WHERE organization_id = %s AND asker = 'chat.route'", (org["id"],))[0]["n"]
     slack.mention(f"C{team}", root, u["U1"], "status?")
     second = _requests(acme["marcia"], 2)[1]

@@ -188,7 +188,7 @@ func TestChatARetryPostsOnlyWhatIsLeft(t *testing.T) {
 		w.count(`SELECT count(*) FROM sessions WHERE organization_id = $1`, w.org) != 1 {
 		t.Fatalf("%d replies, %d model calls", n, w.model.calls())
 	}
-	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "white_check_mark" {
+	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "eyes" {
 		t.Fatalf("reactions %v", r)
 	}
 }
@@ -207,7 +207,7 @@ func (w *world) diedBeforeTheMark(ev string) {
 // ✅, posts only the ✅: the reply is not posted twice.
 func TestChatARetryAfterAPostedReplyPostsOnlyTheMark(t *testing.T) {
 	w := setup(t)
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Hello"}))
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
 	ts, ev := w.receive("Márcia", "C1", "", "hello")
 	w.once()
 	if e := w.event(ev); !e.Processed || len(w.fake.BotMessages()) != 1 {

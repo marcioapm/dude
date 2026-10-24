@@ -141,6 +141,10 @@ CREATE TABLE chat_events (
   claimed_until   timestamptz,
   decision        jsonb,
   last_error      text,
+  -- When dude put its working mark (👀) on the mention, as the delivery's
+  -- first stage: set once, so a retry, a reclaimed lease or a mention kept
+  -- for a Connect marks nothing again.
+  working_at      timestamptz,
   PRIMARY KEY (provider, event_id)
 );
 CREATE INDEX chat_events_pending_idx ON chat_events (received_at) WHERE processed_at IS NULL AND attempts < 6;
@@ -231,6 +235,14 @@ CREATE TABLE chat_requests (
   -- replied_at once posted, or given up.
   effects               jsonb NOT NULL DEFAULT '[]'::jsonb,
   replied_at            timestamptz,
+  -- A request whose result is a session keeps its 👀 until that session's
+  -- agent shows life: its first agent.message or agent.tool.called past
+  -- this cursor (the session's last event once the mention went in) puts ✅,
+  -- its agent ending first ❌, and 24 hours of neither leaves 👀
+  -- (expired). NULL: nothing to wait for; the mark went with the reply.
+  awaits_session_after  bigint,
+  mark_settled          text CHECK (mark_settled IN ('done', 'failed', 'expired')),
+  mark_settled_at       timestamptz,
   created_at            timestamptz NOT NULL DEFAULT now(),
   UNIQUE (provider, event_id)
 );
@@ -251,7 +263,12 @@ ALTER TABLE chat_requests FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON chat_requests
   USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE, DELETE ON chat_requests TO dude_app;
-GRANT SELECT (id, created_at), DELETE ON chat_requests TO dude_sweeper;
+-- The marks still waiting on their session, read across tenants by the
+-- chat-reactions loop in (created_at, id) order, a page a pass.
+CREATE INDEX chat_requests_awaiting_idx ON chat_requests (created_at, id)
+  WHERE awaits_session_after IS NOT NULL AND mark_settled_at IS NULL;
+GRANT SELECT (id, created_at, organization_id, provider, result_id, replied_at, awaits_session_after, mark_settled_at), DELETE
+  ON chat_requests TO dude_sweeper;
 
 -- The organisation's additional routing instructions, told to the routing
 -- call for every provider after dude's built-in ones.

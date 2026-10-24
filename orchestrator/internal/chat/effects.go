@@ -25,7 +25,9 @@ type effect struct {
 	Message   string       `json:"message,omitempty"`
 	ChosenBy  ExternalUser `json:"chosenBy,omitzero"`
 	Reaction  Reaction     `json:"reaction,omitempty"`
-	Done      bool         `json:"done,omitempty"`
+	// A 👀 put again, on a mention whose clarifying question cleared it.
+	Again bool `json:"again,omitempty"`
+	Done  bool `json:"done,omitempty"`
 	// Why it could not be posted, when the provider refused it.
 	Failed string `json:"failed,omitempty"`
 }
@@ -39,6 +41,12 @@ func ephemeralEffect(r Reply) effect {
 }
 
 func reactEffect(r Reaction) effect { return effect{Kind: "react", Reaction: r} }
+
+// sessionMark is a session request's mark with its reply: 👀, already on
+// the mention unless a clicked choice's question cleared it.
+func sessionMark(pick *picked) effect {
+	return effect{Kind: "react", Reaction: ReactionWorking, Again: pick != nil}
+}
 
 // deliver posts what the delivery's request has left to post. A transient
 // failure stops it, for the delivery to be tried again; any other is noted
@@ -104,10 +112,13 @@ func (s *Service) deliver(ctx context.Context, org string, p Provider, inst Inst
 			err = p.UpdateQuestion(ctx, inst, m.ConversationID, e.Message, e.ChosenBy, e.Text)
 		case "react":
 			r := e.Reaction
-			if failed && (r == ReactionDone || r == ReactionCleared) {
+			if failed && r != ReactionFailed {
 				r = ReactionFailed
 			}
-			if m.MessageID != "" {
+			// A session's 👀 was put as the delivery's first stage and
+			// stays until its agent answers (reactions.go): it is put here
+			// only for a clicked choice, whose question cleared it.
+			if m.MessageID != "" && (r != ReactionWorking || e.Again) {
 				err = p.React(ctx, inst, m.ConversationID, m.MessageID, r)
 			}
 		}
@@ -143,10 +154,12 @@ func (s *Service) deliver(ctx context.Context, org string, p Provider, inst Inst
 	}
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		if failed {
-			// What it made stays; Requests says the person was never told.
+			// What it made stays; Requests says the person was never told,
+			// and its ❌ is final: no session's output turns it ✅.
 			_, err := tx.Exec(ctx, `UPDATE chat_requests SET replied_at = now(), route = 'failed',
 					asked_route = CASE WHEN route = 'failed' THEN asked_route ELSE COALESCE(asked_route, route) END,
-					reasoning = left(btrim(reasoning || ' (its reply was not posted: ' || $2 || ')'), 2000)
+					reasoning = left(btrim(reasoning || ' (its reply was not posted: ' || $2 || ')'), 2000),
+					mark_settled = COALESCE(mark_settled, 'failed'), mark_settled_at = COALESCE(mark_settled_at, now())
 				WHERE id = $1`, id, failure)
 			return err
 		}

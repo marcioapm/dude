@@ -152,6 +152,9 @@ type request struct {
 	Added, Skipped              []string
 	ModelCall                   string
 	Question                    any
+	// The session's last event cursor once the mention went in: its mark
+	// waits on the agent's first output past it (reactions.go).
+	AwaitsAfter *int64
 	// What is posted once the request commits.
 	effects []effect
 	// The conversation's members, for a private or group conversation;
@@ -184,14 +187,14 @@ func record(ctx context.Context, tx pgx.Tx, r *request) (bool, error) {
 	tag, err := tx.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
 			conversation_kind, conversation_name, thread_id, external_user_id, external_user_name, person_id, text, permalink, context_hash,
 			route, asked_route, confidence, reasoning, rounds, result_kind, result_id, shared_added, shared_skipped, model_call_id,
-			mention, question, effects)
+			mention, question, effects, awaits_session_after)
 		VALUES ($1, current_organization_id(), $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10, NULLIF($11, ''), $12, $13, NULLIF($14, ''),
-			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27)
+			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27, $28)
 		ON CONFLICT (provider, event_id) DO NOTHING`,
 		r.ID, r.Mention.Provider, r.EventID, r.Mention.WorkspaceID, r.Mention.ConversationID, r.Kind, r.ConversationName,
 		r.Mention.ThreadID, r.Mention.UserID, r.UserName, r.Person, clip(r.Mention.Text, 4000), r.Permalink, r.ContextHash,
 		r.Route, r.AskedRoute, r.Confidence, clip(r.Reasoning, 2000), r.Rounds, r.ResultKind, r.ResultID, db.NonNil(r.Added),
-		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects)
+		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects, r.AwaitsAfter)
 	if err != nil {
 		return false, err
 	}
@@ -290,6 +293,7 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 		ok   bool
 		who  asker
 		done bool
+		mark bool
 	)
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		if done, err = handled(ctx, tx, m.Provider, eventID); err != nil {
@@ -302,6 +306,15 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 			ok = false
 			return nil
 		}
+		if pick == nil {
+			// The 👀 is claimed before it is put: at most once per delivery.
+			tag, err := tx.Exec(ctx, `UPDATE chat_events SET working_at = now() WHERE provider = $1 AND event_id = $2 AND working_at IS NULL`,
+				d.Provider, eventID)
+			if err != nil {
+				return err
+			}
+			mark = tag.RowsAffected() == 1
+		}
 		who, err = whoIs(ctx, tx, m.Provider, m.WorkspaceID, m.UserID)
 		return err
 	})
@@ -312,7 +325,7 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 		return s.deliver(ctx, org, p, inst, eventID)
 	}
 	r := &request{EventID: eventID, Mention: m, Person: who.Person, Permalink: p.Permalink(inst, m.ConversationID, m.MessageID, m.ThreadID)}
-	if pick == nil {
+	if mark {
 		s.react(ctx, org, p, inst, m, ReactionWorking)
 	}
 	if who.Linked && who.Display != "" {
@@ -614,7 +627,10 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 			return err
 		}
 		r.effects = []effect{replyEffect(Reply{Text: "Added to your session " + quoteTitle(title),
-			LinkURL: s.link(who.Slug, "sessions/"+url.PathEscape(b.Session)), LinkLabel: "Open in dude"}), reactEffect(ReactionDone)}
+			LinkURL: s.link(who.Slug, "sessions/"+url.PathEscape(b.Session)), LinkLabel: "Open in dude"}), sessionMark(pick)}
+		if err := awaitSession(ctx, tx, r); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, `UPDATE chat_threads SET last_read_message_id = $5 WHERE provider = $1 AND external_workspace_id = $2
 			AND conversation_id = $3 AND thread_id = $4`, m.Provider, m.WorkspaceID, m.ConversationID, m.ThreadID, m.MessageID)
 		return err
@@ -881,7 +897,8 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 		var mRaw, eRaw []byte
 		err = tx.QueryRow(ctx, `UPDATE chat_requests SET route = 'failed', replied_at = now(),
 				asked_route = CASE WHEN route = 'failed' THEN asked_route ELSE COALESCE(asked_route, route) END,
-				reasoning = left(btrim(reasoning || ' (' || $3 || ')'), 2000)
+				reasoning = left(btrim(reasoning || ' (' || $3 || ')'), 2000),
+				mark_settled = COALESCE(mark_settled, 'failed'), mark_settled_at = COALESCE(mark_settled_at, now())
 			WHERE provider = $1 AND event_id = $2 AND replied_at IS NULL RETURNING mention, effects`,
 			d.Provider, d.ID, "its reply was not posted: "+reason).Scan(&mRaw, &eRaw)
 		if db.IsNotFound(err) {
