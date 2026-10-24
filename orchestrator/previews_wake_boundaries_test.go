@@ -427,7 +427,7 @@ func TestAStaleSweepDoesNotHoldTheNextWake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := &servers.Previews{Service: &servers.Service{DB: &db.DB{Pool: pool}, Lux: w.previews.Lux, Log: quiet,
+	other := &servers.Previews{Service: &servers.Service{DB: &db.DB{Pool: pool}, Lux: w.previews.Lux, Log: w.log,
 		PreviewDomain: previewDomain}, Forges: w.previews.Forges, DefaultImage: "default:img"}
 	swept, returned := make(chan error, 1), make(chan struct{})
 	// In this order on any exit: pool.Close waits on the connection the

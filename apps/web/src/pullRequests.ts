@@ -180,6 +180,7 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
         "integration-started": ["started resolving ", `${target}'s conflicts with `, ...base],
         "integration-completed": ["resolved ", `${target}'s conflicts with `, ...base, ", then reviewed and tested it"],
         "integration-refused": ["could not resolve ", `${target}'s conflicts with `, ...base, cause ? `: ${cause}` : ""],
+        "not-opened": [`opened no pull request for the fix's change in ${str(p.repo)}: #${String(p.number ?? "")} there was closed, and a person chose to go on without it`],
       };
       const parts = acts[str(p.action)];
       if (!parts) return null;

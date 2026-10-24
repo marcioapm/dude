@@ -322,7 +322,7 @@ func TestAResumeKeepsGitTokenTheSubmittedRepositorysOwners(t *testing.T) {
 	w := newWorld(t)
 	app := w.asApp()
 	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 71, "marcio": 72} })
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)

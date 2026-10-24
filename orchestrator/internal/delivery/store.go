@@ -1117,8 +1117,19 @@ func (s *Store) OpenPullRequests(ctx context.Context, org string, st *State, for
 	var ids []string
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var err error
-		todo, changed, ids, err = reposToOpen(ctx, tx, st)
-		return err
+		if todo, changed, ids, err = reposToOpen(ctx, tx, st); err != nil {
+			return err
+		}
+		var skipped map[string]int
+		if todo, skipped, err = waitedPastRepos(ctx, tx, st, todo); err != nil {
+			return err
+		}
+		for _, repo := range slices.Sorted(maps.Keys(skipped)) {
+			if err := notOpenedTx(ctx, tx, org, st, repo, skipped[repo]); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil || len(todo) == 0 {
 		return ids, err
@@ -1201,6 +1212,60 @@ func reposToOpen(ctx context.Context, tx pgx.Tx, st *State) (todo, changed []Rep
 		}
 	}
 	return todo, changed, ids, nil
+}
+
+// ActionNotOpened (pull_request.action) is a change in a repository whose
+// pull request the person waited past closed, which dude opened none for.
+const ActionNotOpened = "not-opened"
+
+// waitedPastRepos takes out of todo the repositories with a pull request
+// the person chose to wait past closed (State.WaitedPastClosed) and still
+// closed: they accepted that part as not taken, so a later change there
+// opens none. One reopened or merged since no longer counts, as in closedBeyondWait.
+// Returns the rest, and, by repository name, the closed pull request's number.
+func waitedPastRepos(ctx context.Context, tx pgx.Tx, st *State, todo []Repository) ([]Repository, map[string]int, error) {
+	if len(st.WaitedPastClosed) == 0 || len(todo) == 0 {
+		return todo, nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT repository_id, number FROM pull_requests WHERE id = ANY($1) AND state = $2`,
+		st.WaitedPastClosed, forge.StateClosed)
+	if err != nil {
+		return nil, nil, err
+	}
+	closed := map[string]int{}
+	var repoID string
+	var number int
+	if _, err := pgx.ForEachRow(rows, []any{&repoID, &number}, func() error { closed[repoID] = number; return nil }); err != nil {
+		return nil, nil, err
+	}
+	var open []Repository
+	skipped := map[string]int{}
+	for _, r := range todo {
+		if n, ok := closed[r.ID]; ok {
+			skipped[r.Name] = n
+		} else {
+			open = append(open, r)
+		}
+	}
+	return open, skipped, nil
+}
+
+// notOpenedTx says on the task's activity that the change in repo, at
+// head, got no pull request since the one there (number) was closed and
+// waited past; once per repository and head however often the step replays.
+func notOpenedTx(ctx context.Context, tx pgx.Tx, org string, st *State, repo string, number int) error {
+	head := st.Heads[repo]
+	var seen bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1
+			AND event_type = $2 AND payload->>'action' = $3 AND payload->>'repo' = $4 AND payload->>'head' = $5)`,
+		st.TaskID, EvPullRequestAction, ActionNotOpened, repo, head).Scan(&seen); err != nil || seen {
+		return err
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: org,
+		ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow",
+		Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID,
+		Payload: map[string]any{"action": ActionNotOpened, "repo": repo, "number": number, "head": head}})
+	return err
 }
 
 // pullRequestText is a task's pull request title and body, rendered

@@ -270,7 +270,7 @@ func TestAQuestionIsPushedOnlyToWhoMayStillAnswerIt(t *testing.T) {
 			}
 			mustExec(t, s.owner, `INSERT INTO push_subscriptions (endpoint, organization_id, person_id, p256dh, auth) VALUES ($1, $2, $3, $4, $5)`,
 				push.URL, s.org, to, base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), base64.RawURLEncoding.EncodeToString(auth))
-			n := &notify.Notifier{DB: s.app, Log: quiet, Subject: "ops@example.com", HTTP: push.Client()}
+			n := &notify.Notifier{DB: s.app, Log: s.log, Subject: "ops@example.com", HTTP: push.Client()}
 			if _, _, err := n.Keys(t0()); err != nil {
 				t.Fatal(err)
 			}
@@ -459,7 +459,7 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	srv := httptest.NewServer((&api.Server{DB: &db.DB{Pool: pool}, Lux: s.syncer.Lux, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	srv := httptest.NewServer((&api.Server{DB: &db.DB{Pool: pool}, Lux: s.syncer.Lux, Token: "svc", Log: s.log, Kick: func() {}}).Handler())
 	t.Cleanup(srv.Close)
 	get := func(person, session string) (map[string]any, int64) {
 		req, _ := http.NewRequest("GET", srv.URL+"/internal/sessions/"+session, nil)

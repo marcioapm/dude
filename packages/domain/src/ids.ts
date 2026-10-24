@@ -48,6 +48,10 @@ export const ID_PREFIXES = {
   feedbackReply: "fbr",
   modelCall: "mcl",
   reviewQuestion: "rvq",
+  automation: "aut",
+  automationRun: "arn",
+  automationRequest: "arq",
+  automationPromptVersion: "apv",
   chatInstallation: "chi",
   chatRequest: "chr",
 } as const;

@@ -82,7 +82,7 @@ func syncBaseLine(t *testing.T, body string) agenttools.BaseSync {
 func TestSyncBaseCountsTheNewestReportOfAnEarlierCall(t *testing.T) {
 	w := newWorld(t)
 	w.lux.HoldSyncs = true
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Lux: w.syncer.Lux,
 		SyncBase: w.syncer.SyncBase, SyncBaseWait: 50 * time.Millisecond}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
@@ -226,7 +226,7 @@ func TestAnIntegrationWhoseFetchNeverLandsPublishesNoMerge(t *testing.T) {
 func TestAnIntegrationWhoseRunIsRecordedRunningLateMergesTheMovedBase(t *testing.T) {
 	w := newWorld(t)
 	var calls atomic.Int32
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Lux: w.syncer.Lux, SyncBase: w.syncer.SyncBase,
 		BeforeCall: func(tool string) {
 			if tool == "sync_base" {
 				calls.Add(1)

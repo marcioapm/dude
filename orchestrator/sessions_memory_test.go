@@ -142,10 +142,10 @@ func (sameVector) Dimensions() int { return 768 }
 // removed, a task's agent in the same project, another session's agent.
 func TestASessionMemoryFoundByMeaningIsItsMembersAlone(t *testing.T) {
 	s := newSessionWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: s.app, Log: quiet, Forges: forge.Resolver{DB: s.app}, Embedder: sameVector{}}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: s.app, Log: s.log, Forges: forge.Resolver{DB: s.app}, Embedder: sameVector{}}).Handler())
 	t.Cleanup(tools.Close)
 	s.syncer.Agent.ToolsURL, s.syncer.Agent.ToolsService = tools.URL, true
-	apiSrv := httptest.NewServer((&api.Server{DB: s.app, Lux: s.syncer.Lux, Token: "svc", Log: quiet, Kick: func() {}, Embedder: sameVector{}}).Handler())
+	apiSrv := httptest.NewServer((&api.Server{DB: s.app, Lux: s.syncer.Lux, Token: "svc", Log: s.log, Kick: func() {}, Embedder: sameVector{}}).Handler())
 	t.Cleanup(apiSrv.Close)
 	s.api = apiSrv.URL
 

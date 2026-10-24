@@ -18,6 +18,16 @@ import type { QuestionAnswer as SentAnswer } from "@dude/design-system/component
 import type {
   AgentMachine,
   AgentRole,
+  Automation,
+  AutomationInput,
+  AutomationRunDetail,
+  AutomationPromptVersion,
+  AutomationRunsResponse,
+  EventSubscriptions,
+  EventVerdict,
+  NewAutomation,
+  PastDelivery,
+  RunNow,
   FeedbackDraftInput,
   FeedbackItem,
   FeedbackList,
@@ -1325,6 +1335,90 @@ export class ApiClient {
   /** One small request for a tier's model with its effort, options and headers, as its agent sends it. */
   testModel(input: ModelTestInput): Promise<{ model: string; result: ModelTestResult }> {
     return this.#request("POST", "/v1/models/test", input);
+  }
+
+  // -- automations: the organisation's and each project's -------------------
+
+  automations(query: Record<string, string> = {}): Promise<{ automations: Automation[] }> {
+    const qs = new URLSearchParams(query).toString();
+    return this.#request("GET", `/v1/automations${qs ? `?${qs}` : ""}`);
+  }
+
+  projectAutomations(projectId: string): Promise<{ automations: Automation[]; alsoRunningHere: Automation[] }> {
+    return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/automations`);
+  }
+
+  automation(id: string): Promise<Automation> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}`);
+  }
+
+  createAutomation(input: NewAutomation & { projectId: string | null; tz: string }): Promise<Automation> {
+    return this.#request("POST", "/v1/automations", input);
+  }
+
+  updateAutomation(id: string, input: AutomationInput): Promise<Automation> {
+    return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}`, input);
+  }
+
+  deleteAutomation(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/automations/${encodeURIComponent(id)}`);
+  }
+
+  setAutomationEnabled(id: string, enabled: boolean): Promise<Automation> {
+    return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}/enabled`, { enabled });
+  }
+
+  transferAutomation(id: string, personId: string): Promise<Automation> {
+    return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}/owner`, { personId });
+  }
+
+  automationRepositories(): Promise<{ groups: Array<{ projectId: string; project: string; repos: string[] }> }> {
+    return this.#request("GET", "/v1/automations/repositories");
+  }
+
+  /** A schedule's next three times, as the orchestrator's scheduler computes them. */
+  scheduleNext(cron: string, tz: string): Promise<{ times: string[] }> {
+    return this.#request("POST", "/v1/automations/schedule/next", { cron, tz });
+  }
+
+  eventSubscriptions(): Promise<EventSubscriptions> {
+    return this.#request("GET", "/v1/automations/subscriptions");
+  }
+
+  automationRuns(id: string, status?: string): Promise<AutomationRunsResponse> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/runs${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+  }
+
+  automationRun(id: string, runId: string): Promise<AutomationRunDetail> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`);
+  }
+
+  automationDeliveries(id: string): Promise<{ deliveries: PastDelivery[] }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries`);
+  }
+
+  runAutomation(id: string, body: RunNow): Promise<{ runId: string }> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/runs`, body);
+  }
+
+  evaluateTestEvent(id: string, body: Record<string, unknown>): Promise<EventVerdict> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/test-event/evaluate`, { body });
+  }
+
+  startAutomationFresh(id: string): Promise<void> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/start-fresh`);
+  }
+
+  automationPromptHistory(id: string): Promise<{ versions: AutomationPromptVersion[] }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/prompt-history`);
+  }
+
+  restoreAutomationPrompt(id: string, versionId: string): Promise<Automation> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/prompt-history/restore`, { versionId });
+  }
+
+  duplicateAutomation(id: string): Promise<Automation> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/duplicate`);
   }
 
   // -- judgements: the organisation's judgement tier and its calls -----------

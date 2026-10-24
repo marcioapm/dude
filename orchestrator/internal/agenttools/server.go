@@ -92,11 +92,21 @@ type Caller struct {
 	Child                                       bool
 	RunID, Org, ProjectID, TaskID, Role, Status string
 	// A session's agent: its session, in place of a task and project.
-	SessionID string
+	SessionID       string
+	AutomationID    string
+	AutomationScope AutomationScope
 	// Its capabilities (capabilities.Resolve), resolved with the token.
 	grants capabilities.Grants
 	// What the server lends a call: set on each, not part of who calls.
 	env env
+}
+
+type AutomationScope struct {
+	ProjectID   string   `json:"projectId"`
+	OwnerID     string   `json:"ownerId"`
+	Repos       []string `json:"repos"`
+	EventRepo   string   `json:"eventRepo"`
+	EventNumber int      `json:"eventNumber"`
 }
 
 // env is the server's, for the tools that need more than the database, and
@@ -120,6 +130,9 @@ func (c Caller) run() delivery.RunRef {
 
 // event is a ledger event by the calling agent, on its Run.
 func (c Caller) event(typ string, payload map[string]any) ledger.Event {
+	if c.AutomationID != "" {
+		payload["automationId"], payload["automationRunId"], payload["actingFor"] = c.AutomationID, c.RunID, c.AutomationScope.OwnerID
+	}
 	return c.run().Event(typ, ledger.ActorAgent, payload)
 }
 
@@ -222,7 +235,7 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 	}
 	out := []entry{}
-	for _, t := range granted(c.Role, c.grants) {
+	for _, t := range c.tools() {
 		if !c.Child || childToolAllowed(t.name) {
 			out = append(out, entry{t.name, s.descriptionFor(r.Context(), c, t)})
 		}
@@ -235,7 +248,7 @@ func (s *Server) listJSON(w http.ResponseWriter, r *http.Request) {
 // tool this Run does not have.
 func (s *Server) callJSON(w http.ResponseWriter, r *http.Request) {
 	c, _ := r.Context().Value(callerKey{}).(Caller)
-	t, ok := find(r.PathValue("name"), c.Role, c.grants)
+	t, ok := c.findTool(r.PathValue("name"))
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no tool " + r.PathValue("name") + " for this Run"})
 		return
@@ -282,7 +295,15 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 			COALESCE(session_id, ''), role, status
 		FROM lookup_run_by_mcp_token($1)`, HashToken(token)).Scan(&c.RunID, &c.Org, &c.ProjectID, &c.TaskID, &c.SessionID, &role, &c.Status)
 	if db.IsNotFound(err) {
-		return c, errUnknown
+		err = s.DB.Pool.QueryRow(ctx, `SELECT run_id, organization_id, automation_id, status, scope
+			FROM lookup_automation_by_mcp_token($1)`, HashToken(token)).Scan(&c.RunID, &c.Org, &c.AutomationID, &c.Status, &c.AutomationScope)
+		if db.IsNotFound(err) {
+			return c, errUnknown
+		}
+		c.ProjectID = c.AutomationScope.ProjectID
+		c.Role = "automation"
+		c.grants = capabilities.Of(capabilities.TasksCreate, capabilities.GitHubRead)
+		return c, err
 	}
 	if err != nil {
 		return c, err
@@ -312,7 +333,7 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "dude", Version: "1"}, &mcp.ServerOptions{
 		Instructions: serverInstructions,
 	})
-	for _, t := range granted(c.Role, c.grants) {
+	for _, t := range c.tools() {
 		if c.Child && !childToolAllowed(t.name) {
 			continue
 		}
@@ -344,7 +365,7 @@ func (s *Server) serverFor(c Caller) *mcp.Server {
 			res, err := next(ctx, method, req)
 			if list, ok := res.(*mcp.ListToolsResult); ok && err == nil {
 				for i, listed := range list.Tools {
-					if t, ok := find(listed.Name, c.Role, c.grants); ok && t.describeFor != nil {
+					if t, ok := c.findTool(listed.Name); ok && t.describeFor != nil {
 						described := *listed
 						described.Description = s.descriptionFor(ctx, c, t)
 						list.Tools[i] = &described
@@ -445,6 +466,26 @@ func granted(role string, grants capabilities.Grants) []tool {
 
 func (c Caller) agent() capabilities.Agent {
 	return capabilities.Agent{Role: c.Role, Org: c.Org, Project: c.ProjectID, Run: c.RunID, Session: c.SessionID}
+}
+
+func (c Caller) tools() []tool {
+	if c.AutomationID != "" {
+		create, _ := find("create_task", c.Role, c.grants)
+		return append(append([]tool{create}, githubReadTools...), automationCommentTool)
+	}
+	return granted(c.Role, c.grants)
+}
+
+func (c Caller) findTool(name string) (tool, bool) {
+	if c.AutomationID == "" {
+		return find(name, c.Role, c.grants)
+	}
+	for _, t := range c.tools() {
+		if t.name == name {
+			return t, true
+		}
+	}
+	return tool{}, false
 }
 
 // renamed: tools' names before "work item" became "task". A Run already
@@ -612,6 +653,16 @@ const (
 // transaction recording what it did outside).
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
 	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		if c.AutomationID != "" {
+			var live bool
+			if err := tx.QueryRow(ctx, `SELECT status IN ('queued', 'running') AND ended_at IS NULL FROM automation_runs WHERE id=$1`, c.RunID).Scan(&live); err != nil {
+				return err
+			}
+			if _, ok := c.findTool(t.name); !live || !ok {
+				return refuse("automation run is no longer active or the tool is outside its scope")
+			}
+			return nil
+		}
 		var child bool
 		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&child); err != nil {
 			return err

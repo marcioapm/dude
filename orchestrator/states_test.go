@@ -52,6 +52,8 @@ type prAt struct {
 	// The task also changes acme/web, writable: the implementer commits in
 	// both, and each gets a pull request.
 	web bool
+	// With web, acme/api as well: a pull request in each of three.
+	api bool
 }
 
 // stateRun is one phase Run prOpen writes.
@@ -88,16 +90,22 @@ func (w *world) prOpen(wi string, at prAt) string {
 	ctx := context.Background()
 	policy := scriptedPolicy()
 	policy.Test = at.test
-	repos := []struct {
+	type prRepo struct {
 		name string
 		gh   *fakegithub.Server
-	}{{"target", w.gh}}
+	}
+	repos := []prRepo{{"target", w.gh}}
 	if at.web {
 		w.addWeb(wi, "write")
-		repos = append(repos, struct {
-			name string
-			gh   *fakegithub.Server
-		}{"web", w.web})
+		repos = append(repos, prRepo{"web", w.web})
+		if at.api {
+			apiID := "repo_api_" + w.org
+			mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+				VALUES ($1, $2, $3, 'api', 'git://127.0.0.1/acme/api.git', 'main')`, apiID, w.org, w.project)
+			mustExec(w.t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+				VALUES ($1, $2, $3, 'write')`, w.org, wi, apiID)
+			repos = append(repos, prRepo{"api", w.apiRepo})
+		}
 	} else if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
 		return delivery.NameOnlyRepository(ctx, tx, wi)
 	}); err != nil {

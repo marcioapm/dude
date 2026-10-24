@@ -74,11 +74,15 @@ func loadStopped(ctx context.Context, tx pgx.Tx, taskID string, lock bool) (stop
 	var t stoppedTask
 	forUpdate := ""
 	if lock {
-		// The delivery's row before the task's (delivery.LockEscalationTx).
+		// The delivery's row before the task's, and NO KEY UPDATE, as
+		// delivery.LockEscalationTx takes them: FOR UPDATE would also
+		// exclude the KEY SHARE the syncer's batch takes on the task (an
+		// update's foreign-key check) while holding a Run's row that
+		// ReleaseKeptTx then updates, a deadlock.
 		if _, err := delivery.LoadDelivery(ctx, tx, taskID); err != nil {
 			return t, err
 		}
-		forUpdate = "FOR UPDATE OF t"
+		forUpdate = "FOR NO KEY UPDATE OF t"
 	}
 	var state []byte
 	err := tx.QueryRow(ctx, `SELECT t.project_id, t.status::text, d.id, d.step, d.state,

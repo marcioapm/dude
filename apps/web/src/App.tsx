@@ -541,8 +541,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         projects={projects}
         admin={isAdmin}
         page={place.page}
-        onPage={(page) => go({ view: "projectSettings", projectId: place.projectId, page }, true)}
-        onOrganization={(page) => go({ view: "orgSettings", page })}
+        sub={place.sub}
+        people={people.all}
+        onPage={(page, sub) => go(sub ? { view: "projectSettings", projectId: place.projectId, page, sub } : { view: "projectSettings", projectId: place.projectId, page }, !sub)}
+        onOrganization={(page, sub) => go(sub ? { view: "orgSettings", page, sub } : { view: "orgSettings", page })}
         onOpenRun={openRun}
         onChanged={() => void load()}
         onBack={() => go(inTree({ kind: "project", id: place.projectId }))}

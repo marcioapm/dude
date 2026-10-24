@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/automations"
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -72,6 +73,8 @@ type Server struct {
 	LLM llm.Client
 	// The operator's agent egress (agent.egress), for the Network page.
 	AgentEgress []string
+	// Automations' Run now, test-event evaluation and Start fresh.
+	Automations *automations.Runner
 	// Chat providers: installs, links and their webhooks; nil has none.
 	Chat *chat.Service
 }
@@ -155,6 +158,11 @@ func (s *Server) Handler() http.Handler {
 		write(w, http.StatusAccepted, map[string]bool{"ok": true})
 		return nil
 	}))
+	mux.Handle("GET /internal/automations/subscriptions", s.auth(s.eventSubscriptions))
+	mux.Handle("POST /internal/automations/{id}/runs", s.auth(s.automationRunNow))
+	mux.Handle("POST /internal/automations/{id}/test-event/evaluate", s.auth(s.evaluateTestEvent))
+	mux.Handle("POST /internal/automations/{id}/start-fresh", s.auth(s.automationStartFresh))
+	mux.Handle("POST /internal/automations/schedule/next", s.auth(s.scheduleNext))
 	return mux
 }
 

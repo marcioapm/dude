@@ -106,9 +106,9 @@ func hookingWorld(t *testing.T, n int) *hookWorld {
 	}
 	mustExec(t, owner, `INSERT INTO forge_credentials (id, organization_id, auth, secret, api_base_url, webhook_secret)
 		VALUES ($1, $2, 'pat', 'ghp_test', $3, 'whsec')`, "forge_"+w.org, w.org, srv.URL)
-	forges := forge.Resolver{DB: app}
-	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: quiet}
-	apiSrv := httptest.NewServer((&api.Server{DB: app, Token: "svc", Log: quiet, Kick: func() {}, Forges: forges, PRs: w.prs}).Handler())
+	forges, log := forge.Resolver{DB: app}, worldLog(t)
+	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: log}
+	apiSrv := httptest.NewServer((&api.Server{DB: app, Token: "svc", Log: log, Kick: func() {}, Forges: forges, PRs: w.prs}).Handler())
 	t.Cleanup(apiSrv.Close)
 	w.api = apiSrv.URL
 	return w

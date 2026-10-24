@@ -418,7 +418,7 @@ func TestAResetThatReadTheRunPausedBeforeALiveTakeUpParksIt(t *testing.T) {
 	gated := &readGated{Client: w.syncer.Lux, entered: make(chan struct{}), release: make(chan struct{})}
 	var released sync.Once
 	t.Cleanup(func() { released.Do(func() { close(gated.release) }) })
-	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: gated, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: gated, Token: "svc", Log: w.log, Kick: func() {}}).Handler())
 	t.Cleanup(srv.Close)
 	type answer struct {
 		status int

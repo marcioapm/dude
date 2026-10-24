@@ -25,6 +25,7 @@ import { getNavigation } from "./navigation.ts";
 import { attentionItems, waitingSplit, type NavProject } from "../../../../../packages/design-system/src/util/navModel.ts";
 import { endAutoStart } from "./relations.ts";
 import { kickOwnerSweep, lockOwnedSessions, PASS_BATCH, passOnSessions } from "./sessions.ts";
+import { automationsOwnerLeft } from "./automations.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
 export function ownerJson(alias = "tasks"): string {
@@ -530,6 +531,7 @@ export async function removePerson(ctx: RequestContext): Promise<Response> {
     const late = first.more ? { ids: [], more: true } : await lockOwnedSessions(scope, id, PASS_BATCH, first.ids);
     passed += (await passOnSessions(scope, ctx, id, [...first.ids, ...late.ids])).length;
     more = first.more || late.more;
+    await automationsOwnerLeft(scope, ctx, id);
     await recordAs(scope, ctx, EventTypes.PersonRemoved, { personId: id });
     return "removed";
   });

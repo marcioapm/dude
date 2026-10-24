@@ -43,6 +43,9 @@ const (
 	ModelCall = "mcl"
 	// A reviewer's question (migration 175).
 	ReviewQuestion = "rvq"
+	// Automations (migration 183): a firing, and one POST it made.
+	AutomationRun     = "arn"
+	AutomationRequest = "arq"
 	// A chat provider's installation, and a routed mention (migration 195).
 	ChatInstallation = "chi"
 	ChatRequest      = "chr"
