@@ -146,15 +146,15 @@ export interface ChatRequestRow {
   sharedSkipped: string[];
   createdAt: string;
 }
+export const CHAT_REQUESTS_MAX = 200;
 export const chatRequestsQuerySchema = z.object({
   provider: z.string().optional(),
   route: chatRouteSchema.optional(),
   /** Only the newest so many (at most CHAT_REQUESTS_MAX). */
-  limit: z.coerce.number().int().min(1).max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(CHAT_REQUESTS_MAX).optional(),
   /** "1": also count the last 7 days, over every row the filters match. */
   summary: z.enum(["1"]).optional(),
 });
-export const CHAT_REQUESTS_MAX = 200;
 /** The last 7 days of the filtered Requests: mentions, and those that asked the model. */
 export interface ChatRequestsSummary { mentions: number; asked: number }
 
