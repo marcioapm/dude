@@ -216,17 +216,44 @@ func TestANewCloseAfterWaitingPastAMixedEndIsAskedAbout(t *testing.T) {
 		m.pump()
 		return m.count(askedAboutCloses, m.task) == 2 && m.taskStatus(m.task) == "awaiting_input"
 	})
-	var closed, open int
-	if err := m.owner.QueryRow(context.Background(), `SELECT (payload->'detail'->>'closed')::int, (payload->'detail'->>'open')::int
-		FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'reason' = 'pull_request_closed'
-		ORDER BY cursor DESC LIMIT 1`, m.task).Scan(&closed, &open); err != nil {
-		t.Fatal(err)
-	}
-	if closed != 2 || open != 1 {
-		t.Errorf("asked about %d closed and %d open, want 2 and 1", closed, open)
-	}
+	m.assertLastAskedAbout(2, 1)
 	m.afterEnd()
 	if n := m.count(askedAboutCloses, m.task); n != 2 {
 		t.Errorf("asked %d times, want twice: target's close, then api's", n)
 	}
+}
+
+// assertLastAskedAbout checks the closed and open counts on the latest
+// question about the closes.
+func (m *mixedEnd) assertLastAskedAbout(wantClosed, wantOpen int) {
+	m.t.Helper()
+	var closed, open int
+	if err := m.owner.QueryRow(context.Background(), `SELECT (payload->'detail'->>'closed')::int, (payload->'detail'->>'open')::int
+		FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'reason' = 'pull_request_closed'
+		ORDER BY cursor DESC LIMIT 1`, m.task).Scan(&closed, &open); err != nil {
+		m.t.Fatal(err)
+	}
+	if closed != wantClosed || open != wantOpen {
+		m.t.Errorf("asked about %d closed and %d open, want %d and %d", closed, open, wantClosed, wantOpen)
+	}
+}
+
+// Api closing while the person is still asked about target's close: the
+// wait covers only the close they were asked about, so they are asked
+// again, about both.
+func TestACloseWhileAskedIsNotWaitedPast(t *testing.T) {
+	m := newMixedEndIn(t, prAt{web: true, api: true})
+	m.gh.Close(1)
+	m.until("the person asked", func() bool { m.sync(); m.pump(); return m.taskStatus(m.task) == "awaiting_input" })
+	m.apiRepo.Close(1)
+	m.afterEnd()
+	if code, body := m.decide(m.person("owner"), m.task, "wait", ""); code != 200 {
+		t.Fatalf("decide: %d %v", code, body)
+	}
+	m.until("the person asked again", func() bool {
+		m.sync()
+		m.pump()
+		return m.count(askedAboutCloses, m.task) == 2 && m.taskStatus(m.task) == "awaiting_input"
+	})
+	m.assertLastAskedAbout(2, 1)
 }
