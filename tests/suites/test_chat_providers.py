@@ -186,8 +186,8 @@ def test_a_public_channel_mention_opens_an_organisation_session_and_replies_with
     assert reply["ThreadTS"] == root and "open to everyone" in reply["Text"]
     assert f"#/o/{org['client'].get('/v1/me').json()['organization']['slug']}/sessions/{session}" in json.dumps(reply["Blocks"])
     assert wait_until(lambda: slack.state()["reactions"].get(f"C{team}:{ts}") == ["white_check_mark"], message="✅")
-    # Eli, who was never added, reads it as an organisation member.
-    assert acme["eli"].get(f"/v1/sessions/{session}").status_code == 200
+    # Eli, who was never added, reads it as an organisation member (the web's session page reads this).
+    assert acme["eli"].get(f"/v1/brainstorms/{session}").status_code == 200
 
 
 def test_a_private_channel_mention_shares_the_session_with_the_connected_members(client: ApiClient, env, owner_dsn: str, org: dict):
@@ -201,8 +201,8 @@ def test_a_private_channel_mention_shares_the_session_with_the_connected_members
     # Eli (connected) is in it as chat; Gus and Zed (not connected) are skipped.
     assert [p["name"] for p in req["sharedAdded"]] == ["Eli Park"]
     assert sorted(req["sharedSkipped"]) == sorted([u["U3"], u["U9"]])
-    assert acme["eli"].get(f"/v1/sessions/{session}").status_code == 200
-    assert acme["gus"].get(f"/v1/sessions/{session}").status_code == 404
+    assert acme["eli"].get(f"/v1/brainstorms/{session}").status_code == 200
+    assert acme["gus"].get(f"/v1/brainstorms/{session}").status_code == 404
 
 
 def test_a_task_bound_thread_answers_with_the_tasks_link_and_no_model(client: ApiClient, env, owner_dsn: str, org: dict):
