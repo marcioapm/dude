@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,8 @@ type Runner struct {
 	inflight map[string]bool
 	pools    map[string]chan struct{}
 	wg       sync.WaitGroup
+	// The preview sign-in of each Server run's lux Run, as a Cookie header.
+	previewCookies map[string]string
 }
 
 // DefaultWorkers is how many runs are followed, and how many webhooks
@@ -1231,11 +1234,15 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	keep := a.SessionMode == "resumable" && source != SourceTest
 	if got, err := r.Lux.Get(ctx, luxRunID); err == nil && lux.Terminal(got.State) {
+		r.forgetPreview(luxRunID)
 		return true, r.endServer(ctx, a, runID, "failed", "error", "its container ended: "+cmp.Or(got.StateReason, got.State))
 	}
 	base, err := r.serverURL(ctx, luxRunID, cfg.Port)
-	if err != nil || !r.healthy(ctx, base, cfg.Health) {
+	// Its requests go through lux's preview listener, signed in (previewDo).
+	signIn := previewAuth{luxRunID: luxRunID, base: base}
+	if err != nil || !r.healthy(ctx, base, signIn, cfg.Health) {
 		if r.now().Sub(started) > ServerHealthMax {
+			r.forgetPreview(luxRunID)
 			r.stopOrCancel(ctx, luxRunID, keep)
 			return true, r.endServer(ctx, a, runID, "failed", "error", "its server was not healthy within 60 seconds")
 		}
@@ -1243,7 +1250,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	if posted < len(payloads) {
 		for i := posted; i < len(payloads); i++ {
-			r.postOnce(ctx, a, runID, base+cfg.Path, payloads[i])
+			r.postOnce(ctx, a, runID, base+cfg.Path, signIn, payloads[i])
 		}
 		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, len(payloads))
@@ -1275,6 +1282,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}); err != nil || !ended {
 		return false, err
 	}
+	r.forgetPreview(luxRunID)
 	r.stopOrCancel(ctx, luxRunID, keep)
 	return true, nil
 }
@@ -1311,7 +1319,7 @@ func (r *Runner) serverURL(ctx context.Context, luxRunID string, port int) (stri
 	return "", errors.New("the server is not ready")
 }
 
-func (r *Runner) healthy(ctx context.Context, base string, health *string) bool {
+func (r *Runner) healthy(ctx context.Context, base string, signIn previewAuth, health *string) bool {
 	if health == nil || *health == "" {
 		u := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
 		conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", hostPort(u, base))
@@ -1321,13 +1329,91 @@ func (r *Runner) healthy(ctx context.Context, base string, health *string) bool 
 		conn.Close()
 		return true
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", base+*health, nil)
-	res, err := r.client().Do(req)
+	res, err := r.previewDo(ctx, signIn, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", base+*health, nil)
+	})
 	if err != nil {
 		return false
 	}
 	res.Body.Close()
 	return res.StatusCode < 400
+}
+
+// previewAuth names a Server run's lux preview: its lux Run and address.
+// Zero for a webhook's request, which is sent as it is.
+type previewAuth struct{ luxRunID, base string }
+
+// previewDo sends a request to a Server run's container through lux's
+// preview listener, which answers 401 to a request without its sign-in
+// cookie. On a 401 it signs in (previewSignIn) and sends the request once
+// more; the cookie is kept per lux Run until the run ends.
+func (r *Runner) previewDo(ctx context.Context, signIn previewAuth, build func() (*http.Request, error)) (*http.Response, error) {
+	send := func() (*http.Response, error) {
+		req, err := build()
+		if err != nil {
+			return nil, err
+		}
+		if signIn.luxRunID != "" {
+			r.mu.Lock()
+			cookie := r.previewCookies[signIn.luxRunID]
+			r.mu.Unlock()
+			if cookie != "" {
+				req.Header.Set("Cookie", cookie)
+			}
+		}
+		return r.client().Do(req)
+	}
+	res, err := send()
+	if err != nil || res.StatusCode != http.StatusUnauthorized || signIn.luxRunID == "" {
+		return res, err
+	}
+	if serr := r.previewSignIn(ctx, signIn); serr != nil {
+		r.Log.Info("signing in to a Server run's lux preview failed", "lux_run", signIn.luxRunID, "error", serr)
+		return res, nil
+	}
+	res.Body.Close()
+	return send()
+}
+
+// previewSignIn spends a preview ticket on <base>/.lux/auth, which answers
+// with the preview cookie, and keeps it for the lux Run.
+func (r *Runner) previewSignIn(ctx context.Context, signIn previewAuth) error {
+	ticket, err := r.Lux.PreviewTicket(ctx, signIn.luxRunID)
+	if err != nil {
+		return fmt.Errorf("minting a preview ticket: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", signIn.base+"/.lux/auth?ticket="+url.QueryEscape(ticket)+"&to=/", nil)
+	if err != nil {
+		return err
+	}
+	// It answers with its cookie and a redirect, which is not followed.
+	client := *r.client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
+	var parts []string
+	for _, c := range res.Cookies() {
+		parts = append(parts, c.Name+"="+c.Value)
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("its sign-in answered %d with no cookie", res.StatusCode)
+	}
+	r.mu.Lock()
+	if r.previewCookies == nil {
+		r.previewCookies = map[string]string{}
+	}
+	r.previewCookies[signIn.luxRunID] = strings.Join(parts, "; ")
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runner) forgetPreview(luxRunID string) {
+	r.mu.Lock()
+	delete(r.previewCookies, luxRunID)
+	r.mu.Unlock()
 }
 
 func hostPort(hostPath, base string) string {
@@ -1342,14 +1428,15 @@ func hostPort(hostPath, base string) string {
 }
 
 // postOnce POSTs one payload with dude's headers and records the answer;
-// a 5xx or no answer is tried once more, a 4xx is not.
-func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, p Payload) bool {
+// a 5xx or no answer is tried once more, a 4xx is not. A Server run's go
+// through its lux preview (previewDo).
+func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, signIn previewAuth, p Payload) bool {
 	body := []byte(p.Body)
 	if len(body) == 0 {
 		body = []byte("{}")
 	}
 	for try := 1; try <= 2; try++ {
-		status, ms, excerpt, err := r.post(ctx, a, runID, url, p, body)
+		status, ms, excerpt, err := r.post(ctx, a, runID, url, signIn, p, body)
 		_ = r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 			var code any
 			if status > 0 {
@@ -1371,25 +1458,31 @@ func (r *Runner) postOnce(ctx context.Context, a Automation, runID, url string, 
 	return false
 }
 
-func (r *Runner) post(ctx context.Context, a Automation, runID, url string, p Payload, body []byte) (int, int, string, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
+func (r *Runner) post(ctx context.Context, a Automation, runID, url string, signIn previewAuth, p Payload, body []byte) (int, int, string, error) {
+	build := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Dude-Automation", a.ID)
+		req.Header.Set("X-Dude-Run", runID)
+		if p.Event != "" {
+			req.Header.Set("X-GitHub-Event", p.Event)
+		}
+		if p.DeliveryID != "" {
+			req.Header.Set("X-GitHub-Delivery", p.DeliveryID)
+		}
+		if a.WebhookSecret != "" {
+			req.Header.Set("X-Dude-Signature-256", Sign(a.WebhookSecret, body))
+		}
+		return req, nil
+	}
+	if _, err := build(); err != nil {
 		return 0, 0, "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Dude-Automation", a.ID)
-	req.Header.Set("X-Dude-Run", runID)
-	if p.Event != "" {
-		req.Header.Set("X-GitHub-Event", p.Event)
-	}
-	if p.DeliveryID != "" {
-		req.Header.Set("X-GitHub-Delivery", p.DeliveryID)
-	}
-	if a.WebhookSecret != "" {
-		req.Header.Set("X-Dude-Signature-256", Sign(a.WebhookSecret, body))
-	}
 	began := time.Now()
-	res, err := r.client().Do(req)
+	res, err := r.previewDo(ctx, signIn, build)
 	ms := int(time.Since(began).Milliseconds())
 	if err != nil {
 		return 0, ms, "", err
@@ -1432,7 +1525,7 @@ func (r *Runner) postWebhook(ctx context.Context, a Automation, runID string) er
 	if len(p.Body) == 0 {
 		p.Body, _ = json.Marshal(map[string]any{"automation": a.ID, "schedule": map[string]any{"time": r.now().UTC().Format(time.RFC3339)}})
 	}
-	if r.postOnce(ctx, a, runID, cfg.URL, p) {
+	if r.postOnce(ctx, a, runID, cfg.URL, previewAuth{}, p) {
 		return r.finish(ctx, a, runID, "succeeded", "", nil)
 	}
 	return r.finish(ctx, a, runID, "failed", "the webhook did not answer 2xx", nil)

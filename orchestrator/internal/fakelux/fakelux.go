@@ -685,6 +685,8 @@ type Server struct {
 	IdleCheck time.Duration
 	// Tenant servers deleted or expired, in order.
 	DeletedServers []string
+	// Preview tickets minted and not yet used (UseTicket), by ticket: the Run each signs in to.
+	tickets map[string]string
 	// What happened to tenant servers, in order (TenantCalls).
 	tenantCalls []string
 	// Their create and patch bodies, in order (TenantBodies).
@@ -1534,6 +1536,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/runs/{id}/servers/{name}", s.removeServer)
 	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
 	mux.HandleFunc("GET /v1/runs/{id}/cost", s.getCost)
+	mux.HandleFunc("POST /v1/runs/{id}/tickets", s.mintTicket)
 	mux.HandleFunc("GET /v1/pools", s.listPools)
 	mux.HandleFunc("POST /v1/pools", s.putPool)
 	mux.HandleFunc("DELETE /v1/pools/{name}", s.deletePool)

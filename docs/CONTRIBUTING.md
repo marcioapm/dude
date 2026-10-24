@@ -771,7 +771,11 @@ their creator.
   (GET its health path, else the port; at most 60 s), and POSTs each event
   to `<path>` with `Content-Type: application/json`, `X-Dude-Automation`,
   `X-Dude-Run`, `X-GitHub-Event`, `X-GitHub-Delivery` and, with a secret,
-  `X-Dude-Signature-256`. Events arriving while it is up go to the same
+  `X-Dude-Signature-256`. It reaches the container at the server's lux
+  preview URL, whose listener answers 401 without its sign-in cookie: on a
+  401 dude mints a preview ticket (`POST /v1/runs/{id}/tickets`), spends it
+  on `<url>/.lux/auth` and sends the request again with the cookie, kept per
+  lux Run (`previewDo`). Events arriving while it is up go to the same
   container. A 5xx or no answer within 30 s is tried once more; a 4xx is
   recorded; one `automation_run_requests` row per POST. With nothing in
   flight and no request for 30 s it is stopped and the run ends (`idle`).

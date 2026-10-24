@@ -515,6 +515,43 @@ func runLive(state string) bool {
 	return true
 }
 
+// mintTicket is POST /v1/runs/{id}/tickets: kind preview mints a
+// single-use ticket for the sign-in of the Run's preview URLs, as lux does;
+// kind exec is not played.
+func (s *Server) mintTicket(w http.ResponseWriter, r *http.Request) {
+	run := s.find(w, r)
+	if run == nil {
+		return
+	}
+	var in struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Kind != "preview" {
+		writeErr(w, 422, "invalid_request", "kind: only preview is played")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tickets == nil {
+		s.tickets = map[string]string{}
+	}
+	ticket := fmt.Sprintf("tkt_%s_%d", strings.TrimPrefix(run.ID, "lrun_"), len(s.tickets)+1)
+	s.tickets[ticket] = run.ID
+	run.Calls = append(run.Calls, "ticket preview")
+	writeJSON(w, 201, map[string]any{"ticket": ticket, "kind": "preview", "runId": run.ID,
+		"expiresAt": time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)})
+}
+
+// UseTicket spends a preview ticket as a preview's /.lux/auth does: the
+// Run it signs in to, and false for one never minted or already used.
+func (s *Server) UseTicket(ticket string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.tickets[ticket]
+	delete(s.tickets, ticket)
+	return run, ok
+}
+
 func (s *Server) listServers(w http.ResponseWriter, r *http.Request) {
 	run := s.find(w, r)
 	if run == nil {

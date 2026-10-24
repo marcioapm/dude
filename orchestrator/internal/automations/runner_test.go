@@ -3,6 +3,7 @@ package automations
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -599,6 +600,84 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		t.Errorf("requests %+v, want %+v", reqs, want)
 	}
 	h.until("the container is ended", func() bool { return lux.Terminated(h.luxState(r.LuxRunID)) })
+}
+
+// A real lux's preview listener answers 401 to any request without its
+// sign-in cookie, which a preview ticket spent on /.lux/auth sets. A Server
+// run signs in with one, is healthy and POSTs through it; when the cookie
+// stops being taken, it signs in again rather than failing the request.
+func TestAutomationServerSignsInToItsLuxPreview(t *testing.T) {
+	h := newHarness(t)
+	var mu sync.Mutex
+	valid := map[string]bool{}
+	var posts []int
+	signIns := 0
+	preview := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/.lux/auth" {
+			if _, ok := h.fake.UseTicket(r.URL.Query().Get("ticket")); !ok {
+				w.WriteHeader(401)
+				return
+			}
+			signIns++
+			v := fmt.Sprintf("signed-%d", signIns)
+			valid[v] = true
+			http.SetCookie(w, &http.Cookie{Name: "lux_preview", Value: v})
+			http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
+			return
+		}
+		c, err := r.Cookie("lux_preview")
+		if err != nil || !valid[c.Value] {
+			w.WriteHeader(401)
+			if r.Method == "POST" {
+				posts = append(posts, 401)
+			}
+			return
+		}
+		if r.Method == "POST" {
+			posts = append(posts, 200)
+		}
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(preview.Close)
+	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return preview.URL, nil }
+	health := "/health"
+	h.automation("aut_preview", "server", map[string]any{"kind": "github", "event": "pull_request"},
+		map[string]any{"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": health}})
+	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
+	h.until("the first POST answered 2xx", func() bool { mu.Lock(); defer mu.Unlock(); return len(posts) == 1 })
+	// The preview no longer takes the cookie it gave: the next event signs in again.
+	mu.Lock()
+	clear(valid)
+	mu.Unlock()
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "ana"))
+	h.until("the second event POSTed", func() bool {
+		var posted int
+		_ = h.owner.QueryRow(context.Background(), `SELECT posted FROM automation_runs WHERE automation_id = 'aut_preview'`).Scan(&posted)
+		return posted == 2
+	})
+	h.runner.Wait()
+	r := h.runs("aut_preview")
+	if len(r) != 1 || r[0].Status != "running" {
+		t.Fatalf("runs: %+v", r)
+	}
+	rows, _ := h.owner.Query(context.Background(), `SELECT delivery_id, try, http_status FROM automation_run_requests WHERE run_id = $1 ORDER BY at, try`, r[0].ID)
+	type req struct {
+		Delivery string
+		Try      int
+		Status   int
+	}
+	reqs, _ := pgx.CollectRows(rows, pgx.RowToStructByPos[req])
+	want := []req{{"d-1", 1, 200}, {"d-2", 1, 200}}
+	if len(reqs) != 2 || reqs[0] != want[0] || reqs[1] != want[1] {
+		t.Errorf("requests %+v, want %+v", reqs, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if signIns < 2 {
+		t.Errorf("signed in %d times, want a fresh sign-in after the cookie was refused", signIns)
+	}
 }
 
 // Webhook only: one signed POST per firing, never queued or merged (Q13).
