@@ -166,10 +166,10 @@ func world(t *testing.T) (*fakeslack.Server, *slack.Provider, chat.Installation)
 	fake.AddTeam("T1", "Acme")
 	fake.AddUser(fakeslack.User{ID: "U1", Team: "T1", Name: "marcia", RealName: "Márcia Lopes"})
 	fake.AddUser(fakeslack.User{ID: "U2", Team: "T1", Name: "eli", RealName: "Eli Park"})
-	fake.AddConversation(fakeslack.Conversation{ID: "C1", Team: "T1", Name: "support", Kind: "public", Members: []string{"U1", "U2"}})
-	fake.AddConversation(fakeslack.Conversation{ID: "G1", Team: "T1", Name: "design-private", Kind: "private", Members: []string{"U1"}})
-	fake.AddConversation(fakeslack.Conversation{ID: "M1", Team: "T1", Name: "mpdm-x", Kind: "group", Members: []string{"U1", "U2"}})
-	fake.AddConversation(fakeslack.Conversation{ID: "D1", Team: "T1", Kind: "dm", Members: []string{"U1"}})
+	fake.AddConversation(fakeslack.Conversation{ID: "C1", Team: "T1", Name: "support", Kind: "public", Members: []string{"U1", "U2", "UBT1"}})
+	fake.AddConversation(fakeslack.Conversation{ID: "G1", Team: "T1", Name: "design-private", Kind: "private", Members: []string{"U1", "UBT1"}})
+	fake.AddConversation(fakeslack.Conversation{ID: "M1", Team: "T1", Name: "mpdm-x", Kind: "group", Members: []string{"U1", "U2", "UBT1"}})
+	fake.AddConversation(fakeslack.Conversation{ID: "D1", Team: "T1", Kind: "dm", Members: []string{"U1", "UBT1"}})
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
@@ -189,7 +189,7 @@ func TestConversationKindMembersAndThreads(t *testing.T) {
 		}
 	}
 	members, err := p.ListMembers(ctx, inst, "C1")
-	if err != nil || strings.Join(members, ",") != "U1,U2" {
+	if err != nil || strings.Join(members, ",") != "U1,U2,UBT1" {
 		t.Fatalf("members %v, %v", members, err)
 	}
 	root := fake.Post("C1", "", "U2", "exports time out for 40 meters")
@@ -314,17 +314,22 @@ func TestInstallIdentityAndRevoke(t *testing.T) {
 		t.Fatalf("installation %+v", inst)
 	}
 	// A code works once.
-	if _, err := p.CompleteInstall(ctx, back.Query().Get("code"), "x"); err == nil {
+	if _, err := p.CompleteInstall(ctx, back.Query().Get("code"), "https://dude.example.com/v1/chat/slack/install/callback"); err == nil {
 		t.Fatal("a code was exchanged twice")
 	}
 	idBack := follow(t, p.IdentityURL("st-2", "https://dude.example.com/v1/chat/slack/connect/callback", "T1"))
-	who, err := p.CompleteIdentity(ctx, idBack.Query().Get("code"), "x")
+	// The exchange repeats the redirect the sign-in was sent to.
+	if _, err := p.CompleteIdentity(ctx, idBack.Query().Get("code"), "https://elsewhere.example.com/cb"); err == nil {
+		t.Fatal("a sign-in code was exchanged with another redirect")
+	}
+	idBack = follow(t, p.IdentityURL("st-2b", "https://dude.example.com/v1/chat/slack/connect/callback", "T1"))
+	who, err := p.CompleteIdentity(ctx, idBack.Query().Get("code"), "https://dude.example.com/v1/chat/slack/connect/callback")
 	if err != nil || who.ID != "U2" || who.WorkspaceID != "T1" || who.DisplayName != "Eli Park" {
 		t.Fatalf("identity %+v, %v", who, err)
 	}
 	// An install code is not a sign-in code.
 	back = follow(t, p.InstallURL("st-3", "https://dude.example.com/cb"))
-	if _, err := p.CompleteIdentity(ctx, back.Query().Get("code"), "x"); err == nil {
+	if _, err := p.CompleteIdentity(ctx, back.Query().Get("code"), "https://dude.example.com/cb"); err == nil {
 		t.Fatal("an install code signed someone in")
 	}
 	// Nobody to consent: access_denied, no code.
@@ -341,5 +346,41 @@ func TestInstallIdentityAndRevoke(t *testing.T) {
 	}
 	if got := fake.Revoked(); len(got) != 1 || got[0] != inst.Token {
 		t.Fatalf("revoked %v", got)
+	}
+}
+
+// The fake refuses as Slack does where dude could get it wrong: a method
+// whose scope the token lacks, and a private channel the bot is not in.
+func TestTheFakeRefusesMissingScopesAndChannelsTheBotIsNotIn(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	narrow := inst
+	narrow.Token = fake.Token("T1", "chat:write")
+	var apiErr *slack.APIError
+	if _, err := p.Conversation(ctx, narrow, "C1"); !errors.As(err, &apiErr) || apiErr.Code != "missing_scope" {
+		t.Fatalf("conversations.info without channels:read: %v", err)
+	}
+	fake.AddConversation(fakeslack.Conversation{ID: "G9", Team: "T1", Name: "secret", Kind: "private", Members: []string{"U1"}})
+	if _, err := p.ListMembers(ctx, inst, "G9"); !errors.As(err, &apiErr) || apiErr.Code != "channel_not_found" {
+		t.Fatalf("a private channel the bot is not in: %v", err)
+	}
+	fake.AddConversation(fakeslack.Conversation{ID: "C9", Team: "T1", Name: "open", Kind: "public", Members: []string{"U1"}})
+	if _, err := p.PostReply(ctx, inst, "C9", "", chat.Reply{Text: "x"}); !errors.As(err, &apiErr) || apiErr.Code != "not_in_channel" {
+		t.Fatalf("posting in a public channel the bot is not in: %v", err)
+	}
+	// The scopes dude asks for at install are each needed by a call it makes.
+	for _, scope := range []string{"channels:read", "groups:read", "im:read", "mpim:read"} {
+		var kept []string
+		for _, s := range slack.BotScopes {
+			if s != scope {
+				kept = append(kept, s)
+			}
+		}
+		without := inst
+		without.Token = fake.Token("T1", kept...)
+		conv := map[string]string{"channels:read": "C1", "groups:read": "G1", "im:read": "D1", "mpim:read": "M1"}[scope]
+		if _, err := p.Conversation(ctx, without, conv); !errors.As(err, &apiErr) || apiErr.Code != "missing_scope" {
+			t.Errorf("without %s, conversations.info on %s: %v", scope, conv, err)
+		}
 	}
 }

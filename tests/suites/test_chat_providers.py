@@ -24,7 +24,7 @@ import hmac
 import json
 import os
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
@@ -72,11 +72,18 @@ class Slack:
 
     def deliver(self, payload: dict) -> requests.Response:
         """POST an Events API payload to dude, signed as Slack signs it."""
-        body = json.dumps(payload).encode()
+        return self._signed(self.events, "application/json", json.dumps(payload).encode())
+
+    def interact(self, payload: dict) -> requests.Response:
+        """POST an interactivity payload (a button click) to dude, as Slack sends and signs it."""
+        return self._signed(self.events.replace("/events", "/interactions"), "application/x-www-form-urlencoded",
+                            urlencode({"payload": json.dumps(payload)}).encode())
+
+    def _signed(self, url: str, content_type: str, body: bytes) -> requests.Response:
         ts = str(int(time.time()))
         sig = "v0=" + hmac.new(SLACK_SIGNING_SECRET.encode(), f"v0:{ts}:".encode() + body, hashlib.sha256).hexdigest()
-        return requests.post(self.events, data=body, timeout=10, headers={
-            "content-type": "application/json", "x-slack-request-timestamp": ts, "x-slack-signature": sig})
+        return requests.post(url, data=body, timeout=10, headers={
+            "content-type": content_type, "x-slack-request-timestamp": ts, "x-slack-signature": sig})
 
     def mention(self, channel: str, thread: str, user: str, text: str) -> str:
         """A person's message mentioning @dude, in Slack and delivered to dude; its ts."""
@@ -246,5 +253,30 @@ def test_someone_dude_never_linked_is_refused_privately_with_a_connect_button(cl
     assert state
     # Nothing was said in public, nothing made, and the 👀 was taken off.
     assert slack.bot_messages(f"C{team}") == []
-    assert not slack.state()["reactions"].get(f"C{team}:{ts}")
+    assert wait_until(lambda: not slack.state()["reactions"].get(f"C{team}:{ts}"), message="the 👀 taken off")
     assert query(owner_dsn, "SELECT count(*) AS n FROM sessions WHERE organization_id = %s", (org["id"],))[0]["n"] == 0
+
+
+def test_an_unsure_mention_asks_and_the_askers_click_files_the_task(client: ApiClient, env, owner_dsn: str, org: dict):
+    acme = _acme(client, env, owner_dsn, org)
+    slack, u, team = acme["slack"], acme["u"], acme["team"]
+    root = slack.mention(f"C{team}", "", u["U2"], "maybe a task to tidy the export page")
+    [req] = _requests(acme["marcia"], 1)
+    assert req["route"] == "clarify" and req["askedRoute"] == "task"
+    question = wait_until(lambda: [m for m in slack.bot_messages(f"C{team}") if m["Text"].startswith("Should I file")], message="the question")[0]
+    value = next(e["value"] for b in question["Blocks"] if b["type"] == "actions" for e in b["elements"])
+    click = {"type": "block_actions", "team": {"id": team}, "user": {"id": u["U2"], "username": "eli"},
+             "container": {"type": "message", "channel_id": f"C{team}", "message_ts": question["TS"], "thread_ts": root},
+             "message": {"ts": question["TS"], "thread_ts": root},
+             "actions": [{"action_id": "choice_0", "value": value, "action_ts": str(time.time())}]}
+    resp = slack.interact(click)
+    assert resp.status_code == 200, resp.text
+    second = _requests(acme["marcia"], 2)[1]
+    assert second["route"] == "task" and second["result"]["kind"] == "task"
+    assert wait_until(lambda: [x for x in slack.state()["updates"] or [] if x["Text"].startswith("Eli Park chose")], message="the question updated")
+
+
+def test_the_routing_stub_read_every_routing_call(env):
+    """Runs last in the file: a change to the routing call's opening or
+    headings fails here by name, not as a confusing route elsewhere."""
+    assert env.chat_route_mismatches == []

@@ -183,6 +183,15 @@ def _checks_questions() -> list[str]:
 
 # The chat routing call's built-in instructions open with this (chat.BuiltInInstructions).
 CHAT_ROUTING_OPENING = "You route a message someone wrote to dude"
+# What else marks a routing call, should the opening change: its answer's shape.
+CHAT_ROUTING_SHAPE = '"route":"brainstorm"|"task"|"epic"|"resume"|"clarify"'
+# The headings the stub reads the routing input by (chat.RoutingInput).
+CHAT_ROUTING_HEADINGS = ("## The message", "## Projects they can file in")
+
+
+class ChatRouteMismatch(Exception):
+    """A routing call the stub cannot read: the opening or a heading it
+    reads by changed. The suite fails on it rather than routing blind."""
 
 
 def _chat_route(messages: list) -> str | None:
@@ -191,17 +200,28 @@ def _chat_route(messages: list) -> str | None:
     Deterministic, from the mention's words: "file a task" files one in the
     first project listed, "open an epic" opens one there with three tasks
     (the second and third blocked by the first), anything else is a
-    brainstorm in that project.
+    brainstorm in that project. Raises ChatRouteMismatch for a routing call
+    whose opening or headings are not the ones it reads.
     """
-    if not messages or CHAT_ROUTING_OPENING not in str(messages[0].get("content", "")):
+    system = str(messages[0].get("content", "")) if messages else ""
+    if CHAT_ROUTING_OPENING not in system:
+        if CHAT_ROUTING_SHAPE in system:
+            raise ChatRouteMismatch(f"a routing call without the opening {CHAT_ROUTING_OPENING!r}")
         return None
     user = str(messages[-1].get("content", ""))
+    missing = [h for h in CHAT_ROUTING_HEADINGS if h not in user]
+    if missing:
+        raise ChatRouteMismatch(f"a routing call without the heading(s) {missing}")
     said = user.split("## The message", 1)[-1].split("## ", 1)[0].lower()
     projects = re.findall(r"^- ([A-Z][A-Z0-9]{1,5}) \(", user.split("## Projects they can file in", 1)[-1], re.MULTILINE)
     project = projects[0] if projects else None
     if "file a task" in said and project:
         return json.dumps({"route": "task", "confidence": 0.95, "reasoning": "scripted: one clear change", "project": project,
                            "title": "Tidy the export page", "goal": "Tidy the export page.", "criteria": ["It is tidy"]})
+    if "maybe a task" in said and project:
+        # Under the 75% bar: dude asks.
+        return json.dumps({"route": "task", "confidence": 0.5, "reasoning": "scripted: unsure", "project": project,
+                           "title": "Tidy the export page", "goal": "Tidy the export page."})
     if "open an epic" in said and project:
         tasks = [{"ref": "t1", "title": "Measure export time", "goal": "g", "criteria": [], "blocked_by": []},
                  {"ref": "t2", "title": "Batch the readings query", "goal": "g", "criteria": [], "blocked_by": ["t1"]},
@@ -283,6 +303,9 @@ class TestEnvironment:
     # It is local and deterministic, never a real model call.
     judge_server: ThreadingHTTPServer | None = field(default=None, repr=False)
     judge_thread: threading.Thread | None = field(default=None, repr=False)
+    # Chat routing calls the stub could not read (ChatRouteMismatch); the
+    # chat suite asserts there were none.
+    chat_route_mismatches: list = field(default_factory=list, repr=False)
     workspace_root: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -380,6 +403,7 @@ class TestEnvironment:
 
     def _start_judge(self) -> None:
         questions = _checks_questions()
+        mismatches = self.chat_route_mismatches
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -387,7 +411,14 @@ class TestEnvironment:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 messages = body.get("messages", [])
                 question = " ".join(str(m.get("content", "")) for m in messages)
-                routed = _chat_route(messages)
+                try:
+                    routed = _chat_route(messages)
+                except ChatRouteMismatch as e:
+                    mismatches.append(str(e))
+                    self.send_response(500)
+                    self.send_header("content-length", "0")
+                    self.end_headers()
+                    return
                 if routed is not None:
                     response = json.dumps({"model": "judge-e2e", "choices": [{"message": {"role": "assistant", "content": routed}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}).encode()
                     self.send_response(200)

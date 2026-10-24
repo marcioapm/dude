@@ -69,6 +69,8 @@ type Server struct {
 	updates                []Update
 	reactions              map[string]map[string]bool // channel:ts -> names
 	tokens                 map[string]string          // bot token -> team
+	scopes                 map[string][]string        // bot token -> its scopes
+	pendingScopes          map[string][]string        // install code -> the scopes asked for
 	userTokens             map[string]string          // OpenID token -> user
 	codes                  map[string]code
 	revoked                []string
@@ -84,13 +86,14 @@ type failure struct {
 	left int
 }
 
-type code struct{ kind, team, user string }
+type code struct{ kind, team, user, redirect string }
 
 // New is an empty fake.
 func New(clientID, clientSecret string) *Server {
 	return &Server{ClientID: clientID, ClientSecret: clientSecret, teams: map[string]string{}, users: map[string]User{},
 		convs: map[string]*Conversation{}, reactions: map[string]map[string]bool{}, tokens: map[string]string{},
-		userTokens: map[string]string{}, codes: map[string]code{}, calls: map[string]int{}, failNext: map[string]failure{}}
+		userTokens: map[string]string{}, codes: map[string]code{}, calls: map[string]int{}, failNext: map[string]failure{},
+		scopes: map[string][]string{}, pendingScopes: map[string][]string{}}
 }
 
 // AddTeam adds a workspace with its bot user (B<team>).
@@ -123,13 +126,50 @@ func (s *Server) SetMembers(conv string, members []string) {
 	s.convs[conv].Members = members
 }
 
-// Token is a bot token for team, as an install would have issued it.
-func (s *Server) Token(team string) string {
+// Token is a bot token for team, as an install would have issued it,
+// with the scopes given (slack.BotScopes with none).
+func (s *Server) Token(team string, scopes ...string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tok := "xoxb-" + team + "-" + strconv.Itoa(len(s.tokens)+1)
 	s.tokens[tok] = team
+	if len(scopes) == 0 {
+		scopes = slack.BotScopes
+	}
+	s.scopes[tok] = scopes
 	return tok
+}
+
+// methodScopes are the bot scopes each Web API method needs, as Slack's
+// method pages list them, for a conversation of kind ("" for any): one of
+// the listed is enough.
+func methodScopes(method, kind string) []string {
+	byKind := func(public, private, group, dm string) []string {
+		switch kind {
+		case "public":
+			return []string{public}
+		case "private":
+			return []string{private}
+		case "group":
+			return []string{group}
+		case "dm":
+			return []string{dm}
+		}
+		return nil
+	}
+	switch method {
+	case "conversations.info", "conversations.members":
+		return byKind("channels:read", "groups:read", "mpim:read", "im:read")
+	case "conversations.replies":
+		return byKind("channels:history", "groups:history", "mpim:history", "im:history")
+	case "chat.postMessage", "chat.postEphemeral", "chat.update":
+		return []string{"chat:write"}
+	case "reactions.add", "reactions.remove":
+		return []string{"reactions:write"}
+	case "users.info":
+		return []string{"users:read"}
+	}
+	return nil
 }
 
 // AuthorizeAs sets who authorizes the next install (installer) and the next
@@ -258,7 +298,11 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, kind string) 
 	if u, ok := s.users[who]; ok {
 		s.seq++
 		c := fmt.Sprintf("code-%s-%d", kind, s.seq)
-		s.codes[c] = code{kind: kind, team: u.Team, user: u.ID}
+		s.codes[c] = code{kind: kind, team: u.Team, user: u.ID, redirect: q.Get("redirect_uri")}
+		if kind == "install" {
+			// The scopes the install asked for are the token's.
+			s.pendingScopes[c] = strings.Split(q.Get("scope"), ",")
+		}
 		params.Set("code", c)
 	} else {
 		params.Set("error", "access_denied")
@@ -357,10 +401,28 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 		refuse(w, "invalid_auth")
 		return
 	}
+	kind := ""
+	if c, ok := s.convs[str(a, "channel")]; ok {
+		kind = c.Kind
+	}
+	if need := methodScopes(method, kind); len(need) > 0 && !containsAny(s.scopes[token], need) {
+		refuse(w, "missing_scope")
+		return
+	}
 	conv := func() (*Conversation, bool) {
 		c, ok := s.convs[str(a, "channel")]
 		if !ok || c.Team != team {
 			refuse(w, "channel_not_found")
+			return nil, false
+		}
+		// A private channel or group the bot is not in is not found, as
+		// Slack answers; a public one it may read but not post in.
+		if c.Kind != "public" && !contains(c.Members, "UB"+team) {
+			refuse(w, "channel_not_found")
+			return nil, false
+		}
+		if c.Kind == "public" && !contains(c.Members, "UB"+team) && strings.HasPrefix(method, "chat.") {
+			refuse(w, "not_in_channel")
 			return nil, false
 		}
 		return c, true
@@ -486,6 +548,15 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 	}
 }
 
+func containsAny(list, want []string) bool {
+	for _, w := range want {
+		if contains(list, w) {
+			return true
+		}
+	}
+	return false
+}
+
 func contains(list []string, v string) bool {
 	for _, x := range list {
 		if x == v {
@@ -511,6 +582,11 @@ func (s *Server) exchange(w http.ResponseWriter, a map[string]json.RawMessage, m
 		refuse(w, "invalid_code")
 		return
 	}
+	// Slack requires the redirect_uri the authorize step was given.
+	if str(a, "redirect_uri") != c.redirect {
+		refuse(w, "bad_redirect_uri")
+		return
+	}
 	delete(s.codes, str(a, "code"))
 	if want == "identity" {
 		tok := "xoxp-" + c.user + "-" + strconv.Itoa(len(s.userTokens)+1)
@@ -520,8 +596,11 @@ func (s *Server) exchange(w http.ResponseWriter, a map[string]json.RawMessage, m
 	}
 	tok := "xoxb-" + c.team + "-" + strconv.Itoa(len(s.tokens)+1)
 	s.tokens[tok] = c.team
+	scopes := s.pendingScopes[str(a, "code")]
+	delete(s.pendingScopes, str(a, "code"))
+	s.scopes[tok] = scopes
 	reply(w, map[string]any{"access_token": tok, "token_type": "bot", "bot_user_id": "UB" + c.team,
-		"scope": strings.Join(slack.BotScopes, ","), "team": map[string]any{"id": c.team, "name": s.teams[c.team]},
+		"scope": strings.Join(scopes, ","), "team": map[string]any{"id": c.team, "name": s.teams[c.team]},
 		"authed_user": map[string]any{"id": c.user}})
 }
 

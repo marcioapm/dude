@@ -138,7 +138,7 @@ describe("a provider's page", () => {
 });
 
 describe("Requests", () => {
-  test("lists every request with its route, filters by route, and pads the face's row past its ring", async () => {
+  test("lists every request with its route and filters by route; each row has its person's face", async () => {
     const client = new Chatting("a");
     const asked: Array<{ provider?: string | undefined; route?: string | undefined }> = [];
     const original = client.chatRequests.bind(client);
@@ -153,7 +153,7 @@ describe("Requests", () => {
     expect(text(rows[1])).toContain("Shared with 2 · 2 not connected");
     expect(text(rows[2])).toContain("was Task");
     expect(text(rows[3])).toContain("Asked to connect");
-    // The face sits in a row with block padding, so the cell's clip leaves its online ring whole.
+    // The face is there; that its ring is not clipped is a layout fact happy-dom cannot measure (checked in the browser shots).
     expect(rows[0]!.querySelector(".chatRequestWho [role=img]")).not.toBeNull();
     expect(asked[0]).toEqual({ provider: undefined, route: undefined });
   });
