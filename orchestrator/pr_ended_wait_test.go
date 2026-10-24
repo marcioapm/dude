@@ -226,6 +226,66 @@ func TestAQuestionAfterWaitingPastAMixedEndHoldsThePromotion(t *testing.T) {
 	m.until("the held fix promoted to web's pull request", func() bool { m.sync(); m.pump(); return webHead() != before })
 }
 
+// Work past the review loop after the person waited past target's close,
+// its fix changing target and web: target's pull request will not open, so
+// the delivery goes back to web's without asking Open or Draft, and says
+// target's change got none.
+func TestWorkPastTheReviewLoopAfterWaitingPastACloseAsksNoOpenOrDraft(t *testing.T) {
+	w := conducting(t)
+	arm := w.firstReviewAfter()
+	inLoop := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := inLoop(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "fix" {
+			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
+		}
+		return b
+	}
+	task := w.prOpen(w.task(), prAt{web: true})
+	setPolicy(w, task, `{"maxReviewIterations":9}`)
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull requests", func() bool { return w.waitingOnPR(task) })
+	w.gh.Close(1)
+	w.until("the person asked", func() bool { w.sync(); w.pump(); return w.taskStatus(task) == "awaiting_input" })
+	if r := w.escalationReason(task); r != "pull_request_closed" {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	if code, body := w.decide(w.person("owner"), task, "wait", ""); code != 200 {
+		t.Fatalf("decide: %d %v", code, body)
+	}
+	w.until("waiting on web's pull request", func() bool { w.pump(); return w.waitingOnPR(task) })
+	arm()
+
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	webBefore := len(w.web.BranchLog(w.web.Pull(1).Head))
+	w.until("waiting on web's pull request again, or the decision before the pull request", func() bool {
+		switch w.decisionAt(task) {
+		case delivery.PointReviewed, delivery.PointFixed:
+			w.must(task, "decide", `{"action":"next"}`)
+		case delivery.PointBeforePR:
+			return true
+		}
+		return w.waitingOnPR(task) && len(w.web.BranchLog(w.web.Pull(1).Head)) > webBefore
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = $3`,
+		task, delivery.EvDecisionAwaited, delivery.PointBeforePR); n != 0 {
+		t.Errorf("%d decisions awaited before the pull request, want none\n%s", n, w.describeRuns())
+	}
+	if n := len(w.gh.Pulls()); n != 1 {
+		t.Errorf("%d target pull requests, want the closed one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'not-opened' AND payload->>'repo' = 'target'`, task); n != 1 {
+		t.Errorf("%d activity lines for target's change left without a pull request, want 1", n)
+	}
+}
+
 // Web closing too, after the person waited past target's close: no pull
 // request is left open, so the task ends (aborted) and nothing is asked.
 func TestTheOtherClosingAfterWaitingPastAMixedEndEndsTheTask(t *testing.T) {
