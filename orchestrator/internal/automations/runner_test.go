@@ -477,12 +477,37 @@ func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
 		h.until(id+"'s kept container is stopped", func() bool { return h.luxState(r.LuxRunID) == "stopped" })
 	}
 
+	// A secret chosen after the container was kept is not one it declared:
+	// lux would refuse it on the resume, so it is not given.
+	exec(t, h.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'ACME_LATER', 'later-1', 'l-1')`, h.org, h.project)
+	exec(t, h.owner, `UPDATE automations SET secrets = '{ACME_TOKEN,ACME_LATER}' WHERE id IN ('aut_rsrv', 'aut_ragent')`)
 	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
 	for id, r := range first {
 		h.until(id+"'s second run starts", func() bool { rs := h.runs(id); return len(rs) == 2 && rs[1].Session != "" })
 		second := h.runs(id)[1]
 		if second.Session != "resumed" || second.LuxRunID != r.LuxRunID {
 			t.Errorf("%s's second run: %+v, want the kept %s resumed", id, second, r.LuxRunID)
+		}
+		resumes := h.fake.ResumeSecretsOf(r.LuxRunID)
+		if len(resumes) != 1 {
+			t.Fatalf("%s: %d resumes, want 1", id, len(resumes))
+		}
+		given := map[string]string{}
+		for _, s := range resumes[0] {
+			given[s.Name] = s.Value
+		}
+		if given["ACME_TOKEN"] != "acme-1" {
+			t.Errorf("%s: the resume gave ACME_TOKEN %q", id, given["ACME_TOKEN"])
+		}
+		if _, ok := given["ACME_LATER"]; ok {
+			t.Errorf("%s: the resume gave ACME_LATER, which the kept Run never declared", id)
+		}
+		if id == "aut_rsrv" {
+			var event map[string]any
+			if err := json.Unmarshal([]byte(given["DUDE_FILE__WORKSPACE__DUDE_EVENT_JSON"]), &event); err != nil ||
+				event["action"] != "synchronize" || event["sender"].(map[string]any)["login"] != "bo" {
+				t.Errorf("the resumed server's event file %q (%v), want the second delivery", given["DUDE_FILE__WORKSPACE__DUDE_EVENT_JSON"], err)
+			}
 		}
 	}
 	h.runner.Wait()

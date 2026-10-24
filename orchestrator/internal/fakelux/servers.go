@@ -491,8 +491,7 @@ func (s *Server) runCommand(run *Run, sv *server) {
 // secretValues are the values lux holds for a Run's next placement: each
 // secret its spec declares, from given when given has it, else from the
 // spec as submitted. lux keeps no value past a placement, so a resume
-// brings them again; a name the Run did not declare is ignored, as lux
-// v0.1.11 does.
+// brings them again (one it did not declare is refused: undeclaredSecrets).
 func secretValues(rawSpec json.RawMessage, given []lux.Secret) map[string]string {
 	var spec lux.Spec
 	_ = json.Unmarshal(rawSpec, &spec)

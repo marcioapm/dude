@@ -1126,6 +1126,17 @@ func (s *Server) CallsOf(id string) []string {
 	return nil
 }
 
+// ResumeSecretsOf is the secrets each accepted resume of a Run gave, values
+// included, in order.
+func (s *Server) ResumeSecretsOf(id string) [][]lux.Secret {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.ResumeSecrets)
+	}
+	return nil
+}
+
 // ResumeInputs is the input text each accepted resume of a Run carried.
 func (s *Server) ResumeInputs(id string) []string {
 	s.mu.Lock()
@@ -3036,6 +3047,27 @@ func missingSecrets(rawSpec json.RawMessage, given []lux.Secret) []string {
 	return missing
 }
 
+// undeclaredSecrets are the names a resume gives that the Run never
+// declared, nor does a repository the same resume adds name as its
+// credential: lux refuses them rather than hold a value nothing reads.
+func undeclaredSecrets(rawSpec json.RawMessage, given []lux.Secret, git *struct {
+	Repositories []map[string]any `json:"repositories"`
+}) []string {
+	var spec lux.Spec
+	_ = json.Unmarshal(rawSpec, &spec)
+	var out []string
+	for _, g := range given {
+		declared := slices.ContainsFunc(spec.Secrets, func(sec lux.Secret) bool { return sec.Name == g.Name })
+		if git != nil {
+			declared = declared || slices.ContainsFunc(git.Repositories, func(r map[string]any) bool { return r["credential"] == g.Name })
+		}
+		if !declared {
+			out = append(out, g.Name)
+		}
+	}
+	return out
+}
+
 // specRepos are a spec's repositories as lux reads them.
 func specRepos(spec map[string]any) []specRepo {
 	git, _ := spec["git"].(map[string]any)
@@ -3303,6 +3335,11 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if msg := missingSecrets(run.Spec, in.Secrets); len(msg) > 0 && !in.ValidateOnly {
 		s.mu.Unlock()
 		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(msg, ", "))
+		return
+	}
+	if msg := undeclaredSecrets(run.Spec, in.Secrets, in.Git); len(msg) > 0 {
+		s.mu.Unlock()
+		writeErr(w, 422, "invalid_request", "secrets the run does not declare: "+strings.Join(msg, ", "))
 		return
 	}
 	if msg := s.syncModeProblem(in.Sync); msg != "" {
