@@ -252,6 +252,27 @@
 .rowControlBlock {
   display: block;
 }
+/* A phone: a row's label over its control; a header's actions wrap under its title. */
+@media (max-width: 719.98px) {
+  .header {
+    flex-wrap: wrap;
+  }
+  .headerText {
+    flex-basis: calc(100% - 64px);
+  }
+  .headerActions {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-8);
+    padding: var(--ds-space-12) 0;
+  }
+  .rowLabel {
+    padding-top: 0;
+  }
+}
 
 .inherited,
 .overridden {

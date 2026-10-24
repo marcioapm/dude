@@ -40,10 +40,11 @@ import { JudgementsPage, useJudgementSettings } from "./JudgementsSettings.tsx";
 import { ImagesPage, queueCount, useImages } from "./ImagesSettings.tsx";
 import { useImageChoices } from "../images.tsx";
 import { NetworkPage } from "./NetworkSettings.tsx";
+import { AutomationPage, AutomationsList, automationsPlace, automationsSub } from "./AutomationsSettings.tsx";
 
 // The first is where the screen opens: who is in the organization, then
 // GitHub, what a new organization sets up first.
-const PAGES = ["members", "invitations", "github", "general", ...SETTINGS_ROLES, "network", "models", "judgements", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
+const PAGES = ["members", "invitations", "github", "general", ...SETTINGS_ROLES, "automations", "network", "models", "judgements", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
 
 export interface OrganizationSettingsScreenProps {
   client: ApiClient;
@@ -112,6 +113,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         { id: "general", label: "General", icon: "settings" },
         { id: "github", label: "GitHub", icon: "git-branch" },
         agentsNav(settings),
+        { id: "automations", label: "Automations", icon: "zap" },
         { id: "network", label: "Network", icon: "globe" },
         { id: "models", label: "Models", icon: "sparkle", note: models.tiers?.tiers.length || undefined },
         { id: "judgements", label: "Judgements", icon: "list-check", note: judgementTier && !judgementTier.model ? "no model" : undefined },
@@ -140,6 +142,14 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
             onPage("images", next);
             imageChoices.reload();
           }} />
+      ) : page === "automations" ? (
+        // Automations says who may change each one itself.
+        automationsPlace(sub).id ? (
+          <AutomationPage client={client} orgName={orgName} people={people} place={automationsPlace(sub)}
+            onPlace={(p) => onPage("automations", automationsSub(p))} onBack={() => onPage("automations")} />
+        ) : (
+          <AutomationsList client={client} orgName={orgName} projectId={null} canCreate={admin} onOpen={(id) => onPage("automations", id)} />
+        )
       ) : page === "machines" ? (
         // Machines says who may change sizes itself.
         <MachinesPage client={client} orgName={settings?.organization.name ?? "the organisation"}

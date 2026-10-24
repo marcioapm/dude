@@ -28,6 +28,7 @@ import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
 import { PageRailSection } from "./sections/PageRails.tsx";
 import { AccountsSection } from "./sections/Accounts.tsx";
+import { AutomationsSection } from "./sections/Automations.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["Page rails", [["rail-populated", "Layout + facets"], ["rail-empty", "Empty"], ["rail-narrow", "Narrow controls"]]],
@@ -235,6 +236,16 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     ],
   ],
   [
+    "Automations",
+    [
+      ["au-marks", "KindMark / ScopeChip / TriggerSummary"],
+      ["au-owner", "OwnerMark"],
+      ["au-schedule", "SchedulePicker / NextRuns"],
+      ["au-chips", "ChipsInput"],
+      ["au-repo-filter", "RepoFilterField"],
+    ],
+  ],
+  [
     "Image library",
     [
       ["i-editor", "CodeEditor"],
@@ -402,6 +413,7 @@ function Shell() {
           <StoppingSection mode={panes} />
           <LifecycleSection mode={panes} />
           <SettingsGallerySection mode={panes} />
+          <AutomationsSection mode={panes} />
           <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />
           <FeedbackSection mode={panes} />
