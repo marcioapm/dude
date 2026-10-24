@@ -1219,14 +1219,16 @@ func reposToOpen(ctx context.Context, tx pgx.Tx, st *State) (todo, changed []Rep
 const ActionNotOpened = "not-opened"
 
 // waitedPastRepos takes out of todo the repositories with a pull request
-// the person chose to wait past closed (State.WaitedPastClosed): they
-// accepted that part as not taken, so a later change there opens none.
+// the person chose to wait past closed (State.WaitedPastClosed) and still
+// closed: they accepted that part as not taken, so a later change there
+// opens none. One reopened or merged since no longer counts, as in closedBeyondWait.
 // Returns the rest, and, by repository name, the closed pull request's number.
 func waitedPastRepos(ctx context.Context, tx pgx.Tx, st *State, todo []Repository) ([]Repository, map[string]int, error) {
 	if len(st.WaitedPastClosed) == 0 || len(todo) == 0 {
 		return todo, nil, nil
 	}
-	rows, err := tx.Query(ctx, `SELECT repository_id, number FROM pull_requests WHERE id = ANY($1)`, st.WaitedPastClosed)
+	rows, err := tx.Query(ctx, `SELECT repository_id, number FROM pull_requests WHERE id = ANY($1) AND state = $2`,
+		st.WaitedPastClosed, forge.StateClosed)
 	if err != nil {
 		return nil, nil, err
 	}

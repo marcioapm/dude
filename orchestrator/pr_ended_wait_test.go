@@ -156,6 +156,32 @@ func TestALaterFixOpensNoPullRequestWhereThePersonWaitedPastAClose(t *testing.T)
 	}
 }
 
+// Target's pull request reopened and merged after the person waited past
+// its close: no longer closed, so a later fix that changes target opens a
+// pull request there, and no activity line says it did not.
+func TestALaterFixOpensAPullRequestWhereTheWaitedPastCloseWasReopenedAndMerged(t *testing.T) {
+	m := newMixedEnd(t)
+	m.waitPastTargetsClose()
+	m.gh.Reopen(1)
+	m.sync()
+	m.gh.Merge(1)
+	m.until("target's pull request recorded merged", func() bool {
+		m.sync()
+		return m.count(`SELECT count(*) FROM pull_requests p JOIN repositories r ON r.id = p.repository_id
+			WHERE r.name = 'target' AND p.number = 1 AND p.state = 'merged'`) == 1
+	})
+	m.afterEnd()
+	m.touchTarget.Store(true)
+	m.laterRound()
+	if n := len(m.gh.Pulls()); n != 2 {
+		t.Errorf("%d target pull requests, want the merged one and the later fix's\n%s", n, m.describeRuns())
+	}
+	if n := m.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'not-opened'`, m.task); n != 0 {
+		t.Errorf("%d activity lines for a change left without a pull request, want none", n)
+	}
+}
+
 // Web closing too, after the person waited past target's close: no pull
 // request is left open, so the task ends (aborted) and nothing is asked.
 func TestTheOtherClosingAfterWaitingPastAMixedEndEndsTheTask(t *testing.T) {
