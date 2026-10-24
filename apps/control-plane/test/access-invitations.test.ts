@@ -216,13 +216,20 @@ describe("accepting", () => {
       await waitFor(async () => told.length > 0);
       told.length = 0;
       const again = (await invite([at("returner")])).body.results[0].invitation.code;
-      // An admin's take-ownership holds the session's lock: the accept waits for it, then returns the session.
+      // An admin's take-ownership holds the session's lock, then reads the
+      // departed owner's row FOR SHARE: the accept waits for it on the
+      // session's lock, not holding her row, so the read is granted at once
+      // and both finish (holding her row first would be a deadlock).
       const held = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
+      const shared = Promise.withResolvers<void>();
       const holder = owner.begin(async (tx) => {
+        await tx`SET LOCAL lock_timeout = '5s'`;
         await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || ${`ssn_back_${suffix}`}))`;
         held.resolve();
         await release.promise;
+        await tx`SELECT 1 FROM people WHERE id = ${fay.id} FOR SHARE`;
+        shared.resolve();
       });
       await held.promise;
       const accepting = as(at("returner"), "POST", `/v1/invitations/${again}/accept`, {}, null);
@@ -230,6 +237,7 @@ describe("accepting", () => {
         WHERE a.datname = current_database() AND l.locktype = 'advisory' AND NOT l.granted`)[0].n > 0);
       expect([...await owner`SELECT removed_at IS NOT NULL AS removed FROM people WHERE id = ${fay.id}`]).toEqual([{ removed: true }]);
       release.resolve();
+      await shared.promise;
       await holder;
       expect((await accepting).body.person.id).toBe(fay.id);
       const rows = await owner`SELECT s.id, s.owned_by_admins AS "byAdmins", o.person_id AS owner FROM sessions s

@@ -287,7 +287,8 @@ test("a removal locks only the sessions it changes, at most PASS_BATCH a transac
 
 test("a removal that fails between its batches is finished by removing them again; then they are gone (404)", async () => {
   const kai = await someone("Kai");
-  const n = PASS_BATCH + 100;
+  // Two full batches left after the failure: the resumed DELETE runs its own batch loop.
+  const n = 2 * PASS_BATCH + 100;
   const id = (g: number) => `ssn_kai_${String(g).padStart(5, "0")}`;
   await owner.begin(async (tx) => {
     await tx`INSERT INTO sessions (id, organization_id, title, access)
@@ -319,6 +320,43 @@ test("a removal that fails between its batches is finished by removing them agai
   expect((await call(boss, "DELETE", `/v1/people/${kai}`)).status).toBe(404);
 }, 60_000);
 
+test("someone invited back while their removal waits between batches keeps the sessions not yet passed", async () => {
+  const ned = await someone("Ned");
+  const n = PASS_BATCH + 100;
+  const id = (g: number) => `ssn_ned_${String(g).padStart(5, "0")}`;
+  await owner.begin(async (tx) => {
+    await tx`INSERT INTO sessions (id, organization_id, title, access)
+      SELECT 'ssn_ned_' || lpad(g::text, 5, '0'), ${ORG}, 'N', 'organisation' FROM generate_series(1, ${n}) g`;
+    await tx`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      SELECT 'ssn_ned_' || lpad(g::text, 5, '0'), ${ned}, ${ORG}, 'owner', now() FROM generate_series(1, ${n}) g`;
+  });
+  // A session of the second batch is held: the first batch commits, then the second waits on it.
+  const held = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const holder = owner.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext('session:' || ${id(PASS_BATCH + 50)}))`;
+    held.resolve();
+    await release.promise;
+  });
+  await held.promise;
+  const removal = call(boss, "DELETE", `/v1/people/${ned}`);
+  try {
+    await waitsOn(["advisory"]);
+    // The invitation accept, as it lands while the second batch waits.
+    await owner`UPDATE people SET removed_at = NULL WHERE id = ${ned}`;
+  } finally {
+    release.resolve();
+    await holder;
+  }
+  expect((await removal).status).toBe(204);
+  const [rest] = await owner`SELECT count(*) FILTER (WHERE owned_by_admins)::int AS passed,
+      count(*) FILTER (WHERE NOT owned_by_admins)::int AS kept FROM sessions WHERE id LIKE 'ssn_ned_%'`;
+  expect(rest).toEqual({ passed: PASS_BATCH, kept: 100 });
+  const [events] = await owner`SELECT count(*)::int AS n FROM events
+    WHERE event_type = 'session.owner_left' AND payload->>'owner' = ${ned} AND session_id > ${id(PASS_BATCH)}`;
+  expect(events.n).toBe(0);
+}, 60_000);
+
 test("removing a member who owns no session only wakes the orchestrator: its sweep withdraws what was put to them", async () => {
   const lou = await someone("Lou");
   forwarded.length = 0;
@@ -332,12 +370,20 @@ test("removing a member who owns no session only wakes the orchestrator: its swe
 
 test("the removal's response does not wait on an orchestrator that does not answer", async () => {
   const mo = await someone("Mo");
-  const hung = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
+  // Never answers; notes when the kick arrives.
+  let arrived = 0;
+  const hung = Bun.serve({ port: 0, fetch: () => {
+    arrived = Date.now();
+    return new Promise<Response>(() => {});
+  } });
   useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${hung.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
   try {
-    const started = Date.now();
     expect((await call(boss, "DELETE", `/v1/people/${mo}`)).status).toBe(204);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    const answered = Date.now();
+    await waitsFor(() => arrived > 0);
+    // Not awaited: the response is out before, or just after, the kick
+    // reaches the orchestrator, whatever bound the kick itself has.
+    expect(answered - arrived).toBeLessThan(200);
   } finally {
     useConfig(Config.load({ env: { ...process.env, DUDE_ORCHESTRATOR_URL: `http://localhost:${orchestrator.port}`, DUDE_ORCHESTRATOR_TOKEN: "t" } }));
     hung.stop(true);
