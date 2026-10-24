@@ -589,9 +589,10 @@ func TestChatLowConfidenceAsksAndTheAskersChoiceFiles(t *testing.T) {
 	if text := lastBot(t, w.fake).Text; text != "Filed ABS-1 Fix the export in Backlog" {
 		t.Fatalf("reply %q", text)
 	}
-	// A second click on the answered question does nothing.
+	// A second click on the answered question does nothing, and reads nothing from Slack.
+	before := w.fake.Calls("conversations.info")
 	w.click("Eli", "C1", q.TS, root, value)
-	if len(w.requests()) != 2 {
+	if len(w.requests()) != 2 || w.fake.Calls("conversations.info") != before {
 		t.Fatal("an answered question routed again")
 	}
 }
