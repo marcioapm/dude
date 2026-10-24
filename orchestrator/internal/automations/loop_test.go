@@ -516,12 +516,12 @@ func TestAutomationServerKeepsAnEventThatArrivesAsItIdles(t *testing.T) {
 	h := newHarness(t)
 	var mu sync.Mutex
 	var deliveries []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(h.fake.Preview(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		deliveries = append(deliveries, r.Header.Get("X-GitHub-Delivery"))
 		mu.Unlock()
 		w.WriteHeader(202)
-	}))
+	})))
 	t.Cleanup(srv.Close)
 	var inject atomic.Bool
 	var once sync.Once

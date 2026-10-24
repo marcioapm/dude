@@ -687,6 +687,12 @@ type Server struct {
 	DeletedServers []string
 	// Preview tickets minted and not yet used (UseTicket), by ticket: the Run each signs in to.
 	tickets map[string]string
+	// Each ticket's number: never reused, so a spent ticket stays spent.
+	ticketSeq int
+	// Preview cookies issued (Preview), by value: the Run each signs in to.
+	previewCookies map[string]string
+	// Preview requests lux answered itself and those it let through, by Run.
+	previewCalls map[string][]string
 	// What happened to tenant servers, in order (TenantCalls).
 	tenantCalls []string
 	// Their create and patch bodies, in order (TenantBodies).

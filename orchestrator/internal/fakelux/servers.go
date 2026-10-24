@@ -535,7 +535,8 @@ func (s *Server) mintTicket(w http.ResponseWriter, r *http.Request) {
 	if s.tickets == nil {
 		s.tickets = map[string]string{}
 	}
-	ticket := fmt.Sprintf("tkt_%s_%d", strings.TrimPrefix(run.ID, "lrun_"), len(s.tickets)+1)
+	s.ticketSeq++
+	ticket := fmt.Sprintf("tkt_%s_%d", strings.TrimPrefix(run.ID, "lrun_"), s.ticketSeq)
 	s.tickets[ticket] = run.ID
 	run.Calls = append(run.Calls, "ticket preview")
 	writeJSON(w, 201, map[string]any{"ticket": ticket, "kind": "preview", "runId": run.ID,
@@ -550,6 +551,92 @@ func (s *Server) UseTicket(ticket string) (string, bool) {
 	run, ok := s.tickets[ticket]
 	delete(s.tickets, ticket)
 	return run, ok
+}
+
+// PreviewCookie is the cookie lux's preview listener signs a browser in
+// with (lux internal/server/preview.go; the __Host- form on https).
+const PreviewCookie = "lux_preview"
+
+// Preview is lux's preview listener in front of app, a server's process:
+// /.lux/auth?ticket=…&to=/path spends a preview ticket, sets PreviewCookie
+// and redirects to the path; a request without a cookie lux issued gets
+// lux's own sign-in page, 401 with X-Lux-Preview: status; any other goes to
+// app, whose answer, a 401 included, is passed on as it is.
+func (s *Server) Preview(app http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.lux/auth" {
+			run, ok := s.UseTicket(r.URL.Query().Get("ticket"))
+			if !ok {
+				previewSignInPage(w)
+				return
+			}
+			s.mu.Lock()
+			if s.previewCookies == nil {
+				s.previewCookies = map[string]string{}
+			}
+			s.ticketSeq++
+			value := fmt.Sprintf("pc_%s_%d", strings.TrimPrefix(run, "lrun_"), s.ticketSeq)
+			s.previewCookies[value] = run
+			s.previewCall(run, "sign-in")
+			s.mu.Unlock()
+			http.SetCookie(w, &http.Cookie{Name: PreviewCookie, Value: value, Path: "/", HttpOnly: true})
+			to := r.URL.Query().Get("to")
+			if to == "" {
+				to = "/"
+			}
+			http.Redirect(w, r, to, http.StatusFound)
+			return
+		}
+		c, err := r.Cookie(PreviewCookie)
+		s.mu.Lock()
+		run, ok := "", false
+		if err == nil {
+			run, ok = s.previewCookies[c.Value]
+		}
+		if !ok {
+			s.previewCall("", "refused "+r.Method+" "+r.URL.Path)
+			s.mu.Unlock()
+			previewSignInPage(w)
+			return
+		}
+		s.previewCall(run, r.Method+" "+r.URL.Path)
+		s.mu.Unlock()
+		app.ServeHTTP(w, r)
+	})
+}
+
+// previewCall records what the preview listener did. Callers hold s.mu.
+func (s *Server) previewCall(run, call string) {
+	if s.previewCalls == nil {
+		s.previewCalls = map[string][]string{}
+	}
+	s.previewCalls[run] = append(s.previewCalls[run], call)
+}
+
+// PreviewCalls is what the preview listener did for a Run's signed-in
+// requests ("sign-in", "POST /events"), in order; run "" is the requests it
+// refused for want of a cookie.
+func (s *Server) PreviewCalls(run string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.previewCalls[run])
+}
+
+// ForgetPreviewCookies stops taking every preview cookie issued so far, as
+// lux does once one expires.
+func (s *Server) ForgetPreviewCookies() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.previewCookies)
+}
+
+func previewSignInPage(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Lux-Preview", "status")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte("<!doctype html><title>Sign-in needed</title><h1>Sign-in needed</h1>"))
 }
 
 func (s *Server) listServers(w http.ResponseWriter, r *http.Request) {

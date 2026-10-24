@@ -3,7 +3,6 @@ package automations
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -152,11 +151,33 @@ func prBody(action, repo, sender string) map[string]any {
 }
 
 func (h *harness) luxState(id string) string {
+	h.t.Helper()
 	got, err := h.lux.Get(context.Background(), id)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	return got.State
+}
+
+// serve puts app behind the fake lux's preview listener, as a real lux's
+// server URL is, and points every Server run at it.
+func (h *harness) serve(app http.Handler) *httptest.Server {
+	h.t.Helper()
+	srv := httptest.NewServer(h.fake.Preview(app))
+	h.t.Cleanup(srv.Close)
+	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return srv.URL, nil }
+	return srv
+}
+
+// count is how many of calls are call.
+func count(calls []string, call string) int {
+	n := 0
+	for _, c := range calls {
+		if c == call {
+			n++
+		}
+	}
+	return n
 }
 
 func TestAutomationIssuesStableScopedToken(t *testing.T) {
@@ -432,9 +453,7 @@ func TestAutomationAgentOnAnEventKeepsAndResumesItsSession(t *testing.T) {
 // a fresh one.
 func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
 	h := newHarness(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
-	t.Cleanup(srv.Close)
-	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return srv.URL, nil }
+	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	exec(t, h.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'ACME_TOKEN', 'acme-1', 'e-1')`, h.org, h.project)
 	h.automation("aut_rsrv", "server", map[string]any{"kind": "github", "event": "pull_request"},
 		map[string]any{"session_mode": "resumable", "expiry_days": 7,
@@ -579,7 +598,7 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	var got []http.Header
 	var bodies []string
 	fails := map[string]int{"d-2": 1}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		defer mu.Unlock()
@@ -591,11 +610,9 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		}
 		w.WriteHeader(202)
 	}))
-	t.Cleanup(srv.Close)
 	if ServerIdle != 30*time.Second {
 		t.Fatalf("ServerIdle %v, the decision says 30 s (Q3, Q16)", ServerIdle)
 	}
-	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return srv.URL, nil }
 	h.automation("aut_srv", "server", map[string]any{"kind": "github", "event": "pull_request"},
 		map[string]any{"server": map[string]any{"command": "bun run serve", "port": 8080, "path": "/events", "health": nil}})
 	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
@@ -646,55 +663,37 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	h.until("the container is ended", func() bool { return lux.Terminated(h.luxState(r.LuxRunID)) })
 }
 
-// A real lux's preview listener answers 401 to any request without its
-// sign-in cookie, which a preview ticket spent on /.lux/auth sets. A Server
-// run signs in with one, is healthy and POSTs through it; when the cookie
-// stops being taken, it signs in again rather than failing the request.
+// A real lux's preview listener answers its own 401 sign-in page to any
+// request without its cookie, which a preview ticket spent on /.lux/auth
+// sets. A Server run signs in before its first request, so the event is
+// never sent into the sign-in page; when lux stops taking the cookie, it
+// signs in again and the app still gets each event once.
 func TestAutomationServerSignsInToItsLuxPreview(t *testing.T) {
 	h := newHarness(t)
 	var mu sync.Mutex
-	valid := map[string]bool{}
-	var posts []int
-	signIns := 0
-	preview := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		if r.URL.Path == "/.lux/auth" {
-			if _, ok := h.fake.UseTicket(r.URL.Query().Get("ticket")); !ok {
-				w.WriteHeader(401)
-				return
-			}
-			signIns++
-			v := fmt.Sprintf("signed-%d", signIns)
-			valid[v] = true
-			http.SetCookie(w, &http.Cookie{Name: "lux_preview", Value: v})
-			http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
-			return
-		}
-		c, err := r.Cookie("lux_preview")
-		if err != nil || !valid[c.Value] {
-			w.WriteHeader(401)
-			if r.Method == "POST" {
-				posts = append(posts, 401)
-			}
-			return
-		}
+	var posts []string
+	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
-			posts = append(posts, 200)
+			mu.Lock()
+			posts = append(posts, r.Header.Get("X-GitHub-Delivery"))
+			mu.Unlock()
 		}
 		w.WriteHeader(200)
 	}))
-	t.Cleanup(preview.Close)
-	h.runner.ServerURL = func(context.Context, string, int) (string, error) { return preview.URL, nil }
-	health := "/health"
 	h.automation("aut_preview", "server", map[string]any{"kind": "github", "event": "pull_request"},
-		map[string]any{"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": health}})
+		map[string]any{"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": "/health"}})
 	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("the first POST answered 2xx", func() bool { mu.Lock(); defer mu.Unlock(); return len(posts) == 1 })
-	// The preview no longer takes the cookie it gave: the next event signs in again.
-	mu.Lock()
-	clear(valid)
-	mu.Unlock()
+	h.runner.Wait()
+	luxRun := h.runs("aut_preview")[0].LuxRunID
+	if calls := h.fake.PreviewCalls(luxRun); len(calls) < 2 || calls[0] != "sign-in" {
+		t.Errorf("the preview's calls %q, want a sign-in before the first request", calls)
+	}
+	if refused := h.fake.PreviewCalls(""); len(refused) != 0 {
+		t.Errorf("lux refused %q: a request went out before signing in", refused)
+	}
+	// lux no longer takes the cookie it gave: the next event signs in again.
+	h.fake.ForgetPreviewCookies()
 	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "ana"))
 	h.until("the second event POSTed", func() bool {
 		var posted int
@@ -719,8 +718,83 @@ func TestAutomationServerSignsInToItsLuxPreview(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if signIns < 2 {
-		t.Errorf("signed in %d times, want a fresh sign-in after the cookie was refused", signIns)
+	if strings.Join(posts, ",") != "d-1,d-2" {
+		t.Errorf("the app got %q, want each event once", posts)
+	}
+	if n := count(h.fake.PreviewCalls(luxRun), "sign-in"); n != 2 {
+		t.Errorf("signed in %d times, want once at the start and once after lux refused the cookie", n)
+	}
+	if n := count(h.fake.CallsOf(luxRun), "ticket preview"); n != 2 {
+		t.Errorf("%d tickets minted, want 2", n)
+	}
+}
+
+// An app that answers 401 itself (it checks a signature or its own auth)
+// has answered: the event is POSTed to it once, no ticket is minted for
+// it, and the request row says 401. Its health answering 401 mints no
+// ticket either, sweep after sweep, until the run fails unhealthy.
+func TestAutomationAnAppsOwn401IsItsAnswer(t *testing.T) {
+	h := newHarness(t)
+	var posts atomic.Int32
+	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			posts.Add(1)
+		}
+		w.WriteHeader(401)
+	}))
+	h.automation("aut_refuses", "server", map[string]any{"kind": "github", "event": "pull_request"},
+		map[string]any{"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": nil}})
+	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
+	h.until("the event is POSTed", func() bool {
+		var posted int
+		_ = h.owner.QueryRow(context.Background(), `SELECT posted FROM automation_runs WHERE automation_id = 'aut_refuses'`).Scan(&posted)
+		return posted == 1
+	})
+	h.runner.Wait()
+	// Signed in by now: the next event goes with the cookie lux takes.
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "ana"))
+	h.until("the second event is POSTed", func() bool {
+		var posted int
+		_ = h.owner.QueryRow(context.Background(), `SELECT posted FROM automation_runs WHERE automation_id = 'aut_refuses'`).Scan(&posted)
+		return posted == 2
+	})
+	h.runner.Wait()
+	run := h.runs("aut_refuses")[0]
+	if n := posts.Load(); n != 2 {
+		t.Errorf("the app got two events %d times", n)
+	}
+	var reqs []string
+	rows, _ := h.owner.Query(context.Background(), `SELECT delivery_id || ':' || try || ':' || http_status FROM automation_run_requests WHERE run_id = $1 ORDER BY at`, run.ID)
+	reqs, _ = pgx.CollectRows(rows, pgx.RowTo[string])
+	if strings.Join(reqs, ",") != "d-1:1:401,d-2:1:401" {
+		t.Errorf("request rows %q, want one 401 per event", reqs)
+	}
+	if n := count(h.fake.CallsOf(run.LuxRunID), "ticket preview"); n != 1 {
+		t.Errorf("%d tickets minted, want only the first request's sign-in", n)
+	}
+
+	// Its health answers 401: a minute of sweeps mints no more tickets.
+	h.automation("aut_unwell", "server", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": "/health"}})
+	h.deliver("d-push", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the unwell server's container starts", func() bool { r := h.runs("aut_unwell"); return len(r) == 1 && r[0].LuxRunID != "" })
+	unwell := h.runs("aut_unwell")[0]
+	for range 61 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h.runner.Wait()
+		h.advance(time.Second)
+	}
+	h.until("the unwell run fails", func() bool { r := h.runs("aut_unwell"); return r[0].Status == "failed" })
+	if r := h.runs("aut_unwell")[0]; r.Reason != "its server was not healthy within 60 seconds" {
+		t.Errorf("unwell run: %+v", r)
+	}
+	if n := count(h.fake.CallsOf(unwell.LuxRunID), "ticket preview"); n != 1 {
+		t.Errorf("%d tickets minted over a minute of 401s from the app's health, want 1", n)
+	}
+	if n := posts.Load(); n != 2 {
+		t.Errorf("the app got %d POSTs in all", n)
 	}
 }
 
