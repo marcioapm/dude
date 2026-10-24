@@ -221,6 +221,36 @@ func TestAutomationStartFreshKeepsTheSessionUntilItsCancelSucceeds(t *testing.T)
 	h.runner.Wait()
 }
 
+// refuseCancel is a lux that answers every cancel 409, as lux does a Run it
+// will not end.
+type refuseCancel struct{ lux.Client }
+
+func (refuseCancel) Cancel(context.Context, string) error {
+	return &lux.Error{Status: http.StatusConflict, Code: "not_cancellable", Message: "the run cannot be cancelled"}
+}
+
+// A kept container lux will neither resume nor cancel does not hold the
+// automation for good: lux's refusal of the cancel is an answer, so the
+// session goes and the run starts fresh.
+func TestAutomationSessionLuxWillNotCancelIsLetGo(t *testing.T) {
+	h := newHarness(t)
+	_, first := keptServer(t, h, "aut_stuck")
+	h.runner.Lux = refuseResume{refuseCancel{h.lux}}
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+	h.until("the second run starts fresh", func() bool { r := h.runs("aut_stuck"); return len(r) == 2 && r[1].Session != "" })
+	if r := h.runs("aut_stuck")[1]; r.Session != "new" || r.LuxRunID == first.LuxRunID {
+		t.Errorf("second run %+v", r)
+	}
+	var n int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM automation_sessions WHERE automation_id = 'aut_stuck' AND lux_run_id = $1`, first.LuxRunID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("the session still names the Run lux would not cancel")
+	}
+	h.runner.Wait()
+}
+
 // refuseResume is a lux that will not resume any Run, as one refuses a Run
 // whose snapshot is gone.
 type refuseResume struct{ lux.Client }

@@ -1722,9 +1722,11 @@ func (r *Runner) StartFresh(ctx context.Context, org, automationID string) error
 }
 
 // startFresh is StartFresh, saying which lux Run it let go of ("" none).
-// The row goes only once the cancel succeeds or lux has no such Run: a
-// failed cancel keeps it, so the next Start fresh or sweep tries again
-// rather than leaving a stopped Run nothing names.
+// The row goes once the cancel succeeds or lux answers it at all: a lux out
+// of reach, failing or busy keeps it, so the next Start fresh or sweep tries
+// again rather than leaving a stopped Run nothing names; any other answer
+// (no such Run, not cancellable) is lux saying it will not end it, and a
+// row kept for it would block every later firing.
 func startFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID string) (string, error) {
 	var luxRunID string
 	err := d.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -1737,7 +1739,7 @@ func startFresh(ctx context.Context, d *db.DB, c lux.Client, org, automationID s
 		return "", err
 	}
 	if err := c.Cancel(ctx, luxRunID); err != nil {
-		if le, ok := lux.AsError(err); !ok || le.Status != http.StatusNotFound {
+		if le, ok := lux.AsError(err); !ok || le.Retryable() {
 			return "", err
 		}
 	}
