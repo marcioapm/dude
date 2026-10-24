@@ -533,6 +533,12 @@ describe("Open to everyone", () => {
     await event("session.mentioned", { person: YOU });
     await settle(500);
     expect(reads).toBe(burst + 1);
+    // Its owner leaving, or coming back, changes who owns it in every admin's list.
+    for (const [i, type] of ["session.owner_left", "session.owner_returned"].entries()) {
+      await event(type, { owner: "u_ana" });
+      await settle(500);
+      expect([type, reads]).toEqual([type, burst + 2 + i]);
+    }
   });
 
   test("a mention reloads the lists only for the person mentioned", () => {

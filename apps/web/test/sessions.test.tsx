@@ -1314,6 +1314,17 @@ describe("a session's model", () => {
     expect(rail.querySelector("[data-testid=model-picker]")!.textContent).toContain("Model: Thinker on Codex");
   });
 
+  test("its owner back in the organisation: the page re-reads who owns it and the Chat says so", async () => {
+    const client = new Choosing(detail("chat", { session: { ...detail("chat").session, run: null } }));
+    const page = await sessionPage(client);
+    client.detail = detail("owner", { session: { ...detail("owner").session, run: null } });
+    client.ledger.push(ev("session.owner_returned", { owner: YOU }));
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => page.querySelector("[data-testid=session-screen][data-role=owner]"), "the return re-read");
+    await until(() => [...page.querySelectorAll("[data-testid=session-notice]")]
+      .find((n) => n.textContent?.includes(`${ME.name} is back in the organisation and owns this session again.`)), "the notice");
+  });
+
   class Reading extends Choosing {
     tiersRead = 0;
     tiersFail = false;
@@ -1439,6 +1450,8 @@ describe("a session's model", () => {
       .toBe("Started a fresh agent on Opus · OpenCode; it has the conversation so far.");
     expect(sessionNotice(ev("session.model.applied", { from: "run_a", to: "run_b", tier: null, model: "gpt-6-sol", harness: "codex" }), people))
       .toBe("Started a fresh agent on gpt-6-sol · Codex; it has the conversation so far.");
+    expect(sessionNotice(ev("session.owner_returned", { owner: ANA.id }), people))
+      .toBe(`${ANA.name} is back in the organisation and owns this session again.`);
   });
 });
 
