@@ -22,6 +22,8 @@ export interface SettingsNavItem {
   readonly note?: ReactNode;
   /** Sub-pages, shown under it while it or one of them is current. */
   readonly items?: ReadonlyArray<SettingsNavItem> | undefined;
+  /** A group that is a page itself: selecting it opens it, not its first sub-page. */
+  readonly page?: boolean | undefined;
 }
 
 export interface SettingsLayoutProps extends Omit<HTMLAttributes<HTMLDivElement>, "onSelect"> {
@@ -46,7 +48,7 @@ export function SettingsLayout({ scope, items, current, onSelect, footer, wide, 
       className={cx(styles["navItem"], sub && styles["navSub"], item.id === current && styles["navCurrent"])}
       aria-current={item.id === current ? "page" : undefined}
       data-settings-nav={item.id}
-      onClick={() => onSelect(item.items?.[0] && !sub ? item.items[0].id : item.id)}
+      onClick={() => onSelect(item.items?.[0] && !sub && !item.page ? item.items[0].id : item.id)}
     >
       {item.leading ?? (item.icon ? <Icon name={item.icon} size={16} className={styles["navIcon"]} /> : null)}
       <span className={styles["navLabel"]}>{item.label}</span>

@@ -1123,6 +1123,9 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   card calls `cardMarks` and `cardStart` itself, so pass **stable
   references** (`useCallback`, or a function defined once): a new closure on
   every render of the board's parent redraws every card.
+- **Where a card came from** (`cardLead`): on its first line, before its
+  key, in muted ink — a chat-born task's provider glyph and name. Nothing
+  for a task typed in dude. A stable reference too, as `cardMarks`.
 - One tab stop per board: ↑↓ move within a lane, ←→ across (same row, or the
   last one there is; folded lanes are skipped), Home/End, Enter/Space open.
   Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
@@ -1487,7 +1490,10 @@ here.
   where you are, and a second navigation inside it is two answers to one
   question. Read-only facts about a connection (GitHub, the embedder) are a
   `Card` with a `KeyValueList` and its actions in the footer; `SettingRow`
-  is for a value you change.
+  is for a value you change. A page whose sub-pages are its children (Chat,
+  with one page per provider and Requests) sets `page`: it opens itself, and
+  the child pages carry a `Breadcrumb size="sm"` back to it. Without `page`,
+  a group opens its first sub-page.
 - **SearchResultRow** is the one way a search result is drawn (Memory's
   search): ArtifactRow's anatomy and open shade — a 32px row, chevron,
   rank, a `RefLead` for what it is, and the title; at the end, as muted
@@ -1825,6 +1831,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   `SidebarSessions`, `AdminOwned`). `pin` is an epic note's and
   nothing else's (`EpicNote`, `EpicNoteNotice`, `EpicNoteRow`, a proposal's
   notes).
+- `slack` is the Slack provider's monochrome glyph (`ProviderGlyph`, never
+  with Slack's colours); a provider without its own glyph uses `integration`.
 
 ### Numbers and identifiers
 
@@ -2677,6 +2685,62 @@ are in `docs/design/accounts.md`):
   glyph on a sunken disc, an `h1`, a line and its `facts`; the card's
   footer holds its actions. `HowList` is how something works in a few
   named lines: a glyph, a bold lead-in, a muted sentence.
+
+### Chat providers (`components/Chat.tsx`)
+
+Shared surfaces never name a provider in words of their own: each takes a
+`provider: ChatProvider` (`{ id, name, glyph }`) and draws its glyph and
+its `name` from props, so a second provider costs an entry, not a
+component. Gallery: "Chat providers" (`gallery/sections/ChatProviders.tsx`).
+
+- **ProviderGlyph** — a chat provider's monochrome glyph in the ink of the
+  text beside it; `label` names it when it stands alone. `providerGlyph(id,
+  ICON_NAMES)` maps a server's id to the set, `integration` when it has none.
+- **RouteBadge** — where a mention went: a `Badge` with the route's glyph and
+  word (`ROUTE_SPEC`), so it reads without colour. Refusals and failures are
+  `subtle`; routes that made or linked something are `tinted`. `fallback`
+  adds "was Task" in muted text when dude overrode an answer under the 75%
+  bar.
+- **OriginFact** — where a session, task or epic came from outside dude:
+  "<glyph> From <provider> · #support · thread by Márcia". The whole fact is
+  the link to the permalink, with the external glyph; `compact` drops
+  "thread by" for list rows.
+- **ExternalThread** (+ **ExternalFace**) — a conversation from outside dude,
+  quoted as external text: the chrome shade and a strong left rule, as
+  `Timeline`'s quote. A linked author shows their dude face and name; anyone
+  else shows their name on neutral initials (`ExternalFace`, never an
+  identity colour), and "not in dude". Text is never rendered as Markdown.
+  "Open in <provider>" links out; `clip` shows the last messages with "Show N
+  earlier".
+- **RoutingLine** — dude's margin line in a chat-born transcript: "Routed as
+  a brainstorm · 82% sure", with the `ChatNotice` rule on either side. It is
+  a `<details>`; its reasoning and the model asked sit under it. With
+  `shared` (a private channel or group), the line adds "Shared with 4 people
+  from #design-private; 2 are not connected", and the body lists them:
+  added as faces and names, skipped as `ExternalFace` and display name.
+- **FactList** — rules that are not settings, read as cases: a glyph and the
+  case on the left, what happens on the right; a `<dl>` named by `label`,
+  stacked under 720px. For what an admin should know but cannot change
+  ("Who gets the session", on the Chat page).
+- **ConnectionCard** — one account dude acts with elsewhere: a title and
+  glyph (any node, so `ProviderGlyph`), an intro, facts, the callback's
+  `outcome`, Connected or Not connected; Connect is primary until connected
+  (or while `reconnect`), Disconnect only when connected. Your settings →
+  Connections: GitHub, then one per chat provider the organisation
+  installed.
+- **IdentityPair** — a provider account beside the dude person it is linked
+  to, the left label the provider's name, named for assistive tech as one
+  sentence.
+- **InstructionStack** — what a model is told, in order: a numbered `<ol>`,
+  one row per layer with whose it is, its length and where it is changed.
+  `here` tints the layer edited on this page (info wash, "This page" badge);
+  `collapsed` shows only its head (the built-in instructions); an empty
+  layer says "Nothing added". Read-only: the layers are edited where they
+  live.
+- **ProviderList** — the Chat page's providers: a list of rows, each a
+  button with the provider's glyph in a tile, its name and detail
+  (`EntityLine`), Installed (success) or Available (neutral), and a chevron
+  to its child page.
 
 ## Page rails
 

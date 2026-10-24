@@ -28,6 +28,7 @@ import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
 import { PageRailSection } from "./sections/PageRails.tsx";
 import { AccountsSection } from "./sections/Accounts.tsx";
+import { ChatProvidersSection } from "./sections/ChatProviders.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["Page rails", [["rail-populated", "Layout + facets"], ["rail-empty", "Empty"], ["rail-narrow", "Narrow controls"]]],
@@ -296,6 +297,22 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ac-door", "FrontDoor"],
     ],
   ],
+  [
+    "Chat providers",
+    [
+      ["cp-glyph", "ProviderGlyph"],
+      ["cp-route", "RouteBadge"],
+      ["cp-origin", "OriginFact"],
+      ["cp-thread", "ExternalThread"],
+      ["cp-routing", "RoutingLine"],
+      ["cp-facts", "FactList"],
+      ["cp-connection", "ConnectionCard / IdentityPair"],
+      ["cp-stack", "InstructionStack"],
+      ["cp-providers", "ProviderList"],
+      ["cp-settings", "Settings: a page group"],
+      ["cp-board", "Board: cardLead"],
+    ],
+  ],
 ];
 
 const PANE_DENSITY_KEY = "dude.gallery.paneDensity";
@@ -411,6 +428,7 @@ function Shell() {
           <BrainstormSection mode={panes} />
           <PageRailSection mode={panes} />
           <AccountsSection mode={panes} />
+          <ChatProvidersSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>

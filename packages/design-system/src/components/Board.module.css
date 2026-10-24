@@ -427,6 +427,15 @@
   color: var(--ds-color-text-muted);
   flex-shrink: 0;
 }
+/* cardLead: where the card came from, before its key. */
+.lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+  flex-shrink: 0;
+}
 /* Never squeezed to a letter: below 8ch the mark at the end wraps under it, and the epic takes the line. */
 .epic {
   color: var(--ds-color-text-muted);
