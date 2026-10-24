@@ -161,6 +161,76 @@ func TestChatAMessageHandedToASuccessorWaitsForItsAnswer(t *testing.T) {
 	}
 }
 
+// A session request whose reply never went out is failed for good: its ❌
+// is put at once, and the agent's later output does not turn it ✅.
+func TestChatASessionReplyNotPostedKeepsItsFailedMark(t *testing.T) {
+	brainstorm := answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"})
+	after := func(t *testing.T, w *world, ts string) {
+		t.Helper()
+		got := w.requests()
+		if len(got) != 1 || got[0].Route != "failed" || got[0].ResultKind != "session" {
+			t.Fatalf("requests %+v", got)
+		}
+		w.agentSays(got[0].ResultID, "agent.message")
+		if n := w.settle(); n != 0 || w.marks("C1", ts) != "x" {
+			t.Fatalf("settled %d after the agent spoke: %s", n, w.marks("C1", ts))
+		}
+		if s := w.one(`SELECT mark_settled FROM chat_requests WHERE organization_id = $1`, w.org); s != "failed" {
+			t.Fatalf("recorded %q", s)
+		}
+	}
+	t.Run("refused", func(t *testing.T) {
+		w := setup(t)
+		w.model.queue(brainstorm)
+		w.fake.FailNext("chat.postMessage", "msg_too_long")
+		ts, _ := w.receive("Márcia", "C1", "", "why are exports slow?")
+		w.once()
+		if m := w.marks("C1", ts); m != "x" {
+			t.Fatalf("right after the refusal: %s", m)
+		}
+		after(t, w, ts)
+	})
+	t.Run("given up", func(t *testing.T) {
+		w := setup(t)
+		w.model.queue(brainstorm)
+		w.fake.FailTimes("chat.postMessage", "internal_error", 100)
+		ts, ev := w.receive("Márcia", "C1", "", "why are exports slow?")
+		for range chat.MaxAttempts + 1 {
+			w.due()
+			w.once()
+		}
+		if e := w.event(ev); !e.Processed || w.marks("C1", ts) != "x" {
+			t.Fatalf("not given up: %+v, %s", e, w.marks("C1", ts))
+		}
+		after(t, w, ts)
+	})
+}
+
+// A session picked from a clarifying question gets its 👀 back (the
+// question cleared it), and ✅ from there on its agent's answer.
+func TestChatASessionPickedByClickIsMarkedAgain(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.6, "reasoning": "might be a task", "project": "BIL",
+		"title": "Fix the export", "goal": "Fix it."}))
+	root := w.mention("Eli", "C1", "", "the export is broken")
+	if m := w.marks("C1", root); m != "" {
+		t.Fatalf("with the question: %q", m)
+	}
+	q := lastBot(t, w.fake)
+	w.click("Eli", "C1", q.TS, root, buttonValue(t, q, 1))
+	got := w.requests()
+	if len(got) != 2 || got[1].Route != "brainstorm" || got[1].ResultKind != "session" {
+		t.Fatalf("requests %+v", got)
+	}
+	if m := w.marks("C1", root); m != "eyes" {
+		t.Fatalf("after the click: %q", m)
+	}
+	w.agentSays(got[1].ResultID, "agent.message")
+	if n := w.settle(); n != 1 || w.marks("C1", root) != "white_check_mark" {
+		t.Fatalf("settled %d after the reply: %s", n, w.marks("C1", root))
+	}
+}
+
 // A session whose agent ends before saying or doing anything gets ❌.
 func TestChatASessionsAgentEndingSilentGetsTheFailedMark(t *testing.T) {
 	w := setup(t)

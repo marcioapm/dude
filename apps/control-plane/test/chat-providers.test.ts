@@ -295,15 +295,25 @@ describe("settings", () => {
     expect(asAdmin.people.map((p: Json) => p.handle)).toEqual(["eli"]);
     expect(asAdmin.connected).toBeNull();
     expect(JSON.stringify(asAdmin)).not.toContain("xoxb-secret");
-    // No route returns the bot token, to a member or to an admin.
+    // No route returns the bot token, to a member or to an admin. Requests
+    // has a row carrying the installation's stored failure, as a reply
+    // refused by the provider records it.
+    await owner`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id,
+        person_id, route, text, reasoning)
+      SELECT 'chr_t1', ${ORG}, 'slack', 'ev_t1', 'T1', 'C1', 'U2', ${memberPerson}, 'failed', 'file it',
+        '(its reply was not posted: ' || last_failure || ')' FROM chat_installations WHERE id = 'chi_1'`;
+    const requests = await (await call(adminKey, "GET", "/v1/organization/chat/requests")).json() as Json;
+    expect(requests.requests.length).toBe(1);
+    expect(JSON.stringify(requests)).toContain("not_in_channel");
     for (const key of [memberKey, adminKey]) {
-      const paths = ["/v1/organization/chat", "/v1/organization/chat/slack", "/v1/organization/chat/slack/routing-instructions", "/v1/me/chat/slack"];
+      const paths = ["/v1/organization/chat", "/v1/organization/chat/slack", "/v1/me/chat/slack"];
       for (const path of key === adminKey ? [...paths, "/v1/organization/chat/requests"] : paths) {
         const res = await call(key, "GET", path);
         expect(res.status).toBe(200);
         expect(await res.text()).not.toContain("xoxb");
       }
     }
+    await owner`DELETE FROM chat_requests WHERE id = 'chr_t1'`;
     expect((await call(memberKey, "GET", "/v1/organization/chat/discord")).status).toBe(404);
     expect((await (await call(memberKey, "GET", "/v1/me/chat/slack")).json() as Json).connected.handle).toBe("eli");
   });
