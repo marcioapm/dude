@@ -739,8 +739,14 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 	var luxRunID, session, startReason string
 	var err error
 	if resumable && kept != "" {
-		luxRunID, err = r.resume(ctx, a, kept, runID, payloads, at)
+		var why string
+		luxRunID, why, err = r.resume(ctx, a, kept, runID, payloads, at)
 		session = "resumed"
+		if why != "" {
+			// What stops this resume (an image still building, no tier) stops
+			// a fresh start too: the run fails and the kept session stays.
+			return true, r.finish(ctx, a, runID, "failed", why, nil)
+		}
 		if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 			// Still stopping after the last run: tried again next pass, for
 			// up to ResumeConflictMax; then the kept Run is ended and this
@@ -762,10 +768,18 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 			startReason = fmt.Sprintf("its kept session was still busy after %s, so it started fresh", ResumeConflictMax)
 			luxRunID, session, err = "", "", nil
 		}
+		if _, isLux := lux.AsError(err); err != nil && !isLux {
+			// Not lux's answer (the database, a forge token, lux out of
+			// reach): tried again next pass, the kept session untouched.
+			return false, err
+		}
 		if err != nil {
-			// The kept container is gone: the run starts fresh.
+			// lux refused to resume the kept Run: it is ended, so no stopped
+			// Run is left behind, and the run starts fresh.
 			r.Log.Info("kept automation session could not be resumed; starting fresh", "automation", a.ID, "error", err)
-			r.forgetSession(ctx, a)
+			if err := StartFresh(ctx, r.DB, r.Lux, a.Org, a.ID); err != nil {
+				return false, err
+			}
 			luxRunID, session = "", ""
 		}
 	}
@@ -823,38 +837,39 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 
 // resume takes the kept session up again with this firing's instructions.
 // lux keeps no secret's value and refuses a resume that does not give
-// every secret the Run declares: its forge tokens are minted afresh, and
-// the rest (the event file, the setup manifest, project secrets, a registry
-// login) are taken from the spec this firing would start a new Run with,
-// so the event file holds this firing's event.
-func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, error) {
+// every secret the Run declares, or gives one it does not: its forge
+// tokens are minted afresh from the stored spec, and the rest it declares
+// (the event and env files, the setup manifest, project secrets, a registry
+// login) are this firing's values. why says what stops this firing from
+// running at all (an image still building, no tier), resumed or fresh.
+func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, payloads []Payload, at *time.Time) (string, string, error) {
 	in := lux.ResumeInput{RequestID: "automation-" + runID}
 	if a.Kind == "agent" {
 		prompt, _, err := r.prompt(ctx, a, payloads, at)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		in.Input = prompt
 	}
 	got, err := r.Lux.Get(ctx, kept)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if r.Forges != nil {
 		gh, err := r.Forges.For(ctx, a.Org)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if gh != nil {
 			if in.Secrets, err = phases.ResumeCredentials(ctx, gh, got.Spec, nil); err != nil {
-				return "", err
+				return "", "", err
 			}
 		}
 	}
 	if a.Kind == "agent" && r.Agent.ToolsURL != "" {
 		token, err := r.toolsToken(ctx, a, runID, payloads)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		in.Secrets = append(in.Secrets, lux.Secret{Name: "DUDE_TOOLS_AUTH", Value: "Bearer " + token})
 	}
@@ -862,14 +877,15 @@ func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, p
 		return slices.ContainsFunc(in.Secrets, func(s lux.Secret) bool { return s.Name == name })
 	}
 	if slices.ContainsFunc(got.Spec.Secrets, func(s lux.StoredSecret) bool { return !given(s.Name) }) {
-		fresh, why, err := r.spec(ctx, a, runID, payloads, at)
+		specIn, why, err := r.specInput(ctx, a, runID, payloads, at, false)
+		if err != nil || why != "" {
+			return "", why, err
+		}
+		rest, err := phases.AutomationResumeSecrets(ctx, r.Registry, specIn, got.Spec)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		if why != "" {
-			return "", errors.New(why)
-		}
-		for _, s := range fresh.Secrets {
+		for _, s := range rest {
 			declared := slices.ContainsFunc(got.Spec.Secrets, func(d lux.StoredSecret) bool { return d.Name == s.Name })
 			if declared && !given(s.Name) {
 				in.Secrets = append(in.Secrets, s)
@@ -877,16 +893,9 @@ func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, p
 		}
 	}
 	if _, err := r.Lux.Resume(ctx, kept, in); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return kept, nil
-}
-
-func (r *Runner) forgetSession(ctx context.Context, a Automation) {
-	_ = r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM automation_sessions WHERE automation_id = $1`, a.ID)
-		return err
-	})
+	return kept, "", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1882,6 +1891,23 @@ func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, pay
 
 // spec builds a run's lux spec; why is the reason it cannot run, in words.
 func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads []Payload, at *time.Time) (lux.Spec, string, error) {
+	in, why, err := r.specInput(ctx, a, runID, payloads, at, true)
+	if err != nil || why != "" {
+		return lux.Spec{}, why, err
+	}
+	var gh *forge.GitHub
+	if r.Forges != nil {
+		if gh, err = r.Forges.For(ctx, a.Org); err != nil {
+			return lux.Spec{}, "", err
+		}
+	}
+	spec, err := phases.AutomationSpec(ctx, r.Agent, r.Registry, gh, in)
+	return spec, "", err
+}
+
+// specInput is what a run's spec is built from. withAgent adds an agent's
+// prompt and tools token, which a resume gives otherwise.
+func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payloads []Payload, at *time.Time, withAgent bool) (phases.AutomationSpecInput, string, error) {
 	in := phases.AutomationSpecInput{OrganizationID: a.Org, AutomationID: a.ID, RunID: runID, Kind: a.Kind}
 	var settings agentSettings
 	_ = json.Unmarshal(a.Agent, &settings)
@@ -1994,18 +2020,21 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 		return nil
 	})
 	if err != nil || why != "" {
-		return lux.Spec{}, why, err
+		return in, why, err
 	}
 	switch a.Kind {
 	case "agent":
+		if !withAgent {
+			break
+		}
 		prompt, _, err := r.prompt(ctx, a, payloads, at)
 		if err != nil {
-			return lux.Spec{}, "", err
+			return in, "", err
 		}
 		in.Prompt = prompt
 		if r.Agent.ToolsURL != "" {
 			if in.ToolsToken, err = r.toolsToken(ctx, a, runID, payloads); err != nil {
-				return lux.Spec{}, "", err
+				return in, "", err
 			}
 		}
 	case "command":
@@ -2030,14 +2059,7 @@ func (r *Runner) spec(ctx context.Context, a Automation, runID string, payloads 
 			in.Files[EventPath] = string(body)
 		}
 	}
-	var gh *forge.GitHub
-	if r.Forges != nil {
-		if gh, err = r.Forges.For(ctx, a.Org); err != nil {
-			return lux.Spec{}, "", err
-		}
-	}
-	spec, err := phases.AutomationSpec(ctx, r.Agent, r.Registry, gh, in)
-	return spec, "", err
+	return in, "", nil
 }
 
 // automationRepos are what a run checks out: a project automation's

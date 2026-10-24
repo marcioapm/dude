@@ -1,0 +1,123 @@
+package automations
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+)
+
+// keptServer gives the harness a resumable Server automation checking out
+// the project's repository with the dude App's tokens, runs it once and
+// waits for its container to be stopped and kept. Each token the App
+// issues lasts 5 minutes, under forge's refresh margin, so every token
+// dude asks for is minted: the App's count is dude's asks.
+func keptServer(t *testing.T, h *harness, id string) (*fakegithub.App, runRow) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := fakegithub.NewApp(9001, "dude-acme", &key.PublicKey)
+	app.Set(func(a *fakegithub.App) { a.Installations["acme"], a.TokenLifetime = 71, 5*time.Minute })
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	h.runner.Forges = oneForge{forge.NewGitHub(forge.Credential{Auth: "github_app", Secret: string(pemKey), APIBaseURL: srv.URL, AppID: "9001"})}
+	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	h.automation(id, "server", map[string]any{"kind": "github", "event": "pull_request"},
+		map[string]any{"session_mode": "resumable", "expiry_days": 7,
+			"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": nil}})
+	exec(t, h.owner, `UPDATE automations SET repos = '"all"' WHERE id = $1`, id)
+	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
+	h.until("the first event is POSTed", func() bool {
+		var posted int
+		_ = h.owner.QueryRow(context.Background(), `SELECT posted FROM automation_runs WHERE automation_id = $1`, id).Scan(&posted)
+		return posted == 1
+	})
+	h.runner.Wait()
+	h.advance(ServerIdle + time.Second)
+	h.until("the first run ends idle", func() bool { r := h.runs(id); return len(r) == 1 && r[0].Status == "succeeded" })
+	first := h.runs(id)[0]
+	h.until("the kept container is stopped", func() bool { return h.luxState(first.LuxRunID) == "stopped" })
+	return app, first
+}
+
+// A resume mints each forge token once, from the kept Run's stored spec:
+// the rest of what it gives again mints none.
+func TestAutomationResumeMintsItsTokensOnce(t *testing.T) {
+	h := newHarness(t)
+	app, first := keptServer(t, h, "aut_mint")
+	before := app.ExchangesFor(71)
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+	h.until("the second run resumes", func() bool { r := h.runs("aut_mint"); return len(r) == 2 && r[1].Session != "" })
+	if r := h.runs("aut_mint")[1]; r.Session != "resumed" || r.LuxRunID != first.LuxRunID {
+		t.Fatalf("second run %+v", r)
+	}
+	if n := app.ExchangesFor(71) - before; n != 1 {
+		t.Errorf("the resume minted %d installation tokens, want 1", n)
+	}
+	h.runner.Wait()
+}
+
+// What fails a fresh start as well (its image has no published version)
+// fails the run and keeps the session: its container is neither ended nor
+// forgotten, and the next firing, the image fixed, resumes it.
+func TestAutomationResumeThatCannotRunKeepsTheSession(t *testing.T) {
+	h := newHarness(t)
+	_, first := keptServer(t, h, "aut_build")
+	exec(t, h.owner, `INSERT INTO images (id, organization_id, name) VALUES ($1 || '_img_new', $1, 'new')`, h.org)
+	exec(t, h.owner, `UPDATE automations SET image_id = $1 || '_img_new' WHERE id = 'aut_build'`, h.org)
+	h.runner.Agent.Layer = "registry.example.com/dude-layer:1"
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+	h.until("the second run fails", func() bool { r := h.runs("aut_build"); return len(r) == 2 && r[1].Status == "failed" })
+	if r := h.runs("aut_build")[1]; r.Reason != "its image new has no published version: build and publish one first" || r.LuxRunID != "" {
+		t.Errorf("second run %+v", r)
+	}
+	var kept string
+	if err := h.owner.QueryRow(context.Background(), `SELECT lux_run_id FROM automation_sessions WHERE automation_id = 'aut_build'`).Scan(&kept); err != nil || kept != first.LuxRunID {
+		t.Fatalf("kept session %q %v, want %s", kept, err, first.LuxRunID)
+	}
+	if s := h.luxState(first.LuxRunID); s != "stopped" {
+		t.Errorf("the kept container is %s", s)
+	}
+	exec(t, h.owner, `UPDATE automations SET image_id = NULL WHERE id = 'aut_build'`)
+	h.deliver("d-3", "pull_request", prBody("synchronize", "acme/web", "cy"))
+	h.until("the third run resumes", func() bool { r := h.runs("aut_build"); return len(r) == 3 && r[2].Session != "" })
+	if r := h.runs("aut_build")[2]; r.Session != "resumed" || r.LuxRunID != first.LuxRunID {
+		t.Errorf("third run %+v", r)
+	}
+	h.runner.Wait()
+}
+
+// A kept container lux will not resume is ended before the run starts
+// fresh: no stopped Run is left on lux with no session naming it.
+func TestAutomationUnresumableSessionIsEndedNotOrphaned(t *testing.T) {
+	h := newHarness(t)
+	_, first := keptServer(t, h, "aut_orphan")
+	h.runner.Lux = refuseResume{h.lux}
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+	h.until("the second run starts fresh", func() bool { r := h.runs("aut_orphan"); return len(r) == 2 && r[1].Session != "" })
+	if r := h.runs("aut_orphan")[1]; r.Session != "new" || r.LuxRunID == first.LuxRunID {
+		t.Errorf("second run %+v", r)
+	}
+	h.until("the unresumable container is ended", func() bool { return lux.Terminated(h.luxState(first.LuxRunID)) })
+	h.runner.Wait()
+}
+
+// refuseResume is a lux that will not resume any Run, as one refuses a Run
+// whose snapshot is gone.
+type refuseResume struct{ lux.Client }
+
+func (refuseResume) Resume(context.Context, string, lux.ResumeInput) (lux.Run, error) {
+	return lux.Run{}, &lux.Error{Status: http.StatusUnprocessableEntity, Code: "not_resumable", Message: "the run's snapshot is gone"}
+}

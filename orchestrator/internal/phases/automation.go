@@ -148,6 +148,34 @@ func AutomationSpec(ctx context.Context, c AgentConfig, reg registry.Provider, g
 	return spec, nil
 }
 
+// AutomationResumeSecrets are the values a resume of an automation's kept
+// Run gives again for what AutomationSpec declared from in, minting no
+// forge token (ResumeCredentials does that from the stored spec): its
+// files, chosen project secrets, the setup manifest when the Run declares
+// one, and the registry login it was started with.
+func AutomationResumeSecrets(ctx context.Context, reg registry.Provider, in AutomationSpecInput, stored lux.StoredSpec) ([]lux.Secret, error) {
+	var out []lux.Secret
+	for _, path := range slices.Sorted(maps.Keys(in.Files)) {
+		out = append(out, lux.Secret{Name: fileSecretName(path), Value: in.Files[path], As: "file", Path: path})
+	}
+	out = append(out, in.Secrets...)
+	if DeclaresSetup(stored) {
+		setups := make([]Setup, 0, len(in.Repos))
+		for _, r := range in.Repos {
+			setups = append(setups, Setup{Name: lux.SpecName(r.Name), Path: RepoPath(r.Name), Script: r.Setup})
+		}
+		out = append(out, SetupSecret(setups))
+	}
+	login, err := LoginFor(ctx, reg, in.Image, &stored)
+	if err != nil {
+		return nil, err
+	}
+	if login != nil {
+		out = append(out, lux.Secret{Name: registrySecret, Value: login.Credential})
+	}
+	return out, nil
+}
+
 // fileSecretName names a file the spec places by its path: lux's secret
 // names are letters, digits and underscores.
 func fileSecretName(path string) string {
