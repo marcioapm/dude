@@ -380,6 +380,57 @@ def test_a_session_open_to_the_organisation_is_read_and_written_by_anyone_in_it_
     assert caio_client.get("/v1/brainstorms").json()["mentions"] == []
 
 
+def _told(who: ApiClient, session: str, words: str) -> list[dict]:
+    return [e for e in who.get("/v1/events", params={"sessionId": session, "limit": 1000}).json()["events"]
+            if e["eventType"] == "session.told" and words in e["payload"]["text"]]
+
+
+@pytest.mark.ui
+def test_an_owner_removed_leaves_their_session_to_the_admins_and_one_invited_back_owns_theirs_again(
+        client: ApiClient, env, access):
+    _scripted_brainstorm(client)
+    org = client.get("/v1/me").json()["organization"]["id"]
+    gil, gil_client = _person(client, env, "Gil Tanaka")
+
+    # Removed while owning an organisation session: an admin sees it as the admins', and takes it over.
+    fay, fay_client = _person(client, env, "Fay Okoro")
+    session = fay_client.post("/v1/brainstorms", {"title": "Invoice retries", "projects": []}).json()["id"]
+    fay_client.post(f"/v1/brainstorms/{session}/chat", {"text": "retries double-charge"})
+    wait_until(lambda: _said(fay_client, session), timeout=60, message="the agent never answered")
+    assert fay_client.put(f"/v1/brainstorms/{session}/access", {"access": "organisation"}).status_code == 200
+    assert client.delete(f"/v1/people/{fay['id']}").status_code == 204
+    listed = {s["id"]: s for s in client.get("/v1/brainstorms").json()["sessions"]}
+    assert listed[session]["ownedByAdmins"] is True, listed.get(session)
+    assert client.get(f"/v1/brainstorms/{session}").json()["you"]["role"] == "owner"
+    wait_until(lambda: _told(client, session, "Fay Okoro left the organisation. Its admins own this session now"), timeout=30,
+               message="the agent was never told its owner left")
+    resp = client.post(f"/v1/brainstorms/{session}/take-ownership")
+    assert resp.status_code == 200, resp.text
+    detail = client.get(f"/v1/brainstorms/{session}").json()
+    assert detail["you"]["role"] == "owner" and detail["you"]["member"] is True
+
+    # Another owner, removed and invited back: their shared session is theirs again, and its agent is told.
+    hal, hal_client = _person(client, env, "Hal Moreau")
+    shared = hal_client.post("/v1/brainstorms", {"title": "Dunning emails", "projects": []}).json()["id"]
+    hal_client.post(f"/v1/brainstorms/{shared}/chat", {"text": "the third reminder is rude"})
+    wait_until(lambda: _said(hal_client, shared), timeout=60, message="the agent never answered")
+    assert hal_client.post(f"/v1/brainstorms/{shared}/people", {"people": [gil["id"]], "role": "chat"}).status_code == 200
+    assert gil_client.post(f"/v1/brainstorms/{shared}/accept").status_code == 200
+    assert client.delete(f"/v1/people/{hal['id']}").status_code == 204
+    assert client.get(f"/v1/brainstorms/{shared}").json()["you"]["role"] == "owner"
+    code = client.post("/v1/organization/invitations", {"invitations": [{"email": hal["email"]}], "role": "member"}).json()["results"][0]["invitation"]["code"]
+    back = access.session(hal["email"])
+    back.headers["x-dude-organization"] = org
+    resp = back.post(f"/v1/invitations/{code}/accept", json={})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["person"]["id"] == hal["id"]
+    mine = back.get(f"/v1/brainstorms/{shared}").json()
+    assert mine["you"]["role"] == "owner" and mine["you"]["member"] is True
+    assert client.get(f"/v1/brainstorms/{shared}").status_code == 404
+    wait_until(lambda: _told(gil_client, shared, "Hal Moreau is back in the organisation and owns this session again"), timeout=30,
+               message="the agent was never told its owner is back")
+
+
 def test_a_session_starts_untitled_its_agent_names_it_and_a_persons_name_wins(client: ApiClient, env, owner_dsn: str):
     _scripted_brainstorm(client)
     ana, ana_client = _person(client, env, "Ana Nunes")
