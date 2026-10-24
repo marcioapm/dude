@@ -130,14 +130,64 @@ type Project struct {
 // EpicRef is an epic of a project.
 type EpicRef struct{ ID, Title string }
 
-// SessionRef is one of the person's chat-born sessions.
-type SessionRef struct{ ID, Title string }
+// SessionRef is one of the person's chat-born sessions, with what decides
+// whether the mention's conversation may be sent into it.
+type SessionRef struct {
+	ID, Title string
+	// "organisation" or "private".
+	Access string
+	// The conversation it was made from, and that conversation's kind.
+	OriginConversation, OriginKind string
+	// Every connected member of the mention's conversation can chat in it.
+	SharedWithAll bool
+}
 
 // World is what an answer is checked against: the person's projects and
-// recent sessions.
+// recent sessions, and the conversation the mention is in.
 type World struct {
 	Projects []Project
 	Sessions []SessionRef
+	// The mention's conversation and its kind (Kind* constants).
+	Conversation, Kind string
+}
+
+// resumable is whether a message from w's conversation may go into s: a
+// resumed session is shared with everyone the conversation would share a
+// new one with, so it must already be open to all of them. A session made
+// in a 1:1 DM is reachable from that DM alone.
+func (w World) resumable(s SessionRef) bool {
+	same := s.OriginConversation != "" && s.OriginConversation == w.Conversation
+	if s.OriginKind == KindDM && !same {
+		return false
+	}
+	switch w.Kind {
+	case KindDM:
+		return true
+	case KindPrivate, KindGroup:
+		return same || s.Access == "organisation" || s.SharedWithAll
+	}
+	return s.Access == "organisation"
+}
+
+func conversationWord(kind string) string {
+	switch kind {
+	case KindDM:
+		return "the direct message"
+	case KindPrivate, KindGroup:
+		return "the conversation"
+	}
+	return "the channel"
+}
+
+// Resumable are the sessions a message from w's conversation may resume.
+func (w World) Resumable() []SessionRef {
+	var out []SessionRef
+	for _, s := range w.Sessions {
+		if w.resumable(s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (w World) project(key string) (Project, bool) {
@@ -212,9 +262,13 @@ func (a Answer) problem(w World) string {
 		}
 	case RouteResume:
 		for _, s := range w.Sessions {
-			if s.ID == a.Session {
-				return ""
+			if s.ID != a.Session {
+				continue
 			}
+			if !w.resumable(s) {
+				return fmt.Sprintf("session %q is not open to everyone in %s", a.Session, conversationWord(w.Kind))
+			}
+			return ""
 		}
 		return fmt.Sprintf("session %q is not one the person can chat in", a.Session)
 	case RouteClarify:
@@ -226,8 +280,9 @@ func (a Answer) problem(w World) string {
 				return "a choice has no label"
 			}
 			switch c.Route {
-			case RouteBrainstorm, RouteTask, RouteEpic, RouteResume:
+			case RouteBrainstorm, RouteTask:
 			default:
+				// An epic or resume choice carries no epic or session to make.
 				return fmt.Sprintf("choice %q routes to %q", c.Label, c.Route)
 			}
 		}
@@ -253,10 +308,15 @@ func EpicTasksProblem(tasks []NewTask) string {
 		edges[t.Ref] = append([]string{}, t.BlockedBy...)
 	}
 	for _, t := range tasks {
+		seen := map[string]bool{}
 		for _, b := range t.BlockedBy {
 			if _, ok := edges[b]; !ok {
 				return fmt.Sprintf("task %s is blocked by %q, no task of the epic", t.Ref, b)
 			}
+			if seen[b] {
+				return fmt.Sprintf("task %s names %q in blocked_by twice", t.Ref, b)
+			}
+			seen[b] = true
 		}
 	}
 	state := map[string]int{}
@@ -291,6 +351,9 @@ func EpicTasksProblem(tasks []NewTask) string {
 // choices can be built, else a brainstorm.
 func Decide(a Answer, w World, rounds int, chosen bool, text string) Decision {
 	problem := a.problem(w)
+	if problem == "" && a.Route == RouteClarify && rounds >= ClarifyRounds {
+		problem = fmt.Sprintf("the thread was asked %d clarifying questions already", rounds)
+	}
 	if problem == "" && !chosen && a.Confidence < ConfidenceBar && a.Route != RouteBrainstorm {
 		problem = fmt.Sprintf("%.0f%% sure, under the %.0f%% bar", a.Confidence*100, ConfidenceBar*100)
 	}

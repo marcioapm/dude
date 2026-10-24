@@ -146,6 +146,7 @@ func setup(t *testing.T) *world {
 	w.fake.AddConversation(fakeslack.Conversation{ID: "G1", Team: "T1", Name: "design-private", Kind: "private",
 		Members: []string{"U1", "U2", "U3", "U9", "UBT1"}})
 	w.fake.AddConversation(fakeslack.Conversation{ID: "D1", Team: "T1", Kind: "dm", Members: []string{"U1", "UBT1"}})
+	w.fake.AddConversation(fakeslack.Conversation{ID: "M1", Team: "T1", Kind: "group", Members: []string{"U1", "U2", "UBT1"}})
 	return w
 }
 

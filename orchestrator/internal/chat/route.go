@@ -155,6 +155,8 @@ type request struct {
 	ModelCall                   string
 	Question                    any
 	QuestionMessage             string
+	// The conversation's members, for a private or group conversation.
+	members []string
 }
 
 // record writes the request, in tx: false when the delivery already has one
@@ -255,6 +257,18 @@ func (s *Service) route(ctx context.Context, org string, p Provider, eventID str
 		return err
 	}
 	r.Kind, r.ConversationName = conv.Kind, conv.Name
+	// Who is in a private conversation decides who a session is shared
+	// with, and which sessions a mention there may resume.
+	var connected []string
+	if conv.Kind == KindPrivate || conv.Kind == KindGroup {
+		if r.members, err = p.ListMembers(ctx, inst, m.ConversationID); err != nil {
+			s.noteFailure(ctx, org, m.Provider, err)
+			return err
+		}
+		if connected, err = s.connectedPeople(ctx, org, inst, r.members); err != nil {
+			return err
+		}
+	}
 	if !m.Direct {
 		if bound, err := s.bound(ctx, org, p, inst, who, r); bound || err != nil {
 			return err
@@ -265,7 +279,7 @@ func (s *Service) route(ctx context.Context, org string, p Provider, eventID str
 		return err
 	}
 	r.ContextHash = thread.hash()
-	world, err := s.world(ctx, org, who.Person)
+	world, err := s.world(ctx, org, who.Person, m, conv.Kind, connected)
 	if err != nil {
 		return err
 	}
@@ -385,15 +399,6 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 	if b.Task != "" || b.Epic != "" {
 		return true, s.linkBound(ctx, org, p, inst, who, r, b)
 	}
-	// Group membership is read on each mention: anyone of the conversation
-	// who has connected since joins, the asker among them.
-	var members []string
-	if b.Kind == KindPrivate || b.Kind == KindGroup {
-		if members, err = p.ListMembers(ctx, inst, m.ConversationID); err != nil {
-			s.noteFailure(ctx, org, m.Provider, err)
-			return true, err
-		}
-	}
 	since := b.LastRead
 	var newer []ThreadMessage
 	if since != "" {
@@ -412,8 +417,16 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 		if err := delivery.LockSession(ctx, tx, b.Session); err != nil {
 			return err
 		}
-		if len(members) > 0 {
-			if r.Added, r.Skipped, err = addMembers(ctx, tx, inst, b.Session, members, who.Person); err != nil {
+		// Group membership is read on each mention: anyone of the
+		// conversation who has connected since joins, the asker among them.
+		// Only the session's own conversation shares it: a thread bound by
+		// a resume elsewhere sends in only for those who can chat already.
+		var origin string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(origin->>'conversationId', '') FROM sessions WHERE id = $1`, b.Session).Scan(&origin); err != nil {
+			return err
+		}
+		if len(r.members) > 0 && origin == m.ConversationID && (b.Kind == KindPrivate || b.Kind == KindGroup) {
+			if r.Added, r.Skipped, err = addMembers(ctx, tx, org, inst, b.Session, r.members, who.Person); err != nil {
 				return err
 			}
 		}
@@ -509,25 +522,10 @@ func (s *Service) reply(ctx context.Context, org string, p Provider, inst Instal
 // member among the conversation's members who has no role in it yet, and
 // returns those added and the members not connected (skipped, by
 // provider id). Bots are neither. Members who left keep their access.
-func addMembers(ctx context.Context, tx pgx.Tx, inst Installation, session string, members []string, by string) (added, skipped []string, err error) {
+func addMembers(ctx context.Context, tx pgx.Tx, org string, inst Installation, session string, members []string, by string) (added, skipped []string, err error) {
 	members = slices.DeleteFunc(slices.Clone(members), func(u string) bool { return u == inst.BotUserID })
-	rows, err := tx.Query(ctx, `SELECT i.external_user_id, pe.id FROM chat_identities i
-		JOIN people pe ON pe.account_id = i.account_id AND pe.organization_id = current_organization_id() AND pe.removed_at IS NULL
-		WHERE i.provider = $1 AND i.external_workspace_id = $2 AND i.external_user_id = ANY($3)`, inst.Provider, inst.WorkspaceID, members)
+	people, err := connectedIn(ctx, tx, inst, members)
 	if err != nil {
-		return nil, nil, err
-	}
-	people := map[string]string{}
-	for rows.Next() {
-		var u, person string
-		if err := rows.Scan(&u, &person); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		people[u] = person
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		return nil, nil, err
 	}
 	for _, u := range members {
@@ -547,7 +545,7 @@ func addMembers(ctx context.Context, tx pgx.Tx, inst Installation, session strin
 			continue
 		}
 		added = append(added, person)
-		if err := delivery.SessionEvent(ctx, tx, delivery.SessionRef(orgOfTx(ctx, tx), session), delivery.EvSessionJoined, "person", by,
+		if err := delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, session), delivery.EvSessionJoined, "person", by,
 			map[string]any{"person": person, "via": JoinedVia}); err != nil {
 			return nil, nil, err
 		}
@@ -555,10 +553,40 @@ func addMembers(ctx context.Context, tx pgx.Tx, inst Installation, session strin
 	return added, skipped, nil
 }
 
-func orgOfTx(ctx context.Context, tx pgx.Tx) string {
-	var org string
-	_ = tx.QueryRow(ctx, `SELECT current_organization_id()`).Scan(&org)
-	return org
+// connectedIn is, of the provider users given, those linked to an active
+// member of the organisation: user id → person id.
+func connectedIn(ctx context.Context, tx pgx.Tx, inst Installation, users []string) (map[string]string, error) {
+	rows, err := tx.Query(ctx, `SELECT i.external_user_id, pe.id FROM chat_identities i
+		JOIN people pe ON pe.account_id = i.account_id AND pe.organization_id = current_organization_id() AND pe.removed_at IS NULL
+		WHERE i.provider = $1 AND i.external_workspace_id = $2 AND i.external_user_id = ANY($3)`, inst.Provider, inst.WorkspaceID, db.NonNil(users))
+	if err != nil {
+		return nil, err
+	}
+	people := map[string]string{}
+	for rows.Next() {
+		var u, person string
+		if err := rows.Scan(&u, &person); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		people[u] = person
+	}
+	rows.Close()
+	return people, rows.Err()
+}
+
+// connectedPeople is the person ids of the connected members among users.
+func (s *Service) connectedPeople(ctx context.Context, org string, inst Installation, users []string) ([]string, error) {
+	var out []string
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		people, err := connectedIn(ctx, tx, inst, users)
+		for _, p := range people {
+			out = append(out, p)
+		}
+		return err
+	})
+	slices.Sort(out)
+	return out, err
 }
 
 // sendToSession is the person's message, with the thread's newer messages
@@ -714,9 +742,11 @@ func (s *Service) quoteMessages(ctx context.Context, org string, p Provider, ins
 
 // world is what the person may route to: every project of the
 // organisation with its epics not done, and the chat-born sessions they
-// can chat in from the last 14 days.
-func (s *Service) world(ctx context.Context, org, person string) (World, error) {
-	var w World
+// can chat in from the last 14 days, each with whether every connected
+// member of the mention's conversation (connected, by person id) can chat
+// in it too.
+func (s *Service) world(ctx context.Context, org, person string, m Mention, kind string, connected []string) (World, error) {
+	w := World{Conversation: m.ConversationID, Kind: kind}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT p.id, p.key_prefix, p.name, COALESCE(json_agg(json_build_object('ID', e.id, 'Title', e.title)
 				ORDER BY e.position) FILTER (WHERE e.id IS NOT NULL), '[]')
@@ -733,9 +763,12 @@ func (s *Service) world(ctx context.Context, org, person string) (World, error) 
 		if err != nil {
 			return err
 		}
-		rows, err = tx.Query(ctx, `SELECT s.id, COALESCE(s.title, '') FROM sessions s
+		rows, err = tx.Query(ctx, `SELECT s.id, COALESCE(s.title, ''), s.access, COALESCE(s.origin->>'conversationId', ''),
+				COALESCE(s.origin->>'conversationKind', ''),
+				NOT EXISTS (SELECT 1 FROM unnest($3::text[]) AS c(person) WHERE COALESCE(session_role(s.id, c.person), '') NOT IN ('owner', 'chat'))
+			FROM sessions s
 			WHERE s.origin IS NOT NULL AND s.created_at > now() - make_interval(days => $2)
-			  AND session_role(s.id, $1) IN ('owner', 'chat') ORDER BY s.created_at DESC LIMIT 20`, person, resumeLookback)
+			  AND session_role(s.id, $1) IN ('owner', 'chat') ORDER BY s.created_at DESC LIMIT 20`, person, resumeLookback, db.NonNil(connected))
 		if err != nil {
 			return err
 		}
@@ -801,9 +834,9 @@ func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m 
 		}
 		in.WriteString("\n")
 	}
-	if len(w.Sessions) > 0 {
+	if resumable := w.Resumable(); len(resumable) > 0 {
 		in.WriteString("\n## Their chat sessions from the last 14 days\n\n")
-		for _, se := range w.Sessions {
+		for _, se := range resumable {
 			fmt.Fprintf(&in, "- %s: %s\n", se.ID, quoteTitle(se.Title))
 		}
 	}

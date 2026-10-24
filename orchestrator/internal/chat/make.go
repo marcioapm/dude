@@ -56,11 +56,7 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 	var members []string
 	names := map[string]string{}
 	if d.Route == RouteBrainstorm && (r.Kind == KindPrivate || r.Kind == KindGroup) {
-		var err error
-		if members, err = p.ListMembers(ctx, inst, m.ConversationID); err != nil {
-			s.noteFailure(ctx, org, m.Provider, err)
-			return err
-		}
+		members = r.members
 		// Display names for the routing line's skipped people, at most 50 asked.
 		for i, u := range members {
 			if i == 50 {
@@ -243,7 +239,7 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, inst 
 	}
 	if len(members) > 0 {
 		var err error
-		if r.Added, r.Skipped, err = addMembers(ctx, tx, inst, id, members, who.Person); err != nil {
+		if r.Added, r.Skipped, err = addMembers(ctx, tx, org, inst, id, members, who.Person); err != nil {
 			return "", "", err
 		}
 	}
