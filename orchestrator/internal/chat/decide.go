@@ -121,10 +121,12 @@ func ParseAnswer(obj []byte) (Answer, error) {
 	return a, nil
 }
 
-// Project is a project the person may file in, with its epics.
+// Project is a project the person may file in, with its epics (the most
+// recent, of EpicsTotal not done).
 type Project struct {
 	ID, Key, Name string
 	Epics         []EpicRef
+	EpicsTotal    int
 }
 
 // EpicRef is an epic of a project.
@@ -146,7 +148,9 @@ type SessionRef struct {
 // recent sessions, and the conversation the mention is in.
 type World struct {
 	Projects []Project
-	Sessions []SessionRef
+	// How many projects there are, shown or not.
+	ProjectsTotal int
+	Sessions      []SessionRef
 	// The mention's conversation and its kind (Kind* constants).
 	Conversation, Kind string
 }

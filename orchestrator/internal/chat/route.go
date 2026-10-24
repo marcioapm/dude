@@ -2,8 +2,6 @@ package chat
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,100 +15,100 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
 
 // JoinedVia is session.joined's via for someone added to a group session
 // because they are in its conversation.
 const JoinedVia = "chat_conversation"
 
-// Sweep routes stored deliveries: each mention, kept mention and clicked
-// choice once, and a workspace's removal. A delivery whose routing failed
-// before it recorded a request is tried again later, longer each time; one
-// that recorded its request is done (its reply already went, or never will).
-func (s *Service) Sweep(ctx context.Context) (int, error) {
-	type pending struct {
-		Provider, ID, Org, Kind string
-		Payload                 json.RawMessage
-	}
-	var batch []pending
-	if err := s.DB.InSystem(ctx, "chat", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT provider, event_id, organization_id, kind, payload FROM chat_events
-			WHERE processed_at IS NULL AND attempts < 10 AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-			ORDER BY received_at LIMIT 20`)
-		if err != nil {
-			return err
-		}
-		batch, err = pgx.CollectRows(rows, pgx.RowToStructByPos[pending])
-		return err
-	}); err != nil {
-		return 0, err
-	}
-	for _, d := range batch {
-		err := s.process(ctx, d.Org, d.Provider, d.ID, d.Kind, d.Payload)
-		if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
-			if err == nil {
-				_, e := tx.Exec(ctx, `UPDATE chat_events SET processed_at = now(), last_error = NULL WHERE provider = $1 AND event_id = $2`,
-					d.Provider, d.ID)
-				return e
-			}
-			_, e := tx.Exec(ctx, `UPDATE chat_events SET attempts = attempts + 1, last_error = $3,
-				next_attempt_at = now() + make_interval(secs => 5 * power(2, attempts)) WHERE provider = $1 AND event_id = $2`,
-				d.Provider, d.ID, clip(err.Error(), 2000))
-			return e
-		}); err != nil {
-			return 0, err
-		}
-		if err != nil {
-			s.log().Warn("chat delivery failed", "provider", d.Provider, "event", d.ID, "error", err)
-		}
-	}
-	return len(batch), nil
-}
-
-func (s *Service) process(ctx context.Context, org, providerID, eventID, kind string, payload json.RawMessage) error {
-	p, err := s.provider(providerID)
+// process is one attempt at a claimed delivery. A delivery that recorded
+// its request only posts what is left of it; otherwise it is routed, from
+// the routing decision kept on it when an earlier attempt got that far.
+func (s *Service) process(ctx context.Context, d claimed) error {
+	p, err := s.provider(d.Provider)
 	if err != nil {
+		s.log().Warn("a chat delivery for a provider dude no longer has", "provider", d.Provider, "event", d.ID)
 		return nil
 	}
-	switch kind {
+	unreadable := func(err error) error {
+		s.log().Warn("an unreadable chat delivery", "provider", d.Provider, "event", d.ID, "error", err)
+		return nil
+	}
+	switch d.Kind {
 	case "mention":
 		var m Mention
-		if err := json.Unmarshal(payload, &m); err != nil {
-			return nil
+		if err := json.Unmarshal(d.Payload, &m); err != nil {
+			return unreadable(err)
 		}
-		return s.route(ctx, org, p, eventID, m, nil)
+		return s.route(ctx, d, p, m, nil)
 	case "interaction":
 		var in Interaction
-		if err := json.Unmarshal(payload, &in); err != nil {
-			return nil
+		if err := json.Unmarshal(d.Payload, &in); err != nil {
+			return unreadable(err)
 		}
-		return s.answer(ctx, org, p, eventID, in)
+		return s.answer(ctx, d, p, in)
 	}
 	var ev storedEvent
-	if err := json.Unmarshal(payload, &ev); err != nil {
-		return nil
+	if err := json.Unmarshal(d.Payload, &ev); err != nil {
+		return unreadable(err)
 	}
 	switch ev.Kind {
 	case EventMention:
 		if ev.Mention == nil {
-			return nil
+			return unreadable(errors.New("a mention event with no mention"))
 		}
-		return s.route(ctx, org, p, eventID, *ev.Mention, nil)
-	case EventUninstalled, EventTokensRevoked:
-		// The workspace took the app out: nothing it issued works now.
-		return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `DELETE FROM chat_installations WHERE provider = $1`, providerID)
-			return err
-		})
+		return s.route(ctx, d, p, *ev.Mention, nil)
+	case EventUninstalled:
+		return s.removeInstallation(ctx, d.Org, d.Provider, "", "uninstalled")
+	case EventTokensRevoked:
+		return s.tokensRevoked(ctx, d.Org, d.Provider, ev)
 	}
 	return nil
+}
+
+// tokensRevoked is a workspace revoking tokens: the bot's ends the
+// installation; a person's (their sign-in) unlinks that person alone.
+func (s *Service) tokensRevoked(ctx context.Context, org, provider string, ev storedEvent) error {
+	var inst Installation
+	var ok bool
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		inst, ok, err = loadInstallation(ctx, tx, provider)
+		return err
+	}); err != nil || !ok {
+		return err
+	}
+	if slices.Contains(ev.RevokedBots, inst.BotUserID) {
+		return s.removeInstallation(ctx, org, provider, "", "tokens_revoked")
+	}
+	if len(ev.RevokedUsers) == 0 {
+		return nil
+	}
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `DELETE FROM chat_identities WHERE provider = $1 AND external_workspace_id = $2 AND external_user_id = ANY($3)
+			RETURNING person_id`, provider, inst.WorkspaceID, ev.RevokedUsers)
+		if err != nil {
+			return err
+		}
+		gone, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		for _, person := range gone {
+			if err := chatLedger(ctx, tx, org, EvChatUnlinked, "system", "", map[string]any{"provider": provider,
+				"personId": person, "reason": "tokens_revoked"}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // asker is the person a mention is from, as dude knows them.
 type asker struct {
 	Person, Name, Slug, OrgName string
 	Linked                      bool
+	// Their provider display name, as linked.
+	Display string
 }
 
 // whoIs is who external user is in the organisation: linked (a
@@ -122,8 +120,8 @@ func whoIs(ctx context.Context, tx pgx.Tx, provider, workspace, user string) (as
 		return a, err
 	}
 	var account string
-	err := tx.QueryRow(ctx, `SELECT account_id FROM chat_identities WHERE provider = $1 AND external_workspace_id = $2 AND external_user_id = $3`,
-		provider, workspace, user).Scan(&account)
+	err := tx.QueryRow(ctx, `SELECT account_id, display_name FROM chat_identities WHERE provider = $1 AND external_workspace_id = $2
+		AND external_user_id = $3`, provider, workspace, user).Scan(&account, &a.Display)
 	if db.IsNotFound(err) {
 		return a, nil
 	}
@@ -154,39 +152,89 @@ type request struct {
 	Added, Skipped              []string
 	ModelCall                   string
 	Question                    any
-	QuestionMessage             string
-	// The conversation's members, for a private or group conversation.
-	members []string
+	// What is posted once the request commits.
+	effects []effect
+	// The conversation's members, for a private or group conversation;
+	// the linked ones (user → person); the others' display names.
+	members     []string
+	linked      map[string]string
+	memberNames map[string]string
 }
 
-// record writes the request, in tx: false when the delivery already has one
-// (it was handled before), which the caller then leaves alone. Requests
-// over 30 days old go as each new one comes.
+// record writes the request with its effects, in tx: false when the
+// delivery already has one (it was handled before).
 func record(ctx context.Context, tx pgx.Tx, r *request) (bool, error) {
 	if r.ID == "" {
 		r.ID = ids.New(ids.ChatRequest)
 	}
-	mention, _ := json.Marshal(r.Mention)
+	mention, err := json.Marshal(r.Mention)
+	if err != nil {
+		return false, err
+	}
 	var question []byte
 	if r.Question != nil {
-		question, _ = json.Marshal(r.Question)
+		if question, err = json.Marshal(r.Question); err != nil {
+			return false, err
+		}
+	}
+	effects, err := json.Marshal(db.NonNil(r.effects))
+	if err != nil {
+		return false, err
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
 			conversation_kind, conversation_name, thread_id, external_user_id, external_user_name, person_id, text, permalink, context_hash,
 			route, asked_route, confidence, reasoning, rounds, result_kind, result_id, shared_added, shared_skipped, model_call_id,
-			mention, question, question_message_id)
+			mention, question, effects)
 		VALUES ($1, current_organization_id(), $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10, NULLIF($11, ''), $12, $13, NULLIF($14, ''),
-			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, NULLIF($27, ''))
+			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27)
 		ON CONFLICT (provider, event_id) DO NOTHING`,
 		r.ID, r.Mention.Provider, r.EventID, r.Mention.WorkspaceID, r.Mention.ConversationID, r.Kind, r.ConversationName,
 		r.Mention.ThreadID, r.Mention.UserID, r.UserName, r.Person, clip(r.Mention.Text, 4000), r.Permalink, r.ContextHash,
-		r.Route, r.AskedRoute, r.Confidence, r.Reasoning, r.Rounds, r.ResultKind, r.ResultID, db.NonNil(r.Added), db.NonNil(r.Skipped),
-		r.ModelCall, mention, question, r.QuestionMessage)
-	if err != nil || tag.RowsAffected() == 0 {
+		r.Route, r.AskedRoute, r.Confidence, clip(r.Reasoning, 2000), r.Rounds, r.ResultKind, r.ResultID, db.NonNil(r.Added),
+		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects)
+	if err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM chat_requests WHERE created_at < now() - interval '30 days'`)
-	return true, err
+	return tag.RowsAffected() == 1, nil
+}
+
+// commit makes what fn makes, records the request with its effects and
+// marks a clicked question answered, in one transaction, then posts the
+// effects. Nothing is made or posted twice: a delivery recorded already, or
+// a question another click answered first, rolls fn's work back.
+func (s *Service) commit(ctx context.Context, org string, p Provider, inst Installation, r *request, pick *picked,
+	fn func(tx pgx.Tx) error) error {
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		if fn != nil {
+			if err := fn(tx); err != nil {
+				return err
+			}
+		}
+		if pick != nil {
+			tag, err := tx.Exec(ctx, `UPDATE chat_requests SET answered_at = now(), answered_by_event = $2 WHERE id = $1 AND answered_at IS NULL`,
+				pick.Request, r.EventID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return errHandled
+			}
+			r.effects = append([]effect{pick.Update}, r.effects...)
+		}
+		first, err := record(ctx, tx, r)
+		if err == nil && !first {
+			err = errHandled
+		}
+		return err
+	})
+	if errors.Is(err, errHandled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.kick()
+	return s.deliver(ctx, org, p, inst, r.EventID)
 }
 
 // handled is whether the delivery already made its request.
@@ -201,17 +249,36 @@ func (s *Service) link(slug, hash string) string {
 	return strings.TrimRight(s.PublicURL, "/") + "/#/o/" + url.PathEscape(slug) + "/" + hash
 }
 
-// picked is a clarifying question's answer, routing a mention again.
+// connectLink is where a private Connect button sends someone: it names
+// no organisation, which the page reads from the state once they sign in.
+func (s *Service) connectLink(provider, state string) string {
+	return strings.TrimRight(s.PublicURL, "/") + "/#/connect/" + url.PathEscape(provider) + "?state=" + url.QueryEscape(state)
+}
+
+// picked is a clarifying question's answer, routing a mention again: the
+// answer as chosen, the rounds asked, the question's request, and the
+// question's update to who chose what.
 type picked struct {
 	Answer  Answer
 	Rounds  int
 	Request string
+	Update  effect
+}
+
+// storedDecision is the routing judgement's outcome, kept on the delivery
+// before dude acts on it: a retry acts on it and never asks again.
+type storedDecision struct {
+	Answer *Answer `json:"answer,omitempty"`
+	Failed string  `json:"failed,omitempty"`
+	CallID string  `json:"callId,omitempty"`
+	Rounds int     `json:"rounds"`
 }
 
 // route is the routing flow for one mention: installed, connected, a
 // member; a bound thread's link or session; else one routing judgement,
-// checked, made, bound and replied to, each step recorded in Requests.
-func (s *Service) route(ctx context.Context, org string, p Provider, eventID string, m Mention, pick *picked) error {
+// kept, checked, made, bound and replied to, each step recorded in Requests.
+func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, pick *picked) error {
+	org, eventID := d.Org, d.ID
 	var (
 		inst Installation
 		ok   bool
@@ -219,10 +286,10 @@ func (s *Service) route(ctx context.Context, org string, p Provider, eventID str
 		done bool
 	)
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		if done, err = handled(ctx, tx, m.Provider, eventID); err != nil || done {
+		if done, err = handled(ctx, tx, m.Provider, eventID); err != nil {
 			return err
 		}
-		if inst, ok, err = loadInstallation(ctx, tx, m.Provider); err != nil || !ok {
+		if inst, ok, err = loadInstallation(ctx, tx, m.Provider); err != nil || !ok || done {
 			return err
 		}
 		if inst.WorkspaceID != m.WorkspaceID {
@@ -232,24 +299,28 @@ func (s *Service) route(ctx context.Context, org string, p Provider, eventID str
 		who, err = whoIs(ctx, tx, m.Provider, m.WorkspaceID, m.UserID)
 		return err
 	})
-	if err != nil || done || !ok {
+	if err != nil || !ok {
 		return err
+	}
+	if done {
+		return s.deliver(ctx, org, p, inst, eventID)
 	}
 	r := &request{EventID: eventID, Mention: m, Person: who.Person, Permalink: p.Permalink(inst, m.ConversationID, m.MessageID, m.ThreadID)}
 	if pick == nil {
 		s.react(ctx, org, p, inst, m, ReactionWorking)
 	}
-	if u, err := p.User(ctx, inst, m.UserID); err == nil {
-		r.UserName = u.Name()
+	if who.Linked && who.Display != "" {
+		r.UserName = who.Display
 	} else {
-		r.UserName = m.UserID
+		r.UserName = s.names(ctx, p, inst, []string{m.UserID})[m.UserID]
 	}
 	if !who.Linked {
-		return s.promptConnect(ctx, org, p, inst, who, r)
+		return s.promptConnect(ctx, org, p, inst, r)
 	}
 	if who.Person == "" {
 		r.Route, r.Reasoning = RouteNotMember, "their linked account is not an active member of the organisation"
-		return s.refuse(ctx, org, p, inst, r, Reply{Text: "Sorry, dude can't act on this for you."})
+		r.effects = []effect{ephemeralEffect(Reply{Text: "Sorry, dude can't act on this for you."}), reactEffect(ReactionCleared)}
+		return s.commit(ctx, org, p, inst, r, pick, nil)
 	}
 	conv, err := p.Conversation(ctx, inst, m.ConversationID)
 	if err != nil {
@@ -261,16 +332,16 @@ func (s *Service) route(ctx context.Context, org string, p Provider, eventID str
 	// with, and which sessions a mention there may resume.
 	var connected []string
 	if conv.Kind == KindPrivate || conv.Kind == KindGroup {
-		if r.members, err = p.ListMembers(ctx, inst, m.ConversationID); err != nil {
-			s.noteFailure(ctx, org, m.Provider, err)
+		if err := s.readMembers(ctx, org, p, inst, r); err != nil {
 			return err
 		}
-		if connected, err = s.connectedPeople(ctx, org, inst, r.members); err != nil {
-			return err
+		for _, person := range r.linked {
+			connected = append(connected, person)
 		}
+		slices.Sort(connected)
 	}
 	if !m.Direct {
-		if bound, err := s.bound(ctx, org, p, inst, who, r); bound || err != nil {
+		if bound, err := s.bound(ctx, org, p, inst, who, r, pick); bound || err != nil {
 			return err
 		}
 	}
@@ -283,35 +354,102 @@ func (s *Service) route(ctx context.Context, org string, p Provider, eventID str
 	if err != nil {
 		return err
 	}
-	var d Decision
+	var dec Decision
 	var a Answer
-	if pick != nil {
+	switch {
+	case pick != nil:
 		a, r.Rounds = pick.Answer, pick.Rounds
-		d = Decide(a, world, r.Rounds, true, m.Text)
+		dec = Decide(a, world, r.Rounds, true, m.Text)
 		r.Reasoning, r.Confidence = "chosen in the clarifying question", ptr(1.0)
-	} else {
-		if r.Rounds, err = s.rounds(ctx, org, m); err != nil {
+	default:
+		kept, err := s.decision(ctx, d, org, p, who, m, conv, thread, world)
+		if err != nil {
 			return err
 		}
-		res, err := s.ask(ctx, org, p, who, m, conv, thread, world)
-		r.ModelCall = res.CallID
-		if err != nil {
+		r.ModelCall, r.Rounds = kept.CallID, kept.Rounds
+		if kept.Answer == nil {
 			// No answer, a proxy error or invalid JSON: a brainstorm.
-			r.Route, r.Reasoning = RouteFailed, clip("the routing call failed: "+err.Error(), 1000)
-			return s.make(ctx, org, p, inst, who, r, thread, Decision{Route: RouteBrainstorm, Title: clip(trimmed(m.Text), 80)})
+			r.Route, r.Reasoning = RouteFailed, "the routing call failed: "+kept.Failed
+			return s.make(ctx, org, p, inst, who, r, thread, Decision{Route: RouteBrainstorm, Title: clip(trimmed(m.Text), 80)}, nil)
 		}
-		a = res.Answer.(Answer)
+		a = *kept.Answer
 		r.Confidence, r.Reasoning = ptr(a.Confidence), a.Reasoning
-		d = Decide(a, world, r.Rounds, false, m.Text)
+		dec = Decide(a, world, r.Rounds, false, m.Text)
 	}
-	if d.Problem != "" {
-		r.AskedRoute = d.AskedRoute
-		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + d.Problem + ")")
+	if dec.Problem != "" {
+		r.AskedRoute = dec.AskedRoute
+		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + dec.Problem + ")")
 	}
-	if d.Route == RouteClarify {
-		return s.clarify(ctx, org, p, inst, r, a, d)
+	if s.beforeMake != nil {
+		if err := s.beforeMake(ctx); err != nil {
+			return err
+		}
 	}
-	return s.make(ctx, org, p, inst, who, r, thread, d)
+	if dec.Route == RouteClarify {
+		return s.clarify(ctx, org, p, inst, r, a, dec, pick)
+	}
+	return s.make(ctx, org, p, inst, who, r, thread, dec, pick)
+}
+
+// decision is the routing judgement for the delivery: the one kept on it,
+// or asked now and kept before anything acts on it. A model that gave no
+// usable answer is kept as failed; only the delivery's own deadline
+// leaves nothing kept, for a retry to ask again.
+func (s *Service) decision(ctx context.Context, d claimed, org string, p Provider, who asker, m Mention, conv ConversationInfo,
+	t threadContext, w World) (storedDecision, error) {
+	var kept storedDecision
+	if len(d.Decision) > 0 && json.Unmarshal(d.Decision, &kept) == nil {
+		return kept, nil
+	}
+	rounds, err := s.rounds(ctx, org, m)
+	if err != nil {
+		return kept, err
+	}
+	res, err := s.ask(ctx, org, p, who, m, conv, t, w)
+	if ctx.Err() != nil {
+		return kept, ctx.Err()
+	}
+	kept = storedDecision{CallID: res.CallID, Rounds: rounds}
+	if err != nil {
+		kept.Failed = clip(err.Error(), 900)
+	} else {
+		a := res.Answer.(Answer)
+		kept.Answer = &a
+	}
+	raw, err := json.Marshal(kept)
+	if err != nil {
+		return kept, err
+	}
+	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE chat_events SET decision = $3 WHERE provider = $1 AND event_id = $2`, d.Provider, d.ID, raw)
+		return err
+	})
+	return kept, err
+}
+
+// readMembers reads the conversation's members, which of them are linked
+// to the organisation's people, and the others' display names.
+func (s *Service) readMembers(ctx context.Context, org string, p Provider, inst Installation, r *request) error {
+	members, err := p.ListMembers(ctx, inst, r.Mention.ConversationID)
+	if err != nil {
+		s.noteFailure(ctx, org, r.Mention.Provider, err)
+		return err
+	}
+	r.members = slices.DeleteFunc(members, func(u string) bool { return u == inst.BotUserID })
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		r.linked, err = connectedIn(ctx, tx, inst, r.members)
+		return err
+	}); err != nil {
+		return err
+	}
+	var others []string
+	for _, u := range r.members {
+		if _, ok := r.linked[u]; !ok {
+			others = append(others, u)
+		}
+	}
+	r.memberNames = s.names(ctx, p, inst, others)
+	return nil
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -327,29 +465,22 @@ func (s *Service) react(ctx context.Context, org string, p Provider, inst Instal
 // promptConnect answers someone not linked yet: privately, a Connect
 // button to the connect page, with a one-time 15-minute state that keeps
 // the mention to route once they link.
-func (s *Service) promptConnect(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request) error {
+func (s *Service) promptConnect(ctx context.Context, org string, p Provider, inst Installation, r *request) error {
 	state := newState()
-	pending, _ := json.Marshal(r.Mention)
+	pending, err := json.Marshal(r.Mention)
+	if err != nil {
+		return err
+	}
 	r.Route, r.Reasoning = RouteNotConnected, "their account is not connected to dude"
-	var first bool
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		if first, err = record(ctx, tx, r); err != nil || !first {
-			return err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO chat_connect_states (state_hash, organization_id, kind, provider, external_workspace_id,
+	r.effects = []effect{ephemeralEffect(Reply{
+		Text:    fmt.Sprintf("Connect your %s account to dude so it can act for you. I'll pick this message up once you have.", p.Info().Name),
+		LinkURL: s.connectLink(r.Mention.Provider, state), LinkLabel: "Connect"}), reactEffect(ReactionCleared)}
+	return s.commit(ctx, org, p, inst, r, nil, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO chat_connect_states (state_hash, organization_id, kind, provider, external_workspace_id,
 			external_user_id, pending_mention, expires_at) VALUES ($1, current_organization_id(), 'prompt', $2, $3, $4, $5, $6)`,
 			hashState(state), r.Mention.Provider, r.Mention.WorkspaceID, r.Mention.UserID, pending, s.now().Add(stateTTL))
 		return err
-	}); err != nil || !first {
-		return err
-	}
-	name := p.Info().Name
-	reply := Reply{Text: fmt.Sprintf("Connect your %s account to dude so it can act for you. I'll pick this message up once you have.", name),
-		LinkURL:   s.link(who.Slug, "connect/"+url.PathEscape(r.Mention.Provider)+"?state="+url.QueryEscape(state)),
-		LinkLabel: "Connect"}
-	s.noteFailure(ctx, org, r.Mention.Provider, p.PostEphemeral(ctx, inst, r.Mention.ConversationID, threadOf(r.Mention), r.Mention.UserID, reply))
-	s.react(ctx, org, p, inst, r.Mention, ReactionCleared)
-	return nil
+	})
 }
 
 // threadOf is where a reply to m goes: its thread, or none in a DM.
@@ -360,20 +491,6 @@ func threadOf(m Mention) string {
 	return m.ThreadID
 }
 
-// refuse records the request and tells the person privately.
-func (s *Service) refuse(ctx context.Context, org string, p Provider, inst Installation, r *request, reply Reply) error {
-	var first bool
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		first, err = record(ctx, tx, r)
-		return err
-	}); err != nil || !first {
-		return err
-	}
-	s.noteFailure(ctx, org, r.Mention.Provider, p.PostEphemeral(ctx, inst, r.Mention.ConversationID, threadOf(r.Mention), r.Mention.UserID, reply))
-	s.react(ctx, org, p, inst, r.Mention, ReactionCleared)
-	return nil
-}
-
 // binding is a thread's chat_threads row.
 type binding struct {
 	Session, Task, Epic, LastRead, Kind string
@@ -382,7 +499,7 @@ type binding struct {
 // bound handles a mention in a thread bound to something, with no model:
 // a task's or epic's link, or the message into the session (joining a
 // group session's conversation members first). False: not bound.
-func (s *Service) bound(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request) (bool, error) {
+func (s *Service) bound(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, pick *picked) (bool, error) {
 	m := r.Mention
 	var b binding
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -397,7 +514,7 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 		return false, err
 	}
 	if b.Task != "" || b.Epic != "" {
-		return true, s.linkBound(ctx, org, p, inst, who, r, b)
+		return true, s.linkBound(ctx, org, p, inst, who, r, b, pick)
 	}
 	since := b.LastRead
 	var newer []ThreadMessage
@@ -411,9 +528,7 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 	if err != nil {
 		return true, err
 	}
-	var title string
-	var first, can bool
-	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+	return true, s.commit(ctx, org, p, inst, r, pick, func(tx pgx.Tx) error {
 		if err := delivery.LockSession(ctx, tx, b.Session); err != nil {
 			return err
 		}
@@ -421,50 +536,37 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 		// conversation who has connected since joins, the asker among them.
 		// Only the session's own conversation shares it: a thread bound by
 		// a resume elsewhere sends in only for those who can chat already.
-		var origin string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(origin->>'conversationId', '') FROM sessions WHERE id = $1`, b.Session).Scan(&origin); err != nil {
+		var origin, title string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(origin->>'conversationId', ''), COALESCE(title, '') FROM sessions WHERE id = $1`,
+			b.Session).Scan(&origin, &title); err != nil {
 			return err
 		}
 		if len(r.members) > 0 && origin == m.ConversationID && (b.Kind == KindPrivate || b.Kind == KindGroup) {
-			if r.Added, r.Skipped, err = addMembers(ctx, tx, org, inst, b.Session, r.members, who.Person); err != nil {
+			var err error
+			if r.Added, r.Skipped, err = addMembers(ctx, tx, org, b.Session, r.members, r.linked, who.Person); err != nil {
 				return err
 			}
 		}
 		var role *string
-		if err := tx.QueryRow(ctx, `SELECT session_role($1, $2), COALESCE(title, '') FROM sessions WHERE id = $1`, b.Session, who.Person).
-			Scan(&role, &title); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT session_role($1, $2)`, b.Session, who.Person).Scan(&role); err != nil {
 			return err
 		}
-		if can = role != nil && (*role == delivery.SessionOwner || *role == "chat"); !can {
+		if role == nil || (*role != delivery.SessionOwner && *role != "chat") {
 			r.Route, r.Reasoning = RouteNotMember, "the thread's session is not one they can chat in"
-			first, err = record(ctx, tx, r)
-			return err
+			r.effects = []effect{ephemeralEffect(Reply{Text: "This thread's session is private, and you are not in it."}), reactEffect(ReactionCleared)}
+			return nil
 		}
 		r.Route, r.Reasoning, r.ResultKind, r.ResultID = RouteResume, "the thread is bound to this session", "session", b.Session
 		r.Confidence = nil
-		if first, err = record(ctx, tx, r); err != nil || !first {
-			return err
-		}
 		if err := sendToSession(ctx, tx, org, b.Session, who, m.Text, quoted, m.Provider); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE chat_threads SET last_read_message_id = $5 WHERE provider = $1 AND external_workspace_id = $2
+		r.effects = []effect{replyEffect(Reply{Text: "Added to your session " + quoteTitle(title),
+			LinkURL: s.link(who.Slug, "sessions/"+url.PathEscape(b.Session)), LinkLabel: "Open in dude"}), reactEffect(ReactionDone)}
+		_, err := tx.Exec(ctx, `UPDATE chat_threads SET last_read_message_id = $5 WHERE provider = $1 AND external_workspace_id = $2
 			AND conversation_id = $3 AND thread_id = $4`, m.Provider, m.WorkspaceID, m.ConversationID, m.ThreadID, m.MessageID)
 		return err
 	})
-	if err != nil || !first {
-		return true, err
-	}
-	if !can {
-		s.noteFailure(ctx, org, m.Provider, p.PostEphemeral(ctx, inst, m.ConversationID, threadOf(m), m.UserID,
-			Reply{Text: "This thread's session is private, and you are not in it."}))
-		s.react(ctx, org, p, inst, m, ReactionCleared)
-		return true, nil
-	}
-	s.kick()
-	text := "Added to your session " + quoteTitle(title)
-	s.reply(ctx, org, p, inst, m, Reply{Text: text, LinkURL: s.link(who.Slug, "sessions/"+url.PathEscape(b.Session)), LinkLabel: "Open in dude"})
-	return true, nil
 }
 
 func quoteTitle(t string) string {
@@ -475,10 +577,9 @@ func quoteTitle(t string) string {
 }
 
 // linkBound replies with the bound task's or epic's link.
-func (s *Service) linkBound(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, b binding) error {
-	var label, hash string
-	var first bool
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+func (s *Service) linkBound(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, b binding, pick *picked) error {
+	return s.commit(ctx, org, p, inst, r, pick, func(tx pgx.Tx) error {
+		var label, hash string
 		if b.Task != "" {
 			var key, title string
 			if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, t.title FROM tasks t JOIN projects p ON p.id = t.project_id
@@ -497,39 +598,18 @@ func (s *Service) linkBound(ctx context.Context, org string, p Provider, inst In
 			r.ResultKind, r.ResultID = "epic", b.Epic
 		}
 		r.Route, r.Reasoning = RouteTaskLink, "the thread is bound to it"
-		first, err = record(ctx, tx, r)
-		return err
+		r.effects = []effect{replyEffect(Reply{Text: label, LinkURL: s.link(who.Slug, hash), LinkLabel: "Open in dude"}), reactEffect(ReactionDone)}
+		return nil
 	})
-	if err != nil || !first {
-		return err
-	}
-	s.reply(ctx, org, p, inst, r.Mention, Reply{Text: label, LinkURL: s.link(who.Slug, hash), LinkLabel: "Open in dude"})
-	return nil
-}
-
-// reply posts in the mention's thread and marks it done.
-func (s *Service) reply(ctx context.Context, org string, p Provider, inst Installation, m Mention, reply Reply) {
-	_, err := p.PostReply(ctx, inst, m.ConversationID, threadOf(m), reply)
-	s.noteFailure(ctx, org, m.Provider, err)
-	if err != nil {
-		s.react(ctx, org, p, inst, m, ReactionFailed)
-		return
-	}
-	s.react(ctx, org, p, inst, m, ReactionDone)
 }
 
 // addMembers adds to a group session, as chat, every connected active
-// member among the conversation's members who has no role in it yet, and
-// returns those added and the members not connected (skipped, by
-// provider id). Bots are neither. Members who left keep their access.
-func addMembers(ctx context.Context, tx pgx.Tx, org string, inst Installation, session string, members []string, by string) (added, skipped []string, err error) {
-	members = slices.DeleteFunc(slices.Clone(members), func(u string) bool { return u == inst.BotUserID })
-	people, err := connectedIn(ctx, tx, inst, members)
-	if err != nil {
-		return nil, nil, err
-	}
+// member among the conversation's members (linked: user → person) who has
+// no role in it yet, and returns those added and the members not
+// connected (skipped, by provider id). Members who left keep their access.
+func addMembers(ctx context.Context, tx pgx.Tx, org, session string, members []string, linked map[string]string, by string) (added, skipped []string, err error) {
 	for _, u := range members {
-		person, ok := people[u]
+		person, ok := linked[u]
 		if !ok {
 			skipped = append(skipped, u)
 			continue
@@ -575,20 +655,6 @@ func connectedIn(ctx context.Context, tx pgx.Tx, inst Installation, users []stri
 	return people, rows.Err()
 }
 
-// connectedPeople is the person ids of the connected members among users.
-func (s *Service) connectedPeople(ctx context.Context, org string, inst Installation, users []string) ([]string, error) {
-	var out []string
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		people, err := connectedIn(ctx, tx, inst, users)
-		for _, p := range people {
-			out = append(out, p)
-		}
-		return err
-	})
-	slices.Sort(out)
-	return out, err
-}
-
 // sendToSession is the person's message, with the thread's newer messages
 // quoted before it, written into the session as theirs: queued for its
 // live agent, or starting one. They join an organisation session by
@@ -623,234 +689,6 @@ func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who aske
 	return delivery.ChatEvent(ctx, tx, ref, wr, map[string]any{"text": text, "directiveId": directive})
 }
 
-// threadContext is the thread a mention is in, as the model and the
-// session are told it.
-type threadContext struct {
-	Messages []quotedMessage
-}
-
-type quotedMessage struct {
-	By     string `json:"by"`
-	Handle string `json:"handle,omitempty"`
-	Person string `json:"person,omitempty"`
-	Text   string `json:"text"`
-	InDude bool   `json:"inDude"`
-}
-
-func (t threadContext) hash() string {
-	sum := sha256.New()
-	for _, m := range t.Messages {
-		fmt.Fprintf(sum, "%s\x00%s\x00", m.By, m.Text)
-	}
-	return hex.EncodeToString(sum.Sum(nil))
-}
-
-// render is the thread as text: each message by its author, people not
-// in dude marked so.
-func (t threadContext) render() string {
-	var b strings.Builder
-	for _, m := range t.Messages {
-		by := m.By
-		if !m.InDude {
-			by += " (not in dude)"
-		}
-		fmt.Fprintf(&b, "> %s: %s\n", by, strings.ReplaceAll(m.Text, "\n", "\n> "))
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-const threadMessagesMax = 30
-
-// thread reads the mention's thread, without the mention: everyone's
-// messages, members' and not (dude's own left out).
-func (s *Service) thread(ctx context.Context, org string, p Provider, inst Installation, m Mention) (threadContext, error) {
-	if m.ThreadID == "" || m.ThreadID == m.MessageID {
-		return threadContext{}, nil
-	}
-	msgs, err := p.FetchThread(ctx, inst, m.ConversationID, m.ThreadID, "")
-	if err != nil {
-		s.noteFailure(ctx, org, m.Provider, err)
-		return threadContext{}, err
-	}
-	quoted, err := s.quoteMessages(ctx, org, p, inst, msgs, m.MessageID)
-	return threadContext{Messages: quoted}, err
-}
-
-// quote is newer thread messages as the text put before a message into a session.
-func (s *Service) quote(ctx context.Context, org string, p Provider, inst Installation, msgs []ThreadMessage, skip string) (string, error) {
-	quoted, err := s.quoteMessages(ctx, org, p, inst, msgs, skip)
-	if err != nil || len(quoted) == 0 {
-		return "", err
-	}
-	return "Earlier in the thread:\n" + threadContext{Messages: quoted}.render(), nil
-}
-
-func (s *Service) quoteMessages(ctx context.Context, org string, p Provider, inst Installation, msgs []ThreadMessage, skip string) ([]quotedMessage, error) {
-	var users []string
-	for _, msg := range msgs {
-		if !msg.Bot && msg.ID != skip && msg.UserID != "" && !slices.Contains(users, msg.UserID) {
-			users = append(users, msg.UserID)
-		}
-	}
-	people := map[string][2]string{}
-	if len(users) > 0 {
-		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			rows, err := tx.Query(ctx, `SELECT i.external_user_id, pe.id, pe.name FROM chat_identities i
-				JOIN people pe ON pe.account_id = i.account_id AND pe.organization_id = current_organization_id() AND pe.removed_at IS NULL
-				WHERE i.provider = $1 AND i.external_workspace_id = $2 AND i.external_user_id = ANY($3)`, inst.Provider, inst.WorkspaceID, users)
-			if err != nil {
-				return err
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var u, id, name string
-				if err := rows.Scan(&u, &id, &name); err != nil {
-					return err
-				}
-				people[u] = [2]string{id, name}
-			}
-			return rows.Err()
-		}); err != nil {
-			return nil, err
-		}
-	}
-	names := map[string]string{}
-	var out []quotedMessage
-	for _, msg := range msgs {
-		if msg.Bot || msg.ID == skip || msg.UserID == inst.BotUserID {
-			continue
-		}
-		q := quotedMessage{Text: clip(msg.Text, 2000)}
-		if person, ok := people[msg.UserID]; ok {
-			q.Person, q.By, q.InDude = person[0], person[1], true
-		} else {
-			if _, ok := names[msg.UserID]; !ok {
-				names[msg.UserID] = msg.UserID
-				if u, err := p.User(ctx, inst, msg.UserID); err == nil {
-					names[msg.UserID] = u.Name()
-				}
-			}
-			q.By = names[msg.UserID]
-		}
-		out = append(out, q)
-	}
-	if len(out) > threadMessagesMax {
-		out = out[len(out)-threadMessagesMax:]
-	}
-	return out, nil
-}
-
-// world is what the person may route to: every project of the
-// organisation with its epics not done, and the chat-born sessions they
-// can chat in from the last 14 days, each with whether every connected
-// member of the mention's conversation (connected, by person id) can chat
-// in it too.
-func (s *Service) world(ctx context.Context, org, person string, m Mention, kind string, connected []string) (World, error) {
-	w := World{Conversation: m.ConversationID, Kind: kind}
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT p.id, p.key_prefix, p.name, COALESCE(json_agg(json_build_object('ID', e.id, 'Title', e.title)
-				ORDER BY e.position) FILTER (WHERE e.id IS NOT NULL), '[]')
-			FROM projects p LEFT JOIN epics e ON e.project_id = p.id AND COALESCE(e.state, 'active') <> 'done'
-			WHERE p.key_prefix IS NOT NULL GROUP BY p.id ORDER BY p.name LIMIT 100`)
-		if err != nil {
-			return err
-		}
-		w.Projects, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Project, error) {
-			var p Project
-			err := row.Scan(&p.ID, &p.Key, &p.Name, &p.Epics)
-			return p, err
-		})
-		if err != nil {
-			return err
-		}
-		rows, err = tx.Query(ctx, `SELECT s.id, COALESCE(s.title, ''), s.access, COALESCE(s.origin->>'conversationId', ''),
-				COALESCE(s.origin->>'conversationKind', ''),
-				NOT EXISTS (SELECT 1 FROM unnest($3::text[]) AS c(person) WHERE COALESCE(session_role(s.id, c.person), '') NOT IN ('owner', 'chat'))
-			FROM sessions s
-			WHERE s.origin IS NOT NULL AND s.created_at > now() - make_interval(days => $2)
-			  AND session_role(s.id, $1) IN ('owner', 'chat') ORDER BY s.created_at DESC LIMIT 20`, person, resumeLookback, db.NonNil(connected))
-		if err != nil {
-			return err
-		}
-		w.Sessions, err = pgx.CollectRows(rows, pgx.RowToStructByPos[SessionRef])
-		return err
-	})
-	return w, err
-}
-
-// rounds is how many clarifying questions this thread was asked.
-func (s *Service) rounds(ctx context.Context, org string, m Mention) (int, error) {
-	var n int
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT count(*) FROM chat_requests WHERE provider = $1 AND external_workspace_id = $2
-			AND conversation_id = $3 AND thread_id = $4 AND route = 'clarify'`, m.Provider, m.WorkspaceID, m.ConversationID, m.ThreadID).Scan(&n)
-	})
-	return n, err
-}
-
-// Instructions are the routing call's instructions in order: dude's
-// built-in ones, the organisation's additional ones, the provider's.
-func Instructions(orgName, organisation, providerName, provider string) string {
-	parts := []string{BuiltInInstructions}
-	if t := strings.TrimSpace(organisation); t != "" {
-		parts = append(parts, "## "+orgName+"'s additional instructions\n\n"+t)
-	}
-	if t := strings.TrimSpace(provider); t != "" {
-		parts = append(parts, "## Additional instructions for "+providerName+"\n\n"+t)
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// ask is the one routing judgement, on the organisation's Judgements tier.
-func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m Mention, conv ConversationInfo, t threadContext, w World) (judge.Structured, error) {
-	if s.Judge == nil {
-		return judge.Structured{}, errors.New("no judge is configured")
-	}
-	var orgText, providerText string
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT o.chat_instructions, COALESCE(i.settings->>'additional_instructions', '')
-			FROM organizations o LEFT JOIN chat_installations i ON i.organization_id = o.id AND i.provider = $1
-			WHERE o.id = current_organization_id()`, m.Provider).Scan(&orgText, &providerText)
-	}); err != nil {
-		return judge.Structured{}, err
-	}
-	var in strings.Builder
-	fmt.Fprintf(&in, "## The message\n\n%s wrote in %s on %s:\n\n%s\n", who.Name, conv.Name, p.Info().Name, m.Text)
-	if len(t.Messages) > 0 {
-		fmt.Fprintf(&in, "\n## The thread before it\n\n%s\n", t.render())
-	}
-	in.WriteString("\n## Projects they can file in\n\n")
-	if len(w.Projects) == 0 {
-		in.WriteString("None.\n")
-	}
-	for _, pr := range w.Projects {
-		fmt.Fprintf(&in, "- %s (%s)", pr.Key, pr.Name)
-		if len(pr.Epics) > 0 {
-			var titles []string
-			for _, e := range pr.Epics {
-				titles = append(titles, strconv.Quote(e.Title))
-			}
-			fmt.Fprintf(&in, ", epics: %s", strings.Join(titles, ", "))
-		}
-		in.WriteString("\n")
-	}
-	if resumable := w.Resumable(); len(resumable) > 0 {
-		in.WriteString("\n## Their chat sessions from the last 14 days\n\n")
-		for _, se := range resumable {
-			fmt.Fprintf(&in, "- %s: %s\n", se.ID, quoteTitle(se.Title))
-		}
-	}
-	return s.Judge.Structured(ctx, org, judge.StructuredAsk{Asker: "chat.route", About: p.Info().Name + " · " + conv.Name,
-		Instructions: Instructions(who.OrgName, orgText, p.Info().Name, providerText), Input: in.String(), MaxTokens: 4096,
-		Parse: func(obj []byte) (any, judge.Judgement, error) {
-			a, err := ParseAnswer(obj)
-			if err != nil {
-				return nil, judge.Judgement{}, err
-			}
-			return a, judge.Judgement{Decision: a.Route, Confidence: a.Confidence, Reasoning: a.Reasoning}, nil
-		}})
-}
-
 // asked is what a clarify request keeps to route the answer: the question
 // and the answer it was asked about.
 type asked struct {
@@ -858,34 +696,24 @@ type asked struct {
 	Answer   Answer `json:"answer"`
 }
 
-// clarify posts the question with a button per choice and records it.
-func (s *Service) clarify(ctx context.Context, org string, p Provider, inst Installation, r *request, a Answer, d Decision) error {
+// clarify records the question, a button per choice naming the request,
+// and then posts it: a retry posts the question recorded, never a second.
+func (s *Service) clarify(ctx context.Context, org string, p Provider, inst Installation, r *request, a Answer, d Decision, pick *picked) error {
 	r.ID = ids.New(ids.ChatRequest)
 	r.Route, r.Rounds = RouteClarify, r.Rounds+1
 	var cs []Choice
 	for i, c := range d.Question.Choices {
 		cs = append(cs, Choice{Label: c.Label, Value: r.ID + ":" + strconv.Itoa(i)})
 	}
-	msg, err := p.PostQuestion(ctx, inst, r.Mention.ConversationID, threadOf(r.Mention), Question{Text: d.Question.Text, Choices: cs})
-	if err != nil {
-		s.noteFailure(ctx, org, r.Mention.Provider, err)
-		return err
-	}
-	r.Question, r.QuestionMessage = asked{Question: *d.Question, Answer: a}, msg
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := record(ctx, tx, r)
-		return err
-	}); err != nil {
-		return err
-	}
-	s.react(ctx, org, p, inst, r.Mention, ReactionCleared)
-	return nil
+	r.Question = asked{Question: *d.Question, Answer: a}
+	r.effects = []effect{{Kind: "question", Text: d.Question.Text, Choices: cs}, reactEffect(ReactionCleared)}
+	return s.commit(ctx, org, p, inst, r, pick, nil)
 }
 
 // answer is a click on a clarifying question's choice: only the person who
-// was asked, once. The question becomes "X chose Y" and the mention is
-// routed again with the choice.
-func (s *Service) answer(ctx context.Context, org string, p Provider, eventID string, in Interaction) error {
+// was asked, once. The mention is routed again with the choice, and the
+// question becomes "X chose Y" once that routing commits.
+func (s *Service) answer(ctx context.Context, d claimed, p Provider, in Interaction) error {
 	reqID, idx, ok := strings.Cut(in.Value, ":")
 	i, err := strconv.Atoi(idx)
 	if !ok || err != nil {
@@ -898,16 +726,15 @@ func (s *Service) answer(ctx context.Context, org string, p Provider, eventID st
 		user   string
 		rounds int
 		found  bool
-		mine   bool
 	)
-	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+	err = s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
 		var installed bool
 		if inst, installed, err = loadInstallation(ctx, tx, p.Info().ID); err != nil || !installed {
 			return err
 		}
 		var qRaw, mRaw []byte
 		err := tx.QueryRow(ctx, `SELECT question, mention, external_user_id, rounds FROM chat_requests
-			WHERE id = $1 AND route = 'clarify' AND answered_at IS NULL FOR UPDATE`, reqID).Scan(&qRaw, &mRaw, &user, &rounds)
+			WHERE id = $1 AND route = 'clarify' AND (answered_at IS NULL OR answered_by_event = $2)`, reqID, d.ID).Scan(&qRaw, &mRaw, &user, &rounds)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -917,26 +744,69 @@ func (s *Service) answer(ctx context.Context, org string, p Provider, eventID st
 		if json.Unmarshal(qRaw, &q) != nil || json.Unmarshal(mRaw, &m) != nil || i < 0 || i >= len(q.Question.Choices) {
 			return nil
 		}
-		found, mine = true, user == in.User.ID
-		if !mine {
-			return nil
-		}
-		_, err = tx.Exec(ctx, `UPDATE chat_requests SET answered_at = now() WHERE id = $1`, reqID)
-		return err
+		found = true
+		return nil
 	})
 	if err != nil || !found {
 		return err
 	}
-	if !mine {
-		s.noteFailure(ctx, org, p.Info().ID, p.PostEphemeral(ctx, inst, in.ConversationID, in.ThreadID, in.User.ID,
+	if user != in.User.ID {
+		s.noteFailure(ctx, d.Org, p.Info().ID, p.PostEphemeral(ctx, inst, in.ConversationID, in.ThreadID, in.User.ID,
 			Reply{Text: "Only the person who asked can answer this."}))
 		return nil
 	}
 	choice := q.Question.Choices[i]
 	by := in.User
-	if u, err := p.User(ctx, inst, in.User.ID); err == nil {
-		by = u
+	if n := s.names(ctx, p, inst, []string{in.User.ID})[in.User.ID]; n != in.User.ID {
+		by.DisplayName = n
 	}
-	s.noteFailure(ctx, org, p.Info().ID, p.UpdateQuestion(ctx, inst, in.ConversationID, in.MessageID, by, choice.Label))
-	return s.route(ctx, org, p, eventID, m, &picked{Answer: Choose(q.Answer, choice), Rounds: rounds, Request: reqID})
+	return s.route(ctx, d, p, m, &picked{Answer: Choose(q.Answer, choice), Rounds: rounds, Request: reqID,
+		Update: effect{Kind: "update", Message: in.MessageID, ChosenBy: by, Text: choice.Label}})
+}
+
+// giveUp is a delivery that failed transiently MaxAttempts times: its
+// request recorded as failed if it had none, and the person told
+// privately, once, as far as the provider lets dude.
+func (s *Service) giveUp(ctx context.Context, d claimed) {
+	p, err := s.provider(d.Provider)
+	if err != nil {
+		return
+	}
+	var m Mention
+	switch d.Kind {
+	case "mention":
+		_ = json.Unmarshal(d.Payload, &m)
+	case "interaction":
+		var in Interaction
+		_ = json.Unmarshal(d.Payload, &in)
+		m = Mention{Provider: d.Provider, WorkspaceID: in.WorkspaceID, ConversationID: in.ConversationID, ThreadID: in.ThreadID, UserID: in.User.ID}
+	default:
+		var ev storedEvent
+		_ = json.Unmarshal(d.Payload, &ev)
+		if ev.Mention != nil {
+			m = *ev.Mention
+		}
+	}
+	if m.ConversationID == "" || m.UserID == "" {
+		return
+	}
+	var inst Installation
+	var ok bool
+	if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) (err error) {
+		inst, ok, err = loadInstallation(ctx, tx, d.Provider)
+		return err
+	}); err != nil || !ok {
+		return
+	}
+	r := &request{EventID: d.ID, Mention: m, Route: RouteFailed, UserName: m.UserID,
+		Reasoning: fmt.Sprintf("%s did not answer after %d tries", p.Info().Name, MaxAttempts),
+		effects: []effect{ephemeralEffect(Reply{Text: fmt.Sprintf("Sorry, dude couldn't act on this: %s did not answer. Try again in a while.",
+			p.Info().Name)}), reactEffect(ReactionFailed)}}
+	if err := s.commit(ctx, d.Org, p, inst, r, nil, nil); err != nil {
+		s.log().Warn("telling the person dude gave up failed", "provider", d.Provider, "event", d.ID, "error", err)
+	}
+	_ = s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE chat_requests SET replied_at = COALESCE(replied_at, now()) WHERE provider = $1 AND event_id = $2`, d.Provider, d.ID)
+		return err
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -48,34 +49,56 @@ type routingFacts struct {
 // make carries a decision out: a session (with access from where the
 // mention was made), a resumed session, a task, or an epic with its tasks;
 // binds the thread to it, records the request and replies with its link.
-func (s *Service) make(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, t threadContext, d Decision) error {
+// A decision the database refuses (a relation, a project gone) is not
+// tried again: it becomes a brainstorm, and a brainstorm refused is
+// recorded as failed and the person told privately.
+func (s *Service) make(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, t threadContext, d Decision,
+	pick *picked) error {
+	err := s.makeOnce(ctx, org, p, inst, who, r, t, d, pick)
+	if err == nil {
+		return nil
+	}
+	if transient, _ := IsTransient(err); transient {
+		return err
+	}
+	s.log().Warn("a chat decision could not be made", "organization", org, "route", d.Route, "error", err)
+	r.ResultKind, r.ResultID, r.Added, r.Skipped = "", "", nil, nil
+	if d.Route != RouteBrainstorm {
+		r.AskedRoute = d.Route
+		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + clip(err.Error(), 300) + ")")
+		fallback := Decision{Route: RouteBrainstorm, Title: d.Title, Project: d.Project}
+		if err = s.makeOnce(ctx, org, p, inst, who, r, t, fallback, pick); err == nil {
+			return nil
+		}
+		if transient, _ := IsTransient(err); transient {
+			return err
+		}
+	}
+	r.Route, r.Reasoning = RouteFailed, strings.TrimSpace(r.Reasoning+" ("+clip(err.Error(), 300)+")")
+	r.effects = []effect{ephemeralEffect(Reply{Text: "Sorry, dude couldn't act on this."}), reactEffect(ReactionFailed)}
+	return s.commit(ctx, org, p, inst, r, pick, nil)
+}
+
+func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, t threadContext, d Decision,
+	pick *picked) error {
 	m := r.Mention
-	if r.Route == "" {
+	// A failed routing call is logged as failed, whatever it then made.
+	if r.Route != RouteFailed {
 		r.Route = d.Route
 	}
 	var members []string
-	names := map[string]string{}
 	if d.Route == RouteBrainstorm && (r.Kind == KindPrivate || r.Kind == KindGroup) {
 		members = r.members
-		// Display names for the routing line's skipped people, at most 50 asked.
-		for i, u := range members {
-			if i == 50 {
-				break
-			}
-			if who, err := p.User(ctx, inst, u); err == nil {
-				names[u] = who.Name()
-			}
-		}
 	}
 	r.ID = ids.New(ids.ChatRequest)
 	origin := Origin{Provider: m.Provider, WorkspaceID: m.WorkspaceID, ConversationID: m.ConversationID, ConversationName: r.ConversationName,
 		ConversationKind: r.Kind, ThreadID: m.ThreadID, Permalink: r.Permalink, RequestedBy: r.UserName}
 	f := delivery.Filer{ActorType: "person", ActorID: who.Person, Person: who.Person}
-	var reply Reply
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+	return s.commit(ctx, org, p, inst, r, pick, func(tx pgx.Tx) error {
+		var reply Reply
 		switch d.Route {
 		case RouteBrainstorm:
-			id, title, err := s.startSession(ctx, tx, org, inst, who, r, t, d, origin, members, names)
+			id, title, err := s.startSession(ctx, tx, org, who, r, t, d, origin, members)
 			if err != nil {
 				return err
 			}
@@ -120,38 +143,23 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 			return fmt.Errorf("nothing makes route %q", d.Route)
 		}
 		reply.LinkLabel = "Open in dude"
-		first, err := record(ctx, tx, r)
-		if err != nil {
-			return err
-		}
-		if !first {
-			return errHandled
-		}
+		r.effects = []effect{replyEffect(reply), reactEffect(ReactionDone)}
 		// A DM is never bound: a thread forwarded into one routes afresh.
 		if m.Direct {
 			return nil
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO chat_threads (organization_id, provider, external_workspace_id, conversation_id, thread_id,
+		_, err := tx.Exec(ctx, `INSERT INTO chat_threads (organization_id, provider, external_workspace_id, conversation_id, thread_id,
 				conversation_kind, conversation_name, session_id, task_id, epic_id, bound_by, last_read_message_id)
 			VALUES (current_organization_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			ON CONFLICT (provider, external_workspace_id, conversation_id, thread_id) DO NOTHING`,
 			m.Provider, m.WorkspaceID, m.ConversationID, m.ThreadID, r.Kind, r.ConversationName,
-			db.Nullable(pick(r.ResultKind == "session", r.ResultID)), db.Nullable(pick(r.ResultKind == "task", r.ResultID)),
-			db.Nullable(pick(r.ResultKind == "epic", r.ResultID)), who.Person, m.MessageID)
+			db.Nullable(pick2(r.ResultKind == "session", r.ResultID)), db.Nullable(pick2(r.ResultKind == "task", r.ResultID)),
+			db.Nullable(pick2(r.ResultKind == "epic", r.ResultID)), who.Person, m.MessageID)
 		return err
 	})
-	if errors.Is(err, errHandled) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	s.kick()
-	s.reply(ctx, org, p, inst, m, reply)
-	return nil
 }
 
-func pick(ok bool, v string) string {
+func pick2(ok bool, v string) string {
 	if ok {
 		return v
 	}
@@ -203,8 +211,8 @@ func withThread(goal string, t threadContext) string {
 // channel's or group's shared, as chat, with each connected member of the
 // conversation; a DM's private), its first message the mention with the
 // thread quoted.
-func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, inst Installation, who asker, r *request, t threadContext,
-	d Decision, origin Origin, members []string, names map[string]string) (string, string, error) {
+func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who asker, r *request, t threadContext,
+	d Decision, origin Origin, members []string) (string, string, error) {
 	id := ids.New(ids.Session)
 	title := clip(trimmed(d.Title), 120)
 	if title == "" {
@@ -239,14 +247,14 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, inst 
 	}
 	if len(members) > 0 {
 		var err error
-		if r.Added, r.Skipped, err = addMembers(ctx, tx, org, inst, id, members, who.Person); err != nil {
+		if r.Added, r.Skipped, err = addMembers(ctx, tx, org, id, members, r.linked, who.Person); err != nil {
 			return "", "", err
 		}
 	}
 	origin.Thread = t.Messages
 	skippedNames := []string{}
 	for _, u := range r.Skipped {
-		if n, ok := names[u]; ok {
+		if n, ok := r.memberNames[u]; ok {
 			skippedNames = append(skippedNames, n)
 		} else {
 			skippedNames = append(skippedNames, u)

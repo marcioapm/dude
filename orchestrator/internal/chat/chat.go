@@ -97,6 +97,8 @@ type Event struct {
 	// URL verification's challenge, answered as it came.
 	Challenge string
 	Mention   *Mention
+	// tokens_revoked: the bot users and the people whose tokens went.
+	RevokedBots, RevokedUsers []string
 }
 
 // Interaction is a click on a button dude posted: a clarifying question's
@@ -160,6 +162,22 @@ const (
 
 // ErrUnverified is a delivery whose signature or timestamp does not hold.
 var ErrUnverified = errors.New("the request is not signed by the provider")
+
+// TransientError is a failure worth trying again later: the provider
+// unreachable, slow, answering 5xx, or rate-limiting (RetryAfter, its
+// Retry-After). Anything else a provider answers is deterministic.
+type TransientError struct {
+	Err        error
+	RetryAfter time.Duration
+}
+
+func (e *TransientError) Error() string { return e.Err.Error() }
+func (e *TransientError) Unwrap() error { return e.Err }
+
+// Transient marks err as worth trying again, no sooner than after.
+func Transient(err error, after time.Duration) error {
+	return &TransientError{Err: err, RetryAfter: after}
+}
 
 // Provider is everything provider-specific. Shared code sees only the
 // types above.

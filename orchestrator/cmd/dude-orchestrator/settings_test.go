@@ -118,7 +118,7 @@ secret_key = "file-secret"
 		ReconcileEvery: 30 * time.Minute, ParkAfter: 20 * time.Minute, IdleAfter: time.Hour, DiffEvery: 30 * time.Second,
 		MachineUSDPerHour: 0.35, LuxCostEvery: 5 * time.Minute, KeepStopped: 48 * time.Hour, FactoryLogins: []string{"file-bot"},
 		VAPIDPublic: "BFile", VAPIDPrivate: "vapid-file-private", VAPIDSubject: "mailto:file@example.com",
-		Slack: slack.Config{APIURL: slack.DefaultAPIURL},
+		Slack: slack.Config{APIURL: slack.DefaultAPIURL}, ChatWorkers: 6,
 		Objects: objects.Config{Bucket: "file-bucket", Endpoint: "http://127.0.0.1:9000", Region: "us-east-1",
 			AccessKey: "file-key", SecretKey: "file-secret"},
 		Embeddings: embeddingsConfig{URL: "https://llm.file/v1", Key: "llm-file-key",

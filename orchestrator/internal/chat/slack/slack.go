@@ -126,6 +126,10 @@ type envelope struct {
 		ThreadTS    string `json:"thread_ts"`
 		Channel     string `json:"channel"`
 		ChannelType string `json:"channel_type"`
+		Tokens      struct {
+			OAuth []string `json:"oauth"`
+			Bot   []string `json:"bot"`
+		} `json:"tokens"`
 	} `json:"event"`
 }
 
@@ -159,6 +163,12 @@ func (p *Provider) ParseEvent(body []byte) (chat.Event, error) {
 		out.Kind = chat.EventUninstalled
 		return out, nil
 	case "tokens_revoked":
+		// A person's sign-in token is revoked as well as the bot's: only
+		// the bot's ends the installation.
+		out.RevokedBots, out.RevokedUsers = ev.Tokens.Bot, ev.Tokens.OAuth
+		if len(out.RevokedBots) == 0 && len(out.RevokedUsers) == 0 {
+			return out, nil
+		}
 		out.Kind = chat.EventTokensRevoked
 		return out, nil
 	case "app_mention":
@@ -276,12 +286,15 @@ func (p *Provider) call(ctx context.Context, token, method string, args map[stri
 	}
 	res, err := p.cfg.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("slack %s: %w", method, err)
+		return chat.Transient(fmt.Errorf("slack %s: %w", method, err), 0)
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
 	if err != nil {
-		return fmt.Errorf("slack %s: %w", method, err)
+		return chat.Transient(fmt.Errorf("slack %s: %w", method, err), 0)
+	}
+	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode/100 == 5 {
+		return chat.Transient(fmt.Errorf("slack %s answered %d", method, res.StatusCode), retryAfter(res.Header))
 	}
 	if res.StatusCode/100 != 2 {
 		return fmt.Errorf("slack %s answered %d", method, res.StatusCode)
@@ -294,12 +307,26 @@ func (p *Provider) call(ctx context.Context, token, method string, args map[stri
 		return fmt.Errorf("slack %s: the answer is not JSON: %w", method, err)
 	}
 	if !status.OK {
-		return &APIError{Method: method, Code: status.Error}
+		apiErr := &APIError{Method: method, Code: status.Error}
+		switch status.Error {
+		case "ratelimited", "internal_error", "fatal_error", "service_unavailable", "request_timeout":
+			return chat.Transient(apiErr, retryAfter(res.Header))
+		}
+		return apiErr
 	}
 	if out != nil {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
+}
+
+// retryAfter is Slack's Retry-After, in seconds; 0 without one.
+func retryAfter(h http.Header) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After")))
+	if err != nil || secs < 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // FetchThread is the thread's messages after since (all with since ""),

@@ -88,7 +88,10 @@ func TestParseEventReadsMentionsDMsAndTheAppsRemoval(t *testing.T) {
 	channelMsg := fakeslack.DirectMessage("T1", "Ev6", "C1", "1.6", "U1", "x")
 	channelMsg["event"].(map[string]any)["channel_type"] = "channel"
 	uninstalled := map[string]any{"type": "event_callback", "team_id": "T1", "event_id": "Ev7", "event": map[string]any{"type": "app_uninstalled"}}
-	revoked := map[string]any{"type": "event_callback", "team_id": "T1", "event_id": "Ev8", "event": map[string]any{"type": "tokens_revoked"}}
+	revoked := map[string]any{"type": "event_callback", "team_id": "T1", "event_id": "Ev8", "event": map[string]any{"type": "tokens_revoked",
+		"tokens": map[string]any{"oauth": []string{"U2"}, "bot": []string{"UBT1"}}}}
+	userRevoked := map[string]any{"type": "event_callback", "team_id": "T1", "event_id": "Ev9", "event": map[string]any{"type": "tokens_revoked",
+		"tokens": map[string]any{"oauth": []string{"U2"}}}}
 
 	cases := []struct {
 		name string
@@ -109,7 +112,10 @@ func TestParseEventReadsMentionsDMsAndTheAppsRemoval(t *testing.T) {
 		{"an edit", raw(edited), chat.Event{Kind: chat.EventIgnored, ID: "Ev5", WorkspaceID: "T1"}},
 		{"a channel message", raw(channelMsg), chat.Event{Kind: chat.EventIgnored, ID: "Ev6", WorkspaceID: "T1"}},
 		{"uninstalled", raw(uninstalled), chat.Event{Kind: chat.EventUninstalled, ID: "Ev7", WorkspaceID: "T1"}},
-		{"tokens revoked", raw(revoked), chat.Event{Kind: chat.EventTokensRevoked, ID: "Ev8", WorkspaceID: "T1"}},
+		{"tokens revoked", raw(revoked), chat.Event{Kind: chat.EventTokensRevoked, ID: "Ev8", WorkspaceID: "T1",
+			RevokedBots: []string{"UBT1"}, RevokedUsers: []string{"U2"}}},
+		{"a person's token revoked", raw(userRevoked), chat.Event{Kind: chat.EventTokensRevoked, ID: "Ev9", WorkspaceID: "T1",
+			RevokedUsers: []string{"U2"}}},
 		{"another envelope", []byte(`{"type":"app_rate_limited"}`), chat.Event{Kind: chat.EventIgnored}},
 	}
 	for _, c := range cases {
@@ -118,7 +124,9 @@ func TestParseEventReadsMentionsDMsAndTheAppsRemoval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Kind != c.want.Kind || got.ID != c.want.ID || got.WorkspaceID != c.want.WorkspaceID || got.Challenge != c.want.Challenge {
+			if got.Kind != c.want.Kind || got.ID != c.want.ID || got.WorkspaceID != c.want.WorkspaceID || got.Challenge != c.want.Challenge ||
+				strings.Join(got.RevokedBots, ",") != strings.Join(c.want.RevokedBots, ",") ||
+				strings.Join(got.RevokedUsers, ",") != strings.Join(c.want.RevokedUsers, ",") {
 				t.Fatalf("got %+v, want %+v", got, c.want)
 			}
 			if (got.Mention == nil) != (c.want.Mention == nil) || (got.Mention != nil && *got.Mention != *c.want.Mention) {

@@ -194,11 +194,12 @@ func (w *world) deliver(payload map[string]any) any {
 
 func (w *world) sweep() {
 	w.t.Helper()
-	for range 5 {
+	for range 20 {
 		n, err := w.svc.Sweep(w.ctx)
 		if err != nil {
 			w.t.Fatalf("sweep: %v", err)
 		}
+		w.svc.Wait()
 		if n == 0 {
 			return
 		}
@@ -514,7 +515,7 @@ func TestChatRefusesTheUnconnectedAndNonMembersPrivately(t *testing.T) {
 	ts := w.mention("Zed", "C1", "", "help me")
 	eph := w.fake.Ephemerals()
 	if len(eph) != 1 || eph[0].User != "U9" || !strings.Contains(eph[0].Text, "Connect your Slack account") ||
-		!strings.Contains(string(eph[0].Blocks), "https://dude.example.com/#/o/acme/connect/slack?state=") {
+		!strings.Contains(string(eph[0].Blocks), "https://dude.example.com/#/connect/slack?state=") || strings.Contains(string(eph[0].Blocks), "acme") {
 		t.Fatalf("ephemerals %+v", eph)
 	}
 	if n := w.count(`SELECT count(*) FROM chat_connect_states WHERE kind = 'prompt' AND external_user_id = 'U9'
@@ -742,10 +743,10 @@ func TestChatInstallBindsOneWorkspaceToOneOrganisation(t *testing.T) {
 		t.Fatalf("denied: %+v", l)
 	}
 	// Disconnect: an admin's, revoking the token.
-	if err := w.svc.Disconnect(w.ctx, w.org, "slack", false); err == nil {
+	if err := w.svc.Disconnect(w.ctx, w.org, "slack", member, false); err == nil {
 		t.Fatal("a member disconnected")
 	}
-	if err := w.svc.Disconnect(w.ctx, w.org, "slack", true); err != nil {
+	if err := w.svc.Disconnect(w.ctx, w.org, "slack", admin, true); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.count(`SELECT count(*) FROM chat_installations WHERE organization_id = $1`, w.org); n != 0 || len(w.fake.Revoked()) != 1 {
@@ -816,7 +817,7 @@ func TestChatConnectLinksOnceAndRoutesTheKeptMention(t *testing.T) {
 
 // regexpFind is the Connect URL in a message's blocks.
 func regexpFind(blocks string) string {
-	i := strings.Index(blocks, "https://dude.example.com/#/o/acme/connect/slack?state=")
+	i := strings.Index(blocks, "https://dude.example.com/#/connect/slack?state=")
 	if i < 0 {
 		return ""
 	}

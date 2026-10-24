@@ -37,6 +37,11 @@ type Service struct {
 	Kick func()
 	// The clock, for tests of the 15-minute states.
 	Now func() time.Time
+	// Deliveries routed at once; DefaultWorkers when 0.
+	Workers int
+
+	serviceState
+	nameCache nameCache
 }
 
 func (s *Service) now() time.Time {
@@ -135,7 +140,8 @@ func (s *Service) Receive(ctx context.Context, providerID string, interaction bo
 		case EventIgnored:
 			return map[string]any{"ok": true}, nil
 		}
-		kind, id, workspace, payload = "event", ev.ID, ev.WorkspaceID, storedEvent{Kind: ev.Kind, Mention: ev.Mention}
+		kind, id, workspace, payload = "event", ev.ID, ev.WorkspaceID, storedEvent{Kind: ev.Kind, Mention: ev.Mention,
+			RevokedBots: ev.RevokedBots, RevokedUsers: ev.RevokedUsers}
 	}
 	org, err := s.orgOf(ctx, providerID, workspace)
 	if err != nil {
@@ -150,12 +156,23 @@ func (s *Service) Receive(ctx context.Context, providerID string, interaction bo
 	if err != nil {
 		return nil, err
 	}
+	key := ""
+	switch v := payload.(type) {
+	case Interaction:
+		key = threadKey(providerID, v.WorkspaceID, v.ConversationID, v.ThreadID)
+	case storedEvent:
+		if v.Mention != nil {
+			key = threadKey(providerID, v.Mention.WorkspaceID, v.Mention.ConversationID, v.Mention.ThreadID)
+		}
+	}
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO chat_events (provider, event_id, organization_id, kind, payload)
-			VALUES ($1, $2, $3, $4, $5) ON CONFLICT (provider, event_id) DO NOTHING`, providerID, id, org, kind, raw); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO chat_events (provider, event_id, organization_id, kind, payload, thread_key)
+			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (provider, event_id) DO NOTHING`, providerID, id, org, kind, raw, key); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `UPDATE chat_installations SET last_event_at = now() WHERE provider = $1`, providerID)
+		// At most once a minute: a burst of deliveries does not queue on this row.
+		_, err := tx.Exec(ctx, `UPDATE chat_installations SET last_event_at = now()
+			WHERE provider = $1 AND (last_event_at IS NULL OR last_event_at < now() - interval '1 minute')`, providerID)
 		return err
 	}); err != nil {
 		return nil, err
@@ -166,8 +183,10 @@ func (s *Service) Receive(ctx context.Context, providerID string, interaction bo
 
 // storedEvent is an event as chat_events keeps it.
 type storedEvent struct {
-	Kind    string   `json:"kind"`
-	Mention *Mention `json:"mention,omitempty"`
+	Kind         string   `json:"kind"`
+	Mention      *Mention `json:"mention,omitempty"`
+	RevokedBots  []string `json:"revokedBots,omitempty"`
+	RevokedUsers []string `json:"revokedUsers,omitempty"`
 }
 
 // orgOf is the organisation that installed workspace, read across tenants
@@ -368,7 +387,11 @@ func (s *Service) CompleteInstall(ctx context.Context, c Callback) (Landing, err
 				failed_today = 0, failures_day = NULL, last_failure = NULL`,
 			ids.New(ids.ChatInstallation), st.Org, c.Provider, inst.WorkspaceID, inst.WorkspaceName, inst.WorkspaceDomain,
 			inst.BotUserID, inst.Token, db.NonNil(inst.Scopes), st.Person)
-		return err
+		if err != nil {
+			return err
+		}
+		return chatLedger(ctx, tx, st.Org, EvChatInstalled, "person", st.Person, map[string]any{"provider": c.Provider,
+			"workspaceId": inst.WorkspaceID, "workspaceName": inst.WorkspaceName})
 	})
 	var pgErr *pgconn.PgError
 	var ref *Refusal
@@ -387,10 +410,9 @@ func (s *Service) CompleteInstall(ctx context.Context, c Callback) (Landing, err
 }
 
 // Disconnect removes the organisation's installation of provider and
-// revokes its token at the provider (best effort: the row goes whatever
-// the provider says). Its people's links and bound threads stay, for a
-// reinstall of the same workspace.
-func (s *Service) Disconnect(ctx context.Context, org, providerID string, admin bool) error {
+// revokes its token at the provider (best effort: the rows go whatever
+// the provider says), with everything bound to the workspace.
+func (s *Service) Disconnect(ctx context.Context, org, providerID, person string, admin bool) error {
 	p, err := s.provider(providerID)
 	if err != nil {
 		return err
@@ -400,12 +422,11 @@ func (s *Service) Disconnect(ctx context.Context, org, providerID string, admin 
 	}
 	var inst Installation
 	var ok bool
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		if inst, ok, err = loadInstallation(ctx, tx, providerID); err != nil || !ok {
 			return err
 		}
-		_, err := tx.Exec(ctx, `DELETE FROM chat_installations WHERE id = $1`, inst.ID)
-		return err
+		return removeInstallationTx(ctx, tx, org, inst, person, "disconnected")
 	}); err != nil {
 		return err
 	}
@@ -416,6 +437,42 @@ func (s *Service) Disconnect(ctx context.Context, org, providerID string, admin 
 		s.log().Warn("revoking a chat installation's token failed", "provider", providerID, "error", err)
 	}
 	return nil
+}
+
+// removeInstallation is the workspace taking the app out (uninstalled, or
+// its bot token revoked): nothing it issued works now.
+func (s *Service) removeInstallation(ctx context.Context, org, provider, person, reason string) error {
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		inst, ok, err := loadInstallation(ctx, tx, provider)
+		if err != nil || !ok {
+			return err
+		}
+		return removeInstallationTx(ctx, tx, org, inst, person, reason)
+	})
+}
+
+// removeInstallationTx deletes the installation and what is keyed on its
+// workspace: people's links, Connect states and thread bindings, so the
+// workspace may be installed by another organisation with nothing of this
+// one's in its way. Sessions, tasks and epics keep their origin; Requests
+// keep their history.
+func removeInstallationTx(ctx context.Context, tx pgx.Tx, org string, inst Installation, person, reason string) error {
+	for _, q := range []string{
+		`DELETE FROM chat_identities WHERE provider = $1 AND external_workspace_id = $2`,
+		`DELETE FROM chat_threads WHERE provider = $1 AND external_workspace_id = $2`,
+		`DELETE FROM chat_connect_states WHERE provider = $1 AND external_workspace_id = $2`,
+		`DELETE FROM chat_installations WHERE provider = $1 AND external_workspace_id = $2`,
+	} {
+		if _, err := tx.Exec(ctx, q, inst.Provider, inst.WorkspaceID); err != nil {
+			return err
+		}
+	}
+	actorType := "system"
+	if person != "" {
+		actorType = "person"
+	}
+	return chatLedger(ctx, tx, org, EvChatUninstalled, actorType, person, map[string]any{"provider": inst.Provider,
+		"workspaceId": inst.WorkspaceID, "workspaceName": inst.WorkspaceName, "reason": reason})
 }
 
 // BeginConnect is a member starting to link their provider account: from
@@ -533,6 +590,9 @@ func (s *Service) CompleteConnect(ctx context.Context, c Callback) (Landing, err
 				land.Outcome = "already_linked"
 				return nil
 			}
+		} else if err := chatLedger(ctx, tx, st.Org, EvChatLinked, "person", st.Person, map[string]any{"provider": c.Provider,
+			"personId": st.Person, "handle": who.Handle}); err != nil {
+			return err
 		}
 		land.Outcome = "connected"
 		if len(st.Pending) == 0 || st.ExternalUser != who.ID {
@@ -556,9 +616,13 @@ func (s *Service) Unlink(ctx context.Context, org, providerID, person string) er
 		return err
 	}
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM chat_identities WHERE provider = $1 AND account_id =
+		tag, err := tx.Exec(ctx, `DELETE FROM chat_identities WHERE provider = $1 AND account_id =
 			(SELECT account_id FROM people WHERE id = $2)`, providerID, person)
-		return err
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		return chatLedger(ctx, tx, org, EvChatUnlinked, "person", person, map[string]any{"provider": providerID,
+			"personId": person, "reason": "unlinked"})
 	})
 }
 

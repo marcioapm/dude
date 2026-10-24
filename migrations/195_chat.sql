@@ -120,26 +120,39 @@ GRANT EXECUTE ON FUNCTION chat_connect_state_org(text) TO dude_app, dude_sweeper
 -- chat loop routes them. The provider's event id is the key, so a retry is
 -- recognised rather than routed twice. `mention` is a neutral mention dude
 -- kept itself (one held for a Connect, routed once the person linked).
+-- The chat loop claims deliveries with a lease (claimed_until), routes
+-- different threads at once and one thread's in order (thread_key), and
+-- keeps the routing judgement's answer (decision) so a retry after it acts
+-- on that answer rather than asking the model again. A delivery is tried
+-- at most 6 times; processed ones are kept 7 days.
 CREATE TABLE chat_events (
   provider        text NOT NULL,
   event_id        text NOT NULL,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   kind            text NOT NULL CHECK (kind IN ('event', 'interaction', 'mention')),
   payload         jsonb NOT NULL,
+  -- provider, workspace, conversation and thread; '' for a delivery no
+  -- other waits on (an uninstall).
+  thread_key      text NOT NULL DEFAULT '',
   received_at     timestamptz NOT NULL DEFAULT now(),
   processed_at    timestamptz,
   attempts        integer NOT NULL DEFAULT 0,
   next_attempt_at timestamptz,
+  claimed_until   timestamptz,
+  decision        jsonb,
   last_error      text,
   PRIMARY KEY (provider, event_id)
 );
-CREATE INDEX chat_events_pending_idx ON chat_events (received_at) WHERE processed_at IS NULL;
+CREATE INDEX chat_events_pending_idx ON chat_events (received_at) WHERE processed_at IS NULL AND attempts < 6;
+CREATE INDEX chat_events_thread_pending_idx ON chat_events (thread_key, received_at) WHERE processed_at IS NULL AND attempts < 6;
+CREATE INDEX chat_events_received_idx ON chat_events (received_at);
 ALTER TABLE chat_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON chat_events
   USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE ON chat_events TO dude_app;
-GRANT SELECT ON chat_events TO dude_sweeper;
+GRANT SELECT, DELETE ON chat_events TO dude_sweeper;
+GRANT UPDATE (claimed_until) ON chat_events TO dude_sweeper;
 
 -- A provider thread bound to what a mention in it made: exactly one of a
 -- session, a task or an epic. A later mention in the thread goes there.
@@ -211,10 +224,22 @@ CREATE TABLE chat_requests (
   question              jsonb,
   question_message_id   text,
   answered_at           timestamptz,
+  -- The clicked choice that answered it: its delivery's event id.
+  answered_by_event     text,
+  -- What dude posts for it (its reply, question or private note, and
+  -- reactions), recorded with the request and posted after it commits;
+  -- replied_at once posted, or given up.
+  effects               jsonb NOT NULL DEFAULT '[]'::jsonb,
+  replied_at            timestamptz,
   created_at            timestamptz NOT NULL DEFAULT now(),
   UNIQUE (provider, event_id)
 );
 CREATE INDEX chat_requests_created_idx ON chat_requests (organization_id, created_at DESC);
+-- Requests filtered by route or provider read one range each.
+CREATE INDEX chat_requests_route_idx ON chat_requests (organization_id, route, created_at DESC);
+CREATE INDEX chat_requests_provider_idx ON chat_requests (organization_id, provider, created_at DESC);
+-- The retention delete, across organisations.
+CREATE INDEX chat_requests_age_idx ON chat_requests (created_at);
 -- Clarify rounds are counted per thread.
 CREATE INDEX chat_requests_thread_idx ON chat_requests (provider, external_workspace_id, conversation_id, thread_id, created_at);
 ALTER TABLE chat_requests ENABLE ROW LEVEL SECURITY;
@@ -222,6 +247,7 @@ ALTER TABLE chat_requests FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON chat_requests
   USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE, DELETE ON chat_requests TO dude_app;
+GRANT SELECT (id, created_at), DELETE ON chat_requests TO dude_sweeper;
 
 -- The organisation's additional routing instructions, told to the routing
 -- call for every provider after dude's built-in ones.

@@ -56,6 +56,8 @@ type settings struct {
 
 	// The Slack app; ClientID "" offers no Slack.
 	Slack slack.Config
+	// Chat deliveries routed at once.
+	ChatWorkers int
 
 	// Where people's attached images are read from; Bucket "" for none.
 	Objects objects.Config
@@ -185,6 +187,7 @@ func settingsFrom(cfg *config.Config) (settings, error) {
 	s.VAPIDSubject = cfg.String("DUDE_VAPID_SUBJECT")
 	s.Slack = slack.Config{SigningSecret: cfg.String("DUDE_SLACK_SIGNING_SECRET"), ClientID: cfg.String("DUDE_SLACK_CLIENT_ID"),
 		ClientSecret: cfg.String("DUDE_SLACK_CLIENT_SECRET"), APIURL: cfg.String("DUDE_SLACK_API_URL")}
+	s.ChatWorkers = int(cfg.Int("DUDE_CHAT_WORKERS"))
 
 	if s.Embeddings, err = embeddingsFromEnv(cfg.Getenv); err != nil {
 		return settings{}, err

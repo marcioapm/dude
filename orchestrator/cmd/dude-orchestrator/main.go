@@ -208,7 +208,7 @@ func run(log *slog.Logger) error {
 
 	embedder, notifier := memoryAndPush(set, database, log)
 	chatService := &chat.Service{DB: database, Providers: chat.Registry{"slack": slack.New(set.Slack)}, Judge: judgeService,
-		PublicURL: set.PublicURL, Log: log}
+		PublicURL: set.PublicURL, Log: log, Workers: set.ChatWorkers}
 	indexer := &memory.Indexer{DB: database, Embedder: embedder, Log: log}
 	// The guide this build embeds, for search_memory: before the tools
 	// listen, so an agent's first search finds this build's text.
@@ -252,8 +252,11 @@ func run(log *slog.Logger) error {
 		// loop only looks for the ones due.
 		{"lux-cost", 15 * time.Second, (&phases.Costs{DB: database, Lux: luxClient, Log: log, Every: set.LuxCostEvery}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
-		// Mentions and clicks chat providers sent: routed, replied to, recorded.
+		// Mentions and clicks chat providers sent: routed, replied to,
+		// recorded, set.ChatWorkers at once; the loop only claims.
 		{"chat", time.Second, chatService.Sweep},
+		// Requests past 30 days and deliveries past 7, in batches.
+		{"chat-retention", time.Hour, chatService.Retain},
 		{"notify", 2 * time.Second, notifier.Sweep},
 		{"indexer", 5 * time.Second, indexer.Sweep},
 		{"pr-reconciler", time.Minute, func(ctx context.Context) (int, error) {

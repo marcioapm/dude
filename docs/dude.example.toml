@@ -177,6 +177,11 @@ subject = "mailto:dude@localhost"                        # DUDE_VAPID_SUBJECT
 # The Web API's base: a stand-in's for tests.
 api_url = "https://slack.com/api"                        # DUDE_SLACK_API_URL
 
+[chat]
+# Chat deliveries (mentions, clicks) routed at once. One thread's are always
+# routed in order; different threads' and organisations' at once.
+workers = 6                                              # DUDE_CHAT_WORKERS
+
 [auth]
 # How people sign in to the backend: "api_key", or "cloudflare_access". API
 # keys keep working either way, for scripts and anyone who signs in with one.

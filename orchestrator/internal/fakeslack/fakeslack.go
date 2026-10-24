@@ -75,8 +75,13 @@ type Server struct {
 	installer, signer      string // who authorizes the next install / sign-in
 	seq                    int
 	calls                  map[string]int
-	// Methods answered with this Slack error once each, for a failure test.
-	failNext map[string]string
+	// Methods answered with a Slack error, so many times, for a failure test.
+	failNext map[string]failure
+}
+
+type failure struct {
+	code string
+	left int
 }
 
 type code struct{ kind, team, user string }
@@ -85,7 +90,7 @@ type code struct{ kind, team, user string }
 func New(clientID, clientSecret string) *Server {
 	return &Server{ClientID: clientID, ClientSecret: clientSecret, teams: map[string]string{}, users: map[string]User{},
 		convs: map[string]*Conversation{}, reactions: map[string]map[string]bool{}, tokens: map[string]string{},
-		userTokens: map[string]string{}, codes: map[string]code{}, calls: map[string]int{}, failNext: map[string]string{}}
+		userTokens: map[string]string{}, codes: map[string]code{}, calls: map[string]int{}, failNext: map[string]failure{}}
 }
 
 // AddTeam adds a workspace with its bot user (B<team>).
@@ -135,11 +140,15 @@ func (s *Server) AuthorizeAs(installer, signer string) {
 	s.installer, s.signer = installer, signer
 }
 
-// FailNext makes the next call of method answer ok:false with code.
-func (s *Server) FailNext(method, code string) {
+// FailNext makes the next call of method answer ok:false with code
+// ("ratelimited" answers as Slack does: HTTP 429 with Retry-After: 1).
+func (s *Server) FailNext(method, code string) { s.FailTimes(method, code, 1) }
+
+// FailTimes makes the next n calls of method fail as FailNext does.
+func (s *Server) FailTimes(method, code string, n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.failNext[method] = code
+	s.failNext[method] = failure{code: code, left: n}
 }
 
 // Post adds a person's message, in thread (a new root with ""), returning its ts.
@@ -314,9 +323,17 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls[method]++
-	if c, ok := s.failNext[method]; ok {
-		delete(s.failNext, method)
-		refuse(w, c)
+	if f, ok := s.failNext[method]; ok {
+		if f.left--; f.left <= 0 {
+			delete(s.failNext, method)
+		} else {
+			s.failNext[method] = f
+		}
+		if f.code == "ratelimited" {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+		refuse(w, f.code)
 		return
 	}
 	switch method {

@@ -142,6 +142,9 @@ type schema struct {
 		ClientSecret  any `toml:"client_secret" env:"DUDE_SLACK_CLIENT_SECRET" kind:"string" use:"orchestrator" secret:"true"`
 		APIURL        any `toml:"api_url" env:"DUDE_SLACK_API_URL" kind:"string" use:"orchestrator" default:"https://slack.com/api"`
 	} `toml:"slack"`
+	Chat struct {
+		Workers any `toml:"workers" env:"DUDE_CHAT_WORKERS" kind:"int" use:"orchestrator" default:"6"`
+	} `toml:"chat"`
 	Auth struct {
 		Provider         any `toml:"provider" env:"DUDE_AUTH_PROVIDER" kind:"string" use:"backend" default:"api_key"`
 		PublicURL        any `toml:"public_url" env:"DUDE_AUTH_PUBLIC_URL" kind:"string" use:"both"`

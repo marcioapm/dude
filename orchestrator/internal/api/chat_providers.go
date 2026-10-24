@@ -57,7 +57,7 @@ func (s *Server) chatProviderRoutes(mux *http.ServeMux) {
 	}))
 	mux.Handle("DELETE /internal/chat/{provider}", s.auth(func(w http.ResponseWriter, r *http.Request, org string) error {
 		p := principalOf(r)
-		if err := s.chatService().Disconnect(r.Context(), org, r.PathValue("provider"), p.Admin); err != nil {
+		if err := s.chatService().Disconnect(r.Context(), org, r.PathValue("provider"), p.Person, p.Admin); err != nil {
 			return chatError(err)
 		}
 		w.WriteHeader(http.StatusNoContent)
