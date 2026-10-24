@@ -1187,7 +1187,10 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 	id := r.PathValue("id")
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// The delivery's row before the task's (delivery.LockEscalationTx):
-		// marking it done locks the delivery again (SetTaskStatusTx).
+		// marking it done locks the delivery again (SetTaskStatusTx). The
+		// task NO KEY UPDATE, as LockTaskTx: ending it updates its live
+		// children, whose syncer batch may hold one and wait on the task's
+		// KEY SHARE.
 		d, err := delivery.LoadDelivery(r.Context(), tx, id)
 		if err != nil {
 			return err
@@ -1199,7 +1202,7 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, w.status::text,
 				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.task_id = w.id AND d.status IN ('running', 'waiting')
 				        AND NOT (d.status = 'waiting' AND d.step = 'awaitRead'))
-			FROM tasks w WHERE w.id = $1 FOR UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
+			FROM tasks w WHERE w.id = $1 FOR NO KEY UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "task %s not found", id)
 			}
