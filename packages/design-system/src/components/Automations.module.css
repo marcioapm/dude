@@ -59,9 +59,7 @@
   vertical-align: -2px;
   margin-inline-end: var(--ds-space-6);
 }
-/* The rest of the first phrase follows its first word with the phrase's own
-   space; only the "·" part after it is spaced by margin. */
-.triggerWrap > span + span:not(.triggerTail),
+/* Space the separator after its explicit line-break opportunity. */
 .triggerWrap > wbr + span {
   margin-inline-start: var(--ds-space-6);
 }

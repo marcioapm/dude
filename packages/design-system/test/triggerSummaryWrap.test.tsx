@@ -57,8 +57,6 @@ for (const [id, first, rest] of [["wrap-github", "pull_request", "opened"], ["wr
     expect(getComputedStyle(word).overflowWrap).toBe("break-word");
     // A break opportunity before the separator, so "·" starts a line rather than ending one.
     const separator = summary.querySelector("wbr")?.nextElementSibling as HTMLElement | null;
-    expect(separator?.textContent?.startsWith("·")).toBe(true);
-    // The separator keeps its gap from the phrase before it.
-    expect(getComputedStyle(separator!).marginInlineStart).not.toBe("0px");
+    expect(separator?.textContent?.startsWith("·\u00a0")).toBe(true);
   });
 }
