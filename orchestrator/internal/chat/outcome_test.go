@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeslack"
 )
 
@@ -98,6 +99,35 @@ func TestChatARefusedReplyIsSentPrivatelyAndRecordedAsFailed(t *testing.T) {
 	}
 	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "x" {
 		t.Fatalf("reactions %v", r)
+	}
+}
+
+// A mark is cosmetic: when every reaction call fails, the reply posted
+// stands, the request stays what it made, and nobody is sent a note.
+func TestChatAFailedMarkLeavesAPostedReplySuccessful(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "ABS", "title": "Stream it", "goal": "g"}))
+	w.fake.FailTimes("reactions.add", "internal_error", 100)
+	_, ev := w.receive("Eli", "C1", "", "file: stream it")
+	for range chat.MaxAttempts + 2 {
+		w.due()
+		w.once()
+	}
+	if e := w.event(ev); !e.Processed || e.Attempts != 0 {
+		t.Fatalf("delivery %+v", e)
+	}
+	got := w.requests()
+	if len(got) != 1 || got[0].Route != "task" || got[0].AskedRoute != "" || strings.Contains(got[0].Reasoning, "not posted") {
+		t.Fatalf("requests %+v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM chat_requests WHERE organization_id = $1 AND replied_at IS NOT NULL`, w.org); n != 1 {
+		t.Fatalf("%d requests replied", n)
+	}
+	if bot := w.fake.BotMessages(); len(bot) != 1 || !strings.HasPrefix(bot[0].Text, "Filed ABS-1") {
+		t.Fatalf("replies %+v", bot)
+	}
+	if eph := w.fake.Ephemerals(); len(eph) != 0 {
+		t.Fatalf("ephemerals %+v", eph)
 	}
 }
 

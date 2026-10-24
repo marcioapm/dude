@@ -112,6 +112,13 @@ func (s *Service) deliver(ctx context.Context, org string, p Provider, inst Inst
 			}
 		}
 		var failedHere string
+		if err != nil && e.Kind == "react" {
+			// A mark is cosmetic: its failure is noted and never retried or
+			// counted against the request.
+			s.noteFailure(ctx, org, m.Provider, err)
+			s.log().Warn("marking a chat mention failed", "provider", m.Provider, "request", id, "error", err)
+			err = nil
+		}
 		if err != nil {
 			s.noteFailure(ctx, org, m.Provider, err)
 			if transient, _ := IsTransient(err); transient {

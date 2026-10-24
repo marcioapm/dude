@@ -193,22 +193,31 @@ func TestChatARetryPostsOnlyWhatIsLeft(t *testing.T) {
 	}
 }
 
-// A retry after the reply was posted and the ✅ failed transiently posts
-// only the ✅: the reply is not posted twice.
+// diedBeforeTheMark puts a delivered mention back where a worker that
+// died after posting the reply, and before the mark, left it: the reply
+// effect done, the mark not, nothing replied, and the lease run out.
+func (w *world) diedBeforeTheMark(ev string) {
+	w.t.Helper()
+	w.exec(`UPDATE chat_requests SET replied_at = NULL, effects = jsonb_set(effects, '{1}', $3::jsonb)
+		WHERE organization_id = $1 AND event_id = $2`, w.org, ev, `{"kind":"react","reaction":`+fmt.Sprint(int(chat.ReactionDone))+`}`)
+	w.exec(`UPDATE chat_events SET processed_at = NULL, claimed_until = NULL WHERE organization_id = $1 AND event_id = $2`, w.org, ev)
+}
+
+// A retry after the reply was posted, by a worker that died before the
+// ✅, posts only the ✅: the reply is not posted twice.
 func TestChatARetryAfterAPostedReplyPostsOnlyTheMark(t *testing.T) {
 	w := setup(t)
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Hello"}))
-	// The 👀 (only noted) and then the ✅ fail.
-	w.fake.FailTimes("reactions.add", "internal_error", 2)
 	ts, ev := w.receive("Márcia", "C1", "", "hello")
 	w.once()
-	if e := w.event(ev); e.Processed || e.Attempts != 1 || len(w.fake.BotMessages()) != 1 {
-		t.Fatalf("after the failed mark: %+v, %d replies", e, len(w.fake.BotMessages()))
+	if e := w.event(ev); !e.Processed || len(w.fake.BotMessages()) != 1 {
+		t.Fatalf("after the first attempt: %+v, %d replies", e, len(w.fake.BotMessages()))
 	}
-	w.due()
+	w.diedBeforeTheMark(ev)
+	marks := w.fake.Calls("reactions.add")
 	w.once()
-	if n := len(w.fake.BotMessages()); n != 1 || w.model.calls() != 1 || !w.event(ev).Processed {
-		t.Fatalf("%d replies, %d model calls", n, w.model.calls())
+	if n := len(w.fake.BotMessages()); n != 1 || w.model.calls() != 1 || !w.event(ev).Processed || w.fake.Calls("reactions.add") != marks+1 {
+		t.Fatalf("%d replies, %d model calls, %d marks", n, w.model.calls(), w.fake.Calls("reactions.add")-marks)
 	}
 	if r := w.fake.Reactions("C1", ts); strings.Join(r, ",") != "white_check_mark" {
 		t.Fatalf("reactions %v", r)
