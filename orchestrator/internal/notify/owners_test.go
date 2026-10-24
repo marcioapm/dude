@@ -96,8 +96,9 @@ func TestTheOwnerSweepWatermarkNeverSkipsALateChange(t *testing.T) {
 	}
 }
 
-// A change whose work fails every time is tried five times, then logged
-// and given up: the watermark passes it, and a later change is told.
+// A change whose work fails every time is given up, and logged, once it
+// has failed five times and first failed over ten minutes ago (neither
+// alone suffices): the watermark passes it, and a later change is told.
 func TestTheOwnerSweepGivesUpAChangeThatAlwaysFails(t *testing.T) {
 	w, ids := newPushWorld(t, "ana")
 	org, ana := w.org, ids["ana"]
@@ -129,6 +130,10 @@ func TestTheOwnerSweepGivesUpAChangeThatAlwaysFails(t *testing.T) {
 	n := w.notifier()
 	n.Log = slog.New(slog.NewTextHandler(&logged, nil))
 	for attempt := 1; attempt < 5; attempt++ {
+		// The fourth fails long after the first: still short of five, it is not given up.
+		if attempt == 4 {
+			w.exec(`UPDATE session_owner_attempts SET first_failed_at = now() - interval '11 minutes' WHERE cursor = $1`, failing)
+		}
 		if _, err := n.Sweep(ctx); err == nil || !strings.Contains(err.Error(), "the directive cannot be queued") {
 			t.Fatalf("attempt %d: %v, want the change's error", attempt, err)
 		}
@@ -136,8 +141,17 @@ func TestTheOwnerSweepGivesUpAChangeThatAlwaysFails(t *testing.T) {
 			t.Fatalf("attempt %d: given up early", attempt)
 		}
 	}
+	// Five failures within ten minutes of the first (an outage of a few sweeps) give nothing up.
+	w.exec(`UPDATE session_owner_attempts SET first_failed_at = now() - interval '9 minutes' WHERE cursor = $1`, failing)
+	if _, err := n.Sweep(ctx); err == nil || !strings.Contains(err.Error(), "the directive cannot be queued") {
+		t.Fatalf("five quick attempts: %v, want the change's error", err)
+	}
+	if d := one(`SELECT count(*) FROM session_owner_done WHERE cursor = $1`, failing); d != 0 {
+		t.Fatalf("given up after five failures within ten minutes")
+	}
+	w.exec(`UPDATE session_owner_attempts SET attempts = 4, first_failed_at = now() - interval '11 minutes' WHERE cursor = $1`, failing)
 	if _, err := n.Sweep(ctx); err != nil {
-		t.Fatalf("the fifth attempt: %v, want it given up", err)
+		t.Fatalf("the fifth attempt, the first over ten minutes ago: %v, want it given up", err)
 	}
 	if d := one(`SELECT count(*) FROM session_owner_done WHERE cursor = $1`, failing); d != 1 {
 		t.Fatalf("not marked done after five attempts")

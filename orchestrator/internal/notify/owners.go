@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -73,23 +74,30 @@ func (n *Notifier) sweepOwners(ctx context.Context) (int, error) {
 	return len(found), errors.Join(errors.Join(errs...), n.advanceOwners(ctx))
 }
 
-// ownerAttempts is how many times a change is tried before it is given up.
-const ownerAttempts = 5
+// ownerAttempts is how many times a change is tried before it may be given
+// up, and ownerGiveUpAfter how long after its first failure: both must be
+// reached, so an error lasting a few 2 s sweeps gives nothing up.
+const (
+	ownerAttempts    = 5
+	ownerGiveUpAfter = 10 * time.Minute
+)
 
-// ownerFailed counts a failed attempt at c; at the ownerAttempts-th it
+// ownerFailed counts a failed attempt at c; once both bounds are reached it
 // logs c and marks it done, so a change that fails every time does not
 // hold the watermark (and, a hundred of them, every later change) for
 // good. Returns what to report: nil once given up.
 func (n *Notifier) ownerFailed(ctx context.Context, c ownerChange, cause error) error {
 	failed := fmt.Errorf("%s %d: %w", c.Type, c.Cursor, cause)
 	var attempts int
+	var givenUp bool
 	if err := n.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `INSERT INTO session_owner_attempts (cursor, organization_id, attempts) VALUES ($1, $2, 1)
-			ON CONFLICT (cursor) DO UPDATE SET attempts = session_owner_attempts.attempts + 1 RETURNING attempts`,
-			c.Cursor, c.Org).Scan(&attempts); err != nil {
+			ON CONFLICT (cursor) DO UPDATE SET attempts = session_owner_attempts.attempts + 1
+			RETURNING attempts, attempts >= $3 AND first_failed_at < now() - make_interval(secs => $4)`,
+			c.Cursor, c.Org, ownerAttempts, ownerGiveUpAfter.Seconds()).Scan(&attempts, &givenUp); err != nil {
 			return err
 		}
-		if attempts < ownerAttempts {
+		if !givenUp {
 			return nil
 		}
 		_, err := markOwnerDone(ctx, tx, c)
@@ -97,7 +105,7 @@ func (n *Notifier) ownerFailed(ctx context.Context, c ownerChange, cause error) 
 	}); err != nil {
 		return errors.Join(failed, err)
 	}
-	if attempts < ownerAttempts {
+	if !givenUp {
 		return failed
 	}
 	n.Log.Warn("session owner change given up", "cursor", c.Cursor, "type", c.Type, "attempts", attempts, "error", cause)
