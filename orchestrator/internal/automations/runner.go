@@ -881,7 +881,7 @@ func (r *Runner) resume(ctx context.Context, a Automation, kept, runID string, p
 		if err != nil || why != "" {
 			return "", why, err
 		}
-		rest, err := phases.AutomationResumeSecrets(ctx, r.Registry, specIn, got.Spec)
+		rest, err := phases.AutomationResumeSecrets(ctx, r.Agent, r.Registry, specIn, got.Spec)
 		if err != nil {
 			return "", "", err
 		}

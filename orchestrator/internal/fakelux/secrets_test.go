@@ -223,6 +223,40 @@ func TestAFailingServerCommandsLogHasNoSecretValue(t *testing.T) {
 	}
 }
 
+// As lux's requireSecrets: a submit with a secret missing its value, or
+// with an empty one, is refused naming each; a resume likewise, since lux
+// keeps no value.
+func TestASubmitOrResumeWithoutEverySecretsValueIsRefused(t *testing.T) {
+	fake := fakelux.New(t.TempDir(), "k", nil)
+	_, c, _ := startedWith(t, fake, preview)
+	ctx := context.Background()
+	empty := preview
+	empty.Secrets = []lux.Secret{{Name: "ACME_KEY", Value: "acme", As: "env"}, {Name: "ACME_EMPTY", As: "env"}}
+	if _, err := c.Submit(ctx, empty, ""); !isLux(err, 422, "secrets_required") || !strings.Contains(err.Error(), "ACME_EMPTY") ||
+		strings.Contains(err.Error(), "ACME_KEY") {
+		t.Errorf("a submit with an empty value: %v, want 422 secrets_required naming ACME_EMPTY alone", err)
+	}
+	full := preview
+	full.Secrets = []lux.Secret{{Name: "ACME_KEY", Value: "acme", As: "env"}}
+	r, err := c.Submit(ctx, full, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the run to run", func() bool { got, _ := c.Get(ctx, r.ID); return got.State == "running" })
+	if err := c.Stop(ctx, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the run to stop", func() bool { got, _ := c.Get(ctx, r.ID); return got.State == "stopped" })
+	for _, given := range [][]lux.Secret{nil, {{Name: "ACME_KEY", As: "env"}}} {
+		if _, err := c.Resume(ctx, r.ID, lux.ResumeInput{Secrets: given}); !isLux(err, 422, "secrets_required") {
+			t.Errorf("a resume giving %+v: %v, want 422 secrets_required", given, err)
+		}
+	}
+	if _, err := c.Resume(ctx, r.ID, lux.ResumeInput{Secrets: full.Secrets}); err != nil {
+		t.Errorf("a resume giving every value: %v", err)
+	}
+}
+
 // A secret printed as a JSON string, by an encoder that escapes HTML and by
 // one that does not (lux's shim redacts both forms): neither is in the
 // server's log.

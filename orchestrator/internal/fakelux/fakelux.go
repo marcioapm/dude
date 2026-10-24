@@ -1647,6 +1647,13 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 422, "invalid_spec", msg)
 		return
 	}
+	// As lux's submit (requireSecrets): every secret needs a non-empty value.
+	var submitted lux.Spec
+	_ = json.Unmarshal(raw, &submitted)
+	if msg := missingSecrets(raw, submitted.Secrets); len(msg) > 0 {
+		writeErr(w, 422, "secrets_required", "secret values required: "+strings.Join(msg, ", "))
+		return
+	}
 	// The prompt's images, checked at submit as lux does.
 	var withImages struct {
 		Workload struct {
@@ -3032,9 +3039,9 @@ func registryAuthProblem(rawSpec json.RawMessage) string {
 	return ""
 }
 
-// missingSecrets are the Run's secrets a resume brings no value for. A
-// repository a resume adds with a credential the spec lacks is left out,
-// as it is here.
+// missingSecrets are the Run's secrets given no value, or an empty one, as
+// lux's requireSecrets names them: given is the submitted spec's own
+// secrets at submit, and a resume's, since lux keeps no value.
 func missingSecrets(rawSpec json.RawMessage, given []lux.Secret) []string {
 	var spec lux.Spec
 	_ = json.Unmarshal(rawSpec, &spec)

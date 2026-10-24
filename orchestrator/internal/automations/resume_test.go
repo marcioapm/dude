@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,64 @@ func TestAutomationUnresumableSessionIsEndedNotOrphaned(t *testing.T) {
 		t.Errorf("second run %+v", r)
 	}
 	h.until("the unresumable container is ended", func() bool { return lux.Terminated(h.luxState(first.LuxRunID)) })
+	h.runner.Wait()
+}
+
+// An agent on a real model declares its harness's secrets (the LLM key,
+// and Codex's config.toml): a resume gives each again, so the next firing
+// takes up the kept session on each harness rather than starting fresh.
+func TestAutomationAgentResumeGivesItsHarnessSecrets(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Agent.LLMKey = "sk-acme"
+	h.runner.Agent.LLMURL = "https://llm.example.com/v1"
+	exec(t, h.owner, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ($1 || '_large', $1, 'Large', 'acme-large')`, h.org)
+	want := map[string][]string{
+		"opencode":    {"DUDE_LLM_KEY"},
+		"claude-code": {"ANTHROPIC_API_KEY"},
+		"codex":       {"CODEX_CONFIG", "OPENAI_API_KEY"},
+	}
+	for harness := range want {
+		id := "aut_h_" + strings.ReplaceAll(harness, "-", "_")
+		h.automation(id, "agent", map[string]any{"kind": "github", "event": "pull_request"},
+			map[string]any{"session_mode": "resumable", "expiry_days": 7,
+				"agent": map[string]any{"own": map[string]any{"tierId": h.org + "_large", "harness": harness, "prompt": "Triage {{pr.title}}."}}})
+	}
+	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
+	first := map[string]runRow{}
+	for harness := range want {
+		id := "aut_h_" + strings.ReplaceAll(harness, "-", "_")
+		h.until(id+"'s first run ends", func() bool { r := h.runs(id); return len(r) == 1 && r[0].Status != "running" })
+		first[harness] = h.runs(id)[0]
+		h.until(id+"'s kept container is stopped", func() bool { return h.luxState(first[harness].LuxRunID) == "stopped" })
+	}
+	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
+	for harness, names := range want {
+		id := "aut_h_" + strings.ReplaceAll(harness, "-", "_")
+		h.until(id+"'s second run starts", func() bool { rs := h.runs(id); return len(rs) == 2 && rs[1].Session != "" })
+		second := h.runs(id)[1]
+		if second.Session != "resumed" || second.LuxRunID != first[harness].LuxRunID {
+			t.Errorf("%s: second run %+v, want the kept %s resumed", harness, second, first[harness].LuxRunID)
+			continue
+		}
+		resumes := h.fake.ResumeSecretsOf(second.LuxRunID)
+		if len(resumes) != 1 {
+			t.Fatalf("%s: %d resumes, want 1", harness, len(resumes))
+		}
+		given := map[string]string{}
+		for _, s := range resumes[0] {
+			given[s.Name] = s.Value
+		}
+		for _, n := range names {
+			switch {
+			case n == "CODEX_CONFIG":
+				if !strings.Contains(given[n], "https://llm.example.com/v1") {
+					t.Errorf("%s: the resume gave CODEX_CONFIG %q", harness, given[n])
+				}
+			case given[n] != "sk-acme":
+				t.Errorf("%s: the resume gave %s %q, want the LLM key", harness, n, given[n])
+			}
+		}
+	}
 	h.runner.Wait()
 }
 
