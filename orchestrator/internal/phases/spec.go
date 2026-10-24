@@ -493,6 +493,15 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
 			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
 		}
+		// An automation's scripted agent calls the tools its prompt names:
+		// the fake lux from the label, a real lux's lux-fake from the script.
+		if in.Phase == "automation" {
+			spec.Workload.Prompt = fakeagent.AutomationScript(in.Prompt)
+			if calls := fakeagent.ConductorCalls(in.Prompt); len(calls) > 0 {
+				raw, _ := json.Marshal(calls)
+				spec.Labels[fakeagent.CallsLabel] = string(raw)
+			}
+		}
 		if in.Anywhere || len(spec.Workload.MCPServers) > 0 || len(in.Egress) > 0 {
 			// Its tools must be reachable, and what it stands in for may
 			// reach; it needs no model.
