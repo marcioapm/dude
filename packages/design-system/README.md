@@ -1126,7 +1126,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   references** (`useCallback`, or a function defined once): a new closure on
   every render of the board's parent redraws every card.
 - **Where a card came from** (`cardLead`): on its first line, before its
-  key, a small chip on the chrome shade — a chat-born task's provider glyph
+  key, a small chip with its own neutral fill and edge over the card's chrome
+  — a chat-born task's provider glyph
   and name (`ProviderGlyph inline`). The board lays whatever the lead holds
   on the key's line. Nothing for a task typed in dude. A stable reference
   too, as `cardMarks`.
@@ -1500,8 +1501,11 @@ here.
   a group opens its first sub-page.
 - **A `SettingRow` with long free text** (routing instructions, a prompt)
   sets `fill`: the field and its Save stack at the control column's full
-  width. Under 720px every `SettingRow` stacks: its label and help above,
-  the control the page's width, so nothing is squeezed to a letter a line.
+  width. When the settings page's column (`SettingsLayout`'s main, a size
+  container) is 640px or narrower — a phone, or a laptop beside the app's
+  sidebar and the settings menu — every `SettingRow` stacks: its label and
+  help above, the control the column's width, so nothing is squeezed to a
+  letter a line. Outside a settings page a row stacks under a 720px window.
 - **SearchResultRow** is the one way a search result is drawn (Memory's
   search): ArtifactRow's anatomy and open shade — a 32px row, chevron,
   rank, a `RefLead` for what it is, and the title; at the end, as muted
@@ -2747,7 +2751,17 @@ component. Gallery: "Chat providers" (`gallery/sections/ChatProviders.tsx`).
   to, the left label the provider's name, named for assistive tech as one
   sentence. `size="lg"` is the connect page's: two square sunken panels
   (provider handle, display name, workspace ↔ dude face, organisation,
-  email) with the link glyph between, stacked under 480px.
+  email) with the link glyph between, stacked under 480px. Its `external`
+  is the account being linked: on the connect page, the one the Connect
+  prompt was sent to. `null` when no account is known yet: the provider's
+  glyph sits in the face's place over "Your <provider> account · Signed in
+  next" and the `workspace` — never an invented handle or initials.
+- **PromptText** — instructions a model is told, read-only: a sunken mono
+  well, named by `label` and reachable by keyboard, wrapped at its column
+  with the text's own line breaks kept, scrolling down past 24 lines and
+  never sideways. Not `Markdown` and not a code block: the text is shown as
+  written, with no copy button or language chrome (the Chat page's built-in
+  instructions).
 - **InstructionStack** — what a model is told, in order: a numbered `<ol>`,
   one row per layer with whose it is, its length and where it is changed.
   `here` tints the layer edited on this page (info wash, "This page" badge);

@@ -256,7 +256,7 @@ describe("settings", () => {
   test("providers and an installation: facts for everyone, health and people for admins", async () => {
     let overview = await (await call(memberKey, "GET", "/v1/organization/chat")).json() as Json;
     expect(overview.providers).toEqual([{ provider: { id: "slack", name: "Slack", glyph: "slack", workspaceWord: "workspace" },
-      installed: false, workspaceName: null, installedAt: null, connected: null }]);
+      installed: false, workspaceName: null, workspaceDomain: null, installedAt: null, connected: null }]);
     expect(overview.canEdit).toBe(false);
     expect(overview.admins.map((a: Json) => a.id)).toEqual([adminPerson]);
 
@@ -269,6 +269,15 @@ describe("settings", () => {
     overview = await (await call(memberKey, "GET", "/v1/organization/chat")).json() as Json;
     expect(overview.providers[0].installed).toBe(true);
     expect(overview.providers[0].connected.handle).toBe("eli");
+    expect(overview.providers[0].workspaceDomain).toBe("acme");
+    // Their own mentions of the last 30 days, not anyone else's.
+    await owner`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id, person_id, route, created_at)
+      VALUES ('chr_m1', ${ORG}, 'slack', 'ev_m1', 'T1', 'C1', 'U2', ${memberPerson}, 'task', now()),
+             ('chr_m2', ${ORG}, 'slack', 'ev_m2', 'T1', 'C1', 'U2', ${memberPerson}, 'task', now() - interval '31 days'),
+             ('chr_m3', ${ORG}, 'slack', 'ev_m3', 'T1', 'C1', 'U1', ${adminPerson}, 'task', now())`;
+    overview = await (await call(memberKey, "GET", "/v1/organization/chat")).json() as Json;
+    expect(overview.providers[0].connected.mentions).toBe(1);
+    await owner`DELETE FROM chat_requests WHERE id IN ('chr_m1', 'chr_m2', 'chr_m3')`;
 
     const asMember = await (await call(memberKey, "GET", "/v1/organization/chat/slack")).json() as Json;
     expect(asMember.workspaceName).toBe("Acme Slack");

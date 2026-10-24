@@ -628,3 +628,32 @@ def test_published_files_name_each_file_and_cap_the_list(gallery_page: Page, con
     expect(first).to_contain_text("v3")
     expect(lists.nth(1)).to_contain_text("1 more")
     assert console_errors == []
+
+
+def test_chat_layout_facts_a_browser_measures(gallery_page: Page, console_errors: list):
+    """Chat providers' layout, which happy-dom cannot measure: an inline provider glyph keeps its
+    where-line one line high; a board card's lead sits on its key's line with a fill of its own, not
+    the card's; a long-text SettingRow in a 600px page column stacks and its field takes >= 90% of it."""
+    gallery_page.set_viewport_size({"width": 1440, "height": 1000})
+    gallery_page.get_by_role("link", name="ProviderGlyph", exact=True).click()
+    lines = gallery_page.locator("#cp-glyph [data-theme]").first.locator("span:has(> span > svg[data-provider])")
+    assert lines.count() >= 2
+    for i in range(lines.count()):
+        m = lines.nth(i).evaluate("e => ({h: e.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(e).lineHeight) || 24})")
+        assert m["h"] <= m["lh"] + 1, m
+    gallery_page.get_by_role("link", name="Board: cardLead").click()
+    leads = gallery_page.locator("#cp-board [data-theme]").locator("[data-board-key] [class*=lead]")
+    assert leads.count() >= 3
+    for i in range(leads.count()):
+        m = leads.nth(i).evaluate("""l => { const key = l.nextElementSibling, card = l.closest('[data-board-key]');
+            return {dy: Math.abs(l.getBoundingClientRect().top - key.getBoundingClientRect().top),
+                    lead: getComputedStyle(l).backgroundColor, card: getComputedStyle(card).backgroundColor}; }""")
+        assert m["dy"] < 6, m
+        assert m["lead"] != m["card"], m
+    gallery_page.get_by_role("link", name="SettingRow fill").click()
+    narrow = gallery_page.get_by_test_id("cp-setting-fill-narrow")
+    m = narrow.evaluate("""c => { const t = c.querySelector('textarea'), label = c.querySelector('label, span');
+        return {ratio: t.getBoundingClientRect().width / c.getBoundingClientRect().width,
+                stacked: label.getBoundingClientRect().bottom <= t.getBoundingClientRect().top + 1}; }""")
+    assert m["ratio"] >= 0.9 and m["stacked"], m
+    assert console_errors == []

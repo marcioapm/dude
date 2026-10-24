@@ -79,9 +79,11 @@ export interface ChatProviderEntry {
   provider: ChatProvider;
   installed: boolean;
   workspaceName: string | null;
+  /** The workspace's address at the provider, when it has one. */
+  workspaceDomain?: string | null;
   installedAt: string | null;
-  /** The caller's own link in this provider's workspace. */
-  connected: { handle: string; displayName: string; linkedAt: string } | null;
+  /** The caller's own link in this provider's workspace, and their mentions of the last 30 days. */
+  connected: { handle: string; displayName: string; linkedAt: string; mentions?: number } | null;
 }
 export interface ChatOverview {
   providers: ChatProviderEntry[];
@@ -169,7 +171,11 @@ export interface ChatConnectStateView {
   status: "ready" | "connected" | "expired" | "wrong_organization";
   provider: ChatProvider;
   workspaceName: string | null;
+  /** The workspace's address at the provider ("acme-hq" of acme-hq.slack.com), when it has one. */
+  workspaceDomain?: string | null;
   connected: { handle: string; displayName: string } | null;
+  /** Ready: the provider account the prompt was sent to, which signing in links. */
+  asker?: { id: string; handle: string; displayName: string } | null;
   /** The message that offered the Connect button, at the provider: "Back to <provider>". */
   backUrl?: string | null;
 }

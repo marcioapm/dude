@@ -1872,6 +1872,17 @@ body {
   gap: var(--ds-space-4);
   white-space: nowrap;
 }
+/* A chat-born session's quoted thread under the asker's opening message, at the message's text column. */
+.sessionOriginNested {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: 0 var(--ds-space-chat-pad-x) var(--ds-space-12) calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
+}
+/* The Connections section's intro stands apart from its first card. */
+.chatConnectionsIntro {
+  margin-bottom: var(--ds-space-12);
+}
 .chatConnections {
   display: flex;
   flex-direction: column;

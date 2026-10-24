@@ -792,6 +792,9 @@ func TestChatConnectLinksOnceAndRoutesTheKeptMention(t *testing.T) {
 	}
 	if st, err := w.svc.ConnectState(w.ctx, w.org, "slack", gus, prompt); err != nil || st["status"] != "ready" || st["workspaceName"] != "Acme Slack" {
 		t.Fatalf("connect state %+v, %v", st, err)
+	} else if a, _ := st["asker"].(map[string]string); a["id"] != "U3" || a["handle"] != "gus" || a["displayName"] != "Gus" ||
+		st["workspaceDomain"] != "acme" {
+		t.Fatalf("the account the page will link: %+v, %v", st["asker"], st["workspaceDomain"])
 	}
 	other := dbtest.Org(t, w.owner)
 	if st, _ := w.svc.ConnectState(w.ctx, other, "slack", gus, prompt); st["status"] != "wrong_organization" {

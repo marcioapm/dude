@@ -84,7 +84,11 @@ describe("the Chat page", () => {
     // The built-in instructions are collapsed until asked for.
     expect(c.querySelectorAll("[data-testid=chat-builtin-text]").length).toBe(0);
     await click(c.querySelector("[data-testid=chat-builtin-view]")!);
-    expect(text(c.querySelector("[data-testid=chat-builtin-text]"))).toContain("You route a message");
+    const builtIn = c.querySelector("[data-testid=chat-builtin-text]")!;
+    expect(text(builtIn)).toContain("You route a message");
+    // Read-only prose in its own well, not a code block with a copy button.
+    expect(builtIn.getAttribute("aria-label")).toBe("Built-in instructions");
+    expect(builtIn.querySelectorAll("pre, code, button").length).toBe(0);
     // Save is offered only once something changed, and sends the text.
     expect(c.querySelector<HTMLButtonElement>("[data-testid=chat-instructions-save]")!.disabled).toBe(true);
     await act(async () => {
@@ -158,7 +162,7 @@ describe("a provider's page", () => {
 describe("Requests", () => {
   test("lists every request with its route and filters by route; each row has its person's face", async () => {
     const client = new Chatting("a");
-    const asked: Array<{ provider?: string | undefined; route?: string | undefined }> = [];
+    const asked: Array<Parameters<typeof client.chatRequests>[0]> = [];
     const original = client.chatRequests.bind(client);
     client.chatRequests = (f = {}) => {
       asked.push(f);
@@ -226,6 +230,9 @@ describe("Connections and the connect page", () => {
     expect(text(card)).toContain("That Slack account is already connected to someone else");
     expect(text(card)).toContain("Connected");
     expect(card.querySelector("[aria-label='Slack @marcio is Márcio Martins in dude']")).not.toBeNull();
+    // The workspace's address, and since when with how many mentions.
+    expect(text(card.querySelector("[data-testid=chat-connection-workspace]"))).toBe("acme-hq");
+    expect(text(card.querySelector("[data-testid=chat-connection-since]"))).toMatch(/ · 14 mentions in 30 days$/);
     expect(window.location.search).toBe("");
     // Nothing installed: no card at all.
     for (const unmount of mounted) await unmount();
@@ -268,17 +275,35 @@ describe("Connections and the connect page", () => {
     const ready = new (class extends Chatting {
       override chatConnectState() {
         return Promise.resolve({ status: "ready" as const, provider: { id: "slack", name: "Slack", glyph: "slack", workspaceWord: "workspace" },
-          workspaceName: "Acme", connected: null, backUrl: "https://acme.slack.com/archives/C1/p1" });
+          workspaceName: "Acme", workspaceDomain: "acme-hq", connected: null, backUrl: "https://acme.slack.com/archives/C1/p1",
+          asker: { id: "U1", handle: "marcia", displayName: "Márcia Costa" } });
       }
     })("a");
     let c = await show(<ConnectScreen client={ready} provider="slack" state="st-9" onSettings={() => {}} me={me} onSignOut={() => (signedOut = true)} />,
       "chat-connect");
     const pair = c.querySelector("[data-testid=identity-pair]")!;
-    expect(pair.getAttribute("aria-label")).toBe("Slack @you is Márcia Costa in dude");
+    // The account the prompt was sent to, and the person signed in: nothing invented on either side.
+    expect(pair.getAttribute("aria-label")).toBe("Slack @marcia is Márcia Costa in dude");
+    expect(text(pair)).toContain("acme-hq");
     expect(text(pair)).toContain("marcia@example.com");
+    expect(text(pair)).not.toContain("@you");
     expect(text(c.querySelector("[data-testid=chat-connect-who]"))).toBe("Signed in to dude as marcia@example.com · Not you?");
     await click(c.querySelector("[data-testid=chat-connect-not-you]")!);
     expect(signedOut).toBe(true);
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    // No account known (the prompt's author could not be read): the provider's own card, no handle or initials.
+    const unknown = new (class extends Chatting {
+      override chatConnectState() {
+        return Promise.resolve({ status: "ready" as const, provider: { id: "slack", name: "Slack", glyph: "slack", workspaceWord: "workspace" },
+          workspaceName: "Acme", connected: null });
+      }
+    })("a");
+    c = await show(<ConnectScreen client={unknown} provider="slack" state="st-8" onSettings={() => {}} me={me} />, "chat-connect");
+    const blank = c.querySelector("[data-testid=identity-pair]")!;
+    expect(blank.getAttribute("aria-label")).toBe("Your Slack account, once you sign in, is Márcia Costa in dude");
+    expect(text(blank.querySelector("[data-unknown=true]"))).toBe("SlackYour Slack accountSigned in nextAcme");
+    expect(blank.querySelector("[data-unknown=true] svg[data-provider=slack]")).not.toBeNull();
     for (const unmount of mounted) await unmount();
     mounted = [];
     // After the sign-in the state is spent: Back goes where the button was, remembered from before.

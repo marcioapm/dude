@@ -649,7 +649,7 @@ func (s *Service) ConnectState(ctx context.Context, org, providerID, person, sta
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"provider": p.Info(), "workspaceName": nil, "connected": nil, "backUrl": nil}
+	out := map[string]any{"provider": p.Info(), "workspaceName": nil, "workspaceDomain": nil, "connected": nil, "backUrl": nil, "asker": nil}
 	var stateOrg string
 	var expired bool
 	err = s.DB.InSystem(ctx, "chat-connect-state", func(tx pgx.Tx) error {
@@ -664,13 +664,21 @@ func (s *Service) ConnectState(ctx context.Context, org, providerID, person, sta
 		out["status"] = "wrong_organization"
 		return out, nil
 	}
+	var inst Installation
+	var asker string
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		inst, ok, err := loadInstallation(ctx, tx, providerID)
+		var ok bool
+		var err error
+		inst, ok, err = loadInstallation(ctx, tx, providerID)
 		if err != nil || !ok {
 			return err
 		}
 		out["workspaceName"] = inst.WorkspaceName
-		// Where "Back to <provider>" goes: the message that offered the button.
+		if inst.WorkspaceDomain != "" {
+			out["workspaceDomain"] = inst.WorkspaceDomain
+		}
+		// Where "Back to <provider>" goes: the message that offered the
+		// button; and who wrote it, the account the sign-in is to link.
 		var pending []byte
 		if err := tx.QueryRow(ctx, `SELECT pending_mention FROM chat_connect_states WHERE state_hash = $1 AND kind = 'prompt'`,
 			hashState(state)).Scan(&pending); err == nil && len(pending) > 0 {
@@ -679,6 +687,7 @@ func (s *Service) ConnectState(ctx context.Context, org, providerID, person, sta
 				if link := p.Permalink(inst, m.ConversationID, m.MessageID, m.ThreadID); link != "" {
 					out["backUrl"] = link
 				}
+				asker = m.UserID
 			}
 		} else if err != nil && !db.IsNotFound(err) {
 			return err
@@ -703,8 +712,27 @@ func (s *Service) ConnectState(ctx context.Context, org, providerID, person, sta
 		out["status"] = "expired"
 	default:
 		out["status"] = "ready"
+		// The account the prompt was sent to, as the provider names it; its
+		// id alone when the provider cannot be read now.
+		if asker != "" {
+			who, err := p.User(ctx, inst, asker)
+			if err != nil {
+				s.noteFailure(ctx, org, providerID, err)
+				who = ExternalUser{ID: asker}
+			}
+			out["asker"] = map[string]string{"id": asker, "handle": firstNonEmpty(who.Handle, asker), "displayName": who.DisplayName}
+		}
 	}
 	return out, nil
+}
+
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // trimmed is s with surrounding space removed and inner runs collapsed.

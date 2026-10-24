@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, type PaneMode } from "../Frame.tsx";
 import {
-  ConnectionCard, ExternalThread, FactList, IdentityPair, InstructionStack, OriginFact, ProviderGlyph, ProviderList, ROUTE_SPEC, RouteBadge,
+  ConnectionCard, ExternalThread, FactList, IdentityPair, InstructionStack, OriginFact, PromptText, ProviderGlyph, ProviderList, ROUTE_SPEC, RouteBadge,
   RoutingLine, type ChatProvider, type ChatRoute,
 } from "../../components/Chat.tsx";
 import { SettingRow, SettingsLayout } from "../../components/Settings.tsx";
@@ -134,6 +134,9 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
             <Label>IdentityPair lg: the connect page</Label>
             <IdentityPair size="lg" provider={slack} external={{ handle: "marcia", display: "Márcia Costa", workspace: "acme-hq.slack.com" }}
               person={{ ...marcia, email: "marcia@example.com", organisation: "Acme" }} />
+            <Label>IdentityPair lg, no account known yet</Label>
+            <IdentityPair size="lg" provider={slack} external={null} workspace="acme-hq.slack.com"
+              person={{ ...marcia, email: "marcia@example.com", organisation: "Acme" }} />
           </Col>
         </Panes>
       </Block>
@@ -149,7 +152,7 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block id="cp-setting-fill" title="SettingRow fill"
-        note="Long free text takes the control column's full width, its Save under it; under 720px the row stacks, label above.">
+        note="Long free text takes the control column's full width, its Save under it. In a settings page column 640px or narrower (here a 600px one, as at a 1024px window beside the sidebars) the row stacks, label above.">
         <Panes mode={mode}>
           {() => (
             <SettingRow label="Additional instructions" help="Appended to the built-in ones, for every chat." fill>
@@ -157,6 +160,20 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
               <span><Button variant="primary" size="sm">Save</Button></span>
             </SettingRow>
           )}
+        </Panes>
+        <Label>In a 600px page column</Label>
+        <div style={{ width: 600, maxWidth: "100%", containerType: "inline-size" }} data-testid="cp-setting-fill-narrow">
+          <SettingRow label="Additional instructions" help="Appended to the built-in ones, for every chat." fill>
+            <Textarea aria-label="Additional instructions, narrow" rows={3} defaultValue="#support is almost always ABS." />
+            <span><Button variant="primary" size="sm">Save</Button></span>
+          </SettingRow>
+        </div>
+      </Block>
+
+      <Block id="cp-prompt" title="PromptText"
+        note="What a model is told, read-only: mono, wrapped at the column, its own line breaks kept, scrolling down past 24 lines and never sideways. Never Markdown and never a code block: there is nothing to copy or run.">
+        <Panes mode={mode}>
+          <PromptText label="Built-in instructions" text={"You route a message someone sent to dude, a software-delivery assistant, from a team chat. Answer with one JSON object and nothing else.\n\n- brainstorm: the person wants to think something through, investigate, reproduce or discuss; or nothing else fits.\n- task: one clear, bounded change in one project. Give a title, a goal and acceptance criteria.\n- epic: several pieces of work in one project, with the tasks and the order they need."} />
         </Panes>
       </Block>
 

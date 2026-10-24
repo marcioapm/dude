@@ -14,7 +14,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  ConnectionCard, ExternalThread, FactList, IdentityPair, InstructionStack, OriginFact, ProviderGlyph, ProviderList, ROUTE_SPEC, RouteBadge,
+  ConnectionCard, ExternalThread, FactList, IdentityPair, InstructionStack, OriginFact, PromptText, ProviderGlyph, ProviderList, ROUTE_SPEC, RouteBadge,
   RoutingLine, providerGlyph, type ChatProvider, type ChatRoute,
 } from "../src/components/Chat.tsx";
 import { SettingsLayout } from "../src/components/Settings.tsx";
@@ -126,6 +126,10 @@ describe("RoutingLine", () => {
     expect(fallback).toContain("was Task");
     expect(text(renderToStaticMarkup(<RoutingLine route="brainstorm" reasoning="x" shared={{ place: "#a", added: [eli], skipped: [] }} />)))
       .toContain("Shared with 1 person from #a x");
+    // Nobody added: never "with 0 people".
+    const none = text(renderToStaticMarkup(<RoutingLine route="brainstorm" reasoning="x" shared={{ place: "#a", added: [], skipped: ["Gus", "Zed"] }} />));
+    expect(none).toContain("Made in #a; 2 are not connected, so nobody else was added");
+    expect(none).not.toContain("0 people");
   });
 });
 
@@ -173,8 +177,23 @@ describe("IdentityPair, InstructionStack and ProviderList", () => {
     expect(group.textContent).toBe("SlackEP@eliEli Parkacme.slack.comdudeEPEli ParkAcmeeli@example.com");
   });
 
+  test("the large pair with no account yet shows the provider's glyph where a face would be, no handle and no initials", async () => {
+    const el = await mount(<IdentityPair size="lg" provider={slack} external={null} workspace="acme-hq" person={{ ...eli, organisation: "Acme" }} />);
+    const group = byRole(el, "group", "Your Slack account, once you sign in, is Eli Park in dude");
+    expect(group.textContent).toBe("SlackYour Slack accountSigned in nextacme-hqdudeEPEli ParkAcme");
+    expect(group.querySelector("[data-unknown=true] svg[data-provider=slack]")).not.toBeNull();
+  });
+
   test("an inline glyph carries the provider's name in the line", () => {
     expect(text(renderToStaticMarkup(<span>Ana · <ProviderGlyph provider={other} size={11} inline /> · #ops</span>))).toBe("Ana · Chatter · #ops");
+  });
+
+  test("a prompt's text is shown as written, in a named well a keyboard reaches: no Markdown, no code block", async () => {
+    const el = await mount(<PromptText label="Built-in instructions" text={"  You route a message.\n- **not bold**\n```\nnot a fence\n"} />);
+    const well = byRole(el, "document", "Built-in instructions");
+    expect(well.textContent).toBe("You route a message.\n- **not bold**\n```\nnot a fence");
+    expect(well.getAttribute("tabindex")).toBe("0");
+    expect(well.querySelectorAll("pre, code, strong, button").length).toBe(0);
   });
 
   test("the stack is in order, the page's layer marked, the collapsed one head only, an empty one says so", async () => {

@@ -797,8 +797,8 @@ export class FixtureClient extends ApiClient {
     const you = PEOPLE[0]!;
     return Promise.resolve({
       providers: [{ provider: SLACK, installed: this.#slackInstalled, workspaceName: this.#slackInstalled ? "Acme" : null,
-        installedAt: this.#slackInstalled ? "2026-10-09T09:00:00Z" : null,
-        connected: this.#slackInstalled && this.#slackLinked ? { handle: "marcio", displayName: you.name, linkedAt: "2026-10-09T09:05:00Z" } : null }],
+        workspaceDomain: this.#slackInstalled ? "acme-hq" : null, installedAt: this.#slackInstalled ? "2026-10-09T09:00:00Z" : null,
+        connected: this.#slackInstalled && this.#slackLinked ? { handle: "marcio", displayName: you.name, linkedAt: "2026-10-09T09:05:00Z", mentions: 14 } : null }],
       canEdit: true, admins: [{ id: you.id, name: you.name, photoUrl: null, online: true }],
     });
   }
@@ -827,8 +827,9 @@ export class FixtureClient extends ApiClient {
     this.#slackLinked = false;
   }
   override chatConnectState(): ReturnType<ApiClient["chatConnectState"]> {
-    return Promise.resolve({ status: this.#slackLinked ? "connected" : "ready", provider: SLACK, workspaceName: "Acme",
-      connected: this.#slackLinked ? { handle: "marcio", displayName: PEOPLE[0]!.name } : null });
+    return Promise.resolve({ status: this.#slackLinked ? "connected" : "ready", provider: SLACK, workspaceName: "Acme", workspaceDomain: "acme-hq",
+      connected: this.#slackLinked ? { handle: "marcio", displayName: PEOPLE[0]!.name } : null,
+      asker: this.#slackLinked ? null : { id: "U1", handle: "marcio", displayName: PEOPLE[0]!.name } });
   }
   override routingInstructions(): ReturnType<ApiClient["routingInstructions"]> {
     return Promise.resolve({ builtIn: CHAT_BUILT_IN, additional: this.#chatInstructions, canEdit: true });

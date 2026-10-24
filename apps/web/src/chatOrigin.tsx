@@ -70,12 +70,17 @@ export function TaskOrigin({ origin, names }: { origin: ChatOrigin; names: (id: 
  * external text, then dude's routing line with who it was shared with.
  * `names` resolves the added people's ids to people.
  */
-export function SessionOrigin({ origin, names }: { origin: SessionChatOrigin; names: (id: string) => { id: string; name: string } | null }) {
+export function SessionOrigin({ origin, names, nested }: {
+  origin: SessionChatOrigin;
+  names: (id: string) => { id: string; name: string } | null;
+  /** Under the asker's opening message, at its text column. */
+  nested?: boolean;
+}) {
   const routing = origin.routing;
   const group = origin.conversationKind === "private" || origin.conversationKind === "group";
   const asked = routing && routing.confidence !== null && routing.route !== "failed";
   return (
-    <div className="sessionOrigin" data-testid="session-origin">
+    <div className={nested ? "sessionOrigin sessionOriginNested" : "sessionOrigin"} data-testid="session-origin" data-nested={nested || undefined}>
       <OriginThread origin={origin} names={names} clip={6} />
       {routing ? (
         <RoutingLine route={routing.route as ChatRoute} confidence={routing.confidence} reasoning={routing.reasoning}

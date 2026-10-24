@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ConnectionCard, IdentityPair, ProviderGlyph } from "@dude/design-system/components";
+import { formatTimestamp } from "@dude/design-system";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
 import type { ChatOverview, ChatProviderEntry } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
@@ -65,20 +66,25 @@ function ChatConnection({ client, entry, me, outcome, onChanged }: {
   const pv = providerView(entry.provider);
   const name = entry.provider.name;
   const shown = outcome ? (CONNECT_OUTCOME[outcome] ?? CONNECT_FAILED) : null;
+  const workspaceLabel = entry.provider.workspaceWord.charAt(0).toUpperCase() + entry.provider.workspaceWord.slice(1);
+  const workspace = entry.workspaceDomain ?? entry.workspaceName;
+  const c = entry.connected;
   return (
     <>
       <ConnectionCard testId={`chat-connection-${entry.provider.id}`} title={name} glyph={<ProviderGlyph provider={pv} size={16} />}
-        intro={entry.connected ? `Mentions of @dude in ${entry.workspaceName ?? name} act as you.`
+        intro={c ? `Mentions of @dude in ${entry.workspaceName ?? name} act as you.`
           : `Connect your ${name} account so dude can act for you when you mention @dude in ${entry.workspaceName ?? name}. dude never matches people by email.`}
         outcome={shown ? { tone: shown.tone, text: shown.text(name) } : null}
-        connected={Boolean(entry.connected)} busy={busy}
-        facts={entry.connected ? [{ label: "Connected as", value: me
-          ? <IdentityPair provider={pv} external={{ handle: entry.connected.handle }} person={{ id: me.id, name: me.name }} />
-          : `@${entry.connected.handle}` },
-        ...(entry.workspaceName ? [{ label: entry.provider.workspaceWord.charAt(0).toUpperCase() + entry.provider.workspaceWord.slice(1), value: entry.workspaceName }] : [])]
+        connected={Boolean(c)} busy={busy}
+        facts={c ? [{ label: "Connected as", value: me
+          ? <IdentityPair provider={pv} external={{ handle: c.handle }} person={{ id: me.id, name: me.name }} />
+          : `@${c.handle}` },
+        ...(workspace ? [{ label: workspaceLabel, value: <span className="ds-mono" data-testid="chat-connection-workspace">{workspace}</span> }] : []),
+        { label: "Since", value: <span data-testid="chat-connection-since">{formatTimestamp(c.linkedAt, "date")}
+          {c.mentions !== undefined ? ` · ${c.mentions} ${c.mentions === 1 ? "mention" : "mentions"} in 30 days` : ""}</span> }]
           : undefined}
         connectLabel={`Connect ${name}`} disconnectLabel={`Disconnect ${name}…`}
-        onConnect={entry.connected ? undefined : () => void save(async () => window.location.assign((await client.connectChat(entry.provider.id)).url))}
+        onConnect={c ? undefined : () => void save(async () => window.location.assign((await client.connectChat(entry.provider.id)).url))}
         onDisconnect={() => setDisconnecting(true)} />
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       {disconnecting ? (

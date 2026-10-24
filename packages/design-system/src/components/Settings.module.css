@@ -114,6 +114,8 @@
   flex-direction: column;
   gap: var(--ds-space-24);
   max-width: 1100px;
+  /* Rows stack on the page column's own width, not the viewport's: beside two sidebars a 1024px window leaves it narrow. */
+  container-type: inline-size;
 }
 /* A role's page: its prompt fills the pane, to the screen's own gutter. */
 .main.wide {
@@ -262,7 +264,17 @@
   max-width: none;
   width: 100%;
 }
-/* A phone: the label above its control, each the page's width. */
+/* A narrow page column (a phone, or a laptop beside the sidebars): the label above its control, each the column's width. */
+@container (max-width: 640px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-8);
+  }
+  .rowLabel {
+    padding-top: 0;
+  }
+}
+/* Outside a settings page's column (no container), a phone still stacks. */
 @media (max-width: 719.98px) {
   .row {
     grid-template-columns: minmax(0, 1fr);

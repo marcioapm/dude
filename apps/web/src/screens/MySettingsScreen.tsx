@@ -199,7 +199,7 @@ export function MySettingsScreen({ client, me, onChanged }: {
       ) : null}
       <SettingsSection title={authorization?.available || chatInstalled ? "Connections" : undefined} data-testid="my-connections">
         {authorization?.available || chatInstalled ? (
-          <p className="muted">Your own accounts elsewhere, so dude can act as you there and know you when you write from there.
+          <p className="muted chatConnectionsIntro">Your own accounts elsewhere, so dude can act as you there and know you when you write from there.
             {account ? ` Chat apps ${account.current.name} has added are listed here.` : ""}</p>
         ) : null}
         {authorization?.available ? (

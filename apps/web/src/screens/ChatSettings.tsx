@@ -15,8 +15,8 @@ import {
   FlowSteps,
   IdentityPair,
   InstructionStack,
-  Markdown,
   PersonAvatar,
+  PromptText,
   ProviderGlyph,
   ProviderList,
   RouteBadge,
@@ -180,7 +180,7 @@ function ChatPage({ client, orgName, admin, overview, onPage, judgementTier }: {
         <SettingRow label="Built-in instructions" help="dude's own, kept up to date with dude. Read-only." fill>
           <span data-testid="chat-builtin-summary">{lines} lines · routes, confidence, reasoning{" "}
             <TextButton onClick={() => setBuiltInOpen((o) => !o)} data-testid="chat-builtin-view">{builtInOpen ? "Hide" : "View"}</TextButton></span>
-          {builtInOpen && instructions ? <div data-testid="chat-builtin-text"><Markdown source={"```text\n" + instructions.builtIn + "\n```"} /></div> : null}
+          {builtInOpen && instructions ? <PromptText label="Built-in instructions" text={instructions.builtIn} data-testid="chat-builtin-text" /> : null}
         </SettingRow>
         <SettingRow label="Additional instructions" htmlFor="chat-instructions" fill
           help={`Appended to the built-in ones, for every chat. What your organisation knows that the model can't: which channel means which project, where bugs go. Each provider can add its own after these.`}>

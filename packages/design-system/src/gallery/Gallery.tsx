@@ -309,6 +309,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["cp-connection", "ConnectionCard / IdentityPair"],
       ["cp-session-row", "SessionRow: origin"],
       ["cp-setting-fill", "SettingRow fill"],
+      ["cp-prompt", "PromptText"],
       ["cp-stack", "InstructionStack"],
       ["cp-providers", "ProviderList"],
       ["cp-settings", "Settings: a page group"],

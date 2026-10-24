@@ -61,8 +61,11 @@ const ADMINS = `(SELECT COALESCE(json_agg(person_ref(p) ORDER BY p.name), '[]') 
 async function overview(ctx: RequestContext): Promise<Response> {
   const list = await providers(ctx);
   const rows = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
-    const installs = await sql`SELECT i.provider, i.workspace_name AS "workspaceName", i.installed_at AS "installedAt",
-        (SELECT json_build_object('handle', c.handle, 'displayName', c.display_name, 'linkedAt', c.linked_at)
+    const installs = await sql`SELECT i.provider, i.workspace_name AS "workspaceName", i.workspace_domain AS "workspaceDomain",
+        i.installed_at AS "installedAt",
+        (SELECT json_build_object('handle', c.handle, 'displayName', c.display_name, 'linkedAt', c.linked_at,
+           'mentions', (SELECT count(*) FROM chat_requests r WHERE r.provider = i.provider AND r.person_id = me.id
+             AND r.created_at > now() - interval '30 days'))
          FROM chat_identities c JOIN people me ON me.account_id = c.account_id
          WHERE me.id = ${ctx.principal.personId} AND c.provider = i.provider AND c.external_workspace_id = i.external_workspace_id) AS connected
       FROM chat_installations i ORDER BY i.installed_at`;
@@ -72,9 +75,9 @@ async function overview(ctx: RequestContext): Promise<Response> {
   const byId = new Map(rows.installs.map((r: { provider: string }) => [r.provider, r]));
   return json({
     providers: list.providers.map((p) => {
-      const i = byId.get(p.id) as { workspaceName: string; installedAt: string; connected: unknown } | undefined;
-      return { provider: strip(p), installed: Boolean(i), workspaceName: i?.workspaceName ?? null, installedAt: i?.installedAt ?? null,
-        connected: i?.connected ?? null };
+      const i = byId.get(p.id) as { workspaceName: string; workspaceDomain: string | null; installedAt: string; connected: unknown } | undefined;
+      return { provider: strip(p), installed: Boolean(i), workspaceName: i?.workspaceName ?? null, workspaceDomain: i?.workspaceDomain || null,
+        installedAt: i?.installedAt ?? null, connected: i?.connected ?? null };
     }),
     canEdit: await isOrgAdmin(ctx),
     admins: rows.admins,

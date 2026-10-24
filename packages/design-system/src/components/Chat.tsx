@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
@@ -203,10 +203,11 @@ const ROUTED_AS: Partial<Record<ChatRoute, string>> = {
 export function RoutingLine({ route, confidence, reasoning, model, fallback, defaultOpen, shared }: RoutingLineProps) {
   const sure = confidence !== null && confidence !== undefined ? ` · ${Math.round(confidence * 100)}% sure` : "";
   const skipped = shared?.skipped.length ?? 0;
-  const sharedWords = shared
-    ? `Shared with ${shared.added.length} ${shared.added.length === 1 ? "person" : "people"} from ${shared.place}${
-      skipped ? `; ${skipped} ${skipped === 1 ? "is" : "are"} not connected` : ""}`
-    : null;
+  const notConnected = skipped ? `${skipped} ${skipped === 1 ? "is" : "are"} not connected` : "";
+  // Nobody added: say where it was made and who was skipped, not "with 0 people".
+  const sharedWords = !shared ? null : shared.added.length
+    ? `Shared with ${shared.added.length} ${shared.added.length === 1 ? "person" : "people"} from ${shared.place}${notConnected ? `; ${notConnected}` : ""}`
+    : `Made in ${shared.place}${notConnected ? `; ${notConnected}, so nobody else was added` : ""}`;
   return (
     <details className={styles["routing"]} open={defaultOpen} data-testid="routing-line">
       <summary className={styles["routingSummary"]}>
@@ -327,25 +328,39 @@ export function ConnectionCard({ title, glyph, intro, facts, outcome, connected,
 export interface IdentityPairProps {
   /** The left side's label: the provider's name. */
   readonly provider: ChatProvider;
-  readonly external: { readonly handle: string; readonly display?: string | undefined; readonly workspace?: string | undefined };
+  /** The provider account; null when it is not known until the person signs in there (`lg` only). */
+  readonly external: { readonly handle: string; readonly display?: string | undefined; readonly workspace?: string | undefined } | null;
   readonly person: Person & { readonly email?: string | undefined; readonly organisation?: string | undefined };
   /** `lg`: two identity cards with the link between, for the page whose point is the link. */
   readonly size?: "md" | "lg" | undefined;
+  /** `lg` with no account yet: where the sign-in happens, under the provider's glyph. */
+  readonly workspace?: string | undefined;
 }
 
 /** A provider account and the dude person it is linked to. */
-export function IdentityPair({ provider, external, person, size = "md" }: IdentityPairProps) {
-  const label = `${provider.name} @${external.handle} is ${person.name} in dude`;
+export function IdentityPair({ provider, external, person, size = "md", workspace }: IdentityPairProps) {
+  const label = external ? `${provider.name} @${external.handle} is ${person.name} in dude`
+    : `Your ${provider.name} account, once you sign in, is ${person.name} in dude`;
   if (size === "lg") {
     return (
       <div className={styles["pairLg"]} role="group" aria-label={label} data-testid="identity-pair">
-        <div className={styles["pairCard"]}>
-          <span className={styles["pairCaps"]}>{provider.name}</span>
-          <ExternalFace name={external.display || external.handle} size={32} />
-          <b className={styles["pairName"]}>@{external.handle}</b>
-          {external.display ? <span className={styles["muted"]}>{external.display}</span> : null}
-          {external.workspace ? <span className={styles["pairMono"]}>{external.workspace}</span> : null}
-        </div>
+        {external ? (
+          <div className={styles["pairCard"]}>
+            <span className={styles["pairCaps"]}>{provider.name}</span>
+            <ExternalFace name={external.display || external.handle} size={32} />
+            <b className={styles["pairName"]}>@{external.handle}</b>
+            {external.display ? <span className={styles["muted"]}>{external.display}</span> : null}
+            {external.workspace ? <span className={styles["pairMono"]}>{external.workspace}</span> : null}
+          </div>
+        ) : (
+          <div className={styles["pairCard"]} data-unknown="true">
+            <span className={styles["pairCaps"]}>{provider.name}</span>
+            <span className={styles["pairUnknown"]}><ProviderGlyph provider={provider} size={18} /></span>
+            <b className={styles["pairName"]}>Your {provider.name} account</b>
+            <span className={styles["muted"]}>Signed in next</span>
+            {workspace ? <span className={styles["pairMono"]}>{workspace}</span> : null}
+          </div>
+        )}
         <span className={styles["pairLink"]} aria-hidden><Icon name="link" size={14} /></span>
         <div className={styles["pairCard"]}>
           <span className={styles["pairCaps"]}>dude</span>
@@ -361,7 +376,7 @@ export function IdentityPair({ provider, external, person, size = "md" }: Identi
     <span className={styles["pair"]} aria-label={label}>
       <span className={styles["pairSide"]}>
         <ProviderGlyph provider={provider} size={14} />
-        <span><span className={styles["pairLabel"]}>{provider.name}</span> @{external.handle}</span>
+        <span><span className={styles["pairLabel"]}>{provider.name}</span> {external ? `@${external.handle}` : "not signed in yet"}</span>
       </span>
       <Icon name="link" size={12} className={styles["muted"]} />
       <span className={styles["pairSide"]}>
@@ -393,6 +408,18 @@ export interface InstructionStackProps {
 }
 
 const lines = (t: string) => (t.trim() ? t.trim().split("\n").length : 0);
+
+export interface PromptTextProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
+  /** What a model is told, as written: shown as it is, never as Markdown. */
+  readonly text: string;
+  /** A label for the well, read by a screen reader. */
+  readonly label: string;
+}
+
+/** A read-only well of instructions a model is told: wrapped at the column's width, its own line breaks kept, scrolling down past 24 lines, never sideways. */
+export function PromptText({ text, label, className, ...rest }: PromptTextProps) {
+  return <div className={cx(styles["promptText"], className)} role="document" aria-label={label} tabIndex={0} {...rest}>{text.trim()}</div>;
+}
 
 /** What a model is told, in order: one row per layer, whose it is, its length and where it is changed. Read-only. */
 export function InstructionStack({ label, layers }: InstructionStackProps) {

@@ -326,6 +326,10 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
     : renderTurn(turn, "brainstorm", conversation.contextWindow, !live, people, dude, undefined, undefined, steer,
       shown, undefined, live && !reader ? { answer } : undefined);
   const starting = conversation.start;
+  // A chat-born session opens with the asker's message: its quote goes under it.
+  const items = interleaved(grouped, lines);
+  const firstItem = items[0];
+  const openingFirst = !!session.origin && !!firstItem && "group" in firstItem && !Array.isArray(firstItem.group) && firstItem.group.kind === "human";
   // The header: where the start is, or where it failed until a next agent is created.
   const headerStart = starting ?? conversation.startFailed;
   const startHint = readWhen(starting);
@@ -440,12 +444,18 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
                 />
               }
             >
-              {session.origin ? <SessionOrigin origin={session.origin} names={(id) => people.byId.get(id) ?? null} /> : null}
-              {interleaved(grouped, lines).map((item) => "node" in item
-                ? <Fragment key={item.id}>{item.node}</Fragment>
-                : Array.isArray(item.group)
-                  ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
-                  : render(item.group))}
+              {session.origin && !openingFirst ? <SessionOrigin origin={session.origin} names={(id) => people.byId.get(id) ?? null} /> : null}
+              {items.map((item, i) => {
+                const node = "node" in item
+                  ? <Fragment key={item.id}>{item.node}</Fragment>
+                  : Array.isArray(item.group)
+                    ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside>
+                    : render(item.group);
+                // A chat-born session's quoted thread and routing sit under the asker's opening message.
+                return i === 0 && openingFirst && session.origin ? (
+                  <Fragment key="opening">{node}<SessionOrigin origin={session.origin} names={(id) => people.byId.get(id) ?? null} nested /></Fragment>
+                ) : node;
+              })}
               {starting ? <StartRow start={starting} role="brainstorm" /> : null}
               {conversation.activity ? (
                 <ChatMessage role="brainstorm" activity={conversation.activity}
