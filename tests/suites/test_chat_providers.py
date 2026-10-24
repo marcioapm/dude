@@ -181,7 +181,9 @@ def test_a_public_channel_mention_opens_an_organisation_session_and_replies_with
     root = slack.say(f"C{team}", "", u["U9"], "CSV export times out for 40 meters")
     ts = slack.mention(f"C{team}", root, u["U1"], "can you reproduce this?")
     # 👀 as soon as dude takes the mention.
-    assert wait_until(lambda: "eyes" in (slack.state()["reactions"].get(f"C{team}:{ts}") or []), message="👀")
+    # 👀, or ⏳ if a reactions pass already saw the agent booting (the fake lux boots in ~20 ms).
+    assert wait_until(lambda: {"eyes", "hourglass_flowing_sand"} & set(slack.state()["reactions"].get(f"C{team}:{ts}") or []),
+                      message="👀 or ⏳")
     [req] = _requests(acme["marcia"], 1)
     assert req["route"] == "brainstorm" and req["result"]["kind"] == "session" and req["conversationKind"] == "public"
     session = req["result"]["id"]
