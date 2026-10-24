@@ -244,6 +244,8 @@ CREATE INDEX chat_requests_provider_idx ON chat_requests (organization_id, provi
 CREATE INDEX chat_requests_age_idx ON chat_requests USING brin (created_at);
 -- Clarify rounds are counted per thread.
 CREATE INDEX chat_requests_thread_idx ON chat_requests (provider, external_workspace_id, conversation_id, thread_id, created_at);
+-- A person's own mentions of the last 30 days read only their rows.
+CREATE INDEX chat_requests_person_idx ON chat_requests (person_id, created_at DESC);
 ALTER TABLE chat_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_requests FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON chat_requests

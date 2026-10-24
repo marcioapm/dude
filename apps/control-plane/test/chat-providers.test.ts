@@ -270,14 +270,15 @@ describe("settings", () => {
     expect(overview.providers[0].installed).toBe(true);
     expect(overview.providers[0].connected.handle).toBe("eli");
     expect(overview.providers[0].workspaceDomain).toBe("acme");
-    // Their own mentions of the last 30 days, not anyone else's.
+    // Their own mentions of the last 30 days on this provider, not anyone else's nor another provider's.
     await owner`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id, person_id, route, created_at)
       VALUES ('chr_m1', ${ORG}, 'slack', 'ev_m1', 'T1', 'C1', 'U2', ${memberPerson}, 'task', now()),
              ('chr_m2', ${ORG}, 'slack', 'ev_m2', 'T1', 'C1', 'U2', ${memberPerson}, 'task', now() - interval '31 days'),
-             ('chr_m3', ${ORG}, 'slack', 'ev_m3', 'T1', 'C1', 'U1', ${adminPerson}, 'task', now())`;
+             ('chr_m3', ${ORG}, 'slack', 'ev_m3', 'T1', 'C1', 'U1', ${adminPerson}, 'task', now()),
+             ('chr_m4', ${ORG}, 'discord', 'ev_m4', 'T1', 'C1', 'U2', ${memberPerson}, 'task', now())`;
     overview = await (await call(memberKey, "GET", "/v1/organization/chat")).json() as Json;
     expect(overview.providers[0].connected.mentions).toBe(1);
-    await owner`DELETE FROM chat_requests WHERE id IN ('chr_m1', 'chr_m2', 'chr_m3')`;
+    await owner`DELETE FROM chat_requests WHERE id IN ('chr_m1', 'chr_m2', 'chr_m3', 'chr_m4')`;
 
     const asMember = await (await call(memberKey, "GET", "/v1/organization/chat/slack")).json() as Json;
     expect(asMember.workspaceName).toBe("Acme Slack");
@@ -351,6 +352,17 @@ describe("settings", () => {
     expect((await (await call(adminKey, "GET", "/v1/organization/chat/requests?route=task&summary=1")).json() as Json).week)
       .toEqual({ mentions: 2, asked: 2 });
     expect((await call(adminKey, "GET", "/v1/organization/chat/requests?limit=201")).status).toBe(400);
+    // The week asks the model only of rows with a confidence that are not a
+    // bound thread's link, counts 7 days and not 8, and keeps to its provider.
+    await insert("chr_nc", "not_connected", 2);
+    await owner`UPDATE chat_requests SET confidence = NULL WHERE id = 'chr_nc'`;
+    await insert("chr_tl", "task_link", 4);
+    await insert("chr_8d", "brainstorm", 60 * 24 * 8);
+    const week = async (qs: string) =>
+      ((await (await call(adminKey, "GET", `/v1/organization/chat/requests?summary=1${qs}`)).json() as Json).week);
+    expect(await week("")).toEqual({ mentions: 5, asked: 3 });
+    expect(await week("&provider=discord")).toEqual({ mentions: 1, asked: 1 });
+    expect(await week("&provider=slack")).toEqual({ mentions: 4, asked: 2 });
   });
 
   test("Requests list at most 200, newest first", async () => {
