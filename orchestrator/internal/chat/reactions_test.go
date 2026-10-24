@@ -131,6 +131,7 @@ func TestChatTheHourglassIsForAnAgentBooting(t *testing.T) {
 		{"paused, asked to resume", "paused", "stopped", "resume", "", true},
 		{"parked between turns", "paused", "stopped", "none", "session", true},
 		{"paused to bring a repository", "paused", "stopped", "none", "repository", true},
+		{"paused to move machine", "paused", "stopped", "none", "machine", true},
 		{"running", "running", "running", "none", "", false},
 		{"paused for a person", "paused", "stopped", "none", "person", false},
 	} {
@@ -356,6 +357,77 @@ func TestChatASessionsAgentEndingSilentGetsTheFailedMark(t *testing.T) {
 	}
 	if got := w.requests(); got[0].Route != "brainstorm" || got[0].ResultKind != "session" {
 		t.Fatalf("the mark changed the request: %+v", got)
+	}
+}
+
+// An agent that answered and then ended before a pass is ✅: its first
+// output came first, whatever followed.
+func TestChatASessionsAgentAnsweringThenEndingIsDone(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	ts := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.requests()[0].ResultID
+	w.agentSays(session, "agent.message")
+	w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE session_id = $1 AND role = 'brainstorm'`, session)
+	if n := w.settle(); n != 1 || w.marks("C1", ts) != "white_check_mark" {
+		t.Fatalf("settled %d: %s", n, w.marks("C1", ts))
+	}
+}
+
+// A message handed to a successor that then ends silent too is ❌: the
+// hand-over settled the first agent's directive, so nothing holds it back.
+func TestChatASuccessorEndingSilentGetsTheFailedMark(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	root := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.requests()[0].ResultID
+	w.agentSays(session, "agent.message")
+	if n := w.settle(); n != 1 {
+		t.Fatalf("settled %d", n)
+	}
+	w.exec(`UPDATE directives SET delivered_at = now() WHERE run_id IN (SELECT id FROM runs WHERE session_id = $1)`, session)
+	second := w.mention("Eli", "C1", root, "and the CSV?")
+	w.exec(`UPDATE runs SET status = 'failed', ended_at = now() WHERE session_id = $1`, session)
+	var ended string
+	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(w.ctx, `SELECT id FROM runs WHERE session_id = $1 AND role = 'brainstorm'`, session).Scan(&ended); err != nil {
+			return err
+		}
+		_, err := delivery.SessionHandOver(w.ctx, tx, delivery.RunRef{Org: w.org, SessionID: session, RunID: ended})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.settle(); n != 0 || w.marks("C1", second) != "hourglass_flowing_sand" {
+		t.Fatalf("settled %d while the successor starts: %s", n, w.marks("C1", second))
+	}
+	// The successor reads the message and fails without a word.
+	w.exec(`UPDATE directives SET delivered_at = now() WHERE run_id IN (SELECT id FROM runs WHERE session_id = $1 AND id <> $2)`, session, ended)
+	w.exec(`UPDATE runs SET status = 'failed', ended_at = now() WHERE session_id = $1 AND id <> $2`, session, ended)
+	if n := w.settle(); n != 1 || w.marks("C1", second) != "x" {
+		t.Fatalf("settled %d after the successor failed: %s", n, w.marks("C1", second))
+	}
+}
+
+// An aborted agent's unread message is not handed over, so it does not
+// hold back ❌.
+func TestChatAnAbortedAgentsUnreadMessageGetsTheFailedMark(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "a chat", "title": "Exports"}))
+	root := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.requests()[0].ResultID
+	w.agentSays(session, "agent.message")
+	if n := w.settle(); n != 1 {
+		t.Fatalf("settled %d", n)
+	}
+	w.exec(`UPDATE directives SET delivered_at = now() WHERE run_id IN (SELECT id FROM runs WHERE session_id = $1)`, session)
+	second := w.mention("Eli", "C1", root, "and the CSV?")
+	if w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id WHERE r.session_id = $1 AND d.delivered_at IS NULL`, session) != 1 {
+		t.Fatal("the message was not queued for the live agent")
+	}
+	w.exec(`UPDATE runs SET status = 'aborted', ended_at = now() WHERE session_id = $1`, session)
+	if n := w.settle(); n != 1 || w.marks("C1", second) != "x" {
+		t.Fatalf("settled %d after the agent was aborted: %s", n, w.marks("C1", second))
 	}
 }
 
