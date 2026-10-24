@@ -227,9 +227,14 @@ func TestChatWakesOnlyTheLoopsThatHaveWork(t *testing.T) {
 		t.Fatalf("a task: %d kicks, %d run wakes", kicks, runs)
 	}
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "S"}))
-	w.mention("Eli", "C1", "", "talk")
+	root := w.mention("Eli", "C1", "", "talk")
 	if kicks != 2 || runs != 1 {
 		t.Fatalf("a session: %d kicks, %d run wakes", kicks, runs)
+	}
+	// A message into the thread's session wakes them too.
+	w.mention("Eli", "C1", root, "and more")
+	if got := w.last(); got.Route != "resume" || runs != 2 {
+		t.Fatalf("into the bound session: %+v, %d run wakes", got, runs)
 	}
 }
 

@@ -796,6 +796,13 @@ func TestChatConnectLinksOnceAndRoutesTheKeptMention(t *testing.T) {
 		st["workspaceDomain"] != "acme" {
 		t.Fatalf("the account the page will link: %+v, %v", st["asker"], st["workspaceDomain"])
 	}
+	// The provider cannot name the account now: the page still loads, with its id.
+	w.fake.FailNext("users.info", "user_not_found")
+	if st, err := w.svc.ConnectState(w.ctx, w.org, "slack", gus, prompt); err != nil || st["status"] != "ready" {
+		t.Fatalf("connect state with users.info refused: %+v, %v", st, err)
+	} else if a, _ := st["asker"].(map[string]string); a["id"] != "U3" || a["handle"] != "U3" || a["displayName"] != "" {
+		t.Fatalf("the account unnamed: %+v", st["asker"])
+	}
 	other := dbtest.Org(t, w.owner)
 	if st, _ := w.svc.ConnectState(w.ctx, other, "slack", gus, prompt); st["status"] != "wrong_organization" {
 		t.Fatalf("signed in elsewhere: %+v", st)
