@@ -989,7 +989,7 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	}); err != nil {
 		return false, err
 	}
-	turnDone, log, newCursor, failed, err := r.readOutput(ctx, luxRunID, cursor, busy)
+	turnDone, log, newCursor, failed, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy)
 	if err != nil {
 		return false, err
 	}
@@ -1093,7 +1093,9 @@ type turnState struct{ busy, done bool }
 
 // readOutput reads a Run's records since cursor without waiting for more:
 // the text the workload printed, and whether its agent went busy, then idle.
-func (r *Runner) readOutput(ctx context.Context, luxRunID, cursor string, busy bool) (turnState, string, string, string, error) {
+// An agent's text is its message chunks: lux's acp adapter also writes each
+// reply to stdout, which would put it in the log twice.
+func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool) (turnState, string, string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	state := turnState{busy: busy}
@@ -1107,7 +1109,9 @@ func (r *Runner) readOutput(ctx context.Context, luxRunID, cursor string, busy b
 			cursor = f.Cursor
 		}
 		if f.Event == nil {
-			log.WriteString(f.Data)
+			if kind != "agent" {
+				log.WriteString(f.Data)
+			}
 			return nil
 		}
 		var d map[string]any

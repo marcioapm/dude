@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -384,6 +385,49 @@ func TestAutomationSendAtTurnEndReachesTheAgent(t *testing.T) {
 	}
 	if in := h.fake.InputBodies(r[0].LuxRunID, "automation-"+r[0].ID+"-1"); len(in) != 1 || !strings.Contains(in[0], "Look at late") {
 		t.Errorf("the late event's input %q", in)
+	}
+}
+
+// stdoutMirror is lux as its acp adapter speaks: an agent's reply is its
+// message chunks and, as well, one stdout record of the same text.
+type stdoutMirror struct{ lux.Client }
+
+func (m stdoutMirror) Output(ctx context.Context, runID, cursor string, after int64, fn func(lux.Frame) error) error {
+	var said strings.Builder
+	return m.Client.Output(ctx, runID, cursor, after, func(f lux.Frame) error {
+		if f.Event != nil && f.Event.Type == "acp.agent_message_chunk" {
+			var d struct {
+				Content struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			_ = json.Unmarshal(f.Event.Data, &d)
+			said.WriteString(d.Content.Text)
+		}
+		if f.Event != nil && f.Event.Type == "lux.activity" && strings.Contains(string(f.Event.Data), `"idle"`) && said.Len() > 0 {
+			if err := fn(lux.Frame{Kind: "record", Channel: "stdout", Data: said.String()}); err != nil {
+				return err
+			}
+			said.Reset()
+		}
+		return fn(f)
+	})
+}
+
+// An agent's log is what it said, once: lux's stdout copy of its reply is
+// not appended after the message chunks it already read.
+func TestAutomationAgentLogIsItsReplyOnce(t *testing.T) {
+	h := newHarness(t)
+	h.runner.Lux = stdoutMirror{h.lux}
+	h.automation("aut_said", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Look"}}})
+	h.deliver("d-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the run ends", func() bool { r := h.runs("aut_said"); return len(r) == 1 && r[0].Status == "succeeded" })
+	h.runner.Wait()
+	log := h.runs("aut_said")[0].Log
+	reply := fakeagent.For("automation", "fake/scripted", "", false).Reply
+	if n := strings.Count(log, reply); n != 1 {
+		t.Errorf("the reply %q is in the log %d times: %q", reply, n, log)
 	}
 }
 
