@@ -58,6 +58,22 @@ func TestTheOwnerSweepWatermarkNeverSkipsALateChange(t *testing.T) {
 		t.Fatalf("after a settled change: watermark %d (want %d), %d done rows left", c, done, left)
 	}
 
+	// A removal (nothing put to Ana) is done once swept, and passed once settled.
+	w.exec(`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
+		VALUES ('evt_' || md5(random()::text), $1, 'person.removed', 'human', 'per_admin', 'control-plane', jsonb_build_object('personId', $2::text))`,
+		org, ana)
+	removed := one(`SELECT max(cursor) FROM events`)
+	w.sweep(w.notifier(), 1)
+	if n := one(`SELECT count(*) FROM session_owner_done WHERE cursor = $1`, removed); n != 1 {
+		t.Fatalf("the person.removed is not marked done (%d)", n)
+	}
+	w.exec(`UPDATE events SET occurred_at = now() - interval '11 minutes' WHERE cursor = $1`, removed)
+	w.sweep(w.notifier(), 1)
+	if c := one(`SELECT after_cursor FROM session_owner_sweep`); c != removed {
+		t.Fatalf("after a settled removal: watermark %d, want %d", c, removed)
+	}
+	done = removed
+
 	// One done far ahead and settled, one committed late below it not done
 	// yet: the watermark stops short of the late one, then passes both.
 	ahead, late := done+1000, done+500
