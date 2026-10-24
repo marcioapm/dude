@@ -105,7 +105,8 @@ func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, s
 	// A pull request merged or closed meanwhile makes the question moot:
 	// the delivery ends as the pull request loop would end it, and nothing
 	// held is published. Woken by an end that left none open, endable has
-	// ended it already; one closed beside one open is ended here.
+	// ended it already; one closed beside one open is ended here, unless the
+	// person already chose to wait past that close (State.WaitedPastClosed).
 	if res, ended, err := w.heldPullRequestEnded(ctx, sc, st); ended || err != nil {
 		st.QuestionsHeld = false
 		return res, true, err

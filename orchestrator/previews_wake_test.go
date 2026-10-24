@@ -34,7 +34,7 @@ func (w *world) wakeable() *servers.Feed {
 
 // newFeed is a follower that settles and writes its cursor at once.
 func (w *world) newFeed() *servers.Feed {
-	return &servers.Feed{DB: w.app, Lux: w.previews.Lux, Log: quiet, Settle: time.Millisecond,
+	return &servers.Feed{DB: w.app, Lux: w.previews.Lux, Log: w.log, Settle: time.Millisecond,
 		CursorEvery: time.Millisecond, Retry: 10 * time.Millisecond}
 }
 
@@ -398,7 +398,7 @@ func TestTwoOrchestratorsActOnAWakeOnce(t *testing.T) {
 	// a second submit or resume harmlessly, but a wake is one orchestrator's.
 	calls := &countingLux{Client: w.previews.Lux}
 	w.previews.Lux = calls
-	other := &servers.Previews{Service: &servers.Service{DB: w.app, Lux: calls, Log: quiet, PreviewDomain: previewDomain},
+	other := &servers.Previews{Service: &servers.Service{DB: w.app, Lux: calls, Log: w.log, PreviewDomain: previewDomain},
 		Forges: w.previews.Forges, DefaultImage: "default:img"}
 	t.Cleanup(other.Stop)
 	sweepBoth := func() {

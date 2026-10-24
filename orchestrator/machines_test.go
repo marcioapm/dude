@@ -110,13 +110,13 @@ func TestAResumedRunTakesTheSizeItsSettingsNameNow(t *testing.T) {
 	}
 
 	// The placement before the resume is not the new size's.
-	phases.RecordMemoryLimit(ctx, w.app, quiet, w.org, runID, before)
+	phases.RecordMemoryLimit(ctx, w.app, w.log, w.org, runID, before)
 	if _, ok := w.machineOf(runID)["memoryLimit"]; ok {
 		t.Error("the placement before the resume recorded its limit as the new size's")
 	}
 	w.until("the resumed placement to run", func() bool { return w.lux.State(r.ID) == "running" })
 	after, _ := w.syncer.Lux.Get(ctx, r.ID)
-	phases.RecordMemoryLimit(ctx, w.app, quiet, w.org, runID, after)
+	phases.RecordMemoryLimit(ctx, w.app, w.log, w.org, runID, after)
 	// 23040 MiB, of which the container gets 95%, to a MiB.
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND (machine->>'memoryLimit')::bigint = $2`, runID, int64(21888)<<20); n != 1 {
 		t.Errorf("the resumed placement's limit was not recorded: %v", w.machineOf(runID))
@@ -335,7 +335,7 @@ func TestLuxsPoolsAreServedToTheBackend(t *testing.T) {
 		t.Errorf("pools = %s", body)
 	}
 
-	down := httptest.NewServer((&api.Server{DB: w.app, Lux: failingPools{w.syncer.Lux}, Token: "svc", Log: quiet}).Handler())
+	down := httptest.NewServer((&api.Server{DB: w.app, Lux: failingPools{w.syncer.Lux}, Token: "svc", Log: w.log}).Handler())
 	t.Cleanup(down.Close)
 	w.api = down.URL
 	code, body = w.get("/internal/lux/pools", w.org)

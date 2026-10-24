@@ -27,7 +27,7 @@ import {
   THead,
   Tr,
 } from "@dude/design-system/primitives";
-import type { ApiClient, ProjectDetail, Repository } from "../api/client.ts";
+import type { ApiClient, Member, ProjectDetail, Repository } from "../api/client.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
 import { settingsPage } from "../settings.ts";
 import { SETTINGS_ROLES } from "@dude/domain";
@@ -37,13 +37,14 @@ import { FacePicker } from "./FacePicker.tsx";
 import { SetupScriptDialog } from "./SetupScriptDialog.tsx";
 import { ServersSettingsPage } from "./ServersSettings.tsx";
 import { NetworkPage } from "./NetworkSettings.tsx";
+import { AutomationPage, AutomationsList, automationsPlace, automationsSub } from "./AutomationsSettings.tsx";
 import { useMachineSizes } from "./MachinesSettings.tsx";
 import { useModelTiers } from "./ModelsSettings.tsx";
 import { ImageField, imageWords, useImageChoices, type ImageChoices } from "../images.tsx";
 import { isMemoryPage, MEMORY_PAGES, MemoryPages, memoryNav, useIndexSummary, type ProjectChoice } from "./MemorySettings.tsx";
 
 // The first is where the screen opens: a new project needs its repositories first.
-const PAGES = ["repositories", "general", "servers", "network", ...SETTINGS_ROLES, "delivery", ...MEMORY_PAGES] as const;
+const PAGES = ["repositories", "general", "servers", "network", "automations", ...SETTINGS_ROLES, "delivery", ...MEMORY_PAGES] as const;
 
 export interface ProjectSettingsScreenProps {
   client: ApiClient;
@@ -53,15 +54,19 @@ export interface ProjectSettingsScreenProps {
   /** An organisation admin: changes anyone's memory, reindexes. */
   admin: boolean;
   page?: string | undefined;
-  onPage: (page: string) => void;
+  /** Deeper than the page: an automation, its tab, a run. */
+  sub?: string | undefined;
+  /** The organisation's members, for an automation's Transfer. */
+  people?: readonly Member[] | undefined;
+  onPage: (page: string, sub?: string) => void;
   onChanged: () => void;
   onBack: () => void;
   /** The organization's settings, where what is not changed here comes from. */
-  onOrganization: (page: string) => void;
+  onOrganization: (page: string, sub?: string) => void;
   onOpenRun?: ((runId: string) => void) | undefined;
 }
 
-export function ProjectSettingsScreen({ client, projectId, projects, admin, page: given, onPage, onChanged, onBack, onOrganization, onOpenRun }: ProjectSettingsScreenProps) {
+export function ProjectSettingsScreen({ client, projectId, projects, admin, page: given, sub, people, onPage, onChanged, onBack, onOrganization, onOpenRun }: ProjectSettingsScreenProps) {
   const page = settingsPage(given, PAGES);
   const index = useIndexSummary(client, projectId);
   const [project, setProject] = useState<ProjectDetail | null>(null);
@@ -135,6 +140,7 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
               { id: "repositories", label: "Repositories", icon: "git-branch", note: project.repositories.length || undefined },
               { id: "servers", label: "Servers", icon: "globe", note: serverCount || undefined },
               { id: "network", label: "Network", icon: "globe" },
+              { id: "automations", label: "Automations", icon: "zap" },
               agentsNav(settings),
               deliveryNav(settings),
               memoryNav(index.status?.failed),
@@ -174,6 +180,14 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
             <DeliveryPage scope={scope} />
           ) : page === "network" ? (
             <NetworkPage scope={scope} onOrganization={() => onOrganization("network")} />
+          ) : page === "automations" ? (
+            automationsPlace(sub).id ? (
+              <AutomationPage client={client} orgName={orgName} people={people ?? []} place={automationsPlace(sub)}
+                onPlace={(p) => onPage("automations", automationsSub(p))} onBack={() => onPage("automations")} />
+            ) : (
+              <AutomationsList client={client} orgName={orgName} projectId={project.id} canCreate={scope.settings.canEdit}
+                onOpen={(id) => onPage("automations", id)} onOpenOrg={(id) => onOrganization("automations", id)} />
+            )
           ) : isRole(page) ? (
             <RolePage key={page} scope={scope} role={page} onOpenRun={onOpenRun} sizes={sizes} tiers={tiers}
               tiersProblem={models.problem} onManageTiers={admin ? () => onOrganization("models") : undefined} images={images}

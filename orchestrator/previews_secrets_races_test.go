@@ -55,7 +55,7 @@ func (w *world) staleSweeper() (gate *secretsReadGate, sweep func() <-chan error
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	stale := &servers.Previews{Service: &servers.Service{DB: &db.DB{Pool: pool}, Lux: w.previews.Lux, Log: quiet,
+	stale := &servers.Previews{Service: &servers.Service{DB: &db.DB{Pool: pool}, Lux: w.previews.Lux, Log: w.log,
 		PreviewDomain: previewDomain}, Forges: w.previews.Forges, DefaultImage: "default:img", Minute: time.Hour}
 	returned := make(chan struct{})
 	w.t.Cleanup(func() {

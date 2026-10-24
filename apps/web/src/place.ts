@@ -18,7 +18,8 @@ export type Place =
   // when that is not the current one (`?attempt=1`). An epic's page, its
   // Coordination view (`#/epic/<id>/coordination`) in place of its board.
   | { view: "tree"; ref: NavRef; tab?: TaskTab; attempt?: number; epicView?: EpicView }
-  | { view: "projectSettings"; projectId: string; page?: string }
+  // sub: deeper than a page, as the page reads it (Automations: "<automation>/runs/<run>").
+  | { view: "projectSettings"; projectId: string; page?: string; sub?: string }
   // sub: deeper than a page, as the page reads it (Images: "<image>/<tab>", "<image>/builds/<build>").
   | { view: "orgSettings"; page?: string; sub?: string }
   | { view: "mySettings" }
@@ -96,7 +97,9 @@ export function parsePlace(full: string): Place | null {
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
   if (kind === "project" && view === "settings") {
-    return page ? { view: "projectSettings", projectId: decoded, page } : { view: "projectSettings", projectId: decoded };
+    const sub = rest.filter((p): p is string => Boolean(p)).map((p) => decodeURIComponent(p)).join("/");
+    if (!page) return { view: "projectSettings", projectId: decoded };
+    return sub ? { view: "projectSettings", projectId: decoded, page, sub } : { view: "projectSettings", projectId: decoded, page };
   }
   const ref = { kind: kind as NavRef["kind"], id: decoded };
   if (kind === "epic" && view === "coordination") return { view: "tree", ref, epicView: "coordination" };
@@ -137,7 +140,7 @@ function bareHash(place: Place | null): string {
       if (!place.page) return "#/help";
       return `#/help/${encodeURIComponent(place.page)}${place.section ? `/${encodeURIComponent(place.section)}` : ""}`;
     case "projectSettings":
-      return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}`;
+      return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}${place.page && place.sub ? `/${place.sub.split("/").map(encodeURIComponent).join("/")}` : ""}`;
     case "tree":
       if (place.ref.kind === "epic" && place.epicView === "coordination") return `#/epic/${encodeURIComponent(place.ref.id)}/coordination`;
       return `#/${place.ref.kind}/${encodeURIComponent(place.ref.id)}${place.tab ? `/${place.tab}` : ""}${place.attempt ? `?attempt=${place.attempt}` : ""}`;

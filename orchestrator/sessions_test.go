@@ -998,7 +998,7 @@ func TestASessionRunBreaksNoLoop(t *testing.T) {
 	price(sessionLux, "7.5")
 	price(taskLux, "0.25")
 	mustExec(t, s.owner, `UPDATE runs SET lux_cost_next_at = now() - interval '1 second' WHERE id = ANY($1)`, []string{run, ended, taskRun})
-	costs := &phases.Costs{DB: s.app, Lux: s.syncer.Lux, Log: quiet}
+	costs := &phases.Costs{DB: s.app, Lux: s.syncer.Lux, Log: s.log}
 	if _, err := costs.Sweep(t0()); err != nil {
 		t.Fatalf("the cost sweep failed with session Runs due: %v", err)
 	}

@@ -809,6 +809,13 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 	}
 	var batch []delivery
 	if err := s.DB.InSystem(ctx, "webhooks", func(tx pgx.Tx) error {
+		// Every event is stored (automations trigger on any); only these can
+		// change a pull request. The rest are marked done in one statement,
+		// so a busy repository's pushes never hold up a review's sync.
+		if _, err := tx.Exec(ctx, `UPDATE webhook_deliveries SET processed_at = now()
+			WHERE processed_at IS NULL AND NOT (event = ANY($1))`, forge.WebhookEvents); err != nil {
+			return err
+		}
 		// A failed delivery waits before its next try, longer each time, so
 		// a forge that is briefly down is not asked ten times in a second.
 		rows, err := tx.Query(ctx, `SELECT id, organization_id, event, payload, attempts FROM webhook_deliveries

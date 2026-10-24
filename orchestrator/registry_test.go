@@ -110,7 +110,7 @@ func (f *fakeECR) GetAuthorizationToken(ctx context.Context, _ *ecr.GetAuthoriza
 // come from, through a fake ECR.
 func (w *world) withECR() *fakeECR {
 	api := &fakeECR{clock: time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)}
-	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now, registry.WithLog(quiet))
+	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now, registry.WithLog(w.log))
 	mustExec(w.t, w.owner, `UPDATE projects SET runtime_image = $2 WHERE id = $1`, w.project, ecrImage)
 	return api
 }
@@ -564,7 +564,7 @@ func TestRunsWaitingOnAFailingLoginShareOneBackOff(t *testing.T) {
 	w := newWorld(t)
 	api := w.withECR()
 	// The top of each delay's range: steps of 5, 10, 20… seconds exactly.
-	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now, registry.WithLog(quiet),
+	w.syncer.Registry = registry.NewECR(ecrRegistry, api, api.now, registry.WithLog(w.log),
 		registry.WithJitter(func() float64 { return 0.999999999 }))
 	w.previews.Registry = w.syncer.Registry
 	w.lux.Decide = hang

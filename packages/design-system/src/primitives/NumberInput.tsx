@@ -22,6 +22,8 @@ export interface NumberInputProps {
   readonly size?: "sm" | "md" | undefined;
   readonly id?: string | undefined;
   readonly className?: string | undefined;
+  /** The field's name when no `label` shows one. */
+  readonly "aria-label"?: string | undefined;
   readonly "data-testid"?: string | undefined;
 }
 
@@ -42,7 +44,7 @@ const shown = (v: number | null) => (v === null ? "" : String(v));
  * The buttons are out of the tab order: the keys do what they do.
  */
 export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(function NumberInput(
-  { value, onValueChange, step, min, max, unit, label, hint, error, disabled, size = "md", id, className, "data-testid": testId },
+  { value, onValueChange, step, min, max, unit, label, hint, error, disabled, size = "md", id, className, "aria-label": ariaLabel, "data-testid": testId },
   ref,
 ) {
   const autoId = useId();
@@ -107,6 +109,7 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(functi
           type="text"
           inputMode="decimal"
           role="spinbutton"
+          aria-label={label ? undefined : ariaLabel}
           aria-valuenow={value ?? undefined}
           aria-valuemin={min}
           aria-valuemax={max}

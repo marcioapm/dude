@@ -202,7 +202,7 @@ func TestASupersededConductorRepliesNowhere(t *testing.T) {
 	w := conducting(t)
 	paused, resume := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app},
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app},
 		BeforeCall: func(tool string) {
 			if tool == "reply_on_pull_request" {
 				once.Do(func() { close(paused); <-resume })

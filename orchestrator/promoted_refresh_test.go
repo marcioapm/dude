@@ -318,7 +318,7 @@ func TestARestartDuringAPromotedRefreshRetryDoesNotPromoteAgain(t *testing.T) {
 	// A restart: another orchestrator process, its own poller, from what
 	// the database holds. Its first run of the refresh is lost before it
 	// commits, as a crash mid-step loses it.
-	w.runtime = workflow.New(w.app, "restarted", quiet)
+	w.runtime = workflow.New(w.app, "restarted", w.log)
 	def := delivery.Workflow(&delivery.Store{DB: w.app}, forge.Resolver{DB: w.app})
 	var mu sync.Mutex
 	var ran []string

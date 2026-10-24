@@ -209,7 +209,7 @@ func TestASupersededConductorSteersNothing(t *testing.T) {
 	w := conducting(t)
 	paused, resume := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, BeforeCall: func(tool string) {
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, BeforeCall: func(tool string) {
 		if tool == "steer" {
 			once.Do(func() { close(paused); <-resume })
 		}

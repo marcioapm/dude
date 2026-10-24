@@ -20,6 +20,7 @@ import { EventTypes, TERMINAL_RUN_STATUSES, UNARCHIVE_FIRST, closedBy, lifecycle
 import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
+import { FixtureAutomations } from "./automations.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { OpenSessionsList } from "@dude/domain";
 import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
@@ -1000,5 +1001,79 @@ export class FixtureClient extends ApiClient {
   }
   override runDiff(): Promise<never> {
     return Promise.reject(new ApiError(404, "not_found", "No diff in the fixtures."));
+  }
+
+  // -- automations ------------------------------------------------------------
+  #automations = new FixtureAutomations();
+  #auto<T>(f: () => T): Promise<T> {
+    try {
+      return Promise.resolve(f());
+    } catch (e) {
+      return Promise.reject(new ApiError(404, "not_found", e instanceof Error ? e.message : String(e)));
+    }
+  }
+  override automations(query: Record<string, string> = {}): ReturnType<ApiClient["automations"]> {
+    return this.#auto(() => this.#automations.all(query));
+  }
+  override projectAutomations(projectId: string): ReturnType<ApiClient["projectAutomations"]> {
+    return this.#auto(() => this.#automations.project(projectId));
+  }
+  override automation(id: string): ReturnType<ApiClient["automation"]> {
+    return this.#auto(() => this.#automations.one(id));
+  }
+  override createAutomation(input: Parameters<ApiClient["createAutomation"]>[0]): ReturnType<ApiClient["createAutomation"]> {
+    return this.#auto(() => this.#automations.create(input));
+  }
+  override updateAutomation(id: string, input: Parameters<ApiClient["updateAutomation"]>[1]): ReturnType<ApiClient["updateAutomation"]> {
+    return this.#auto(() => this.#automations.update(id, input));
+  }
+  override deleteAutomation(id: string): Promise<void> {
+    return this.#auto(() => this.#automations.remove(id));
+  }
+  override setAutomationEnabled(id: string, enabled: boolean): ReturnType<ApiClient["setAutomationEnabled"]> {
+    return this.#auto(() => this.#automations.enable(id, enabled));
+  }
+  override transferAutomation(id: string, personId: string): ReturnType<ApiClient["transferAutomation"]> {
+    return this.#auto(() => this.#automations.transfer(id, personId));
+  }
+  override automationRepositories(): ReturnType<ApiClient["automationRepositories"]> {
+    return this.#auto(() => this.#automations.repositories());
+  }
+  override scheduleNext(cron: string, tz: string): ReturnType<ApiClient["scheduleNext"]> {
+    return this.#auto(() => this.#automations.scheduleNext(cron, tz));
+  }
+  override eventSubscriptions(): ReturnType<ApiClient["eventSubscriptions"]> {
+    return this.#auto(() => this.#automations.subscriptions());
+  }
+  override automationRuns(id: string): ReturnType<ApiClient["automationRuns"]> {
+    return this.#auto(() => this.#automations.runsOf(id));
+  }
+  override automationRun(id: string, runId: string): ReturnType<ApiClient["automationRun"]> {
+    return this.#auto(() => this.#automations.run(id, runId));
+  }
+  override automationDeliveries(): ReturnType<ApiClient["automationDeliveries"]> {
+    return this.#auto(() => this.#automations.deliveries());
+  }
+  override runAutomation(id: string, body: Parameters<ApiClient["runAutomation"]>[1]): ReturnType<ApiClient["runAutomation"]> {
+    return this.#auto(() => this.#automations.runNow(id, body));
+  }
+  override evaluateTestEvent(id: string, body: Record<string, unknown>): ReturnType<ApiClient["evaluateTestEvent"]> {
+    return this.#auto(() => this.#automations.evaluate(id, body));
+  }
+  override startAutomationFresh(): Promise<void> {
+    return Promise.resolve();
+  }
+  override automationPromptHistory(id: string): ReturnType<ApiClient["automationPromptHistory"]> {
+    return this.#auto(() => this.#automations.promptHistory(id));
+  }
+  override restoreAutomationPrompt(id: string, versionId: string): ReturnType<ApiClient["restoreAutomationPrompt"]> {
+    return this.#auto(() => this.#automations.restorePrompt(id, versionId));
+  }
+  override duplicateAutomation(id: string): ReturnType<ApiClient["duplicateAutomation"]> {
+    return this.#auto(() => this.#automations.duplicate(id));
+  }
+  /** An automation as the fixture backend holds it now, read synchronously (tests). */
+  fixtureAutomation(id: string) {
+    return this.#automations.one(id);
   }
 }

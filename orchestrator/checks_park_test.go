@@ -389,7 +389,7 @@ func TestARestartKeepsAParkedHeldRunHeld(t *testing.T) {
 	w := newWorld(t)
 	wi, runID := w.parkedHeld()
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent,
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: w.syncer.Agent,
 		KeepFor: w.syncer.KeepFor, Judge: w.syncer.Judge, ParkAfter: w.syncer.ParkAfter}
 	t.Cleanup(w.syncer.Stop)
 	for range 5 {
