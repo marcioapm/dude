@@ -45,6 +45,7 @@ import { registerSessionRoutes } from "./api/routes/sessions.ts";
 import { registerModelRoutes } from "./api/routes/models.ts";
 import { registerJudgementRoutes } from "./api/routes/judgements.ts";
 import { registerImageRoutes } from "./api/routes/images.ts";
+import { registerChatRoutes } from "./api/routes/chat.ts";
 import { webApp } from "./api/web.ts";
 import { version } from "./build.ts";
 import { closePool, getPool } from "./db/client.ts";
@@ -95,6 +96,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerServerRoutes(router);
   registerAttachmentRoutes(router);
   registerSessionRoutes(router);
+  registerChatRoutes(router);
 
   if (webDir) router.fallback(webApp(webDir));
 
