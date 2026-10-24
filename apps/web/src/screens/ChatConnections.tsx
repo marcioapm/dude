@@ -5,7 +5,7 @@
  * with `?chat=<provider>&outcome=<o>`, shown once on that provider's card.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ConnectionCard, IdentityPair, ProviderGlyph } from "@dude/design-system/components";
 import { formatTimestamp } from "@dude/design-system";
 import { Button, Callout, Dialog } from "@dude/design-system/primitives";
@@ -62,7 +62,6 @@ function ChatConnection({ client, entry, me, outcome, onChanged }: {
 }) {
   const { busy, problem, save } = useSave();
   const [disconnecting, setDisconnecting] = useState(false);
-  const done = useRef(false);
   const pv = providerView(entry.provider);
   const name = entry.provider.name;
   const shown = outcome ? (CONNECT_OUTCOME[outcome] ?? CONNECT_FAILED) : null;
@@ -94,7 +93,6 @@ function ChatConnection({ client, entry, me, outcome, onChanged }: {
             <Button variant="quiet" onClick={() => setDisconnecting(false)}>Cancel</Button>
             <Button variant="danger" solid disabled={busy} data-testid={`chat-disconnect-${entry.provider.id}-confirm`}
               onClick={() => void save(() => client.unlinkChat(entry.provider.id), () => {
-                done.current = true;
                 setDisconnecting(false);
                 onChanged();
               }, `${name} disconnected`)}>Disconnect {name}</Button>

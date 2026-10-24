@@ -83,8 +83,8 @@ export function ConnectScreen({ client, provider, state, onSettings, me, onSignO
   // The workspace's address at the provider where it has one, else its name.
   const workspace = view.workspaceDomain ?? view.workspaceName ?? undefined;
   // Linked, or the account the prompt was sent to; with neither, the provider's own placeholder card, never an invented handle.
-  const account = view.connected ? { handle: view.connected.handle, display: view.connected.displayName || undefined, workspace }
-    : view.asker ? { handle: view.asker.handle, display: view.asker.displayName || undefined, workspace } : null;
+  const external = view.connected ?? view.asker;
+  const account = external ? { handle: external.handle, display: external.displayName || undefined, workspace } : null;
   const pair = me && view.status !== "wrong_organization" && view.status !== "expired" ? (
     <IdentityPair size="lg" provider={pv} external={account} workspace={workspace}
       person={{ id: me.id, name: me.name, photoUrl: me.photoUrl ?? null, email: me.email ?? undefined, organisation: me.organisation }} />
