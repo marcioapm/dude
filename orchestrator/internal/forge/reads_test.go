@@ -707,3 +707,46 @@ func TestAgentReadsLeaveDeliveryItsShareOfTheRateLimit(t *testing.T) {
 		t.Errorf("delivery's read: %v, want GitHub's own answer (no pull request 1)", err)
 	}
 }
+
+// An agent's read of a file's content keeps delivery's share of the rate
+// limit, and a redirect carries no token and no credentials of its own.
+func TestAnAgentsReadOfAFileKeepsTheReserveAndItsTokenAtHome(t *testing.T) {
+	var auth []string
+	calls := 0
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		auth = append(auth, r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/repos/acme/target/contents/moved.md":
+			http.Redirect(w, r, "/raw/moved.md", http.StatusFound)
+		case "/repos/acme/target/contents/userinfo.md":
+			http.Redirect(w, r, strings.Replace(srv.URL, "http://", "http://u:p@", 1)+"/raw/moved.md", http.StatusFound)
+		default:
+			_, _ = w.Write([]byte("content\n"))
+		}
+	}))
+	defer srv.Close()
+	gh := NewGitHub(Credential{Secret: t.Name(), APIBaseURL: srv.URL})
+	agent := agentReadContext(context.Background())
+	key := rateKey(srv.URL+"/repos/acme/target/contents/a.md?ref=main", "Bearer "+t.Name(), "core")
+	rateReadings.Store(key, rateReading{remaining: 20, limit: 100, reset: time.Now().Add(time.Hour)})
+	defer rateReadings.Delete(key)
+	if _, err := gh.FileAt(agent, "acme/target", "a.md", "main", 1<<10); !RateLimited(err) || calls != 0 {
+		t.Fatalf("at the reserve: %v, %d requests; want refused before any", err, calls)
+	}
+	if b, err := gh.FileAt(context.Background(), "acme/target", "a.md", "main", 1<<10); err != nil || string(b) != "content\n" {
+		t.Fatalf("delivery's read: %q %v", b, err)
+	}
+	auth = nil
+	if b, err := gh.FileAt(context.Background(), "acme/target", "moved.md", "main", 1<<10); err != nil || string(b) != "content\n" {
+		t.Fatalf("redirected: %q %v", b, err)
+	}
+	if len(auth) != 2 || auth[0] != "Bearer "+t.Name() || auth[1] != "" {
+		t.Fatalf("authorization sent %q, want the token only before the redirect", auth)
+	}
+	calls = 0
+	if _, err := gh.FileAt(context.Background(), "acme/target", "userinfo.md", "main", 1<<10); err == nil || !strings.Contains(err.Error(), "unsafe redirect") || calls != 1 {
+		t.Fatalf("a redirect carrying credentials: %v after %d requests, want refused", err, calls)
+	}
+}

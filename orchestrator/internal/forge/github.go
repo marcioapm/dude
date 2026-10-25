@@ -1459,6 +1459,7 @@ func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparis
 // FileAt is path's content at ref (a commit), read raw from GitHub's
 // contents API. Content over limit bytes is an *Error with Refusal
 // RefusalTooLarge, read no further; a path absent at ref is GitHub's 404.
+// A redirect is followed as JobLogTail follows one, without the token.
 func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64) ([]byte, error) {
 	segments := strings.Split(path, "/")
 	for i, s := range segments {
@@ -1470,6 +1471,11 @@ func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64
 		return nil, err
 	}
 	authorization := "Bearer " + token
+	if isAgentRead(ctx) {
+		if err := reserveAgentRequest(target, authorization, "core"); err != nil {
+			return nil, err
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
@@ -1477,12 +1483,28 @@ func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64
 	req.Header.Set("Authorization", authorization)
 	req.Header.Set("Accept", "application/vnd.github.raw")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	res, err := g.http.Do(req)
+	client := *g.http
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return errors.New("too many redirects reading a file's content")
+		}
+		if next.Response != nil {
+			noteRate(target, authorization, next.Response.Header)
+		}
+		next.Header.Del("Authorization")
+		if next.URL.User != nil || (via[0].URL.Scheme == "https" && next.URL.Scheme != "https") {
+			return errors.New("unsafe redirect reading a file's content")
+		}
+		return nil
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return nil, &Unreachable{err}
 	}
 	defer res.Body.Close()
-	noteRate(target, authorization, res.Header)
+	if res.Request != nil && res.Request.URL.Host == req.URL.Host {
+		noteRate(target, authorization, res.Header)
+	}
 	if res.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 		var e struct {
