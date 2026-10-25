@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -566,10 +565,57 @@ func TestTheScriptedAgentSpeaksItsRolesHarness(t *testing.T) {
 	}
 }
 
+// A repository's own tests run git under the Run's environment and read
+// what it prints through a pipe, as on a laptop or in CI: a diff carries
+// no escape codes (jervasion's comment-hygiene tests, which parse one,
+// failed 40 of 46 in every Run when git was made to colour). The Run's
+// other tools still colour (colourEnv).
+func TestARunsGitPrintsPlainOutputThroughAPipe(t *testing.T) {
+	c, in := goldenInput("claude-opus-5-5")
+	env := buildSpec(c, in).Env
+	if env["FORCE_COLOR"] != "1" {
+		t.Fatalf("a harness Run's env %v, want its tools made to colour", env)
+	}
+	repo, home := t.TempDir(), t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"), "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@x",
+			"GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@x"}
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	file := filepath.Join(repo, "a.txt")
+	git("init", "-q", ".")
+	if err := os.WriteFile(file, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "-m", "one")
+	if err := os.WriteFile(file, []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"diff"}, {"log", "-p", "-1"}, {"status", "--short"}} {
+		if out := git(args...); strings.Contains(out, "\x1b[") {
+			t.Errorf("git %v printed escape codes: %q", args, out)
+		}
+	}
+	if out := git("diff"); !strings.Contains(out, "+two") {
+		t.Errorf("git diff %q, want the change", out)
+	}
+}
+
 // Every Run's git includes dude's config file in command scope, whose
 // core.hooksPath outranks any a repository sets, on every harness and the
-// scripted agent; a harness Run keeps color.ui beside it, each setting at
-// its own index.
+// scripted agent, and nothing else: no colour, whose escape codes would
+// reach every git a repository's tests read.
 func TestEveryRunsGitUsesDudesHooks(t *testing.T) {
 	for _, model := range []string{"claude-opus-5-5", "fake/scripted"} {
 		for _, harness := range []string{"", delivery.HarnessOpenCode, delivery.HarnessClaudeCode, delivery.HarnessCodex} {
@@ -581,10 +627,7 @@ func TestEveryRunsGitUsesDudesHooks(t *testing.T) {
 			for i := range n {
 				got[env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)]] = env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)]
 			}
-			want := map[string]string{"color.ui": "always", "include.path": DudeGitConfig}
-			if fakeagent.Is(model) {
-				want = map[string]string{"include.path": DudeGitConfig}
-			}
+			want := map[string]string{"include.path": DudeGitConfig}
 			if !reflect.DeepEqual(got, want) || len(got) != n {
 				t.Errorf("%s/%q: git settings %v (count %d), want %v", model, harness, got, n, want)
 			}

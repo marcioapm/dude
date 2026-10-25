@@ -508,13 +508,13 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			spec.Network = runNetwork(AgentConfig{ToolsURL: c.ToolsURL, Egress: c.Egress, toolsOnly: true}, in)
 		}
 		spec.Env = map[string]string{}
-		workloadGitConfig(spec.Env, false)
+		workloadGitConfig(spec.Env)
 		commitIdentity(&spec, in.Bot)
 		return spec
 	}
 
 	spec.Env = maps.Clone(colourEnv)
-	workloadGitConfig(spec.Env, true)
+	workloadGitConfig(spec.Env)
 	switch in.Harness {
 	case delivery.HarnessClaudeCode:
 		claudeCodeWorkload(c, in, &spec)
@@ -1084,9 +1084,11 @@ func openCodeConfigDenying(model, effort string, options map[string]any, headers
 }
 
 // colourEnv makes the tools an agent runs colour their output, though it
-// goes to a pipe rather than a terminal: pytest's failures in red, git's
-// diffs (color.ui, in workloadGitConfig), ls. The chat renders the colour;
-// the agent reads past it.
+// goes to a pipe rather than a terminal: pytest's failures in red, ls. The
+// chat renders the colour; the agent reads past it. git is left plain: a
+// color.ui setting reaches every git a test or script runs as well, and
+// code that reads git's output (a diff parser) then sees escape codes, so
+// a repository's own tests failed in every Run and nowhere else.
 var colourEnv = map[string]string{
 	"TERM":           "xterm-256color",
 	"FORCE_COLOR":    "1", // node, many Python tools
@@ -1117,10 +1119,7 @@ func GitConfig(env map[string]string, key, value string) {
 // names. git skips an include whose file is missing, so an image without
 // dude's layer runs the repository's hooks as git would, without
 // co-authors.
-func workloadGitConfig(env map[string]string, colour bool) {
-	if colour {
-		GitConfig(env, "color.ui", "always")
-	}
+func workloadGitConfig(env map[string]string) {
 	GitConfig(env, "include.path", DudeGitConfig)
 }
 
