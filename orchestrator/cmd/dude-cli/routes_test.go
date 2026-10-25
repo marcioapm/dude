@@ -80,16 +80,6 @@ func (r manifestRoute) matches(method, path string) bool {
 	return true
 }
 
-func (r manifestRoute) params() int {
-	n := 0
-	for _, s := range r.segments {
-		if strings.HasPrefix(s, ":") {
-			n++
-		}
-	}
-	return n
-}
-
 // dispatch is the one route the server sends method and path to: of the
 // matching routes, the one whose leftmost differing segment is literal, as the
 // routers register them (cli-routes.test.ts fails if one shadows another).
@@ -240,6 +230,19 @@ type routeCase struct {
 	body   string
 }
 
+func checkRequest(t *testing.T, c call, want routeCase) string {
+	t.Helper()
+	body := ""
+	if c.body != nil {
+		b, _ := json.Marshal(c.body)
+		body = string(b)
+	}
+	if c.method != want.method || c.path != want.path || body != want.body {
+		t.Errorf("%v: %s %s %s, want %s %s %s", want.args, c.method, c.path, body, want.method, want.path, want.body)
+	}
+	return body
+}
+
 // routeCases covers what the older route tables do not: every mapping in
 // routes.json is seen at least once across all of them.
 var routeCases = []routeCase{
@@ -295,14 +298,6 @@ func TestRouteCases(t *testing.T) {
 		if _, err := runCLI(t, srv, stdin, args...); err != nil {
 			t.Fatalf("%v: %v", tc.args, err)
 		}
-		c := last(*calls)
-		body := ""
-		if c.body != nil {
-			b, _ := json.Marshal(c.body)
-			body = string(b)
-		}
-		if c.method != tc.method || c.path != tc.path || body != tc.body {
-			t.Errorf("%v: %s %s %s, want %s %s %s", tc.args, c.method, c.path, body, tc.method, tc.path, tc.body)
-		}
+		checkRequest(t, last(*calls), tc)
 	}
 }

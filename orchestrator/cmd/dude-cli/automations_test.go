@@ -128,14 +128,7 @@ func TestAutomationCommandsReachTheirRoutes(t *testing.T) {
 			t.Fatalf("%v: %v", tc.args, err)
 		}
 		c := last(*calls)
-		body := ""
-		if c.body != nil {
-			b, _ := json.Marshal(c.body)
-			body = string(b)
-		}
-		if c.method != tc.method || c.path != tc.path || body != tc.body {
-			t.Errorf("%v: %s %s %s, want %s %s %s", tc.args, c.method, c.path, body, tc.method, tc.path, tc.body)
-		}
+		body := checkRequest(t, c, routeCase{tc.args, tc.method, tc.path, tc.body})
 		path, rawQuery, _ := strings.Cut(c.path, "?")
 		rec := recordedRequest{Args: tc.args, Route: routeKey(t, c.method, path), Scope: tc.scope}
 		if body != "" {
