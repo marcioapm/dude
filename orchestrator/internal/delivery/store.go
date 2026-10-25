@@ -390,6 +390,9 @@ type Outcome struct {
 	// The commit each repository's checkout started from, as lux reported
 	// it (runs.base_shas).
 	Bases map[string]string
+	// A repository's setup script failed the Run before its agent started
+	// (its run.failed says which, redacted); nil otherwise.
+	Setup *SetupFailure
 }
 
 // advance is where the work stands after this phase: the heads it moved,
@@ -539,7 +542,10 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 		}
 		o.Bases = readBases(heads)
 		o.Succeeded, o.Error = status == "completed", deref(errText)
-		o.Heads, o.ChangedPaths, err = ReadHeads(heads)
+		if o.Heads, o.ChangedPaths, err = ReadHeads(heads); err != nil || o.Succeeded {
+			return err
+		}
+		o.Setup, err = setupFailureTx(ctx, tx, runID)
 		return err
 	})
 	return o, err

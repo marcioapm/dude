@@ -406,7 +406,7 @@ func TestAHookASetupScriptInstallsRunsUnderDudesHook(t *testing.T) {
 	w.git(dir, "add", "scripts/pre-commit")
 	w.git(dir, "commit", "-q", "-m", "hook")
 	if _, errOut, code := w.init(w.setup("api",
-		`ln -sf ../../scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"`+"\n")); code != 0 {
+		`ln -sf ../../scripts/pre-commit "$DUDE_REPO_HOOKS_DIR/pre-commit"`+"\n")); code != 0 {
 		t.Fatalf("exit %d\n%s", code, errOut)
 	}
 	if !exists(filepath.Join(dir, ".git", "hooks", "pre-commit")) {
@@ -429,4 +429,73 @@ func TestAHookASetupScriptInstallsRunsUnderDudesHook(t *testing.T) {
 	if w.git(dir, "rev-parse", "HEAD") == head {
 		t.Error("an allowed commit was not made")
 	}
+}
+
+// withImageSystemConfig gives the workspace's git the image's system
+// config, as the runtime image and the dude layer write it: core.hooksPath
+// naming dude's hook directory, which only root may write. A setup script
+// runs with the Run's command-scope include cleared, but not this.
+func (w *setupWorkspace) withImageSystemConfig() {
+	w.t.Helper()
+	system := filepath.Join(w.t.TempDir(), "gitconfig")
+	if err := os.WriteFile(system, []byte("[core]\n\thooksPath = "+w.hooks+"\n"), 0o644); err != nil {
+		w.t.Fatal(err)
+	}
+	w.env = slices.DeleteFunc(w.env, func(kv string) bool { return kv == "GIT_CONFIG_NOSYSTEM=1" })
+	w.env = append(w.env, "GIT_CONFIG_SYSTEM="+system)
+	if err := os.Chmod(w.hooks, 0o555); err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(func() { _ = os.Chmod(w.hooks, 0o755) })
+}
+
+// The trap the abs repository's setup script fell into on 2026-10-22: in a
+// script, `git rev-parse --git-path hooks` names dude's own hook directory
+// (the image's system core.hooksPath), which the agent cannot write, and
+// the script fails. DUDE_REPO_HOOKS_DIR names the checkout's own hooks
+// directory, made if missing; a hook linked there is run by dude's hook on
+// the agent's commit, and dude's directory is untouched.
+func TestASetupScriptInstallsHooksThroughDudeRepoHooksDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	w := newSetupWorkspace(t)
+	w.withImageSystemConfig()
+	dir := w.checkout("api")
+	if err := os.RemoveAll(filepath.Join(dir, ".git", "hooks")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pre-commit"), []byte("#!/bin/sh\necho repository-hook >&2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errOut, code := w.init(w.setup("api", `ln -sf ../../pre-commit "$(git rev-parse --git-path hooks)/pre-commit"`+"\n"))
+	if code == 0 || !strings.Contains(errOut, w.hooks+"/pre-commit") {
+		t.Fatalf("--git-path hooks in a script: exit %d, want a failure writing to dude's directory\n%s", code, errOut)
+	}
+
+	where := filepath.Join(t.TempDir(), "where")
+	_, errOut, code = w.init(w.setup("api", `printf %s "$DUDE_REPO_HOOKS_DIR" > '`+where+`'
+ln -sf ../../pre-commit "$DUDE_REPO_HOOKS_DIR/pre-commit"
+`))
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, errOut)
+	}
+	want, _ := filepath.EvalSymlinks(filepath.Join(dir, ".git", "hooks"))
+	if b, _ := os.ReadFile(where); string(b) != want {
+		t.Errorf("DUDE_REPO_HOOKS_DIR = %q, want the checkout's .git/hooks", b)
+	}
+	if exists(filepath.Join(w.hooks, "pre-commit")) && !isDudeHook(t, filepath.Join(w.hooks, "pre-commit")) {
+		t.Error("dude's hook directory was changed")
+	}
+	if _, errOut, err := w.run(dir, "git", "commit", "-q", "--allow-empty", "-m", "work"); err != nil || !strings.Contains(errOut, "repository-hook") {
+		t.Errorf("the installed hook did not run under dude's: %v\n%s", err, errOut)
+	}
+}
+
+// isDudeHook says the file is a link to the runtime image's dude-hook.
+func isDudeHook(t *testing.T, path string) bool {
+	t.Helper()
+	target, err := os.Readlink(path)
+	return err == nil && strings.HasSuffix(target, "dude-hook")
 }

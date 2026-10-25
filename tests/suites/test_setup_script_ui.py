@@ -16,7 +16,7 @@ from playwright.sync_api import Page, expect
 
 from helpers import ApiClient, provision_person, sign_in, toast
 
-SCRIPT = 'ln -sf ../../scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"\nnpm ci --prefer-offline'
+SCRIPT = 'ln -sf ../../scripts/pre-commit "$DUDE_REPO_HOOKS_DIR/pre-commit"\nnpm ci --prefer-offline'
 
 
 def _project_with_repositories(client: ApiClient) -> dict:
@@ -58,7 +58,7 @@ def test_a_setup_script_is_set_marked_reopened_and_cleared(page: Page, web_url: 
     expect(dialog).to_contain_text("Time limit: 15 minutes.")
     expect(dialog.get_by_test_id("size-meter")).to_have_text("0 B of 16 KB")
     # The placeholder is guidance only: nothing to save yet.
-    expect(dialog.locator(".cm-placeholder")).to_contain_text("git rev-parse --git-path hooks")
+    expect(dialog.locator(".cm-placeholder")).to_contain_text("$DUDE_REPO_HOOKS_DIR")
     expect(dialog.get_by_test_id("setup-script-save")).to_be_disabled()
 
     _type_script(page, SCRIPT)

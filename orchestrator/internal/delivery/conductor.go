@@ -225,8 +225,11 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	var latest, status, briefing string
 	var ran bool
 	var baseRefs map[string]string
-	err := tx.QueryRow(ctx, `SELECT r.id, r.status::text, r.prompt, r.started_at IS NOT NULL, r.base_refs FROM runs r
-		WHERE r.task_id = $1 AND r.role = 'conductor' AND r.kind = 'agent' ORDER BY r.created_at DESC LIMIT 1`,
+	// One a setup script failed never reached its agent, whatever lux
+	// started: it is retried as one that never ran, its briefing again.
+	err := tx.QueryRow(ctx, `SELECT x.id, x.status::text, x.prompt, x.started_at IS NOT NULL AND NOT `+setupFailedConductor+`,
+			x.base_refs FROM runs x
+		WHERE x.task_id = $1 AND x.role = 'conductor' AND x.kind = 'agent' ORDER BY x.created_at DESC LIMIT 1`,
 		taskID).Scan(&latest, &status, &briefing, &ran, &baseRefs)
 	if db.IsNotFound(err) {
 		return "", ErrNothingToRetry
@@ -254,7 +257,20 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 		return "", err
 	}
 	if requeued {
-		return "", ErrRetryTaken
+		// Its reasons wait for the next conductor; for one a setup script
+		// failed, dude starts none by itself (setupBlockedOf): this is it.
+		blocked, err := SetupBlockedTx(ctx, tx, taskID)
+		if err != nil {
+			return "", err
+		}
+		if !blocked {
+			return "", ErrRetryTaken
+		}
+		next, err := wakeConductorTx(ctx, tx, org, taskID, 0, latest)
+		if err == nil && next == "" {
+			err = ErrRetryTaken
+		}
+		return next, err
 	}
 	// No other live conductor can exist: runs_live_conductor_idx refuses a
 	// second, which the API answers 409.
@@ -299,13 +315,15 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 // LATERAL primary-key lookup; OFFSET 0 keeps the planner from flattening it
 // into a join, which with retained attempt history it hashes over all runs.
 // A task its owner stopped is left out until it is picked up (HandOver
-// holds its input), so its held input cannot fill the sweep's batch.
+// holds its input), so its held input cannot fill the sweep's batch, and
+// so is one whose last conductor a setup script failed (setupBlockedOf).
 const Unheard = `(SELECT d.run_id FROM directives d WHERE d.delivered_at IS NULL AND d.failed_at IS NULL
 	  UNION SELECT a.conductor_run_id FROM conductor_wake_attempts a
 	    WHERE a.directive_id IS NULL AND a.heard_at IS NULL AND a.failed_at IS NULL) c
 	CROSS JOIN LATERAL (SELECT u.id, u.organization_id, u.project_id, u.task_id, u.status, u.ended_at FROM runs u
 	  WHERE u.id = c.run_id AND u.role = 'conductor' AND u.status IN ('completed', 'failed', 'aborted')
 	    AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = u.task_id` + latestDelivery + `), false)
+	    AND NOT ` + setupBlockedRun + `
 	  OFFSET 0) r`
 
 // HandOver settles what a person sent an ended conductor and it never
@@ -339,6 +357,14 @@ func handOver(ctx context.Context, tx pgx.Tx, ref RunRef, replace bool, retries 
 	// hands it on after the pick-up — to the resumed conductor, or the new one.
 	if replace {
 		if halted, err := HaltedTx(ctx, tx, ref.TaskID); err != nil || halted {
+			return "", err
+		}
+	}
+	// Nor one a setup script failed, unless a person is trying it again
+	// (retries): its replacement would fail the same way, and hand the
+	// same messages on again. They wait, unsettled, for that Try again.
+	if replace && retries == "" {
+		if blocked, err := SetupBlockedTx(ctx, tx, ref.TaskID); err != nil || blocked {
 			return "", err
 		}
 	}

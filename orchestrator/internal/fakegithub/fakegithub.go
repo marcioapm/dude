@@ -130,6 +130,12 @@ type Server struct {
 	// it, without the fake's lock: it may block (a slow GitHub), or return
 	// a status to fail the request with (0 answers it as usual).
 	Intercept func(r *http.Request) int
+	// HeadLag, by pull request number, is how many more reads of the pull
+	// request (GET /pulls/{n}) report the head LaggingHead names rather
+	// than its branch's: GitHub updates a pull request's head a moment
+	// after its branch moves.
+	HeadLag     map[int]int
+	LaggingHead map[int]string
 	// Every review request received, refused or not, in order.
 	ReviewRequests []ReviewRequest
 	// When set, review requests are refused with this status.
@@ -1156,7 +1162,12 @@ func (s *Server) getPull(w http.ResponseWriter, r *http.Request) {
 	if p := s.number(w, r); p != nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		write(w, 200, s.pullJSON(p))
+		out := s.pullJSON(p)
+		if s.HeadLag[p.Number] > 0 {
+			s.HeadLag[p.Number]--
+			out["head"].(map[string]any)["sha"] = s.LaggingHead[p.Number]
+		}
+		write(w, 200, out)
 	}
 }
 
