@@ -56,6 +56,50 @@ func logSink() io.Writer {
 	return io.Discard
 }
 
+// logRing keeps a world's last logRingLines log lines, so a test that
+// fails prints the cause its components logged (an API 500's error, say)
+// without every passing test printing its logs.
+type logRing struct {
+	mu    sync.Mutex
+	lines []string
+	next  int
+	full  bool
+}
+
+const logRingLines = 200
+
+// TextHandler writes each record in one Write, newline-terminated.
+func (r *logRing) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines[r.next] = strings.TrimSuffix(string(p), "\n")
+	r.next = (r.next + 1) % len(r.lines)
+	r.full = r.full || r.next == 0
+	return len(p), nil
+}
+
+func (r *logRing) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.lines[:r.next]
+	if r.full {
+		kept = append(slices.Clone(r.lines[r.next:]), kept...)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// worldLog is a test's logger: its lines go to its own ring, printed with
+// t.Log if the test fails, and to stderr as well under DUDE_TEST_LOG.
+func worldLog(t *testing.T) *slog.Logger {
+	ring := &logRing{lines: make([]string, logRingLines)}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the world's last %d log lines:\n%s", logRingLines, ring)
+		}
+	})
+	return slog.New(slog.NewTextHandler(io.MultiWriter(ring, logSink()), nil))
+}
+
 type world struct {
 	t         *testing.T
 	app       *db.DB
@@ -65,8 +109,10 @@ type world struct {
 	repoID    string
 	gh        *fakegithub.Server
 	web       *fakegithub.Server
+	apiRepo   *fakegithub.Server
 	marcioWeb *fakegithub.Server
 	lux       *fakelux.Server
+	log       *slog.Logger
 	runtime   *workflow.Runtime
 	syncer    *phases.Syncer
 	artifacts *phases.Artifacts
@@ -90,29 +136,26 @@ type world struct {
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	app, owner := dbtest.Open(t)
-	w := &world{t: t, app: app, owner: owner, org: dbtest.Org(t, owner)}
+	w := &world{t: t, app: app, owner: owner, org: dbtest.Org(t, owner), log: worldLog(t)}
 	ctx := context.Background()
 
-	// Two bare repositories with one commit on main, as GitHub would hold
-	// them: the project's, and a second one (acme/web) a test may add.
+	// Bare repositories with one commit on main, as GitHub would hold them:
+	// the project's, and two more (acme/web, acme/api) a test may add.
 	dir := t.TempDir()
-	bare, webBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web")
+	bare, webBare, apiBare := bareRepo(t, dir, "target"), bareRepo(t, dir, "web"), bareRepo(t, dir, "api")
 	w.gh = fakegithub.New(bare, "acme/target")
 	w.web = fakegithub.New(webBare, "acme/web")
+	w.apiRepo = fakegithub.New(apiBare, "acme/api")
 	// The same repository as another owner's, for an App installed on two.
 	w.marcioWeb = fakegithub.New(webBare, "marcio/web")
 	mux := http.NewServeMux()
-	mux.Handle("/repos/acme/target", w.gh.Handler())
-	mux.Handle("/repos/acme/web", w.web.Handler())
-	mux.Handle("/repos/marcio/web", w.marcioWeb.Handler())
-	mux.Handle("/repos/acme/target/", w.gh.Handler())
-	mux.Handle("/repos/acme/web/", w.web.Handler())
-	mux.Handle("/repos/marcio/web/", w.marcioWeb.Handler())
-	mux.Handle("/acme/target.git/", w.gh.Handler())
-	mux.Handle("/acme/web.git/", w.web.Handler())
-	mux.Handle("/marcio/web.git/", w.marcioWeb.Handler())
-	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.marcioWeb))
-	mux.Handle("GET /search/issues", fakegithub.Search(w.gh, w.web, w.marcioWeb))
+	for slug, s := range map[string]*fakegithub.Server{"acme/target": w.gh, "acme/web": w.web, "acme/api": w.apiRepo, "marcio/web": w.marcioWeb} {
+		mux.Handle("/repos/"+slug, s.Handler())
+		mux.Handle("/repos/"+slug+"/", s.Handler())
+		mux.Handle("/"+slug+".git/", s.Handler())
+	}
+	mux.Handle("POST /graphql", fakegithub.Graphql(w.gh, w.web, w.apiRepo, w.marcioWeb))
+	mux.Handle("GET /search/issues", fakegithub.Search(w.gh, w.web, w.apiRepo, w.marcioWeb))
 	mux.Handle("GET /user", w.gh.Handler())
 	// A GitHub App's endpoints, once a test connects one (asApp).
 	ghSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -130,6 +173,9 @@ func newWorld(t *testing.T) *world {
 	w.lux.RepoFor = func(url string) string {
 		if strings.Contains(url, "/web.git") {
 			return webBare
+		}
+		if strings.Contains(url, "/api.git") {
+			return apiBare
 		}
 		return bare
 	}
@@ -153,25 +199,25 @@ func newWorld(t *testing.T) *world {
 		VALUES ($1, $2, 'pat', 'ghp_test', $3)`, "forge_"+w.org, w.org, ghSrv.URL)
 
 	forges := forge.Resolver{DB: app}
-	w.runtime = workflow.New(app, "test", quiet)
+	w.runtime = workflow.New(app, "test", w.log)
 	store := &delivery.Store{DB: app}
 	w.runtime.Register(delivery.Workflow(store, forges))
-	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: quiet, KeepFor: 7 * 24 * time.Hour,
+	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: w.log, KeepFor: 7 * 24 * time.Hour,
 		// The organisation's judgement tier, as main wires it: off unless a
 		// test sets one, so the checks gate skips its questions.
 		Judge: &judge.Service{DB: app},
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
-	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: quiet,
+	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: w.log,
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}
 	store.SyncPullRequest = w.prs.Sync
-	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: quiet,
+	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: w.log,
 		ConsoleURL: "https://console.lux.test/"}, Forges: forges, DefaultImage: "default:img"}
 	t.Cleanup(w.previews.Stop)
-	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: quiet, Kick: func() {},
+	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: w.log, Kick: func() {},
 		Forges: forges, PRs: w.prs, Servers: w.previews.Service}).Handler())
 	t.Cleanup(apiSrv.Close)
 	w.api = apiSrv.URL
@@ -310,6 +356,9 @@ func scriptedPolicy() delivery.Policy {
 	p.RequiredReviewers = []string{"correctness"}
 	p.Test = false // the world's project pins it off; the gate's tests turn it on
 	p.ResumeRounds = false
+	// The scripted writers' files (FIXED.md, SIMPLE.md) stand for product
+	// changes: only CI configuration is outside the product here.
+	p.NonProductPaths = []string{".github/**"}
 	return p
 }
 
@@ -713,7 +762,7 @@ func TestAnExitLuxWillNeverReportIsNotWaitedFor(t *testing.T) {
 
 func TestAnAgentIsGivenDudesToolsAsItsOwnRun(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = "http://10.9.8.7:3120/mcp"
 	w.syncer.Agent.ToolsService = true
@@ -814,7 +863,7 @@ func (w *world) callTool(tools, luxRunSpec string, tool string, args string) (in
 
 func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -875,7 +924,7 @@ func TestAnAgentIsGivenARepositoryAPersonApproved(t *testing.T) {
 // at url, on branch, and a person approved it.
 func (w *world) approvedWeb(url, branch string) (wi, requestID string) {
 	w.t.Helper()
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -957,7 +1006,7 @@ func TestAResumedCloneSignInFailureNamesGitHub(t *testing.T) {
 
 func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -997,7 +1046,7 @@ func TestAPersonsPauseIsNotUndoneByAnApproval(t *testing.T) {
 
 func TestADeclinedRepositoryRequestIsToldToTheAgent(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
@@ -1270,7 +1319,7 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 // withTools serves dude's tools to the world's agents, as the orchestrator
 // does, reached through lux's service in their containers.
 func (w *world) withTools() {
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
 		SyncPullRequest: w.prs.Sync,
 		ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
 			return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
@@ -1833,20 +1882,25 @@ func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 		return w.taskStatus(wi) != "ready_to_merge"
 	})
 
-	// Merged by a person while the fixer is still at work. The fix lands
-	// after the merge, so it is outside it: it gets a pull request of its
-	// own, and the task is done when that one is merged too.
+	// Merged by a person while the fixer is still at work: the merge ends
+	// the delivery there. The fixer is stopped and its fix opens no pull
+	// request of its own.
 	w.gh.SetChecks("success")
 	w.gh.Merge(1)
-	w.until("a pull request for the fix", func() bool {
-		_, _ = w.prs.Reconcile(context.Background(), 0)
-		return len(w.gh.Pulls()) == 2
-	})
-	w.gh.Merge(2)
 	w.until("the task to finish", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.taskStatus(wi) == "done"
 	})
+	for range 3 {
+		_, _ = w.prs.Reconcile(context.Background(), 0)
+		w.pump()
+	}
+	if n := len(w.gh.Pulls()); n != 1 {
+		t.Errorf("%d pull requests after the merge ended the delivery, want the merged one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status NOT IN ('completed', 'aborted')`, wi); n != 0 {
+		t.Errorf("%d fixers still live after the merge", n)
+	}
 }
 
 // An agent quiet mid-turn is nudged once; still quiet, it is parked for a
@@ -3131,7 +3185,7 @@ func TestInitialGitEventsSurviveAStreamReconnectWithoutDuplicates(t *testing.T) 
 		}
 	}
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	status, body := w.call("/internal/runs/"+runID+"/steer", map[string]any{"text": "Keep working", "interrupt": true})
 	if status != 201 {
@@ -3182,7 +3236,7 @@ func TestAFinishingRunIsFollowedAfterARestart(t *testing.T) {
 	})
 	// A new orchestrator: nothing is following anything.
 	w.syncer.Stop()
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: w.syncer.Agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	w.until("the implementer to complete", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, wi) == 1
@@ -3874,6 +3928,242 @@ func TestAFixerIsToldAnActionsJobsFailureLog(t *testing.T) {
 		}
 		return false
 	})
+}
+
+// (a) JERV-1's check: a Node 20 deprecation warning, the exit code's
+// failure and a runner-label notice. The fixer's check carries the job
+// log's end, failure line included, and neither warning nor notice.
+func TestAFixerOfAJobWithWarningsIsToldItsLog(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+	})
+	w.gh.SetJobLog(77, "2026-10-23T09:12:01.123Z ruff check .\n"+
+		"2026-10-23T09:12:02.123Z app/backup.py:14:5: F841 Local variable `rows` is assigned to but never used\n"+
+		"2026-10-23T09:12:03.123Z ##[error]Process completed with exit code 1.\n"+
+		"2026-10-23T09:12:04.123Z Post job cleanup.\n", downloads.URL)
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	var feedback []forge.ActionableFeedback
+	var raw []byte
+	_ = w.owner.QueryRow(context.Background(), `SELECT pr_feedback FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, wi).Scan(&raw)
+	if err := json.Unmarshal(raw, &feedback); err != nil || len(feedback) != 1 || len(feedback[0].Checks) != 1 {
+		t.Fatalf("pr_feedback %s: %v", raw, err)
+	}
+	c := feedback[0].Checks[0]
+	if !strings.Contains(c.Log, "F841 Local variable `rows`") || !strings.HasSuffix(c.Log, "##[error]Process completed with exit code 1.") {
+		t.Errorf("the check's log is not the job log's end: %+v", c)
+	}
+	for _, noise := range []string{"Node.js 20", "ubuntu-latest", "warning", "notice", "Post job cleanup"} {
+		if strings.Contains(c.Log, noise) {
+			t.Errorf("the check's log holds %q:\n%s", noise, c.Log)
+		}
+	}
+}
+
+// failingCheckFix makes check 77 of an open pull request an Actions job of
+// run's annotations and log, fails it, and returns the fix's stored check
+// and its prompt once the fix reaches lux.
+func failingCheckFix(t *testing.T, w *world, run fakegithub.CheckRun, log string, set func(*fakegithub.Server)) (forge.FailingCheck, string) {
+	t.Helper()
+	w.gh.SetChecks("run:success")
+	wi := w.reviewing()
+	w.onModel("implementer", "llm-impl")
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: run} })
+	w.gh.SetJobLog(77, log, downloads.URL)
+	if set != nil {
+		w.gh.Set(set)
+	}
+	w.gh.SetChecks("run:failure")
+	w.until("a fix for CI", func() bool { w.sync(); return w.fixes(wi) == 1 })
+	var prompt string
+	w.until("the fix to reach lux", func() bool {
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			_ = json.Unmarshal(r.Spec, &spec)
+			if spec.Labels["dude.phase"] == "fix" && strings.Contains(spec.Workload.Prompt, "Pull request feedback") {
+				prompt = spec.Workload.Prompt
+				return true
+			}
+		}
+		return false
+	})
+	var raw []byte
+	_ = w.owner.QueryRow(context.Background(), `SELECT pr_feedback FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, wi).Scan(&raw)
+	var feedback []forge.ActionableFeedback
+	if err := json.Unmarshal(raw, &feedback); err != nil || len(feedback) != 1 || len(feedback[0].Checks) != 1 {
+		t.Fatalf("pr_feedback %s: %v", raw, err)
+	}
+	return feedback[0].Checks[0], prompt
+}
+
+// (c) A job log GitHub refuses (no Actions: Read) or has expired: the fix
+// still starts, its check says why, and the fixer's prompt says so in one
+// sentence with what to do instead. GitHub's own words, which here echo
+// the token, reach neither.
+func TestAFixerIsToldWhyAJobsLogCouldNotBeRead(t *testing.T) {
+	for status, why := range map[int]string{http.StatusForbidden: "GitHub refused: no Actions: Read permission",
+		http.StatusGone: "the log has expired"} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			w := newWorld(t)
+			c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+				s.LogStatus, s.LogMessage = status, "Resource not accessible by integration (token ghp_test)"
+			})
+			if c.Unread != why || c.Log != ".github:243: failure: Process completed with exit code 1." {
+				t.Errorf("check %+v", c)
+			}
+			sentence := "dude could not read this job's log (" + why + "), so reproduce the failure locally from the workflow file"
+			if !strings.Contains(prompt, sentence) {
+				t.Errorf("the prompt does not say why:\n%s", prompt)
+			}
+			var events string
+			if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(string_agg(payload::text, ' '), '') FROM events
+				WHERE organization_id = $1`, w.org).Scan(&events); err != nil || events == "" {
+				t.Fatalf("events: %v", err)
+			}
+			for where, text := range map[string]string{"prompt": prompt, "check": c.Unread + c.Log, "events": events} {
+				if strings.Contains(text, "ghp_test") || strings.Contains(text, "Resource not accessible") {
+					t.Errorf("GitHub's words reached the %s", where)
+				}
+			}
+		})
+	}
+}
+
+// (d) A 5xx on the log read does not fail the step: the fix starts, with
+// the check run's words and that GitHub was unavailable.
+func TestAFixerIsToldGitHubWasUnavailableForAJobsLog(t *testing.T) {
+	w := newWorld(t)
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+		s.LogStatus = http.StatusBadGateway
+	})
+	if c.Unread != "GitHub was unavailable" || !strings.Contains(prompt, "dude could not read this job's log (GitHub was unavailable)") {
+		t.Errorf("check %+v\n%s", c, prompt)
+	}
+}
+
+// A log whose download hop fails after GitHub's redirect: the signed
+// blob URL in the redirect (its sig a bearer credential) reaches no log
+// line, no stored check and no prompt.
+func TestASignedLogURLIsNeverLogged(t *testing.T) {
+	logs := &lockedBuffer{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	w := newWorld(t)
+	w.syncer.Log = slog.New(slog.NewTextHandler(logs, nil))
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), "##[error]boom\n", func(s *fakegithub.Server) {
+		s.LogHost, s.LogSignature = gone.URL, "SECRET"
+	})
+	if c.Unread != "GitHub was unavailable" {
+		t.Errorf("check %+v", c)
+	}
+	if !strings.Contains(logs.String(), "reading a failing check's log failed") {
+		t.Fatalf("the failed read was not logged:\n%s", logs)
+	}
+	var events string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(string_agg(payload::text, ' '), '') FROM events
+		WHERE organization_id = $1`, w.org).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	for where, text := range map[string]string{"logs": logs.String(), "prompt": prompt, "check": c.Log + c.Unread + c.Full, "events": events} {
+		if strings.Contains(text, "SECRET") {
+			t.Errorf("the signature reached the %s:\n%s", where, text)
+		}
+	}
+}
+
+// (e) A fix Run's spec writes the end of its failing check's job log, up
+// to 64 KiB and cleaned, to /workspace/.dude/checks/<repo>-<check>.log; the
+// prompt keeps a 4000-byte excerpt, quoted as external text, and names the
+// file.
+func TestAFixRunsWorkspaceHoldsItsChecksLog(t *testing.T) {
+	var log strings.Builder
+	for i := 0; log.Len() < 200<<10; i++ {
+		fmt.Fprintf(&log, "2026-10-23T09:12:01.123Z \x1b[32mtests/test_%d.py PASSED\x1b[0m\n", i)
+	}
+	log.WriteString("2026-10-23T09:12:02.123Z E       AssertionError: 3 != 2\n" +
+		"2026-10-23T09:12:03.123Z ##[error]Process completed with exit code 1.\n2026-10-23T09:12:04.123Z Post job cleanup.\n")
+	w := newWorld(t)
+	c, prompt := failingCheckFix(t, w, fakegithub.NoisyActionsJob(), log.String(), nil)
+	if len(c.Log) > 4000+len("…\n") || !strings.HasSuffix(c.Log, "##[error]Process completed with exit code 1.") {
+		t.Errorf("the prompt's excerpt is %d bytes:\n%s", len(c.Log), c.Log)
+	}
+	var spec lux.Spec
+	for _, r := range w.lux.Runs() {
+		var s lux.Spec
+		_ = json.Unmarshal(r.Spec, &s)
+		if s.Labels["dude.phase"] == "fix" && s.Workload.Prompt == prompt {
+			spec = s
+		}
+	}
+	if spec.Init == nil {
+		t.Fatal("the fix's spec has no init")
+	}
+	dir := t.TempDir()
+	if out, err := exec.Command("/bin/sh", "-c", strings.ReplaceAll(spec.Init.Script, "/workspace/", dir+"/")).CombinedOutput(); err != nil {
+		t.Fatalf("init: %v: %s", err, out)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, ".dude", "checks", "target-e2e.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > 64<<10 || len(got) < 60<<10 || !strings.HasSuffix(string(got), "E       AssertionError: 3 != 2\n##[error]Process completed with exit code 1.\n") ||
+		!strings.HasPrefix(string(got), "tests/test_") || strings.ContainsAny(string(got), "\x1b") || strings.Contains(string(got), "2026-10-23T") {
+		t.Errorf("the log file is %d bytes, starting %q, ending %q", len(got), got[:min(80, len(got))], got[max(0, len(got)-120):])
+	}
+	if !strings.Contains(prompt, "The last 64 KiB of this job's log is at `/workspace/.dude/checks/target-e2e.log`: read it") ||
+		!strings.Contains(prompt, "⟦external ") || strings.Contains(prompt, "tests/test_0.py") {
+		t.Errorf("the prompt:\n%s", prompt)
+	}
+	// The 64 KiB tail lives in runs.check_logs alone: the rows the phase
+	// sweep and the workflow runtime read and rewrite stay small.
+	var feedbackMax, stateMax, fixes, withLogs int
+	if err := w.owner.QueryRow(context.Background(), `SELECT
+			COALESCE((SELECT max(length(pr_feedback::text)) FROM runs WHERE organization_id = $1), 0),
+			COALESCE((SELECT max(length(state::text)) FROM workflow_runs WHERE organization_id = $1), 0),
+			(SELECT count(*) FROM runs WHERE organization_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb),
+			(SELECT count(*) FROM runs WHERE organization_id = $1 AND phase = 'fix' AND length(check_logs::text) > 60000)`,
+		w.org).Scan(&feedbackMax, &stateMax, &fixes, &withLogs); err != nil {
+		t.Fatal(err)
+	}
+	if feedbackMax >= 16384 || stateMax >= 16384 || fixes != 1 || withLogs != 1 {
+		t.Errorf("pr_feedback up to %d bytes, workflow state up to %d; %d fix Runs, %d holding the log tail",
+			feedbackMax, stateMax, fixes, withLogs)
+	}
+
+	// A restarted fix Run is a new row: it carries the tail, since
+	// pr_feedback no longer holds it.
+	var fix string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE organization_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb`, w.org).Scan(&fix); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := w.do("POST", "/internal/runs/"+fix+"/restart", map[string]any{"note": "again"}); status != 200 {
+		t.Fatalf("restart: %d %v", status, body)
+	}
+	var fresh string
+	if err := w.owner.QueryRow(context.Background(), `SELECT replaced_by FROM runs WHERE id = $1`, fix).Scan(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	var carried int
+	if err := w.owner.QueryRow(context.Background(), `SELECT length(check_logs::text) FROM runs WHERE id = $1`, fresh).Scan(&carried); err != nil {
+		t.Fatal(err)
+	}
+	if carried < 60000 {
+		t.Errorf("the restarted fix Run %s holds %d bytes of check_logs, want the tail", fresh, carried)
+	}
 }
 
 // An approved pull request with a thread left unresolved is not ready.

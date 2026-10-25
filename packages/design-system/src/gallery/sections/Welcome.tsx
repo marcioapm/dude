@@ -88,9 +88,10 @@ function Shell({ collapsed: initial, children }: { readonly collapsed?: boolean;
         collapsed={collapsed}
         onCollapsedChange={setCollapsed}
         onWaitingSelect={() => undefined}
-        railSessions={{ onNew: () => setSelected(null), onOpenList: () => undefined, recent: RECENT.map((r) => r.title) }}
+        railSessions={{ onNew: () => setSelected(null), onOpenList: () => undefined, recent: RECENT.map((r) => r.title), organisationCount: 2 }}
         sessions={<SidebarSessions sessions={RECENT.slice(0, 4).map((r) => ({ id: r.id, title: r.title, ...(r.shared ? { shared: true, owner: r.shared.owner } : {}) }))}
-          onSelect={() => undefined} onNew={() => setSelected(null)} onOpenList={() => undefined} />}
+          onSelect={() => undefined} onNew={() => setSelected(null)} onOpenList={() => undefined}
+          organisation={{ count: 2, onOpen: () => undefined }} />}
         footer={<>
           <SidebarLink icon="building">Organisation settings</SidebarLink>
           <SidebarProfile person={you} detail="marcio@acme.dev" onOpen={() => undefined} />

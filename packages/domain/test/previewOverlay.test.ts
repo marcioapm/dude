@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { FEEDBACK_LIMITS, OVERLAY_LIMITS, feedbackDraftSchema, overSize, overlayMessageSchema, overlaySessionSchema } from "../src/index.ts";
+import { FEEDBACK_LIMITS, OVERLAY_LIMITS, feedbackDraftSchema, overSize, overlayMessageSchema, overlaySessionSchema, overlayWindowName } from "../src/index.ts";
 
 const anchor = { kind: "preview", url: "https://web.preview.example/cart", selector: "button.pay", viewport: { width: 1280, height: 720 } };
 
@@ -33,6 +33,19 @@ test("a session names dude's theme as light or dark, or none for an older dude; 
   for (const theme of ["light", "dark"]) expect(overlaySessionSchema.safeParse({ ...session, theme }).success).toBe(true);
   for (const theme of ["system", "Dark", "", 1, null, "sepia"]) expect(overlaySessionSchema.safeParse({ ...session, theme }).success).toBe(false);
   expect(overlaySessionSchema.safeParse({ ...session, colour: "red" }).success).toBe(false);
+});
+
+test("a session names dude's tab's window within OVERLAY_LIMITS.windowName, or none for an older dude", () => {
+  const session = { type: "session", v: 1, task: "WC-1", url: "https://web.preview.example/", pins: [], drafts: 0, showPins: true };
+  for (const dudeWindow of ["dude-tab-0b7c", "a", "x".repeat(OVERLAY_LIMITS.windowName)]) {
+    expect(overlayWindowName(dudeWindow)).toBe(true);
+    expect(overlaySessionSchema.safeParse({ ...session, dudeWindow }).success).toBe(true);
+  }
+  // `_blank` and the like would open a new tab; a space, a slash or an over-long name is no name dude gives itself.
+  for (const dudeWindow of ["", "_blank", "_top", "dude tab", "dude/tab", "x".repeat(OVERLAY_LIMITS.windowName + 1), 7, null]) {
+    expect(overlayWindowName(dudeWindow)).toBe(false);
+    expect(overlaySessionSchema.safeParse({ ...session, dudeWindow }).success).toBe(false);
+  }
 });
 
 test("overSize counts a message's strings and stops once past the cap", () => {

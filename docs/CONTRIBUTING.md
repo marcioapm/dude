@@ -51,6 +51,9 @@ loops (`cmd/dude-orchestrator/main.go`):
 | `phase-sync` | Drives each phase Run on lux: submit, follow its output into the ledger, deliver directives, pause, resume, cancel, and when the agent's turn ends, push, fast-forward the branch, record findings, stop. |
 | `phase-notifier` | Turns a finished phase Run into a `phase.finished` signal for its workflow. |
 | `webhooks` | Acts on stored GitHub deliveries: syncs the pull request each is about. |
+| `automations` | Fires due schedules, matches stored deliveries against event automations, starts queued runs, follows running ones (an agent's turn, a command's exit, a Server's POSTs and idle stop), expires kept sessions. |
+| `automations-retention` | Hourly: deletes deliveries after 30 days, empties automation runs' payloads at 30 days and logs at 90. |
+| `chat` | Routes stored chat provider deliveries (mentions, kept mentions, clicked choices, an app's removal): replies, records each in Requests. |
 | `previews` | Drives branch previews on lux: creates a wakeable preview's lux servers, wakes it (resume with a sync, or submit and attach) when lux's feed says someone opened it, stops it when every server is idle, syncs a running one when its branch moves, reaps unused ones, deletes the servers and cancels the Run of an ended one. Previews from before lux#41 keep the old park-after-idle path. |
 | `lux-feed` (goroutine) | Follows lux's tenant event feed (`GET /v1/events`) from the cursor in `lux_feed`, recording wakes, idleness and gone servers of wakeable previews (`servers.Feed`). |
 | `pr-reconciler` | Re-reads open pull requests not seen for 15 minutes — the backstop for webhooks GitHub never sent. |
@@ -414,11 +417,42 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   round has none, to the policy's required reviewer the round has, else its
   first. Those it judges fixed are resolved (`phases.RecordFindings`). That
   rule is what lets the loop converge.
+- **A later review round's reviewers come from its own change**
+  (`RoundReviewers`, `steps.roundReviewers`): after the attempt's first
+  completed review round, a round runs `alwaysReviewers`, the categories of
+  its attempted findings, the conditional rules matched against the paths
+  changed since the previous review round's checkouts (`Store.RoundDelta`,
+  one GitHub compare per repository, cached in `roundDelta` and shared with
+  the resumption's line count), and `requiredReviewers` when one of those
+  paths is outside `nonProductPaths` (matched against the in-repo path
+  only, unlike conditional rules, so `docs/**` does not cover a repository
+  named `docs`). Unmeasurable (no forge, refused, truncated) or over
+  `MaxResumeDeltaLines`: the first round's `ReviewersFor`. A retry, a
+  directed review and the simplifier's range keep their own categories.
+  The round's `run.created` carries `reasons`; a round with no reviewer
+  goes straight to `awaitReview`, unless a gate waits on a completed review
+  at its heads (`st.Candidate`, or an untested conductor head): then
+  `requiredReviewers` run, else the first round's (`steps.gateReviewers`).
+  The choice is kept in the Owned `reviewChoice` with the round's creation
+  key and heads, so a replayed step at those heads creates the same round.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
   change request or a failing check. Merged → task `done`; closed →
-  `aborted`. Under the conductor, ready to merge (or no longer) is dude's
+  `aborted`. Once none is left open, the end reaches the delivery at
+  whatever step it is parked on (`delivery/pr_ended.go`): live phase Runs
+  are aborted, a pending conductor decision dropped and an escalation
+  withdrawn (`task.decided` by the system), and a finished fix is dropped
+  rather than opened or promoted. One closed beside one still open is the
+  pull request wait's to ask a person about (or, held by a reviewer's
+  question, that hold's); the step at work goes on. A person who chooses
+  wait is not asked about those closes again (`State.WaitedPastClosed`):
+  not by the close's own signal, not by a later round on the open one, and
+  a later fix opens no new pull request where they let one go; a further
+  close is asked about.
+  dude's own closes (Start over, Close) reach no live
+  delivery: the syncer signals only the one on the pull request's branch.
+  Under the conductor, ready to merge (or no longer) is dude's
   line in Chat (`chat.notice`) and wakes nobody; a pull request merged or
   closed wakes it once (`pr_merged`, `pr_closed`). A comment that
   mentions `@dude` (or a factory login), by someone who may wake a fixer,
@@ -636,6 +670,319 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   goes offline five to ten minutes after their last input. While a tab is in
   use the people's minute read is the heartbeat; background polling stops
   while hidden (`useVisibleInterval`), not every event-driven request.
+
+### Organisation sessions, admin-owned sessions and mentions
+
+A brainstorm session's **general access** (`sessions.access`, migration 190)
+is `private` (its accepted people) or `organisation` (every active member of
+its organisation can open it and chat). The change is one way: `PUT
+/internal/sessions/{id}/access` takes only `organisation` (anything else is
+409), and the `sessions_access_one_way` trigger refuses going back whoever
+writes the row. Who may do what is `session_role()` alone, which the
+orchestrator (`delivery.SessionRole`), the ledger's visibility, artifacts and
+the notifier all read: in an organisation session a `read` member counts as
+`chat` and any active member without a row is `chat`; someone removed, or of
+another organisation, has no role whatever rows they left. Writing as a
+non-member inserts their `chat` row under the session's lock
+(`delivery.JoinByWriting`, `session.joined` with `via: organisation`).
+`GET /internal/sessions/open` lists the open sessions with `joined` per row;
+the sidebar's Open to everyone count is those joined and not archived.
+
+**When the owner is removed** from the organisation (`removePerson` →
+`passOnSessions`, in the removal's transaction), each session of theirs that
+someone else can reach — open to the organisation, or with any other row —
+gets `owned_by_admins` (`session.owner_left`); a private one nobody else is in
+is archived with them. While it is set every active admin is `owner` in
+`session_role()` (and may open it); `POST …/take-ownership` makes one of them
+the owner row and clears it (`session.owner_taken`), else 409. Handing it on
+waits until an admin has taken it. `removePerson` takes the `session:`
+advisory lock (`lockOwnedSessions`, before the person's row) of each owned
+session its leaving changes, at most 500 a transaction (the rest pass in
+transactions of their own), and voids the departed owner's pending handover.
+A removal that fails between batches is finished by `DELETE` again (200,
+`{passed}`); otherwise an already removed person is a 404. The backend never
+waits on the orchestrator here: it only kicks it (unawaited, 1 s). The
+orchestrator's owner sweep (`notify/owners.go`, in the notify loop, its own
+watermark `session_owner_sweep` and done set `session_owner_done`, migration
+192) reads `session.owner_left`, `session.owner_returned` and `person.removed`
+from the ledger: it tells each session's live agent
+(`notices/told/session-owner-left` / `-returned`) once, unless an owner change
+was recorded for the session since, and withdraws every open question put to
+a removed person by name, in any session. A change that keeps failing is
+counted (`session_owner_attempts`, migration 194) and given up, logged as
+`session owner change given up` with its cursor and error, once it has failed
+five times and first failed over ten minutes ago. The orchestrator's
+handover, accept and take-ownership hold the new owner's `people` row FOR
+SHARE under the session lock, so a removal either refuses them or sees the
+session as theirs; take-ownership also holds the departed owner's row FOR
+SHARE, so an invitation bringing them back is waited for (409 `owner_active`).
+Take-ownership withdraws what was put to the departed
+owner and tells the agent through `notices/told/session-owner`. An owner
+invited back while its admins still own the session owns it again: the
+invitation's transaction takes the `session:` locks of at most 500 of those
+sessions before the person's row, clears `owned_by_admins` and records
+`session.owner_returned` (which the owner sweep tells the agent); the rest
+follow in transactions of their own of at most 500, each stopping if the
+person was removed again meanwhile, plus one more pass after coming back for
+sessions a removal batch passed while the accept waited on the row. A return
+that fails between batches (a multiple of 500 back, the person active, the
+rest still `owned_by_admins`) is finished by accepting the same invitation
+again, as a removal is by `DELETE` again, or by an admin taking each session
+over: nothing periodic resumes it. Writing a message, answering, filing and
+Try again join an organisation session; renaming takes an owner or chat row
+(or an admin while its admins own it).
+
+**Mentions** ride on a session message (`mentions`, `shareWith`: person ids).
+`shareWith` is the owner's only (403, nothing sent) and adds each as accepted
+`chat` in the message's transaction. Each mention of someone `session_role()`
+admits (others are dropped silently) is a `session_mentions` row, listed in
+`GET /internal/sessions`'s `mentions` while unseen and while the person does
+not have the session open; their page's open heartbeat (`setOpen`, which also
+covers non-members through `session_viewers`) marks it seen. A
+`session.mentioned` event is written only when they did not have it open.
+The notifier pushes it from a sweep of its own (`notify/sessions.go`: its
+own watermark `push_config.session_after_cursor` and sent set
+`push_session_sent`, and index `events_session_mentioned_idx`, migration
+191), which also sends a question put to nobody by name to every active
+admin while the session's admins own it. The agent reads the words as written; `mentions`
+is metadata on the `chat.message`, for the chips.
+
+### Automations
+
+Work nobody started by hand (migration 183; `orchestrator/internal/automations`,
+the API `apps/control-plane/src/api/routes/automations.ts`, the pages
+`apps/web/src/screens/AutomationsSettings.tsx`). An automation belongs to
+the organisation (`project_id` NULL) or a project, and is one of four kinds:
+an **agent**, a **command** that runs and exits, a **server** that answers
+events, or a **webhook** (one signed POST). New ones start off, owned by
+their creator.
+
+- **Triggers.** `{kind: schedule, cron, tz}` — five-field cron in an IANA
+  zone (`ParseCron`/`Next`: no dependency; a minute a spring-forward skips
+  never fires, one a fall-back repeats fires once) — or `{kind: github,
+  event, actions[], filters{branch,label,paths,author}}`. The event is any
+  GitHub event name, so an App permission added later needs no code. Values
+  in a filter are OR'd, filters AND'd; `!login` excludes an author; paths
+  read the pull request's files from GitHub and are checked last (`Match`).
+  An event dude has no code for still matches on event, action, repository
+  and author. The event picker lists what the organisation is subscribed to
+  (`/v1/automations/subscriptions`: the App's `events` from `GET /app`, a
+  PAT's repository webhook's, kept an hour; else the events seen, saying so).
+- **Repositories.** A project automation takes events from its project's
+  repositories and checks out all, none or some of them. An organisation's
+  `repo_filter` (all / only / except, `*` within a segment) is evaluated at
+  match time, so a repository added later is covered at once; on a schedule
+  it decides what each run checks out. Projects cannot opt out: a project's
+  list shows the organisation's that reach it as "Also running here".
+- **Every GitHub delivery is stored** (`receiveWebhook`); the pull request
+  sync marks those that cannot change a pull request done in one statement
+  (`ProcessDeliveries`), and the automations loop reads each delivery once
+  (`webhook_deliveries.automations_at`).
+- **Kinds.** An agent is its own (harness, tier, time limit, machine,
+  image, prompt) or one of dude's roles that run without a task — Tester,
+  Reviewer (`pull_request*` events only), Investigator — resolved for the
+  automation's scope as a task's would be (`ResolveRole`, `Sizes.ForRole`,
+  `RoleImage`), then the automation's overrides; the role's later changes
+  reach every value not overridden. Its prompt is the role's, then the
+  automation's text as the task brief. `{{event.name}}`, `{{event.action}}`,
+  `{{event.delivery_id}}`, `{{event.payload}}`, `{{pr.number|title|url}}`,
+  `{{repository}}`, `{{branch}}`, `{{sender}}` and `{{schedule.time}}` are
+  substituted (`Substitute`). Its checkouts use the dude App's tokens and
+  bot. A command is `sh -c` in a generic lux Run; the event is at
+  `$DUDE_EVENT_PATH` with `DUDE_EVENT_NAME`, `DUDE_EVENT_ACTION` and
+  `DUDE_DELIVERY_ID`. An automation's lux Run is not a dude Run (`runs`): it
+  has no task or session, so the loop follows it from
+  `automation_runs.lux_run_id`.
+- **Preset overrides.** Harness, tier, time limit without progress, machine
+  and image each show the role's resolved value, "From <role> · <org|project>",
+  and "Override for this automation". An override shows "Overridden",
+  what the role's value is and Reset (back to following it). Each field is
+  independent; `spec()` applies `agent.preset.overrides` after the role's settings.
+- **Agent tools.** A run gets exactly `create_task`, `github_search`,
+  `github_issue`, `github_pull_request`, `github_check_log` and `github_comment`.
+  The runner issues a stable per-run tools token (`RunToken`, retried starts
+  use the same one) into the MCP service and CLI's `DUDE_TOOLS_AUTH` secret;
+  its hash and scope live on `automation_runs`. The tool server's sibling
+  `lookup_automation_by_mcp_token` answers without a `runs` row; a finished
+  run's token is dead. Reads and comments are restricted to the covered
+  repositories (project's, or the organisation filter's). `github_comment`
+  uses `forge.GitHub.Comment` as the App, on the triggering issue/PR by default
+  or a given repo/number. `create_task` files in the automation's project,
+  or, for an organisation automation, the project owning the triggering
+  repository; with none (for example on a schedule), it refuses clearly.
+  The task's `created_by_automation_run_id` and `task.created` event name
+  the automation run, automation and owner it acts for.
+- **Prompt editor and history.** Own prompt and preset brief both use
+  `MarkdownDocument`, `{{ }}` inserting `AUTOMATION_PROMPT_VARIABLES`.
+  `automation_prompt_versions` (migration 183, the `prompt_versions` pattern)
+  keeps every changed save's text, who and when; the first change also keeps
+  what it had before. `GET /v1/automations/:id/prompt-history` lists newest
+  first; `POST …/prompt-history/restore {versionId}` (editors) saves an old
+  version again as the newest. The role pages' `PromptHistory` shows diff,
+  whole text and Restore. A read-only viewer reads without Edit/Restore.
+- **Delete and Duplicate.** The header's ⋯ menu: Duplicate copies the settings
+  off, named "<name> (copy)", owned by the caller, with no runs, kept session
+  or prompt history; a webhook copy gets its own signing secret.
+  Delete confirms how many runs' history/logs/payloads go with it and whether
+  a kept session is ended; the API calls the orchestrator's Start fresh to
+  cancel its kept lux Run before deleting the row (and refuses to delete
+  if that fails). Both actions require the scope's editor permission.
+- **Secrets.** Chosen project secrets are given to each run as environment
+  variables. Organisation automations choose none: secrets belong to each
+  project, and a project automation is needed to use its secrets. The org
+  page says so instead of showing a picker; the API rejects names there.
+- **Sessions.** Ephemeral (a fresh Run, cancelled at the end) or Resumable:
+  one session per automation (`automation_sessions`), stopped and kept at
+  the end of a run and resumed by the next firing, until `expiry_days`
+  (1–30) pass without a run — whether or not the automation is on. "Start
+  fresh now" lets it go. lux keeps no secret's value, so a resume gives
+  every secret the kept Run declares again: forge tokens minted afresh, the
+  rest (event file, setup manifest, project secrets) from the spec a new
+  Run would get, so the event file holds the new event. A Run's env stays as
+  first submitted, so `DUDE_AUTOMATION_RUN`, `DUDE_DELIVERY_ID`,
+  `DUDE_EVENT_NAME` and `DUDE_EVENT_ACTION` are also written to
+  `/workspace/.dude/env.sh` (`EnvPath`), a file secret the resume gives again,
+  and the command or server line sources it first: a resumed container sees
+  this firing's values. A process that outlives the resume (one the command
+  started in the background) keeps the values it started with; it must read
+  the event file or `env.sh` again.
+- **Concurrency** (`Arrive`): queue (default), merge (the waiting run gets
+  every payload, as a list), skip (a skipped run row with the reason),
+  cancel and restart, send to the running agent (a resumable agent), or run
+  in parallel up to N (ephemeral). Run now on a schedule queues behind a
+  live run. A test run (a past delivery or a written test event) is always
+  a run of its own, with a fresh ephemeral session, untouched by
+  concurrency; it is a real run.
+- **Server POST contract.** On an event dude starts (or resumes) the
+  container with the command as a lux server, waits for it to be healthy
+  (GET its health path, else the port; at most 60 s), and POSTs each event
+  to `<path>` with `Content-Type: application/json`, `X-Dude-Automation`,
+  `X-Dude-Run`, `X-GitHub-Event`, `X-GitHub-Delivery` and, with a secret,
+  `X-Dude-Signature-256`. It reaches the container at the server's lux
+  preview URL, whose listener answers 401 without its sign-in cookie: on a
+  401 dude mints a preview ticket (`POST /v1/runs/{id}/tickets`), spends it
+  on `<url>/.lux/auth` and sends the request again with the cookie, kept per
+  lux Run (`previewDo`). Events arriving while it is up go to the same
+  container. A 5xx or no answer within 30 s is tried once more; a 4xx is
+  recorded; one `automation_run_requests` row per POST. With nothing in
+  flight and no request for 30 s it is stopped and the run ends (`idle`).
+- **Webhook signing.** `X-Dude-Signature-256: sha256=` and the hex
+  HMAC-SHA256 of the body with the automation's secret, as GitHub signs;
+  one run row per POST, retried once on a 5xx or no answer. The API never
+  returns the secret, only its last four characters.
+- **Ownership.** The creator owns it; its owner and the organisation's
+  admins transfer it to a current member, who need not be able to edit it.
+  Org admins edit organisation automations, a project's editors its own;
+  everyone reads; the owner and editors run it by hand. When the owner is
+  removed (`removePerson`), the organisation's admins hold it together
+  (`owner_id` NULL, `owner_left_at` set): it stays on and its page says so.
+  A failed run records `automation.failed` naming the owner, or every current
+  admin while held. The Web Push notifier includes it in `asks` (and the
+  `events_asks_v2_idx` predicate, migration 184); recipients come from the
+  payload's `to`. The message names the automation and reason, linking to
+  that run under its organisation's or project's settings.
+- **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90
+  (`automations.Retain`, hourly).
+
+### Chat providers (Slack first)
+
+Someone writes `@dude …` in a team chat and dude starts a session, files a
+task, opens an epic with its tasks, resumes a session or asks first, and
+replies in the thread with a link. Migration 195 holds it all, keyed by
+`provider` (an adapter's id): `chat_installations` (one workspace ↔ one
+organisation, unique across tenants; the bot token treated as the forge
+token is — behind RLS, read only by `dude_app` (the sweeper's grant names
+the routing columns alone), returned by no route, kept out of agents,
+logs, stored errors and model-call records (the Slack adapter redacts it,
+and the app's secrets, from every error it returns), and deleted with the
+installation on a disconnect, an uninstall or a revoked bot token; like
+the forge token it is plaintext at rest, see What's next), `chat_identities`
+(a provider account linked once to one account per workspace, never by
+email), `chat_connect_states` (one-time, 15 minutes, as sha256),
+`chat_events` (deliveries, keyed on the provider's event id), `chat_threads`
+(a thread bound to one session, task or epic), `chat_requests` (the routing
+log, 30 days, one per delivery), `organizations.chat_instructions`, and
+`origin` on tasks, epics and sessions.
+
+**The provider interface.** `orchestrator/internal/chat` is provider-neutral:
+a `Mention`, `Event`, `Interaction`, conversation kinds (`public`,
+`private`, `group`, `dm`), `Reply`, `Question`, `Reaction`, and the
+`Provider` interface (verify and parse webhooks; read a thread, a
+conversation's kind and members, a user; post replies, ephemerals,
+questions; update a question; react; OAuth install and identity URLs and
+exchanges; revoke). Routing, the checks, binding, session access and
+Requests (`route.go`, `make.go`, `decide.go`) use only those. The Slack
+adapter is `internal/chat/slack`; `internal/fakeslack` fakes its Web API and
+OAuth pages as strictly as Slack and signs payloads (`cmd/fake-slack` serves
+it for the E2E suite). The web draws a provider from its entry (name and
+glyph id, `GET /v1/organization/chat`); shared components take it as props.
+
+**Adding a provider**: an adapter implementing `chat.Provider` in
+`internal/chat/<id>`, registered in `cmd/dude-orchestrator/main.go`'s
+`chat.Registry` under its id; its config keys (as `slack.*`); a glyph in the
+DS icon set (or it draws `integration`); its name in `apps/web/src/chatOrigin.tsx`'s
+`KNOWN_NAMES`; a fake for its tests. Nothing else changes: routes, tables,
+settings pages and Requests are by `{provider}`.
+
+**The flow.** The backend is still the only public surface: a provider's
+webhook (`POST /v1/webhooks/chat/{provider}/events|interactions`) is passed
+to the orchestrator with its body and its own headers, bounded at 2.5 s;
+`chat.Service.Receive` verifies it (Slack: v0 signature, 5-minute skew),
+answers URL verification, stores it in `chat_events` (a retry is the same
+row) and answers at once. The `chat` loop then, per delivery: installed?
+(else ignored: nothing to reply with) → linked? (else a private Connect
+button to `#/o/<org>/connect/<provider>?state=`, the mention kept against
+the state and routed once they link) → an active member? (else a generic
+private refusal) → a bound thread? (a task or epic: its link, no model; a
+session: the message and the thread since, group members joining on each
+mention) → one routing judgement (`judge.Service.Structured`: the Judgements
+tier, its redaction and `model_calls` record, asker `chat.route`), told the
+built-in instructions, the organisation's, then the provider's, with the
+thread (non-members marked), the projects and epics and the person's chat
+sessions of 14 days → checks (project, epic, session, no cycle, at most 12
+tasks, 2–4 choices; under 75% or a failed check asks while choices can be
+built and fewer than 2 were asked, else a brainstorm, as any failed call)
+→ make it (public: an organisation session; private or group: shared as
+chat with each connected member, the rest recorded skipped; DM: private,
+never bound; tasks in the Backlog, not started, with origin and blocked-by)
+→ bind the thread, reply with the link, record the request. A
+delivery handled twice makes nothing twice (`chat_requests` is unique per
+delivery). An install or a link is begun by a signed-in browser (an HttpOnly
+cookie whose hash the state holds) and finished only in that browser.
+
+**Reactions follow the work.** 👀 goes on the mention as the loop's first
+stage of a delivery (never in the webhook request), once per delivery:
+`chat_events.working_at` is claimed before it is put. A mention kept for a
+Connect loses its 👀 with the Connect prompt and gets it back when the kept
+delivery is routed. Then, by what the mention made: a session (new,
+shared, private, or a message into a bound or resumed one) keeps 👀 after
+the reply with the link, and the `chat-reactions` loop
+(`Service.SettleMarks`, 50 waiting requests a pass) follows the session's
+own agent (its brainstorm Runs, not the investigators it starts):
+- ⏳ in place of 👀 while that agent boots (pending, scheduled or starting;
+  paused and due back for the message; or resumed and lux not yet running
+  it), once per request (`chat_requests.booting_marked_at`). An agent
+  already running goes straight from 👀 to ✅;
+- ✅ on the agent's first `agent.message` or `agent.tool.called` after the
+  mention's message (`chat_requests.awaits_session_after`, read through
+  `events_session_cursor_idx`);
+- ❌ when no brainstorm Run is live and none holds an unread message the
+  syncer will hand to a successor;
+- the mark left as it is after 24 hours of neither.
+
+Each is recorded (`mark_settled`, `booting_marked_at`) before the provider is
+called, so it is put once. A task, an epic or a bound thread's
+link: nothing runs, ✅ with the reply. A clarifying question: the question
+is the answer, the 👀 is cleared. Refusals: cleared, with the private note.
+A mark is cosmetic: no route or outcome depends on it, and a failed one is
+noted for the installation's health, never retried.
+
+**Configuration**: `slack.signing_secret`, `slack.client_id`,
+`slack.client_secret` (both secrets), `slack.api_url` (default
+`https://slack.com/api`; the fake's in tests). The Slack app's Event
+Subscriptions and Interactivity URLs are `<public_url>/v1/webhooks/chat/slack/events`
+and `…/interactions`; its redirect URLs `<public_url>/v1/chat/slack/install/callback`
+and `…/connect/callback`; its bot scopes `slack.BotScopes`.
 
 ## Decisions already made
 
@@ -868,6 +1215,8 @@ In rough priority order.
    per-Run branch and the GitHub fast-forward.
 7. **Forge credentials are stored in plaintext.** Encrypt at rest before any
    non-local use.
+8. **Chat bot tokens are too** (`chat_installations.bot_token`): treated as
+   forge credentials are, and the same encryption should cover both.
 
 ## Where things are
 
@@ -884,5 +1233,13 @@ In rough priority order.
 | Change the scripted agent | `orchestrator/internal/fakeagent` |
 | Add an event type | `packages/domain/src/events/types.ts` and the Go constants that write it |
 | Change the sidebar/board data | `apps/control-plane/src/api/routes/navigation.ts` |
+| Change who may read or chat in a session | `session_role()` (`migrations/190_org_sessions.sql`), `orchestrator/internal/delivery/session_access.go` |
+| Change what a session mention does | `orchestrator/internal/delivery/session_mentions.go`, `notify.go`'s `asks` |
+
+| Change what an automation matches, when it fires, or how it runs | `orchestrator/internal/automations/` (`match.go`, `cron.go`, `concurrency.go`, `runner.go`); its spec, `orchestrator/internal/phases/automation.go` |
+| Change automations' API or who may change them | `apps/control-plane/src/api/routes/automations.ts`, rules in `packages/domain/src/automations.ts` |
+| Change how a chat mention is routed | `orchestrator/internal/chat/route.go`, `decide.go`, `make.go` |
+| Add or change a chat provider | `orchestrator/internal/chat/chat.go` (the interface), `internal/chat/slack`, `internal/fakeslack` |
+| Change the chat settings pages | `apps/web/src/screens/ChatSettings.tsx`, `apps/control-plane/src/api/routes/chat.ts` |
 | Change a screen | `apps/web/src/screens/` |
 | Change a component | `packages/design-system/src/components/` |

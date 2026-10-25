@@ -514,7 +514,9 @@ body {
   align-items: flex-start;
   gap: var(--ds-space-24);
 }
-.settingsForm > section {
+/* Sections take the column's width, also those grouped in a plainFieldset (display: contents). */
+.settingsForm > section,
+.settingsForm > .plainFieldset > section {
   align-self: stretch;
 }
 
@@ -524,6 +526,142 @@ body {
   flex-direction: column;
   gap: var(--ds-space-24);
   min-width: 0;
+}
+
+/* Automations: the list's filters in a wrapping row; a name beside its scope; kind beside session. */
+.automationFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.automationFilters > :first-child {
+  flex: 1 1 200px;
+  max-width: 320px;
+}
+.automationName,
+.automationKind {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+/* In the list: a name wraps rather than clips; kind sits over session. */
+.automationName > button {
+  white-space: normal;
+  text-align: start;
+  color: var(--ds-color-text-primary);
+}
+.automationKind[data-stack="true"] {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ds-space-2);
+}
+.automationLastRun {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+}
+.automationActions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--ds-size-control-md) * 5), 1fr));
+  gap: var(--ds-space-4) var(--ds-space-12);
+  flex: 1;
+}
+.automationNext {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.automationEditorFoot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--ds-space-12);
+  width: 100%;
+}
+.automationChecks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+}
+.automationChecks > li[data-ok="false"] {
+  color: var(--ds-color-text-secondary);
+}
+.automationHint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.automationCount {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.automationRunHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  margin: 0;
+}
+.automationSave {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+  padding-top: var(--ds-space-16);
+}
+.automationSession {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-12);
+  margin-bottom: var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+}
+.automationFact {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+/* A preset's inherited value: read-only, in a dashed field's box. */
+.automationValueBox {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ds-size-control-md);
+  padding: 0 var(--ds-space-8);
+  border: 1px dashed var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.automationTimeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin: 0 0 var(--ds-space-12);
+  padding-left: var(--ds-space-20);
+  font-size: var(--ds-text-sm);
+}
+.automationTimeline time {
+  margin-right: var(--ds-space-8);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.automationPayload {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  white-space: pre-wrap;
 }
 
 /* A tier naming no model yet: its Requests cell, in the attention tone. */
@@ -603,6 +741,18 @@ body {
   .taskSessions,
   .taskChat {
     min-height: 560px;
+  }
+}
+/* Where the page scrolls, the tabs grow with their content instead of
+   shrinking to the window (Tabs' `fill`): the drafts tray after them then
+   follows the last card and sticks to the scroll area's foot while more is
+   below, never drawn over the middle of the page. */
+.taskScreen:not(.fixed) > .taskTabs {
+  flex: 1 0 auto;
+}
+@media (max-height: 639px) {
+  .taskScreen > .taskTabs {
+    flex: 1 0 auto;
   }
 }
 .taskTop {
@@ -1758,4 +1908,121 @@ body {
 .linkish:hover {
   color: var(--ds-color-text-primary);
   text-decoration: underline;
+}
+
+/* The Share dialog: General access and its callouts, spaced from the people
+   below; a member's note on its own line under their name. */
+.sessionShareAccess {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  margin-bottom: var(--ds-space-12);
+}
+.sessionShareNote {
+  display: block;
+  font-size: var(--ds-text-sm);
+}
+/* A member's row: the name takes the width it needs (min-width 0 so it can
+   shrink and wrap), and the role, Make owner… and Remove wrap under it as
+   one group, to the right, when the row is too narrow for both. */
+.sessionShareMembers li {
+  flex-wrap: wrap;
+}
+.sessionShareMembers li > span:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sessionShareActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ds-space-8);
+  margin-left: auto;
+}
+
+/* Chat settings: the provider card's title, the admins to ask, Requests'
+   filters and rows. */
+.chatCardTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.chatAdmins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-12);
+}
+.chatRequestFilters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--ds-space-8);
+  margin-block: var(--ds-space-12);
+}
+/* Block padding larger than the face's online ring, so the cell's clip never cuts it. */
+.chatRequestWho {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-8);
+  padding-block: var(--ds-space-6);
+}
+.chatRequestNoFace {
+  width: var(--ds-size-avatar-md);
+  flex-shrink: 0;
+}
+.chatRequestText,
+.chatRequestRoute {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+.chatRequestQuote {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.chatRequestWhere {
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The request keeps a readable width; on a phone the table scrolls in its frame. */
+.chatRequestText {
+  min-width: 220px;
+}
+/* The result's kind glyph sits on its first line, before the label. */
+.chatRequestKind {
+  display: inline-flex;
+  vertical-align: -0.125em;
+  margin-right: var(--ds-space-4);
+}
+.chatRequestResult {
+  display: inline-block;
+  min-width: 140px;
+}
+.chatRequestWhen {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  white-space: nowrap;
+}
+/* A chat-born session's quoted thread under the asker's opening message, at the message's text column. */
+.sessionOriginNested {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: 0 var(--ds-space-chat-pad-x) var(--ds-space-12) calc(var(--ds-space-chat-pad-x) + var(--ds-size-avatar-chat) + var(--ds-space-chat-avatar-gap));
+}
+/* The Connections section's intro stands apart from its first card. */
+.chatConnectionsIntro {
+  margin-bottom: var(--ds-space-12);
+}
+.chatConnections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
 }

@@ -33,6 +33,11 @@ import { InboxScreen } from "./screens/InboxScreen.tsx";
 import { NotFound } from "./screens/NotFound.tsx";
 import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
+import { ConnectScreen } from "./screens/ConnectScreen.tsx";
+import { EpicOrigin, OriginLead } from "./chatOrigin.tsx";
+
+/** A chat-born card's lead: defined once, so the memoised cards keep their props. */
+const cardLead = (card: BoardCard) => (card.task.originProvider ? <OriginLead provider={card.task.originProvider} /> : null);
 import { HelpScreen } from "./screens/HelpScreen.tsx";
 import { OrganizationSettingsScreen } from "./screens/OrganizationSettingsScreen.tsx";
 import { ProjectSettingsScreen } from "./screens/ProjectSettingsScreen.tsx";
@@ -43,6 +48,7 @@ import type { EpicView } from "./place.ts";
 import { RunScreen } from "./screens/RunScreen.tsx";
 import { SessionScreen } from "./screens/SessionScreen.tsx";
 import { SessionsScreen } from "./screens/SessionsScreen.tsx";
+import { OpenSessionsScreen } from "./screens/OpenSessionsScreen.tsx";
 import { WelcomeScreen } from "./screens/WelcomeScreen.tsx";
 import { forgetModelOptions } from "./sessionModel.ts";
 import { existingTask, TaskDialog, type ExistingTask } from "./screens/TaskDialog.tsx";
@@ -132,7 +138,15 @@ const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormRenamed,
   EventTypes.QuestionAsked, EventTypes.QuestionAnswered, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
   EventTypes.RunPaused, EventTypes.RunResumed,
+  EventTypes.BrainstormAccessChanged, EventTypes.BrainstormOwnerLeft, EventTypes.BrainstormOwnerTaken, EventTypes.BrainstormMentioned,
+  EventTypes.BrainstormOwnerReturned,
 ]);
+
+/** A mention changes only the mentioned person's lists; every other event of SESSION_LIST_EVENTS is anyone's. */
+export function mentionIsYours(e: { eventType: string; payload?: unknown }, you: string | null | undefined): boolean {
+  if (e.eventType !== EventTypes.BrainstormMentioned) return true;
+  return !!you && (e.payload as { person?: unknown } | undefined)?.person === you;
+}
 
 export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   const [projects, setProjects] = useState<NavProject[] | null>(null);
@@ -292,8 +306,18 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // An invitation is not on your stream until you accept it: read again
   // each minute while the page is shown, and once on showing it again.
   useVisibleInterval(() => void loadSessions(), 60_000);
-  const reloadSessions = useRef(loadSessions);
-  reloadSessions.current = loadSessions;
+  // A burst of a session's events (a turn starting, asking, pausing) reads the list once.
+  const sessionsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const latestLoadSessions = useRef(loadSessions);
+  latestLoadSessions.current = loadSessions;
+  const reloadSessions = useRef(() => {
+    if (sessionsTimer.current !== undefined) return;
+    sessionsTimer.current = setTimeout(() => {
+      sessionsTimer.current = undefined;
+      void latestLoadSessions.current();
+    }, 400);
+  });
+  useEffect(() => () => clearTimeout(sessionsTimer.current), []);
 
   // Someone seen is presence, and an agent's words, tools, plan and diff
   // change nothing the tree shows: no reload for either.
@@ -303,7 +327,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       // A tier added, edited or removed, or the Brainstorm setting changed: the model pickers read them again.
       if (e.eventType === EventTypes.SettingsUpdated) forgetModelOptions(client);
       if (e.sessionId?.startsWith("ssn_") || e.eventType.startsWith("session.")) {
-        if (SESSION_LIST_EVENTS.has(e.eventType)) void reloadSessions.current();
+        if (SESSION_LIST_EVENTS.has(e.eventType) && mentionIsYours(e, people.you)) reloadSessions.current();
         return true;
       }
       return QUIET_EVENTS.has(e.eventType);
@@ -465,11 +489,16 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
       onPage={(page, sub) => go(sub ? { view: "orgSettings", page, sub } : { view: "orgSettings", page }, !sub)} />;
   } else if (place?.view === "mySettings") {
     main = <MySettingsScreen client={client} me={people.me} onChanged={() => void people.refresh()} />;
+  } else if (place?.view === "connect") {
+    main = <ConnectScreen client={client} provider={place.provider} state={place.state} onSettings={() => go({ view: "mySettings" })}
+      me={people.me ? { ...people.me, organisation: account?.current.name } : null} onSignOut={onSignOut} />;
   } else if (place?.view === "help") {
     main = <HelpScreen client={client} page={place.page} section={place.section} onPage={(page) => go({ view: "help", page })}
       onSection={(page, section) => go({ view: "help", page, section })} />;
   } else if (place?.view === "sessions") {
     main = <SessionsScreen client={client} sessions={sessionsList?.sessions ?? null} onNew={toWelcome} onOpen={openListedSession} />;
+  } else if (place?.view === "openSessions") {
+    main = <OpenSessionsScreen client={client} org={account?.current.name ?? "the organisation"} onOpen={openSession} />;
   } else if (place?.view === "brainstorm") {
     flush = true;
     main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
@@ -512,8 +541,10 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         projects={projects}
         admin={isAdmin}
         page={place.page}
-        onPage={(page) => go({ view: "projectSettings", projectId: place.projectId, page }, true)}
-        onOrganization={(page) => go({ view: "orgSettings", page })}
+        sub={place.sub}
+        people={people.all}
+        onPage={(page, sub) => go(sub ? { view: "projectSettings", projectId: place.projectId, page, sub } : { view: "projectSettings", projectId: place.projectId, page }, !sub)}
+        onOrganization={(page, sub) => go(sub ? { view: "orgSettings", page, sub } : { view: "orgSettings", page })}
         onOpenRun={openRun}
         onChanged={() => void load()}
         onBack={() => go(inTree({ kind: "project", id: place.projectId }))}
@@ -552,6 +583,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         onFilterChange={setBoardFilter}
         onHighlightChange={litCard.set}
         cardStart={cardStart}
+        cardLead={cardLead}
         archivedHint={!epic && project.archivedCount ? (
           <Button size="sm" variant="quiet" aria-expanded={showArchived} data-testid="archived-hint"
             onClick={() => setShowArchived((s) => !s)}>
@@ -599,12 +631,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
             { id: project.id, label: project.name, onSelect: () => go(inTree({ kind: "project", id: project.id })) },
             { id: epic.id, label: epic.title, icon: "layers" },
           ]} />}
-          meta={<Segmented<EpicView> size="sm" label="Epic view" tabs="epic" value={epicView} data-testid="epic-view"
+          meta={<><EpicOrigin origin={epic.origin} /><Segmented<EpicView> size="sm" label="Epic view" tabs="epic" value={epicView} data-testid="epic-view"
             onChange={(v) => go({ view: "tree", ref: { kind: "epic", id: epic.id }, ...(v === "coordination" ? { epicView: v } : {}) }, true)}
             options={[
               { value: "board", label: "Board" },
               { value: "coordination", label: <>Coordination<OpenWaits client={client} epicId={epic.id} version={version} /></> },
-            ]} />}
+            ]} /></>}
           actions={<>
             <Button size="sm" variant="quiet" leadingIcon="edit" data-testid="edit-epic-button"
               onClick={() => act({ kind: "editEpic", epic: epicRef(project.id, epic) })}>
@@ -723,6 +755,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
           onOpenList: () => go({ view: "sessions" }),
           current: place?.view === "sessions" || place?.view === "brainstorm",
           recent: (sessionsList?.sessions ?? []).map(sessionTitle),
+          organisationCount: sessionsList?.organisation?.joined,
         }}
         railFooter={
           <>
@@ -750,11 +783,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
         onWaitingSelect={() => go({ view: "inbox" })}
         waitingSelected={place?.view === "inbox"}
-        waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0)}
+        waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0) + (sessionsList?.mentions?.length ?? 0)}
         sessions={
           <SidebarSessions
             sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: sessionTitle(s), shared: s.shared,
-              lastActivityAt: s.lastActivityAt, owner: s.role === "owner" ? null : s.owner }))}
+              lastActivityAt: s.lastActivityAt, owner: s.role === "owner" ? null : s.owner, access: s.access }))}
+            organisation={sessionsList?.organisation ? { count: sessionsList.organisation.joined, current: place?.view === "openSessions",
+              onOpen: () => go({ view: "openSessions" }) } : undefined}
             limit={3}
             folded={sessionsFolded}
             onFoldedChange={(folded) => {
@@ -880,6 +915,10 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
       return "Sessions";
     case "brainstorm":
       return "A session";
+    case "openSessions":
+      return "Open to everyone";
+    case "connect":
+      return "Connect";
     case "projectSettings":
       return [projects?.find((p) => p.id === place.projectId)?.name, "Settings"].filter(Boolean).join(" · ");
     case "tree": {

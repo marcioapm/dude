@@ -14,6 +14,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import socket
 import sys
 import signal
@@ -54,6 +55,10 @@ POSTGRES_OWNER_PASSWORD = os.environ.get("DUDE_TEST_PG_OWNER_PASSWORD", "dude")
 POSTGRES_APP_USER = os.environ.get("DUDE_TEST_PG_APP_USER", "dude_app")
 POSTGRES_APP_PASSWORD = os.environ.get("DUDE_TEST_PG_APP_PASSWORD", "dude_app")
 POSTGRES_ADMIN_DB = os.environ.get("DUDE_TEST_PG_ADMIN_DB", "postgres")
+# The suite's Slack app, as the fake Slack and the orchestrator both know it.
+SLACK_SIGNING_SECRET = "e2e-slack-signing-secret"
+SLACK_CLIENT_ID = "e2e-slack-client"
+SLACK_CLIENT_SECRET = "e2e-slack-client-secret"
 
 # The dude layer library images are finished with. The fake lux runs any
 # ref, so this one is never pulled; set, the image library is on. An
@@ -176,6 +181,68 @@ def _checks_questions() -> list[str]:
     return out
 
 
+# The chat routing call's built-in instructions open with this (chat.BuiltInInstructions).
+CHAT_ROUTING_OPENING = "You route a message someone wrote to dude"
+# What else marks a routing call, should the opening change: its answer's shape.
+CHAT_ROUTING_SHAPE = '"route":"brainstorm"|"task"|"epic"|"resume"|"clarify"'
+# The headings the stub reads the routing input by (chat.RoutingInput).
+CHAT_ROUTING_HEADINGS = ("## The message", "## Projects they can file in")
+
+
+class ChatRouteMismatch(Exception):
+    """A routing call the stub cannot read: the opening or a heading it
+    reads by changed. The suite fails on it rather than routing blind."""
+
+
+# The stub runs in run_tests.py's process and the chat suite in pytest's, so
+# a mismatch is recorded in a file under the shared log directory, one per line.
+_mismatch_lock = threading.Lock()
+
+
+def record_chat_route_mismatch(path: Path, mismatch: str) -> None:
+    line = " ".join(mismatch.split())
+    with _mismatch_lock, path.open("a") as f:
+        f.write(line + "\n")
+
+
+def _chat_route(messages: list) -> str | None:
+    """The scripted answer to a chat routing call, or None for any other call.
+
+    Deterministic, from the mention's words: "file a task" files one in the
+    first project listed, "open an epic" opens one there with three tasks
+    (the second and third blocked by the first), anything else is a
+    brainstorm in that project. Raises ChatRouteMismatch for a routing call
+    whose opening or headings are not the ones it reads.
+    """
+    system = str(messages[0].get("content", "")) if messages else ""
+    if CHAT_ROUTING_OPENING not in system:
+        if CHAT_ROUTING_SHAPE in system:
+            raise ChatRouteMismatch(f"a routing call without the opening {CHAT_ROUTING_OPENING!r}")
+        return None
+    user = str(messages[-1].get("content", ""))
+    missing = [h for h in CHAT_ROUTING_HEADINGS if h not in user]
+    if missing:
+        raise ChatRouteMismatch(f"a routing call without the heading(s) {missing}")
+    said = user.split("## The message", 1)[-1].split("## ", 1)[0].lower()
+    projects = re.findall(r"^- ([A-Z][A-Z0-9]{1,5}) \(", user.split("## Projects they can file in", 1)[-1], re.MULTILINE)
+    project = projects[0] if projects else None
+    if "file a task" in said and project:
+        return json.dumps({"route": "task", "confidence": 0.95, "reasoning": "scripted: one clear change", "project": project,
+                           "title": "Tidy the export page", "goal": "Tidy the export page.", "criteria": ["It is tidy"]})
+    if "maybe a task" in said and project:
+        # Under the 75% bar: dude asks.
+        return json.dumps({"route": "task", "confidence": 0.5, "reasoning": "scripted: unsure", "project": project,
+                           "title": "Tidy the export page", "goal": "Tidy the export page."})
+    if "open an epic" in said and project:
+        tasks = [{"ref": "t1", "title": "Measure export time", "goal": "g", "criteria": [], "blocked_by": []},
+                 {"ref": "t2", "title": "Batch the readings query", "goal": "g", "criteria": [], "blocked_by": ["t1"]},
+                 {"ref": "t3", "title": "Stream the CSV response", "goal": "g", "criteria": [], "blocked_by": ["t1"]}]
+        return json.dumps({"route": "epic", "confidence": 0.9, "reasoning": "scripted: several pieces", "project": project,
+                           "new_epic": {"title": "CSV exports", "description": "Make exports fast.", "tasks": tasks}})
+    return json.dumps({"route": "brainstorm", "confidence": 0.85, "reasoning": "scripted: a discussion", "project": project,
+                       "title": "Chat brainstorm"})
+
+
 def llm_env() -> dict:
     """DUDE_LLM_URL / DUDE_LLM_KEY from this process, for an orchestrator
     that is to run a real model. Never printed: the key is a secret."""
@@ -237,6 +304,7 @@ class TestEnvironment:
     control_plane_proc: subprocess.Popen | None = field(default=None, repr=False)
     orchestrator_proc: subprocess.Popen | None = field(default=None, repr=False)
     lux_proc: subprocess.Popen | None = field(default=None, repr=False)
+    slack_proc: subprocess.Popen | None = field(default=None, repr=False)
     gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
     # Access mode's edge and backend, when a suite started them (start_access).
     _access_procs: list = field(default_factory=list, repr=False)
@@ -267,6 +335,16 @@ class TestEnvironment:
         self.orchestrator_url = f"http://127.0.0.1:{self.orchestrator_port}"
         self.orchestrator_token = f"svc-{self.run_id}"
         self.lux_key = f"lux-{self.run_id}"
+
+    @property
+    def chat_route_mismatches_path(self) -> Path:
+        return self.log_dir / f"chat-route-mismatches-{self.run_id}.log"
+
+    def chat_route_mismatches(self) -> list[str]:
+        """The routing calls the judge stub could not read (ChatRouteMismatch),
+        as recorded by whichever process runs the stub."""
+        path = self.chat_route_mismatches_path
+        return path.read_text().splitlines() if path.exists() else []
 
     # -- connection strings -------------------------------------------------
 
@@ -343,6 +421,9 @@ class TestEnvironment:
 
     def _start_judge(self) -> None:
         questions = _checks_questions()
+        mismatches = self.chat_route_mismatches_path
+        # A kept log directory may hold an earlier run's file.
+        mismatches.unlink(missing_ok=True)
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -350,6 +431,23 @@ class TestEnvironment:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 messages = body.get("messages", [])
                 question = " ".join(str(m.get("content", "")) for m in messages)
+                try:
+                    routed = _chat_route(messages)
+                except ChatRouteMismatch as e:
+                    record_chat_route_mismatch(mismatches, str(e))
+                    print(f"judge stub: {e}", file=sys.stderr)
+                    self.send_response(500)
+                    self.send_header("content-length", "0")
+                    self.end_headers()
+                    return
+                if routed is not None:
+                    response = json.dumps({"model": "judge-e2e", "choices": [{"message": {"role": "assistant", "content": routed}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}).encode()
+                    self.send_response(200)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(response)))
+                    self.end_headers()
+                    self.wfile.write(response)
+                    return
                 if not any(q in question for q in questions):
                     # Anything but the checks gate's own questions finds no
                     # proxy: the connection closes with no answer, as an
@@ -383,6 +481,7 @@ class TestEnvironment:
 
     def _start_orchestrator(self) -> None:
         self._start_judge()
+        self._start_fake_slack()
         self.orchestrator_proc = subprocess.Popen(
             [str(REPO_ROOT / "orchestrator" / "bin" / "dude-orchestrator")],
             env={
@@ -423,10 +522,40 @@ class TestEnvironment:
                 # The images people send agents: it reads what the backend stored.
                 **self.s3_env,
                 **self._tools_env(),
+                # Slack is the fake's (fake-slack): its Web API and OAuth pages.
+                **self.slack_env,
                 **self.orchestrator_env,
             },
             stdout=self._log("orchestrator"), stderr=subprocess.STDOUT,
         )
+
+    def _start_fake_slack(self) -> None:
+        """A stand-in for Slack (orchestrator/cmd/fake-slack): the Web API calls
+        and OAuth pages dude uses, and /_fake/ controls a test drives it with.
+        The orchestrator calls it as DUDE_SLACK_API_URL; a test signs Events API
+        payloads with SLACK_SIGNING_SECRET, as Slack signs them."""
+        addr_file = self.log_dir / "fake-slack.addr"
+        addr_file.unlink(missing_ok=True)
+        self.slack_proc = subprocess.Popen(
+            [str(REPO_ROOT / "orchestrator" / "bin" / "fake-slack"), "-client-id", SLACK_CLIENT_ID,
+             "-client-secret", SLACK_CLIENT_SECRET, "-addr-file", str(addr_file)],
+            stdout=self._log("fake-slack"), stderr=subprocess.STDOUT,
+        )
+        deadline = time.time() + 10
+        while not addr_file.exists() or not addr_file.read_text():
+            if time.time() > deadline:
+                raise RuntimeError("fake slack did not start")
+            time.sleep(0.05)
+
+    @property
+    def fake_slack_url(self) -> str:
+        """The fake Slack's address, as it wrote it on start."""
+        return f"http://{(self.log_dir / 'fake-slack.addr').read_text()}"
+
+    @property
+    def slack_env(self) -> dict:
+        return {"DUDE_SLACK_SIGNING_SECRET": SLACK_SIGNING_SECRET, "DUDE_SLACK_CLIENT_ID": SLACK_CLIENT_ID,
+                "DUDE_SLACK_CLIENT_SECRET": SLACK_CLIENT_SECRET, "DUDE_SLACK_API_URL": f"{self.fake_slack_url}/api"}
 
     def _tools_env(self) -> dict:
         """dude's tools for agents: always with the fake lux; with a real one
@@ -642,7 +771,7 @@ class TestEnvironment:
 
     def teardown(self, keep: bool = False) -> None:
         self.stop_access()
-        for name in ("web_proc", "gallery_proc", "control_plane_proc", "orchestrator_proc", "lux_proc"):
+        for name in ("web_proc", "gallery_proc", "control_plane_proc", "orchestrator_proc", "lux_proc", "slack_proc"):
             proc = getattr(self, name, None)
             if proc is None:
                 continue
@@ -755,6 +884,7 @@ class TestEnvironment:
         env.control_plane_proc = None
         env.orchestrator_proc = None
         env.lux_proc = None
+        env.slack_proc = None
         env.gallery_proc = None
         env._access_procs = []
         env.orchestrator_port = int(os.environ.get("DUDE_TEST_ORCHESTRATOR_PORT", "0"))

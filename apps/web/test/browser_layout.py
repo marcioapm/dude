@@ -7,7 +7,9 @@ Against the fixture client; no backend or external network required.
 Run with: python3 apps/web/test/browser_layout.py
 Requires installed Playwright and system Chrome.
 """
+import os
 import unittest
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -26,6 +28,27 @@ OVERFILL = """(selector) => {
   const page = document.scrollingElement;
   return page.scrollHeight - page.clientHeight;
 }"""
+# Where the drafts tray sits in the task page's scroll area: its edges against
+# the area's, and the last feedback card's bottom with the area scrolled to its
+# start and to its end.
+TRAY = """async () => {
+  const area = document.querySelector('[data-testid=task-screen]');
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const measure = () => {
+    const a = area.getBoundingClientRect();
+    const tray = document.querySelector('[data-testid=fb-tray]')?.getBoundingClientRect() ?? null;
+    const cards = document.querySelectorAll('[data-testid=feedback-tab] article');
+    const last = cards[cards.length - 1].getBoundingClientRect();
+    return { areaBottom: a.bottom, trayTop: tray?.top ?? null, trayBottom: tray?.bottom ?? null, lastBottom: last.bottom };
+  };
+  area.scrollTop = 0;
+  await frame();
+  const top = measure();
+  area.scrollTop = area.scrollHeight;
+  await frame();
+  return { top, end: measure() };
+}"""
+SHOTS = os.environ.get("DUDE_TRAY_SHOTS")
 
 
 class PageHoldsStill(unittest.TestCase):
@@ -120,6 +143,44 @@ class PageHoldsStill(unittest.TestCase):
           probe.remove();
           return getComputedStyle(el).color === muted;
         }"""))
+
+    def test_the_drafts_tray_sits_at_the_foot_of_the_scroll_area(self):
+        # The owner's report: on Feedback, the tray drew over the middle of the page with cards below it.
+        # 2 drafts at 1440x900 is the owner's: the page then scrolls, and the tray stayed at the window's foot as the page moved.
+        for width, height in ((1440, 900), (390, 844)):
+            context = self.browser.new_context(viewport={"width": width, "height": height}, service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(f"{URL}/?fixtures=a&run=comment#/task/{TASK}/feedback")
+            page.get_by_test_id("feedback-needs").wait_for(timeout=15000)
+            for drafts in (0, 1, 2, 9):
+                while page.locator("[data-testid=fb-draft]").count() < drafts:
+                    n = page.locator("[data-testid=fb-draft]").count()
+                    page.get_by_test_id("general-open").click()
+                    page.get_by_label("Comment").fill(f"Draft {n}: " + "a line long enough to wrap on a phone " * 4)
+                    page.get_by_test_id("fb-save").click()
+                    page.wait_for_function("n => document.querySelectorAll('[data-testid=fb-draft]').length === n", arg=n + 1)
+                for review in ((False, True) if drafts else (False,)):
+                    if drafts:
+                        toggle = page.get_by_test_id("fb-tray-toggle")
+                        if (toggle.get_attribute("aria-expanded") == "true") != review:
+                            toggle.click()
+                        page.get_by_test_id("fb-tray-panel").wait_for(state="visible" if review else "detached")
+                    for theme in ("light", "dark"):
+                        page.evaluate("t => document.documentElement.setAttribute('data-theme', t)", theme)
+                        at = page.evaluate(TRAY)
+                        where = f"{width}px, {drafts} drafts, review {'open' if review else 'closed'}, {theme}"
+                        if drafts == 0:
+                            self.assertIsNone(at["end"]["trayTop"], where)
+                            self.assertLessEqual(at["end"]["lastBottom"], at["end"]["areaBottom"] + 0.5, where)
+                        else:
+                            for edge in ("top", "end"):
+                                self.assertAlmostEqual(at[edge]["trayBottom"], at[edge]["areaBottom"], delta=0.5, msg=f"{where}, scrolled to {edge}")
+                            # Scrolled to the end, the last card is wholly above the tray: nothing is left under it.
+                            self.assertLessEqual(at["end"]["lastBottom"], at["end"]["trayTop"] + 0.5, where)
+                        if SHOTS:
+                            Path(SHOTS).mkdir(parents=True, exist_ok=True)
+                            page.screenshot(path=str(Path(SHOTS) / f"tray-{drafts}-{'open' if review else 'closed'}-{width}-{theme}.png"))
 
     def test_the_open_session_is_drawn_in_the_selector(self):
         # Open the third session, reopen the list: the keyboard's row is the

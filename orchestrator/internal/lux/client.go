@@ -707,6 +707,10 @@ type Client interface {
 	ServerAction(ctx context.Context, runID, name, action string) (Server, error)
 	RemoveServer(ctx context.Context, runID, name string) error
 	ServerLog(ctx context.Context, runID, name string, tail int) (json.RawMessage, error)
+	// PreviewTicket mints a single-use ticket, good for 60 seconds, for
+	// the sign-in of a Run's preview URLs: <url>/.lux/auth?ticket=…&to=/path
+	// answers with the preview cookie. Needs the read scope.
+	PreviewTicket(ctx context.Context, runID string) (string, error)
 
 	// Cost is what lux's cost plugins have priced for a Run so far.
 	Cost(ctx context.Context, runID string) (RunCost, error)
@@ -968,6 +972,17 @@ func (c *HTTPClient) ServerAction(ctx context.Context, runID, name, action strin
 	var s Server
 	err := c.do(ctx, "POST", serverPath(runID, name)+"/"+action, nil, nil, &s)
 	return s, err
+}
+
+func (c *HTTPClient) PreviewTicket(ctx context.Context, runID string) (string, error) {
+	var out struct {
+		Ticket string `json:"ticket"`
+	}
+	err := c.do(ctx, "POST", "/v1/runs/"+url.PathEscape(runID)+"/tickets", map[string]string{"kind": "preview"}, nil, &out)
+	if err == nil && out.Ticket == "" {
+		err = errors.New("lux minted no preview ticket")
+	}
+	return out.Ticket, err
 }
 
 func (c *HTTPClient) RemoveServer(ctx context.Context, runID, name string) error {

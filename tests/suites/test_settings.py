@@ -363,6 +363,26 @@ def test_a_project_shows_inherited_and_overridden_values_and_resets_them(
 
 
 @pytest.mark.ui
+def test_automations_is_in_both_settings_menus_and_opens_its_list(
+    page: Page, web_url: str, org: dict, project: dict, console_errors: list
+):
+    _sign_in(page, web_url, org["api_key"], board=False)
+    page.goto(f"{web_url}#/org/settings/members")
+    nav = page.locator("[data-settings-nav='automations']")
+    expect(nav).to_have_text(re.compile(r"^Automations$"))
+    # Between Agents & prompts and Network in the organisation's menu.
+    expect(page.locator("[data-settings-nav='network']")).to_be_visible()
+    nav.click()
+    expect(page.get_by_test_id("automations")).to_be_visible()
+    expect(page.get_by_test_id("automations-empty")).to_contain_text("No automations yet")
+
+    page.goto(f"{web_url}#/project/{project['id']}/settings/general")
+    page.locator("[data-settings-nav='automations']").click()
+    expect(page.get_by_test_id("automations")).to_be_visible()
+    assert console_errors == []
+
+
+@pytest.mark.ui
 def test_the_project_page_shows_epics_by_state(page: Page, web_url: str, client: ApiClient, org: dict,
                                                forge_project: dict, console_errors: list):
     pid = forge_project["id"]

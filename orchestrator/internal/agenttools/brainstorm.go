@@ -724,8 +724,9 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 	}
 	to, toName := "", ""
 	if name := strings.TrimSpace(in.To); name != "" {
+		// Its people who can chat now: a reader of an organisation session counts.
 		rows, err := tx.Query(ctx, `SELECT p.id, p.name FROM session_people sp JOIN people p ON p.id = sp.person_id
-			WHERE sp.session_id = $1 AND sp.accepted_at IS NOT NULL AND sp.role IN ('owner', 'chat')
+			WHERE sp.session_id = $1 AND sp.accepted_at IS NOT NULL AND session_role(sp.session_id, p.id) IN ('owner', 'chat')
 			  AND (p.id = $2 OR lower(p.name) = lower($2) OR lower(split_part(p.name, ' ', 1)) = lower($2))`, c.SessionID, name)
 		if err != nil {
 			return askOut{}, err

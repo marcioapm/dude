@@ -108,6 +108,9 @@ type githubRead struct {
 // readableRepos are the GitHub repositories (owner/name) the caller may
 // read: a session's linked projects', or a conductor's task's project's.
 func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
+	if c.AutomationID != "" {
+		return c.AutomationScope.Repos, nil
+	}
 	var projects []string
 	if c.Role == delivery.RoleBrainstorm {
 		linked, err := delivery.SessionProjects(ctx, tx, c.SessionID)
@@ -203,6 +206,9 @@ func checkGitHubBudget(ctx context.Context, tx pgx.Tx, c Caller, need int) error
 // conductor with none, the task's) Runs share one, counted one caller at a
 // time under this key's lock.
 func githubReadKey(c Caller) string {
+	if c.AutomationID != "" {
+		return "automation:" + c.AutomationID
+	}
 	if c.SessionID != "" {
 		return "session:" + c.SessionID
 	}
@@ -214,6 +220,9 @@ func githubReadsThisHour(ctx context.Context, tx pgx.Tx, c Caller) (int, error) 
 	count, scope := githubReadsByTask, c.TaskID
 	if c.SessionID != "" {
 		count, scope = githubReadsBySession, c.SessionID
+	}
+	if c.AutomationID != "" {
+		count, scope = `SELECT count(*) FROM events WHERE payload->>'automationId' = $1`+githubReadsInHour, c.AutomationID
 	}
 	var reads int
 	err := tx.QueryRow(ctx, count, scope).Scan(&reads)
@@ -656,7 +665,12 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 }
 
 func (w wrapper) checkLog(log forge.CheckLogRead) map[string]any {
-	return map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(log.Text, 16<<10), "external": w.note()}
+	out := map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(log.Text, 16<<10), "external": w.note()}
+	// Why an Actions job's log was not read, in dude's words (forge.UnreadReason).
+	if log.Unread != "" {
+		out["unread"] = log.Unread
+	}
+	return out
 }
 
 // fit encodes a result within resultCap, its note first. Past it, one
@@ -764,6 +778,62 @@ func (w wrapper) recut(s string, n int) string {
 	inner, _, _ = strings.Cut(inner, end)
 	return w.text(inner, max(0, n-len(open)-len(end)-64))
 }
+
+type githubCommentIn struct {
+	Repo   string `json:"repo,omitempty"`
+	Number int    `json:"number,omitempty"`
+	Body   string `json:"body"`
+}
+
+func checkAutomationComment(ctx context.Context, tx pgx.Tx, c Caller, in githubCommentIn) (githubCommentIn, error) {
+	if c.AutomationID == "" {
+		return in, refuse("GitHub comments are only available to automations")
+	}
+	if in.Repo == "" {
+		in.Repo = c.AutomationScope.EventRepo
+	}
+	if in.Number == 0 {
+		in.Number = c.AutomationScope.EventNumber
+	}
+	in.Repo, in.Body = strings.TrimSpace(in.Repo), strings.TrimSpace(in.Body)
+	if in.Number <= 0 || len(in.Body) == 0 || len(in.Body) > 65536 {
+		return in, refuse("name an issue or pull request number and a comment of 1 to 65536 bytes")
+	}
+	gh, err := githubOf(c)
+	if err != nil {
+		return in, err
+	}
+	if gh == nil {
+		return in, refuseText(rThisOrganisationHasNoGithubConnection)
+	}
+	repos, err := readableRepos(ctx, tx, c)
+	if err != nil {
+		return in, err
+	}
+	i := slices.IndexFunc(repos, func(repo string) bool { return strings.EqualFold(repo, in.Repo) })
+	if i < 0 {
+		return in, refuse("repository %s is outside this automation's covered repositories", in.Repo)
+	}
+	in.Repo = repos[i]
+	return in, nil
+}
+
+func postAutomationComment(ctx context.Context, c Caller, in githubCommentIn) (forge.Posted, error) {
+	gh, err := githubOf(c)
+	if err != nil {
+		return forge.Posted{}, err
+	}
+	return gh.Comment(ctx, in.Repo, in.Number, in.Body)
+}
+
+func recordAutomationComment(ctx context.Context, tx pgx.Tx, c Caller, in githubCommentIn, posted forge.Posted) (map[string]any, error) {
+	out := map[string]any{"repo": in.Repo, "number": in.Number, "url": posted.URL, "commentId": posted.CommentID}
+	_, err := ledger.Append(ctx, tx, c.event("github.comment.created", out))
+	return out, err
+}
+
+var automationCommentTool = around(define("github_comment", checkAutomationComment).before(forgeFor).limit(20).countingAttempts().withholdingResult(),
+	postAutomationComment, recordAutomationComment)
 
 var githubReadTools = []tool{
 	around(define("github_search", searchGitHub).before(forgeFor).countingAttempts().withholdingResult(),

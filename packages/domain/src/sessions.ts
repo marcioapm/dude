@@ -3,13 +3,41 @@
  * conversation with an agent that belongs to its members, not a task.
  */
 
+import { z } from "zod";
 import type { Harness } from "./harnesses.ts";
 import type { PersonRef } from "./hierarchy.ts";
 import type { AskItem } from "./questions.ts";
 import type { AgentMachine } from "./machines.ts";
+import type { SessionChatOrigin } from "./chat.ts";
 
 /** What a member may do: the owner (exactly one), write and file, or read. */
 export type SessionRole = "owner" | "chat" | "read";
+
+/**
+ * Who may open a session without being added: its people alone, or every
+ * active member of its organisation. Private → organisation is one way.
+ */
+export const sessionAccessSchema = z.enum(["private", "organisation"]);
+export type SessionAccess = z.infer<typeof sessionAccessSchema>;
+
+/**
+ * What a member's role lets them do in a session of this access: in an
+ * organisation session everyone can chat, so a `read` role counts as chat.
+ */
+export function effectiveSessionRole(role: SessionRole, access: SessionAccess): SessionRole {
+  return access === "organisation" && role === "read" ? "chat" : role;
+}
+
+/** Whether a member with `role` may write in a session of this access. */
+export function canChat(role: SessionRole | null, access: SessionAccess): boolean {
+  return role !== null && effectiveSessionRole(role, access) !== "read";
+}
+
+/** A session message's mentions and the people the owner shares it with as it is sent, person ids each. */
+export const sessionMentionsSchema = z.object({
+  mentions: z.array(z.string().min(1)).max(20).optional(),
+  shareWith: z.array(z.string().min(1)).max(20).optional(),
+});
 
 /** What a session is called until its agent or a member names it. */
 export const UNTITLED_SESSION = "Untitled session";
@@ -43,6 +71,51 @@ export interface SessionSummary {
   lastActivityAt: string;
   /** You archived it: listed only when archived ones are asked for (`?archived=1`). Yours alone. */
   archived: boolean;
+  /** Absent from an older orchestrator: private. */
+  access?: SessionAccess;
+  /** Its owner left the organisation: its admins own it. */
+  ownedByAdmins?: boolean;
+}
+
+/** An organisation session as "Open to everyone" lists it. */
+export interface OpenSessionSummary {
+  id: string;
+  title: string | null;
+  owner: PersonRef | null;
+  /** You are in it: added, or you wrote in it. */
+  joined: boolean;
+  people: number;
+  projects: SessionProjectRef[];
+  runStatus: string | null;
+  lastActivityAt: string;
+  ownedByAdmins: boolean;
+  /** Its owner archived it: listed under "Archived by owner", not Active. */
+  archivedByOwner: boolean;
+}
+
+export interface OpenSessionsList {
+  sessions: OpenSessionSummary[];
+  /** The sidebar's count: the active organisation sessions you have joined. */
+  joined: number;
+}
+
+/** The sidebar's Open to everyone row: how many sessions are open to the organisation, and how many of them you joined (active). */
+export interface OpenSessionsCount {
+  count: number;
+  joined: number;
+}
+
+/** Someone mentioned you in a session and you have not opened it since. */
+export interface SessionMentionLine {
+  id: string;
+  sessionId: string;
+  title: string | null;
+  by: PersonRef | null;
+  text: string;
+  createdAt: string;
+  access: SessionAccess;
+  /** You are not one of its people yet (an organisation session you never joined). */
+  member: boolean;
 }
 
 /** An invitation waiting on you: what an inbox line shows, never a word said. */
@@ -75,6 +148,10 @@ export interface SessionsList {
   sessions: SessionSummary[];
   invitations: SessionInvitation[];
   questions: SessionQuestionLine[];
+  /** Absent from an older orchestrator. */
+  mentions?: SessionMentionLine[];
+  /** Absent from an older orchestrator. */
+  organisation?: OpenSessionsCount;
 }
 
 export interface SessionMemberView {
@@ -173,8 +250,14 @@ export interface SessionDetail {
     runs: string[];
     costUsd: number;
     messages: number;
+    /** Absent from an older orchestrator: private. */
+    access?: SessionAccess;
+    ownedByAdmins?: boolean;
+    /** Made from a chat mention: where, the thread as quoted, and how it was routed; null otherwise. */
+    origin?: SessionChatOrigin | null;
   };
-  you: { id: string; role: SessionRole; archived: boolean };
+  /** `role` is what you may do (an organisation session lifts `read` to `chat`); `member` is false when you are not one of its people yet; `mayRename` is the rename route's own rule (a lifted reader may not). */
+  you: { id: string; role: SessionRole; archived: boolean; member?: boolean; admin?: boolean; mayRename?: boolean };
   proposals: Proposal[] | null;
   question: { id: string; prompt: string; options: string[]; items?: AskItem[]; askedAt: string; to: PersonRef | null; yours: boolean } | null;
   /** The model its agent runs on; absent from an older orchestrator. */

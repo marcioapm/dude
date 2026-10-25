@@ -1,7 +1,9 @@
 package delivery
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"path"
@@ -69,6 +71,7 @@ var (
 	restartedTmpl              = mustTemplate("contracts/restarted")
 	reviewScopeTmpl            = mustTemplate("contracts/review-scope")
 	roundTmpl                  = mustTemplate("contracts/resume/round")
+	retestAfreshTmpl           = mustTemplate("contracts/resume/afresh")
 	fixRoundTmpl               = mustTemplate("contracts/resume/fix-round")
 	reviewFindingsTmpl         = mustTemplate("contracts/review-findings")
 	reviewLeadTmpl             = mustTemplate("contracts/review-lead")
@@ -151,6 +154,11 @@ var agentFuncs = template.FuncMap{
 	// quoteLines continues a Markdown quote over the text's lines.
 	"quoteLines": func(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ") },
 	"fenced":     fenced,
+	// externalID is an id for quoting s (ExternalText), derived from s so a
+	// prompt renders the same for the same text; ExternalText takes the
+	// marker brackets out of s, so s cannot close its quote whatever the id.
+	"externalID": func(s string) string { sum := sha256.Sum256([]byte(s)); return hex.EncodeToString(sum[:4]) },
+	"external":   ExternalText,
 	// indent indents each line of a text by four spaces.
 	"indent": func(s string) string { return "    " + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n    ") },
 }

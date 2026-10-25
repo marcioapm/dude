@@ -20,13 +20,21 @@ import { EventTypes, TERMINAL_RUN_STATUSES, UNARCHIVE_FIRST, closedBy, lifecycle
 import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
+import { FixtureAutomations } from "./automations.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
+import type { OpenSessionsList } from "@dude/domain";
+import type { ChatProvider, ChatRequestRow } from "@dude/domain";
+import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type StopRequest, type StopResult, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
+
+/** Slack, as the fixtures' backend lists it. */
+const SLACK: ChatProvider = { id: "slack", name: "Slack", glyph: "slack", workspaceWord: "workspace" };
+const CHAT_BUILT_IN = "You route a message someone wrote to dude, a software-delivery system, from a team chat.\n(The rest of dude's built-in instructions.)";
 
 /**
  * An EventSource over the fixtures: on open it replays the scope's ledger
@@ -239,6 +247,7 @@ export class FixtureClient extends ApiClient {
   #session: SessionDetail | null = null;
 
   override getSession(id: string): Promise<SessionDetail> {
+    if (localStorage.getItem(RUN_KEY) === "org-sessions" && ORG_SESSIONS[id]) return Promise.resolve(ORG_SESSIONS[id]);
     return this.#session && id === this.#session.session.id ? Promise.resolve(this.#session)
       : Promise.reject(new ApiError(404, "not_found", "No such session."));
   }
@@ -505,6 +514,9 @@ export class FixtureClient extends ApiClient {
 
   /** The scope's events after a cursor, as the API and the stream's backfill both answer. A test's client adds its own. */
   protected ledgerFor({ runId, taskId, sessionId, after = 0 }: LedgerQuery): PersistedEvent[] {
+    if (sessionId && localStorage.getItem(RUN_KEY) === "org-sessions" && ORG_SESSIONS[sessionId]) {
+      return orgSessionEvents().filter((e) => e.sessionId === sessionId && e.cursor > after);
+    }
     return this.#events.filter((e) => e.cursor > after && (!runId || e.runId === runId) && (!taskId || e.taskId === taskId)
       && (!sessionId || e.sessionId === sessionId));
   }
@@ -549,7 +561,12 @@ export class FixtureClient extends ApiClient {
   }
   // The mockups' world has no brainstorm sessions; a test's client adds its own.
   override sessions(): Promise<SessionsList> {
+    if (localStorage.getItem(RUN_KEY) === "org-sessions") return Promise.resolve(orgSessionsList());
     return Promise.resolve({ sessions: [], invitations: [], questions: [] });
+  }
+  // `dude.fixtures.run` = org-sessions: the sessions open to everyone (fixtures/orgSessions.ts); none otherwise.
+  override openSessions(): Promise<OpenSessionsList> {
+    return Promise.resolve(localStorage.getItem(RUN_KEY) === "org-sessions" ? openSessionsList() : { sessions: [], joined: 0 });
   }
   override sessionOpen(_id: string, open: boolean) {
     return Promise.resolve({ open });
@@ -771,6 +788,92 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ calls: [], summary: { calls: 0, since: new Date(Date.now() - 7 * 86_400_000).toISOString() }, askers: [], next: null });
   }
 
+  // -- chat: Slack installed, you connected, a few requests -------------------
+
+  #chatInstructions = "#support is almost always about Billing (BIL).\nBugs about exports go to the Exports epic.";
+  #slackInstructions = "#eng-* channels belong to engineering: prefer a task over a brainstorm there.";
+  #slackInstalled = true;
+  #slackLinked = true;
+  override chatOverview(): ReturnType<ApiClient["chatOverview"]> {
+    const you = PEOPLE[0]!;
+    return Promise.resolve({
+      providers: [{ provider: SLACK, installed: this.#slackInstalled, workspaceName: this.#slackInstalled ? "Acme" : null,
+        workspaceDomain: this.#slackInstalled ? "acme-hq" : null, installedAt: this.#slackInstalled ? "2026-10-09T09:00:00Z" : null,
+        connected: this.#slackInstalled && this.#slackLinked ? { handle: "marcio", displayName: you.name, linkedAt: "2026-10-09T09:05:00Z", mentions: 14 } : null }],
+      canEdit: true, admins: [{ id: you.id, name: you.name, photoUrl: null, online: true }],
+    });
+  }
+  override chatInstallation(): ReturnType<ApiClient["chatInstallation"]> {
+    const you = { id: PEOPLE[0]!.id, name: PEOPLE[0]!.name, photoUrl: null, online: true };
+    return Promise.resolve({ provider: SLACK, installed: this.#slackInstalled, canEdit: true, configured: true,
+      workspaceName: this.#slackInstalled ? "Acme" : null, workspaceDomain: this.#slackInstalled ? "acme-hq" : null,
+      installedAt: this.#slackInstalled ? "2026-10-09T09:00:00Z" : null, installedBy: this.#slackInstalled ? you : null,
+      botUser: this.#slackInstalled ? "UB0DUDE" : null,
+      scopes: [], connectedCount: this.#slackInstalled ? 7 : 0, connected: null, admins: [you],
+      health: this.#slackInstalled ? { lastEventAt: new Date(Date.now() - 120_000).toISOString(), failedToday: 0, lastFailure: null } : null,
+      people: this.#slackInstalled ? [{ person: you, handle: "marcio", displayName: you.name, linkedAt: "2026-10-09T09:05:00Z" }] : null });
+  }
+  override async installChat(): ReturnType<ApiClient["installChat"]> {
+    this.#slackInstalled = true;
+    return { url: "#/org/settings/chat/slack" };
+  }
+  override async disconnectChat(): Promise<void> {
+    this.#slackInstalled = false;
+  }
+  override async connectChat(): ReturnType<ApiClient["connectChat"]> {
+    this.#slackLinked = true;
+    return { url: "#/me/settings" };
+  }
+  override async unlinkChat(): Promise<void> {
+    this.#slackLinked = false;
+  }
+  override chatConnectState(): ReturnType<ApiClient["chatConnectState"]> {
+    return Promise.resolve({ status: this.#slackLinked ? "connected" : "ready", provider: SLACK, workspaceName: "Acme", workspaceDomain: "acme-hq",
+      connected: this.#slackLinked ? { handle: "marcio", displayName: PEOPLE[0]!.name } : null,
+      asker: this.#slackLinked ? null : { id: "U1", handle: "marcio", displayName: PEOPLE[0]!.name } });
+  }
+  override routingInstructions(): ReturnType<ApiClient["routingInstructions"]> {
+    return Promise.resolve({ builtIn: CHAT_BUILT_IN, additional: this.#chatInstructions, canEdit: true });
+  }
+  override async setRoutingInstructions(additional: string): ReturnType<ApiClient["setRoutingInstructions"]> {
+    this.#chatInstructions = additional;
+    return this.routingInstructions();
+  }
+  override providerRoutingInstructions(): ReturnType<ApiClient["providerRoutingInstructions"]> {
+    return Promise.resolve({ builtIn: CHAT_BUILT_IN, organisation: this.#chatInstructions, additional: this.#slackInstructions,
+      installed: this.#slackInstalled, canEdit: true });
+  }
+  override async setProviderRoutingInstructions(_provider: string, additional: string): ReturnType<ApiClient["setProviderRoutingInstructions"]> {
+    this.#slackInstructions = additional;
+    return this.providerRoutingInstructions();
+  }
+  override chatRequests(filter: Parameters<ApiClient["chatRequests"]>[0] = {}): ReturnType<ApiClient["chatRequests"]> {
+    const p = (i: number) => ({ id: PEOPLE[i % PEOPLE.length]!.id, name: PEOPLE[i % PEOPLE.length]!.name, photoUrl: null, online: i === 0 });
+    const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+    const rows: ChatRequestRow[] = [
+      { id: "chr_1", provider: "slack", conversationKind: "public", conversationName: "#eng-exports", externalUserName: p(1).name, person: p(1),
+        text: "open an epic in billing so CSV exports stop timing out, with the tasks it needs", permalink: "", route: "epic", askedRoute: null,
+        confidence: 0.86, reasoning: "Several pieces of work in BIL.", rounds: 0, result: { kind: "epic", id: "epc_csv", label: "BIL › CSV exports" },
+        sharedAdded: [], sharedSkipped: [], createdAt: ago(8) },
+      { id: "chr_2", provider: "slack", conversationKind: "private", conversationName: "#design-private", externalUserName: p(0).name, person: p(0),
+        text: "let's think through the export settings screen together", permalink: "", route: "brainstorm", askedRoute: null, confidence: 0.79,
+        reasoning: "A discussion.", rounds: 0, result: { kind: "session", id: "ssn_9d2p", label: "Export settings screen" },
+        sharedAdded: [p(1), p(2)], sharedSkipped: ["U9", "U8"], createdAt: ago(16) },
+      { id: "chr_3", provider: "slack", conversationKind: "public", conversationName: "#eng-exports", externalUserName: p(1).name, person: p(1),
+        text: "hmm thoughts?", permalink: "", route: "brainstorm", askedRoute: "task", confidence: 0.41,
+        reasoning: "Might be a task; under the 75% bar.", rounds: 2, result: null, sharedAdded: [], sharedSkipped: [], createdAt: ago(180) },
+      { id: "chr_4", provider: "slack", conversationKind: "public", conversationName: "#support", externalUserName: "Jon Kowalski", person: null,
+        text: "@dude summarise this thread into a bug", permalink: "", route: "not_connected", askedRoute: null, confidence: null,
+        reasoning: "Their account is not connected.", rounds: 0, result: null, sharedAdded: [], sharedSkipped: [], createdAt: ago(420) },
+    ];
+    const matched = rows.filter((r) => (!filter.provider || r.provider === filter.provider) && (!filter.route || r.route === filter.route));
+    const week = matched.filter((r) => Date.parse(r.createdAt) > Date.now() - 7 * 86_400_000);
+    return Promise.resolve({
+      requests: filter.limit ? matched.slice(0, filter.limit) : matched,
+      ...(filter.summary ? { week: { mentions: week.length, asked: week.filter((r) => r.confidence !== null && r.route !== "task_link").length } } : {}),
+    });
+  }
+
   // -- servers --------------------------------------------------------------
 
   override projectServers(): Promise<{ servers: Recipe[]; previews: PreviewSettings }> {
@@ -989,5 +1092,79 @@ export class FixtureClient extends ApiClient {
   }
   override runDiff(): Promise<never> {
     return Promise.reject(new ApiError(404, "not_found", "No diff in the fixtures."));
+  }
+
+  // -- automations ------------------------------------------------------------
+  #automations = new FixtureAutomations();
+  #auto<T>(f: () => T): Promise<T> {
+    try {
+      return Promise.resolve(f());
+    } catch (e) {
+      return Promise.reject(new ApiError(404, "not_found", e instanceof Error ? e.message : String(e)));
+    }
+  }
+  override automations(query: Record<string, string> = {}): ReturnType<ApiClient["automations"]> {
+    return this.#auto(() => this.#automations.all(query));
+  }
+  override projectAutomations(projectId: string): ReturnType<ApiClient["projectAutomations"]> {
+    return this.#auto(() => this.#automations.project(projectId));
+  }
+  override automation(id: string): ReturnType<ApiClient["automation"]> {
+    return this.#auto(() => this.#automations.one(id));
+  }
+  override createAutomation(input: Parameters<ApiClient["createAutomation"]>[0]): ReturnType<ApiClient["createAutomation"]> {
+    return this.#auto(() => this.#automations.create(input));
+  }
+  override updateAutomation(id: string, input: Parameters<ApiClient["updateAutomation"]>[1]): ReturnType<ApiClient["updateAutomation"]> {
+    return this.#auto(() => this.#automations.update(id, input));
+  }
+  override deleteAutomation(id: string): Promise<void> {
+    return this.#auto(() => this.#automations.remove(id));
+  }
+  override setAutomationEnabled(id: string, enabled: boolean): ReturnType<ApiClient["setAutomationEnabled"]> {
+    return this.#auto(() => this.#automations.enable(id, enabled));
+  }
+  override transferAutomation(id: string, personId: string): ReturnType<ApiClient["transferAutomation"]> {
+    return this.#auto(() => this.#automations.transfer(id, personId));
+  }
+  override automationRepositories(): ReturnType<ApiClient["automationRepositories"]> {
+    return this.#auto(() => this.#automations.repositories());
+  }
+  override scheduleNext(cron: string, tz: string): ReturnType<ApiClient["scheduleNext"]> {
+    return this.#auto(() => this.#automations.scheduleNext(cron, tz));
+  }
+  override eventSubscriptions(): ReturnType<ApiClient["eventSubscriptions"]> {
+    return this.#auto(() => this.#automations.subscriptions());
+  }
+  override automationRuns(id: string): ReturnType<ApiClient["automationRuns"]> {
+    return this.#auto(() => this.#automations.runsOf(id));
+  }
+  override automationRun(id: string, runId: string): ReturnType<ApiClient["automationRun"]> {
+    return this.#auto(() => this.#automations.run(id, runId));
+  }
+  override automationDeliveries(): ReturnType<ApiClient["automationDeliveries"]> {
+    return this.#auto(() => this.#automations.deliveries());
+  }
+  override runAutomation(id: string, body: Parameters<ApiClient["runAutomation"]>[1]): ReturnType<ApiClient["runAutomation"]> {
+    return this.#auto(() => this.#automations.runNow(id, body));
+  }
+  override evaluateTestEvent(id: string, body: Record<string, unknown>): ReturnType<ApiClient["evaluateTestEvent"]> {
+    return this.#auto(() => this.#automations.evaluate(id, body));
+  }
+  override startAutomationFresh(): Promise<void> {
+    return Promise.resolve();
+  }
+  override automationPromptHistory(id: string): ReturnType<ApiClient["automationPromptHistory"]> {
+    return this.#auto(() => this.#automations.promptHistory(id));
+  }
+  override restoreAutomationPrompt(id: string, versionId: string): ReturnType<ApiClient["restoreAutomationPrompt"]> {
+    return this.#auto(() => this.#automations.restorePrompt(id, versionId));
+  }
+  override duplicateAutomation(id: string): ReturnType<ApiClient["duplicateAutomation"]> {
+    return this.#auto(() => this.#automations.duplicate(id));
+  }
+  /** An automation as the fixture backend holds it now, read synchronously (tests). */
+  fixtureAutomation(id: string) {
+    return this.#automations.one(id);
   }
 }

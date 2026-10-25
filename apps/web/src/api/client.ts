@@ -18,6 +18,16 @@ import type { QuestionAnswer as SentAnswer } from "@dude/design-system/component
 import type {
   AgentMachine,
   AgentRole,
+  Automation,
+  AutomationInput,
+  AutomationRunDetail,
+  AutomationPromptVersion,
+  AutomationRunsResponse,
+  EventSubscriptions,
+  EventVerdict,
+  NewAutomation,
+  PastDelivery,
+  RunNow,
   FeedbackDraftInput,
   FeedbackItem,
   FeedbackList,
@@ -27,6 +37,7 @@ import type {
   Harness,
   SessionLink,
   SessionsList,
+  OpenSessionsList,
   TaskRepository,
   TaskSource,
   TaskSourceInput,
@@ -105,6 +116,15 @@ import type {
   RelationSide,
   TaskRelations,
   TaskStatus,
+} from "@dude/domain";
+import type {
+  ChatConnectStateView,
+  ChatInstallationView,
+  ChatOverview,
+  ChatRequestRow,
+  ChatRequestsSummary,
+  ProviderRoutingInstructions,
+  RoutingInstructions,
 } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
 
@@ -562,7 +582,7 @@ export type AdminPerson = PersonRef & { email: string | null; role: PersonRole; 
 /** Where an id lives among your organisations. `GET /v1/locate/:id`. */
 export interface Located {
   organization: { id: string; name: string; slug: string };
-  kind: "task" | "project" | "epic" | "run" | "brainstorm";
+  kind: "task" | "project" | "epic" | "run" | "brainstorm" | "connect";
   id: string;
 }
 
@@ -1317,6 +1337,90 @@ export class ApiClient {
     return this.#request("POST", "/v1/models/test", input);
   }
 
+  // -- automations: the organisation's and each project's -------------------
+
+  automations(query: Record<string, string> = {}): Promise<{ automations: Automation[] }> {
+    const qs = new URLSearchParams(query).toString();
+    return this.#request("GET", `/v1/automations${qs ? `?${qs}` : ""}`);
+  }
+
+  projectAutomations(projectId: string): Promise<{ automations: Automation[]; alsoRunningHere: Automation[] }> {
+    return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/automations`);
+  }
+
+  automation(id: string): Promise<Automation> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}`);
+  }
+
+  createAutomation(input: NewAutomation & { projectId: string | null; tz: string }): Promise<Automation> {
+    return this.#request("POST", "/v1/automations", input);
+  }
+
+  updateAutomation(id: string, input: AutomationInput): Promise<Automation> {
+    return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}`, input);
+  }
+
+  deleteAutomation(id: string): Promise<void> {
+    return this.#request("DELETE", `/v1/automations/${encodeURIComponent(id)}`);
+  }
+
+  setAutomationEnabled(id: string, enabled: boolean): Promise<Automation> {
+    return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}/enabled`, { enabled });
+  }
+
+  transferAutomation(id: string, personId: string): Promise<Automation> {
+    return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}/owner`, { personId });
+  }
+
+  automationRepositories(): Promise<{ groups: Array<{ projectId: string; project: string; repos: string[] }> }> {
+    return this.#request("GET", "/v1/automations/repositories");
+  }
+
+  /** A schedule's next three times, as the orchestrator's scheduler computes them. */
+  scheduleNext(cron: string, tz: string): Promise<{ times: string[] }> {
+    return this.#request("POST", "/v1/automations/schedule/next", { cron, tz });
+  }
+
+  eventSubscriptions(): Promise<EventSubscriptions> {
+    return this.#request("GET", "/v1/automations/subscriptions");
+  }
+
+  automationRuns(id: string, status?: string): Promise<AutomationRunsResponse> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/runs${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+  }
+
+  automationRun(id: string, runId: string): Promise<AutomationRunDetail> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`);
+  }
+
+  automationDeliveries(id: string): Promise<{ deliveries: PastDelivery[] }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries`);
+  }
+
+  runAutomation(id: string, body: RunNow): Promise<{ runId: string }> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/runs`, body);
+  }
+
+  evaluateTestEvent(id: string, body: Record<string, unknown>): Promise<EventVerdict> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/test-event/evaluate`, { body });
+  }
+
+  startAutomationFresh(id: string): Promise<void> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/start-fresh`);
+  }
+
+  automationPromptHistory(id: string): Promise<{ versions: AutomationPromptVersion[] }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/prompt-history`);
+  }
+
+  restoreAutomationPrompt(id: string, versionId: string): Promise<Automation> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/prompt-history/restore`, { versionId });
+  }
+
+  duplicateAutomation(id: string): Promise<Automation> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/duplicate`);
+  }
+
   // -- judgements: the organisation's judgement tier and its calls -----------
 
   judgementSettings(): Promise<JudgementSettings> {
@@ -1344,6 +1448,65 @@ export class ApiClient {
   /** The test question, asked of a tier as a judgement would be; not recorded. */
   testJudgement(tierId: string): Promise<JudgementTestResult> {
     return this.#request("POST", "/v1/judgements/test", { tierId });
+  }
+
+  // -- chat providers ---------------------------------------------------------
+
+  chatOverview(): Promise<ChatOverview> {
+    return this.#request("GET", "/v1/organization/chat");
+  }
+
+  chatInstallation(provider: string): Promise<ChatInstallationView> {
+    return this.#request("GET", `/v1/organization/chat/${encodeURIComponent(provider)}`);
+  }
+
+  /** An admin installing a provider's app: the provider's page to send the browser to. */
+  installChat(provider: string): Promise<{ url: string }> {
+    return this.#request("POST", `/v1/chat/${encodeURIComponent(provider)}/install`, {});
+  }
+
+  disconnectChat(provider: string): Promise<void> {
+    return this.#request("DELETE", `/v1/organization/chat/${encodeURIComponent(provider)}`);
+  }
+
+  /** Linking your provider account; `prompt` is the connect page's state, whose kept mention is routed once linked. */
+  connectChat(provider: string, prompt?: string): Promise<{ url: string }> {
+    return this.#request("POST", `/v1/chat/${encodeURIComponent(provider)}/connect`, prompt ? { prompt } : {});
+  }
+
+  unlinkChat(provider: string): Promise<void> {
+    return this.#request("DELETE", `/v1/me/chat/${encodeURIComponent(provider)}`);
+  }
+
+  chatConnectState(provider: string, state: string): Promise<ChatConnectStateView> {
+    return this.#request("GET", `/v1/chat/${encodeURIComponent(provider)}/connect/state?state=${encodeURIComponent(state)}`);
+  }
+
+  routingInstructions(): Promise<RoutingInstructions> {
+    return this.#request("GET", "/v1/organization/routing-instructions");
+  }
+
+  setRoutingInstructions(additional: string): Promise<RoutingInstructions> {
+    return this.#request("PUT", "/v1/organization/routing-instructions", { additional });
+  }
+
+  providerRoutingInstructions(provider: string): Promise<ProviderRoutingInstructions & { installed: boolean }> {
+    return this.#request("GET", `/v1/organization/chat/${encodeURIComponent(provider)}/routing-instructions`);
+  }
+
+  setProviderRoutingInstructions(provider: string, additional: string): Promise<ProviderRoutingInstructions & { installed: boolean }> {
+    return this.#request("PUT", `/v1/organization/chat/${encodeURIComponent(provider)}/routing-instructions`, { additional });
+  }
+
+  chatRequests(filter: { provider?: string | undefined; route?: string | undefined; limit?: number | undefined; summary?: boolean | undefined } = {}):
+    Promise<{ requests: ChatRequestRow[]; week?: ChatRequestsSummary }> {
+    const params = new URLSearchParams();
+    if (filter.provider) params.set("provider", filter.provider);
+    if (filter.route) params.set("route", filter.route);
+    if (filter.limit) params.set("limit", String(filter.limit));
+    if (filter.summary) params.set("summary", "1");
+    const qs = params.toString();
+    return this.#request("GET", `/v1/organization/chat/requests${qs ? `?${qs}` : ""}`);
   }
 
   // -- images: the organization's library ------------------------------------
@@ -1693,8 +1856,9 @@ export class ApiClient {
   }
 
   /** A message to the session's agent: it starts it, or is its next input (or the answer it waits on from you). */
-  sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string> } = {}): Promise<{ runId: string; created: boolean; questionId?: string; directiveId?: string; attachments?: AttachmentInfo[] }> {
-    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}), ...(opts.attachmentIds?.length ? { attachmentIds: opts.attachmentIds } : {}) });
+  sessionChat(id: string, text: string, opts: { aside?: boolean; attachmentIds?: ReadonlyArray<string>; mentions?: ReadonlyArray<string>; shareWith?: ReadonlyArray<string> } = {}): Promise<{ runId: string; created: boolean; questionId?: string; directiveId?: string; attachments?: AttachmentInfo[] }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/chat`, { text, ...(opts.aside ? { aside: true } : {}), ...(opts.attachmentIds?.length ? { attachmentIds: opts.attachmentIds } : {}),
+      ...(opts.mentions?.length ? { mentions: opts.mentions } : {}), ...(opts.shareWith?.length ? { shareWith: opts.shareWith } : {}) });
   }
 
   /** Try again on a session whose agent failed, to start or to resume: a fresh agent takes what it never read. */
@@ -1750,6 +1914,21 @@ export class ApiClient {
   /** Take the session out of your own list and sidebar (or put it back): nobody else's, and nothing else changes. */
   archiveSession(id: string, archived: boolean): Promise<{ id: string; archived: boolean }> {
     return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/${archived ? "archive" : "unarchive"}`);
+  }
+
+  /** Every session open to the organisation, each with whether you joined it, and how many you joined. */
+  openSessions(): Promise<OpenSessionsList> {
+    return this.#request("GET", "/v1/brainstorms/open");
+  }
+
+  /** Open the session to everyone in the organisation: one way, the owner's (or an admin's while its admins own it). */
+  openSessionToOrganisation(id: string): Promise<{ id: string; access: "organisation"; changed: boolean }> {
+    return this.#request("PUT", `/v1/brainstorms/${encodeURIComponent(id)}/access`, { access: "organisation" });
+  }
+
+  /** An admin makes themselves the owner of a session its admins own (its owner left). */
+  takeSessionOwnership(id: string): Promise<{ id: string }> {
+    return this.#request("POST", `/v1/brainstorms/${encodeURIComponent(id)}/take-ownership`);
   }
 
   /**

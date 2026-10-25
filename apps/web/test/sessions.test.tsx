@@ -362,8 +362,8 @@ describe("a brainstorm session's page", () => {
   test("a message goes to the session's chat", async () => {
     const placeholder = async (d: SessionDetail) =>
       (await sessionPage(new SessionClient(d))).querySelector<HTMLTextAreaElement>("[data-testid=session-screen] textarea")!.placeholder;
-    // A session has no task: its composer says who it writes to, not the task Chat's words.
-    expect(await placeholder(detail("chat"))).toBe("Message the brainstorm…");
+    // A session has no task: its composer says who it writes to, not the task Chat's words, and that @ mentions.
+    expect(await placeholder(detail("chat"))).toBe("Message the brainstorm… (@ to mention someone)");
     expect(await placeholder(detail("owner"))).not.toContain("task");
     const client = new SessionClient(detail("chat"));
     const page = await sessionPage(client);
@@ -1314,6 +1314,17 @@ describe("a session's model", () => {
     expect(rail.querySelector("[data-testid=model-picker]")!.textContent).toContain("Model: Thinker on Codex");
   });
 
+  test("its owner back in the organisation: the page re-reads who owns it and the Chat says so", async () => {
+    const client = new Choosing(detail("chat", { session: { ...detail("chat").session, run: null } }));
+    const page = await sessionPage(client);
+    client.detail = detail("owner", { session: { ...detail("owner").session, run: null } });
+    client.ledger.push(ev("session.owner_returned", { owner: YOU }));
+    await act(async () => emit(client.ledger.at(-1)!));
+    await until(() => page.querySelector("[data-testid=session-screen][data-role=owner]"), "the return re-read");
+    await until(() => [...page.querySelectorAll("[data-testid=session-notice]")]
+      .find((n) => n.textContent?.includes(`${ME.name} is back in the organisation and owns this session again.`)), "the notice");
+  });
+
   class Reading extends Choosing {
     tiersRead = 0;
     tiersFail = false;
@@ -1439,6 +1450,8 @@ describe("a session's model", () => {
       .toBe("Started a fresh agent on Opus · OpenCode; it has the conversation so far.");
     expect(sessionNotice(ev("session.model.applied", { from: "run_a", to: "run_b", tier: null, model: "gpt-6-sol", harness: "codex" }), people))
       .toBe("Started a fresh agent on gpt-6-sol · Codex; it has the conversation so far.");
+    expect(sessionNotice(ev("session.owner_returned", { owner: ANA.id }), people))
+      .toBe(`${ANA.name} is back in the organisation and owns this session again.`);
   });
 });
 

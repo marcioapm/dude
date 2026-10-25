@@ -302,6 +302,34 @@ func (s *appSession) forgetInstallation(installation string) bool {
 	return forgot
 }
 
+// AppSubscription is what GET /app (as the App) says the App is
+// subscribed to, and the page where a person changes it.
+type AppSubscription struct {
+	Events      []string
+	SettingsURL string
+}
+
+// AppEvents reads the events the App is subscribed to. A PAT has no App:
+// an error saying so.
+func (g *GitHub) AppEvents(ctx context.Context) (AppSubscription, error) {
+	if !g.IsApp() {
+		return AppSubscription{}, &Error{Status: http.StatusConflict, Message: "GitHub is connected with a token, not an App"}
+	}
+	var app struct {
+		Slug    string   `json:"slug"`
+		Events  []string `json:"events"`
+		HTMLURL string   `json:"html_url"`
+	}
+	if err := g.appRequest(ctx, g.app(), "GET", "/app", &app); err != nil {
+		return AppSubscription{}, err
+	}
+	out := AppSubscription{Events: app.Events}
+	if app.Slug != "" {
+		out.SettingsURL = "https://github.com/settings/apps/" + url.PathEscape(app.Slug) + "/permissions"
+	}
+	return out, nil
+}
+
 // BotIdentity is the App's bot account, as commits name it: "<slug>[bot]"
 // and its noreply address, which GitHub links to the bot by its user id.
 type BotIdentity struct {

@@ -1545,6 +1545,26 @@ func (g *GitHub) EnsureWebhook(ctx context.Context, slug, target, secret string)
 	return fmt.Sprint(created.ID), nil
 }
 
+// HookEvents is the events of the repository's webhook delivering to
+// target; nil when it has none.
+func (g *GitHub) HookEvents(ctx context.Context, slug, target string) ([]string, error) {
+	var hooks []struct {
+		Events []string `json:"events"`
+		Config struct {
+			URL string `json:"url"`
+		} `json:"config"`
+	}
+	if err := g.do(ctx, "GET", "/repos/"+slug+"/hooks", nil, &hooks); err != nil {
+		return nil, err
+	}
+	for _, h := range hooks {
+		if h.Config.URL == target {
+			return h.Events, nil
+		}
+	}
+	return nil, nil
+}
+
 // WebhookEvents are the events that can change what dude does about a PR.
 var WebhookEvents = []string{
 	"pull_request", "pull_request_review", "pull_request_review_comment",
@@ -1943,6 +1963,25 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 		return PullRequestRead{}, err
 	}
 	return out, nil
+}
+
+// PullFiles is the paths a pull request changes, up to max (GitHub lists
+// at most 3000).
+func (g *GitHub) PullFiles(ctx context.Context, slug string, number, max int) ([]string, error) {
+	var out []string
+	for page := 1; page <= (max+99)/100; page++ {
+		var batch []ghFile
+		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100&page=%d", slug, number, page), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, f := range batch {
+			out = append(out, f.Filename)
+		}
+		if len(batch) < 100 {
+			break
+		}
+	}
+	return out[:min(len(out), max)], nil
 }
 
 // conversationTail reads the newest conversation comments and derives their

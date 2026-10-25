@@ -1039,9 +1039,11 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, i
 		var projectID string
 		var attempt int
 		var over bool
+		// NO KEY UPDATE: two starts of one task's preview wait for each
+		// other; inserts referencing the task (KEY SHARE) do not.
 		if err := tx.QueryRow(ctx, `SELECT t.project_id, COALESCE((SELECT max(attempt) FROM runs WHERE task_id = t.id), 1),
 				t.status IN ('done', 'failed', 'aborted')
-			FROM tasks t WHERE t.id = $1 FOR UPDATE`, taskID).Scan(&projectID, &attempt, &over); err != nil {
+			FROM tasks t WHERE t.id = $1 FOR NO KEY UPDATE`, taskID).Scan(&projectID, &attempt, &over); err != nil {
 			if db.IsNotFound(err) {
 				return refuse(http.StatusNotFound, "not_found", "task %s not found", taskID)
 			}

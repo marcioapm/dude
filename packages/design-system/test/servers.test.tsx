@@ -213,6 +213,19 @@ describe("ServerRow", () => {
     expect(h).toContain('aria-label="Open in a new tab"');
   });
 
+  test("openLabel names the open icon and titles both links only while onOpen handles them", () => {
+    const label = "Preview web (opens the commenting window)";
+    const on = row(server({ state: "ready" }), { onOpen: () => true, openLabel: label });
+    expect(on).toContain(`aria-label="${label}"`);
+    expect(preview(on)).toContain(`title="${label}"`);
+    for (const extra of [{ openLabel: label }, { onOpen: () => true, openLabel: label, state: "starting" }]) {
+      const off = row(server({ state: "ready" }), extra);
+      expect(off).not.toContain(label);
+    }
+    expect(html(<ServersSummaryRow name="web" state="ready" url="https://web-abc.lux.example" onOpen={() => true} openLabel={label} />)).toContain(`aria-label="${label}"`);
+    expect(html(<ServersSummaryRow name="web" state="ready" url="https://web-abc.lux.example" openLabel={label} />)).toContain('aria-label="Preview web (opens in a new tab)"');
+  });
+
   test("only an https URL is ever a link", () => {
     for (const url of ["javascript:alert(1)", "http://web-abc.lux.example", "data:text/html,x"]) {
       const h = row(server({ state: "ready", url }));

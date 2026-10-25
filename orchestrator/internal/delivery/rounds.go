@@ -110,53 +110,61 @@ func (s *Store) PreviousRound(ctx context.Context, org, taskID string, attempt i
 	return p, err
 }
 
-// DeltaLines is how many lines changed (additions and deletions) from the
-// predecessor's checkouts to heads, across the task's repositories, as
-// GitHub compares them; a comparison GitHub cut short counts as over
-// MaxResumeDeltaLines.
-func (s *Store) DeltaLines(ctx context.Context, org, taskID string, gh *forge.GitHub, from, heads map[string]string) (int, error) {
+// RoundDelta is what changed from the predecessor's checkouts to heads,
+// across the task's repositories, as GitHub compares them: lines (additions
+// and deletions) and <repo>/<path>s. A comparison GitHub refused or cut
+// short is not Measured. A repository with no checkout recorded is
+// compared from its default branch for the line count, and does not
+// descend.
+func (s *Store) RoundDelta(ctx context.Context, org, taskID string, gh *forge.GitHub, from, heads map[string]string) (RoundChange, error) {
 	var repos []Repository
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		repos, err = TaskRepositories(ctx, tx, taskID)
 		return err
 	}); err != nil {
-		return 0, err
+		return RoundChange{}, err
 	}
-	lines := 0
+	out := RoundChange{Measured: true, Descends: true}
 	for _, repo := range repos {
 		now := heads[repo.Name]
 		if now == "" {
+			out.Descends = out.Descends && from[repo.Name] == ""
 			continue
 		}
 		prev := from[repo.Name]
 		if prev == "" {
-			prev = repo.DefaultBranch
+			prev, out.Descends = repo.DefaultBranch, false
 		}
 		if prev == now {
 			continue
 		}
 		if gh == nil {
-			return MaxResumeDeltaLines + 1, nil
+			return RoundChange{}, nil
 		}
 		cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), prev, now)
 		if err != nil {
 			if ctx.Err() != nil {
-				return 0, ctx.Err()
+				return RoundChange{}, ctx.Err()
 			}
 			if forge.Transient(err) {
-				return 0, forgeWait(err)
+				return RoundChange{}, forgeWait(err)
 			}
 			// Unmeasurable changes require fresh eyes on the whole branch.
-			return MaxResumeDeltaLines + 1, nil
+			return RoundChange{}, nil
 		}
 		if cmp.Truncated() {
-			return MaxResumeDeltaLines + 1, nil
+			return RoundChange{}, nil
 		}
+		out.Descends = out.Descends && cmp.BehindBy == 0
 		for _, f := range cmp.Files {
-			lines += f.Additions + f.Deletions
+			out.Lines += f.Additions + f.Deletions
+			out.Paths = append(out.Paths, repo.Name+"/"+f.Filename)
+			if f.PreviousFilename != "" {
+				out.Paths = append(out.Paths, repo.Name+"/"+f.PreviousFilename)
+			}
 		}
 	}
-	return lines, nil
+	return out, nil
 }
 
 // predecessorRow is what continueOrCreateTx reads of the predecessor:
@@ -505,7 +513,7 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 				return "", err
 			}
 		}
-		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix)
+		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
 		if in.Phase == PhaseTest {
 			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
 			if err != nil {
@@ -569,11 +577,29 @@ func FixRoundMessage(from, to map[string]string, contract bool, in PromptInput) 
 	if contract {
 		c = fixContract
 	}
+	in.PRFeedback = resumedChecks(in.PRFeedback)
 	return render(fixRoundTmpl, struct {
 		Ranges   []roundRange
 		Contract string
 		Sections []string
 	}{roundRanges(from, to), c, fixSections(in)})
+}
+
+// resumedChecks is a copy of feedback whose checks are marked Resumed: a
+// resumed Run's init does not run again, so this round's logs get no file
+// and any under its workspace are an earlier round's. A check with an
+// excerpt is NoFile, for the prompt to say the excerpt is all there is.
+func resumedChecks(feedback []forge.ActionableFeedback) []forge.ActionableFeedback {
+	out := slices.Clone(feedback)
+	for i := range out {
+		out[i].Checks = slices.Clone(out[i].Checks)
+		for j := range out[i].Checks {
+			c := &out[i].Checks[j]
+			c.Resumed, c.NoFile = true, c.Log != ""
+			c.Path, c.FileKiB, c.FileCut = "", 0, false
+		}
+	}
+	return out
 }
 
 type roundRange struct {
@@ -596,9 +622,10 @@ func roundRanges(from, to map[string]string) []roundRange {
 // RoundMessage renders contracts/resume/round: from and to are each
 // repository's commit at the last round and now; questions, what earlier
 // reviewers of a review's category asked; lastFix, the commits of the fix
-// this round follows (LastFixTx).
+// this round follows (LastFixTx); carry, a test round's previous run the
+// tester may carry criteria from ("" retests every one).
 func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
-	lastFix []FixRange) string {
+	lastFix []FixRange, carry string) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
@@ -607,8 +634,8 @@ func RoundMessage(phase string, from, to map[string]string, reason string, findi
 		Test                                 bool
 		Ranges                               []roundRange
 		Reason, Findings, Questions, LastFix string
-		Format, Summary                      string
-	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), findingFormat, reviewSummary})
+		Format, Summary, CarryFrom           string
+	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), findingFormat, reviewSummary, carry})
 }
 
 // FixRange is what a fix Run published in one repository: its commits are

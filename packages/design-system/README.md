@@ -782,7 +782,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   there is no task to take over.
 - **The rail** is `SessionRail` with a `SessionRailBlock` per part:
   `SessionPeople` (owner first, each with their role in words — Owner, Can
-  chat, Can read, Invited), `LinkedProjects` (each project and its
+  chat, Can read, Invited; a member with `left: <org>`, the owner of record
+  of a session its admins own, reads "Left <org> · No access"; gallery `bs-access`), `LinkedProjects` (each project and its
   repositories, read only; "No project linked yet" when none), **Model**
   (`ModelPicker`; read only but for the owner), **Files**
   and `Capabilities` (what it can and cannot do, each line a check or a
@@ -805,10 +806,28 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   what it filed in a line, the projects it reads as chips, its state and
   age in words. **`SharedMark`** marks one someone else is in too: the
   shared glyph, and the owner's face when it is not yours, so it reads
-  without colour.
+  without colour. An organisation session shows the organisation mark in
+  place of the shared one (`access="organisation"`, `org`); `origin` adds a
+  line under its summary saying where it came from — for a chat-born
+  session, `OriginFact compact` ("<glyph> From Slack · #support"; the
+  gallery's "Chat providers" shows it). Under 600px its chips go under the
+  text and the state spans both rows.
+- **`SharedMark scope="organisation"`** is the building glyph and "Everyone
+  in <org>" in the info ink, a `role=img` named with those words;
+  `showLabel` writes them beside the glyph, as the session header does.
+  With `owner` it adds the owner's face after the glyph and names it
+  ("Everyone in Acme, Gus's"), as the Open to everyone list's rows do
+  (`SessionRow access="organisation" shared={{ owner }}`).
+  **`AdminOwned`** marks a session whose owner left the organisation: the
+  building glyph and "Owner left <org> — owned by <org>'s admins" in the
+  attention ink, in the header meta and on top of the rail's People.
 - **`SidebarSessions`** sits above Projects in the sidebar: only the
   sessions you are in, the latest three by last activity, each with the
-  bulb glyph and the `SharedMark`'s parts. Its heading folds the list
+  bulb glyph and the `SharedMark`'s parts (the building glyph for one open
+  to the organisation). With `organisation`, a last row "Open to
+  everyone" — the building glyph and a muted count of the active
+  organisation sessions you have joined — opens their own list; it is a
+  place, not a session, and stays when the list is folded. Its heading folds the list
   (the app remembers it), opens the whole list, and has a "+" for a new
   session, as the Projects heading has for a project. The app passes it as `Sidebar`'s `sessions`
   slot, so the sidebar draws it in place and knows nothing of sessions.
@@ -818,8 +837,38 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   icon="archive"` "Archived". The list's header has a `Segmented size="toolbar"`
   of **Yours | Archived**; the sidebar never lists an archived session.
 - **`Sidebar waitingExtra`** adds what waits on you outside the tree —
-  session invitations and brainstorm questions put to you — to the
-  "Waiting on you" count, so one number answers "what needs me".
+  session invitations, brainstorm questions put to you, and @-mentions of
+  you in a session — to the "Waiting on you" count, so one number answers
+  "what needs me". A mention's `WaitingRow` has the mentioner's face, "<First>
+  mentioned you in **<session>**: “…”", the access mark and "you're not in it
+  yet" when you were never added, and Open.
+- **General access is one way.** `GeneralAccessRow` sits above a session's
+  people in the Share dialog: who may open it without being added. On a
+  private session the owner gets a `Select` whose Everyone option says
+  "Can't be undone"; choosing it shows the confirm (`Callout` attention,
+  `oneWay(org)`, "Open to everyone in <org>" / "Keep it private"). Once
+  `organisation`, the row is read-only for everyone, the owner included,
+  with "Every active member of <org> can open it and chat, without being
+  added. This can't be undone." and "Can chat".
+- **@-mentions.** `MentionMenu` is the listbox under the composer when "@"
+  starts a word: face, name, and what mentioning them means ("In this
+  session · can chat", "Not in it yet · can open it and chat", or, in a
+  private session, a locked "Not in this session" in the attention ink for
+  an `outside` person), with the keys under it. The composer keeps focus
+  (`aria-activedescendant`); a pointer press picks without taking it.
+  `MentionChip` is a mention in a sent message: the face and "@First" on the
+  info wash, named "Mention: <name>"; `you` when it is the reader. It sits
+  in the sentence, in place of the "@Name" the composer wrote:
+  `ChatMessage mentions` (and `Markdown mentions`) take `{ name, chip }` per
+  person and draw the chip for each "@<name>" that starts a word in plain
+  text (not in code or a link), the longest name first; the name is never
+  shown twice.
+  `MentionShareConfirm` sits under the composer (its `below` slot) after a
+  pick of someone who can't open a private session: the owner gets **Share
+  and send**, **Send without sharing** (the name stays as text; nobody is
+  notified) and Cancel; anyone else is told who can share it and gets **Send
+  as plain text** and Cancel. A `role=group` named for the person, ringed in
+  the attention border, `shadow-1` in light.
 - **A session's name never leaves it.** The tab title and the presence
   word teammates see beside your face are the fixed "A session", never its
   title — named or "Untitled session" — because a private session's name must
@@ -1076,6 +1125,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   card calls `cardMarks` and `cardStart` itself, so pass **stable
   references** (`useCallback`, or a function defined once): a new closure on
   every render of the board's parent redraws every card.
+- **Where a card came from** (`cardLead`): on its first line, before its
+  key, a small chip with its own neutral fill and edge over the card's chrome
+  — a chat-born task's provider glyph
+  and name (`ProviderGlyph inline`). The board lays whatever the lead holds
+  on the key's line. Nothing for a task typed in dude. A stable reference
+  too, as `cardMarks`.
 - One tab stop per board: ↑↓ move within a lane, ←→ across (same row, or the
   last one there is; folded lanes are skipped), Home/End, Enter/Space open.
   Past `cap` cards a lane shows "N more"; since urgent cards sort first, what
@@ -1440,7 +1495,17 @@ here.
   where you are, and a second navigation inside it is two answers to one
   question. Read-only facts about a connection (GitHub, the embedder) are a
   `Card` with a `KeyValueList` and its actions in the footer; `SettingRow`
-  is for a value you change.
+  is for a value you change. A page whose sub-pages are its children (Chat,
+  with one page per provider and Requests) sets `page`: it opens itself, and
+  the child pages carry a `Breadcrumb size="sm"` back to it. Without `page`,
+  a group opens its first sub-page.
+- **A `SettingRow` with long free text** (routing instructions, a prompt)
+  sets `fill`: the field and its Save stack at the control column's full
+  width. When the settings page's column (`SettingsLayout`'s main, a size
+  container) is 640px or narrower — a phone, or a laptop beside the app's
+  sidebar and the settings menu — every `SettingRow` stacks: its label and
+  help above, the control the column's width, so nothing is squeezed to a
+  letter a line. Outside a settings page a row stacks under a 720px window.
 - **SearchResultRow** is the one way a search result is drawn (Memory's
   search): ArtifactRow's anatomy and open shade — a 32px row, chevron,
   rank, a `RefLead` for what it is, and the title; at the end, as muted
@@ -1773,10 +1838,13 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   16px grid and 1.75 at 20px and up.
 - Every agent role has its own glyph (`ROLE_ICON` in `AgentAvatar`), the
   brainstorm's a bulb (`brainstorm`), also on each brainstorm session in a
-  list. `shared` (two people) marks a brainstorm session someone else is in
-  too (`SharedMark`, `SidebarSessions`). `pin` is an epic note's and
+  list. `shared` (two people) marks a brainstorm session shared with named
+  people, `building` one open to the whole organisation (`SharedMark`,
+  `SidebarSessions`, `AdminOwned`). `pin` is an epic note's and
   nothing else's (`EpicNote`, `EpicNoteNotice`, `EpicNoteRow`, a proposal's
   notes).
+- `slack` is the Slack provider's monochrome glyph (`ProviderGlyph`, never
+  with Slack's colours); a provider without its own glyph uses `integration`.
 
 ### Numbers and identifiers
 
@@ -2086,7 +2154,8 @@ Button drawn disabled inside a focusable wrapper with the control's focus
 ring and radius, its `reason` the tooltip and the accessible description,
 its `label` the name; StartGate's gated starts and a task header's refused
 Stop), Input (`size="title"` for a
-document's heading), NumberInput (`step`, `min`, `max`, `unit`), Textarea,
+document's heading), NumberInput (`step`, `min`, `max`, `unit`; `aria-label`
+when no `label` shows), Textarea,
 MarkdownEditor (`fill`), Select (options with `meta` and `description`, a
 `footer`, `onOpenChange`), Checkbox (named by its `label`; its
 `description` and `aria-describedby`, the ids of hints beside it, describe
@@ -2102,7 +2171,7 @@ once; an item's `descriptionMono` and `descriptionWraps` set its second
 line in mono or let a sentence wrap; a `kind: "note"` is a muted line that
 is not an item, for what the menu cannot list, and the menu's description
 for a screen reader, whose menu mode reads items alone), Skeleton/SkeletonLines/Spinner, EmptyState,
-ScrollArea, Section (`count`, and `limit` for "3 of 10"), FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
+ScrollArea, Section (`count`, and `limit` for "3 of 10"; `note`, muted words beside the label and out of its capitals, gallery `pe-note`), FormStack (`fill`), Kbd/KeyHint (+ `modKey`)/HelpList/
 MarkdownCheatsheet.
 
 `src/components/` — the factory vocabulary:
@@ -2198,7 +2267,13 @@ MarkdownCheatsheet.
   `variant="stage"` is for the page's one thing (the welcome): raised
   (`shadow-2`), a 72px field (52 compact) in `text-prose`, and no inset of
   its own, since its host is the frame. A host never restyles a composer
-  from outside.
+  from outside. With `mentionables`, "@" at the start of a word opens
+  `MentionMenu` (the field becomes a `combobox`); ↑/↓ move, Enter or Tab
+  pick, Escape closes; a pick writes "@Name " and the submission's
+  `mentions` lists the people still named in it, for the server to notify.
+  Enter picks while the menu is open, and sends otherwise. An `outside`
+  pick is written but not mentioned; `onMention` tells the caller, which
+  shows its confirm in `below`, and `submitRef` sends with `shareWith`.
 - **TaskHistory** — a task's history in one line: how it went, what ran,
   what it came to. Heads a task's Chat.
 - **ChatRunLine** — a Run the conductor started, one line in its Chat on
@@ -2245,7 +2320,9 @@ MarkdownCheatsheet.
   controlled or uncontrolled. `collapsed` / `onCollapsedChange` fold it to
   the rail (a chevron in the header collapses it, `[` in the app); the rail
   takes `railMark` (home, `onHome`, `homeSelected`), `railSessions` (New
-  session and Sessions, so the sidebar still knows nothing of sessions) and
+  session and Sessions, so the sidebar still knows nothing of sessions;
+  `organisationCount` adds "2 open to everyone you joined" to the Sessions
+  tooltip) and
   `railFooter` (the band's `SidebarRailItem`s). `projectCountWords(counts)`
   is a project's `projectCounts` in words.
 - **SidebarRailItem** — one square of the rail, named, its words in a
@@ -2336,7 +2413,12 @@ MarkdownCheatsheet.
   it as `server:<name>`. Preview opens the server's URL in a new tab:
   there is no in-app frame (a preview's sign-in cookie would not reach a
   cross-site iframe). `safeServerUrl` keeps anything but an `https://` URL
-  out of an `href`.
+  out of an `href`. `ServerRow.onOpen(url)` optionally opens the URL the
+  application's way: a plain left click on the URL, its open icon or
+  Preview calls it, and true handles the click; false, a modified click or
+  middle-click leaves it to the real `<a href>`. `openLabel` is the open
+  icon's accessible name and title, and Preview's title, while `onOpen`
+  handles them; without it they say "in a new tab".
 - **ServersRunLine / ServersPanel** — the run the servers live on as a
   line, and the panel: the task's Servers tab (a container: under 560px,
   a phone, its rows stack). An agent session has no servers panel; its servers
@@ -2351,7 +2433,9 @@ MarkdownCheatsheet.
   `aria-current="step"`. Elapsed is optional: only supply it with an
   authoritative stage timestamp, never the Run's original start.
 - **ServersSummary** — the overview aside's block, in PullRequestPanel's
-  grammar.
+  grammar. `ServersSummaryRow.onOpen(url)` is `ServerRow.onOpen` for its
+  URL and eye Preview; `openLabel` is the eye's accessible name while
+  `onOpen` handles it.
 - **ServerRecipeTable / ServerRecipeDialog / EnvVarRows / HostChips** —
   project settings: the definitions, the editor with validation in words,
   and a preview's egress allowlist as chips. `HostChips readOnly` lists
@@ -2500,14 +2584,19 @@ sessions*):
 - **PublishedFiles** — the rail's Files: what the session's agent
   published, each with its `description` under the name when it has one,
   each opening in `FileViewer`.
-- **SessionRow / SharedMark** — a brainstorm session in the list, and the
-  marker for one someone else is in too.
+- **SessionRow / SharedMark** — a brainstorm session in the list, its
+  origin, and the marker for one shared with people or open to the
+  organisation. **AdminOwned** — the owner-left mark.
+- **GeneralAccessRow** — the Share dialog's one-way General access row.
+- **MentionMenu / MentionChip / MentionShareConfirm** — @-mentions in a
+  session: the composer's picker, the sent chip, and the private session's
+  share confirm.
 - **SidebarSessions** — your latest brainstorm sessions above the
   projects, in `Sidebar`'s `sessions` slot: `limit` (3) by `lastActivityAt`,
   newest first; the heading is a fold chevron (`folded` / `onFoldedChange`,
   for the app to keep), Sessions (`onOpenList`) and a "+" `IconButton`
   "New session" (`onNew`); `waitingExtra` counts their invitations and
-  questions in Waiting on you.
+  questions in Waiting on you. `organisation` adds the Open to everyone row.
 - **Welcome** — the first screen's stage: `mark` (the app's face; the
   design system has none), `greeting`, `line`, `composer` (a `ChatComposer
   variant="stage"`), `starters`, `footer`. **WelcomeNote** is the first-time
@@ -2609,6 +2698,81 @@ are in `docs/design/accounts.md`):
   glyph on a sunken disc, an `h1`, a line and its `facts`; the card's
   footer holds its actions. `HowList` is how something works in a few
   named lines: a glyph, a bold lead-in, a muted sentence.
+
+### Chat providers (`components/Chat.tsx`)
+
+Shared surfaces never name a provider in words of their own: each takes a
+`provider: ChatProvider` (`{ id, name, glyph }`) and draws its glyph and
+its `name` from props, so a second provider costs an entry, not a
+component. Gallery: "Chat providers" (`gallery/sections/ChatProviders.tsx`).
+
+- **ProviderGlyph** — a chat provider's monochrome glyph in the ink of the
+  text beside it; `label` names it when it stands alone; `inline` puts the
+  glyph and the provider's name in a line of text (a Requests row's where,
+  a board card's lead) without breaking the line. `providerGlyph(id,
+  ICON_NAMES)` maps a server's id to the set, `integration` when it has none.
+- **RouteBadge** — where a mention went: a `Badge` with the route's glyph and
+  word (`ROUTE_SPEC`), so it reads without colour. Refusals and failures are
+  `subtle`; routes that made or linked something are `tinted`. `fallback`
+  adds "was Task" in muted text when dude overrode an answer under the 75%
+  bar.
+- **OriginFact** — where a session, task or epic came from outside dude:
+  "<glyph> From <provider> · #support · thread by Márcia". The whole fact is
+  the link to the permalink, with the external glyph; `compact` drops
+  "thread by" for list rows.
+- **ExternalThread** (+ **ExternalFace**) — a conversation from outside dude,
+  quoted as external text: the chrome shade and a strong left rule, as
+  `Timeline`'s quote. A linked author shows their dude face and name; anyone
+  else shows their name on neutral initials (`ExternalFace`, never an
+  identity colour; punctuation is no initial), and "not in dude". Text is
+  never rendered as Markdown. Its head reads "Quoted from <provider> ·
+  #place · N messages"; "Open in <provider>" links out with the external
+  glyph; `clip` shows the last messages with "Show N earlier". A chat-born
+  task's overview quotes its thread under the goal, as filed.
+- **RoutingLine** — dude's margin line in a chat-born transcript: "Routed as
+  a brainstorm · 82% sure", with the `ChatNotice` rule on either side. It is
+  a `<details>`; its reasoning and `model` (how the model was asked) sit
+  under it. With `shared` (a private channel or group), the line adds
+  "Shared with 4 people from #design-private; 2 are not connected", and the
+  body groups them in two rows: "Added, can chat" (faces and names) and
+  "Skipped, not connected" (`ExternalFace` and display name).
+- **FactList** — rules that are not settings, read as cases: a glyph and the
+  case on the left, what happens on the right; a `<dl>` named by `label`,
+  stacked under 720px. For what an admin should know but cannot change
+  ("Who gets the session", on the Chat page).
+- **ConnectionCard** — one account dude acts with elsewhere: a title and
+  glyph (any node, so `ProviderGlyph`), an intro, facts, the callback's
+  `outcome`, Connected or Not connected; Connect is primary until connected
+  (or while `reconnect`), Disconnect only when connected. A `Card`'s
+  surface and shadow, square as every panel, so it pairs with the GitHub
+  `Card` above it. Your settings → Connections (a `SettingsSection` with
+  its intro): GitHub, then one per chat provider the organisation
+  installed.
+- **IdentityPair** — a provider account beside the dude person it is linked
+  to, the left label the provider's name, named for assistive tech as one
+  sentence. `size="lg"` is the connect page's: two square sunken panels
+  (provider handle, display name, workspace ↔ dude face, organisation,
+  email) with the link glyph between, stacked under 480px. Its `external`
+  is the account being linked: on the connect page, the one the Connect
+  prompt was sent to. `null` when no account is known yet: the provider's
+  glyph sits in the face's place over "Your <provider> account · Signed in
+  next" and the `workspace` — never an invented handle or initials.
+- **PromptText** — instructions a model is told, read-only: a sunken mono
+  well, named by `label` and reachable by keyboard, wrapped at its column
+  with the text's own line breaks kept, scrolling down past 24 lines and
+  never sideways. Not `Markdown` and not a code block: the text is shown as
+  written, with no copy button or language chrome (the Chat page's built-in
+  instructions).
+- **InstructionStack** — what a model is told, in order: a numbered `<ol>`,
+  one row per layer with whose it is, its length and where it is changed.
+  `here` tints the layer edited on this page (info wash, "This page" badge);
+  `collapsed` shows only its head (the built-in instructions); an empty
+  layer says "Nothing added". Read-only: the layers are edited where they
+  live.
+- **ProviderList** — the Chat page's providers: a list of rows, each a
+  button with the provider's glyph in a tile, its name and detail
+  (`EntityLine`), Installed (success) or Available (neutral), and a chevron
+  to its child page.
 
 ## Page rails
 
@@ -2754,6 +2918,13 @@ comments when opened there, never on the standalone Run page.
   `"unchanged"` shows the original excerpt (`FeedbackExcerpt`) with the
   words that say why it is not on lines. `readOnly` has no actions.
   A refused action keeps what was written and shows the API's words.
+  Preview anchors render `FeedbackPreview`: Page, element, component and
+  optional `imageUrl`. `FeedbackPreview.onOpen(url)` (passed through as
+  `FeedbackCard.onOpenPage`) handles a plain left click on Page when it
+  returns true; false leaves it to the real link. Modified clicks remain
+  the browser's. The app uses this to open the item's exact page with
+  commenting when its origin belongs to a commentable preview server;
+  `onJump` remains the separate Show on preview action.
 - **`CommentEditor`**: ⌘/Ctrl+Enter saves, Escape cancels, "Private draft
   until you submit"; `full` turns the field off and says why.
 - **`DraftsTray`** sits at the foot of a task's pages (`position: sticky`)
@@ -2806,3 +2977,65 @@ densities.
 - **Redaction shows as `[REDACTED:NAME]`** in the transcript, tool output
   and diffs, as dude stored it; nothing styles it. The redaction note says
   it is defence in depth, not a guarantee.
+
+## Automations
+
+`src/components/Automations.tsx`: `KindMark`, `ScopeChip`, `OwnerMark`,
+`TriggerSummary`, `SessionMark`, `ListSwitch`, `NextRuns`, `DayToggles`,
+`SchedulePicker`, `ChipsInput`, `RepoFilterField`, and the helpers
+`describeCron`, `scheduleOf`, `cronOf`, `repoGlob`, `repoFilterCount`,
+`cityOf`. Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
+`#au-schedule`, `#au-chips`, `#au-repo-filter`), in both themes and
+densities. No tone of their own: an automation's state is its runs'
+(`StatusMark`), so `paletteDistance` is untouched.
+
+- **KindMark** (`kind`, `role?`): the kind as glyph and word (Agent,
+  Command, Server, Webhook only); an agent that is one of dude's roles adds
+  "· Tester" in muted text.
+- **ScopeChip** (`org`, `project?`, `projectId?`): where an automation lives:
+  "Organisation" with a building glyph on the info tint, or the project's
+  `ProjectAvatar` and name on the neutral tint, at the chip height.
+- **OwnerMark** (`owner`, `org`, `avatarOnly?`, `left?`): who owns an
+  automation — `PersonAvatar` and name, or only the avatar with the name for
+  screen readers (list cells). `left` (or no owner): the organisation's
+  admins hold it — a building glyph in info tone and "Acme's admins".
+- **TriggerSummary** (`trigger`, `wrap`): one line, or with `wrap` words
+  that wrap in a narrow cell, the glyph staying beside the first word; a long event name breaks under the glyph rather than being cut off, and a line never ends on the "·" alone. A schedule in words when it is a
+  preset ("Daily at 03:00", "Weekdays at 09:30", "Every 15 minutes") else
+  the cron line, then the zone's city muted; an event in mono and its
+  actions, or "any action".
+- **SessionMark** (`mode`, `expiryDays?`): Ephemeral, or Resumable and its
+  expiry in days.
+- **ListSwitch** (`checked`, `onCheckedChange`, `label`): the settings
+  `Switch`'s track and thumb (its very classes) with no words beside it, for
+  a list row. Its accessible name is "<label>: on/off"; a press does not
+  open the row.
+- **NextRuns** (`times`, `tz`): the next runs as a list of `time`s in the
+  schedule's zone; none says it never runs.
+- **DayToggles** (`days`, `onChange`): seven pressed/unpressed buttons,
+  Monday first; the last one on cannot be turned off.
+- **SchedulePicker** (`cron`, `tz`, `zones`, `onChange`, `next?`,
+  `problem?`, `zoneSource?`): a `Segmented` Minutes / Hourly / Daily /
+  Weekly / cron, the mode's fields in the DS `Select`, `NumberInput` and
+  `Input` (every N minutes, minute of the hour, a 24-hour `HH:MM` time, days,
+  or the cron line in mono), and the time zone (`zoneSource` says whose it
+  is). Under it, "As cron … · Advanced: write a cron expression". `next` is
+  shown under that (the app's `NextRuns`, from the orchestrator's parser);
+  `problem` is an alert line in danger text, and marks the cron field invalid.
+- **ChipsInput** (`values`, `onChange`, `label`, `matches?`,
+  `suggestions?`): filter values as chips in a field box. Enter or comma
+  adds, Backspace in an empty field takes the last back, each chip has a
+  Remove button named for its value. A chip with `*` is info-toned and,
+  with `matches`, counts what it matches. With `suggestions` the field is
+  a combobox whose listbox (raised surface, `shadow-1`) groups values by
+  heading, filtered by what is typed.
+- **RepoFilterField** (`value`, `onChange`, `org`, `groups`, `disabled?`):
+  which of the organisation's repositories an organisation automation
+  covers. A `Segmented` picks All repositories in <org>, Only these or All
+  except these; the last two show a `ChipsInput` of owner/name values and
+  globs (`acme/svc-*`), suggested from the projects' repositories grouped by
+  project. Under it a status line: "Matches N of M repositories" (", and
+  any added later" on All).
+- **Settings rows stack below 720px.** `SettingRow` puts its label over its
+  control and `SettingsHeader`'s actions wrap under the title, so a page's
+  Run now and switch never squeeze its title on a phone.

@@ -57,6 +57,8 @@ export interface CriterionRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "
   readonly problem?: string | undefined;
   /** The evidence, as the app links it (each opens the file). */
   readonly evidence?: ReactNode;
+  /** Kept from an earlier test round, not tested again: that round's verdict and evidence. */
+  readonly carried?: boolean | undefined;
 }
 
 /**
@@ -65,7 +67,7 @@ export interface CriterionRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "
  * the verdict it settled still named), the criterion, the evidence, and
  * under it what was seen and why dude disagreed or a person decided.
  */
-export function CriterionRow({ number, text, status, decision, decidedBy, decisionNote, observed, problem, evidence, className, ...rest }: CriterionRowProps) {
+export function CriterionRow({ number, text, status, decision, decidedBy, decisionNote, observed, problem, evidence, carried, className, ...rest }: CriterionRowProps) {
   const state = criterionState(status, decision);
   const spec = CRITERION_STATE_SPECS[state];
   return (
@@ -77,6 +79,12 @@ export function CriterionRow({ number, text, status, decision, decidedBy, decisi
         </span>
         <span className={styles["number"]}>#{number}</span>
         <span className={styles["text"]}>{text}</span>
+        {carried ? (
+          <Badge tone="neutral" emphasis="subtle" size="sm" data-testid="criterion-carried"
+            title="Not tested again: the change since the earlier test round cannot affect it. Its verdict and evidence are that round's.">
+            carried
+          </Badge>
+        ) : null}
         {decision ? (
           <Badge tone="neutral" emphasis="subtle" size="sm" title={CRITERION_STATE_SPECS[status].description}>
             was {CRITERION_STATE_SPECS[status].label.toLowerCase()}

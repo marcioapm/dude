@@ -129,6 +129,9 @@ export { StepList, StepRow } from "./StepList.tsx";
 export type { StepListProps, StepRowProps } from "./StepList.tsx";
 export { SettingsLayout, SettingsHeader, SettingsNote, SettingsExplainer, SettingsSection, SettingRow, SettingSource, SettingFields, SettingField, SettingsDisclosure, SettingsMeta, TextButton, Switch } from "./Settings.tsx";
 export type { SettingsLayoutProps, SettingsNavItem, SettingRowProps, SettingSourceProps, SwitchProps } from "./Settings.tsx";
+export { ChipsInput, DayToggles, KindMark, ListSwitch, NextRuns, OwnerMark, RepoFilterField, SchedulePicker, ScopeChip, SessionMark, TriggerSummary,
+  cityOf, cronOf, describeCron, repoFilterCount, repoGlob, scheduleOf } from "./Automations.tsx";
+export type { AutomationKindName, RepoFilterValue, ScheduleMode } from "./Automations.tsx";
 export { PromptHistory } from "./PromptHistory.tsx";
 export type { PromptHistoryProps, PromptHistoryVersion } from "./PromptHistory.tsx";
 export { EpicCard, EpicRow, EpicProgress, EpicPullRequests } from "./EpicCard.tsx";
@@ -215,3 +218,14 @@ export type {
   DigestItem, EpicNoteAuthor, EpicNoteData, EpicNoteNoticeProps, EpicNoteProps, PeerDelivery, PeerListProps, PeerMessageData,
   PeerMessageProps, PeerRow, PeerTask, PeerThreadProps, PeerThreadState, PeerWaitEnd, PeerWaitLineProps, SinceDigestProps, TaskChipProps,
 } from "./Peer.tsx";
+export { AdminOwned } from "./Brainstorm.tsx";
+export { GeneralAccessRow, MentionChip, MentionMenu, MentionShareConfirm, mentionOptionId, oneWay } from "./SessionAccess.tsx";
+export type { GeneralAccessRowProps, MentionItem, MentionMenuProps, MentionShareConfirmProps } from "./SessionAccess.tsx";
+export {
+  ConnectionCard, ExternalFace, ExternalThread, FactList, IdentityPair, InstructionStack, OriginFact, PromptText, ProviderGlyph, ProviderList, ROUTE_SPEC,
+  RouteBadge, RoutingLine, providerGlyph,
+} from "./Chat.tsx";
+export type {
+  ChatProvider, ChatRoute, ConnectionCardProps, ExternalMessage, ExternalThreadProps, FactListProps, IdentityPairProps, InstructionLayer,
+  InstructionStackProps, OriginFactProps, PromptTextProps, ProviderGlyphProps, ProviderListProps, RouteBadgeProps, RoutingLineProps,
+} from "./Chat.tsx";

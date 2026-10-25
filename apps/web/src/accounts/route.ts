@@ -19,24 +19,27 @@ export type Route =
   // An older tenant link: `id` is what `/v1/locate` can place, when it names one.
   | { kind: "legacy"; rest: string; id: string | null };
 
-/** The id an older link names, for `/v1/locate`: a tree item, a project's settings, a brainstorm session. */
-function idOf(path: string): string | null {
+/** The id an older link names, for `/v1/locate`: a tree item, a project's settings, a brainstorm session; a chat Connect link's state. */
+function idOf(path: string, query: string): string | null {
   const [kind, id] = path.split("/");
   if (!id) return null;
   if (["task", "workItem", "project", "epic", "run", "session", "sessions"].includes(kind ?? "")) return decodeURIComponent(id);
+  // A provider's Connect button names no organisation: its state does.
+  if (kind === "connect") return new URLSearchParams(query).get("state") || null;
   return null;
 }
 
 export function parseRoute(hash: string): Route {
   const { slug, rest } = splitOrganization(hash);
   if (slug) return { kind: "tenant", slug, rest };
-  const path = hash.replace(/^#\/?/, "").split("?")[0]!.trim();
+  const [rawPath = "", query = ""] = hash.replace(/^#\/?/, "").split("?", 2);
+  const path = rawPath.trim();
   if (path === "") return { kind: "home" };
   const parts = path.split("/");
   if (parts[0] === "invite" && parts[1]) return { kind: "invite", code: decodeURIComponent(parts[1]) };
   if (parts[0] === "admin") return { kind: "admin", slug: parts[1] === "o" && parts[2] ? decodeURIComponent(parts[2]) : null };
   if (parts[0] === "invitations" && !parts[1]) return { kind: "invitations" };
-  return { kind: "legacy", rest: hash.startsWith("#") ? hash : `#${hash}`, id: idOf(path) };
+  return { kind: "legacy", rest: hash.startsWith("#") ? hash : `#${hash}`, id: idOf(path, query) };
 }
 
 export const adminHash = (slug?: string | null) => (slug ? `#/admin/o/${encodeURIComponent(slug)}` : "#/admin");

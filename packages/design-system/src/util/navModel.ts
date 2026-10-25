@@ -100,6 +100,8 @@ export interface NavTask {
   readonly resolution?: TaskResolution | undefined;
   /** Closed as a duplicate: the key of the task it duplicates. */
   readonly duplicateOf?: string | undefined;
+  /** The chat provider it came from, by id, for the board card's lead; absent for one made in dude. */
+  readonly originProvider?: string | undefined;
 }
 
 /** A related task, as a chip, a menu and the strip name it. */
@@ -146,6 +148,8 @@ export function shownDriver(task: NavTask): NavTask["driver"] {
 export interface NavEpic {
   readonly id: string;
   readonly title: string;
+  /** Where it came from outside dude (a chat provider's origin), when it did. */
+  readonly origin?: { readonly provider: string; readonly conversationName: string; readonly permalink: string; readonly requestedBy: string } | undefined;
   readonly tasks: ReadonlyArray<NavTask>;
 }
 

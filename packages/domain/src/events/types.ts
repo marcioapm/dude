@@ -37,6 +37,12 @@ export const EventTypes = {
   SettingsUpdated: "settings.updated",
   /** A role's prompt was saved or restored. Payload: `{ role, versionId, projectId?, restoredFrom? }`. */
   PromptSaved: "prompt.saved",
+  /**
+   * An automation was created, changed, turned on or off, transferred or
+   * deleted, or its owner left. Payload: `{ automationId, name, changed }`;
+   * `changed.owner` is `{ from, to }` (to null: the organisation's admins hold it).
+   */
+  AutomationChanged: "automation.changed",
 
   // The image library (the backend writes the person's acts, dude-image-builder the builds')
   /** An image was added, described, archived or made the default base. Payload: `{ imageId, name, changed }`. */
@@ -142,7 +148,7 @@ export const EventTypes = {
   BrainstormCreated: "session.created",
   /** The owner invited people. Payload: `{ people, role }`; role `owner` for a handover waiting on its acceptance. */
   BrainstormShared: "session.shared",
-  /** Payload: `{ person }`. */
+  /** Payload: `{ person, via? }`; `via: "organisation"` when a member of the organisation joined an organisation session by writing in it. */
   BrainstormJoined: "session.joined",
   /** Payload: `{ person }`. */
   BrainstormDeclined: "session.declined",
@@ -199,6 +205,19 @@ export const EventTypes = {
    * ledger, and only to the session's members. Payload: `{ personId, open }`.
    */
   BrainstormOpen: "session.open",
+  /** The owner opened the session to the organisation, one way. Payload: `{ access: "organisation" }`. */
+  BrainstormAccessChanged: "session.access_changed",
+  /** Its owner was removed from the organisation: its admins own it. Payload: `{ owner, ownerName }`. */
+  BrainstormOwnerLeft: "session.owner_left",
+  /** An admin took over an admin-owned session. Payload: `{ from, to, toName }`. */
+  BrainstormOwnerTaken: "session.owner_taken",
+  /** The owner who left came back while its admins still owned it: it is theirs again. By the system. Payload: `{ owner }`. */
+  BrainstormOwnerReturned: "session.owner_returned",
+  /**
+   * A message mentioned someone not looking at the session: the notifier
+   * sends them a Web Push. Payload: `{ person, by, byName, title, text }`.
+   */
+  BrainstormMentioned: "session.mentioned",
 
   // People
   /** An admin added someone. Payload: `{ personId, role }`. */
@@ -212,6 +231,20 @@ export const EventTypes = {
    * only, never in the ledger: no cursor. Payload: `{ person: PersonRef }`.
    */
   PersonSeen: "person.seen",
+
+  // Chat providers (orchestrator/internal/chat)
+  /** An admin installed a provider's app in a workspace. Payload: `{ provider, workspaceId, workspaceName }`. */
+  ChatProviderInstalled: "chat_provider.installed",
+  /**
+   * The installation went with its links and thread bindings: an admin
+   * disconnected it, or the workspace removed the app or revoked its token.
+   * Payload: `{ provider, workspaceId, workspaceName, reason }`.
+   */
+  ChatProviderRemoved: "chat_provider.removed",
+  /** A person linked their provider account. Payload: `{ provider, personId, handle }`. */
+  ChatIdentityLinked: "chat_identity.linked",
+  /** A link went: unlinked by the person, or their sign-in revoked. Payload: `{ provider, personId, reason }`. */
+  ChatIdentityUnlinked: "chat_identity.unlinked",
 
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",
@@ -365,6 +398,12 @@ export const EventTypes = {
   RunChecksJudged: "run.checks.judged",
   /** A person's checks-gate decision: `{action, note}`. */
   RunChecksDecided: "run.checks.decided",
+  /**
+   * A test step started no tester: every path changed since the previous
+   * round is outside the product and that round passed; its verdicts stand.
+   * Payload: `{ fromRunId, from, heads, paths, criteria: [{criterion, status, decision}] }`.
+   */
+  TestSkipped: "test.skipped",
   /**
    * The Run failed. Payload: `{ status, error, kept?, failedTurns?, stage?,
    * reason? }`. `stage`: a start that failed before the agent ran, the

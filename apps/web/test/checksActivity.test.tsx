@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { EventTypes, type PersistedEvent, type Run } from "@dude/domain";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { activityLines } from "../src/screens/TaskScreen.tsx";
+import { dudeName } from "../src/DudeMark.tsx";
 
 const at = (s: number) => new Date(Date.UTC(2026, 9, 21, 10, 0, s)).toISOString();
 
@@ -77,5 +78,16 @@ describe("checks judgements in the task's Activity", () => {
       "The simplifier's checks were not model-checked",
       "The implementer's checks were verified",
     ]);
+  });
+
+  test("a test step that started no tester says why, which paths changed, and that the verdicts stand", () => {
+    const test1 = run("run_test_cj", "test", "qa_browser");
+    const skipped = { ...judged(test1.id, {}, 3), eventType: EventTypes.TestSkipped, runId: null,
+      payload: { fromRunId: test1.id, paths: ["api/.github/workflows/ci.yml"],
+        criteria: [{ criterion: 1, status: "pass", decision: "" }, { criterion: 2, status: "pass", decision: "" }] } } as PersistedEvent;
+    const lines = activityLines([skipped], people, [test1], [], 1);
+    expect(lines.map((l) => [textOf(l.text), l.quote, l.open?.runId])).toEqual([[
+      `${dudeName(TASK_ID)} did not run the tester again: the change since the last test touches only paths no criterion depends on. Its 2 verdicts stand.`,
+      "api/.github/workflows/ci.yml", test1.id]]);
   });
 });

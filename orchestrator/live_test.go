@@ -22,7 +22,7 @@ import (
 
 func TestFinalHookUsesRecordedSyncHistoryDespiteForgedRefs(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
 	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
@@ -53,7 +53,7 @@ func TestFinalHookUsesRecordedSyncHistoryDespiteForgedRefs(t *testing.T) {
 
 func TestPushScanSeesSecretInImportedBaseOmittedFromDisplay(t *testing.T) {
 	w := newWorld(t)
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet}).Handler())
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
 	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond

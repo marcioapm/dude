@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { harnessSchema } from "./harnesses.ts";
+import { chatOriginSchema } from "./chat.ts";
 
 /**
  * Product hierarchy — plan §39.
@@ -191,6 +192,10 @@ export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, str
 export const deliveryPolicySchema = z
   .object({
     requiredReviewers: z.array(z.enum(REVIEWER_CATEGORIES)).min(1),
+    /** Reviewers every review round runs, a later round whose own change is CI or docs only included; may be empty. */
+    alwaysReviewers: z.array(z.enum(REVIEWER_CATEGORIES)),
+    /** Path globs that are not the product: a later review round that changed only these runs no required reviewer of its own, and a change of these alone after a passing test starts no tester. In-repo paths; to make a whole repository non-product, list its paths. */
+    nonProductPaths: z.array(z.string().trim().min(1).max(200)).max(50),
     blockingSeverities: z.array(findingSeveritySchema).min(1),
     maxReviewIterations: z.number().int().min(1).max(20),
     /** Fix attempts one finding may survive before it is escalated on its own. */
@@ -256,6 +261,8 @@ export const epicSchema = z.object({
   description: z.string().default(""),
   /** Its place among the project's epics, 0 first: a statement of priority. */
   position: z.number().int().default(0),
+  /** Where it came from outside dude: a chat thread; null for one made in dude. */
+  origin: chatOriginSchema.nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
 });
 export type Epic = z.infer<typeof epicSchema>;
@@ -468,6 +475,8 @@ export const taskSchema = z.object({
   archivedAt: z.string().nullable().default(null),
   archivedBy: personRefSchema.nullable().default(null),
   closedBy: personRefSchema.nullable().default(null),
+  /** Where it came from outside dude: a chat thread (chat.ts); null for one made in dude. */
+  origin: chatOriginSchema.nullable().default(null),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });
@@ -932,6 +941,8 @@ export const criterionVerdictSchema = z.object({
   decision: z.enum(["waived", "accepted"]).nullable(),
   decidedBy: z.object({ id: z.string(), name: z.string() }).nullable(),
   decisionNote: z.string().nullable(),
+  /** The earlier test Run whose verdict and evidence this one carries forward, unretested; null for one judged here. */
+  carriedFrom: z.string().nullable().optional(),
 });
 export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
 

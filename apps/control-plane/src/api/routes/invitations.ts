@@ -5,6 +5,7 @@ import { withOrg, withoutTenant, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
 import { HttpError, json, noContent, parseBody } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { kickOwnerSweep, lockReturnable, returnSessions } from "./sessions.ts";
 
 const unusable = () => new HttpError(404, "invitation_unusable", "invitation_unusable");
 const mismatch = () => new HttpError(403, "invitation_for_another_email", "invitation_for_another_email");
@@ -90,7 +91,9 @@ export function registerInvitationRoutes(router: Router) {
   router.post("/v1/invitations/:code/accept", async (ctx) => {
     const input = await parseBody(ctx.request, z.object({ name: z.string().trim().min(1).max(100).optional() }).strict());
     const preview = await detail(ctx), access = ctx.principal.access!;
-    return json(await withOrg(preview.organization.id, async (scope) => {
+    let returned = false;
+    let more = false;
+    const accepted = await withOrg(preview.organization.id, async (scope) => {
       await lockPeople(scope);
       const [i] = await scope.sql`SELECT * FROM invitations WHERE code = ${ctx.params.code!} FOR UPDATE`;
       if (!i || i.revoked_at || (!i.accepted_at && new Date(i.expires_at).getTime() <= Date.now())) throw unusable();
@@ -98,8 +101,12 @@ export function registerInvitationRoutes(router: Router) {
       const [a] = await scope.sql`INSERT INTO accounts (id, email, name, photo_url)
         VALUES (${`acc_${crypto.randomUUID()}`}, ${access.email}, ${input.name ?? access.profile?.name ?? i.name ?? access.email}, ${access.profile?.picture ?? null})
         ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING *`;
+      // Before their row: the session's lock, then the person's, as the orchestrator takes them.
+      const [candidate] = await scope.sql`SELECT id FROM people WHERE account_id=${a.id} ORDER BY (removed_at IS NULL) DESC, created_at DESC LIMIT 1`;
+      const returnable = candidate ? await lockReturnable(scope, candidate.id) : { ids: [], more: false };
       let [person] = await scope.sql`SELECT * FROM people WHERE account_id=${a.id} ORDER BY (removed_at IS NULL) DESC, created_at DESC LIMIT 1 FOR UPDATE`;
       if (i.accepted_at && (!person || person.removed_at)) throw unusable();
+      const cameBack = !!person?.removed_at;
       if (!person || person.removed_at) {
         if (person) [person] = await scope.sql`UPDATE people SET removed_at=NULL, role=${i.role}, name=${a.name}, email=${a.email},
           photo_url=${a.photo_url}, photo_key=${a.photo_key}, photo_token=${a.photo_token} WHERE id=${person.id} RETURNING *`;
@@ -111,9 +118,30 @@ export function registerInvitationRoutes(router: Router) {
           actor: i.invited_by ? { type: "person", id: i.invited_by } : { type: "system", id: "operator" },
           payload: { personId: person.id, role: i.role, invitationId: i.id } });
       }
+      // A departed owner's sessions its admins still own are theirs again:
+      // the first PASS_BATCH here, the rest below. Accepting again (an
+      // active member's accept) finishes a return that failed between batches.
+      returned = (await returnSessions(scope, person.id, returnable.ids)).length > 0;
+      // A removal batch that committed while this waited on their row passed
+      // sessions not locked here: one more pass after coming back finds them.
+      more = returnable.more || cameBack;
       await scope.sql`UPDATE invitations SET accepted_at=COALESCE(accepted_at,now()), accepted_person_id=${person.id} WHERE id=${i.id}`;
       return { person: { id: person.id, role: person.role, name: person.name }, organization: preview.organization };
-    }));
+    });
+    // The rest in transactions of their own, at most PASS_BATCH locks each,
+    // each re-reading the person as still active under the sessions' locks
+    // (a removal since keeps the rest the admins').
+    while (more) {
+      more = await withOrg(preview.organization.id, async (scope) => {
+        const batch = await lockReturnable(scope, accepted.person.id);
+        const [here] = await scope.sql`SELECT 1 FROM people WHERE id = ${accepted.person.id} AND removed_at IS NULL FOR SHARE`;
+        if (!here) return false;
+        if ((await returnSessions(scope, accepted.person.id, batch.ids)).length > 0) returned = true;
+        return batch.more;
+      });
+    }
+    if (returned) kickOwnerSweep(preview.organization.id);
+    return json(accepted);
   });
   const path = "/v1/organization/invitations";
   router.get(path, async (ctx) => json(await withOrg(ctx.principal.organizationId, async (scope) => {

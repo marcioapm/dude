@@ -215,7 +215,7 @@ func (w *world) liveImplementer() (task, runID, live string) {
 // lux's dry run as production does.
 func (w *world) requestMachine(runID, body string) (int, string) {
 	w.t.Helper()
-	srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: quiet, Lux: w.syncer.Lux, ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
+	srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Lux: w.syncer.Lux, ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
 		return phases.ValidateResize(ctx, w.syncer.Lux, id, phases.PlanResize(ctx, w.syncer.Lux, from, to, before))
 	}}).Handler())
 	defer srv.Close()
@@ -837,7 +837,7 @@ func TestNoMoveIsParkedWhileLuxsPoolsCannotBeRead(t *testing.T) {
 	raise := `{"sizeId":"msz_big","moveId":"mmv_read","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}`
 	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, raise)
 	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
-	down := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	down := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: w.log, Kick: func() {}}).Handler())
 	t.Cleanup(down.Close)
 	w.api = down.URL
 	code, res := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
@@ -872,7 +872,7 @@ func TestARefusedMoveReadsLuxsPoolsNoMoreThanItsCallDid(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
 	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
 	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_gone' WHERE organization_id=$1 AND is_default`, w.org)
-	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: w.log, Kick: func() {}}).Handler())
 	t.Cleanup(srv.Close)
 	w.api = srv.URL
 	reads = pools.calls.Load()
@@ -912,7 +912,7 @@ func TestARefusalAfterAFailedPoolsReadNamesThePool(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE tasks SET agent_machines='{"implementer":{"sizeId":"msz_big","moveId":"mmv_old","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}}' WHERE id=$1`, task)
 	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
 	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_arm' WHERE organization_id=$1 AND is_default`, w.org)
-	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	srv := httptest.NewServer((&api.Server{DB: w.app, Lux: pools, Token: "svc", Log: w.log, Kick: func() {}}).Handler())
 	t.Cleanup(srv.Close)
 	w.api = srv.URL
 	pools.failNext.Store(1)

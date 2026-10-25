@@ -275,8 +275,25 @@
   gap: var(--ds-space-4);
   color: var(--ds-color-text-muted);
 }
+/* Open to the organisation: the building glyph in the info ink. */
+.sharedOrg {
+  color: var(--ds-tone-info-fg);
+  font-size: var(--ds-text-sm);
+}
+/* Its owner left: owned by the organisation's admins, in the attention ink. */
+.adminOwned {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-tone-attention-fg);
+  font-size: var(--ds-text-sm);
+}
 
-/* A session in the list. */
+/* A session in the list: the item is the container its grid reads, so it
+   folds wherever it is narrow, not only on a narrow screen. */
+.rowBox {
+  container-type: inline-size;
+}
 .row {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto auto;
@@ -284,6 +301,21 @@
   gap: var(--ds-space-16);
   padding: var(--ds-space-12);
   margin: 0 calc(-1 * var(--ds-space-12));
+}
+/* Narrow: the chips go under the text, the state spans both rows. */
+@container (max-width: 599.98px) {
+  .row {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    row-gap: var(--ds-space-6);
+  }
+  .row > .chips {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .row > .rowState {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
 }
 .row:hover {
   background: var(--ds-color-hover-wash);

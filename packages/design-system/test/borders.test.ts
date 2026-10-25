@@ -25,6 +25,7 @@ const ALLOWED: Record<string, Record<string, string>> = {
   },
   "packages/design-system/src/primitives/Select.module.css": { "*": "a field's edge" },
   "packages/design-system/src/primitives/NumberInput.module.css": { "*": "a field's edge" },
+  "apps/web/src/app.css": { ".automationValueBox": "a field's edge, read-only (a preset's inherited value)" },
   "packages/design-system/src/components/CodeEditor.module.css": {
     ".frame": "a field's edge",
     ".frame:hover": "a field's edge",
@@ -39,6 +40,13 @@ const ALLOWED: Record<string, Record<string, string>> = {
     ".box": "a field's edge",
     ".box:hover": "a field's edge",
     ".box:focus-within": "focus",
+  },
+  "packages/design-system/src/components/Automations.module.css": {
+    ".chips": "a field's edge",
+    ".chips:hover": "a field's edge",
+    ".chips:focus-within": "focus",
+    ".day": "a toggle is its outline",
+    ".dayOn": "a toggle is its outline, pressed",
   },
   "packages/design-system/src/primitives/Checkbox.module.css": { "*": "a checkbox is its outline" },
   "packages/design-system/src/primitives/ChoiceList.module.css": { ".dot": "a radio is its outline", ".chosen .dot": "a radio is its outline" },
@@ -61,6 +69,7 @@ const ALLOWED: Record<string, Record<string, string>> = {
   },
   // Bars down one side that carry meaning, not separation.
   "packages/design-system/src/components/ChatMessage.module.css": { ".quote": "a quotation's bar" },
+  "packages/design-system/src/components/Chat.module.css": { ".thread": "a quotation's bar: a thread from outside dude" },
   "packages/design-system/src/components/Peer.module.css": { ".replyTo": "a quotation's bar: what a peer's reply answers" },
   "packages/design-system/src/components/ChatThread.module.css": { ".root": "a subagent's thread, in its role's colour", ".finished": "a finished thread, fading" },
   "packages/design-system/src/components/ChatRunLine.module.css": { ".root": "a Run the conductor started, in its role's colour" },

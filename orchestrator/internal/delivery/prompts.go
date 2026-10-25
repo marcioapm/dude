@@ -94,6 +94,9 @@ type PromptInput struct {
 	// Test phase: the checks the attempt's writers reported
 	// (WriterChecksTx), "" for none.
 	WriterChecks string
+	// Test phase: an earlier round of the attempt tested, and this one
+	// resumed none of it (RetestsAfreshTx): every criterion again.
+	RetestsAfresh bool
 	// Review phase: what earlier reviewers of its category asked
 	// (EarlierQuestionsTx).
 	Questions []EarlierQuestion
@@ -370,6 +373,9 @@ func Prompt(phase string, in PromptInput) string {
 
 	case PhaseTest:
 		add(in.task())
+		if in.RetestsAfresh {
+			add(render(retestAfreshTmpl, nil))
+		}
 		if len(in.Findings) > 0 {
 			add(earlierFindings(in.Findings))
 		}

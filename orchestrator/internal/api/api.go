@@ -24,6 +24,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/automations"
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
@@ -71,6 +73,10 @@ type Server struct {
 	LLM llm.Client
 	// The operator's agent egress (agent.egress), for the Network page.
 	AgentEgress []string
+	// Automations' Run now, test-event evaluation and Start fresh.
+	Automations *automations.Runner
+	// Chat providers: installs, links and their webhooks; nil has none.
+	Chat *chat.Service
 }
 
 func (s *Server) Handler() http.Handler {
@@ -136,6 +142,7 @@ func (s *Server) Handler() http.Handler {
 	s.sessionRoutes(mux)
 	s.noteRoutes(mux)
 	s.feedbackRoutes(mux)
+	s.chatProviderRoutes(mux)
 	// dude's own stance for each role: the one section of its instruction
 	// file a saved prompt takes the place of, and where a first edit starts.
 	mux.Handle("GET /internal/prompts/builtin", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
@@ -151,6 +158,11 @@ func (s *Server) Handler() http.Handler {
 		write(w, http.StatusAccepted, map[string]bool{"ok": true})
 		return nil
 	}))
+	mux.Handle("GET /internal/automations/subscriptions", s.auth(s.eventSubscriptions))
+	mux.Handle("POST /internal/automations/{id}/runs", s.auth(s.automationRunNow))
+	mux.Handle("POST /internal/automations/{id}/test-event/evaluate", s.auth(s.evaluateTestEvent))
+	mux.Handle("POST /internal/automations/{id}/start-fresh", s.auth(s.automationStartFresh))
+	mux.Handle("POST /internal/automations/schedule/next", s.auth(s.scheduleNext))
 	return mux
 }
 
@@ -1187,7 +1199,10 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 	id := r.PathValue("id")
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// The delivery's row before the task's (delivery.LockEscalationTx):
-		// marking it done locks the delivery again (SetTaskStatusTx).
+		// marking it done locks the delivery again (SetTaskStatusTx). The
+		// task NO KEY UPDATE, as LockTaskTx: ending it updates its live
+		// children, whose syncer batch may hold one and wait on the task's
+		// KEY SHARE.
 		d, err := delivery.LoadDelivery(r.Context(), tx, id)
 		if err != nil {
 			return err
@@ -1199,7 +1214,7 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		if err := tx.QueryRow(r.Context(), `SELECT w.project_id, w.status::text,
 				EXISTS (SELECT 1 FROM workflow_runs d WHERE d.task_id = w.id AND d.status IN ('running', 'waiting')
 				        AND NOT (d.status = 'waiting' AND d.step = 'awaitRead'))
-			FROM tasks w WHERE w.id = $1 FOR UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
+			FROM tasks w WHERE w.id = $1 FOR NO KEY UPDATE`, id).Scan(&projectID, &status, &open); err != nil {
 			if db.IsNotFound(err) {
 				return fail(http.StatusNotFound, "not_found", "task %s not found", id)
 			}

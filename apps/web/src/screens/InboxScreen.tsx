@@ -10,13 +10,14 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, type AttentionItem, type NavProject, type NavRef } from "@dude/design-system";
-import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, PageWithRail, PageRail, PageRailBlock, FacetList, WaitingList, WaitingRow } from "@dude/design-system/components";
+import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, PageWithRail, PageRail, PageRailBlock, FacetList, SharedMark, WaitingList, WaitingRow } from "@dude/design-system/components";
 import { Button, EmptyState, Tabs, TabList, Tab, TabPanel, useToast } from "@dude/design-system/primitives";
 import { sessionTitle, severalLine, type SessionsList } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople } from "../people.tsx";
+import { useAccount } from "../accounts/context.tsx";
 import { inFacet, withCounts } from "./facets.ts";
 
 export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSelect, onOpenSession, onChanged }: {
@@ -48,6 +49,8 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
   const filter = (part: "projects" | "facets", values: string[]) => setFilters((f) => ({ ...f, [selectedTab]: { ...f[selectedTab], [part]: values } }));
   const invitations = sessions?.invitations ?? [];
   const questions = sessions?.questions ?? [];
+  const mentions = sessions?.mentions ?? [];
+  const org = useAccount()?.current.name ?? "the organisation";
   const openSession = (id: string) => onOpenSession?.(id);
 
   const decline = async (id: string) => {
@@ -120,6 +123,21 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
         />
       );
     }),
+    // Someone mentioned you: open the session, which marks it seen.
+    ...mentions.map((m) => {
+      const since = toMs(m.createdAt);
+      return (
+        <WaitingRow key={`m-${m.id}`} mine data-testid="session-mention" data-session={m.sessionId}
+          onOpen={() => openSession(m.sessionId)}
+          face={m.by ? <PersonAvatar person={people.byId.get(m.by.id) ?? m.by} size={40} /> : null}
+          ask={<>{m.by ? firstName(m.by.name) : "Someone"} mentioned you in <b>{sessionTitle(m)}</b>: “{m.text}”</>}
+          where={<>{m.access === "organisation" ? <SharedMark scope="organisation" org={org} /> : null}
+            {[m.access === "organisation" ? `Open to everyone in ${org}` : "A session", m.member ? null : "you're not in it yet"].filter(Boolean).join(" · ")}</>}
+          age={since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
+          action={<Button size="sm" variant="primary" onClick={() => openSession(m.sessionId)}>Open</Button>}
+        />
+      );
+    }),
   ];
   const mineCount = yours.length + sessionRows.length;
 
@@ -179,6 +197,10 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
       const summary = sessions?.sessions.find((s) => s.id === q.sessionId);
       return { id: `q-${q.id}`, label: "A session", projects: summary ? summary.projects.map((p) => p.id) : ["unknown"], kind: "questions", person: "", since: toMs(q.askedAt), node: sessionRows[invitations.length + i] as ReactNode };
     }),
+    ...mentions.map((m, i) => {
+      const summary = sessions?.sessions.find((s) => s.id === m.sessionId);
+      return { id: `m-${m.id}`, label: "A session", projects: summary ? summary.projects.map((p) => p.id) : ["unknown"], kind: "mentions", person: "", since: toMs(m.createdAt), node: sessionRows[invitations.length + questions.length + i] as ReactNode };
+    }),
     ...yours.map((it) => taskEntry(it, true)),
   ];
   const base = selectedTab === "you" ? mineEntries : others.map((it) => taskEntry(it, false));
@@ -194,7 +216,7 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
   for (const s of sessions?.sessions ?? []) for (const p of s.projects) projectNames.set(p.id, p.name);
   const projectIds = [...new Set([...base.flatMap((e) => e.projects.length ? e.projects : ["unlinked"]), ...selected.projects])];
   const personNames = new Map(others.map((it) => { const owner = taskOwner(it.task); return [owner?.id ?? owner?.name ?? "", owner?.name ?? "Unknown person"]; }));
-  const facets = selectedTab === "you" ? ["questions", "decisions", "invitations"] : [...new Set([...base.map((e) => e.person), ...selected.facets])];
+  const facets = selectedTab === "you" ? ["questions", "decisions", "invitations", ...(mentions.length > 0 ? ["mentions"] : [])] : [...new Set([...base.map((e) => e.person), ...selected.facets])];
   const oldest = visible.filter((e) => e.since !== null).reduce<Entry | null>((a, b) => !a || b.since! < a.since! ? b : a, null);
   const rail = <PageRail aria-label="Waiting filters">
     <PageRailBlock label="Projects">
@@ -206,7 +228,7 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
     <PageRailBlock label={facetLabel}>
       <Button size="sm" variant="quiet" onClick={() => filter("facets", [])} aria-pressed={!selected.facets.length}>All · {base.length}</Button>
       <FacetList label={facetLabel} value={selected.facets} onValueChange={(v) => filter("facets", v)} empty="Nobody else is waiting"
-        options={withCounts(facets.map((value) => ({ value, label: selectedTab === "you" ? ({ questions: "Questions", decisions: "Decisions", invitations: "Invitations" }[value] ?? value) : personNames.get(value) ?? value })),
+        options={withCounts(facets.map((value) => ({ value, label: selectedTab === "you" ? ({ questions: "Questions", decisions: "Decisions", invitations: "Invitations", mentions: "Mentions" }[value] ?? value) : personNames.get(value) ?? value })),
           base, facetOf)} />
     </PageRailBlock>
     <PageRailBlock label="Oldest">

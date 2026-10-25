@@ -379,3 +379,69 @@ func TestABrowserOnInTwoOrganisationsHearsOnlyTheAsksOrganisation(t *testing.T) 
 		t.Errorf("registrations after the sweep = %d, %v; want both kept", rows, err)
 	}
 }
+
+// A failed automation run reaches the people its event names — its owner,
+// or every admin while the owner has left — and nobody else, linking to the
+// run under its organisation's or project's settings.
+func TestAFailedAutomationReachesWhomItsEventNames(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ana, bo, cy := "per_ana_"+org, "per_bo_"+org, "per_cy_"+org
+	exec(`INSERT INTO people (id, organization_id, name, role) VALUES ($1, $4, 'Ana', 'admin'), ($2, $4, 'Bo', 'admin'), ($3, $4, 'Cy', 'member')`,
+		ana, bo, cy, org)
+	browsers := map[string]*browser{ana: newBrowser(t), bo: newBrowser(t), cy: newBrowser(t)}
+	mux := http.NewServeMux()
+	for person, b := range browsers {
+		mux.Handle("/"+person, b)
+	}
+	push := httptest.NewServer(mux)
+	t.Cleanup(push.Close)
+	for person, b := range browsers {
+		p256dh, auth := b.keys()
+		exec(`INSERT INTO push_subscriptions (endpoint, organization_id, person_id, p256dh, auth) VALUES ($1, $2, $3, $4, $5)`,
+			push.URL+"/"+person, org, person, p256dh, auth)
+	}
+	n := &notify.Notifier{DB: app, Log: slog.New(slog.DiscardHandler), Subject: "ops@example.com", HTTP: push.Client()}
+	if _, _, err := n.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE push_config SET after_cursor = (SELECT COALESCE(max(cursor), 0) FROM events)`)
+	failed := func(id, automation, project, name string, to []string) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{"automationId": automation, "projectId": project, "name": name, "runId": "arn_" + id,
+			"reason": "exit status 3", "to": to})
+		exec(`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
+			VALUES ($1, $2, 'automation.failed', 'system', 'dude', 'orchestrator', $3)`, "evt_"+id+"_"+org, org, string(payload))
+	}
+	// Owned by Cy, a member; then held, so both admins.
+	failed("owned", "aut_report", "prj_web", "Weekly report", []string{cy})
+	failed("held", "aut_audit", "", "Nightly audit", []string{ana, bo})
+	for range 5 {
+		if _, err := n.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[string][]string{}
+	for person, b := range browsers {
+		b.mu.Lock()
+		for _, m := range b.got {
+			got[person] = append(got[person], m.Title+" | "+m.Body+" | "+m.URL)
+		}
+		b.mu.Unlock()
+	}
+	owned := "Weekly report failed | exit status 3 | #/o/" + org + "/project/prj_web/settings/automations/aut_report/runs/arn_owned"
+	held := "Nightly audit failed | exit status 3 | #/o/" + org + "/org/settings/automations/aut_audit/runs/arn_held"
+	want := map[string][]string{cy: {owned}, ana: {held}, bo: {held}}
+	for person, w := range want {
+		if strings.Join(got[person], "\n") != strings.Join(w, "\n") {
+			t.Errorf("%s got %q, want %q", person, got[person], w)
+		}
+	}
+}

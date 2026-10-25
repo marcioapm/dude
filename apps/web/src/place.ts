@@ -18,7 +18,8 @@ export type Place =
   // when that is not the current one (`?attempt=1`). An epic's page, its
   // Coordination view (`#/epic/<id>/coordination`) in place of its board.
   | { view: "tree"; ref: NavRef; tab?: TaskTab; attempt?: number; epicView?: EpicView }
-  | { view: "projectSettings"; projectId: string; page?: string }
+  // sub: deeper than a page, as the page reads it (Automations: "<automation>/runs/<run>").
+  | { view: "projectSettings"; projectId: string; page?: string; sub?: string }
   // sub: deeper than a page, as the page reads it (Images: "<image>/<tab>", "<image>/builds/<build>").
   | { view: "orgSettings"; page?: string; sub?: string }
   | { view: "mySettings" }
@@ -27,8 +28,12 @@ export type Place =
   // is an agent's session inside a task's Run).
   | { view: "sessions" }
   | { view: "brainstorm"; id: string }
+  // The sessions open to the whole organisation (`#/sessions/open`; session ids are `ssn_…`).
+  | { view: "openSessions" }
   // dude's guide (`#/help/<page>/<section>`): the list, a page, a section of it.
-  | { view: "help"; page?: string; section?: string };
+  | { view: "help"; page?: string; section?: string }
+  // Where a chat provider's private Connect button lands (`#/connect/<provider>?state=…`).
+  | { view: "connect"; provider: string; state: string };
 
 /** The task tabs a URL can name; Overview is the task's own URL. */
 export type TaskTab = "chat" | "findings" | "sessions" | "feedback" | "files" | "servers" | "activity";
@@ -85,6 +90,8 @@ export function parsePlace(full: string): Place | null {
   }
   if (kind === "me" && id === "settings") return { view: "mySettings" };
   if (kind === "waiting") return id === "others" ? { view: "inbox", tab: "others" } : { view: "inbox" };
+  if (kind === "sessions" && id === "open") return { view: "openSessions" };
+  if (kind === "connect" && id) return { view: "connect", provider: decodeURIComponent(id), state: new URLSearchParams(query).get("state") ?? "" };
   if (kind === "sessions") return id ? { view: "brainstorm", id: decodeURIComponent(id) } : { view: "sessions" };
   if (kind === "help") {
     if (!id) return { view: "help" };
@@ -93,7 +100,9 @@ export function parsePlace(full: string): Place | null {
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
   if (kind === "project" && view === "settings") {
-    return page ? { view: "projectSettings", projectId: decoded, page } : { view: "projectSettings", projectId: decoded };
+    const sub = rest.filter((p): p is string => Boolean(p)).map((p) => decodeURIComponent(p)).join("/");
+    if (!page) return { view: "projectSettings", projectId: decoded };
+    return sub ? { view: "projectSettings", projectId: decoded, page, sub } : { view: "projectSettings", projectId: decoded, page };
   }
   const ref = { kind: kind as NavRef["kind"], id: decoded };
   if (kind === "epic" && view === "coordination") return { view: "tree", ref, epicView: "coordination" };
@@ -128,11 +137,15 @@ function bareHash(place: Place | null): string {
       return "#/sessions";
     case "brainstorm":
       return `#/sessions/${encodeURIComponent(place.id)}`;
+    case "openSessions":
+      return "#/sessions/open";
+    case "connect":
+      return `#/connect/${encodeURIComponent(place.provider)}${place.state ? `?state=${encodeURIComponent(place.state)}` : ""}`;
     case "help":
       if (!place.page) return "#/help";
       return `#/help/${encodeURIComponent(place.page)}${place.section ? `/${encodeURIComponent(place.section)}` : ""}`;
     case "projectSettings":
-      return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}`;
+      return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}${place.page && place.sub ? `/${place.sub.split("/").map(encodeURIComponent).join("/")}` : ""}`;
     case "tree":
       if (place.ref.kind === "epic" && place.epicView === "coordination") return `#/epic/${encodeURIComponent(place.ref.id)}/coordination`;
       return `#/${place.ref.kind}/${encodeURIComponent(place.ref.id)}${place.tab ? `/${place.tab}` : ""}${place.attempt ? `?attempt=${place.attempt}` : ""}`;

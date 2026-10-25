@@ -28,6 +28,8 @@ import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
 import { PageRailSection } from "./sections/PageRails.tsx";
 import { AccountsSection } from "./sections/Accounts.tsx";
+import { AutomationsSection } from "./sections/Automations.tsx";
+import { ChatProvidersSection } from "./sections/ChatProviders.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["Page rails", [["rail-populated", "Layout + facets"], ["rail-empty", "Empty"], ["rail-narrow", "Narrow controls"]]],
@@ -235,6 +237,16 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     ],
   ],
   [
+    "Automations",
+    [
+      ["au-marks", "KindMark / ScopeChip / TriggerSummary"],
+      ["au-owner", "OwnerMark"],
+      ["au-schedule", "SchedulePicker / NextRuns"],
+      ["au-chips", "ChipsInput"],
+      ["au-repo-filter", "RepoFilterField"],
+    ],
+  ],
+  [
     "Image library",
     [
       ["i-editor", "CodeEditor"],
@@ -267,6 +279,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["bs-proposal", "ProposalCard"],
       ["bs-row", "SessionRow / SharedMark"],
       ["bs-sidebar", "SidebarSessions"],
+      ["bs-access", "GeneralAccessRow / AdminOwned"],
+      ["bs-mentions", "Mentions"],
       ["bs-rail", "SessionPeople / LinkedProjects"],
       ["bs-files", "PublishedFiles"],
     ],
@@ -292,6 +306,25 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["ac-links", "InvitationLinkList"],
       ["ac-key", "KeyShownOnce"],
       ["ac-door", "FrontDoor"],
+    ],
+  ],
+  [
+    "Chat providers",
+    [
+      ["cp-glyph", "ProviderGlyph"],
+      ["cp-route", "RouteBadge"],
+      ["cp-origin", "OriginFact"],
+      ["cp-thread", "ExternalThread"],
+      ["cp-routing", "RoutingLine"],
+      ["cp-facts", "FactList"],
+      ["cp-connection", "ConnectionCard / IdentityPair"],
+      ["cp-session-row", "SessionRow: origin"],
+      ["cp-setting-fill", "SettingRow fill"],
+      ["cp-prompt", "PromptText"],
+      ["cp-stack", "InstructionStack"],
+      ["cp-providers", "ProviderList"],
+      ["cp-settings", "Settings: a page group"],
+      ["cp-board", "Board: cardLead"],
     ],
   ],
 ];
@@ -402,6 +435,7 @@ function Shell() {
           <StoppingSection mode={panes} />
           <LifecycleSection mode={panes} />
           <SettingsGallerySection mode={panes} />
+          <AutomationsSection mode={panes} />
           <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />
           <FeedbackSection mode={panes} />
@@ -409,6 +443,7 @@ function Shell() {
           <BrainstormSection mode={panes} />
           <PageRailSection mode={panes} />
           <AccountsSection mode={panes} />
+          <ChatProvidersSection mode={panes} />
         </PaneDensityContext.Provider>
       </main>
     </div>

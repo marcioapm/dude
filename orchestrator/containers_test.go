@@ -397,7 +397,7 @@ func TestARunKeepsWhatItWasSubmittedWithWhenTheOperatorChangesTheSetting(t *test
 	w.syncer.Stop()
 	agent := w.syncer.Agent
 	agent.NestedContainers = false
-	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: quiet, Agent: agent, KeepFor: w.syncer.KeepFor}
+	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: agent, KeepFor: w.syncer.KeepFor}
 	t.Cleanup(w.syncer.Stop)
 	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)

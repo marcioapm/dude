@@ -35,7 +35,7 @@ func TestTheAPISendsUTCOnAHostOutsideIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Close)
-	srv := httptest.NewServer((&api.Server{DB: app, Lux: s.syncer.Lux, Token: "svc", Log: quiet, Kick: func() {}}).Handler())
+	srv := httptest.NewServer((&api.Server{DB: app, Lux: s.syncer.Lux, Token: "svc", Log: s.log, Kick: func() {}}).Handler())
 	t.Cleanup(srv.Close)
 	get := func(method, path string, body string) map[string]any {
 		t.Helper()

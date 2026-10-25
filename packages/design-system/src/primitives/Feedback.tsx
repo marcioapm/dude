@@ -53,15 +53,16 @@ export interface EmptyStateProps {
   /** Single-row layout for panels and table bodies. */
   readonly compact?: boolean | undefined;
   readonly className?: string | undefined;
+  readonly "data-testid"?: string | undefined;
 }
 
 /**
  * Empty state. Say what would appear here and, if possible, how to make it
  * appear. Never an illustration — this is a console.
  */
-export function EmptyState({ icon = "inbox", title, description, action, compact, className }: EmptyStateProps) {
+export function EmptyState({ icon = "inbox", title, description, action, compact, className, "data-testid": testId }: EmptyStateProps) {
   return (
-    <div className={cx(styles["empty"], compact && styles["emptyCompact"], className)}>
+    <div className={cx(styles["empty"], compact && styles["emptyCompact"], className)} data-testid={testId}>
       <span className={styles["emptyIcon"]} aria-hidden>
         <Icon name={icon} size={compact ? 12 : 16} />
       </span>

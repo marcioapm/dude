@@ -21,15 +21,21 @@ import (
 )
 
 // Brainstorm sessions (delivery/session.go). Every route acts for the
-// person the backend names, and checks they are an accepted member before
-// anything else (member): a non-member, an invitee who has not accepted
-// and an organisation admin who is not in the session all get the same
-// 404. Only the owner shares, changes roles, removes and hands over;
-// readers write nothing.
+// person the backend names, and checks their role before anything else
+// (member, from session_role): someone with none — not in it, an invitee
+// who has not accepted, an organisation admin who is not in a private
+// session — gets the same 404. In a session open to its organisation every
+// active member can chat, and writing makes them one of its people; while
+// its admins own it (its owner left), every admin acts as owner. Only the
+// owner shares, opens it to the organisation, changes roles, removes and
+// hands over; readers write nothing.
 func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/sessions", s.auth(s.createSession))
 	mux.Handle("GET /internal/sessions", s.auth(s.listSessions))
+	mux.Handle("GET /internal/sessions/open", s.auth(s.listOpenSessions))
 	mux.Handle("GET /internal/sessions/{id}", s.auth(s.getSession))
+	mux.Handle("PUT /internal/sessions/{id}/access", s.auth(s.setSessionAccess))
+	mux.Handle("POST /internal/sessions/{id}/take-ownership", s.auth(s.takeSessionOwnership))
 	mux.Handle("POST /internal/sessions/{id}/title", s.auth(s.renameSession))
 	mux.Handle("POST /internal/sessions/{id}/chat", s.auth(s.sessionChat))
 	mux.Handle("POST /internal/sessions/{id}/retry", s.auth(s.retrySessionAgent))
@@ -49,6 +55,10 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 
 // sessionTitleMax bounds a session's title, as the schema does.
 const sessionTitleMax = 200
+
+// mentionsMax bounds the people one message mentions, and those it shares
+// the session with (@dude/domain's sessionMentionsSchema).
+const mentionsMax = 20
 
 var errNoPerson = fail(http.StatusForbidden, "no_person", "sessions are a person's: sign in as one")
 
@@ -84,12 +94,51 @@ func lockedOwner(ctx context.Context, tx pgx.Tx, sessionID, person, verb string)
 	return owner(ctx, tx, sessionID, person, verb)
 }
 
-// lockedWriter is writer under the session's lock.
-func lockedWriter(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) (string, error) {
+// lockedWriter is writer under the session's lock. Someone writing in an
+// organisation session they are not in joins its people as they write
+// (delivery.JoinByWriting), in the same transaction.
+func lockedWriter(ctx context.Context, tx pgx.Tx, org, sessionID string, p principal, verb string) (string, error) {
 	if err := delivery.LockSession(ctx, tx, sessionID); err != nil {
 		return "", err
 	}
-	return writer(ctx, tx, sessionID, person, verb)
+	role, err := writer(ctx, tx, sessionID, p.Person, verb)
+	if err != nil {
+		return "", err
+	}
+	return role, delivery.JoinByWriting(ctx, tx, delivery.SessionRef(org, sessionID), p.Person, p.writer().ActorType, p.Actor)
+}
+
+// lockedMemberWriter is writer under the session's lock for one of its
+// people alone: an accepted owner or chat row, or an admin while its admins
+// own it. Anyone else who could chat (an organisation member not in it) gets
+// a 403 and joins nothing: renaming is not writing to the agent.
+func lockedMemberWriter(ctx context.Context, tx pgx.Tx, sessionID, person, verb string) error {
+	if err := delivery.LockSession(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	role, err := writer(ctx, tx, sessionID, person, verb)
+	if err != nil {
+		return err
+	}
+	in, err := memberWriter(ctx, tx, sessionID, person, role)
+	if err != nil {
+		return err
+	}
+	if !in {
+		return fail(http.StatusForbidden, "not_member", "only the session's people who can chat %s", verb)
+	}
+	return nil
+}
+
+// memberWriter is lockedMemberWriter's rule for someone whose role is role:
+// an accepted owner or chat row, or the owner role while its admins own it.
+func memberWriter(ctx context.Context, tx pgx.Tx, sessionID, person, role string) (bool, error) {
+	var in bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_people WHERE session_id = $1 AND person_id = $2
+			AND accepted_at IS NOT NULL AND role IN ('owner', 'chat'))
+		OR EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND owned_by_admins) AND $3`, sessionID, person, role == delivery.SessionOwner).
+		Scan(&in)
+	return in, err
 }
 
 // writer refuses a reader: only the owner and members who can chat write
@@ -219,7 +268,7 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org strin
 	}
 	id := r.PathValue("id")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "rename it"); err != nil {
+		if err := lockedMemberWriter(r.Context(), tx, id, p.Person, "rename it"); err != nil {
 			return err
 		}
 		_, err := delivery.RenameSession(r.Context(), tx, delivery.SessionRef(org, id), title, p.Person, p.writer().ActorType, p.Actor)
@@ -363,21 +412,39 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 		return err
 	}
 	archived := r.URL.Query().Get("archived") == "1"
-	var sessions, invitations, questions json.RawMessage
+	var sessions, invitations, questions, mentions, organisation json.RawMessage
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		// Yours: those you accepted, and, for an admin, those its admins own
+		// (their owner left). An organisation session you never joined is
+		// listed by listOpenSessions instead. Driven from those candidates,
+		// so the cost is your sessions', not the organisation's.
 		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."lastActivityAt" DESC), '[]') FROM (
-			SELECT s.id, s.title, me.role, s.created_at AS "createdAt", me.archived_at IS NOT NULL AS archived,
+			SELECT s.id, s.title, s.role, s.created_at AS "createdAt", COALESCE(me.archived_at IS NOT NULL, false) AS archived,
 				(SELECT person_ref(o) FROM session_people so JOIN people o ON o.id = so.person_id
 				 WHERE so.session_id = s.id AND so.role = 'owner') AS owner,
 				(SELECT count(*) FROM session_people sp WHERE sp.session_id = s.id AND sp.accepted_at IS NOT NULL) > 1 AS shared,
+				s.access, s.owned_by_admins AS "ownedByAdmins",
 				`+sessionProjectsJSON+` AS projects,
 				(SELECT r.status::text FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1) AS "runStatus",
 				(SELECT r.dude_pause FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1) AS "dudePause",
 				(SELECT count(*) FROM session_filings f WHERE f.session_id = s.id) AS filed,
 				COALESCE((SELECT max(e.occurred_at) FROM events e WHERE e.session_id = s.id), s.created_at) AS "lastActivityAt"
-			FROM sessions s JOIN session_people me ON me.session_id = s.id AND me.person_id = $1 AND me.accepted_at IS NOT NULL
-			WHERE $2 OR me.archived_at IS NULL) x`,
+			FROM (SELECT c.*, session_role(c.id, $1) AS role FROM sessions c
+				WHERE c.id IN (SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL
+				               UNION ALL SELECT id FROM sessions WHERE owned_by_admins)) s
+			LEFT JOIN session_people me ON me.session_id = s.id AND me.person_id = $1 AND me.accepted_at IS NOT NULL
+			WHERE s.role IS NOT NULL AND (me.person_id IS NOT NULL OR (s.owned_by_admins AND s.role = 'owner'))
+			  AND ($2 OR me.archived_at IS NULL)) x`,
 			p.Person, archived).Scan(&sessions); err != nil {
+			return err
+		}
+		// The sidebar's Open to everyone row: no list, only its numbers;
+		// joined driven from the caller's own rows.
+		if err := tx.QueryRow(r.Context(), `SELECT json_build_object(
+				'count', (SELECT count(*) FROM sessions s WHERE s.access = 'organisation'),
+				'joined', (SELECT count(*) FROM session_people me JOIN sessions s ON s.id = me.session_id
+				  WHERE me.person_id = $1 AND me.accepted_at IS NOT NULL AND me.archived_at IS NULL AND s.access = 'organisation'))`,
+			p.Person).Scan(&organisation); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."invitedAt" DESC), '[]') FROM (
@@ -392,6 +459,21 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 			p.Person).Scan(&invitations); err != nil {
 			return err
 		}
+		// Mentions of the caller not seen yet, while they do not have the
+		// session open (one made while they look shows only if they leave
+		// before their page next says it is open), and only where they may
+		// still open it.
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."createdAt"), '[]') FROM (
+			SELECT m.id::text AS id, s.id AS "sessionId", s.title, m.text, m.created_at AS "createdAt", s.access,
+				(SELECT person_ref(b) FROM people b WHERE b.id = m.by_person) AS by,
+				EXISTS (SELECT 1 FROM session_people sp WHERE sp.session_id = s.id AND sp.person_id = $1 AND sp.accepted_at IS NOT NULL) AS member
+			FROM session_mentions m JOIN sessions s ON s.id = m.session_id
+			WHERE m.person_id = $1 AND m.seen_at IS NULL AND session_role(s.id, $1) IS NOT NULL
+			  AND NOT EXISTS (SELECT 1 FROM session_people sp WHERE sp.session_id = s.id AND sp.person_id = $1 AND sp.open_at > now() - interval '90 seconds')
+			  AND NOT EXISTS (SELECT 1 FROM session_viewers v WHERE v.session_id = s.id AND v.person_id = $1 AND v.open_at > now() - interval '90 seconds')) x`,
+			p.Person).Scan(&mentions); err != nil {
+			return err
+		}
 		return tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."askedAt"), '[]') FROM (
 			SELECT q.id, q.prompt, q.options, q.items, q.asked_at AS "askedAt", s.id AS "sessionId", s.title
 			FROM questions q JOIN runs r ON r.id = q.run_id JOIN sessions s ON s.id = r.session_id
@@ -402,7 +484,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 	if err != nil {
 		return err
 	}
-	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions})
+	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions, "mentions": mentions, "organisation": organisation})
 	return nil
 }
 
@@ -443,7 +525,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 					FROM runs r WHERE r.session_id = s.id ORDER BY r.created_at DESC LIMIT 1),
 				'runs', (SELECT COALESCE(json_agg(r.id ORDER BY r.created_at), '[]') FROM runs r WHERE r.session_id = s.id),
 				'costUsd', (SELECT COALESCE(sum(run_model_usd(r)), 0)::float8 FROM runs r WHERE r.session_id = s.id),
-				'messages', (SELECT count(*) FROM events e WHERE e.session_id = s.id AND e.event_type IN ('chat.message', 'agent.message')))
+				'messages', (SELECT count(*) FROM events e WHERE e.session_id = s.id AND e.event_type IN ('chat.message', 'agent.message')),
+				'access', s.access, 'ownedByAdmins', s.owned_by_admins, 'origin', s.origin)
 			FROM sessions s WHERE s.id = $1`, id).Scan(&session); err != nil {
 			return err
 		}
@@ -460,16 +543,30 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, org string) 
 			ORDER BY q.asked_at DESC LIMIT 1`, id, role, p.Person).Scan(&question); err != nil && !db.IsNotFound(err) {
 			return err
 		}
-		var archived bool
-		if err := tx.QueryRow(r.Context(), `SELECT archived_at IS NOT NULL FROM session_people WHERE session_id = $1 AND person_id = $2`,
-			id, p.Person).Scan(&archived); err != nil {
+		// Someone in an organisation session they never joined, or an admin of
+		// one its admins own, has no row: not a member, nothing archived.
+		var archived, isMember, admin bool
+		if err := tx.QueryRow(r.Context(), `SELECT
+				COALESCE((SELECT archived_at IS NOT NULL FROM session_people WHERE session_id = $1 AND person_id = $2 AND accepted_at IS NOT NULL), false),
+				EXISTS (SELECT 1 FROM session_people WHERE session_id = $1 AND person_id = $2 AND accepted_at IS NOT NULL),
+				EXISTS (SELECT 1 FROM people WHERE id = $2 AND role = 'admin' AND removed_at IS NULL)`,
+			id, p.Person).Scan(&archived, &isMember, &admin); err != nil {
 			return err
 		}
 		model, err := sessionModelView(r.Context(), tx, id)
 		if err != nil {
 			return err
 		}
-		out = map[string]any{"session": session, "you": map[string]any{"id": p.Person, "role": role, "archived": archived},
+		// Rename's own rule (lockedMemberWriter): a read row lifted to chat does not rename.
+		mayRename := false
+		if role != delivery.SessionRead {
+			if mayRename, err = memberWriter(r.Context(), tx, id, p.Person, role); err != nil {
+				return err
+			}
+		}
+		out = map[string]any{"session": session,
+			"you": map[string]any{"id": p.Person, "role": role, "archived": archived, "member": isMember, "admin": admin,
+				"mayRename": mayRename},
 			"proposals": proposals, "question": question, "model": model}
 		return nil
 	})
@@ -601,7 +698,8 @@ type taskFacts struct {
 }
 
 // readFileFacts reads the facts for items in three queries. lock takes the
-// named tasks' rows FOR UPDATE, as filing must before it edits one.
+// named tasks' rows FOR NO KEY UPDATE, so no other writer changes one
+// before filing edits it; inserts referencing them (KEY SHARE) go on.
 func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []delivery.ProposalItem, lock bool) (fileFacts, error) {
 	f := fileFacts{projects: map[string]bool{}, orgProjects: map[string]string{}, tasks: map[string]taskFacts{}}
 	rows, err := tx.Query(ctx, `SELECT upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
@@ -654,7 +752,7 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	}
 	lockClause := ""
 	if lock {
-		lockClause = " FOR UPDATE OF t"
+		lockClause = " FOR NO KEY UPDATE OF t"
 	}
 	// Matched on the key's parts, so each is an index probe on
 	// tasks (project_id, number) rather than a scan of the projects' tasks.
@@ -874,7 +972,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 	var results []map[string]any
 	linkedOne := false
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		role, err := lockedWriter(r.Context(), tx, id, p.Person, "file work")
+		role, err := lockedWriter(r.Context(), tx, org, id, p, "file work")
 		if err != nil {
 			return err
 		}
@@ -1213,9 +1311,17 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		// Images uploaded to the session, sent with the words; they may be
 		// all there is, as a steer's may.
 		AttachmentIDs []string `json:"attachmentIds"`
+		// People the message @-mentions, and people the owner adds as chat
+		// with it so they can see the mention (Share and send). Metadata:
+		// the agent reads the words as written.
+		Mentions  []string `json:"mentions"`
+		ShareWith []string `json:"shareWith"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
+	}
+	if len(body.Mentions) > mentionsMax || len(body.ShareWith) > mentionsMax {
+		return fail(http.StatusBadRequest, "bad_request", "at most %d people mentioned or shared with", mentionsMax)
 	}
 	if len(body.AttachmentIDs) == 0 || strings.TrimSpace(body.Text) != "" {
 		if err := checkChatText("text", body.Text); err != nil {
@@ -1227,8 +1333,26 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 	var out map[string]any
 	created := false
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "write to the agent"); err != nil {
+		role, err := lockedWriter(r.Context(), tx, org, id, p, "write to the agent")
+		if err != nil {
 			return err
+		}
+		// Only whoever acts as owner shares; anyone else's message is
+		// refused whole, so nothing is sent with a share it did not make.
+		if len(body.ShareWith) > 0 && role != delivery.SessionOwner {
+			return fail(http.StatusForbidden, "not_owner", "only the session's owner can share it")
+		}
+		sref := delivery.SessionRef(org, id)
+		if _, err := delivery.ShareForMention(r.Context(), tx, sref, body.ShareWith, p.Person, wr.ActorType, p.Actor); err != nil {
+			return err
+		}
+		mentioned, err := delivery.MentionInSession(r.Context(), tx, sref, body.Mentions, p.Person, body.Text, wr.ActorType, p.Actor)
+		if err != nil {
+			return err
+		}
+		if len(mentioned) > 0 {
+			// On the message's chat.message, for its chips.
+			wr.Via = map[string]any{"mentions": mentioned}
 		}
 		name, err := delivery.PersonName(r.Context(), tx, p.Person)
 		if err != nil {
@@ -1358,7 +1482,7 @@ func (s *Server) retrySessionAgent(w http.ResponseWriter, r *http.Request, org s
 	id := r.PathValue("id")
 	var runID string
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "start the agent again"); err != nil {
+		if _, err := lockedWriter(r.Context(), tx, org, id, p, "start the agent again"); err != nil {
 			return err
 		}
 		runID, err = delivery.RetryBrainstorm(r.Context(), tx, org, id, p.writer())
@@ -1507,7 +1631,7 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 	id, questionID := r.PathValue("id"), r.PathValue("question")
 	var out map[string]any
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		if _, err := lockedWriter(r.Context(), tx, id, p.Person, "answer the agent"); err != nil {
+		if _, err := lockedWriter(r.Context(), tx, org, id, p, "answer the agent"); err != nil {
 			return err
 		}
 		var runID, status, prompt, to string
@@ -1727,19 +1851,25 @@ func (s *Server) handOverSession(w http.ResponseWriter, r *http.Request, org str
 		if err := lockedOwner(r.Context(), tx, id, p.Person, "hand it over"); err != nil {
 			return err
 		}
+		// An admin acts as owner of an admin-owned session without being its
+		// owner member: they take it over first, then hand it on.
+		if _, byAdmins, err := delivery.SessionAccess(r.Context(), tx, id); err != nil {
+			return err
+		} else if byAdmins {
+			return fail(http.StatusConflict, "admin_owned", "its admins own this session; make yourself its owner first")
+		}
 		if body.Person == p.Person {
 			return fail(http.StatusBadRequest, "bad_request", "you already own it")
 		}
-		var ok bool
-		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM people WHERE id = $1 AND removed_at IS NULL)`,
-			body.Person).Scan(&ok); err != nil {
+		ok, err := activePerson(r.Context(), tx, body.Person)
+		if err != nil {
 			return err
 		}
 		if !ok {
 			return fail(http.StatusNotFound, "not_found", "%s is not one of this organisation's people", body.Person)
 		}
 		var accepted *bool
-		err := tx.QueryRow(r.Context(), `SELECT accepted_at IS NOT NULL FROM session_people WHERE session_id = $1 AND person_id = $2`,
+		err = tx.QueryRow(r.Context(), `SELECT accepted_at IS NOT NULL FROM session_people WHERE session_id = $1 AND person_id = $2`,
 			id, body.Person).Scan(&accepted)
 		if err != nil && !db.IsNotFound(err) {
 			return err
@@ -1775,6 +1905,11 @@ func (s *Server) handOverSession(w http.ResponseWriter, r *http.Request, org str
 // and tells the agent. A handover offered by the owner before is void: its
 // invitee, if they accept, joins as an ordinary member.
 func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep string, by principal) error {
+	if ok, err := activePerson(ctx, tx, to); err != nil {
+		return err
+	} else if !ok {
+		return fail(http.StatusConflict, "not_active", "%s is no longer one of this organisation's people", to)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE session_people SET becomes_owner = false, handover_keep = NULL
 		WHERE session_id = $1 AND becomes_owner AND person_id <> $2`, sessionID, to); err != nil {
 		return err
@@ -1817,6 +1952,18 @@ func makeOwner(ctx context.Context, tx pgx.Tx, org, sessionID, from, to, keep st
 
 var sessionOwnerTold = delivery.MustText("notices/told/session-owner")
 
+// activePerson is whether person is still one of the organisation's
+// people, holding their row FOR SHARE for the rest of tx. The backend's
+// removal holds that row FOR UPDATE until it commits and then re-reads the
+// sessions the person owns, so a session made theirs under its lock here
+// is either refused (the removal came first) or seen by that re-read.
+func activePerson(ctx context.Context, tx pgx.Tx, person string) (bool, error) {
+	var ok bool
+	err := tx.QueryRow(ctx, `SELECT count(*) > 0 FROM (SELECT 1 FROM people WHERE id = $1 AND removed_at IS NULL FOR SHARE) x`,
+		person).Scan(&ok)
+	return ok, err
+}
+
 // acceptSession is an invitee joining: they see the whole conversation from
 // now on. A handover's invitation makes them the owner.
 func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org string) error {
@@ -1828,6 +1975,13 @@ func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org strin
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := delivery.LockSession(r.Context(), tx, id); err != nil {
 			return err
+		}
+		// Before any row of theirs is touched: a removal in flight holds
+		// their row and rewrites their session rows (the standing trigger).
+		if ok, err := activePerson(r.Context(), tx, p.Person); err != nil {
+			return err
+		} else if !ok {
+			return fail(http.StatusForbidden, "invalid_principal", "principal is not an active organization member")
 		}
 		var becomesOwner bool
 		var keep *string
@@ -1843,8 +1997,13 @@ func (s *Server) acceptSession(w http.ResponseWriter, r *http.Request, org strin
 			return err
 		}
 		// A handover is the offer of the owner who made it: by now another's,
-		// it hands over nothing and its keep is not applied.
-		handover := becomesOwner && keep != nil && offeredBy != "" && offeredBy == current
+		// it hands over nothing and its keep is not applied. One whose owner
+		// left (its admins own the session) is void too.
+		_, byAdmins, err := delivery.SessionAccess(r.Context(), tx, id)
+		if err != nil {
+			return err
+		}
+		handover := becomesOwner && keep != nil && offeredBy != "" && offeredBy == current && !byAdmins
 		if _, err := tx.Exec(r.Context(), `UPDATE session_people SET accepted_at = now(), becomes_owner = false, handover_keep = NULL
 			WHERE session_id = $1 AND person_id = $2`, id, p.Person); err != nil {
 			return err
@@ -1919,9 +2078,14 @@ func (s *Server) archiveSession(archive bool) handler {
 			if err != nil {
 				return err
 			}
-			// Removed between member() and here: the same answer as any non-member.
+			// No row of theirs: in an organisation session they never joined
+			// (or an admin of one its admins own) there is nothing to archive;
+			// removed between member() and here, the same answer as any non-member.
 			if tag.RowsAffected() == 0 {
-				return fail(http.StatusNotFound, "not_found", "session %s not found", id)
+				if _, err := member(r.Context(), tx, id, p.Person); err != nil {
+					return err
+				}
+				return fail(http.StatusConflict, "not_member", "you are not one of this session's people; there is nothing of yours to archive")
 			}
 			return nil
 		})

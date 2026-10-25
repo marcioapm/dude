@@ -33,7 +33,7 @@ const FRAMES = ["comfortable dark", "comfortable light", "compact dark", "compac
 test("every Brainstorm block renders in dark and light, comfortable and compact", async () => {
   const el = await mount();
   const blocks = [...el.querySelectorAll("section#brainstorm [id^='bs-']")];
-  expect(blocks.map((b) => b.id)).toEqual(["bs-avatar", "bs-title", "bs-proposal", "bs-row", "bs-sidebar", "bs-rail", "bs-rail-model", "bs-files"]);
+  expect(blocks.map((b) => b.id)).toEqual(["bs-avatar", "bs-title", "bs-proposal", "bs-row", "bs-sidebar", "bs-access", "bs-mentions", "bs-rail", "bs-rail-model", "bs-files"]);
   for (const block of blocks) {
     const panes = [...block.querySelectorAll("[data-theme][data-density]")];
     expect(panes.map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`), block.id).toEqual(FRAMES);
@@ -119,6 +119,28 @@ test("PublishedFiles: each file by its own name and kind, a version mark when pu
   expect(capped!.textContent).toContain("1 more");
 });
 
+test("bs-mentions has a live composer: @ opens the menu, and a private session's outside pick shows the share confirm inside the composer", async () => {
+  const el = await mount();
+  const pane = el.querySelector("#bs-mentions [data-theme]")!;
+  const type = async (area: HTMLTextAreaElement, value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, value);
+    area.setSelectionRange(value.length, value.length);
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const org = pane.querySelector<HTMLElement>("[data-testid=g-mention-composer-organisation]")!;
+  const orgArea = org.querySelector("textarea")!;
+  expect(orgArea.getAttribute("role")).toBe("combobox");
+  await type(orgArea, "@t");
+  expect([...org.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual([expect.stringContaining("Tom")]);
+
+  const priv = pane.querySelector<HTMLElement>("[data-testid=g-mention-composer-private]")!;
+  const area = priv.querySelector("textarea")!;
+  await type(area, "@lin");
+  await act(async () => void area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  const confirm = priv.querySelector("form [data-testid=mention-share-confirm]");
+  expect(confirm?.getAttribute("data-owner")).toBe("true");
+});
+
 // `awaiting_input` is the vocabulary's needs-you state ("Needs you", solid).
 test("each frame shows the brainstorm's face beside the conductor's and a needs-you mark", async () => {
   const el = await mount();
@@ -150,5 +172,14 @@ test("the rail's Model: the owner's chip, chosen and read only, each with when a
   expect(new Set(panes.map((p) => p.getAttribute("data-theme")))).toEqual(new Set(["dark", "light"]));
   for (const pane of el.querySelectorAll("#bs-rail [data-theme][data-density]")) {
     expect(pane.querySelector("[data-testid=rail-model]")!.textContent).toContain("Applies from your next message: a fresh agent takes over with the conversation so far.");
+  }
+});
+
+test("bs-access shows the rail of a session whose owner left: Left Acme · No access, never Owner", async () => {
+  const el = await mount();
+  for (const pane of el.querySelectorAll("#bs-access [data-theme][data-density]")) {
+    const left = pane.querySelector('[data-testid=session-people] [data-left="true"]')!;
+    expect(left.textContent).toContain("Left Acme · No access");
+    expect(left.textContent).not.toContain("Owner");
   }
 });

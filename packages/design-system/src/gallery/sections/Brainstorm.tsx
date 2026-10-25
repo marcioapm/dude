@@ -1,9 +1,14 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
-import { Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { AdminOwned, Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { GeneralAccessRow, MentionChip, MentionMenu, MentionShareConfirm, type MentionItem } from "../../components/SessionAccess.tsx";
+import { PersonAvatar } from "../../components/PersonAvatar.tsx";
+import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
 import { ChatNotice } from "../../components/ChatNotice.tsx";
+import { ChatComposer } from "../../components/ChatComposer.tsx";
+import { ChatMessage } from "../../components/ChatMessage.tsx";
 import { ScreenHeader, Segmented } from "../../components/ScreenHeader.tsx";
 import { Badge } from "../../primitives/Badge.tsx";
 import { Button } from "../../primitives/Button.tsx";
@@ -19,6 +24,40 @@ import styles from "../gallery.module.css";
 const RAIL_MODEL_NOTE = "Applies from your next message: a fresh agent takes over with the conversation so far.";
 
 const P = people;
+
+/** Who the mention menu offers: one in the session, two who can open it. */
+const MENTION_ITEMS: MentionItem[] = [
+  { person: P["ana"]!, detail: "In this session · can chat" },
+  { person: P["tom"]!, detail: "Not in it yet · can open it and chat" },
+  { person: P["lin"]!, detail: "Not in it yet · can open it and chat" },
+];
+
+/**
+ * A live ChatComposer with mentionables: type "@" to open the menu above the
+ * field; in the private one, picking someone outside it shows the share
+ * confirm in its `below` slot, inside the composer frame. What it would
+ * send is written under it.
+ */
+function MentionComposer({ access, width }: { readonly access: "organisation" | "private"; readonly width?: number }) {
+  const [pending, setPending] = useState<MentionItem | null>(null);
+  const [sent, setSent] = useState<string>("");
+  const submitRef = useRef<((extra?: { readonly shareWith?: ReadonlyArray<string> }) => void) | null>(null);
+  const items = access === "organisation" ? MENTION_ITEMS : [MENTION_ITEMS[0]!, ...MENTION_ITEMS.slice(1).map((m) => ({ ...m, outside: true }))];
+  return (
+    <div style={{ width: width ?? "100%", display: "flex", flexDirection: "column", gap: 8 }} data-testid={`g-mention-composer-${access}`}>
+      <ChatComposer mode="chat" placeholder="Message the brainstorm… (@ to mention someone)" mentionables={items}
+        mentionHeading={access === "organisation" ? "Mention someone in Acme · they're notified" : undefined}
+        onMention={(m) => m.outside && setPending(m)} submitRef={submitRef}
+        below={pending ? (
+          <MentionShareConfirm person={pending.person} owner ownerName="Márcio Martins"
+            onShare={() => { submitRef.current?.({ shareWith: [pending.person.id ?? pending.person.name] }); setPending(null); }}
+            onPlain={() => { submitRef.current?.(); setPending(null); }} onCancel={() => setPending(null)} />
+        ) : undefined}
+        onSubmit={(s) => { setSent(JSON.stringify(s)); return true; }} />
+      {sent ? <Label>sent: {sent}</Label> : null}
+    </div>
+  );
+}
 
 /** The card as Ana sees it: Márcio's edit stays for him; one item filed already. */
 const ITEMS: ProposalCardItem[] = [
@@ -204,17 +243,88 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
               projects={[{ key: "WC", name: "web-console", repositories: 2 }, { key: "BL", name: "billing", repositories: 1 }]}
               shared={{ owner: P["marcio"] }} onOpen={() => undefined} />
             <SessionRow title="Q4 cleanup ideas" summary="Nothing filed yet" state="Parked" age="3 days ago" projects={[]} onOpen={() => undefined} />
+            <SessionRow title="Usage CSV export times out for October" summary="Nothing filed yet" state="Talking" age="19 min"
+              projects={[{ key: "AB", name: "abs", repositories: 2 }]} access="organisation" org="Acme" shared={{ owner: P["ana"] }}
+              origin="Started from a channel thread" onOpen={() => undefined} />
           </ul>
           <SharedMark />
+          <Label>390px: the chips go under the text, the state spans both rows</Label>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, width: 390 }} data-testid="session-row-narrow">
+            <SessionRow title="Usage CSV export times out for October" summary="Nothing filed yet" state="Talking" age="19 min"
+              projects={[{ key: "AB", name: "abs", repositories: 2 }]} access="organisation" org="Acme" onOpen={() => undefined} />
+          </ul>
         </Panes>
       </Block>
       <Block id="bs-sidebar" title="SidebarSessions"
-        note="Above Projects in the sidebar: only sessions you are in, then New session.">
+        note="Above Projects in the sidebar: only sessions you are in, then New session. With organisation, a last row Open to everyone counts the active organisation sessions you joined; it stays when the list is folded.">
         <Panes mode={mode}>
           <div style={{ width: 280 }}>
             <SidebarSessions selected="s2" onSelect={() => undefined} onNew={() => undefined} onOpenList={() => undefined}
-              sessions={[{ id: "s1", title: "Meter v2 notes" }, { id: "s2", title: "Usage-based billing", shared: true, owner: P["marcio"] }]} />
+              sessions={[{ id: "s1", title: "Meter v2 notes" }, { id: "s2", title: "Usage-based billing", shared: true, owner: P["marcio"] },
+                { id: "s3", title: "CSV export times out", access: "organisation" }]}
+              organisation={{ count: 2, onOpen: () => undefined }} />
+            <Label>Open to everyone current, the list folded</Label>
+            <SidebarSessions onSelect={() => undefined} onNew={() => undefined} folded sessions={[]}
+              organisation={{ count: 2, current: true, onOpen: () => undefined }} />
           </div>
+        </Panes>
+      </Block>
+      <Block id="bs-access" title="GeneralAccessRow / SharedMark organisation / AdminOwned"
+        note="Who may open a session without being added. One way: the owner's private row offers Everyone (can't be undone) and asks first; once open, the row is read-only for everyone. The header's marks: Everyone in Acme (info ink) and the owner-left mark (attention ink), each named in words.">
+        <Panes mode={mode}>
+          <Col style={{ width: 460 }}>
+            <Label>owner, private</Label>
+            <GeneralAccessRow org="Acme" value="private" editable onOpen={() => undefined} />
+            <Label>owner, confirming</Label>
+            <GeneralAccessRow org="Acme" value="private" editable confirming onConfirm={() => undefined} onCancel={() => undefined} />
+            <Label>organisation (owner and anyone else)</Label>
+            <GeneralAccessRow org="Acme" value="organisation" />
+            <Label>someone else, private</Label>
+            <GeneralAccessRow org="Acme" value="private" />
+            <Label>marks</Label>
+            <Row style={{ gap: 16 }}>
+              <SharedMark scope="organisation" org="Acme" showLabel />
+              <SharedMark label="Shared with 4" showLabel />
+              <AdminOwned org="Acme" />
+            </Row>
+            <Label>the rail of a session its admins own: its owner left</Label>
+            <SessionPeople members={[
+              { person: P["lin"]!, role: "owner", left: "Acme" },
+              { person: P["ana"]!, role: "chat", open: true },
+            ]} />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="bs-mentions" title="MentionMenu / MentionChip / MentionShareConfirm"
+        note="@ in a session's composer: a live ChatComposer with mentionables (type @ — the menu opens above the field; in the private one a pick of someone outside it shows the share confirm in the composer's below slot, at full width and at 390px), the menu with a query and with none, a private session's menu with outside people (locked, in the attention ink), a message with its two chips in the sentence (one you), the share confirm for the owner and for anyone else at 390px, and a mention's Waiting on you row.">
+        <Panes mode={mode}>
+          <Col style={{ width: 460 }}>
+            <Label>ChatComposer, organisation session: type @</Label>
+            <MentionComposer access="organisation" />
+            <Label>ChatComposer, private session, 390px: @ a name outside it</Label>
+            <MentionComposer access="private" width={390} />
+            <MentionMenu id="g-menu-q" query="g" active={0} onPick={() => undefined}
+              heading="Mention someone in Acme · they're notified" items={[MENTION_ITEMS[1]!]} />
+            <MentionMenu id="g-menu" query="" active={1} onPick={() => undefined} items={MENTION_ITEMS}
+              heading="Mention someone in Acme · they're notified" />
+            <MentionMenu id="g-menu-private" query="" active={0} onPick={() => undefined}
+              items={[MENTION_ITEMS[0]!, { ...MENTION_ITEMS[1]!, outside: true }, { ...MENTION_ITEMS[2]!, outside: true }]} />
+            <MentionMenu id="g-menu-none" query="zed" active={0} onPick={() => undefined} items={[]} />
+            <ChatMessage role="human" name="Márcio Martins" person={P["marcio"]} content="Can you check the rows, @Ana Ribeiro and @Tom Okafor?"
+              mentions={[{ name: P["ana"]!.name, chip: <MentionChip person={P["ana"]!} /> }, { name: P["tom"]!.name, chip: <MentionChip person={P["tom"]!} you /> }]} />
+            <div style={{ width: 390, display: "flex", flexDirection: "column", gap: 8 }}>
+              <MentionShareConfirm person={P["tom"]!} owner ownerName="Márcio Martins" onShare={() => undefined}
+                onPlain={() => undefined} onCancel={() => undefined} />
+              <MentionShareConfirm person={P["tom"]!} owner={false} ownerName="Márcio Martins"
+                onPlain={() => undefined} onCancel={() => undefined} />
+            </div>
+            <WaitingList aria-label="On you">
+              <WaitingRow mine face={<PersonAvatar person={P["marcio"]!} size={40} />} onOpen={() => undefined}
+                ask={<>Márcio mentioned you in <b>Usage CSV export times out for October</b>: “Tom, can you check the rows?”</>}
+                where={<><SharedMark scope="organisation" org="Acme" />Open to everyone in Acme · you're not in it yet</>}
+                age="2 min" action={<Button size="sm" variant="primary">Open</Button>} />
+            </WaitingList>
+          </Col>
         </Panes>
       </Block>
       <Block id="bs-rail" title="SessionPeople / LinkedProjects / ModelPicker / Capabilities"

@@ -114,6 +114,8 @@
   flex-direction: column;
   gap: var(--ds-space-24);
   max-width: 1100px;
+  /* Rows stack on the page column's own width, not the viewport's: beside two sidebars a 1024px window leaves it narrow. */
+  container-type: inline-size;
 }
 /* A role's page: its prompt fills the pane, to the screen's own gutter. */
 .main.wide {
@@ -251,6 +253,47 @@
 /* A table and what follows it, stacked at the column's width. */
 .rowControlBlock {
   display: block;
+}
+/* A field that takes the column's width (long free text). */
+.rowControlFill {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.rowControlFill > * {
+  max-width: none;
+  width: 100%;
+}
+/* A narrow page column (a phone, or a laptop beside the sidebars): the label above its control, each the column's width. */
+@container (max-width: 640px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-8);
+  }
+  .rowLabel {
+    padding-top: 0;
+  }
+}
+/* A phone: a row's label over its control; a header's actions wrap under its title. */
+@media (max-width: 719.98px) {
+  .header {
+    flex-wrap: wrap;
+  }
+  .headerText {
+    flex-basis: calc(100% - 64px);
+  }
+  .headerActions {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-8);
+    padding: var(--ds-space-12) 0;
+  }
+  .rowLabel {
+    padding-top: 0;
+  }
 }
 
 .inherited,
