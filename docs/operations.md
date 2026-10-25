@@ -226,6 +226,17 @@ object is stored, but Bun reports `ConnectionClosed` and the upload answers
 naming the version it needs; without it, no S3 request is made and it
 starts.
 
+### git
+
+The orchestrator runs `git merge-file` (git 2.43 or later, for its
+`--diff-algorithm`) to judge a base merge GitHub made on a task branch
+where both sides edited one file: it re-merges that file and compares the
+result with GitHub's. `git` must be on the orchestrator's `PATH`. Without
+it, or with an older git, such a merge is not adopted: the writer's or the
+promotion's move is refused, as for any other move of the branch, and the
+orchestrator logs `re-merging a file both sides of a base merge changed
+failed`.
+
 The orchestrator reaches out to `LUX_URL`, to GitHub's API
 (`https://api.github.com`, or the organization's stored `apiBaseUrl`), to
 ECR's API (`api.ecr.<region>.amazonaws.com`) and the instance metadata
