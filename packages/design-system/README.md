@@ -301,8 +301,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   second block marked by label and rail, not by tinting the text; a harness
   that merges the streams (OpenCode) passes one `output`.
 - Tool output carries the tool's own escape codes — the container forces
-  colour (`FORCE_COLOR`, `CLICOLOR_FORCE`, `TERM=xterm-256color`,
-  `git color.ui=always`). `parseAnsi` (`src/util/ansi.ts`) turns it into
+  colour (`FORCE_COLOR`, `CLICOLOR_FORCE`, `TERM=xterm-256color`; git is
+  left plain). `parseAnsi` (`src/util/ansi.ts`) turns it into
   styled runs and `AnsiString` renders them as spans; no HTML string exists
   anywhere in the path. SGR is kept (reset, bold, dim, italic, underline,
   inverse, the 16 colours, 256-colour, truecolor); every other sequence

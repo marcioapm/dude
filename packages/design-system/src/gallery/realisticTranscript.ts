@@ -167,7 +167,7 @@ export const CONTEXT_WINDOW = 744_000;
 
 // ---------------------------------------------------------------------------
 // Coloured output. The container forces colour (FORCE_COLOR, CLICOLOR_FORCE,
-// TERM=xterm-256color, git color.ui=always), so this is what the backend
+// TERM=xterm-256color; git is left plain), so this is what the backend
 // delivers: the tool's own SGR codes, and whatever else it printed.
 // ---------------------------------------------------------------------------
 

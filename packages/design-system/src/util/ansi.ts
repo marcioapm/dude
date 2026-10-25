@@ -2,7 +2,7 @@
  * ANSI escape sequences in tool output, parsed into styled segments.
  *
  * Agents run in a container that forces colour (FORCE_COLOR, CLICOLOR_FORCE,
- * `TERM=xterm-256color`, `git color.ui=always`), so what a tool printed
+ * `TERM=xterm-256color`; git is left plain), so what a tool printed
  * arrives with the SGR codes it printed. This turns that text into a list
  * of `{ text, style }` runs for `AnsiString` to render as React spans.
  * There is no HTML string anywhere in the path; nothing here touches the
