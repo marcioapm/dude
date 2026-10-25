@@ -520,7 +520,11 @@ func TestEachRefusalOfABaseMergeHolds(t *testing.T) {
 					cancel()
 					return
 				}
-				time.Sleep(10 * time.Millisecond)
+				select {
+				case <-cancelled.Done():
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
 			}
 		}()
 		pure, err := pureMerge(cancelled, a.gh, "acme/target", ps[0], ps[1], x, ps[0])
