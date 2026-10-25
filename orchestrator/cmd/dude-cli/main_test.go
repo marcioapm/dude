@@ -64,16 +64,27 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 	return srv, &calls
 }
 
+// runCLI runs one command against srv, and fails the test when the command
+// sends a request routes.json does not map to it (routes_test.go).
 func runCLI(t *testing.T, srv *httptest.Server, stdin string, args ...string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
+	var sent []call
 	c := &cli{
 		creds: func(string) (string, string, error) { return srv.URL, "k3y", nil },
-		http:  srv.Client(),
+		login: func(string, string, string, bool) (string, error) { return "test keystore", nil },
+		http:  &http.Client{Transport: recorder{srv.Client().Transport, &sent}},
 		stdin: strings.NewReader(stdin),
 		out:   &out,
 	}
 	err := c.run(args)
+	if len(args) > 0 {
+		for _, s := range sent {
+			if msg := unmappedRequest(t, args[0], s); msg != "" {
+				t.Error(msg)
+			}
+		}
+	}
 	return out.String(), err
 }
 

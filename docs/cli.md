@@ -366,3 +366,27 @@ request shows the server's answer, as in `dude: GET /v1/tasks/x: 404 {"error":â€
 - **`not logged in`**: run `dude login URL`, or set `DUDE_API_KEY`.
 - **`the key for ORG is gone from the â€¦`**: the keystore lost it, for
   example a new keychain. Log in again.
+
+## Adding a command
+
+Every authenticated `/v1/` route is either a CLI command or a decision not
+to make one. `orchestrator/cmd/dude-cli/routes.json` records which, one
+entry per route, keyed `"METHOD /v1/pattern/:param"` as the router
+registers it: the command that calls it (a list when several do), or
+`{"apiOnly": "<why>"}`, reusing one of the reasons already there.
+
+- **Commands** are the `command` tables in `main.go`, `more.go` and
+  `lifecycle.go`: positional names (`?` optional,
+  `...` the rest), one line of help, and a flag set returning a `doer`.
+  Reuse `request`/`post`, `onTask`/`onRun` (they resolve TASK and RUN),
+  `projectID`, `text` (`-` reads stdin), `obj`, `pick`, `setIf`, and
+  `oneOf` to refuse a bad fixed choice before any request.
+- **`apps/control-plane/test/cli-routes.test.ts`** (bun, no database)
+  fails when a registered route has no entry, an entry names a route that
+  is gone, or an `apiOnly` reason is empty.
+- **`routes_test.go`** (Go) fails when an entry names a command that does
+  not exist, a command is in no entry, a command sends a request its
+  entries do not cover (checked on every request in every test, through
+  `runCLI`), or a mapping is never exercised: add a row to `routeCases`.
+- **Bodies** are written in the row as the route's zod schema takes them,
+  read from the handler, never copied from what the CLI sends.

@@ -52,6 +52,7 @@ type PublicHandler = (ctx: PublicContext) => Promise<Response> | Response;
 
 interface Route {
   method: string;
+  pattern: string;
   segments: string[];
   handler: Handler | PublicHandler;
   public: boolean;
@@ -82,6 +83,7 @@ export class Router {
   ): this {
     this.#routes.push({
       method,
+      pattern,
       segments: pattern.split("/").filter(Boolean),
       handler,
       public: opts.public ?? false,
@@ -109,6 +111,11 @@ export class Router {
   /** Register a route that runs without authentication. */
   publicRoute(method: string, pattern: string, handler: PublicHandler): this {
     return this.#add(method, pattern, handler, { public: true });
+  }
+
+  /** Every registered route, in registration order. */
+  routes(): ReadonlyArray<{ method: string; pattern: string; public: boolean }> {
+    return this.#routes.map((r) => ({ method: r.method, pattern: r.pattern, public: r.public }));
   }
 
   /** Runs, unauthenticated, only when no route matched. */
