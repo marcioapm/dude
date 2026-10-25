@@ -41,7 +41,7 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */
-const COLUMNS = `a.id, a.project_id AS "projectId", p.name AS "projectName", a.name, a.description, a.kind, a.enabled,
+export const COLUMNS = `a.id, a.project_id AS "projectId", p.name AS "projectName", a.name, a.description, a.kind, a.enabled,
   a.owner_id AS "ownerId", a.owner_left_at AS "ownerLeftAt", a.trigger, a.session_mode AS "sessionMode",
   a.expiry_days AS "expiryDays", a.concurrency, a.parallel_max AS "parallelMax", a.repos, a.repo_filter AS "repoFilter",
   a.agent, a.machine_size_id AS "machineSizeId", a.image_id AS "imageId", a.setup_script AS "setupScript", a.command,
@@ -61,7 +61,8 @@ async function canEdit(ctx: RequestContext, projectId: string | null): Promise<b
   return projectId ? canEditProject(ctx, projectId) : isOrgAdmin(ctx);
 }
 
-async function shape(ctx: RequestContext, row: Row): Promise<Automation> {
+/** A row as every read answers it. No query of its own: access reads ctx.principal. */
+export async function shape(ctx: RequestContext, row: Row): Promise<Automation> {
   const { ownerId, ...rest } = row;
   const admin = await isOrgAdmin(ctx);
   const lastRun = rest.lastRun ? { ...rest.lastRun, at: iso(rest.lastRun.at)! } : null;

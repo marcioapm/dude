@@ -203,6 +203,23 @@ func TestAutomationSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+// cli-bodies.test.ts strips testdata/automation-readonly.json's fields from
+// automation-get.json and parses the rest with the PUT's schema, so the list
+// there must be the one automation-update strips.
+func TestAutomationReadOnlyIsShared(t *testing.T) {
+	raw, err := os.ReadFile("testdata/automation-readonly.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shared []string
+	if err := json.Unmarshal(raw, &shared); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(shared, ",") != strings.Join(automationReadOnly, ",") {
+		t.Fatalf("testdata/automation-readonly.json is %v, automationReadOnly %v: make them the same", shared, automationReadOnly)
+	}
+}
+
 func TestAutomationRunTestEventGetsADeliveryID(t *testing.T) {
 	srv, calls := fakeDude(t)
 	if _, err := runCLI(t, srv, prEvent, "automation-run", "aut_gh", "--body", "-"); err != nil {
