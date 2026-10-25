@@ -4,11 +4,18 @@
 package advance
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"maps"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
@@ -101,8 +108,9 @@ func Existing(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, s
 // Bound: the judgement and the re-judgement inspect at most
 // maxBaseMerges merges each, 2 × maxBaseMerges in all. Each inspected
 // merge costs up to four GitHub reads (provenance, two compares, base
-// containment), so a fallback makes about 48 reads at most, and one write
-// (POST /merges) besides the fast-forward.
+// containment) and three per file re-merged (at most maxRemerged), so a
+// fallback makes about 650 reads at most, and one write (POST /merges)
+// besides the fast-forward.
 //
 // A head that is already a pure merge of commit is adopted only when
 // attempted says so: the caller durably recorded, in beforeMerge, sending
@@ -159,7 +167,7 @@ func Settle(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, sta
 	if !j.Only && into != start {
 		return Result{}, &ErrUnsafeMerge{Merge: m.SHA, Found: parentsOf(m.Parents), Expected: mergedOnto(at, baseBranch, commit)}
 	}
-	pure, err := pureMerge(ctx, gh, slug, into, m.Parents[1], m.SHA)
+	pure, err := pureMerge(ctx, gh, slug, into, m.Parents[1], m.SHA, into)
 	if err != nil {
 		return Result{}, err
 	}
@@ -226,19 +234,29 @@ type Judgement struct {
 	Under     string
 }
 
+// maxRemerged bounds the files of one merge re-merged locally: three
+// GitHub reads each.
+const maxRemerged = 20
+
+// maxRemergedBytes bounds each version of a re-merged file read.
+const maxRemergedBytes = 1 << 20
+
+// gitBinary is the git that re-merges a file both parents changed.
+var gitBinary = "git"
+
 // pureMerge verifies that merge is GitHub's (web-flow, verified) and added
 // exactly first's changes to second: compare second...first and compare
 // second...merge list the same files, each with the same status and the
-// same resulting blob SHA.
+// same resulting blob SHA, except files both parents modified whose merge
+// blob is exactly git's clean three-way merge of them (remerged).
 //
 // Sound against false positives: any content in merge beyond first's
 // changes either adds a path to second...merge or changes a listed path's
-// blob SHA, and a blob SHA is the hash of the file's whole content.
-//
-// Conservative: a file both parents changed, which git merged cleanly,
-// has a merge blob different from first's, so the merge is judged impure
-// and the writer's fast-forward refusal stands.
-func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second, merge string) (bool, error) {
+// blob SHA, and a blob SHA is the hash of the file's whole content; a
+// re-merged file's blob is the hash of the automatic merge's content.
+// ours is first or second, whichever is merge's first parent: git's
+// merge-file side ours.
+func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second, merge, ours string) (bool, error) {
 	provenance, err := gh.CommitProvenance(ctx, slug, merge)
 	if err != nil {
 		return false, err
@@ -257,13 +275,119 @@ func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second
 	if left.Truncated() || right.Truncated() {
 		return false, nil
 	}
-	return maps.Equal(comparisonFiles(left.Files), comparisonFiles(right.Files)), nil
+	lf, rf := comparisonFiles(left.Files), comparisonFiles(right.Files)
+	if len(lf) != len(rf) {
+		return false, nil
+	}
+	var differing []forge.ComparedFile
+	for name, r := range rf {
+		l, ok := lf[name]
+		switch {
+		case !ok:
+			return false, nil
+		case l.Status == r.Status && l.SHA == r.SHA:
+			continue
+		case l.Status != "modified" || r.Status != "modified":
+			return false, nil
+		}
+		differing = append(differing, r)
+	}
+	if len(differing) == 0 {
+		return true, nil
+	}
+	if len(differing) > maxRemerged || left.MergeBase.SHA == "" {
+		return false, nil
+	}
+	theirs := second
+	if ours == second {
+		theirs = first
+	}
+	pure, err := remerged(ctx, gh, slug, left.MergeBase.SHA, ours, theirs, differing)
+	var local *remergeError
+	if errors.As(err, &local) {
+		slog.Warn("re-merging a file both sides of a base merge changed failed; the merge is not adopted",
+			"repo", slug, "merge", merge, "error", err)
+		return false, nil
+	}
+	return pure, err
 }
 
-func comparisonFiles(files []forge.ComparedFile) map[string]string {
-	out := map[string]string{}
+// remergeError is a local re-merge that could not run (no git, no
+// temporary directory): the merge is refused, never judged pure.
+type remergeError struct{ err error }
+
+func (e *remergeError) Error() string { return "re-merging locally: " + e.err.Error() }
+func (e *remergeError) Unwrap() error { return e.err }
+
+// remerged says each of files, modified on both ours and theirs since
+// base, has as its blob (the merge's) exactly the clean three-way merge of
+// its versions at ours, base and theirs by `git merge-file`. A version over
+// maxRemergedBytes or binary (a NUL byte) is false.
+func remerged(ctx context.Context, gh *forge.GitHub, slug, base, ours, theirs string, files []forge.ComparedFile) (bool, error) {
+	dir, err := os.MkdirTemp("", "dude-remerge-")
+	if err != nil {
+		return false, &remergeError{err}
+	}
+	defer os.RemoveAll(dir)
+	for _, f := range files {
+		var versions [3][]byte
+		for i, ref := range []string{ours, base, theirs} {
+			b, err := gh.FileAt(ctx, slug, f.Filename, ref, maxRemergedBytes)
+			var fe *forge.Error
+			switch {
+			case errors.As(err, &fe) && (fe.Refusal == forge.RefusalTooLarge || fe.NotFound()):
+				return false, nil
+			case err != nil:
+				return false, err
+			case bytes.IndexByte(b, 0) >= 0:
+				return false, nil
+			}
+			versions[i] = b
+		}
+		out, clean, err := mergeFile(ctx, dir, versions[0], versions[1], versions[2])
+		if err != nil || !clean {
+			return false, err
+		}
+		if plumbing.ComputeHash(plumbing.BlobObject, out).String() != f.SHA {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// mergeFile is `git merge-file -p ours base theirs` on files in dir: the
+// merged content, and whether it merged with no conflict.
+func mergeFile(ctx context.Context, dir string, ours, base, theirs []byte) ([]byte, bool, error) {
+	paths := make([]string, 3)
+	for i, b := range [][]byte{ours, base, theirs} {
+		paths[i] = filepath.Join(dir, strconv.Itoa(i))
+		if err := os.WriteFile(paths[i], b, 0o600); err != nil {
+			return nil, false, &remergeError{err}
+		}
+	}
+	// Histogram, as GitHub's merge-ort diffs; no configuration read.
+	cmd := exec.CommandContext(ctx, gitBinary, "merge-file", "-p", "--diff-algorithm=histogram",
+		"-L", "ours", "-L", "base", "-L", "theirs", paths[0], paths[1], paths[2])
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return nil, false, ctx.Err()
+	case errors.As(err, &exit) && exit.ExitCode() > 0 && exit.ExitCode() < 128:
+		// merge-file's exit status is its count of conflicts.
+		return out, false, nil
+	case err != nil:
+		return nil, false, &remergeError{fmt.Errorf("git merge-file: %w", err)}
+	}
+	return out, true, nil
+}
+
+func comparisonFiles(files []forge.ComparedFile) map[string]forge.ComparedFile {
+	out := map[string]forge.ComparedFile{}
 	for _, file := range files {
-		out[file.Filename] = file.Status + "\x00" + file.SHA
+		out[file.Filename] = file
 	}
 	return out
 }
@@ -306,14 +430,14 @@ func BaseMerges(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, 
 		if at == head && ps[1] == commit {
 			// dude's own merge must be exactly the first parent plus
 			// commit's change, made by GitHub.
-			pure, err := pureMerge(ctx, gh, slug, commit, ps[0], at)
+			pure, err := pureMerge(ctx, gh, slug, commit, ps[0], at, ps[0])
 			if err != nil || !pure {
 				return Judgement{}, err
 			}
 			j.Own, j.Under = true, ps[0]
 			continue
 		}
-		pure, err := pureMerge(ctx, gh, slug, ps[0], ps[1], at)
+		pure, err := pureMerge(ctx, gh, slug, ps[0], ps[1], at, ps[0])
 		if err != nil {
 			return Judgement{}, err
 		}
