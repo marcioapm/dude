@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -53,6 +54,15 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 			io.WriteString(w, `{"id":"wi_12","key":"ABS-12","title":"T","status":"running","projectId":"prj_1",
 				"owner":{"id":"usr_1","name":"Ana"},"bulky":"x",
 				"runs":[{"id":"run_preview","kind":"preview","attempt":2},{"id":"run_new","kind":"agent","attempt":2,"status":"running","extra":1},{"id":"run_old","kind":"agent","attempt":2}]}`)
+		case r.URL.Path == "/v1/automations/aut_1" && r.Method == "GET":
+			b, _ := os.ReadFile("testdata/automation-get.json")
+			w.Write(b)
+		case r.URL.Path == "/v1/automations/aut_gh" && r.Method == "GET":
+			io.WriteString(w, `{"id":"aut_gh","kind":"command","trigger":{"kind":"github","event":"pull_request","actions":["opened"],"filters":{}}}`)
+		case r.URL.Path == "/v1/automations/aut_1/prompt-history":
+			io.WriteString(w, `{"versions":[{"id":"apv_2","number":2,"current":true},{"id":"apv_1","number":1,"current":false}]}`)
+		case r.URL.Path == "/v1/projects/prj_1/automations":
+			io.WriteString(w, `{"automations":[{"id":"aut_p","name":"Triage","kind":"agent","enabled":true,"owner":{"id":"per_1","name":"Ana"},"agent":{}}],"alsoRunningHere":[]}`)
 		case r.URL.Path == "/v1/nope":
 			w.WriteHeader(404)
 			io.WriteString(w, `{"error":"no route for GET /v1/nope"}`)

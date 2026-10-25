@@ -292,6 +292,37 @@ A brainstorm is an agent to think something through with; it writes no code.
 | `judgements [--asker A] [--limit N] [--before ID]` | The judgement calls dude's models made lately; `--before` pages |
 | `judgement ID` | One in full |
 
+### Automations
+
+Work nobody starts by hand: an agent, a command, a server or a webhook, on
+a schedule or on GitHub events, the organisation's or a project's
+(CONTRIBUTING.md, "Automations"). Anyone reads them; the organisation's
+admins change the organisation's, a project's editors the project's; its
+owner and the admins transfer one, and its owner may run it.
+
+| Command | Does |
+|---|---|
+| `automations [PROJECT] [--scope organization\|project] [--trigger schedule\|github] [--kind K] [--enabled true\|false] [--mine] [--name N]` | The organisation's and every project's, filtered (`--kind agent:own`, `agent:reviewer`… for one kind of agent); with PROJECT, its own and the organisation's that also run there |
+| `automation ID [--settings]` | One in full; `--settings`: only what `automation-update` takes |
+| `automation-create [PROJECT] --name N --kind agent\|command\|server\|webhook --trigger schedule\|github [--preset qa_browser\|reviewer\|investigator] [--tz TZ]` | A new one, as the New automation dialog makes it: **disabled**, owned by you, with defaults (a schedule is weekdays at 09:00 in `--tz`, default UTC; events are `pull_request` opened/synchronize) |
+| `automation-update ID SETTINGS` | Replaces its settings with a JSON file, or `-` for stdin. `automation ID`'s output, edited, is accepted as it is: the read-only fields (`id`, `enabled`, `owner`, `lastRun`, …) are dropped |
+| `automation-enable ID` / `automation-disable ID` | Turns it on or off (off keeps a kept session) |
+| `automation-delete ID`, `automation-duplicate ID` | Deletes it with its runs; copies it, off, as "NAME (copy)" |
+| `automation-owner ID PERSON` | Hands it to another member (a person id, from `people`) |
+| `automation-secret ID` | A webhook's signing secret, 16–256 characters, read from stdin only, like `login`'s key; only its last four characters are ever shown |
+| `automation-run ID` | Runs it now: a schedule as it is |
+| `automation-run ID --delivery D` | On GitHub events: with a past delivery (from `automation-deliveries`) |
+| `automation-run ID --body FILE [--event E] [--action A] [--delivery-id D]` | On GitHub events: with a test event (`-` reads stdin; the event defaults to the automation's, the delivery id to a made-up `test-…`) |
+| `automation-runs ID [--status S] [--limit N]` | Its runs, newest first, and its kept session: `queued`, `running`, `succeeded`, `failed`, `skipped`, `cancelled` |
+| `automation-run-show ID RUN` | One run: its payloads, log tail, a Server's requests |
+| `automation-deliveries ID` | The last 30 days' deliveries of its event |
+| `automation-test ID BODY` | Whether an event body would run it: `{"matches": true}`, or the filter that skips it and why |
+| `automation-start-fresh ID` | Ends its kept session; the next run starts a new one |
+| `automation-prompts ID`, `automation-prompt-restore ID VERSION` | Its prompt's saved versions; saves one (number or id) again as the newest |
+| `automation-repos` | Every project's repositories, for an organisation automation's `repoFilter` |
+| `automation-next CRON [--tz TZ]` | A schedule's next three times |
+| `automation-subscriptions` | The GitHub events the organisation is subscribed to |
+
 ### Anything else
 
 `dude api METHOD PATH [JSON | -]` makes any API call with your key:
@@ -355,6 +386,33 @@ dude create WEB --epic "$epic" --title "API" --goal "…" --blocked-by "$a"
 dude auto-start WEB-43                    # starts once $a merges
 ```
 
+A weekday-morning agent, from creation to its first run:
+
+```sh
+dude automation-next "30 8 * * 1-5" --tz Europe/Lisbon      # check the schedule
+id=$(dude automation-create --name "Morning digest" --kind agent --trigger schedule \
+  --tz Europe/Lisbon | jq -r .id)                          # disabled, defaults
+dude automation "$id" --settings \
+  | jq '.trigger.cron = "30 8 * * 1-5"
+        | .agent.own.prompt = "Summarise yesterday'\''s merged pull requests."' \
+  | dude automation-update "$id" -
+dude automation-enable "$id"
+dude automation-run "$id"                                   # once now, to see it work
+dude automation-runs "$id" --limit 1
+```
+
+A command on pull requests, tried on an event before it is turned on:
+
+```sh
+id=$(dude automation-create WEB --name "Lint PRs" --kind command --trigger github | jq -r .id)
+dude automation "$id" --settings \
+  | jq '.command = "npm ci && npm run lint" | .trigger.filters.author = ["!dependabot[bot]"]' \
+  | dude automation-update "$id" -
+dude automation-test "$id" event.json   # {"matches": false, "filter": "author", "because": "…"}
+dude automation-run "$id" --body event.json --action opened
+dude automation-enable "$id"
+```
+
 ## Errors
 
 Errors go to stderr as `dude: …`, and the exit status is 1. A refused
@@ -375,8 +433,8 @@ entry per route, keyed `"METHOD /v1/pattern/:param"` as the router
 registers it: the command that calls it (a list when several do), or
 `{"apiOnly": "<why>"}`, reusing one of the reasons already there.
 
-- **Commands** are the `command` tables in `main.go`, `more.go` and
-  `lifecycle.go`: positional names (`?` optional,
+- **Commands** are the `command` tables in `main.go`, `more.go`,
+  `lifecycle.go` and `automations.go`: positional names (`?` optional,
   `...` the rest), one line of help, and a flag set returning a `doer`.
   Reuse `request`/`post`, `onTask`/`onRun` (they resolve TASK and RUN),
   `projectID`, `text` (`-` reads stdin), `obj`, `pick`, `setIf`, and
@@ -389,4 +447,10 @@ registers it: the command that calls it (a list when several do), or
   entries do not cover (checked on every request in every test, through
   `runCLI`), or a mapping is never exercised: add a row to `routeCases`.
 - **Bodies** are written in the row as the route's zod schema takes them,
-  read from the handler, never copied from what the CLI sends.
+  read from the handler, never copied from what the CLI sends. Commands
+  that build a body from flags also record it: `automations_test.go`
+  writes `testdata/automation-requests.json` (`go -C orchestrator test
+  ./cmd/dude-cli -run TestAutomationCommandsReachTheirRoutes -update`; a
+  normal run fails when it is stale), and
+  `apps/control-plane/test/cli-bodies.test.ts` parses each body and query
+  with the route's own schema. Follow that pattern for new families.

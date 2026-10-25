@@ -1075,7 +1075,7 @@ Each of these cost real time.
 | --- | --- | --- |
 | Go unit | `orchestrator/internal/*` | Workflow runtime, policy, classifier, parsers — against a real Postgres |
 | Go integration | `orchestrator/delivery_test.go` | Whole deliveries through the orchestrator's real code, against a fake lux and a fake GitHub backed by real git |
-| TS unit | `apps/control-plane/test` | The ledger, the live stream, webhook signatures; `cli-routes.test.ts`: every authenticated `/v1/` route has a dude CLI command or an `apiOnly` reason in `orchestrator/cmd/dude-cli/routes.json` (no database) |
+| TS unit | `apps/control-plane/test` | The ledger, the live stream, webhook signatures; `cli-routes.test.ts`: every authenticated `/v1/` route has a dude CLI command or an `apiOnly` reason in `orchestrator/cmd/dude-cli/routes.json`, and `cli-bodies.test.ts`: the CLI's recorded automation request bodies parse with their routes' schemas (neither needs a database) |
 | E2E | `tests/suites` | The deployed processes through the public API and the built UI, with the fake lux and a fake GitHub that delivers signed webhooks |
 | Contract | `tests/suites/test_lux_contract.py` (`--lux`) | The same flows against a real lux |
 | Browser | `tests/suites/test_web_ui.py`, `test_gallery_ui.py` | The web app and the design system, in system Chrome (Playwright's bundled Chromium with `DUDE_TEST_BROWSER_CHANNEL=` empty, where there is no Chrome) |

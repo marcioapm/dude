@@ -119,6 +119,21 @@ dude itself
   guide [PAGE]                       dude's guide
   judgements [--asker A] [--limit N] [--before ID] | judgement ID
 
+Automations (ID: aut_…, from automations)
+  automations [P] [--scope organization|project] [--trigger schedule|github]
+                  [--kind K|agent:ROLE] [--enabled true|false] [--mine] [--name N]
+  automation ID [--settings]
+  automation-create [P] --name N --kind agent|command|server|webhook --trigger schedule|github
+                    [--preset qa_browser|reviewer|investigator] [--tz TZ]   starts disabled
+  automation-update ID SETTINGS      a JSON file or -: automation ID's output, edited
+  automation-enable ID | automation-disable ID | automation-delete ID | automation-duplicate ID
+  automation-owner ID PERSON | automation-secret ID   (the secret on stdin)
+  automation-run ID [--delivery D | --body FILE [--event E] [--action A] [--delivery-id D]]
+  automation-runs ID [--status S] [--limit N] | automation-run-show ID RUN | automation-deliveries ID
+  automation-test ID BODY            would this event body run it, and if not, why
+  automation-start-fresh ID | automation-prompts ID | automation-prompt-restore ID VERSION
+  automation-repos | automation-next CRON [--tz TZ] | automation-subscriptions
+
 Anything else
   api METHOD PATH [JSON | -]
 
