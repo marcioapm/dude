@@ -431,7 +431,7 @@ Every authenticated `/v1/` route is either a CLI command or a decision not
 to make one. `orchestrator/cmd/dude-cli/routes.json` records which, one
 entry per route, keyed `"METHOD /v1/pattern/:param"` as the router
 registers it: the command that calls it (a list when several do), or
-`{"apiOnly": "<why>"}`, reusing one of the reasons already there.
+`{"apiOnly": "<why>"}`.
 
 - **Commands** are the `command` tables in `main.go`, `more.go`,
   `lifecycle.go` and `automations.go`: positional names (`?` optional,
