@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { ZodTypeAny } from "zod";
+import type { AnyZodObject, ZodTypeAny } from "zod";
 import {
   automationInputSchema,
   enabledSchema,
@@ -54,7 +54,7 @@ const bodies: Record<string, (r: Recorded) => ZodTypeAny[]> = {
   "POST /v1/automations/schedule/next": () => [scheduleNextBody],
 };
 
-const queries: Record<string, ZodTypeAny> = {
+const queries: Record<string, AnyZodObject> = {
   "GET /v1/automations": listQuery,
   "GET /v1/automations/:id/runs": runsQuery,
 };
@@ -87,7 +87,7 @@ describe("the dude CLI's automation requests", () => {
     expect(refused).toEqual([]);
   });
 
-  test("each query parses with its route's schema; a route that takes none is sent none", () => {
+  test("each query parses with its route's schema, every key one it reads; a route that takes none is sent none", () => {
     const refused: string[] = [];
     for (const r of recorded) {
       const schema = queries[r.route];
@@ -95,7 +95,8 @@ describe("the dude CLI's automation requests", () => {
         if (r.query) refused.push(`${label(r)}: sends a query to a route that reads none`);
         continue;
       }
-      const parsed = schema.safeParse(r.query ?? {});
+      // The handlers strip unknown keys, so a misspelt filter is silently ignored: refuse it here.
+      const parsed = schema.strict().safeParse(r.query ?? {});
       if (!parsed.success) refused.push(`${label(r)}: ${JSON.stringify(parsed.error.flatten())}`);
     }
     expect(refused).toEqual([]);
