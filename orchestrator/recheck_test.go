@@ -180,6 +180,11 @@ func newPRFixWorld(t *testing.T, testers ...string) *prFixWorld {
 // newPRFixWorldIn is newPRFixWorld, across target and web (both writable,
 // a pull request in each) when web is set.
 func newPRFixWorldIn(t *testing.T, web bool, testers ...string) *prFixWorld {
+	return newPRFixWorldAt(t, prAt{test: true, web: web}, testers...)
+}
+
+// newPRFixWorldAt is newPRFixWorld with the pull request opened at at.
+func newPRFixWorldAt(t *testing.T, at prAt, testers ...string) *prFixWorld {
 	w := &prFixWorld{world: newWorld(t), mu: make(chan struct{}, 1), testers: testers}
 	scripted := w.lux.Decide
 	count := map[string]int{}
@@ -218,7 +223,7 @@ func newPRFixWorldIn(t *testing.T, web bool, testers ...string) *prFixWorld {
 	w.onModel("qa_browser", "fake/scripted")
 	w.wi = w.task()
 	mustExec(t, w.owner, `UPDATE tasks SET acceptance_criteria = '["it greets", "it says goodbye"]' WHERE id = $1`, w.wi)
-	w.prOpen(w.wi, prAt{test: true, web: web})
+	w.prOpen(w.wi, at)
 	w.branch = w.gh.Pull(1).Head
 	w.before = w.gh.SHA(w.branch)
 	w.webBefore = w.web.SHA(w.branch)

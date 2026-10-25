@@ -54,6 +54,9 @@ type prAt struct {
 	web bool
 	// With web, acme/api as well: a pull request in each of three.
 	api bool
+	// Files committed on target's main before the task, and the
+	// implementer's own edits of target's files on top of its commit.
+	seed, edit map[string]string
 }
 
 // stateRun is one phase Run prOpen writes.
@@ -146,6 +149,9 @@ func (w *world) prOpen(wi string, at prAt) string {
 	// the implementer's in every repository, then the fixer's and the
 	// simplifier's in target, each repository's in one git process.
 	heads := map[string]string{}
+	if at.seed != nil && w.gh.CommitFiles("main", "Seed", at.seed) == "" {
+		w.t.Fatal("seeding main failed")
+	}
 	for _, repo := range repos {
 		publishers := []*stateRun{implement}
 		if repo.name == "target" {
@@ -170,6 +176,11 @@ func (w *world) prOpen(wi string, at prAt) string {
 					path = file
 				}
 				fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+			}
+			if r == implement && repo.name == "target" {
+				for path, content := range at.edit {
+					fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+				}
 			}
 		}
 		importer := exec.Command("git", "-C", repo.gh.Repo, "fast-import", "--quiet")
