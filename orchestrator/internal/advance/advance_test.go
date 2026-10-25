@@ -164,6 +164,10 @@ func notes(first, last string) string {
 	return first + "\n2\n3\n4\n5\n6\n7\n8\n9\n" + last + "\n"
 }
 
+func notesFile(first, last string) map[string]string {
+	return map[string]string{"NOTES.md": notes(first, last)}
+}
+
 // bothSides is a task branch whose writer's start edited files, and the
 // base edited them too; the task branch's head before any merge.
 func bothSides(t *testing.T, files map[string]string, task, base map[string]string) (*advancing, string) {
@@ -191,9 +195,9 @@ func (a *advancing) pure(first string) (bool, error) {
 }
 
 func TestABaseMergeOfAFileBothSidesEditedIsPureOnlyAsGitMergesIt(t *testing.T) {
-	shared := map[string]string{"NOTES.md": notes("1", "10")}
-	ours := map[string]string{"NOTES.md": notes("1", "ten, the task's")}
-	theirs := map[string]string{"NOTES.md": notes("one, the base's", "10")}
+	shared := notesFile("1", "10")
+	ours := notesFile("1", "ten, the task's")
+	theirs := notesFile("one, the base's", "10")
 	t.Run("merged cleanly by GitHub: pure", func(t *testing.T) {
 		a, first := bothSides(t, shared, ours, theirs)
 		x := a.fake.MergeInto("task", "main", nil)
@@ -229,14 +233,14 @@ func TestABaseMergeOfAFileBothSidesEditedIsPureOnlyAsGitMergesIt(t *testing.T) {
 		}
 	})
 	t.Run("a conflict the merge resolved: not pure", func(t *testing.T) {
-		a, first := bothSides(t, shared, map[string]string{"NOTES.md": notes("one, the task's", "10")}, theirs)
-		a.fake.MergeInto("task", "main", map[string]string{"NOTES.md": notes("one, the base's", "10")})
+		a, first := bothSides(t, shared, notesFile("one, the task's", "10"), theirs)
+		a.fake.MergeInto("task", "main", notesFile("one, the base's", "10"))
 		if pure, err := a.pure(first); err != nil || pure {
 			t.Fatalf("%v %v, want not pure", pure, err)
 		}
 	})
 	t.Run("a conflict resolved as git's conflicted text: not pure", func(t *testing.T) {
-		a, first := bothSides(t, shared, map[string]string{"NOTES.md": notes("one, the task's", "10")}, theirs)
+		a, first := bothSides(t, shared, notesFile("one, the task's", "10"), theirs)
 		dir := t.TempDir()
 		for name, content := range map[string]string{"o": notes("one, the task's", "10"), "b": notes("1", "10"), "t": notes("one, the base's", "10")} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -382,9 +386,9 @@ func TestABaseMergeOverTwoMergeBasesIsNotPure(t *testing.T) {
 
 // Each refusal of a merge that might otherwise be judged pure.
 func TestEachRefusalOfABaseMergeHolds(t *testing.T) {
-	shared := map[string]string{"NOTES.md": notes("1", "10")}
-	ours := map[string]string{"NOTES.md": notes("1", "ten, the task's")}
-	theirs := map[string]string{"NOTES.md": notes("one, the base's", "10")}
+	shared := notesFile("1", "10")
+	ours := notesFile("1", "ten, the task's")
+	theirs := notesFile("one, the base's", "10")
 	ctx := context.Background()
 	notPure := func(t *testing.T, pure bool, err error) {
 		t.Helper()
@@ -484,8 +488,6 @@ func TestEachRefusalOfABaseMergeHolds(t *testing.T) {
 		})
 	}
 	t.Run("a base merge needing no re-merge, its commits from the merge base cut short: still pure", func(t *testing.T) {
-		// A base merge with no file to re-merge needs no commit list from
-		// its merge base.
 		a, first := bothSides(t, shared, map[string]string{"TASK.md": "task\n"}, map[string]string{"BASE.md": "base\n"})
 		x := a.fake.MergeInto("task", "main", nil)
 		base := git(t, a.fake.Repo, "merge-base", first, a.fake.Parents(x)[1])
@@ -568,11 +570,7 @@ func gitIn(t *testing.T, dir, stdin string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git %v: %v", args, err)
-	}
-	return string(out)
+	return gitOutput(t, cmd)
 }
 
 // gitAsGitHub runs git committing as the fake's GitHub, whose commits it
@@ -582,11 +580,16 @@ func gitAsGitHub(t *testing.T, dir string, args ...string) string {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=GitHub", "GIT_AUTHOR_EMAIL=noreply@github.com",
 		"GIT_COMMITTER_NAME=GitHub", "GIT_COMMITTER_EMAIL=noreply@github.com")
+	return strings.TrimSpace(gitOutput(t, cmd))
+}
+
+func gitOutput(t *testing.T, cmd *exec.Cmd) string {
+	t.Helper()
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("git %v: %v", args, err)
+		t.Fatalf("git %v: %v", cmd.Args[3:], err)
 	}
-	return strings.TrimSpace(string(out))
+	return string(out)
 }
 
 // git's clean three-way merge of two sides is the same whichever is ours:
