@@ -77,7 +77,9 @@ func lockChildTx(ctx context.Context, tx pgx.Tx, childID string, betweenLocks fu
 		if betweenLocks != nil {
 			betweenLocks()
 		}
-		if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, c.TaskID).Scan(&taskStatus); err != nil {
+		// NO KEY UPDATE, as startChildTx: status writers wait, inserts of
+		// rows referencing the task (KEY SHARE) do not.
+		if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, c.TaskID).Scan(&taskStatus); err != nil {
 			return nil, err
 		}
 	}
@@ -345,7 +347,7 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 			return err
 		}
 		var status string
-		if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&status); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID).Scan(&status); err != nil {
 			return err
 		}
 		if live && !Ended(status) {
@@ -520,12 +522,15 @@ func childResultText(summary []byte, reply string) (string, error) {
 	return out.String(), err
 }
 
-// The caller holds Chat before the parent Run and task rows.
+// The caller holds Chat before the parent Run and task rows. The task NO
+// KEY UPDATE: a hand-over goes on to queue for the live conductor, whose
+// row the syncer's batch may hold while its foreign-key check waits on
+// this task's KEY SHARE.
 func MarkChildParentEndedTx(ctx context.Context, tx pgx.Tx, taskID, parentID string) error {
 	if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id=$1 AND task_id=$2 FOR UPDATE`, parentID, taskID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `SELECT id FROM tasks WHERE id=$1 FOR UPDATE`, taskID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT id FROM tasks WHERE id=$1 FOR NO KEY UPDATE`, taskID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE runs SET child_stop_reason='parent-ended',control='abort',control_requested_at=now(),keep=false

@@ -698,7 +698,8 @@ type taskFacts struct {
 }
 
 // readFileFacts reads the facts for items in three queries. lock takes the
-// named tasks' rows FOR UPDATE, as filing must before it edits one.
+// named tasks' rows FOR NO KEY UPDATE, so no other writer changes one
+// before filing edits it; inserts referencing them (KEY SHARE) go on.
 func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []delivery.ProposalItem, lock bool) (fileFacts, error) {
 	f := fileFacts{projects: map[string]bool{}, orgProjects: map[string]string{}, tasks: map[string]taskFacts{}}
 	rows, err := tx.Query(ctx, `SELECT upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
@@ -751,7 +752,7 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	}
 	lockClause := ""
 	if lock {
-		lockClause = " FOR UPDATE OF t"
+		lockClause = " FOR NO KEY UPDATE OF t"
 	}
 	// Matched on the key's parts, so each is an index probe on
 	// tasks (project_id, number) rather than a scan of the projects' tasks.
