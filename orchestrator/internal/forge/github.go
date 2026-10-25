@@ -1456,6 +1456,60 @@ func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparis
 	return cmp, err
 }
 
+// FileAt is path's content at ref (a commit), read raw from GitHub's
+// contents API. Content over limit bytes is an *Error with Refusal
+// RefusalTooLarge, read no further; a path absent at ref is GitHub's 404.
+func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64) ([]byte, error) {
+	segments := strings.Split(path, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	target := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", g.cred.APIBaseURL, slug, strings.Join(segments, "/"), url.QueryEscape(ref))
+	token, err := g.Token(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	authorization := "Bearer " + token
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Accept", "application/vnd.github.raw")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	res, err := g.http.Do(req)
+	if err != nil {
+		return nil, &Unreachable{err}
+	}
+	defer res.Body.Close()
+	noteRate(target, authorization, res.Header)
+	if res.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+		var e struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(data, &e)
+		if e.Message == "" {
+			e.Message = fmt.Sprintf("GET contents of %s at %s failed", path, ref)
+		}
+		refusal := &Error{Status: res.StatusCode, Message: e.Message}
+		markRateLimit(refusal, res.Header, "rate limit: ")
+		if Transient(refusal) {
+			refusal.RetryAfter = retryAfter(res.Header, time.Now())
+		}
+		return nil, refusal
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, &Unreachable{err}
+	}
+	if int64(len(data)) > limit {
+		return nil, &Error{Status: http.StatusRequestEntityTooLarge, Refusal: RefusalTooLarge,
+			Message: fmt.Sprintf("%s at %s is over %d bytes", path, ref, limit)}
+	}
+	return data, nil
+}
+
 // CompareCommits returns the ancestry-bearing compare response for phase
 // advancement. Ordinary callers use Compare and do not materialize commits.
 func (g *GitHub) CompareCommits(ctx context.Context, slug, base, head string) (CommitComparison, error) {

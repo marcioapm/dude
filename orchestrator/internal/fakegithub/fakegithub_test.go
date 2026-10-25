@@ -154,3 +154,25 @@ func TestMergesParentOrderContract(t *testing.T) {
 		t.Fatalf("incoming branch moved to %s, want %s", got, incoming)
 	}
 }
+
+func TestAFileIsReadRawAtACommit(t *testing.T) {
+	fake, client, _ := branchContract(t)
+	ctx := context.Background()
+	first := contractCommit(t, fake, "topic", map[string]string{"docs/a note #1.md": "one\n"})
+	second := contractCommit(t, fake, "topic", map[string]string{"docs/a note #1.md": "two\n"})
+	for ref, want := range map[string]string{first: "one\n", second: "two\n"} {
+		got, err := client.FileAt(ctx, "acme/repo", "docs/a note #1.md", ref, 1<<20)
+		if err != nil || string(got) != want {
+			t.Fatalf("at %.8s: %q %v, want %q", ref, got, err, want)
+		}
+	}
+	_, err := client.FileAt(ctx, "acme/repo", "docs/absent.md", second, 1<<20)
+	contractStatus(t, err, 404)
+	_, err = client.FileAt(ctx, "acme/repo", "docs/a note #1.md", fake.SHA("main"), 1<<20)
+	contractStatus(t, err, 404)
+	_, err = client.FileAt(ctx, "acme/repo", "docs/a note #1.md", second, 3)
+	var apiErr *forge.Error
+	if !errors.As(err, &apiErr) || apiErr.Refusal != forge.RefusalTooLarge {
+		t.Fatalf("%v, want refused as too large", err)
+	}
+}
