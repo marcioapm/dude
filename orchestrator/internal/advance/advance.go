@@ -107,9 +107,9 @@ func Existing(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, s
 //
 // Bound: the judgement and the re-judgement inspect at most
 // maxBaseMerges merges each, 2 × maxBaseMerges in all. Each inspected
-// merge costs up to six GitHub reads (provenance, two compares, two
-// compares from their merge base, base containment) and three per file
-// re-merged (at most maxRemerged), so a fallback makes about 730 reads at
+// merge costs up to four GitHub reads (provenance, two compares, base
+// containment), plus two compares from their merge base and three per
+// file when it re-merges files (at most maxRemerged), so a fallback makes about 730 reads at
 // most, and one write (POST /merges) besides the fast-forward.
 //
 // A head that is already a pure merge of commit is adopted only when
@@ -295,17 +295,17 @@ func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second
 		}
 		differing = append(differing, r)
 	}
-	if len(rf) > 0 {
-		single, err := singleMergeBase(ctx, gh, slug, left.MergeBase.SHA, first, second)
-		if err != nil || !single {
-			return false, err
-		}
-	}
 	if len(differing) == 0 {
 		return true, nil
 	}
 	if len(differing) > maxRemerged {
 		return false, nil
+	}
+	// Only a re-merge needs it: a base merge of ours already passed with no
+	// commit list, and one long enough to be cut short must not start failing.
+	single, err := singleMergeBase(ctx, gh, slug, left.MergeBase.SHA, first, second)
+	if err != nil || !single {
+		return false, err
 	}
 	theirs := second
 	if ours == second {

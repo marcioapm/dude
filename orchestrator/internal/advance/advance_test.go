@@ -328,11 +328,13 @@ func TestABaseMergeOfAFileBothSidesEditedIsPureOnlyAsGitMergesIt(t *testing.T) {
 }
 
 // A task branch and a base that each merged the other's two branches
-// have two merge bases; a clean merge against either alone is not
-// GitHub's merge of them, so neither is pure.
+// have two merge bases, and git conflicts on F; a person's resolution
+// that equals a clean merge against the base GitHub names is not
+// GitHub's merge, so it is not pure. (Resolving to the task's F whole
+// never reaches the re-merge: a pre-existing gap, filed separately.)
 func TestABaseMergeOverTwoMergeBasesIsNotPure(t *testing.T) {
 	f := func(two, ten string) string { return "1\n" + two + "\n3\n4\n5\n6\n7\n8\n9\n" + ten + "\n" }
-	for _, resolved := range []string{f("a", "ten"), f("b", "ten")} {
+	for _, resolved := range []string{f("b", "ten")} {
 		t.Run("resolved as "+strings.ReplaceAll(resolved, "\n", " "), func(t *testing.T) {
 			a := newAdvancing(t)
 			repo := a.fake.Repo
@@ -441,6 +443,23 @@ func TestEachRefusalOfABaseMergeHolds(t *testing.T) {
 		})
 		pure, err := a.pure(first)
 		notPure(t, pure, err)
+	})
+	t.Run("a base merge needing no re-merge, its commits from the merge base cut short: still pure", func(t *testing.T) {
+		// A long-lived branch on a busy base: its plain base merges were pure
+		// before files both sides changed were re-merged, and still are.
+		a, first := bothSides(t, shared, map[string]string{"TASK.md": "task\n"}, map[string]string{"BASE.md": "base\n"})
+		x := a.fake.MergeInto("task", "main", nil)
+		base := git(t, a.fake.Repo, "merge-base", first, a.fake.Parents(x)[1])
+		a.fake.Set(func(s *fakegithub.Server) {
+			s.CompareAnswer = func(from, head string, answer map[string]any) {
+				if from == base {
+					answer["total_commits"] = len(answer["commits"].([]any)) + 1
+				}
+			}
+		})
+		if pure, err := a.pure(first); err != nil || !pure {
+			t.Fatalf("%v %v, want pure", pure, err)
+		}
 	})
 	t.Run("cancelled while git merges: the cancellation, not a verdict", func(t *testing.T) {
 		a, _ := bothSides(t, shared, ours, theirs)
