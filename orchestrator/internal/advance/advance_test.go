@@ -462,6 +462,27 @@ func TestEachRefusalOfABaseMergeHolds(t *testing.T) {
 		pure, err := a.pure(first)
 		notPure(t, pure, err)
 	})
+	for _, side := range []string{"the task's", "the base's"} {
+		t.Run("only "+side+" commit list from the merge base cut short: not pure", func(t *testing.T) {
+			a, first := bothSides(t, shared, ours, theirs)
+			x := a.fake.MergeInto("task", "main", nil)
+			second := a.fake.Parents(x)[1]
+			base := git(t, a.fake.Repo, "merge-base", first, second)
+			short := first
+			if side == "the base's" {
+				short = second
+			}
+			a.fake.Set(func(s *fakegithub.Server) {
+				s.CompareAnswer = func(from, head string, answer map[string]any) {
+					if from == base && head == short {
+						answer["total_commits"] = len(answer["commits"].([]any)) + 1
+					}
+				}
+			})
+			pure, err := a.pure(first)
+			notPure(t, pure, err)
+		})
+	}
 	t.Run("a base merge needing no re-merge, its commits from the merge base cut short: still pure", func(t *testing.T) {
 		// A long-lived branch on a busy base: its plain base merges were pure
 		// before files both sides changed were re-merged, and still are.
