@@ -441,7 +441,9 @@ registers it: the command that calls it (a list when several do), or
   `oneOf` to refuse a bad fixed choice before any request.
 - **`apps/control-plane/test/cli-routes.test.ts`** (bun, no database)
   fails when a registered route has no entry, an entry names a route that
-  is gone, or an `apiOnly` reason is empty.
+  is gone, or an `apiOnly` reason is not one of its fixed set. "Not in the
+  CLI yet" is closed: only the routes in its `NOT_YET` backlog may use it,
+  and a route leaves that backlog when it gets a command.
 - **`routes_test.go`** (Go) fails when an entry names a command that does
   not exist, a command is in no entry, a command sends a request its
   entries do not cover (checked on every request in every test, through
