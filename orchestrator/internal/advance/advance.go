@@ -248,7 +248,9 @@ var gitBinary = "git"
 // exactly first's changes to second: compare second...first and compare
 // second...merge list the same files, each with the same status and the
 // same resulting blob SHA, except files both parents modified whose merge
-// blob is exactly git's clean three-way merge of them (remerged).
+// blob is exactly git's clean three-way merge of them (remerged). A merge
+// that changed any file is pure only over a single merge base
+// (singleMergeBase): merge-ort merges over several against a virtual one.
 //
 // Sound against false positives: any content in merge beyond first's
 // changes either adds a path to second...merge or changes a listed path's
@@ -292,10 +294,16 @@ func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second
 		}
 		differing = append(differing, r)
 	}
+	if len(rf) > 0 {
+		single, err := singleMergeBase(ctx, gh, slug, left.MergeBase.SHA, first, second)
+		if err != nil || !single {
+			return false, err
+		}
+	}
 	if len(differing) == 0 {
 		return true, nil
 	}
-	if len(differing) > maxRemerged || left.MergeBase.SHA == "" {
+	if len(differing) > maxRemerged {
 		return false, nil
 	}
 	theirs := second
@@ -310,6 +318,30 @@ func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second
 		return false, nil
 	}
 	return pure, err
+}
+
+// singleMergeBase says base, GitHub's merge base of first and second, is
+// their only one: base..first and base..second, each listed whole, share
+// no commit.
+func singleMergeBase(ctx context.Context, gh *forge.GitHub, slug, base, first, second string) (bool, error) {
+	if base == "" {
+		return false, nil
+	}
+	seen := map[string]bool{}
+	for i, head := range []string{first, second} {
+		cmp, err := gh.CompareCommits(ctx, slug, base, head)
+		if err != nil || len(cmp.Commits) < cmp.TotalCommits {
+			return false, err
+		}
+		for _, c := range cmp.Commits {
+			// A commit in both is a common ancestor not under base: another merge base.
+			if i == 1 && seen[c.SHA] {
+				return false, nil
+			}
+			seen[c.SHA] = true
+		}
+	}
+	return true, nil
 }
 
 // remergeError is a local re-merge that could not run (no git, no

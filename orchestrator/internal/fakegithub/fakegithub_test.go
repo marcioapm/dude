@@ -176,3 +176,32 @@ func TestAFileIsReadRawAtACommit(t *testing.T) {
 		t.Fatalf("%v, want refused as too large", err)
 	}
 }
+
+// Over two merge bases GitHub's three-dot compare diffs from one of them
+// and still names each file's status.
+func TestACompareOverTwoMergeBasesNamesOneAndEachStatus(t *testing.T) {
+	fake, client, _ := branchContract(t)
+	contractCommit(t, fake, "main", map[string]string{"F.md": "1\nx\n3\n"})
+	contractGit(t, fake.Repo, "update-ref", "refs/heads/b1", "refs/heads/main")
+	contractGit(t, fake.Repo, "update-ref", "refs/heads/b2", "refs/heads/main")
+	contractCommit(t, fake, "b1", map[string]string{"F.md": "1\na\n3\n"})
+	contractCommit(t, fake, "b2", map[string]string{"F.md": "1\nb\n3\n"})
+	contractGit(t, fake.Repo, "update-ref", "refs/heads/left", "refs/heads/b1")
+	contractGit(t, fake.Repo, "update-ref", "refs/heads/right", "refs/heads/b2")
+	fake.MergeInto("left", "b2", map[string]string{"F.md": "1\na\n3\n"})
+	fake.MergeInto("right", "b1", map[string]string{"F.md": "1\nb\n3\n"})
+	bases := strings.Fields(contractGit(t, fake.Repo, "merge-base", "--all", "left", "right"))
+	if len(bases) != 2 {
+		t.Fatalf("merge bases %v, want two", bases)
+	}
+	cmp, err := client.Compare(context.Background(), fake.Slug, fake.SHA("right"), fake.SHA("left"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(bases, cmp.MergeBase.SHA) {
+		t.Errorf("merge base %q, want one of %v", cmp.MergeBase.SHA, bases)
+	}
+	if len(cmp.Files) != 1 || cmp.Files[0].Filename != "F.md" || cmp.Files[0].Status != "modified" || cmp.Files[0].SHA == "" {
+		t.Fatalf("files %+v, want F.md modified with its blob", cmp.Files)
+	}
+}

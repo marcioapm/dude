@@ -326,6 +326,39 @@ func TestABaseMergeOfAFileBothSidesEditedIsPureOnlyAsGitMergesIt(t *testing.T) {
 	})
 }
 
+// A task branch and a base that each merged the other's two branches
+// have two merge bases; a clean merge against either alone is not
+// GitHub's merge of them, so neither is pure.
+func TestABaseMergeOverTwoMergeBasesIsNotPure(t *testing.T) {
+	f := func(two, ten string) string { return "1\n" + two + "\n3\n4\n5\n6\n7\n8\n9\n" + ten + "\n" }
+	for _, resolved := range []string{f("a", "ten"), f("b", "ten")} {
+		t.Run("resolved as "+strings.ReplaceAll(resolved, "\n", " "), func(t *testing.T) {
+			a := newAdvancing(t)
+			repo := a.fake.Repo
+			a.fake.CommitFiles("main", "F", map[string]string{"F.md": f("x", "10")})
+			git(t, repo, "update-ref", "refs/heads/b1", "refs/heads/main")
+			git(t, repo, "update-ref", "refs/heads/b2", "refs/heads/main")
+			a.fake.CommitFiles("b1", "a", map[string]string{"F.md": f("a", "10")})
+			a.fake.CommitFiles("b2", "b", map[string]string{"F.md": f("b", "10")})
+			git(t, repo, "update-ref", "refs/heads/task", "refs/heads/b1")
+			a.fake.MergeInto("task", "b2", map[string]string{"F.md": f("a", "10")})
+			first := a.fake.CommitFiles("task", "the task's", map[string]string{"F.md": f("a", "ten")})
+			git(t, repo, "update-ref", "refs/heads/main", "refs/heads/b2")
+			a.fake.MergeInto("main", "b1", map[string]string{"F.md": f("b", "10")})
+			if bases := strings.Fields(git(t, repo, "merge-base", "--all", "task", "main")); len(bases) != 2 {
+				t.Fatalf("merge bases %v, want two", bases)
+			}
+			if err := exec.Command("git", "-C", repo, "merge-tree", "--write-tree", "task", "main").Run(); err == nil {
+				t.Fatal("merge-tree merged F.md cleanly, want a conflict")
+			}
+			a.fake.MergeInto("task", "main", map[string]string{"F.md": resolved})
+			if pure, err := a.pure(first); err != nil || pure {
+				t.Fatalf("%v %v, want not pure", pure, err)
+			}
+		})
+	}
+}
+
 // git's clean three-way merge of two sides is the same whichever is ours:
 // edits on both sides of one line, and insertions at neighbouring lines.
 func TestACleanMergeOfAFileIsTheSameWhicheverSideIsOurs(t *testing.T) {
