@@ -565,33 +565,28 @@ func TestTheScriptedAgentSpeaksItsRolesHarness(t *testing.T) {
 	}
 }
 
-// A repository's own tests run git under the Run's environment and read
-// what it prints through a pipe, as on a laptop or in CI: a diff parser
-// must see no escape codes. The Run's other tools still colour (colourEnv).
+// Repository tests must be able to parse piped git output even while
+// the Run's other tools are made to colour.
 func TestARunsGitPrintsPlainOutputThroughAPipe(t *testing.T) {
 	c, in := goldenInput("claude-opus-5-5")
 	env := buildSpec(c, in).Env
 	if env["FORCE_COLOR"] != "1" {
 		t.Fatalf("a harness Run's env %v, want its tools made to colour", env)
 	}
-	// Every include names a file absent here: a host with dude's layer
-	// installed does not run its hooks under the test.
-	n, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
-	for i := range n {
-		if env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)] == "include.path" {
-			env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)] = filepath.Join(t.TempDir(), "absent")
-		}
-	}
 	repo, home := t.TempDir(), t.TempDir()
+	gitEnv := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"), "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@x",
+		"GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@x"}
+	for k, v := range env {
+		if v == DudeGitConfig {
+			v = filepath.Join(home, "absent") // Do not run hooks installed on the host.
+		}
+		gitEnv = append(gitEnv, k+"="+v)
+	}
 	git := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
-		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1",
-			"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"), "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@x",
-			"GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@x"}
-		for k, v := range env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
+		cmd.Env = gitEnv
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -608,13 +603,18 @@ func TestARunsGitPrintsPlainOutputThroughAPipe(t *testing.T) {
 	if err := os.WriteFile(file, []byte("two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"diff"}, {"log", "-p", "-1"}, {"status", "--short"}} {
-		if out := git(args...); strings.Contains(out, "\x1b[") {
-			t.Errorf("git %v printed escape codes: %q", args, out)
+	diff := git("diff")
+	for name, out := range map[string]string{
+		"diff":           diff,
+		"log -p -1":      git("log", "-p", "-1"),
+		"status --short": git("status", "--short"),
+	} {
+		if strings.Contains(out, "\x1b[") {
+			t.Errorf("git %s printed escape codes: %q", name, out)
 		}
 	}
-	if out := git("diff"); !strings.Contains(out, "+two") {
-		t.Errorf("git diff %q, want the change", out)
+	if !strings.Contains(diff, "+two") {
+		t.Errorf("git diff %q, want the change", diff)
 	}
 }
 

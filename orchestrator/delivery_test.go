@@ -1129,8 +1129,7 @@ func TestWhatDudeSendsLux(t *testing.T) {
 	if spec.Network == nil || len(spec.Network.Egress) != 2 || spec.Network.Egress[0].Host != "llm.example" || spec.Network.Egress[1].Host != "mcp.exa.ai" {
 		t.Errorf("network = %+v, want egress to the model provider and Exa's search only", spec.Network)
 	}
-	// The tools it runs colour their output, which the chat renders; git's
-	// settings are TestEveryRunsGitUsesDudesHooks'.
+	// The tools it runs colour their output, which the chat renders.
 	if spec.Env["FORCE_COLOR"] != "1" || spec.Env["TERM"] == "" {
 		t.Errorf("env = %v, want colour forced", spec.Env)
 	}
