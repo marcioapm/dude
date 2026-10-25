@@ -379,7 +379,7 @@
     "args": [
       "automation-repos"
     ],
-    "route": "GET /v1/automations/:id"
+    "route": "GET /v1/automations/repositories"
   },
   {
     "args": [
@@ -398,6 +398,6 @@
     "args": [
       "automation-subscriptions"
     ],
-    "route": "GET /v1/automations/:id"
+    "route": "GET /v1/automations/subscriptions"
   }
 ]

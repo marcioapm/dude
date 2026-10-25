@@ -113,10 +113,8 @@ func routeKey(t *testing.T, method, path string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range routes {
-		if r.matches(method, path) {
-			return r.key
-		}
+	if r, ok := dispatch(routes, method, path); ok {
+		return r.key
 	}
 	t.Fatalf("%s %s is no route in routes.json", method, path)
 	return ""

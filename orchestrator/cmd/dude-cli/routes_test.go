@@ -80,6 +80,30 @@ func (r manifestRoute) matches(method, path string) bool {
 	return true
 }
 
+func (r manifestRoute) params() int {
+	n := 0
+	for _, s := range r.segments {
+		if strings.HasPrefix(s, ":") {
+			n++
+		}
+	}
+	return n
+}
+
+// dispatch is the one route the server sends method and path to: of the
+// matching routes, the one with the fewest :params, since the routers register
+// literal routes before their :param siblings.
+func dispatch(routes []manifestRoute, method, path string) (manifestRoute, bool) {
+	var best manifestRoute
+	found := false
+	for _, r := range routes {
+		if r.matches(method, path) && (!found || r.params() < best.params()) {
+			best, found = r, true
+		}
+	}
+	return best, found
+}
+
 // recorder sends each request on and keeps a copy: method, path and body.
 type recorder struct {
 	next http.RoundTripper
@@ -116,28 +140,22 @@ func unmappedRequest(t *testing.T, command string, c call) string {
 		t.Fatal(err)
 	}
 	path, _, _ := strings.Cut(c.path, "?")
-	var mapped []string
-	for _, r := range routes {
-		if !r.matches(c.method, path) {
-			continue
-		}
-		for _, name := range r.commands {
-			if name == command {
-				exercisedMu.Lock()
-				exercised[command+"\t"+r.key] = true
-				exercisedMu.Unlock()
-				return ""
-			}
-		}
-		if lookupRoutes[r.key] {
-			return ""
-		}
-		mapped = append(mapped, r.key)
-	}
-	if len(mapped) == 0 {
+	r, ok := dispatch(routes, c.method, path)
+	if !ok {
 		return fmt.Sprintf("dude %s sent %s %s, which is no route in routes.json", command, c.method, path)
 	}
-	return fmt.Sprintf("dude %s sent %s %s, but routes.json does not map %s to %s", command, c.method, path, strings.Join(mapped, ", "), command)
+	for _, name := range r.commands {
+		if name == command {
+			exercisedMu.Lock()
+			exercised[command+"\t"+r.key] = true
+			exercisedMu.Unlock()
+			return ""
+		}
+	}
+	if lookupRoutes[r.key] {
+		return ""
+	}
+	return fmt.Sprintf("dude %s sent %s %s, but routes.json does not map %s to %s", command, c.method, path, r.key, command)
 }
 
 // TestMain checks, after a full run, that every command routes.json maps to
@@ -165,6 +183,17 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+}
+
+// The server sends /v1/automations/subscriptions to its literal route, not to
+// /v1/automations/:id, so a command mapped only to the :id route may not send it.
+func TestALiteralRouteBeatsItsParamSibling(t *testing.T) {
+	if why := unmappedRequest(t, "automation", call{method: "GET", path: "/v1/automations/subscriptions"}); !strings.Contains(why, "does not map GET /v1/automations/subscriptions to automation") {
+		t.Fatalf("automation sending GET /v1/automations/subscriptions: %q", why)
+	}
+	if why := unmappedRequest(t, "automation", call{method: "GET", path: "/v1/automations/aut_1"}); why != "" {
+		t.Fatal(why)
+	}
 }
 
 func TestManifestNamesOnlyCommandsThatExist(t *testing.T) {
