@@ -334,7 +334,9 @@ func TestABaseMergeOfAFileBothSidesEditedIsPureOnlyAsGitMergesIt(t *testing.T) {
 // differs from both parents' F and passes the re-merge, but it is not
 // GitHub's merge, so it is not pure.
 func TestABaseMergeOverTwoMergeBasesIsNotPure(t *testing.T) {
-	f := func(two, five, ten string) string { return "1\n" + two + "\n3\n4\n" + five + "\n6\n7\n8\n9\n" + ten + "\n" }
+	f := func(two, five, ten string) string {
+		return "1\n" + two + "\n3\n4\n" + five + "\n6\n7\n8\n9\n" + ten + "\n"
+	}
 	ctx := context.Background()
 	a := newAdvancing(t)
 	repo := a.fake.Repo
