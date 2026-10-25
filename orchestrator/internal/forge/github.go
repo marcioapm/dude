@@ -1459,7 +1459,8 @@ func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparis
 // FileAt is path's content at ref (a commit), read raw from GitHub's
 // contents API. Content over limit bytes is an *Error with Refusal
 // RefusalTooLarge, read no further; a path absent at ref is GitHub's 404.
-// A redirect is followed as JobLogTail follows one, without the token.
+// A redirect is followed as JobLogTail follows one, without the token
+// unless it stays on the same host.
 func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64) ([]byte, error) {
 	segments := strings.Split(path, "/")
 	for i, s := range segments {
@@ -1491,7 +1492,10 @@ func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64
 		if next.Response != nil {
 			noteRate(target, authorization, next.Response.Header)
 		}
-		next.Header.Del("Authorization")
+		// A renamed repository's 301 stays on GitHub's host and needs the token.
+		if next.URL.Host != via[0].URL.Host {
+			next.Header.Del("Authorization")
+		}
 		if next.URL.User != nil || (via[0].URL.Scheme == "https" && next.URL.Scheme != "https") {
 			return errors.New("unsafe redirect reading a file's content")
 		}
