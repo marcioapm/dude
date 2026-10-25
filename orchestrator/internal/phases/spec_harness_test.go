@@ -566,15 +566,21 @@ func TestTheScriptedAgentSpeaksItsRolesHarness(t *testing.T) {
 }
 
 // A repository's own tests run git under the Run's environment and read
-// what it prints through a pipe, as on a laptop or in CI: a diff carries
-// no escape codes (jervasion's comment-hygiene tests, which parse one,
-// failed 40 of 46 in every Run when git was made to colour). The Run's
-// other tools still colour (colourEnv).
+// what it prints through a pipe, as on a laptop or in CI: a diff parser
+// must see no escape codes. The Run's other tools still colour (colourEnv).
 func TestARunsGitPrintsPlainOutputThroughAPipe(t *testing.T) {
 	c, in := goldenInput("claude-opus-5-5")
 	env := buildSpec(c, in).Env
 	if env["FORCE_COLOR"] != "1" {
 		t.Fatalf("a harness Run's env %v, want its tools made to colour", env)
+	}
+	// Every include names a file absent here: a host with dude's layer
+	// installed does not run its hooks under the test.
+	n, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
+	for i := range n {
+		if env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)] == "include.path" {
+			env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)] = filepath.Join(t.TempDir(), "absent")
+		}
 	}
 	repo, home := t.TempDir(), t.TempDir()
 	git := func(args ...string) string {
