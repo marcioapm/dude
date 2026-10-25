@@ -66,9 +66,9 @@ func automationBrief(a obj) obj {
 	return out
 }
 
-func setEnabled(on bool) func(*flag.FlagSet) doer {
+func automationRequest(method, suffix string, body any) func(*flag.FlagSet) doer {
 	return noFlags(func(c *cli, a []string) (any, error) {
-		return c.request("PUT", autPath(a[0], "/enabled"), obj{"enabled": on})
+		return c.request(method, autPath(a[0], suffix), body)
 	})
 }
 
@@ -208,17 +208,15 @@ var automationCommands = map[string]command{
 			}
 			return c.request("PUT", autPath(a[0], ""), s)
 		})},
-	"automation-enable":  {"ID", "turn an automation on", setEnabled(true)},
-	"automation-disable": {"ID", "turn an automation off; a kept session stays", setEnabled(false)},
+	"automation-enable":  {"ID", "turn an automation on", automationRequest("PUT", "/enabled", obj{"enabled": true})},
+	"automation-disable": {"ID", "turn an automation off; a kept session stays", automationRequest("PUT", "/enabled", obj{"enabled": false})},
 	"automation-delete": {"ID", "delete an automation and its runs' history", noFlags(func(c *cli, a []string) (any, error) {
 		if _, err := c.request("DELETE", autPath(a[0], ""), nil); err != nil {
 			return nil, err
 		}
 		return obj{"deleted": a[0]}, nil
 	})},
-	"automation-duplicate": {"ID", "copy an automation: off, \"NAME (copy)\", owned by you", noFlags(func(c *cli, a []string) (any, error) {
-		return c.post(autPath(a[0], "/duplicate"), nil)
-	})},
+	"automation-duplicate": {"ID", "copy an automation: off, \"NAME (copy)\", owned by you", automationRequest("POST", "/duplicate", nil)},
 	"automation-owner": {"ID PERSON", "hand an automation to another member (its owner or an admin); PERSON is an id from people",
 		noFlags(func(c *cli, a []string) (any, error) {
 			return c.request("PUT", autPath(a[0], "/owner"), obj{"personId": a[1]})
@@ -325,7 +323,7 @@ var automationCommands = map[string]command{
 			return c.request("GET", autPath(a[0], "/runs/"+esc(a[1])), nil)
 		})},
 	"automation-deliveries": {"ID", "the last 30 days' deliveries of a GitHub automation's event, for automation-run --delivery",
-		noFlags(func(c *cli, a []string) (any, error) { return c.request("GET", autPath(a[0], "/deliveries"), nil) })},
+		automationRequest("GET", "/deliveries", nil)},
 	"automation-test": {"ID BODY", "whether an event body (a JSON file, or - for stdin) would run a GitHub automation, and which filter skips it if not",
 		noFlags(func(c *cli, a []string) (any, error) {
 			b, err := c.jsonArg("BODY", a[1])
@@ -335,9 +333,9 @@ var automationCommands = map[string]command{
 			return c.post(autPath(a[0], "/test-event/evaluate"), obj{"body": b})
 		})},
 	"automation-start-fresh": {"ID", "end an automation's kept session; its next run starts a new one",
-		noFlags(func(c *cli, a []string) (any, error) { return c.post(autPath(a[0], "/start-fresh"), nil) })},
+		automationRequest("POST", "/start-fresh", nil)},
 	"automation-prompts": {"ID", "every saved version of an agent automation's prompt or brief, newest first",
-		noFlags(func(c *cli, a []string) (any, error) { return c.request("GET", autPath(a[0], "/prompt-history"), nil) })},
+		automationRequest("GET", "/prompt-history", nil)},
 	"automation-prompt-restore": {"ID VERSION", "save an earlier prompt version again as the newest; VERSION is its number or id, from automation-prompts",
 		noFlags(func(c *cli, a []string) (any, error) {
 			version := a[1]
