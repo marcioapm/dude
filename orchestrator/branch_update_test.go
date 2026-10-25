@@ -490,9 +490,9 @@ func TestAFixsLostMergeCarryingOtherContentIsRefused(t *testing.T) {
 
 // The task branch and the base both edit NOTES.md, in different hunks,
 // and GitHub merges the base in cleanly under a fix. The merge's NOTES.md
-// is neither side's, so it is not proven only the base's: the fix's
-// publish is refused as not a fast-forward, and the branch keeps the merge.
-func TestAFixIsRefusedOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
+// is neither side's but exactly git's merge of the two: the fix is merged
+// in on top of GitHub's merge.
+func TestAFixPublishesOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
 	w := newWorld(t)
 	lines := func(first, last string) string {
 		return first + "\n2\n3\n4\n5\n6\n7\n8\n9\n" + last + "\n"
@@ -524,14 +524,14 @@ func TestAFixIsRefusedOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
 	if out, _ := exec.Command("git", "-C", w.gh.Repo, "show", x+":NOTES.md").Output(); string(out) != lines("one, the base's", "ten, the task's") {
 		t.Fatalf("the merge's NOTES.md is %q, want both edits", out)
 	}
-	if fix.status != "failed" || !strings.Contains(fix.error, "Update is not a fast forward") {
-		t.Fatalf("fix %s (%s), want refused as not a fast-forward", fix.status, fix.error)
+	if r := w.escalationReason(wi); r != "" || fix.status != "completed" {
+		t.Fatalf("fix %s (%s), escalated %q\nruns:\n%s", fix.status, fix.error, r, w.describeRuns())
 	}
-	if r := w.escalationReason(wi); r != "fix_failed" {
-		t.Errorf("escalated %q, want fix_failed", r)
+	if got := w.gh.Parents(fix.head); !slices.Equal(got, []string{x, fix.commit}) {
+		t.Fatalf("the fix recorded head %.8s with parents %v, want GitHub's merge %.8s then the fix's %.8s", fix.head, got, x, fix.commit)
 	}
-	if got := w.gh.SHA(branch); got != x {
-		t.Errorf("the task branch at %.8s, want GitHub's merge %.8s", got, x)
+	if got := w.gh.BranchLog(branch); !slices.Contains(got, fix.head) {
+		t.Errorf("the task branch was never at the fix's merge %.8s: %v", fix.head, got)
 	}
 }
 
