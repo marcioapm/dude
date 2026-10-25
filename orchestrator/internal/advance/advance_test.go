@@ -1,6 +1,7 @@
 package advance
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http/httptest"
@@ -328,37 +329,52 @@ func TestABaseMergeOfAFileBothSidesEditedIsPureOnlyAsGitMergesIt(t *testing.T) {
 }
 
 // A task branch and a base that each merged the other's two branches
-// have two merge bases, and git conflicts on F; a person's resolution
-// that equals a clean merge against the base GitHub names is not
-// GitHub's merge, so it is not pure. (Resolving to the task's F whole
-// never reaches the re-merge: a pre-existing gap, filed separately.)
+// have two merge bases, and git conflicts on F. A person's resolution
+// that is git's clean merge of F against the one merge base GitHub names
+// differs from both parents' F and passes the re-merge, but it is not
+// GitHub's merge, so it is not pure.
 func TestABaseMergeOverTwoMergeBasesIsNotPure(t *testing.T) {
-	f := func(two, ten string) string { return "1\n" + two + "\n3\n4\n5\n6\n7\n8\n9\n" + ten + "\n" }
-	for _, resolved := range []string{f("b", "ten")} {
-		t.Run("resolved as "+strings.ReplaceAll(resolved, "\n", " "), func(t *testing.T) {
-			a := newAdvancing(t)
-			repo := a.fake.Repo
-			a.fake.CommitFiles("main", "F", map[string]string{"F.md": f("x", "10")})
-			git(t, repo, "update-ref", "refs/heads/b1", "refs/heads/main")
-			git(t, repo, "update-ref", "refs/heads/b2", "refs/heads/main")
-			a.fake.CommitFiles("b1", "a", map[string]string{"F.md": f("a", "10")})
-			a.fake.CommitFiles("b2", "b", map[string]string{"F.md": f("b", "10")})
-			git(t, repo, "update-ref", "refs/heads/task", "refs/heads/b1")
-			a.fake.MergeInto("task", "b2", map[string]string{"F.md": f("a", "10")})
-			first := a.fake.CommitFiles("task", "the task's", map[string]string{"F.md": f("a", "ten")})
-			git(t, repo, "update-ref", "refs/heads/main", "refs/heads/b2")
-			a.fake.MergeInto("main", "b1", map[string]string{"F.md": f("b", "10")})
-			if bases := strings.Fields(git(t, repo, "merge-base", "--all", "task", "main")); len(bases) != 2 {
-				t.Fatalf("merge bases %v, want two", bases)
-			}
-			if err := exec.Command("git", "-C", repo, "merge-tree", "--write-tree", "task", "main").Run(); err == nil {
-				t.Fatal("merge-tree merged F.md cleanly, want a conflict")
-			}
-			a.fake.MergeInto("task", "main", map[string]string{"F.md": resolved})
-			if pure, err := a.pure(first); err != nil || pure {
-				t.Fatalf("%v %v, want not pure", pure, err)
-			}
-		})
+	f := func(two, five, ten string) string { return "1\n" + two + "\n3\n4\n" + five + "\n6\n7\n8\n9\n" + ten + "\n" }
+	ctx := context.Background()
+	a := newAdvancing(t)
+	repo := a.fake.Repo
+	a.fake.CommitFiles("main", "F", map[string]string{"F.md": f("x", "5", "10")})
+	git(t, repo, "update-ref", "refs/heads/b1", "refs/heads/main")
+	git(t, repo, "update-ref", "refs/heads/b2", "refs/heads/main")
+	a.fake.CommitFiles("b1", "a", map[string]string{"F.md": f("a", "5", "10")})
+	a.fake.CommitFiles("b2", "b", map[string]string{"F.md": f("b", "5", "10")})
+	git(t, repo, "update-ref", "refs/heads/task", "refs/heads/b1")
+	a.fake.MergeInto("task", "b2", map[string]string{"F.md": f("a", "5", "10")})
+	first := a.fake.CommitFiles("task", "the task's", map[string]string{"F.md": f("a", "5", "ten")})
+	git(t, repo, "update-ref", "refs/heads/main", "refs/heads/b2")
+	a.fake.MergeInto("main", "b1", map[string]string{"F.md": f("b", "5", "10")})
+	// main's F differs from F at either merge base.
+	second := a.fake.CommitFiles("main", "the base's", map[string]string{"F.md": f("b", "five", "10")})
+	if bases := strings.Fields(git(t, repo, "merge-base", "--all", "task", "main")); len(bases) != 2 {
+		t.Fatalf("merge bases %v, want two", bases)
+	}
+	if err := exec.Command("git", "-C", repo, "merge-tree", "--write-tree", "task", "main").Run(); err == nil {
+		t.Fatal("merge-tree merged F.md cleanly, want a conflict")
+	}
+	mb := git(t, repo, "merge-base", "main", "task")
+	var versions [3][]byte
+	for i, ref := range []string{first, mb, second} {
+		versions[i] = []byte(git(t, repo, "show", ref+":F.md") + "\n")
+	}
+	resolved, clean, err := mergeFile(ctx, t.TempDir(), versions[0], versions[1], versions[2])
+	if err != nil || !clean {
+		t.Fatalf("merge-file against %.8s: clean %v, %v; want clean", mb, clean, err)
+	}
+	if bytes.Equal(resolved, versions[0]) || bytes.Equal(resolved, versions[2]) {
+		t.Fatalf("the clean merge %q is one parent's F; it would never be re-merged", resolved)
+	}
+	x := a.fake.MergeInto("task", "main", map[string]string{"F.md": string(resolved)})
+	blob := strings.TrimSpace(gitIn(t, repo, string(resolved), "hash-object", "--stdin"))
+	if pure, err := remerged(ctx, a.gh, "acme/target", mb, first, a.fake.Parents(x)[1], []forge.ComparedFile{{Filename: "F.md", Status: "modified", SHA: blob}}); err != nil || !pure {
+		t.Fatalf("re-merged against %.8s: %v %v, want accepted", mb, pure, err)
+	}
+	if pure, err := a.pure(first); err != nil || pure {
+		t.Fatalf("%v %v, want not pure", pure, err)
 	}
 }
 
