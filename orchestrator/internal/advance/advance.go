@@ -256,6 +256,7 @@ var gitBinary = "git"
 // changes either adds a path to second...merge or changes a listed path's
 // blob SHA, and a blob SHA is the hash of the file's whole content; a
 // re-merged file's blob is the hash of the automatic merge's content.
+// File modes are not compared: GitHub's compare carries none.
 // ours is first or second, whichever is merge's first parent: git's
 // merge-file side ours.
 func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second, merge, ours string) (bool, error) {
