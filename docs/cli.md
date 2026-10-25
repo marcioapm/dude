@@ -312,7 +312,7 @@ owner and the admins transfer one, and its owner may run it.
 | `automation-secret ID` | A webhook's signing secret, 16–256 characters, read from stdin only, like `login`'s key; only its last four characters are ever shown |
 | `automation-run ID` | Runs it now: a schedule as it is |
 | `automation-run ID --delivery D` | On GitHub events: with a past delivery (from `automation-deliveries`) |
-| `automation-run ID --body FILE [--event E] [--action A] [--delivery-id D]` | On GitHub events: with a test event (`-` reads stdin; the event defaults to the automation's, the delivery id to a made-up `test-…`) |
+| `automation-run ID --body FILE [--event E] [--action A] [--delivery-id D]` | On GitHub events: with a test event (`-` reads stdin; the event defaults to the automation's, the delivery id to a made-up `test-…`; `--action` is written into the body, which must name no other action) |
 | `automation-runs ID [--status S] [--limit N]` | Its runs, newest first, and its kept session: `queued`, `running`, `succeeded`, `failed`, `skipped`, `cancelled` |
 | `automation-run-show ID RUN` | One run: its payloads, log tail, a Server's requests |
 | `automation-deliveries ID` | The last 30 days' deliveries of its event |
@@ -409,7 +409,7 @@ dude automation "$id" --settings \
   | jq '.command = "npm ci && npm run lint" | .trigger.filters.author = ["!dependabot[bot]"]' \
   | dude automation-update "$id" -
 dude automation-test "$id" event.json   # {"matches": false, "filter": "author", "because": "…"}
-dude automation-run "$id" --body event.json --action opened
+dude automation-run "$id" --body event.json --action opened   # sets the body's action
 dude automation-enable "$id"
 ```
 

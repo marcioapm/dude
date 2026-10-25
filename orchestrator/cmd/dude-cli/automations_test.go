@@ -78,6 +78,9 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"automation-run", "aut_gh", "--body", "-", "--action", "opened", "--delivery-id", "test-1"}, prEvent,
 			"POST", "/v1/automations/aut_gh/runs",
 			`{"testEvent":{"action":"opened","body":{"action":"opened","pull_request":{"number":7}},"deliveryId":"test-1","event":"pull_request"}}`, ""},
+		{[]string{"automation-run", "aut_gh", "--body", "-", "--action", "opened", "--delivery-id", "test-3"}, `{"pull_request":{"number":7}}`,
+			"POST", "/v1/automations/aut_gh/runs",
+			`{"testEvent":{"action":"opened","body":{"action":"opened","pull_request":{"number":7}},"deliveryId":"test-3","event":"pull_request"}}`, ""},
 		{[]string{"automation-run", "aut_gh", "--body", "-", "--event", "issues", "--delivery-id", "test-2"}, `{"issue":{"number":3}}`,
 			"POST", "/v1/automations/aut_gh/runs", `{"testEvent":{"action":null,"body":{"issue":{"number":3}},"deliveryId":"test-2","event":"issues"}}`, ""},
 		{[]string{"automation-runs", "aut_1", "--status", "failed", "--limit", "10"}, "", "GET", "/v1/automations/aut_1/runs?limit=10&status=failed", ``, ""},
@@ -210,6 +213,28 @@ func TestAutomationRunTestEventGetsADeliveryID(t *testing.T) {
 	te, _ := last(*calls).body["testEvent"].(map[string]any)
 	if id, _ := te["deliveryId"].(string); !strings.HasPrefix(id, "test-") || te["event"] != "pull_request" {
 		t.Fatalf("testEvent %v", te)
+	}
+}
+
+// The orchestrator filters a test event on the body's action, so --action
+// must reach the body; a body naming another action is refused.
+func TestAutomationRunActionIsWrittenIntoTheBody(t *testing.T) {
+	srv, calls := fakeDude(t)
+	if _, err := runCLI(t, srv, `{"pull_request":{"number":7}}`, "automation-run", "aut_gh", "--body", "-", "--action", "opened"); err != nil {
+		t.Fatal(err)
+	}
+	te, _ := last(*calls).body["testEvent"].(map[string]any)
+	body, _ := te["body"].(map[string]any)
+	if te["action"] != "opened" || body["action"] != "opened" {
+		t.Fatalf("testEvent %v", te)
+	}
+	n := len(*calls)
+	_, err := runCLI(t, srv, `{"action":"closed"}`, "automation-run", "aut_gh", "--body", "-", "--action", "opened")
+	if err == nil || !strings.Contains(err.Error(), "opened") || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("a body with another action: %v", err)
+	}
+	if len(*calls) != n {
+		t.Fatalf("made requests after the refusal: %+v", (*calls)[n:])
 	}
 }
 

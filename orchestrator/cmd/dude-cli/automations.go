@@ -253,7 +253,7 @@ var automationCommands = map[string]command{
 			delivery := fs.String("delivery", "", "a past delivery's id, from automation-deliveries")
 			body := fs.String("body", "", "a test event's body: a JSON file, or - for stdin")
 			event := fs.String("event", "", "with --body: the GitHub event (default: the automation's)")
-			action := fs.String("action", "", "with --body: its action, e.g. opened")
+			action := fs.String("action", "", "with --body: its action, e.g. opened, written into the body when the body names none")
 			deliveryID := fs.String("delivery-id", "", "with --body: its X-GitHub-Delivery (default: a made-up test-…)")
 			return func(c *cli, a []string) (any, error) {
 				if *body == "" {
@@ -271,6 +271,13 @@ var automationCommands = map[string]command{
 				b, err := c.jsonArg("--body", *body)
 				if err != nil {
 					return nil, err
+				}
+				if *action != "" {
+					// The run's filters read the action from the body, not testEvent.action.
+					if own := b["action"]; own != nil && own != *action {
+						return nil, fmt.Errorf("automation-run: --action %s, but the body's action is %v", *action, own)
+					}
+					b["action"] = *action
 				}
 				ev := *event
 				if ev == "" {

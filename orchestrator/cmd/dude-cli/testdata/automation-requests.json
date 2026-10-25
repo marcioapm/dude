@@ -248,6 +248,32 @@
       "aut_gh",
       "--body",
       "-",
+      "--action",
+      "opened",
+      "--delivery-id",
+      "test-3"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {
+      "testEvent": {
+        "action": "opened",
+        "body": {
+          "action": "opened",
+          "pull_request": {
+            "number": 7
+          }
+        },
+        "deliveryId": "test-3",
+        "event": "pull_request"
+      }
+    }
+  },
+  {
+    "args": [
+      "automation-run",
+      "aut_gh",
+      "--body",
+      "-",
       "--event",
       "issues",
       "--delivery-id",
