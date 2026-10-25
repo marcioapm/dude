@@ -484,8 +484,8 @@ func TestEachRefusalOfABaseMergeHolds(t *testing.T) {
 		})
 	}
 	t.Run("a base merge needing no re-merge, its commits from the merge base cut short: still pure", func(t *testing.T) {
-		// A long-lived branch on a busy base: its plain base merges were pure
-		// before files both sides changed were re-merged, and still are.
+		// A base merge with no file to re-merge needs no commit list from
+		// its merge base.
 		a, first := bothSides(t, shared, map[string]string{"TASK.md": "task\n"}, map[string]string{"BASE.md": "base\n"})
 		x := a.fake.MergeInto("task", "main", nil)
 		base := git(t, a.fake.Repo, "merge-base", first, a.fake.Parents(x)[1])

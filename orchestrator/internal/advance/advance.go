@@ -109,8 +109,9 @@ func Existing(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, s
 // maxBaseMerges merges each, 2 × maxBaseMerges in all. Each inspected
 // merge costs up to four GitHub reads (provenance, two compares, base
 // containment), plus two compares from their merge base and three per
-// file when it re-merges files (at most maxRemerged), so a fallback makes about 730 reads at
-// most, and one write (POST /merges) besides the fast-forward.
+// file when it re-merges files (at most maxRemerged). With those, plus
+// Settle's own check of the merge it made, a fallback makes about 730
+// reads at most, and one write (POST /merges) besides the fast-forward.
 //
 // A head that is already a pure merge of commit is adopted only when
 // attempted says so: the caller durably recorded, in beforeMerge, sending
@@ -249,13 +250,17 @@ var gitBinary = "git"
 // second...merge list the same files, each with the same status and the
 // same resulting blob SHA, except files both parents modified whose merge
 // blob is exactly git's clean three-way merge of them (remerged). A merge
-// that changed any file is pure only over a single merge base
-// (singleMergeBase): merge-ort merges over several against a virtual one.
+// that re-merges a file is pure only over a single merge base
+// (singleMergeBase): merge-ort merges over several against a virtual one,
+// which a re-merge against one base cannot reproduce.
 //
 // Sound against false positives: any content in merge beyond first's
 // changes either adds a path to second...merge or changes a listed path's
 // blob SHA, and a blob SHA is the hash of the file's whole content; a
-// re-merged file's blob is the hash of the automatic merge's content.
+// re-merged file's blob is the hash of the automatic merge's content. A
+// file equal to either parent's blob is judged by that equality, not
+// re-merged, so a resolution that takes one side's file whole is
+// accepted, as it was before files were re-merged.
 // File modes are not compared: GitHub's compare carries none.
 // ours names whichever of first and second is merge's first parent
 // (merge-file's ours side).
@@ -301,8 +306,9 @@ func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second
 	if len(differing) > maxRemerged {
 		return false, nil
 	}
-	// Only a re-merge needs it: a base merge of ours already passed with no
-	// commit list, and one long enough to be cut short must not start failing.
+	// Checked only for a re-merge: requiring the full commit list of every
+	// base merge would refuse a long-lived branch whose merge base is over
+	// 250 commits back.
 	single, err := singleMergeBase(ctx, gh, slug, left.MergeBase.SHA, first, second)
 	if err != nil || !single {
 		return false, err
