@@ -107,10 +107,10 @@ func Existing(ctx context.Context, gh *forge.GitHub, slug, branch, baseBranch, s
 //
 // Bound: the judgement and the re-judgement inspect at most
 // maxBaseMerges merges each, 2 × maxBaseMerges in all. Each inspected
-// merge costs up to four GitHub reads (provenance, two compares, base
-// containment) and three per file re-merged (at most maxRemerged), so a
-// fallback makes about 650 reads at most, and one write (POST /merges)
-// besides the fast-forward.
+// merge costs up to six GitHub reads (provenance, two compares, two
+// compares from their merge base, base containment) and three per file
+// re-merged (at most maxRemerged), so a fallback makes about 730 reads at
+// most, and one write (POST /merges) besides the fast-forward.
 //
 // A head that is already a pure merge of commit is adopted only when
 // attempted says so: the caller durably recorded, in beforeMerge, sending
@@ -257,8 +257,8 @@ var gitBinary = "git"
 // blob SHA, and a blob SHA is the hash of the file's whole content; a
 // re-merged file's blob is the hash of the automatic merge's content.
 // File modes are not compared: GitHub's compare carries none.
-// ours is first or second, whichever is merge's first parent: git's
-// merge-file side ours.
+// ours names whichever of first and second is merge's first parent
+// (merge-file's ours side).
 func pureMerge(ctx context.Context, gh *forge.GitHub, slug string, first, second, merge, ours string) (bool, error) {
 	provenance, err := gh.CommitProvenance(ctx, slug, merge)
 	if err != nil {
@@ -389,7 +389,9 @@ func remerged(ctx context.Context, gh *forge.GitHub, slug, base, ours, theirs st
 }
 
 // mergeFile is `git merge-file -p ours base theirs` on files in dir: the
-// merged content, and whether it merged with no conflict.
+// merged content, and whether it merged with no conflict. Repository
+// .gitattributes merge drivers are deliberately not honoured, which can
+// only refuse more.
 func mergeFile(ctx context.Context, dir string, ours, base, theirs []byte) ([]byte, bool, error) {
 	paths := make([]string, 3)
 	for i, b := range [][]byte{ours, base, theirs} {
