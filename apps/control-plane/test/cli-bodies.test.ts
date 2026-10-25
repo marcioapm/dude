@@ -217,10 +217,10 @@ function selectNames(list: string): string[] {
   }
   items.push(list.slice(start));
   return items.map((item) => {
-    const m = /(?:\bAS\s+"?(\w+)"?|\.(\w+)|^\s*(\w+))\s*$/i.exec(item.trim());
-    const name = m?.[1] ?? m?.[2] ?? m?.[3];
-    if (!name) throw new Error(`cannot name the SELECT item ${item.trim()}`);
-    return name;
+    const m = /(?:\bAS\s+"(\w+)"|\bAS\s+(\w+)|\.(\w+)|^\s*(\w+))\s*$/i.exec(item.trim());
+    if (!m) throw new Error(`cannot name the SELECT item ${item.trim()}`);
+    // Postgres folds an unquoted name to lower case; only "quoted" keeps its case.
+    return m[1] ?? (m[2] ?? m[3] ?? m[4])!.toLowerCase();
   });
 }
 

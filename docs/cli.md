@@ -456,7 +456,8 @@ registers it: the command that calls it (a list when several do), or
   normal run fails when it is stale), and
   `apps/control-plane/test/cli-bodies.test.ts` parses each body and query
   with the route's own schema. Follow that pattern for new families.
-- **A new POST, PUT or PATCH command** must come with its body check: the
-  route goes in `bodies` in `cli-bodies.test.ts`, which fails for a CLI
-  route with a body that is neither there nor in its shrinking `UNCHECKED`
-  backlog.
+- **A new POST, PUT or PATCH route that a command calls** must come with its
+  body check: the route goes in `bodies` in `cli-bodies.test.ts`, which fails
+  for a CLI route with a body that is neither there nor in its shrinking
+  `UNCHECKED` backlog. (A new command on a route already in `UNCHECKED` is
+  not caught; give it a check while you are there.)

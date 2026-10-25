@@ -91,17 +91,31 @@ func (r manifestRoute) params() int {
 }
 
 // dispatch is the one route the server sends method and path to: of the
-// matching routes, the one with the fewest :params, since the routers register
-// literal routes before their :param siblings.
+// matching routes, the one whose leftmost differing segment is literal, as the
+// routers register them (cli-routes.test.ts fails if one shadows another).
 func dispatch(routes []manifestRoute, method, path string) (manifestRoute, bool) {
 	var best manifestRoute
 	found := false
 	for _, r := range routes {
-		if r.matches(method, path) && (!found || r.params() < best.params()) {
+		if r.matches(method, path) && (!found || moreSpecific(r, best)) {
 			best, found = r, true
 		}
 	}
 	return best, found
+}
+
+// moreSpecific is whether a has a literal at the first segment where a and b differ.
+func moreSpecific(a, b manifestRoute) bool {
+	for i := range a.segments {
+		if i >= len(b.segments) {
+			return false
+		}
+		la, lb := !strings.HasPrefix(a.segments[i], ":"), !strings.HasPrefix(b.segments[i], ":")
+		if la != lb {
+			return la
+		}
+	}
+	return false
 }
 
 // recorder sends each request on and keeps a copy: method, path and body.

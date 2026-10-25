@@ -121,4 +121,20 @@ describe("the dude CLI's route manifest", () => {
       `remove "${key}" from NOT_YET in cli-routes.test.ts`);
     expect([...added, ...done]).toEqual([]);
   });
+
+  // The router takes the first match; the CLI's tests take the route whose
+  // leftmost differing segment is literal. They agree while no route is
+  // registered after an earlier one that takes its paths.
+  test("no route is shadowed by one registered before it", () => {
+    const all = buildRouter("", async () => null).routes().map((r) => ({ key: `${r.method} ${r.pattern}`, method: r.method, segs: r.pattern.split("/").filter(Boolean) }));
+    const shadowed: string[] = [];
+    all.forEach((late, j) => all.slice(0, j).forEach((early) => {
+      if (early.method !== late.method || early.segs.length !== late.segs.length) return;
+      const param = (s: string) => s.startsWith(":");
+      if (!early.segs.every((s, i) => s === late.segs[i] || param(s) || param(late.segs[i]!))) return;
+      const i = early.segs.findIndex((s, i) => s !== late.segs[i]);
+      if (i >= 0 && param(early.segs[i]!) && !param(late.segs[i]!)) shadowed.push(`"${late.key}" is registered after "${early.key}", which takes its paths first: register it before`);
+    }));
+    expect(shadowed).toEqual([]);
+  });
 });
