@@ -87,6 +87,15 @@ func TestFindChannelRemembersAChannelTheBotIsIn(t *testing.T) {
 	if n := fake.Calls("conversations.list"); n != 4 {
 		t.Errorf("%d lookups after ForgetChannel, want 4", n)
 	}
+	// Another installation on the same provider remembers nothing of this one's.
+	other := inst
+	other.ID = "chi_other"
+	if _, _, _, err := p.FindChannel(context.Background(), other, "c002"); err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.Calls("conversations.list"); n != 5 {
+		t.Errorf("%d lookups after another installation's, want 5", n)
+	}
 }
 
 func TestFindChannelPassesSlacksErrorThrough(t *testing.T) {
