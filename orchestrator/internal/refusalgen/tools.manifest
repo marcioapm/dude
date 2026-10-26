@@ -138,6 +138,7 @@ rChatHistoryNotFromChat                refusals/tools/chat/history-not-from-chat
 rChatHistoryNotInstalled               refusals/tools/chat/history-not-installed
 rChatHistoryUnavailable                refusals/tools/chat/history-unavailable
 rChatHistoryTooFar                     refusals/tools/chat/history-too-far
+rChatHistoryRateLimited                refusals/tools/chat/history-rate-limited
 rChatHistoryAtMostReadsHour            refusals/tools/chat/history-at-most-reads-hour
 rRunIdRunFrom1OrItsLink                refusals/tools/github/run-id-run-from-1-or-its-link
 rRunLinkIsAnotherRepository            refusals/tools/github/run-link-is-another-repository

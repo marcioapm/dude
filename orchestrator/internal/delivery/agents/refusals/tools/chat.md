@@ -10,4 +10,6 @@
 
 {{- define "refusals/tools/chat/history-too-far"}}that message is too far back or ahead to page to from here: use a nearer message's id, from a page you read{{end}}
 
+{{- define "refusals/tools/chat/history-rate-limited"}}the chat is rate limiting reads: try again later, or work with what you have{{end}}
+
 {{- define "refusals/tools/chat/history-at-most-reads-hour"}}at most %d chat reads an hour; this session has made them: wait, or work with what you read{{end}}
