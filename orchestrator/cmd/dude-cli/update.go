@@ -341,13 +341,24 @@ func (c *cli) say(msg string) {
 }
 
 // selfUpdateArgs is whether `dude update ARGS` means self-update: no TASK,
-// which update needs, and only self-update's flags.
+// which update needs, and only self-update's flags, or a bare -h/--help.
 func selfUpdateArgs(args []string) bool {
 	if len(args) == 0 {
 		return true
 	}
 	name, _, _ := strings.Cut(strings.TrimLeft(args[0], "-"), "=")
-	return strings.HasPrefix(args[0], "-") && (name == "check" || name == "version")
+	if !strings.HasPrefix(args[0], "-") {
+		return false
+	}
+	if name == "h" || name == "help" {
+		for _, a := range args[1:] {
+			if !strings.HasPrefix(a, "-") {
+				return false
+			}
+		}
+		return true
+	}
+	return name == "check" || name == "version"
 }
 
 func init() {

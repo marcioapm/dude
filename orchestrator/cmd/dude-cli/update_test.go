@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -344,6 +345,7 @@ func TestUpdateWithATaskIsTheTaskCommand(t *testing.T) {
 	for args, self := range map[string]bool{
 		"": true, "--check": true, "-check": true, "--version v1.2.0": true, "--version=v1.2.0": true,
 		"wi_12 --title x": false, "--title x wi_12": false,
+		"--help": true, "-h": true, "--help wi_12": false, "wi_12 --help": false,
 	} {
 		if got := selfUpdateArgs(strings.Fields(args)); got != self {
 			t.Errorf("update %s: self-update %v, want %v", args, got, self)
@@ -352,5 +354,35 @@ func TestUpdateWithATaskIsTheTaskCommand(t *testing.T) {
 	srv, calls := fakeDude(t)
 	if _, err := runCLI(t, srv, "", "update", "wi_12", "--title", "x"); err != nil || last(*calls).method != "PATCH" {
 		t.Fatalf("%v %+v", err, *calls)
+	}
+}
+
+func TestUpdateHelpAndUsageNameDudeUpdate(t *testing.T) {
+	for _, help := range []string{"--help", "-h"} {
+		f := newFakeRelease(t, "v1.2.0")
+		c, _, out, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
+		if err := c.run([]string{"update", help}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(out.String(), "usage: dude update \n") || !strings.Contains(out.String(), "-check") || strings.Contains(out.String(), "-title") {
+			t.Fatalf("%s:\n%s", help, out)
+		}
+	}
+	f := newFakeRelease(t, "v1.2.0")
+	c, _, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
+	if err := c.run([]string{"update", "--check", "extra"}); err == nil || err.Error() != "usage: dude update " || len(f.requests) != 0 {
+		t.Fatalf("err = %v, requests %v", err, f.requests)
+	}
+}
+
+// self-update claims dude update's --check and --version, so the task
+// command must never grow flags by those names.
+func TestTaskUpdateHasNoSelfUpdateFlags(t *testing.T) {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	commands["update"].flags(fs)
+	for _, name := range []string{"check", "version"} {
+		if fs.Lookup(name) != nil {
+			t.Errorf("update TASK has a --%s flag, which dude update would read as self-update's", name)
+		}
 	}
 }

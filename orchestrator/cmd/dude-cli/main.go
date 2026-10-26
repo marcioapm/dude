@@ -529,6 +529,9 @@ func (c *cli) run(args []string) error {
 		return nil
 	}
 	name := args[0]
+	// shown is the command as typed: dude update without a TASK runs
+	// self-update but its messages still say dude update.
+	shown := name
 	if name == "update" && selfUpdateArgs(args[1:]) {
 		name = "self-update"
 	}
@@ -536,10 +539,10 @@ func (c *cli) run(args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown command %q; see dude --help", name)
 	}
-	fs := flag.NewFlagSet("dude "+name, flag.ContinueOnError)
+	fs := flag.NewFlagSet("dude "+shown, flag.ContinueOnError)
 	fs.SetOutput(c.out)
 	fs.Usage = func() {
-		fmt.Fprintf(c.out, "usage: dude %s %s\n\n%s\n", name, cmd.args, cmd.help)
+		fmt.Fprintf(c.out, "usage: dude %s %s\n\n%s\n", shown, cmd.args, cmd.help)
 		fs.PrintDefaults()
 	}
 	do := cmd.flags(fs)
@@ -563,7 +566,7 @@ func (c *cli) run(args []string) error {
 		}
 	}
 	if len(pos) < min || (max >= 0 && len(pos) > max) {
-		return fmt.Errorf("usage: dude %s %s", name, cmd.args)
+		return fmt.Errorf("usage: dude %s %s", shown, cmd.args)
 	}
 	for len(pos) < max {
 		pos = append(pos, "")
