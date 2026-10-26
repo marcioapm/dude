@@ -548,17 +548,20 @@ export class PreviewCommenting {
   }
 
   readonly onMessage = (e: MessageEvent): void => {
-    const pane = this.#paneOf(e.source) ?? this.#adopt(e);
-    const checked = checkMessage(e, pane !== null, this.#d.read().origins, originOf(pane?.url));
+    const held = this.#paneOf(e.source);
+    const origins = this.#d.read().origins;
+    const linked = held === null && origins.has(e.origin) && this.#linked(e.source as Window | null);
+    const checked = checkMessage(e, held !== null || linked, origins, originOf(held?.url));
     if (!checked.ok) {
-      if ("reason" in checked && pane) {
+      if ("reason" in checked && held) {
         const nonce = (e.data as { nonce?: unknown } | null)?.nonce;
-        this.#refuse(pane, checked.reason, typeof nonce === "string" && nonce.length <= 100 ? nonce : undefined);
+        this.#refuse(held, checked.reason, typeof nonce === "string" && nonce.length <= 100 ? nonce : undefined);
       }
       return;
     }
-    const p = pane!;
     const msg = checked.msg;
+    const p = held ?? (msg.type === "hello" || msg.type === "navigated" ? this.#adopt(e.source as Window, msg.url) : null);
+    if (!p) return;
     switch (msg.type) {
       case "hello":
       case "navigated":
@@ -599,25 +602,25 @@ export class PreviewCommenting {
   };
 
   /**
-   * A window this tab holds no handle on, taken as one of the task's
-   * commenting windows: only on a hello or navigated, from one of this
-   * task's preview origins, about a page at that origin, and only when the
-   * browser says the sender is linked to this tab (a page can't forge
-   * `opener`):
+   * Whether a window this tab holds no handle on is linked to this tab, as
+   * the browser says (a page can't forge `opener`):
    * - this tab is up its chain of openers: a window this tab opened before
    *   a reload, or a tab opened from one (target=_blank, ctrl-click);
    * - or it is this tab's own opener, and this tab came from its Connect to
    *   dude (`openerArrived`).
-   * The checks after it (size, schema, the page's origin) are checkMessage's,
-   * as for any window held.
    */
-  #adopt(e: MessageEvent): Pane | null {
-    const m = e.data as { type?: unknown; url?: unknown } | null;
-    if (!m || typeof m !== "object" || m.type !== "hello" && m.type !== "navigated" || typeof m.url !== "string") return null;
-    if (!this.#d.read().origins.has(e.origin) || originOf(m.url) !== e.origin) return null;
-    const source = e.source as Window | null;
-    if (!source || !(this.#reachesMe(source) || this.#isMyOpener(source))) return null;
-    return this.#add(source, m.url, null);
+  #linked(source: Window | null): boolean {
+    return source !== null && (this.#reachesMe(source) || this.#isMyOpener(source));
+  }
+
+  /**
+   * A linked window taken as one of the task's commenting windows, once its
+   * hello or navigated has passed checkMessage. At the cap it takes only a
+   * closed window's slot: a live window is never let go for a newcomer.
+   */
+  #adopt(source: Window, url: string): Pane | null {
+    if (this.#panes.length >= MAX_WINDOWS && !this.#panes.some((p) => p.state === "closed" || closedOrGone(p.win))) return null;
+    return this.#add(source, url, null);
   }
 
   #reachesMe(source: Window): boolean {

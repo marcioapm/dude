@@ -624,7 +624,7 @@ test("this tab's own opener is adopted only when the tab came from Connect to du
   }
 });
 
-test("no more than MAX_WINDOWS are held: a closed one makes room first, else the oldest adopted, never the named one", () => {
+test("no more than MAX_WINDOWS are held: a closed one makes room, and a ninth live window is not adopted", () => {
   c.open(`${WEB}/cart`, "web");
   post({ type: "hello", v: 1, url: `${WEB}/cart` });
   const adopted = Array.from({ length: MAX_WINDOWS - 1 }, () => win(window));
@@ -636,13 +636,48 @@ test("no more than MAX_WINDOWS are held: a closed one makes room first, else the
   expect(c.windows.length).toBe(MAX_WINDOWS);
   expect(c.windows).not.toContain(adopted[3] as unknown as Window);
   expect(c.windows).toContain(next as unknown as Window);
-  // None closed: the oldest adopted goes, the named window stays.
+  // None closed: a ninth live window is not adopted, and every live one stays.
   const last = win(window);
   post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, last);
   expect(c.windows.length).toBe(MAX_WINDOWS);
-  expect(c.windows).not.toContain(adopted[0] as unknown as Window);
+  expect(types(last)).toEqual([]);
+  expect(c.windows).toContain(adopted[0] as unknown as Window);
   expect(c.windows).toContain(popup as unknown as Window);
-  expect(c.windows).toContain(last as unknown as Window);
+});
+
+test("a hello dude can't read (another protocol version, the wrong shape, too big) adopts no window", () => {
+  const unreadable = [
+    { type: "hello", v: 99, url: `${WEB}/cart` },
+    { type: "hello", v: 1, url: `${WEB}/cart`, extra: { nested: true } },
+    { type: "navigated", v: 1, url: `${WEB}/${"x".repeat(OVERLAY_LIMITS.message)}` },
+  ];
+  const linked = Array.from({ length: 12 }, () => win(window));
+  linked.forEach((w, i) => post(unreadable[i % unreadable.length], WEB, w));
+  expect(c.windows.length).toBe(0);
+  expect(c.view.state).toBe("idle");
+  expect(linked.flatMap(types)).toEqual([]);
+});
+
+test("past MAX_WINDOWS live linked windows, hellos don't evict and re-adopt, so a save sent again is not created twice", async () => {
+  let land!: () => void;
+  createDraft = mock(() => new Promise<{ id: string; drafts: number }>((r) => { land = () => r({ id: "fbk_new", drafts: 1 }); }));
+  c.dispose();
+  boot();
+  const linked = Array.from({ length: MAX_WINDOWS + 1 }, () => win(window));
+  for (const w of linked) post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, w);
+  const first = linked[0]!;
+  post({ type: "draft", v: 1, nonce: "n", body: "x", anchor: anchor() }, WEB, first);
+  await tick();
+  land();
+  await tick(5);
+  const sessionsBefore = linked.map((w) => types(w).filter((t) => t === "session").length);
+  for (let round = 0; round < 3; round++) for (const w of linked) post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, w);
+  post({ type: "draft", v: 1, nonce: "n", body: "x", anchor: anchor() }, WEB, first);
+  await tick(5);
+  expect(createDraft).toHaveBeenCalledTimes(1);
+  // The ninth is never held, so never answered; the eight held are each answered once per hello.
+  expect(types(linked[MAX_WINDOWS]!)).toEqual([]);
+  expect(linked.map((w, i) => types(w).filter((t) => t === "session").length - sessionsBefore[i]!)).toEqual([...Array(MAX_WINDOWS).fill(3), 0]);
 });
 
 test("refresh sends the session to every open window, each for its own page", () => {
