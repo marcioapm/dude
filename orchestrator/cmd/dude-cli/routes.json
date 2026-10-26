@@ -92,6 +92,7 @@
   "GET /v1/organization/invitations/counts": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "GET /v1/organization/routing-instructions": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "GET /v1/people": "person list",
+  "GET /v1/preview-servers/lookup": { "apiOnly": "browser-only: the web app's own plumbing (uploads, downloads, live streams, pickers, badges, push)" },
   "GET /v1/projects": "project list",
   "GET /v1/projects/:id": ["repo list", "task create", "task update"],
   "GET /v1/projects/:id/automations": "automation list",

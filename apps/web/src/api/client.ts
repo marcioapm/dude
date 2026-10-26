@@ -586,6 +586,14 @@ export interface Located {
   id: string;
 }
 
+/** Whose preview is served at an origin. `GET /v1/preview-servers/lookup`. */
+export interface PreviewServerAt {
+  organizationSlug: string;
+  taskId: string;
+  taskKey: string;
+  server: string;
+}
+
 /** You, as your own profile shows you: who you are on GitHub too. */
 export type Me = Member & { githubLogin?: string | null; commitEmail?: string | null };
 
@@ -1989,6 +1997,11 @@ export class ApiClient {
 
   runServers(runId: string): Promise<TaskServers> {
     return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/servers`);
+  }
+
+  /** The task, among your organisations', whose live preview is served at an https origin; 404 when none is yours. */
+  previewServerAt(origin: string): Promise<PreviewServerAt> {
+    return this.#request("GET", `/v1/preview-servers/lookup?origin=${encodeURIComponent(origin)}`);
   }
 
   /** Add a server to a run: one of the project's recipes by name, or a port and command just for this run. */

@@ -319,6 +319,59 @@ describe("a task's and a Run's servers", () => {
   });
 });
 
+describe("a preview's task, looked up by its origin", () => {
+  const ORIGIN = "https://web-look-1-web.preview.example.test";
+  const lookup = (key: string, origin: string) => call(key, "GET", `/v1/preview-servers/lookup?origin=${encodeURIComponent(origin)}`);
+
+  beforeAll(async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_look', ${ORG}, ${PROJECT}, 41, 'look')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind) VALUES ('run_look', ${ORG}, ${PROJECT}, 'wi_look', 1, 'preview')`;
+    await owner`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+      VALUES ('run_look', ${ORG}, 'web', 'srv_look_web', 'web-look-1-web.preview.example.test', ${`${ORIGIN}/`}),
+             ('run_look', ${ORG}, 'api', 'srv_look_api', 'api-look-1-web.preview.example.test', 'https://api-look-1-web.preview.example.test/'),
+             ('run_look', ${ORG}, 'old', 'srv_look_old', 'old-look-1-web.preview.example.test', 'https://old-look-1-web.preview.example.test/')`;
+    await owner`UPDATE preview_servers SET deleted_at = now() WHERE lux_server_id = 'srv_look_old'`;
+    // Another organisation's preview.
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image) VALUES ('prj_look_other', ${OTHER}, 'O', 'o', 'OTH', 'node:22')`;
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_look_other', ${OTHER}, 'prj_look_other', 1, 'o')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind) VALUES ('run_look_other', ${OTHER}, 'prj_look_other', 'wi_look_other', 1, 'preview')`;
+    await owner`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+      VALUES ('run_look_other', ${OTHER}, 'web', 'srv_look_other', 'web-oth-1-o.preview.example.test', 'https://web-oth-1-o.preview.example.test/')`;
+  });
+
+  test("names the organisation, task and server of a live preview served at the origin", async () => {
+    const res = await lookup(memberKey, ORIGIN);
+    expect(res.status).toBe(200);
+    expect(await body(res)).toEqual({ organizationSlug: ORG, taskId: "wi_look", taskKey: "WEB-41", server: "web" });
+    expect(await body(await lookup(memberKey, "https://api-look-1-web.preview.example.test"))).toMatchObject({ server: "api" });
+  });
+
+  test("another organisation's preview is not found, nor yours from theirs", async () => {
+    expect((await lookup(memberKey, "https://web-oth-1-o.preview.example.test")).status).toBe(404);
+    expect((await lookup(otherKey, ORIGIN)).status).toBe(404);
+    expect(await body(await lookup(otherKey, "https://web-oth-1-o.preview.example.test"))).toMatchObject({ organizationSlug: OTHER, taskKey: "OTH-1" });
+  });
+
+  test("a deleted server, or an origin that only begins like a live one's, is not found", async () => {
+    expect((await lookup(memberKey, "https://old-look-1-web.preview.example.test")).status).toBe(404);
+    expect((await lookup(memberKey, "https://web-look-1-web.preview.example.tes")).status).toBe(404);
+    expect((await lookup(memberKey, "https://web-look-1-web.preview.example.test.evil.test")).status).toBe(404);
+  });
+
+  test("an origin that is not exactly an https origin is a 400", async () => {
+    for (const bad of ["", "web-look-1-web.preview.example.test", "http://web-look-1-web.preview.example.test", `${ORIGIN}/`,
+      `${ORIGIN}/cart`, "https://", "javascript:alert(1)", `https://${"a".repeat(300)}.test`, "HTTPS://WEB-LOOK-1-WEB.preview.example.test"]) {
+      const res = await lookup(memberKey, bad);
+      expect([bad, res.status]).toEqual([bad, 400]);
+    }
+    expect((await call(memberKey, "GET", "/v1/preview-servers/lookup")).status).toBe(400);
+  });
+
+  test("needs a key", async () => {
+    expect((await lookup("dude_sk_nope", ORIGIN)).status).toBe(401);
+  });
+});
+
 describe("migration 055", () => {
   test("a Run is an agent's unless it says otherwise, and a task has one live preview", async () => {
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_m', ${ORG}, ${PROJECT}, 1, 't')`;
