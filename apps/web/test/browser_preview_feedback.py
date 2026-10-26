@@ -490,6 +490,29 @@ class CommentingOnAPreview(unittest.TestCase):
         expect(page.get_by_test_id("fb-tray")).to_have_attribute("data-count", "1")
         self.assertEqual(self.errors, [])
 
+    def test_a_tab_opened_from_the_preview_stays_connected_when_the_preview_closes(self):
+        ctx, page = self.context()
+        self.watch(page)
+        comment = page.get_by_test_id("server-url").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        # A target=_blank tab from the preview reaches dude through the preview's opener.
+        with ctx.expect_page() as opened2:
+            pv.evaluate(f"() => window.open('{PREVIEW}/cart', '_blank')")
+        pv2 = opened2.value
+        self.watch(pv2)
+        pv2.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        pv.close()
+        # Two more hellos from pv2 reach dude after the close: one beat period (4 s connected) apart, so the 1 s closed check has run.
+        heard = page.evaluate(f"() => window.__heard.filter((o) => o === '{PREVIEW}').length")
+        page.wait_for_function(f"n => window.__heard.filter((o) => o === '{PREVIEW}').length > n + 1", arg=heard, timeout=15_000)
+        self.assertEqual(ov(pv2, "r => r.querySelector('[data-connection]').getAttribute('data-connection')"), "connected")
+        self.assertEqual(ov_count(pv2, "ov-disconnected"), 0)
+        self.assertEqual(self.errors, [])
+
     def test_the_overlay_follows_the_os_then_dudes_theme_live(self):
         ctx, page = self.context()
         self.watch(page)

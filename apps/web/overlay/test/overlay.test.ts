@@ -987,6 +987,26 @@ test("a page opened from a preview page reaches dude through its openers: hello 
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
 
+test("once dude answered through the chain, the page stays connected to it after the preview page between them closes", async () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  const previewPage = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: dudeTab });
+  opener = previewPage as unknown as Opener;
+  boot({ heartbeatMs: HB });
+  fromDude(sessionFor(), DUDE, dudeTab);
+  previewPage.closed = true;
+  await tick(1_100);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-disconnected"]')).toBe(0);
+  // dude's tab is still the one hello goes to and the one heard.
+  beat();
+  beat();
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
 test("the walk up the openers stops after five same-origin pages, and at an opener that can't be read past", () => {
   page(CART, false);
   const dudeTab = fakeWin();

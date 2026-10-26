@@ -226,7 +226,7 @@ export class Overlay {
   #saidHello = false;
   // Beats in a row with nothing from dude while connected.
   #quietBeats = 0;
-  // The dude tab Connect to dude opened, and what the click came to: opened, or refused by the browser.
+  // The dude tab Connect to dude opened, or the dude window that last answered with a session; and what the click came to.
   #connectWin: Window | null = null;
   #connect: "opened" | "blocked" | null = null;
   #stopped = false;
@@ -345,7 +345,8 @@ export class Overlay {
   // ------------------------------------------------------------------ dude
 
   /**
-   * The dude window to talk to: the tab Connect to dude opened, else the
+   * The dude window to talk to: the tab Connect to dude opened or the one
+   * that last answered, while it is open; else the
    * first opener up the chain that is not one of this preview's own pages
    * (a link with target=_blank opened from a connected page has that page as
    * its opener). Not same-origin does not prove it is dude: messages are
@@ -430,6 +431,8 @@ export class Overlay {
     switch (m.type) {
       case "session":
         if (!validSession(m) || overlayPage(m.url) !== this.#page) return;
+        // The window that answered is dude's: kept, so a preview page between them closing doesn't lose it.
+        this.#connectWin = e.source as Window;
         this.#connection = "connected";
         this.#connect = null;
         this.#task = String(m.task).slice(0, 40);
