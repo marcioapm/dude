@@ -142,6 +142,7 @@ const (
 	rChatHistoryNotInstalled               = "the chat this session came from is no longer connected to dude: its conversation can't be read; ask a member what it said"
 	rChatHistoryUnavailable                = "the chat did not answer: try again in a while, or work with what you have"
 	rChatHistoryTooFar                     = "that message is too far back or ahead to page to from here: use a nearer message's id, from a page you read"
+	rChatHistoryRateLimited                = "the chat is rate limiting reads: try again later, or work with what you have"
 	rChatHistoryAtMostReadsHour            = "at most %d chat reads an hour; this session has made them: wait, or work with what you read"
 	rRunIdRunFrom1OrItsLink                = "runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>)"
 	rRunLinkIsAnotherRepository            = "%s is a run of another repository than %s: leave repo out, or name the link's"

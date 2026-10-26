@@ -2,6 +2,7 @@ package agenttools_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -133,5 +134,26 @@ func TestChatHistorySaysWhenTheChatIsGone(t *testing.T) {
 	// A task's agent has no such tool.
 	if status, _ := f.post(t, f.run(t, "run_impl_chat", "implementer", "running"), "chat_history", `{}`); status != 404 {
 		t.Fatalf("an implementer reads chat: %d", status)
+	}
+}
+
+// A page too far from where the chat lists, and a read the chat rate
+// limits, are each refused saying so, not as a chat that did not answer.
+func TestChatHistorySaysWhenAPageIsTooFarOrTheChatIsRateLimiting(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{chat.ErrPageTooFar, "that message is too far back or ahead to page to from here: use a nearer message's id"},
+		{fmt.Errorf("%w: slack conversations.history answered 429", chat.ErrRateLimited), "the chat is rate limiting reads: try again later"},
+	} {
+		reader := &chatReader{err: c.err}
+		f := setupWith(t, &agenttools.Server{Chat: reader})
+		token := f.session(t, "ssn_far", "", "")
+		mustExec(t, f.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id = 'ssn_far'`)
+		status, out := f.post(t, token, "chat_history", `{"after":"1.1"}`)
+		if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, c.want) {
+			t.Errorf("%v: %d %v, want 422 saying %q", c.err, status, out, c.want)
+		}
 	}
 }

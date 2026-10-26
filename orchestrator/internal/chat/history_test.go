@@ -65,6 +65,42 @@ func TestChatASessionReadsMoreOfItsOwnConversationOnly(t *testing.T) {
 	}
 }
 
+// Slack rate-limiting a read is the read's to try later: ErrRateLimited,
+// and not counted against the installation's health as a failure is.
+func TestChatARateLimitedHistoryReadIsNotAFailureOfTheInstallation(t *testing.T) {
+	w := setup(t)
+	for i := range 10 {
+		w.fake.Post("C1", "", "U2", fmt.Sprintf("channel message %d", i))
+	}
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+	w.mention("Márcia", "C1", "", "what failed?")
+	session := w.requests()[0].ResultID
+	latest, err := w.svc.ReadHistory(w.ctx, w.org, session, "", "")
+	if err != nil || len(latest.Messages) == 0 {
+		t.Fatalf("latest page: %+v, %v", latest, err)
+	}
+	failed := func() int {
+		return w.count(`SELECT COALESCE(failed_today, 0) FROM chat_installations WHERE organization_id = $1`, w.org)
+	}
+	before := failed()
+	// A channel read after a message pages from Slack's far end.
+	w.fake.FailNext("conversations.history", "ratelimited")
+	if _, err := w.svc.ReadHistory(w.ctx, w.org, session, "", latest.Messages[0].ID); !errors.Is(err, chat.ErrRateLimited) {
+		t.Fatalf("a rate-limited read: %v, want ErrRateLimited", err)
+	}
+	if n := failed(); n != before {
+		t.Fatalf("failed_today went from %d to %d on a rate limit", before, n)
+	}
+	// Any other failure still counts.
+	w.fake.FailNext("conversations.history", "internal_error")
+	if _, err := w.svc.ReadHistory(w.ctx, w.org, session, "", latest.Messages[0].ID); err == nil || errors.Is(err, chat.ErrRateLimited) {
+		t.Fatalf("a failed read: %v", err)
+	}
+	if n := failed(); n != before+1 {
+		t.Fatalf("failed_today went from %d to %d on a failure", before, n)
+	}
+}
+
 func TestChatHistoryIsRefusedOnceTheInstallationIsGone(t *testing.T) {
 	w := setup(t)
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))

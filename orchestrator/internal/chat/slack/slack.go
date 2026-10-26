@@ -264,6 +264,32 @@ type APIError struct{ Method, Code string }
 
 func (e *APIError) Error() string { return fmt.Sprintf("slack %s: %s", e.Method, e.Code) }
 
+// statusError is a Web API call answered with an HTTP status worth trying
+// again (429, 5xx).
+type statusError struct {
+	Method string
+	Status int
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("slack %s answered %d", e.Method, e.Status) }
+
+// rateLimited says err is Slack rate-limiting a call: HTTP 429, or the
+// API's ratelimited error.
+func rateLimited(err error) bool {
+	var s *statusError
+	var a *APIError
+	return errors.As(err, &s) && s.Status == http.StatusTooManyRequests || errors.As(err, &a) && a.Code == "ratelimited"
+}
+
+// pageCallFailed is a FetchPage call's err as the read reports it: a rate
+// limit is chat.ErrRateLimited, not a failure of the installation.
+func pageCallFailed(err error) error {
+	if rateLimited(err) {
+		return fmt.Errorf("%w: %w", chat.ErrRateLimited, err)
+	}
+	return err
+}
+
 // jsonMethods send blocks as JSON; other methods use form encoding
 // because Slack reads reject JSON with invalid_arguments.
 var jsonMethods = map[string]bool{"chat.postMessage": true, "chat.postEphemeral": true, "chat.update": true}
@@ -336,7 +362,7 @@ func (p *Provider) send(ctx context.Context, token, method string, args map[stri
 		return chat.Transient(fmt.Errorf("slack %s: %w", method, err), 0)
 	}
 	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode/100 == 5 {
-		return chat.Transient(fmt.Errorf("slack %s answered %d", method, res.StatusCode), retryAfter(res.Header))
+		return chat.Transient(&statusError{Method: method, Status: res.StatusCode}, retryAfter(res.Header))
 	}
 	if res.StatusCode/100 != 2 {
 		return fmt.Errorf("slack %s answered %d", method, res.StatusCode)
@@ -472,7 +498,7 @@ func (p *Provider) FetchPage(ctx context.Context, inst chat.Installation, conver
 				if t := (*chat.TransientError)(nil); call > 0 && errors.As(err, &t) {
 					break
 				}
-				return nil, false, err
+				return nil, false, pageCallFailed(err)
 			}
 			for _, m := range out.Messages {
 				if inPage(m) {
@@ -503,7 +529,7 @@ func (p *Provider) FetchPage(ctx context.Context, inst chat.Installation, conver
 				} `json:"response_metadata"`
 			}
 			if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
-				return nil, false, err
+				return nil, false, pageCallFailed(err)
 			}
 			for _, m := range out.Messages {
 				if inPage(m) {

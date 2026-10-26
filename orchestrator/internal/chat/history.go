@@ -26,6 +26,9 @@ var (
 	// ErrPageTooFar is a page whose bound is further from where the
 	// provider lists from than a read scans: a nearer message is needed.
 	ErrPageTooFar = errors.New("that message is too far back or ahead to page to from here")
+	// ErrRateLimited is a read the provider rate-limited: the installation
+	// is healthy, the read is to be tried later.
+	ErrRateLimited = errors.New("the chat is rate limiting reads")
 )
 
 // HistoryMessage is one message read, quoted: its id (to page from), its
@@ -87,7 +90,7 @@ func (s *Service) ReadHistory(ctx context.Context, org, session, before, after s
 		thread, h.Scope = origin.ThreadID, "thread"
 	}
 	msgs, more, err := p.FetchPage(ctx, inst, origin.ConversationID, thread, Page{Before: before, After: after, Limit: HistoryPageMax})
-	if errors.Is(err, ErrPageTooFar) {
+	if errors.Is(err, ErrPageTooFar) || errors.Is(err, ErrRateLimited) {
 		return History{}, err
 	}
 	if err != nil {
