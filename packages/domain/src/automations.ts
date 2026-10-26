@@ -515,8 +515,8 @@ export interface AutomationToolCall {
   args: Record<string, unknown>;
   durationMs: number | null;
   error: string | null;
-  /** A post_to_chat that went: the channel as people read it ("#engineering") and the message's link. */
-  posted: { channel: string; permalink: string } | null;
+  /** A post_to_chat that went: the channel as people read it ("#engineering"), its id, the message's ts and link. */
+  posted: { channel: string; channelId: string; ts: string; permalink: string } | null;
 }
 
 /** Run now: nothing on a schedule; a past delivery or a written test event on GitHub events. */

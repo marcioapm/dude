@@ -353,7 +353,7 @@ describe("runs", () => {
         VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_d', 'orchestrator', ${at}::timestamptz, 'arn_d', ${{ ...payload, automationRunId: "arn_d" }})`;
     await ev("evt_d1", "agent.tool.dude", "2026-10-23T15:00:05Z", { tool: "github_comment", arguments: { issue: 12, body: "Looks good" }, result: {} });
     await ev("evt_d2", "agent.tool.attempted", "2026-10-23T15:03:12Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" } });
-    await ev("evt_d3", "slack.message.posted", "2026-10-23T15:03:12.640Z", { channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p1" });
+    await ev("evt_d3", "slack.message.posted", "2026-10-23T15:03:12.640Z", { channel: "#engineering", channelId: "C1", ts: "1.000100", permalink: "https://acme.slack.com/archives/C1/p1" });
     await ev("evt_d4", "agent.tool.dude", "2026-10-23T15:03:12.640Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" },
       result: { withheld: true }, attempted: true });
     // A post Slack refused spent its attempt first: timed from it.
@@ -364,7 +364,7 @@ describe("runs", () => {
     expect(run.toolCalls).toEqual([
       { id: "evt_d1", tool: "github_comment", at: "2026-10-23T15:00:05.000Z", status: "completed", args: { issue: 12 }, durationMs: null, error: null, posted: null },
       { id: "evt_d4", tool: "post_to_chat", at: "2026-10-23T15:03:12.000Z", status: "completed", args: { channel: "#engineering" }, durationMs: 640,
-        error: null, posted: { channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p1" } },
+        error: null, posted: { channel: "#engineering", channelId: "C1", ts: "1.000100", permalink: "https://acme.slack.com/archives/C1/p1" } },
       { id: "evt_d5", tool: "post_to_chat", at: "2026-10-23T15:03:59.700Z", status: "failed", args: { channel: "#random" }, durationMs: 300,
         error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude", posted: null },
     ]);

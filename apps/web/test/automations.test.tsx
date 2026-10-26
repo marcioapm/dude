@@ -578,6 +578,13 @@ describe("post_to_chat", () => {
     expect(link.getAttribute("target")).toBe("_blank");
     expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("1 tool call. Open one for its output.");
     expect(c.querySelector("[data-testid=run-failed]")).toBeNull();
+    // The note's "Open one" holds: the post opens to its answer.
+    const head = call.querySelector<HTMLElement>("[role=button][aria-expanded]");
+    expect(head?.getAttribute("aria-expanded")).toBe("false");
+    await click(head!);
+    expect(head!.getAttribute("aria-expanded")).toBe("true");
+    expect(call.textContent).toContain(`"channelId": "C0ENGINEER"`);
+    expect(call.textContent).toContain(`"ts": "1761318192.000100"`);
   });
 
   test("a run that failed on post_to_chat says so under Run, and the call shows its error", async () => {

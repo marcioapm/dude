@@ -49,7 +49,8 @@ const at = (ago: number, plusMs = 0) => new Date(Date.now() - ago + plusMs).toIS
 const DIGEST_CALLS: Record<string, AutomationToolCall[]> = {
   arn_d1: [
     { id: "evt_d1", tool: "post_to_chat", at: at(DIGEST_AGO, 192_000), status: "completed", args: { channel: "#engineering" }, durationMs: 640,
-      error: null, posted: { channel: "#engineering", permalink: "https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100" } },
+      error: null, posted: { channel: "#engineering", channelId: "C0ENGINEER", ts: "1761318192.000100",
+        permalink: "https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100" } },
   ],
   arn_d0: [
     { id: "evt_d0", tool: "post_to_chat", at: at(DIGEST_AGO + 7 * 24 * 60 * MIN, 178_000), status: "failed", args: { channel: "#engineering" },

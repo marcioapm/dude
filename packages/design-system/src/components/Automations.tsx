@@ -469,7 +469,7 @@ export interface AgentToolUnavailable {
 /**
  * The tools an automation's agent can call: a wrench, the mono name, an
  * info "New" badge when `fresh`, and its one line, in two columns that
- * stack below 720px. An unavailable tool keeps its row, with an attention
+ * stack when the list's own width is narrow (520px). An unavailable tool keeps its row, with an attention
  * Callout under it saying why, that runs calling it fail on the call, and
  * the fix as a link.
  */
@@ -478,25 +478,27 @@ export function AgentTools({ tools, unavailable }: {
   readonly unavailable?: Readonly<Record<string, AgentToolUnavailable>> | undefined;
 }) {
   return (
-    <ul className={styles["tools"]} aria-label="The agent's tools" data-testid="agent-tools">
-      {tools.map((t) => {
-        const off = unavailable?.[t.name];
-        return (
-          <li key={t.name} className={styles["tool"]} data-tool={t.name} data-unavailable={off ? "true" : undefined}>
-            <span className={styles["toolName"]}>
-              <Icon name="wrench" size={12} className={styles["kindIcon"]} />
-              <code className="ds-mono">{t.name}</code>
-              {t.fresh ? <Badge size="sm" tone="info">New</Badge> : null}
-            </span>
-            <span className={styles["toolWhat"]}>{t.what}</span>
-            {off ? (
-              <Callout tone="attention" className={styles["toolOff"]} data-testid="tool-unavailable">
-                <b>{off.why}.</b> Runs that call it fail on the call. <a href={off.fix.href}>{off.fix.label}</a>
-              </Callout>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
+    <div className={styles["toolsBox"]}>
+      <ul className={styles["tools"]} aria-label="The agent's tools" data-testid="agent-tools">
+        {tools.map((t) => {
+          const off = unavailable?.[t.name];
+          return (
+            <li key={t.name} className={styles["tool"]} data-tool={t.name} data-unavailable={off ? "true" : undefined}>
+              <span className={styles["toolName"]}>
+                <Icon name="wrench" size={12} className={styles["kindIcon"]} />
+                <code className="ds-mono">{t.name}</code>
+                {t.fresh ? <Badge size="sm" tone="info">New</Badge> : null}
+              </span>
+              <span className={styles["toolWhat"]}>{t.what}</span>
+              {off ? (
+                <Callout tone="attention" className={styles["toolOff"]} data-testid="tool-unavailable">
+                  <b>{off.why}.</b> Runs that call it fail on the call. <a href={off.fix.href}>{off.fix.label}</a>
+                </Callout>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

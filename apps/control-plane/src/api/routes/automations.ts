@@ -475,11 +475,12 @@ async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
     WHERE run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
     ORDER BY occurred_at, cursor`) as Array<{ id: string; type: string; at: Date; payload: Record<string, unknown> }>;
   const attempts = new Map<string, Date[]>();
-  const posts: Array<{ channel: string; permalink: string }> = [];
+  const posts: Array<{ channel: string; channelId: string; ts: string; permalink: string }> = [];
   for (const e of rows) {
     const tool = String(e.payload.tool ?? "");
     if (e.type === "agent.tool.attempted" && !e.payload.attempted) attempts.set(tool, [...(attempts.get(tool) ?? []), e.at]);
-    if (e.type === "slack.message.posted") posts.push({ channel: String(e.payload.channel ?? ""), permalink: String(e.payload.permalink ?? "") });
+    if (e.type === "slack.message.posted") posts.push({ channel: String(e.payload.channel ?? ""), channelId: String(e.payload.channelId ?? ""), ts: String(e.payload.ts ?? ""),
+      permalink: String(e.payload.permalink ?? "") });
   }
   // The attempt a call wrote before its outside work, when it wrote one: the
   // earliest of its tool's not yet taken that came before the call ended.

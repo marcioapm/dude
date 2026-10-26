@@ -1105,7 +1105,7 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
     <div data-testid="run-detail" className={runDetailClass}>
       <SettingsSection title="Run">
         <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span>
-          {run.costUsd !== null ? <span className="automationFact">· ${run.costUsd.toFixed(2)}</span> : null}</p>
+          {run.costUsd !== null ? <span className="automationRunCost">· ${run.costUsd.toFixed(2)}</span> : null}</p>
         {run.reason && failedCall ? (
           <Callout tone="danger" data-testid="run-failed">
             <b>Failed.</b> {run.reason}. Nothing was posted; {a.owner?.name ?? "its owner"} was told.
