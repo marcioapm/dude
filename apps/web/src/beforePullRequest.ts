@@ -21,8 +21,8 @@ export const sentBackFromGate = (task: GateFacts): boolean =>
 /** Why a task's choice can no longer change: a pull request is open. */
 export const PULL_REQUEST_OPEN_TEXT = "The pull request is already open.";
 
-/** A first name, for "Only Sam can change it." */
-export const firstName = (name: string) => name.split(" ")[0] ?? name;
+/** Why a finished task's choice can no longer change. */
+export const TASK_DONE_TEXT = "The task is done.";
 
 /** The label of the setting wherever it is shown. */
 export const BEFORE_PR_LABEL = "Before the pull request";

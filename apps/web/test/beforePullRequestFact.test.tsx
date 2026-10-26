@@ -90,4 +90,16 @@ test("anyone else reads the value, and whose it is", async () => {
   expect(f.querySelectorAll("[role=combobox]").length).toBe(0);
   expect(f.textContent).toContain("Open as draft");
   expect(f.textContent).toContain("Only Sam can change it.");
+  // A group named by its label, so the value is read with what it is.
+  expect(f.getAttribute("role")).toBe("group");
+  expect(document.getElementById(f.getAttribute("aria-labelledby")!)?.textContent).toBe("Before the pull request");
+});
+
+test("on a task that has ended it is locked: the task is done", async () => {
+  const client = new Running({ status: "done", resolution: "nothing_to_merge", pullRequestChoice: "ask", projectPullRequest: "open",
+    pullRequestOpened: false });
+  const page = await overview(client);
+  const f = fact(page);
+  expect(f.getAttribute("data-state")).toBe("locked");
+  expect(f.querySelector<HTMLElement>("[aria-label]")!.getAttribute("aria-label")).toBe("Before the pull request: Ask me first. The task is done.");
 });

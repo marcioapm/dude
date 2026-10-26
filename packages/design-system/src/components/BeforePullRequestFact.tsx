@@ -35,11 +35,12 @@ export function BeforePullRequestFact<T extends string>({
   const picked = options.find((o) => o.value === value);
   const note = state.kind === "locked" ? state.reason : state.kind === "read-only" ? `Only ${state.owner} can change it.` : hint;
   return (
-    <div className={styles["root"]} data-state={state.kind}>
+    <div className={styles["root"]} data-state={state.kind}
+      {...(state.kind === "read-only" ? { role: "group", "aria-labelledby": id } : {})}>
       {state.kind === "read-only" ? (
         <>
           <span className={styles["label"]} id={id}>{label}</span>
-          <span className={styles["value"]} aria-labelledby={id}>{picked?.label}</span>
+          <span className={styles["value"]}>{picked?.label}</span>
         </>
       ) : (
         <>

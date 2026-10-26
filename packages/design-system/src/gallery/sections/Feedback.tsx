@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FeedbackCodeAnchor, RunDiffFile } from "@dude/domain";
+import { PULL_REQUEST_CHOICE, PULL_REQUEST_CHOICES, type FeedbackCodeAnchor, type RunDiffFile } from "@dude/domain";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { LiveDiff, type DiffRange } from "../../components/LiveDiff.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
@@ -58,10 +58,8 @@ const CHIPS: EvidenceChip[] = [
   { id: "preview", icon: "globe", label: <><b>Preview</b> · open with commenting</>, name: "Open the preview with commenting", href: "https://web-142.preview.example.com/" },
 ];
 const FACT_OPTIONS = [
-  { value: "project", label: "Project default (Open it)", description: "When review, simplify and the test pass, Deliver opens the pull request." },
-  { value: "open", label: "Open it", description: "When review, simplify and the test pass, Deliver opens the pull request." },
-  { value: "draft", label: "Open as draft", description: "Deliver opens a draft pull request: no reviewers are asked, but CI still runs on most repositories." },
-  { value: "ask", label: "Ask me first", description: "Deliver stops for your review before the pull request: you open it, send feedback, or finish without one." },
+  { value: "project", label: `Project default (${PULL_REQUEST_CHOICE.open.label})`, description: PULL_REQUEST_CHOICE.open.hint },
+  ...PULL_REQUEST_CHOICES.map((value) => ({ value, label: PULL_REQUEST_CHOICE[value].label, description: PULL_REQUEST_CHOICE[value].hint })),
 ];
 
 /** A picture as the overlay draws one: the element alone on white, outlined. */

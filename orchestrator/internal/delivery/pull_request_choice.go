@@ -183,7 +183,7 @@ func (e ChoiceRefusal) Error() string { return e.Msg }
 // as person, its owner: refused for anyone else and once the current
 // attempt has a pull request. Returns whether it changed. The change is
 // read by the delivery at its gate; a delivery Deliver holds at the gate is
-// woken to read it (the caller signals, AtAskHold).
+// woken to read it (the caller signals, HeldByChoice).
 func SetPullRequestChoiceTx(ctx context.Context, tx pgx.Tx, org, taskID, choice string, actor Actor) (bool, error) {
 	if choice != "" && !IsPullRequestChoice(choice) {
 		return false, ChoiceRefusal{"bad_request", fmt.Sprintf("pullRequest is open, draft, ask or null, not %q", choice)}

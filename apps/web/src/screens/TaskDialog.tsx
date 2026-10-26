@@ -25,10 +25,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AttachDropZone, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, type MarkdownEditorHandle } from "@dude/design-system";
+import { AttachDropZone, Badge, firstName, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, type MarkdownEditorHandle } from "@dude/design-system";
 import { ATTACHMENT_LIMITS, DEFAULT_PULL_REQUEST_CHOICE, TASK_CRITERIA_MAX, TASK_GOAL_MAX, attachmentMarkdown, taskAttachmentIds, taskGoalShortBy, type PullRequestChoice } from "@dude/domain";
 import { ApiError, type ApiClient, type Epic, type Repository, type TaskDetail, type TaskFields, type TaskRepository, type TaskSource } from "../api/client.ts";
-import { BEFORE_PR_LABEL, PULL_REQUEST_OPEN_TEXT, choiceHint, firstName, taskChoice, taskChoiceOptions, type TaskPullRequestChoice } from "../beforePullRequest.ts";
+import { BEFORE_PR_LABEL, PULL_REQUEST_OPEN_TEXT, choiceHint, taskChoice, taskChoiceOptions, type TaskPullRequestChoice } from "../beforePullRequest.ts";
 import { StartsFromField, sourceDraft, sourceInput, useSourceCheck, useSourceRepositories, type SourceDraft } from "./StartsFrom.tsx";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
