@@ -40,6 +40,71 @@ func NoisyActionsJob() CheckRun {
 	}}
 }
 
+// WorkflowRun is a GitHub Actions run as a test sets one: its jobs are
+// check runs (by id, as CheckRuns and JobLogs name them).
+type WorkflowRun struct {
+	Name, Branch, Event, HeadSHA, Status, Conclusion string
+	Jobs                                             []WorkflowJob
+}
+
+// WorkflowJob is one job of a WorkflowRun; FailedSteps' steps failed, the
+// others succeeded.
+type WorkflowJob struct {
+	ID                       int64
+	Name, Status, Conclusion string
+	Steps, FailedSteps       []string
+}
+
+// SetWorkflowRun gives run id to the repository.
+func (s *Server) SetWorkflowRun(id int64, run WorkflowRun) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.WorkflowRuns == nil {
+		s.WorkflowRuns = map[int64]WorkflowRun{}
+	}
+	s.WorkflowRuns[id] = run
+}
+
+func (s *Server) workflowRun(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	s.mu.Lock()
+	run, ok := s.WorkflowRuns[id]
+	s.mu.Unlock()
+	if !ok {
+		fail(w, 404, "Not Found")
+		return
+	}
+	write(w, 200, map[string]any{"id": id, "name": run.Name, "head_branch": run.Branch, "head_sha": run.HeadSHA, "event": run.Event,
+		"status": run.Status, "conclusion": run.Conclusion, "html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, id)})
+}
+
+// workflowRunJobs answers a run's jobs; GitHub's filter=latest is the only
+// attempt the fake keeps.
+func (s *Server) workflowRunJobs(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	s.mu.Lock()
+	run, ok := s.WorkflowRuns[id]
+	s.mu.Unlock()
+	if !ok {
+		fail(w, 404, "Not Found")
+		return
+	}
+	jobs := []any{}
+	for _, j := range run.Jobs {
+		steps := []any{}
+		for i, name := range slices.Concat(j.Steps, j.FailedSteps) {
+			conclusion := "success"
+			if slices.Contains(j.FailedSteps, name) {
+				conclusion = "failure"
+			}
+			steps = append(steps, map[string]any{"name": name, "number": i + 1, "status": "completed", "conclusion": conclusion})
+		}
+		jobs = append(jobs, map[string]any{"id": j.ID, "run_id": id, "name": j.Name, "status": j.Status, "conclusion": j.Conclusion,
+			"html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d/job/%d", s.Slug, id, j.ID), "steps": steps})
+	}
+	write(w, 200, map[string]any{"total_count": len(jobs), "jobs": jobs})
+}
+
 // SetJobLog gives job id a log, served from downloads (LogDownloads' URL);
 // "" takes the log away, as GitHub does once it expires (410).
 func (s *Server) SetJobLog(id int64, log, downloads string) {

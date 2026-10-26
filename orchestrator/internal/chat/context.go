@@ -25,6 +25,8 @@ type threadContext struct {
 }
 
 type quotedMessage struct {
+	// The message's id at the provider.
+	ID     string `json:"id,omitempty"`
 	By     string `json:"by"`
 	Handle string `json:"handle,omitempty"`
 	Person string `json:"person,omitempty"`
@@ -212,7 +214,7 @@ func (s *Service) quoteMessages(ctx context.Context, org string, p Provider, ins
 	names := s.names(ctx, p, inst, append(strangers, bots...))
 	var out []quotedMessage
 	for _, msg := range msgs {
-		q := quotedMessage{Text: clip(msg.Text, 2000)}
+		q := quotedMessage{ID: msg.ID, Text: clip(msg.Text, 2000)}
 		switch person, ok := people[msg.UserID]; {
 		case msg.Bot:
 			q.App, q.By = true, firstNonEmpty(msg.BotName, names[msg.UserID], "an app")

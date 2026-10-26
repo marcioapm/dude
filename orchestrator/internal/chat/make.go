@@ -28,7 +28,10 @@ type Origin struct {
 	ConversationName string          `json:"conversationName"`
 	ConversationKind string          `json:"conversationKind"`
 	ThreadID         string          `json:"threadId"`
-	Permalink        string          `json:"permalink"`
+	// The mention was at the conversation's top level, not in a thread:
+	// its context is the channel before it.
+	TopLevel  bool            `json:"topLevel,omitempty"`
+	Permalink string          `json:"permalink"`
 	RequestedBy      string          `json:"requestedBy"`
 	Thread           []quotedMessage `json:"thread,omitempty"`
 	// The channel before a top-level mention, as quoted.
@@ -97,7 +100,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 	}
 	r.ID = ids.New(ids.ChatRequest)
 	origin := Origin{Provider: m.Provider, WorkspaceID: m.WorkspaceID, ConversationID: m.ConversationID, ConversationName: r.ConversationName,
-		ConversationKind: r.Kind, ThreadID: m.ThreadID, Permalink: r.Permalink, RequestedBy: r.UserName}
+		ConversationKind: r.Kind, ThreadID: m.ThreadID, TopLevel: topLevel(m), Permalink: r.Permalink, RequestedBy: r.UserName}
 	f := delivery.Filer{ActorType: "person", ActorID: who.Person, Person: who.Person}
 	return s.commit(ctx, org, p, inst, r, pick, func(tx pgx.Tx) error {
 		var reply Reply

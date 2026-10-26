@@ -527,7 +527,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 		if !ok {
 			return
 		}
-		root, oldest := str(a, "ts"), str(a, "oldest")
+		root, oldest, latest := str(a, "ts"), str(a, "oldest"), str(a, "latest")
 		var msgs []any
 		found := false
 		for _, m := range s.messages {
@@ -535,7 +535,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 				continue
 			}
 			found = found || m.TS == root
-			if oldest != "" && m.TS <= oldest {
+			if oldest != "" && m.TS <= oldest || latest != "" && m.TS >= latest {
 				continue
 			}
 			msgs = append(msgs, m.wire(team))

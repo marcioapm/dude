@@ -138,6 +138,11 @@ const (
 	rRefreshingTakesGithubReads            = "a refresh takes one GitHub read for each open pull request, %d here, and %d of the hour's %d are left: wait, or work with what pull_requests last read"
 	rProjectHiddenFromChat                 = "%s is hidden from what is started from %s: this session or task can't see it, its repositories, tasks or memory"
 	rTaskProjectHiddenFromChat             = "this task's project is hidden from what is started from %s: its tools can't reach it"
+	rChatHistoryBeforeOrAfter              = "page with before or with after, not both"
+	rChatHistoryNotFromChat                = "this session was not started from a chat: there is no conversation to read"
+	rChatHistoryNotInstalled               = "the chat this session came from is no longer connected to dude: its conversation can't be read; ask a member what it said"
+	rChatHistoryUnavailable                = "the chat did not answer: try again in a while, or work with what you have"
+	rChatHistoryAtMostReadsHour            = "at most %d chat reads an hour; this session has made them: wait, or work with what you read"
 	rRunIdRunFrom1OrItsLink                = "runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>)"
 	rRunLinkIsAnotherRepository            = "%s is a run of another repository than %s: leave repo out, or name the link's"
 )

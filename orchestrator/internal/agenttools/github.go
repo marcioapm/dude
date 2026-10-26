@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -64,7 +66,8 @@ func githubText(name string, data any) string { return githubTexts[name].Render(
 var githubTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
 	for _, name := range []string{"refused", "whose-task", "whose-session", "cut", "search-more", "issue-pull-request",
-		"comments-cut", "comments-newest-cut", "no-diff", "checks-cut", "reviews-cut", "threads-unknown", "files-cut", "budget-cut", "text-cut"} {
+		"comments-cut", "comments-newest-cut", "no-diff", "checks-cut", "reviews-cut", "threads-unknown", "files-cut", "budget-cut", "text-cut",
+		"run-jobs-next", "run-jobs-cut"} {
 		out[name] = delivery.MustText("results/github/" + name)
 	}
 	return out
@@ -92,6 +95,18 @@ type githubCheckLogIn struct {
 	Repo    string `json:"repo"`
 	CheckID int64  `json:"checkId"`
 }
+
+type githubRunJobsIn struct {
+	Repo string `json:"repo,omitempty"`
+	// A number, or a run's link (…/actions/runs/<id>[/job/<id>]).
+	RunID string `json:"runId"`
+}
+
+// runJobsMax bounds the jobs one github_run_jobs read lists.
+const runJobsMax = 100
+
+// actionsRunURL is a GitHub Actions run's link, as a report carries it.
+var actionsRunURL = regexp.MustCompile(`^https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/(\d+)(?:/attempts/\d+)?(?:/job/\d+)?/?(?:[?#].*)?$`)
 
 // githubRead is a read checked in the call's transaction: what to ask
 // GitHub, and how its ledger event names it.
@@ -122,6 +137,12 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 		}
 	} else if c.ProjectID != "" {
 		projects = []string{c.ProjectID}
+		// A task filed from chat reads nothing of a project hidden since.
+		f, err := fenceOf(ctx, tx, c)
+		if err != nil {
+			return nil, err
+		}
+		projects = f.Keep(projects)
 	}
 	rows, err := tx.Query(ctx, `SELECT url FROM repositories WHERE project_id = ANY($1) ORDER BY name`, projects)
 	if err != nil {
@@ -143,10 +164,10 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 // A session's and a task's GitHub reads in the last hour: the GitHub read
 // tools' and refresh_pull_requests' attempts (a refresh records one per pull
 // request it syncs). Both share one predicate, the WHERE of their partial
-// indexes (migrations 163-164), written with literals, as a parameter would
+// indexes (migrations 197-199), written with literals, as a parameter would
 // not prove the index's WHERE.
 const (
-	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'refresh_pull_requests')
+	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'github_run_jobs', 'refresh_pull_requests')
 		AND occurred_at > now() - interval '1 hour'`
 	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1` + githubReadsInHour
 	githubReadsByTask    = `SELECT count(*) FROM events WHERE task_id = $1` + githubReadsInHour
@@ -278,6 +299,27 @@ func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheck
 	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_check_log", Slug: in.Repo, CheckID: in.CheckID})
 }
 
+// readGitHubRunJobs takes a run's id, or its link: a link names its own
+// repository, which must agree with repo when both are given.
+func readGitHubRunJobs(ctx context.Context, tx pgx.Tx, c Caller, in githubRunJobsIn) (githubRead, error) {
+	given := strings.TrimSpace(in.RunID)
+	repo := strings.Trim(strings.TrimSpace(in.Repo), "/")
+	var id int64
+	if m := actionsRunURL.FindStringSubmatch(given); m != nil {
+		if repo != "" && !strings.EqualFold(repo, m[1]) {
+			return githubRead{}, refuse(rRunLinkIsAnotherRepository, given, repo)
+		}
+		repo = m[1]
+		id, _ = strconv.ParseInt(m[2], 10, 64)
+	} else if n, err := strconv.ParseInt(given, 10, 64); err == nil {
+		id = n
+	}
+	if id <= 0 {
+		return githubRead{}, refuseText(rRunIdRunFrom1OrItsLink)
+	}
+	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_run_jobs", Slug: repo, CheckID: id})
+}
+
 // readOnGitHub makes the read. GitHub refusing it, or its rate limit, is
 // said to the agent as a refusal.
 func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessage, error) {
@@ -316,6 +358,12 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 			return nil, githubRefusal(read, err)
 		}
 		out = w.checkLog(log)
+	case "github_run_jobs":
+		run, err := gh.RunJobs(ctx, read.Slug, read.CheckID, runJobsMax)
+		if err != nil {
+			return nil, githubRefusal(read, err)
+		}
+		out = w.runJobs(run)
 	default:
 		return nil, fmt.Errorf("no GitHub read %s", read.Tool)
 	}
@@ -431,7 +479,11 @@ func readPayload(read githubRead) map[string]any {
 		payload["number"] = read.Number
 	}
 	if read.CheckID > 0 {
-		payload["checkId"] = read.CheckID
+		key := "checkId"
+		if read.Tool == "github_run_jobs" {
+			key = "runId"
+		}
+		payload[key] = read.CheckID
 	}
 	if read.Tool == "github_search" {
 		payload["query"], payload["kind"] = read.Query, read.Kind
@@ -664,6 +716,40 @@ func (w wrapper) pullRequest(p forge.PullRequestRead, paths []string) map[string
 	return pr
 }
 
+// ghJobOut is one job of a run: id is the check run's, which
+// github_check_log reads.
+type ghJobOut struct {
+	ID          int64    `json:"id"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	Conclusion  string   `json:"conclusion,omitempty"`
+	FailedSteps []string `json:"failedSteps,omitempty"`
+	URL         string   `json:"url"`
+}
+
+// runJobs is a run and its jobs; names people chose (the workflow's, its
+// jobs' and steps', the branch) are quoted as external text.
+func (w wrapper) runJobs(r forge.WorkflowRun) map[string]any {
+	jobs := []ghJobOut{}
+	for _, j := range r.Jobs {
+		out := ghJobOut{ID: j.ID, Name: w.text(j.Name, 300), Status: j.Status, Conclusion: j.Conclusion, URL: j.URL}
+		for _, s := range j.FailedSteps {
+			out.FailedSteps = append(out.FailedSteps, w.text(s, 300))
+		}
+		jobs = append(jobs, out)
+	}
+	out := map[string]any{"run": map[string]any{"id": r.ID, "name": w.text(r.Name, 300), "branch": w.text(r.Branch, 300),
+		"event": r.Event, "headSha": r.HeadSHA, "status": r.Status, "conclusion": r.Conclusion, "url": r.URL},
+		"jobs": jobs, "next": githubText("run-jobs-next", nil), "external": w.note()}
+	if r.TotalJobs > len(r.Jobs) {
+		out["more"] = githubText("run-jobs-cut", struct {
+			Cut          string
+			Shown, Total int
+		}{cutMark, len(r.Jobs), r.TotalJobs})
+	}
+	return out
+}
+
 func (w wrapper) checkLog(log forge.CheckLogRead) map[string]any {
 	out := map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(log.Text, 16<<10), "external": w.note()}
 	// Why an Actions job's log was not read, in dude's words (forge.UnreadReason).
@@ -843,5 +929,7 @@ var githubReadTools = []tool{
 	around(define("github_pull_request", readGitHubPullRequest).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
 	around(define("github_check_log", readGitHubCheckLog).before(forgeFor).countingAttempts().withholdingResult(),
+		readOnGitHub, recordGitHubRead),
+	around(define("github_run_jobs", readGitHubRunJobs).before(forgeFor).countingAttempts().withholdingResult(),
 		readOnGitHub, recordGitHubRead),
 }

@@ -2,9 +2,12 @@ package slack_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 )
 
 // ciReport is a CI bot's nightly report as such bots post it: a short
@@ -46,6 +49,42 @@ func TestHistoryReadsTheChannelBeforeAMessageWithinItsWindow(t *testing.T) {
 	if _, err := p.FetchHistory(ctx, inst, "C9", mention, time.Hour, 30); err == nil {
 		t.Fatal("a conversation that is not there was read")
 	}
+}
+
+func TestAPageIsTheMessagesNearestItsBoundOldestFirst(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	var ts []string
+	for i := range 7 {
+		ts = append(ts, fake.Post("C1", "", "U2", fmt.Sprintf("m%d", i)))
+	}
+	reply := fake.Post("C1", ts[0], "U1", "in the thread")
+	texts := func(ms []chat.ThreadMessage) string {
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.Text)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, c := range []struct {
+		thread string
+		page   chat.Page
+		want   string
+		more   bool
+	}{
+		{"", chat.Page{Limit: 3}, "m4,m5,m6", true},
+		{"", chat.Page{Before: ts[4], Limit: 3}, "m1,m2,m3", true},
+		{"", chat.Page{Before: ts[2], Limit: 3}, "m0,m1", false},
+		{"", chat.Page{After: ts[1], Limit: 3}, "m2,m3,m4", true},
+		{ts[0], chat.Page{Limit: 30}, "m0,in the thread", false},
+		{ts[0], chat.Page{After: ts[0], Limit: 30}, "in the thread", false},
+	} {
+		got, more, err := p.FetchPage(ctx, inst, "C1", c.thread, c.page)
+		if err != nil || texts(got) != c.want || more != c.more {
+			t.Errorf("%+v in %q: %q more=%v (%v); want %q more=%v", c.page, c.thread, texts(got), more, err, c.want, c.more)
+		}
+	}
+	_ = reply
 }
 
 func TestABotsAttachmentsAndBlocksAreReadOnce(t *testing.T) {

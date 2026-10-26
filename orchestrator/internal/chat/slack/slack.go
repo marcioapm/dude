@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -410,6 +411,78 @@ func tsAfter(a, b string) bool {
 	x, _ := strconv.ParseFloat(a, 64)
 	y, _ := strconv.ParseFloat(b, 64)
 	return x > y
+}
+
+// pageScan bounds how many messages FetchPage reads to find a page: Slack
+// lists a thread oldest first and a channel newest first, whichever way the
+// page goes.
+const pageScan = 1000
+
+// FetchPage reads the messages of a thread (conversations.replies) or of a
+// channel's top level (conversations.history) between the page's bound and
+// the conversation's end that way, following Slack's cursor up to pageScan,
+// and keeps the Limit nearest the bound, oldest first.
+func (p *Provider) FetchPage(ctx context.Context, inst chat.Installation, conversation, thread string, page chat.Page) ([]chat.ThreadMessage, bool, error) {
+	method, args := "conversations.history", map[string]any{"channel": conversation, "limit": 200, "inclusive": false}
+	if thread != "" {
+		method, args["ts"] = "conversations.replies", thread
+	}
+	if page.Before != "" {
+		args["latest"] = page.Before
+	}
+	if page.After != "" {
+		args["oldest"] = page.After
+	}
+	var all []message
+	cursor, more := "", false
+	for len(all) < pageScan {
+		if cursor != "" {
+			args["cursor"] = cursor
+		}
+		var out struct {
+			Messages []message `json:"messages"`
+			HasMore  bool      `json:"has_more"`
+			Meta     struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
+			return nil, false, err
+		}
+		for _, m := range out.Messages {
+			if (page.Before != "" && !tsAfter(page.Before, m.TS)) || (page.After != "" && !tsAfter(m.TS, page.After)) {
+				continue
+			}
+			all = append(all, m)
+		}
+		more = out.HasMore
+		if cursor = out.Meta.NextCursor; cursor == "" {
+			break
+		}
+	}
+	slices.SortFunc(all, func(a, b message) int {
+		switch {
+		case tsAfter(b.TS, a.TS):
+			return -1
+		case tsAfter(a.TS, b.TS):
+			return 1
+		}
+		return 0
+	})
+	if len(all) > page.Limit {
+		more = true
+		// After a message: the first Limit after it; otherwise the latest.
+		if page.After == "" {
+			all = all[len(all)-page.Limit:]
+		} else {
+			all = all[:page.Limit]
+		}
+	}
+	out := make([]chat.ThreadMessage, 0, len(all))
+	for _, m := range all {
+		out = append(out, m.threadMessage())
+	}
+	return out, more, nil
 }
 
 // FetchHistory reads conversations.history: the messages before before

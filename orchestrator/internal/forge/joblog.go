@@ -214,6 +214,77 @@ func (g *GitHub) CheckLog(ctx context.Context, slug string, runID int64, limit i
 	return g.checkLogResult(ctx, slug, runID, run, limit)
 }
 
+// WorkflowRun is a GitHub Actions run with its latest attempt's jobs.
+type WorkflowRun struct {
+	ID                   int64
+	Name, Branch, Event  string
+	HeadSHA, Status, URL string
+	Conclusion           string
+	Jobs                 []WorkflowJob
+	// TotalJobs is how many jobs GitHub has, of which Jobs is the first page.
+	TotalJobs int
+}
+
+// WorkflowJob is one job of a run: its id is its check run's, which
+// CheckLog reads.
+type WorkflowJob struct {
+	ID                int64
+	Name, Status, URL string
+	Conclusion        string
+	FailedSteps       []string
+}
+
+// RunJobs reads Actions run runID of slug and the jobs of its latest
+// attempt, at most max of them.
+func (g *GitHub) RunJobs(ctx context.Context, slug string, runID int64, max int) (WorkflowRun, error) {
+	ctx = agentReadContext(ctx)
+	if err := g.readBudget(ctx, slug, "core"); err != nil {
+		return WorkflowRun{}, err
+	}
+	var run struct {
+		ID         int64  `json:"id"`
+		Name       string `json:"name"`
+		HeadBranch string `json:"head_branch"`
+		HeadSHA    string `json:"head_sha"`
+		Event      string `json:"event"`
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion"`
+		HTMLURL    string `json:"html_url"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs/%d", slug, runID), nil, &run); err != nil {
+		return WorkflowRun{}, err
+	}
+	var jobs struct {
+		Total int `json:"total_count"`
+		Jobs  []struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			HTMLURL    string `json:"html_url"`
+			Steps      []struct {
+				Name       string `json:"name"`
+				Conclusion string `json:"conclusion"`
+			} `json:"steps"`
+		} `json:"jobs"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=%d", slug, runID, max), nil, &jobs); err != nil {
+		return WorkflowRun{}, err
+	}
+	out := WorkflowRun{ID: run.ID, Name: run.Name, Branch: run.HeadBranch, Event: run.Event, HeadSHA: run.HeadSHA, Status: run.Status,
+		Conclusion: run.Conclusion, URL: run.HTMLURL, TotalJobs: jobs.Total}
+	for _, j := range jobs.Jobs[:min(len(jobs.Jobs), max)] {
+		job := WorkflowJob{ID: j.ID, Name: j.Name, Status: j.Status, Conclusion: j.Conclusion, URL: j.HTMLURL}
+		for _, s := range j.Steps {
+			if s.Conclusion == "failure" || s.Conclusion == "timed_out" || s.Conclusion == "cancelled" {
+				job.FailedSteps = append(job.FailedSteps, s.Name)
+			}
+		}
+		out.Jobs = append(out.Jobs, job)
+	}
+	return out, nil
+}
+
 // checkLogResult reads an Actions job's log whatever its check run said,
 // and keeps its check run's words before it, less the exit-code line the
 // log ends with. A log GitHub will not give leaves the check run's words

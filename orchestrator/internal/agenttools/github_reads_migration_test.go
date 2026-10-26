@@ -9,11 +9,11 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// Migrations 147 through 167 rebuild their indexes over the events already
+// Migrations 147 through 203 rebuild their indexes over the events already
 // there: each is valid, on its scope and time, holds the GitHub read
-// attempts (refresh_pull_requests' included) and nothing else, the indexes
-// before refresh_pull_requests counted are gone, and the hourly counts
-// checkGitHubRead runs count each scope's reads of the last hour.
+// attempts (refresh_pull_requests' and github_run_jobs' included) and
+// nothing else, the indexes before those counted are gone, and the hourly
+// counts checkGitHubRead runs count each scope's reads of the last hour.
 func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) {
 	owner, apply := dbtest.Upgrade(t, "147")
 	ctx := context.Background()
@@ -30,6 +30,7 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		{"evt_s3", "agent.tool.attempted", "github_pull_request", "ses_a", "", "59 minutes", true},
 		{"evt_s4", "agent.tool.attempted", "github_check_log", "ses_a", "", "2 minutes", true},
 		{"evt_s5", "agent.tool.attempted", "refresh_pull_requests", "ses_a", "", "3 minutes", true},
+		{"evt_s6", "agent.tool.attempted", "github_run_jobs", "ses_a", "", "4 minutes", true},
 		{"evt_s_old", "agent.tool.attempted", "github_issue", "ses_a", "", "61 minutes", true},
 		{"evt_s_other_tool", "agent.tool.attempted", "pull_requests", "ses_a", "", "1 minute", false},
 		{"evt_s_result", "agent.tool.dude", "github_issue", "ses_a", "", "1 minute", false},
@@ -62,8 +63,8 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 	}
 
 	for _, ix := range []struct{ name, scope string }{
-		{"events_session_github_reads_v2_idx", "session_id"},
-		{"events_task_github_reads_v2_idx", "task_id"},
+		{"events_session_github_reads_v3_idx", "session_id"},
+		{"events_task_github_reads_v3_idx", "task_id"},
 	} {
 		var valid bool
 		var columns []string
@@ -103,16 +104,17 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		}
 	}
 	var old int
-	if err := owner.QueryRow(ctx, `SELECT count(*) FROM pg_class WHERE relname IN ('events_session_github_reads_idx', 'events_task_github_reads_idx')`).
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM pg_class WHERE relname IN ('events_session_github_reads_idx', 'events_task_github_reads_idx',
+		'events_session_github_reads_v2_idx', 'events_task_github_reads_v2_idx', 'events_automation_github_reads_idx')`).
 		Scan(&old); err != nil || old != 0 {
-		t.Errorf("%d of the indexes refresh_pull_requests is not in remain (%v)", old, err)
+		t.Errorf("%d of the indexes refresh_pull_requests or github_run_jobs is not in remain (%v)", old, err)
 	}
 
 	for _, c := range []struct {
 		query, scope string
 		want         int
 	}{
-		{githubReadsBySession, "ses_a", 5},
+		{githubReadsBySession, "ses_a", 6},
 		{githubReadsBySession, "ses_b", 1},
 		{githubReadsBySession, "ses_none", 0},
 		{githubReadsByTask, "tsk_a", 4},
@@ -134,9 +136,9 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		if err := json.Unmarshal(plan, &nodes); err != nil {
 			t.Fatal(err)
 		}
-		want := "events_session_github_reads_v2_idx"
+		want := "events_session_github_reads_v3_idx"
 		if c.query == githubReadsByTask {
-			want = "events_task_github_reads_v2_idx"
+			want = "events_task_github_reads_v3_idx"
 		}
 		var uses func(map[string]any) bool
 		uses = func(node map[string]any) bool {

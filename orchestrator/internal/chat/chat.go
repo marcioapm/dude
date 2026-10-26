@@ -131,6 +131,13 @@ type ThreadMessage struct {
 	BotName string
 }
 
+// Page asks for the messages just Before one message, or just After one
+// (an empty After with no Before: from the start), at most Limit.
+type Page struct {
+	Before, After string
+	Limit         int
+}
+
 // Reply is what dude posts: words, and optionally a link with its label
 // (a button where the provider has them).
 type Reply struct {
@@ -202,6 +209,11 @@ type Provider interface {
 	// before (not it), newest first: at most limit, none older than within
 	// before it.
 	FetchHistory(ctx context.Context, inst Installation, conversation, before string, within time.Duration, limit int) ([]ThreadMessage, error)
+	// FetchPage is a page of a thread (thread "" for the conversation's
+	// top level), oldest first: at most limit messages just before message
+	// before, or just after message after (one of the two), and whether
+	// there are more that way.
+	FetchPage(ctx context.Context, inst Installation, conversation, thread string, page Page) ([]ThreadMessage, bool, error)
 	Conversation(ctx context.Context, inst Installation, conversation string) (ConversationInfo, error)
 	ListMembers(ctx context.Context, inst Installation, conversation string) ([]string, error)
 	User(ctx context.Context, inst Installation, userID string) (ExternalUser, error)

@@ -542,6 +542,26 @@ runId is the run's id, from 1, or its link (https://github.com/owner/name/action
 
 %s is a run of another repository than %s: leave repo out, or name the link's
 
+## refusals/tools/chat/history-at-most-reads-hour
+
+at most %d chat reads an hour; this session has made them: wait, or work with what you read
+
+## refusals/tools/chat/history-before-or-after
+
+page with before or with after, not both
+
+## refusals/tools/chat/history-not-from-chat
+
+this session was not started from a chat: there is no conversation to read
+
+## refusals/tools/chat/history-not-installed
+
+the chat this session came from is no longer connected to dude: its conversation can't be read; ask a member what it said
+
+## refusals/tools/chat/history-unavailable
+
+the chat did not answer: try again in a while, or work with what you have
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
