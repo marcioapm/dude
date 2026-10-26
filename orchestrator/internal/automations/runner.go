@@ -2124,8 +2124,8 @@ func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payl
 
 // automationRepos are what a run checks out: a project automation's
 // repositories (all, none or the ones named); an organisation's on a
-// schedule, every project's its filter covers; on an event, the event's
-// repository when one of the organisation's.
+// schedule, none when its repos is "none", else every project's its filter
+// covers; on an event, the event's repository when one of the organisation's.
 func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Payload) ([]phases.AutomationRepo, error) {
 	type repo struct{ ID, Name, URL, Branch, Setup string }
 	rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, COALESCE(setup_script, '') FROM repositories
@@ -2169,6 +2169,10 @@ func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Pa
 			}
 		}
 	default:
+		// An organisation schedule's Checked out None: an empty workspace.
+		if string(a.Repos) == `"none"` {
+			break
+		}
 		for _, r := range all {
 			if RepoAllowed(a.RepoFilter, slugOf(r.URL)) {
 				picked = append(picked, r)
