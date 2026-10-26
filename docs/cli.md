@@ -32,7 +32,8 @@ without it, see [Where keys are kept](#where-keys-are-kept).
 
 1. In dude, **Your settings → Keys → New key for <organisation>**. Name it
    for where it will live ("Laptop"); copy it, it is shown once.
-2. Log in with the dude's address, and paste the key when asked:
+2. Log in with the dude's address, and paste the key when asked (it is not
+   shown as you type or paste it):
 
    ```sh
    dude login https://dude.acme.dev

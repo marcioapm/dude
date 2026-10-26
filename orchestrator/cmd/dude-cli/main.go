@@ -155,6 +155,8 @@ func main() {
 		http:   apiClient(nil),
 		stdin:  os.Stdin,
 		out:    os.Stdout,
+		errOut: os.Stderr,
+		term:   osTerminal{int(os.Stdin.Fd())},
 	}
 	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 		c.prompt = func(s string) { fmt.Fprint(os.Stderr, s) }
@@ -179,6 +181,9 @@ type cli struct {
 	http   *http.Client
 	stdin  io.Reader
 	out    io.Writer
+	errOut io.Writer
+	// term, when stdin is a terminal, reads login's key without echo.
+	term   terminal
 	cached string
 	// prompt, when stdin is a terminal, asks for what is read next.
 	prompt func(string)

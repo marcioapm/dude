@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 func init() {
@@ -102,6 +104,43 @@ func oneOf(what, v string, allowed ...string) error {
 	return fmt.Errorf("%s is %s", what, strings.Join(allowed, ", "))
 }
 
+// terminal is stdin when it may be a terminal; tests replace it.
+type terminal interface {
+	isTerminal() bool
+	readPassword() ([]byte, error)
+}
+
+type osTerminal struct{ fd int }
+
+func (t osTerminal) isTerminal() bool              { return term.IsTerminal(t.fd) }
+func (t osTerminal) readPassword() ([]byte, error) { return term.ReadPassword(t.fd) }
+
+// readKey is login's key: typed without echo on a terminal, else the first
+// line of stdin.
+func (c *cli) readKey(prompt string) (string, error) {
+	if c.term != nil && c.term.isTerminal() {
+		fmt.Fprint(c.errOut, prompt)
+		b, err := c.term.readPassword()
+		fmt.Fprintln(c.errOut)
+		if err != nil {
+			return "", fmt.Errorf("login: reading the key: %w", err)
+		}
+		if key := strings.TrimSpace(string(b)); key != "" {
+			return key, nil
+		}
+		return "", errors.New("login: the key is empty")
+	}
+	line, rerr := bufio.NewReader(c.stdin).ReadString('\n')
+	key := strings.TrimSpace(line)
+	if key == "" {
+		if rerr != nil {
+			return "", errors.New("login: no key on stdin")
+		}
+		return "", errors.New("login: the key is empty")
+	}
+	return key, nil
+}
+
 var moreCommands = map[string]command{
 	// Credentials
 	"login": {"URL", "log in to an organisation on the dude at URL with a key from Your settings → Keys (read from stdin)",
@@ -112,16 +151,9 @@ var moreCommands = map[string]command{
 				if err != nil {
 					return nil, err
 				}
-				if c.prompt != nil {
-					c.prompt("Key for " + base + " (dude: Your settings → Keys): ")
-				}
-				line, rerr := bufio.NewReader(c.stdin).ReadString('\n')
-				key := strings.TrimSpace(line)
-				if key == "" {
-					if rerr != nil {
-						return nil, errors.New("login: no key on stdin")
-					}
-					return nil, errors.New("login: the key is empty")
+				key, err := c.readKey("Key for " + base + " (dude: Your settings → Keys): ")
+				if err != nil {
+					return nil, err
 				}
 				c.base, c.cached = base, key
 				me, err := c.getObj("/v1/me")

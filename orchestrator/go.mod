@@ -19,6 +19,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	golang.org/x/sys v0.46.0
+	golang.org/x/term v0.44.0
 )
 
 require (
