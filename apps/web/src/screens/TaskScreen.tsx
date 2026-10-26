@@ -102,6 +102,7 @@ import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
 import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, isAdoptedPr, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 import { SourceLine } from "./StartsFrom.tsx";
 import { HeldPanel, fixingFeedback, heldBeforePullRequest } from "./HeldPanel.tsx";
+import { BeforePullRequestControl } from "./BeforePullRequestControl.tsx";
 import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
@@ -866,7 +867,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     <span data-testid="task-source-mode-fact"> · {continues ? "Continue the work" : "Review it as is"}</span></span> }] : []),
                   // A task never started over names no attempt anywhere.
                   ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
-                ]} /></PageRailBlock>
+                ]} />
+                  {!earlier ? <BeforePullRequestControl client={client} task={item} you={people.you} onChanged={() => void load()} /> : null}
+                </PageRailBlock>
                 <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.
