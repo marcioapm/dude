@@ -281,6 +281,8 @@ type storedDecision struct {
 	Conv    *ConversationInfo `json:"conv,omitempty"`
 	Members []string          `json:"members,omitempty"`
 	Thread  *threadContext    `json:"thread,omitempty"`
+	// The channel before a top-level mention.
+	Channel *threadContext `json:"channel,omitempty"`
 }
 
 // route is the routing flow for one mention: installed, connected, a
@@ -388,13 +390,19 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 		}
 		slices.Sort(connected)
 	}
-	var thread threadContext
+	var h heard
 	if kept != nil && kept.Thread != nil {
-		thread = *kept.Thread
-	} else if thread, err = s.thread(ctx, org, p, inst, m); err != nil {
-		return err
+		h.Thread = *kept.Thread
+		if kept.Channel != nil {
+			h.Channel = *kept.Channel
+		}
+	} else {
+		if h.Thread, err = s.thread(ctx, org, p, inst, m); err != nil {
+			return err
+		}
+		h.Channel = s.channelBefore(ctx, org, p, inst, m)
 	}
-	r.ContextHash = thread.hash()
+	r.ContextHash = h.hash()
 	world, err := s.world(ctx, org, who.Person, m, conv.Kind, connected)
 	if err != nil {
 		return err
@@ -407,7 +415,7 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 		dec = Decide(a, world, r.Rounds, true, m.Text)
 		r.Reasoning, r.Confidence = "chosen in the clarifying question", ptr(1.0)
 	default:
-		got, err := s.decision(ctx, d, org, p, who, m, conv, r.members, thread, world)
+		got, err := s.decision(ctx, d, org, p, who, m, conv, r.members, h, world)
 		if err != nil {
 			return err
 		}
@@ -415,7 +423,7 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 		if got.Answer == nil {
 			// No answer, a proxy error or invalid JSON: a brainstorm.
 			r.Route, r.Reasoning = RouteFailed, "the routing call failed: "+got.Failed
-			return s.make(ctx, org, p, inst, who, r, thread, Decision{Route: RouteBrainstorm, Title: clip(trimmed(m.Text), 80)}, nil)
+			return s.make(ctx, org, p, inst, who, r, h, Decision{Route: RouteBrainstorm, Title: clip(trimmed(m.Text), 80)}, nil)
 		}
 		a = *got.Answer
 		r.Confidence, r.Reasoning = ptr(a.Confidence), a.Reasoning
@@ -433,7 +441,7 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 	if dec.Route == RouteClarify {
 		return s.clarify(ctx, org, p, inst, r, a, dec, pick)
 	}
-	return s.make(ctx, org, p, inst, who, r, thread, dec, pick)
+	return s.make(ctx, org, p, inst, who, r, h, dec, pick)
 }
 
 // decision is the routing judgement for the delivery: the one kept on it,
@@ -441,7 +449,7 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 // usable answer is kept as failed; only the delivery's own deadline
 // leaves nothing kept, for a retry to ask again.
 func (s *Service) decision(ctx context.Context, d claimed, org string, p Provider, who asker, m Mention, conv ConversationInfo,
-	members []string, t threadContext, w World) (storedDecision, error) {
+	members []string, h heard, w World) (storedDecision, error) {
 	var kept storedDecision
 	if len(d.Decision) > 0 && json.Unmarshal(d.Decision, &kept) == nil {
 		return kept, nil
@@ -450,11 +458,14 @@ func (s *Service) decision(ctx context.Context, d claimed, org string, p Provide
 	if err != nil {
 		return kept, err
 	}
-	res, err := s.ask(ctx, org, p, who, m, conv, t, w)
+	res, err := s.ask(ctx, org, p, who, m, conv, h, w)
 	if ctx.Err() != nil {
 		return kept, ctx.Err()
 	}
-	kept = storedDecision{CallID: res.CallID, Rounds: rounds, Conv: &conv, Members: members, Thread: &t}
+	kept = storedDecision{CallID: res.CallID, Rounds: rounds, Conv: &conv, Members: members, Thread: &h.Thread}
+	if len(h.Channel.Messages) > 0 {
+		kept.Channel = &h.Channel
+	}
 	if err != nil {
 		kept.Failed = clip(err.Error(), 900)
 	} else {

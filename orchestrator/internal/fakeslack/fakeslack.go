@@ -164,7 +164,7 @@ func methodScopes(method, kind string) []string {
 	switch method {
 	case "conversations.info", "conversations.members":
 		return byKind("channels:read", "groups:read", "mpim:read", "im:read")
-	case "conversations.replies":
+	case "conversations.replies", "conversations.history":
 		return byKind("channels:history", "groups:history", "mpim:history", "im:history")
 	case "chat.postMessage", "chat.postEphemeral", "chat.update":
 		return []string{"chat:write"}
@@ -257,6 +257,22 @@ func (s *Server) post(m Message) string {
 	}
 	s.messages = append(s.messages, m)
 	return m.TS
+}
+
+// PostAged adds a person's top-level message age before the fake's clock
+// (its messages are all at 1700000000), returning its ts.
+func (s *Server) PostAged(channel, user, text string, age time.Duration) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	ts := fmt.Sprintf("%d.%06d", 1700000000-int64(age/time.Second), s.seq)
+	s.messages = append(s.messages, Message{Channel: channel, TS: ts, ThreadTS: ts, User: user, Text: text})
+	return ts
+}
+
+func tsNum(ts string) float64 {
+	f, _ := strconv.ParseFloat(ts, 64)
+	return f
 }
 
 // BotMessages are the app's messages, in order.
@@ -529,6 +545,33 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 			return
 		}
 		reply(w, map[string]any{"messages": msgs, "response_metadata": map[string]any{"next_cursor": ""}})
+	case "conversations.history":
+		c, ok := conv()
+		if !ok {
+			return
+		}
+		latest, oldest := tsNum(str(a, "latest")), tsNum(str(a, "oldest"))
+		limit, _ := strconv.Atoi(str(a, "limit"))
+		if limit <= 0 {
+			limit = 100
+		}
+		var top []Message
+		for _, m := range s.messages {
+			if m.Channel != c.ID || m.ThreadTS != m.TS {
+				continue
+			}
+			ts := tsNum(m.TS)
+			if (str(a, "latest") != "" && ts >= latest) || (str(a, "oldest") != "" && ts <= oldest) {
+				continue
+			}
+			top = append(top, m)
+		}
+		sort.SliceStable(top, func(i, j int) bool { return tsNum(top[i].TS) > tsNum(top[j].TS) })
+		msgs := []any{}
+		for _, m := range top[:min(len(top), limit)] {
+			msgs = append(msgs, m.wire(team))
+		}
+		reply(w, map[string]any{"messages": msgs, "has_more": len(top) > limit})
 	case "users.info":
 		u, ok := s.users[str(a, "user")]
 		if !ok || u.Team != team {

@@ -31,7 +31,9 @@ type Origin struct {
 	Permalink        string          `json:"permalink"`
 	RequestedBy      string          `json:"requestedBy"`
 	Thread           []quotedMessage `json:"thread,omitempty"`
-	Routing          *routingFacts   `json:"routing,omitempty"`
+	// The channel before a top-level mention, as quoted.
+	Channel []quotedMessage `json:"channel,omitempty"`
+	Routing *routingFacts   `json:"routing,omitempty"`
 }
 
 type routingFacts struct {
@@ -52,9 +54,9 @@ type routingFacts struct {
 // A decision the database refuses (a relation, a project gone) is not
 // tried again: it becomes a brainstorm, and a brainstorm refused is
 // recorded as failed and the person told privately.
-func (s *Service) make(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, t threadContext, d Decision,
+func (s *Service) make(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, h heard, d Decision,
 	pick *picked) error {
-	err := s.makeOnce(ctx, org, p, inst, who, r, t, d, pick)
+	err := s.makeOnce(ctx, org, p, inst, who, r, h, d, pick)
 	if err == nil {
 		return nil
 	}
@@ -67,7 +69,7 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 		r.AskedRoute = d.Route
 		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + clip(err.Error(), 300) + ")")
 		fallback := Decision{Route: RouteBrainstorm, Title: d.Title, Project: d.Project}
-		if err = s.makeOnce(ctx, org, p, inst, who, r, t, fallback, pick); err == nil {
+		if err = s.makeOnce(ctx, org, p, inst, who, r, h, fallback, pick); err == nil {
 			return nil
 		}
 		if transient, _ := IsTransient(err); transient {
@@ -79,7 +81,7 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 	return s.commit(ctx, org, p, inst, r, pick, nil)
 }
 
-func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, t threadContext, d Decision,
+func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, h heard, d Decision,
 	pick *picked) error {
 	m := r.Mention
 	// A failed routing call is logged as failed, whatever it then made.
@@ -101,7 +103,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 		var reply Reply
 		switch d.Route {
 		case RouteBrainstorm:
-			id, title, err := s.startSession(ctx, tx, org, who, r, t, d, origin, members)
+			id, title, err := s.startSession(ctx, tx, org, who, r, h, d, origin, members)
 			if err != nil {
 				return err
 			}
@@ -115,7 +117,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 			if err := tx.QueryRow(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = $1`, d.Session).Scan(&title); err != nil {
 				return err
 			}
-			if err := sendToSession(ctx, tx, org, d.Session, who, m.Text, threadQuote(t), m.Provider); err != nil {
+			if err := sendToSession(ctx, tx, org, d.Session, who, m.Text, h.quote(), m.Provider); err != nil {
 				return err
 			}
 			r.ResultKind, r.ResultID = "session", d.Session
@@ -125,11 +127,11 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 			if d.Epic != nil {
 				epic = d.Epic.ID
 			}
-			id, key, err := delivery.CreateTaskTx(ctx, tx, org, d.Project.ID, f, epic, clip(d.Title, 200), withThread(d.Goal, t), d.Criteria)
+			id, key, err := delivery.CreateTaskTx(ctx, tx, org, d.Project.ID, f, epic, clip(d.Title, 200), withThread(d.Goal, h), d.Criteria)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE tasks SET origin = $2 WHERE id = $1`, id, withQuoted(origin, t)); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE tasks SET origin = $2 WHERE id = $1`, id, withQuoted(origin, h)); err != nil {
 				return err
 			}
 			r.ResultKind, r.ResultID = "task", id
@@ -206,19 +208,32 @@ func threadQuote(t threadContext) string {
 	return "Earlier in the thread:\n" + t.render()
 }
 
-// withQuoted is an origin carrying the thread as it was filed, for the
-// task page's quote of it.
-func withQuoted(o Origin, t threadContext) Origin {
-	o.Thread = t.Messages
+// quote is what a mention was said after, as the text put before it into a
+// session: the thread, or the channel before a top-level mention.
+func (h heard) quote() string {
+	if c := h.channel(); c != "" {
+		return "Earlier in the channel, before this message (not a thread):\n" + c
+	}
+	return threadQuote(h.Thread)
+}
+
+// withQuoted is an origin carrying the thread (or channel) as it was
+// filed, for the task page's quote of it.
+func withQuoted(o Origin, h heard) Origin {
+	o.Thread, o.Channel = h.Thread.Messages, h.Channel.Messages
 	return o
 }
 
-// withThread is a task's goal with the thread it came from quoted under it.
-func withThread(goal string, t threadContext) string {
-	if len(t.Messages) == 0 {
+// withThread is a task's goal with the thread or channel it came from
+// quoted under it.
+func withThread(goal string, h heard) string {
+	if c := h.channel(); c != "" {
+		return goal + "\n\n**From the channel, before the request:**\n\n" + c
+	}
+	if len(h.Thread.Messages) == 0 {
 		return goal
 	}
-	return goal + "\n\n**From the thread:**\n\n" + t.render()
+	return goal + "\n\n**From the thread:**\n\n" + h.Thread.render()
 }
 
 // startSession makes the session a brainstorm route asks for: owned by the
@@ -226,8 +241,8 @@ func withThread(goal string, t threadContext) string {
 // was made (a public channel's open to the organisation; a private
 // channel's or group's shared, as chat, with each connected member of the
 // conversation; a DM's private), its first message the mention with the
-// thread quoted.
-func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who asker, r *request, t threadContext,
+// thread (or the channel before it) quoted.
+func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who asker, r *request, h heard,
 	d Decision, origin Origin, members []string) (string, string, error) {
 	id := ids.New(ids.Session)
 	title := clip(trimmed(d.Title), 120)
@@ -267,7 +282,7 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who a
 			return "", "", err
 		}
 	}
-	origin.Thread = t.Messages
+	origin.Thread, origin.Channel = h.Thread.Messages, h.Channel.Messages
 	skippedNames := []string{}
 	for _, u := range r.Skipped {
 		if n, ok := r.memberNames[u]; ok {
@@ -282,7 +297,7 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who a
 		return "", "", err
 	}
 	full := r.Mention.Text
-	if q := threadQuote(t); q != "" {
+	if q := h.quote(); q != "" {
 		full = q + "\n\n" + full
 	}
 	wr := delivery.Writer{ActorType: "person", ActorID: who.Person, Person: who.Person, Via: map[string]any{"via": r.Mention.Provider}}

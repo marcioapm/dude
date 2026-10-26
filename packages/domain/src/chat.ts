@@ -56,6 +56,10 @@ export const chatOriginSchema = z.object({
   thread: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean(),
     app: z.boolean().optional() }))
     .optional(),
+  /** The channel before a request made outside a thread, as it was filed. */
+  channel: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean(),
+    app: z.boolean().optional() }))
+    .optional(),
 });
 export type ChatOrigin = z.infer<typeof chatOriginSchema>;
 

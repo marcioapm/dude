@@ -412,6 +412,34 @@ func tsAfter(a, b string) bool {
 	return x > y
 }
 
+// FetchHistory reads conversations.history: the messages before before
+// (latest, exclusive), back to within before it (oldest), newest first, at
+// most limit, in one page.
+func (p *Provider) FetchHistory(ctx context.Context, inst chat.Installation, conversation, before string, within time.Duration,
+	limit int) ([]chat.ThreadMessage, error) {
+	secs, frac, _ := strings.Cut(before, ".")
+	at, err := strconv.ParseInt(secs, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("slack conversations.history: %q is not a message timestamp", before)
+	}
+	oldest := strconv.FormatInt(at-int64(within/time.Second), 10)
+	if frac != "" {
+		oldest += "." + frac
+	}
+	args := map[string]any{"channel": conversation, "latest": before, "inclusive": false, "oldest": oldest, "limit": limit}
+	var page struct {
+		Messages []message `json:"messages"`
+	}
+	if err := p.call(ctx, inst.Token, "conversations.history", args, &page); err != nil {
+		return nil, err
+	}
+	out := make([]chat.ThreadMessage, 0, len(page.Messages))
+	for _, m := range page.Messages[:min(len(page.Messages), limit)] {
+		out = append(out, m.threadMessage())
+	}
+	return out, nil
+}
+
 // Conversation reads conversations.info: a public channel, a private one,
 // a group DM or a DM.
 func (p *Provider) Conversation(ctx context.Context, inst chat.Installation, conversation string) (chat.ConversationInfo, error) {

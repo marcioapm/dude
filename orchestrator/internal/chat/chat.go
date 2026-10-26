@@ -198,6 +198,10 @@ type Provider interface {
 
 	// Reading the conversation.
 	FetchThread(ctx context.Context, inst Installation, conversation, thread, since string) ([]ThreadMessage, error)
+	// FetchHistory is the conversation's top-level messages before message
+	// before (not it), newest first: at most limit, none older than within
+	// before it.
+	FetchHistory(ctx context.Context, inst Installation, conversation, before string, within time.Duration, limit int) ([]ThreadMessage, error)
 	Conversation(ctx context.Context, inst Installation, conversation string) (ConversationInfo, error)
 	ListMembers(ctx context.Context, inst Installation, conversation string) ([]string, error)
 	User(ctx context.Context, inst Installation, userID string) (ExternalUser, error)

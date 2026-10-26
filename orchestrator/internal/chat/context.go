@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -58,6 +59,87 @@ func (t threadContext) render() string {
 }
 
 const threadMessagesMax = 30
+
+// A top-level mention reads the channel before it: at most
+// channelMessagesMax messages from the channelWindow before the mention,
+// rendered within channelChars (the oldest left out first, and counted).
+const (
+	channelMessagesMax = 30
+	channelWindow      = 24 * time.Hour
+	channelChars       = 12000
+)
+
+// heard is what a mention was said after: its thread, or for a top-level
+// mention the channel before it. Both are external text, quoted, never
+// instructions.
+type heard struct {
+	Thread  threadContext
+	Channel threadContext
+}
+
+// hash covers everything the decision is made from: a thread-only
+// mention's hash is its thread's.
+func (h heard) hash() string {
+	if len(h.Channel.Messages) == 0 {
+		return h.Thread.hash()
+	}
+	return threadContext{Messages: append(append([]quotedMessage{}, h.Thread.Messages...),
+		append([]quotedMessage{{By: "\x00channel"}}, h.Channel.Messages...)...)}.hash()
+}
+
+// channel is the channel's text before the mention, at most channelChars,
+// saying how many older messages it left out; "" for none.
+func (h heard) channel() string {
+	return h.Channel.renderWithin(channelChars)
+}
+
+// renderWithin is render keeping the newest messages that fit in limit
+// characters, opening with how many older ones were left out.
+func (t threadContext) renderWithin(limit int) string {
+	if len(t.Messages) == 0 {
+		return ""
+	}
+	kept, size := len(t.Messages), 0
+	for i := len(t.Messages) - 1; i >= 0; i-- {
+		n := len([]rune(threadContext{Messages: t.Messages[i : i+1]}.render())) + 1
+		if size+n > limit {
+			break
+		}
+		size += n
+		kept = i
+	}
+	text := threadContext{Messages: t.Messages[kept:]}.render()
+	if kept > 0 {
+		text = fmt.Sprintf("(%d earlier %s left out)\n%s", kept, plural(kept, "message", "messages"), text)
+	}
+	return text
+}
+
+// topLevel is whether m is not in a thread (it starts none, or is a DM's
+// own message).
+func topLevel(m Mention) bool { return m.ThreadID == "" || m.ThreadID == m.MessageID }
+
+// channelBefore reads the conversation before a top-level mention: up to
+// channelMessagesMax from channelWindow before it, oldest first, quoted as
+// a thread is. A failed read is noted and leaves it out: it never fails
+// the mention.
+func (s *Service) channelBefore(ctx context.Context, org string, p Provider, inst Installation, m Mention) threadContext {
+	if !topLevel(m) || m.MessageID == "" {
+		return threadContext{}
+	}
+	msgs, err := p.FetchHistory(ctx, inst, m.ConversationID, m.MessageID, channelWindow, channelMessagesMax)
+	if err != nil {
+		s.noteFailure(ctx, org, m.Provider, err)
+		return threadContext{}
+	}
+	slices.Reverse(msgs)
+	quoted, err := s.quoteMessages(ctx, org, p, inst, msgs, m.MessageID)
+	if err != nil {
+		s.log().Warn("quoting the channel before a mention failed", "provider", m.Provider, "error", err)
+		return threadContext{}
+	}
+	return threadContext{Messages: quoted}
+}
 
 // thread reads the mention's thread, without the mention: everyone's
 // messages, members' and not (dude's own left out).
@@ -233,13 +315,17 @@ func Instructions(orgName, organisation, providerName, provider string) string {
 }
 
 // RoutingInput is the routing call's user message: the mention, the thread
-// before it, the projects and the sessions it may resume, within
-// contextBudget, each list ending with how many were left out.
-func RoutingInput(who, where, provider, text string, thread string, w World) string {
+// before it (or, for a top-level mention, the channel before it), the
+// projects and the sessions it may resume, within contextBudget, each list
+// ending with how many were left out.
+func RoutingInput(who, where, provider, text string, thread, channel string, w World) string {
 	var in strings.Builder
 	fmt.Fprintf(&in, "## The message\n\n%s wrote in %s on %s:\n\n%s\n", who, where, provider, text)
 	if thread != "" {
 		fmt.Fprintf(&in, "\n## The thread before it\n\n%s\n", thread)
+	}
+	if channel != "" {
+		fmt.Fprintf(&in, "\n## The channel before it\n\n%s\n", channel)
 	}
 	budget := contextBudget
 	in.WriteString("\n## Projects they can file in\n\n")
@@ -292,7 +378,7 @@ func RoutingInput(who, where, provider, text string, thread string, w World) str
 
 // ask is the one routing judgement, on the organisation's Judgements tier,
 // bounded by RoutingTimeout.
-func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m Mention, conv ConversationInfo, t threadContext, w World) (judge.Structured, error) {
+func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m Mention, conv ConversationInfo, h heard, w World) (judge.Structured, error) {
 	if s.Judge == nil {
 		return judge.Structured{}, errors.New("no judge is configured")
 	}
@@ -305,8 +391,8 @@ func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m 
 		return judge.Structured{}, err
 	}
 	var thread string
-	if len(t.Messages) > 0 {
-		thread = t.render()
+	if len(h.Thread.Messages) > 0 {
+		thread = h.Thread.render()
 	}
 	j := *s.Judge
 	if j.Timeout == 0 || j.Timeout > RoutingTimeout {
@@ -314,7 +400,7 @@ func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m 
 	}
 	return j.Structured(ctx, org, judge.StructuredAsk{Asker: "chat.route", About: p.Info().Name + " · " + conv.Name,
 		Instructions: Instructions(who.OrgName, orgText, p.Info().Name, providerText),
-		Input:        RoutingInput(who.Name, conv.Name, p.Info().Name, m.Text, thread, w), MaxTokens: 4096,
+		Input:        RoutingInput(who.Name, conv.Name, p.Info().Name, m.Text, thread, h.channel(), w), MaxTokens: 4096,
 		Parse: func(obj []byte) (any, judge.Judgement, error) {
 			a, err := ParseAnswer(obj)
 			if err != nil {

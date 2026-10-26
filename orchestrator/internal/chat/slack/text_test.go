@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ciReport is a CI bot's nightly report as such bots post it: a short
@@ -24,6 +25,27 @@ func ciReport() (text string, attachments, blocks []any) {
 			"text": "Open run"}, "url": "https://github.com/acme/api/actions/runs/812"}}},
 	}
 	return
+}
+
+func TestHistoryReadsTheChannelBeforeAMessageWithinItsWindow(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	old := fake.PostAged("C1", "U2", "two days ago", 48*time.Hour)
+	first := fake.Post("C1", "", "U2", "first")
+	fake.Post("C1", first, "U1", "a reply in its thread")
+	second := fake.Post("C1", "", "U1", "second")
+	mention := fake.Post("C1", "", "U1", "<@UBT1> look above")
+	fake.Post("C1", "", "U2", "after")
+	got, err := p.FetchHistory(ctx, inst, "C1", mention, 24*time.Hour, 30)
+	if err != nil || len(got) != 2 || got[0].ID != second || got[1].ID != first {
+		t.Fatalf("history %+v, %v (old %s)", got, err, old)
+	}
+	if got, err = p.FetchHistory(ctx, inst, "C1", mention, 24*time.Hour, 1); err != nil || len(got) != 1 || got[0].ID != second {
+		t.Fatalf("limited %+v, %v", got, err)
+	}
+	if _, err := p.FetchHistory(ctx, inst, "C9", mention, time.Hour, 30); err == nil {
+		t.Fatal("a conversation that is not there was read")
+	}
 }
 
 func TestABotsAttachmentsAndBlocksAreReadOnce(t *testing.T) {
