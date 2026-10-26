@@ -173,3 +173,38 @@ func TestRunDiffReadsAPeersStoredSnapshotAndRefusesAnyOtherTask(t *testing.T) {
 		t.Errorf("a peer's current Run: %s", got.Run)
 	}
 }
+
+// A peer in a project hidden from the chat the caller's task came from is
+// no peer of it: list_tasks with peers leaves it out, and message and
+// run_diff naming it are refused as naming no peer. Nothing ties an epic's
+// tasks to its project, so the peer is put in another project by hand.
+func TestAPeerInAProjectHiddenFromTheTasksChatIsNoPeer(t *testing.T) {
+	f := setup(t)
+	ids := f.onEpic(t)
+	token := f.runOn(t, "run_me", f.item, "implement", "implementer", "running")
+	f.runOn(t, "run_two", ids["TEXT-2"], "implement", "implementer", "running")
+	full, _ := gitDiff("api.ts", 3, 1)
+	f.storeDiff(t, "run_two", full)
+	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'sec', $1, 'SEC')`, "prj_sec_"+f.org, f.org)
+	mustExec(t, f.owner, `UPDATE tasks SET project_id = $2, number = 7 WHERE id = $1`, ids["TEXT-2"], "prj_sec_"+f.org)
+	mustExec(t, f.owner, `UPDATE runs SET project_id = $1 WHERE id = 'run_two'`, "prj_sec_"+f.org)
+	mustExec(t, f.owner, `UPDATE tasks SET origin = '{"provider":"slack"}' WHERE id = $1`, f.item)
+	// Not hidden yet: SEC-7 is a peer, so what follows is the fence's doing.
+	if got := f.peers(t, token); got["SEC-7"].Key != "SEC-7" {
+		t.Fatalf("peers before hiding SEC: %+v", got)
+	}
+	if got := f.diff(t, token, `{"task":"SEC-7"}`); got.Run != "run_two" {
+		t.Fatalf("run_diff of SEC-7 before hiding SEC: %+v", got)
+	}
+	mustExec(t, f.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, f.org, "prj_sec_"+f.org)
+	if got := f.peers(t, token); got["SEC-7"].Key != "" || len(got) != 2 {
+		t.Errorf("peers once SEC is hidden: %+v, want TEXT-1 and TEXT-3", got)
+	}
+	if status, out := f.post(t, token, "message", `{"to":"SEC-7","text":"which body?"}`); status != 422 ||
+		!strings.Contains(out["error"].(string), "not one of your peers") {
+		t.Errorf("message to SEC-7: %d %v", status, out)
+	}
+	if status, raw := f.diffCall(t, token, `{"task":"SEC-7"}`); status != 422 || !strings.Contains(raw, "not one of your peers") {
+		t.Errorf("run_diff of SEC-7: %d %s", status, raw)
+	}
+}
