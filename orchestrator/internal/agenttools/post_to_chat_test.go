@@ -478,6 +478,41 @@ func TestPostToChatLooksTheChannelUpAgainAfterSlackSaysItIsGone(t *testing.T) {
 	}
 }
 
+// A channel the lookup refused writes no call, but still counts toward the
+// run's 60 calls a minute: the 61st is refused before Slack is asked.
+func TestPostToChatLookupRefusalsCountTowardTheMinutesCalls(t *testing.T) {
+	c := setupChat(t, true)
+	for i := range 60 {
+		if status, out := c.postToChat(t, "#nowhere", fmt.Sprintf("guess %d", i)); status != 422 ||
+			!strings.HasPrefix(fmt.Sprint(out["error"]), "there is no channel #nowhere") {
+			t.Fatalf("guess %d: %d %v", i, status, out)
+		}
+	}
+	before := c.fake.Calls("conversations.list")
+	status, out := c.postToChat(t, "#nowhere", "one more")
+	if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "too many calls: at most 60 a minute") {
+		t.Fatalf("the 61st: %d %v", status, out)
+	}
+	if n := c.fake.Calls("conversations.list") - before; n != 0 {
+		t.Errorf("the 61st looked the channel up: %d conversations.list calls", n)
+	}
+}
+
+// Only lookup refusals are added to the minute's calls: a post Slack refused
+// is counted once, by its attempt, not again by its refusal.
+func TestPostToChatCountsAPostSlackRefusedOnceTowardTheMinute(t *testing.T) {
+	c := setupChat(t, true)
+	for i := range 30 {
+		mustExec(t, c.owner, `INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, run_id, payload) VALUES
+			($1, $3, $4, 'agent', 'arn_digest', 'orchestrator', 'arn_digest', '{"tool":"github_comment"}'),
+			($2, $3, $5, 'agent', 'arn_digest', 'orchestrator', 'arn_digest', '{"tool":"post_to_chat","channel":"#engineering"}')`,
+			fmt.Sprintf("evt_att%02d", i), fmt.Sprintf("evt_ref%02d", i), c.org, agenttools.AttemptEventType, agenttools.EvSlackPostRefused)
+	}
+	if status, out := c.postToChat(t, "#engineering", "30 calls this minute"); status != 200 {
+		t.Fatalf("after 30 calls and their 30 refusals: %d %v", status, out)
+	}
+}
+
 // Only an automation's agent has the tool.
 func TestPostToChatIsAnAutomationsTool(t *testing.T) {
 	c := setupChat(t, true)
