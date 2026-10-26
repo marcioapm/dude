@@ -40,19 +40,46 @@ func PullRequestOpenedTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, e
 }
 
 // PullRequestChoiceTx is what Deliver does before the task's pull request
-// now: the task's own choice, else its project's, else open (PolicyFor).
+// now: the task's own choice whatever its project's policy says, else its
+// project's (PolicyFor). A project policy that no longer resolves leaves
+// nothing to follow: ChoiceUnresolved.
 func PullRequestChoiceTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	var own *string
+	err := tx.QueryRow(ctx, `SELECT pull_request_choice FROM tasks WHERE id = $1`, taskID).Scan(&own)
+	if db.IsNotFound(err) {
+		return "", TaskNotFound{taskID}
+	}
+	if err != nil {
+		return "", err
+	}
+	if own != nil && IsPullRequestChoice(*own) {
+		return *own, nil
+	}
 	_, p, err := PolicyFor(ctx, tx, taskID)
 	var notFound TaskNotFound
 	if errors.As(err, &notFound) {
 		return "", err
 	}
-	if err != nil || !IsPullRequestChoice(p.PullRequest) {
-		// A project policy that does not resolve opens as it always did.
-		return PullRequestOpen, nil
+	if err != nil {
+		return "", ChoiceUnresolved{err}
+	}
+	if !IsPullRequestChoice(p.PullRequest) {
+		return "", ChoiceUnresolved{fmt.Errorf("pullRequest %q", p.PullRequest)}
 	}
 	return p.PullRequest, nil
 }
+
+// ChoiceUnresolved is a task with no choice of its own whose project's
+// policy does not resolve: Deliver cannot tell whether to ask, so the
+// opening escalates (ReasonChoiceUnresolved) rather than open.
+type ChoiceUnresolved struct{ Err error }
+
+func (e ChoiceUnresolved) Error() string { return "before the pull request: " + e.Err.Error() }
+func (e ChoiceUnresolved) Unwrap() error { return e.Err }
+
+// ReasonChoiceUnresolved is the escalation of an opening whose choice
+// before the pull request could not be read (ChoiceUnresolved).
+const ReasonChoiceUnresolved = "pull_request_choice_unresolved"
 
 // FirstPullRequestChoice is the task's choice before its pull request, as
 // the step that opens it reads it: "" once the current attempt has had a
@@ -87,6 +114,10 @@ func (w *steps) choiceReleased(ctx context.Context, sc workflow.StepContext, st 
 		return false, nil
 	}
 	choice, err := w.s.FirstPullRequestChoice(ctx, sc.OrganizationID, st.TaskID)
+	if errors.As(err, new(ChoiceUnresolved)) {
+		// Nothing says to stop asking: the hold stays.
+		return false, nil
+	}
 	if err != nil || choice == PullRequestAsk || choice == "" {
 		return false, err
 	}
@@ -113,6 +144,9 @@ func choiceReleasedAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepCo
 		return res, false, nil
 	}
 	choice, err := firstPullRequestChoiceTx(ctx, tx, st.TaskID)
+	if errors.As(err, new(ChoiceUnresolved)) {
+		return res, false, nil
+	}
 	if err != nil || choice == PullRequestAsk || choice == "" {
 		return res, false, err
 	}

@@ -207,6 +207,41 @@ func TestAChoiceChangedWhileEnteringTheHoldOpensThePullRequest(t *testing.T) {
 	}
 }
 
+// The project's policy stops resolving after the delivery started (a
+// reviewer key since removed). A task whose own choice is Ask me first is
+// still held; one with no choice of its own escalates instead of opening.
+func TestAnUnresolvedProjectPolicyNeverOpensPastTheChoice(t *testing.T) {
+	for _, own := range []string{delivery.PullRequestAsk, ""} {
+		t.Run("own="+own, func(t *testing.T) {
+			w := newWorld(t)
+			ana := w.person("Ana")
+			task := w.task()
+			w.assignOwner(task, ana)
+			if own != "" {
+				if code, out := w.putAs(ana, "/internal/tasks/"+task+"/pull-request-choice", map[string]any{"choice": own}); code != 200 {
+					t.Fatalf("the owner's choice: %d %v", code, out)
+				}
+			}
+			w.deliver(task)
+			mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"alwaysReviewers":["no-such-reviewer"]}'::jsonb WHERE id = $1`, w.project)
+			if own != "" {
+				w.until("the hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
+				if n := len(w.gh.Pulls()); n != 0 {
+					t.Fatalf("%d pull requests opened under the task's own Ask me first", n)
+				}
+				return
+			}
+			w.until("the escalation", func() bool { return w.escalationReason(task) != "" || len(w.gh.Pulls()) > 0 })
+			if r := w.escalationReason(task); r != delivery.ReasonChoiceUnresolved {
+				t.Fatalf("escalation %q, want %q", r, delivery.ReasonChoiceUnresolved)
+			}
+			if n := len(w.gh.Pulls()); n != 0 {
+				t.Fatalf("%d pull requests opened with the choice unresolved", n)
+			}
+		})
+	}
+}
+
 // The owner's Open authorizes the heads they saw. Heads that moved before
 // the opening step ran are not opened: the hold asks again.
 func TestAHoldWhoseHeadsMovedAsksAgain(t *testing.T) {

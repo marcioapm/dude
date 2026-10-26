@@ -2,6 +2,7 @@ package delivery_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -93,6 +94,33 @@ func TestATasksPullRequestChoiceIsItsOwnersUntilAPullRequestOpens(t *testing.T) 
 	// repository's, a re-open) opens as Deliver always has.
 	if got, err := store.FirstPullRequestChoice(ctx, org, "wi_c"); err != nil || got != "" {
 		t.Fatalf("with a pull request on record the opening reads %q, %v", got, err)
+	}
+}
+
+// A project's policy that stopped resolving: the task's own choice still
+// stands; with none, the choice is unresolved, never Open it.
+func TestAChoiceWhoseProjectPolicyDoesNotResolve(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	exec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, delivery_policy)
+		VALUES ('prj_u', $1, 'P', 'p', 'UNR', '{"alwaysReviewers":["no-such-reviewer"]}')`, org)
+	exec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, pull_request_choice)
+		VALUES ('wi_own', $1, 'prj_u', 1, 'T', 'G', 'ask'), ('wi_none', $1, 'prj_u', 2, 'T', 'G', NULL)`, org)
+	read := func(task string) (string, error) {
+		var got string
+		err := app.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+			got, err = delivery.PullRequestChoiceTx(ctx, tx, task)
+			return err
+		})
+		return got, err
+	}
+	if got, err := read("wi_own"); err != nil || got != delivery.PullRequestAsk {
+		t.Fatalf("the task's own ask under a broken project policy = %q, %v", got, err)
+	}
+	got, err := read("wi_none")
+	if !errors.As(err, new(delivery.ChoiceUnresolved)) || got != "" {
+		t.Fatalf("no choice of its own under a broken project policy = %q, %v; want ChoiceUnresolved", got, err)
 	}
 }
 

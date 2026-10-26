@@ -229,6 +229,12 @@ export function escalationWords(e: Escalation): EscalationWords {
     case "source_changed":
       // The orchestrator's reason names what changed and the two ways on.
       return { short: "Adopted work changed on GitHub", sentence: typeof d.reason === "string" && d.reason ? d.reason : "Delivery stopped: source changed.", runId };
+    case "pull_request_choice_unresolved":
+      return {
+        short: "Before the pull request: unreadable",
+        sentence: "The project's delivery settings no longer resolve, so dude cannot tell whether to ask before opening the pull request. Fix the project's settings, or set the task's own choice, then try again.",
+        runId,
+      };
     default: {
       const words = e.reason.replaceAll("_", " ");
       return { short: words.charAt(0).toUpperCase() + words.slice(1), sentence: `Delivery stopped: ${words}.`, runId };

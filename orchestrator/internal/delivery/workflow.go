@@ -1577,6 +1577,9 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		// first holds as a gate the conductor entered does; Open as draft
 		// opens a draft. Never once the attempt has had a pull request.
 		choice, err := w.s.FirstPullRequestChoice(ctx, sc.OrganizationID, st.TaskID)
+		if unresolved := (ChoiceUnresolved{}); errors.As(err, &unresolved) {
+			return w.escalate(ctx, sc, st, ReasonChoiceUnresolved, map[string]any{"error": unresolved.Err.Error()})
+		}
 		if err != nil {
 			return workflow.Result{}, err
 		}
@@ -2949,6 +2952,9 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	case ReasonTestFailedCriteria, ReasonNotConverging:
 		// One more fix round; a blocked test's retry is the tester again.
 		st.Escalation.Step = "fix"
+	case ReasonChoiceUnresolved:
+		// The opening, which reads the choice again.
+		st.Escalation.Step = "openPullRequest"
 	}
 	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") {
 		// A Run failed, and lux keeps it: the step waiting on it can wait on
