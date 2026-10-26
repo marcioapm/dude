@@ -4,9 +4,16 @@ package agenttools
 // the organisation's chat installation (its bot), at most postsPerRun times
 // a run. Its text was redacted with the run's secret values before the call
 // reached the tool (Server.call), so no secret value leaves dude.
+//
+// The call has three steps. resolvePostChannel (the tool's prepare step, no
+// transaction open) finds the channel; a channel the bot cannot post in is
+// refused there, before any budget is spent. checkPostToChat, in the call's
+// transaction, checks the text and the run's ten and writes the attempt.
+// postOutside calls chat.postMessage with no transaction open.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -18,11 +25,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
-
-// ChatProviders are the chat providers post_to_chat posts through (the
-// orchestrator's chat.Registry); without "slack" every call is refused as
-// not connected.
-type ChatProviders = chat.Registry
 
 const (
 	// postsPerRun bounds one run's posts.
@@ -64,25 +66,111 @@ type postToChatIn struct {
 	Text    string `json:"text"`
 }
 
+// postTarget is the channel resolvePostChannel found, and how to post in it.
+type postTarget struct {
+	inst                  chat.Installation
+	provider              chat.Provider
+	channelID, channelName string
+}
+
 type postChecked struct {
 	postToChatIn
-	inst         chat.Installation
-	provider     chat.Provider
-	notConnected bool
+	postTarget
 }
 
 type postDone struct {
-	channelID, channelName, ts, permalink string
+	ts, permalink string
+}
+
+// postChannel is the channel as the agent named it, trimmed; "" for one
+// that names nothing.
+func postChannel(raw string) string {
+	ch := strings.TrimSpace(raw)
+	if strings.TrimPrefix(ch, "#") == "" || strings.ContainsAny(ch, " \n\t") {
+		return ""
+	}
+	return ch
+}
+
+// resolvePostChannel is post_to_chat's prepare step: the organisation's
+// installation and the channel's id, read before the call's transaction
+// opens. It answers a postTarget, a refusal (the channel cannot be posted
+// in: refused with no budget spent), an error, or nil when checkPost refuses
+// the call on its own (no Slack, not an automation, no channel named).
+func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any {
+	var in postToChatIn
+	if c.AutomationID == "" || json.Unmarshal(args, &in) != nil || c.env.db == nil {
+		return nil
+	}
+	channel := postChannel(in.Channel)
+	p, registered := c.env.chat.Get(chatProvider)
+	if channel == "" || !registered {
+		return nil
+	}
+	var inst chat.Installation
+	var installed bool
+	var made, recent int
+	if err := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
+		if inst, installed, err = chat.Installed(ctx, tx, chatProvider); err != nil {
+			return err
+		}
+		if recent, made, err = callsMade(ctx, tx, c.RunID, "post_to_chat"); err != nil {
+			return err
+		}
+		// Lookup refusals write no call, so the minute's bound counts them here.
+		var lookups int
+		err = tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2
+			AND occurred_at > now() - interval '1 minute'`, c.RunID, EvChatPostRefused).Scan(&lookups)
+		recent += lookups
+		return err
+	}); err != nil {
+		return err
+	}
+	switch {
+	case !installed, made >= postsPerRun:
+		// checkPost refuses it, under the run's lock.
+		return nil
+	case recent >= callsPerMinute:
+		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
+	}
+	refused := func(name string, a ...any) error {
+		return postRefused(channel, refuse(postRefusal(name), a...).Error())
+	}
+	shown := "#" + strings.TrimPrefix(channel, "#")
+	target := postTarget{inst: inst, provider: p, channelID: channel, channelName: shown}
+	if channelID.MatchString(channel) {
+		if info, err := p.Conversation(ctx, inst, channel); err == nil {
+			target.channelName = info.Name
+		} else if apiCode(err) == "channel_not_found" {
+			return refused("unknown-channel", channel)
+		}
+		return target
+	}
+	finder, ok := p.(channelFinder)
+	if !ok {
+		return refused("unknown-channel", shown)
+	}
+	id, member, found, err := finder.FindChannel(ctx, inst, channel)
+	switch {
+	case err != nil:
+		return slackFailed(refused, err)
+	case !found:
+		return refused("unknown-channel", shown)
+	case !member:
+		return refused("not-in-channel", shown)
+	}
+	target.channelID = id
+	return target
 }
 
 func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (postChecked, error) {
-	out, err := checkPost(ctx, tx, c, in)
+	out, notConnected, err := checkPost(ctx, tx, c, in)
 	var refused refusal
 	if errors.As(err, &refused) && refused.event == nil && c.AutomationID != "" {
 		// Recorded once the call's transaction is gone: the run's log shows
 		// the refused call and why.
 		recorded := postRefused(in.Channel, refused.msg).(refusal)
-		if out.notConnected {
+		if notConnected {
 			recorded.event.payload["code"] = PostNotConnected
 		}
 		return out, recorded
@@ -99,89 +187,62 @@ func postRefused(channel, msg string) error {
 	return refuseRecorded(EvChatPostRefused, map[string]any{"tool": "post_to_chat", "channel": channel, "error": msg}, msg)
 }
 
-func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (postChecked, error) {
-	out := postChecked{postToChatIn: in}
+// checkPost checks the call in the run's transaction; notConnected says it
+// was refused because the organisation has no Slack installation.
+func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out postChecked, notConnected bool, err error) {
+	out.postToChatIn = in
 	if c.AutomationID == "" {
-		return out, refuseText(postRefusal("automations-only"))
+		return out, false, refuseText(postRefusal("automations-only"))
 	}
-	out.Channel = strings.TrimSpace(in.Channel)
-	if strings.TrimPrefix(out.Channel, "#") == "" || strings.ContainsAny(out.Channel, " \n\t") {
-		return out, refuseText(postRefusal("name-a-channel"))
+	if out.Channel = postChannel(in.Channel); out.Channel == "" {
+		return out, false, refuseText(postRefusal("name-a-channel"))
 	}
 	if n := utf8.RuneCountInString(in.Text); strings.TrimSpace(in.Text) == "" || n > postTextMax {
-		return out, refuse(postRefusal("text-length"), postTextMax, n)
+		return out, false, refuse(postRefusal("text-length"), postTextMax, n)
 	}
 	// The run's row, locked, serialises its calls: two at once cannot both
 	// take its last post. Counted as tool.limit counts (callsMade, every
 	// attempt once), checked here so the refusal says "messages per run".
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM automation_runs WHERE id = $1 FOR UPDATE`, c.RunID); err != nil {
-		return out, err
+		return out, false, err
 	}
 	_, made, err := callsMade(ctx, tx, c.RunID, "post_to_chat")
 	if err != nil {
-		return out, err
+		return out, false, err
 	}
 	if made >= postsPerRun {
-		return out, refuse(postRefusal("per-run"), postsPerRun)
+		return out, false, refuse(postRefusal("per-run"), postsPerRun)
 	}
-	inst, ok, err := chat.Installed(ctx, tx, chatProvider)
-	if err != nil {
-		return out, err
+	switch target := c.env.prepared.(type) {
+	case error:
+		return out, false, target
+	case postTarget:
+		out.postTarget = target
+		return out, false, nil
 	}
-	p, registered := c.env.chat.Get(chatProvider)
-	if !ok || !registered {
-		var org string
-		if err := tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, c.Org).Scan(&org); err != nil {
-			return out, err
-		}
-		out.notConnected = true
-		return out, refuse(postRefusal("not-connected"), org)
+	var org string
+	if err := tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, c.Org).Scan(&org); err != nil {
+		return out, false, err
 	}
-	out.inst, out.provider = inst, p
-	return out, nil
+	return out, true, refuse(postRefusal("not-connected"), org)
 }
 
-// postOutside finds the channel and posts, with no transaction open.
+// postOutside posts, with no transaction open.
 func postOutside(ctx context.Context, c Caller, in postChecked) (postDone, error) {
 	refused := func(name string, a ...any) error {
 		return postRefused(in.Channel, refuse(postRefusal(name), a...).Error())
 	}
-	shown := "#" + strings.TrimPrefix(in.Channel, "#")
-	done := postDone{channelID: in.Channel, channelName: shown}
-	if channelID.MatchString(in.Channel) {
-		if info, err := in.provider.Conversation(ctx, in.inst, in.Channel); err == nil {
-			done.channelName = info.Name
-		} else if apiCode(err) == "channel_not_found" {
-			return done, refused("unknown-channel", in.Channel)
-		}
-	} else {
-		finder, ok := in.provider.(channelFinder)
-		if !ok {
-			return done, refused("unknown-channel", shown)
-		}
-		id, member, found, err := finder.FindChannel(ctx, in.inst, in.Channel)
-		switch {
-		case err != nil:
-			return done, slackFailed(refused, err)
-		case !found:
-			return done, refused("unknown-channel", shown)
-		case !member:
-			return done, refused("not-in-channel", shown)
-		}
-		done.channelID = id
-	}
-	ts, err := post(ctx, in, done.channelID)
+	ts, err := post(ctx, in)
 	if err != nil {
 		switch apiCode(err) {
 		case "channel_not_found":
-			return done, refused("unknown-channel", done.channelName)
+			return postDone{}, refused("unknown-channel", in.channelName)
 		case "not_in_channel":
-			return done, refused("not-in-channel", done.channelName)
+			return postDone{}, refused("not-in-channel", in.channelName)
 		}
-		return done, slackFailed(refused, err)
+		return postDone{}, slackFailed(refused, err)
 	}
-	done.ts, done.permalink = ts, in.provider.Permalink(in.inst, done.channelID, ts, "")
-	return done, nil
+	return postDone{ts: ts, permalink: in.provider.Permalink(in.inst, in.channelID, ts, "")}, nil
 }
 
 // textPoster is a provider that posts text past what one of PostReply's
@@ -195,11 +256,11 @@ const blockMax = 3000
 
 // post posts in.Text with no thread: through PostReply, or, longer than a
 // block takes, as the message's plain mrkdwn text.
-func post(ctx context.Context, in postChecked, channel string) (string, error) {
+func post(ctx context.Context, in postChecked) (string, error) {
 	if p, ok := in.provider.(textPoster); ok && utf8.RuneCountInString(in.Text) > blockMax {
-		return p.PostText(ctx, in.inst, channel, in.Text)
+		return p.PostText(ctx, in.inst, in.channelID, in.Text)
 	}
-	return in.provider.PostReply(ctx, in.inst, channel, "", chat.Reply{Text: in.Text})
+	return in.provider.PostReply(ctx, in.inst, in.channelID, "", chat.Reply{Text: in.Text})
 }
 
 // slackFailed is a provider error said to the agent: a transient one to
@@ -222,10 +283,10 @@ func apiCode(err error) string {
 }
 
 func recordPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postChecked, done postDone) (map[string]any, error) {
-	out := map[string]any{"channel": done.channelName, "channelId": done.channelID, "ts": done.ts, "permalink": done.permalink}
-	_, err := ledger.Append(ctx, tx, c.event(EvChatPosted, map[string]any{"provider": chatProvider, "channel": done.channelName,
-		"channelId": done.channelID, "ts": done.ts, "permalink": done.permalink}))
+	out := map[string]any{"channel": in.channelName, "channelId": in.channelID, "ts": done.ts, "permalink": done.permalink}
+	_, err := ledger.Append(ctx, tx, c.event(EvChatPosted, map[string]any{"provider": chatProvider, "channel": in.channelName,
+		"channelId": in.channelID, "ts": done.ts, "permalink": done.permalink}))
 	return out, err
 }
 
-var postToChatTool = around(define("post_to_chat", checkPostToChat).countingAttempts(), postOutside, recordPostToChat)
+var postToChatTool = around(define("post_to_chat", checkPostToChat).before(resolvePostChannel).countingAttempts(), postOutside, recordPostToChat)

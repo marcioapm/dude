@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/chat/slack"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeslack"
 )
@@ -30,7 +31,7 @@ func setupChat(t *testing.T, installed bool) chatFixture {
 	srv := httptest.NewServer(fake.WithChannelList())
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
-	f := setupWith(t, &agenttools.Server{Chat: agenttools.ChatProviders{"slack": p}})
+	f := setupWith(t, &agenttools.Server{Chat: chat.Registry{"slack": p}})
 	mustExec(t, f.owner, `UPDATE organizations SET name = 'Acme' WHERE id = $1`, f.org)
 	if installed {
 		mustExec(t, f.owner, `INSERT INTO chat_installations (id, organization_id, provider, external_workspace_id, workspace_name,
@@ -112,16 +113,26 @@ func TestPostToChatWithoutSlackSaysItIsNotConnected(t *testing.T) {
 
 func TestPostToChatOutsideTheBotsChannelsSaysHowToInviteIt(t *testing.T) {
 	c := setupChat(t, true)
-	for _, tc := range []struct{ channel, want string }{
-		{"#random", "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude"},
-		{"C0RANDOMXX", "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude"},
-		{"#hiring", "there is no channel #hiring that dude's Slack bot can see"},
-		{"#nowhere", "there is no channel #nowhere that dude's Slack bot can see"},
-		{"C0NOSUCHXX", "there is no channel C0NOSUCHXX that dude's Slack bot can see"},
+	// posts is how many chat.postMessage calls a channel's refusal may make:
+	// a channel by name is looked up first, so a refused one never reaches
+	// chat.postMessage (which, in real Slack, takes a name and would post).
+	for _, tc := range []struct {
+		channel, want string
+		posts         int
+	}{
+		{"#random", "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude", 0},
+		{"C0RANDOMXX", "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude", 1},
+		{"#hiring", "there is no channel #hiring that dude's Slack bot can see", 0},
+		{"#nowhere", "there is no channel #nowhere that dude's Slack bot can see", 0},
+		{"C0NOSUCHXX", "there is no channel C0NOSUCHXX that dude's Slack bot can see", 0},
 	} {
+		before := c.fake.Calls("chat.postMessage")
 		status, out := c.postToChat(t, tc.channel, "hello")
 		if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), tc.want) {
 			t.Errorf("%s: %d %v, want %q", tc.channel, status, out, tc.want)
+		}
+		if n := c.fake.Calls("chat.postMessage") - before; n != tc.posts {
+			t.Errorf("%s: %d chat.postMessage calls, want %d", tc.channel, n, tc.posts)
 		}
 	}
 	if n := len(c.fake.BotMessages()); n != 0 {
@@ -145,6 +156,28 @@ func TestPostToChatRefusesTheEleventhPostOfARun(t *testing.T) {
 	status, out := c.postToChat(t, "#engineering", "post 11")
 	if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "post_to_chat is limited to 10 messages per run") {
 		t.Fatalf("11th: %d %v", status, out)
+	}
+	if n := len(c.fake.BotMessages()); n != 10 {
+		t.Errorf("%d messages reached Slack, want 10", n)
+	}
+}
+
+// Only a call that reached chat.postMessage spends one of the run's ten: a
+// channel the lookup refused, or no Slack at all, spends none.
+func TestPostToChatLookupRefusalsSpendNoPost(t *testing.T) {
+	c := setupChat(t, true)
+	for i := range 10 {
+		if status, out := c.postToChat(t, "#nowhere", fmt.Sprintf("guess %d", i)); status != 422 {
+			t.Fatalf("guess %d: %d %v", i, status, out)
+		}
+	}
+	if status, _ := c.postToChat(t, "C0NOSUCHXX", "by an id Slack does not have"); status != 422 {
+		t.Fatalf("unknown id: %d", status)
+	}
+	for i := range 10 {
+		if status, out := c.postToChat(t, "#engineering", fmt.Sprintf("post %d", i+1)); status != 200 {
+			t.Fatalf("post %d after the refused lookups: %d %v", i+1, status, out)
+		}
 	}
 	if n := len(c.fake.BotMessages()); n != 10 {
 		t.Errorf("%d messages reached Slack, want 10", n)
