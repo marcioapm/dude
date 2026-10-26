@@ -139,6 +139,17 @@ async function dropIfInvalid(sql: SQL, index: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Refuses to touch index while a build of it is still running: a migrate
+ * retried after a timeout whose killed client's backend builds on would
+ * otherwise wait that build out, drop the index it made, and build it again.
+ */
+async function refuseWhileBuilding(sql: SQL, index: string): Promise<void> {
+  const [row] = await sql`SELECT EXISTS (SELECT 1 FROM pg_stat_progress_create_index
+    WHERE index_relid = to_regclass(${index})) AS building`;
+  if (row?.building) throw new Error(`a build of ${index} is still running; migrate again when it finishes`);
+}
+
 export async function migrate(
   databaseUrl: string,
   opts: { log?: (msg: string) => void } = {},
@@ -175,12 +186,17 @@ export async function migrate(
       log(`applying ${file.name}`);
       if (outsideTransaction(contents)) {
         const index = concurrentIndex(contents);
-        // An earlier interrupted build's leftover, which IF NOT EXISTS would skip.
-        if (index) await dropIfInvalid(sql, index);
+        // An earlier interrupted build's leftover, which IF NOT EXISTS would
+        // skip; never one another backend is still building.
+        if (index) {
+          await refuseWhileBuilding(sql, index);
+          await dropIfInvalid(sql, index);
+        }
         // Postgres reports a cancelled or failed CREATE INDEX CONCURRENTLY
         // as an error, so an index this statement leaves invalid is dropped
         // here and the file not recorded. A success never leaves it invalid:
-        // the leftover IF NOT EXISTS could skip was dropped just above.
+        // the leftover IF NOT EXISTS could skip was dropped just above, and
+        // none was being built.
         try {
           await sql.unsafe(contents);
         } catch (err) {

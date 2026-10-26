@@ -922,6 +922,43 @@ test("an invalid index an earlier interrupted build left is dropped and built af
   }
 }, 120_000);
 
+test("a migrate retried while an earlier build of its index still runs refuses, dropping nothing; once it finishes, migrate records it", async () => {
+  const { url, sql } = await migratedBefore("198");
+  const builder = await sql.reserve();
+  const holder = await sql.reserve();
+  const validity = async () => [...await sql`SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass('events_task_tool_attempts_idx')`];
+  try {
+    // An open snapshot holds the build, as a killed client's backend that
+    // builds on until it next writes to its socket.
+    await holder`BEGIN ISOLATION LEVEL REPEATABLE READ`;
+    await holder`SELECT count(*) FROM events`;
+    const file = (await listMigrationFiles()).find((f) => f.version === "198")!;
+    const building = builder.unsafe(await file.contents()).then(() => "", (err: Error) => err.message);
+    let running = false;
+    for (let i = 0; i < 200 && !running; i++) {
+      const [row] = await sql`SELECT EXISTS (SELECT 1 FROM pg_stat_progress_create_index
+        WHERE index_relid = to_regclass('events_task_tool_attempts_idx')) AS running`;
+      running = row?.running === true;
+      if (!running) await Bun.sleep(50);
+    }
+    expect(running).toBe(true);
+    const refusal = await migrate(url, { log: () => {} }).then(() => "", (err: Error) => err.message);
+    expect(refusal).toBe("a build of events_task_tool_attempts_idx is still running; migrate again when it finishes");
+    expect(await validity()).toEqual([{ valid: false }]);
+    expect((await recorded(url)).map((m) => m.version)).not.toContain("198");
+
+    await holder`COMMIT`;
+    expect(await building).toBe("");
+    expect(await validity()).toEqual([{ valid: true }]);
+    expect((await migrate(url, { log: () => {} })).applied).toContain("198_events_task_tool_attempts_idx.sql");
+    expect(await validity()).toEqual([{ valid: true }]);
+  } finally {
+    builder.release();
+    holder.release();
+    await sql.end();
+  }
+}, 120_000);
+
 test("108 leaves a valid index on the directives that resend another, and only those, outside a transaction", async () => {
   const file = (await listMigrationFiles()).find((f) => f.version === "108");
   expect(file && outsideTransaction(await file.contents())).toBe(true);
