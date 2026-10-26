@@ -31,9 +31,11 @@ import { formatTimestamp, plural } from "@dude/design-system";
 import { Button, Callout, Checkbox, Dialog, Input, Select } from "@dude/design-system/primitives";
 import {
   DEFAULT_HARNESS,
+  DEFAULT_PULL_REQUEST_CHOICE,
   HARNESSES,
   HARNESS_LABEL,
   PROMPT_VARIABLES,
+  PULL_REQUEST_CHOICE,
   findingSeveritySchema,
   REVIEWER_CATEGORIES,
   REVIEWER_CATEGORY_LABEL,
@@ -46,6 +48,7 @@ import {
   type ProjectPromptMode,
   type PromptHistory as PromptHistoryData,
   type PromptState,
+  type PullRequestChoice,
   type Setting,
   type SettingsPatch,
   type SettingsResponse,
@@ -58,6 +61,7 @@ import { tierEffortLabel } from "../tiers.ts";
 import { MachineSelect } from "./MachinesSettings.tsx";
 import { INHERIT_TIER, tierOption } from "./ModelsSettings.tsx";
 import { ImageField, imageWords, type ImageChoices } from "../images.tsx";
+import { BEFORE_PR_LABEL, choiceOptions } from "../beforePullRequest.ts";
 
 /** Where these settings are: an organization's, or a project's over it. */
 export interface SettingsScope {
@@ -593,6 +597,31 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
     >
       <SettingsHeader title="Delivery" description="How a task goes from Deliver to a pull request." />
       <SettingsSection title="Review">
+        {isProject(settings) ? (
+          <SettingRow
+            label={BEFORE_PR_LABEL}
+            help={PULL_REQUEST_CHOICE[form.pullRequest].hint}
+            htmlFor="delivery-pullRequest"
+            source={
+              <SettingSource
+                source="default"
+                inherited={PULL_REQUEST_CHOICE[DEFAULT_PULL_REQUEST_CHOICE].label}
+                disabled={busy}
+                onReset={canEdit && d.pullRequest.source === "project"
+                  ? () => void scope.patch({ delivery: { pullRequest: null } }, `${BEFORE_PR_LABEL} reset`) : undefined}
+              />
+            }
+          >
+            <Select<PullRequestChoice>
+              id="delivery-pullRequest"
+              data-testid="delivery-pullRequest"
+              disabled={!canEdit}
+              value={form.pullRequest}
+              options={choiceOptions}
+              onValueChange={(v) => setField("pullRequest", v)}
+            />
+          </SettingRow>
+        ) : null}
         <SettingRow
           role="group"
           aria-label="Reviewers every delivery runs"

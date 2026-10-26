@@ -66,6 +66,15 @@ describe("SettingSource", () => {
     expect(text(h)).toBe("Overridden Acme: off Reset");
     expect(h).toContain("<button");
   });
+
+  test("a project-only setting reads its default, with Reset once changed", () => {
+    expect(text(renderToStaticMarkup(<SettingSource source="default" inherited="Open it" />))).toBe("Default · Open it");
+    const changed = renderToStaticMarkup(<SettingSource source="default" inherited="Open it" onReset={() => {}} />);
+    expect(text(changed)).toBe("Default · Open it Reset");
+    expect(changed).toContain("<button");
+    expect(changed).toContain('aria-label="Reset to the default"');
+    expect(changed).not.toContain("From");
+  });
 });
 
 describe("SettingsLayout", () => {
