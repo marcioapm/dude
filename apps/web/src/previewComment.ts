@@ -5,11 +5,14 @@
  * does what needs the person: uploads the picture, creates the draft,
  * lists the page's pins.
  *
- * A message is taken only from the window dude opened, from the origin of
- * one of this task's preview servers, within OVERLAY_LIMITS.message, and
- * valid by overlayMessageSchema (whose anchor is the API's own preview
- * anchor). Nothing the page says is used but the anchor's fields and the
- * person's words: no id, no attachment, no task comes from it.
+ * A task has a few such windows: the one it opened, and those it adopted
+ * (a tab opened from one of them, a window it opened before a reload, the
+ * preview whose Connect to dude opened this tab). A message is taken only
+ * from one of them, from the origin of one of this task's preview servers,
+ * within OVERLAY_LIMITS.message, and valid by overlayMessageSchema (whose
+ * anchor is the API's own preview anchor). Nothing the page says is used
+ * but the anchor's fields and the person's words: no id, no attachment, no
+ * task comes from it.
  */
 
 import {
@@ -60,7 +63,8 @@ export type CommentingOffer =
   | { readonly kind: "unavailable"; readonly reason: "public_url" | "lux" }
   | { readonly kind: "available"; readonly servers: ReadonlyArray<CommentableServer>; readonly restart: ReadonlyArray<string> };
 
-const originOf = (url: string | null | undefined): string | null => {
+/** An https URL's origin, or null: the only origins a preview is served at. */
+export const httpsOriginOf = (url: string | null | undefined): string | null => {
   if (!url) return null;
   try {
     const u = new URL(url);
@@ -69,6 +73,8 @@ const originOf = (url: string | null | undefined): string | null => {
     return null;
   }
 };
+
+const originOf = httpsOriginOf;
 
 /**
  * What the task's servers offer for commenting: nothing (no live preview,
@@ -109,7 +115,7 @@ export function serverOf(offer: CommentingOffer, url: string): CommentableServer
 
 export type Checked =
   | { readonly ok: true; readonly msg: OverlayToDude }
-  /** Not from the window dude opened at one of the task's origins: not answered at all. */
+  /** Not from one of dude's commenting windows at one of the task's origins: not answered at all. */
   | { readonly ok: false; readonly why: "origin" | "source" }
   /** From the right window, refused with words for its box. */
   | { readonly ok: false; readonly why: "size" | "invalid" | "moved"; readonly reason: string };
@@ -118,17 +124,18 @@ export const PREVIEW_MOVED = "This preview isn't the one at work any more — op
 
 /**
  * The guards, in order: origin, source window, size, then the schema and
- * the anchor's own origin. `openedAt` is the origin dude opened the window
- * at: that window, still there but no longer at one of `origins` (the task's
- * read moved to an agent Run, or the task changed), is told so instead of
- * being left unanswered.
+ * the anchor's own origin. `mine` is whether the source is one of dude's
+ * commenting windows, and `openedAt` the origin that window was opened or
+ * adopted at: such a window, still there but no longer at one of `origins`
+ * (the task's read moved to an agent Run, or the task changed), is told so
+ * instead of being left unanswered.
  */
-export function checkMessage(e: Pick<MessageEvent, "origin" | "source" | "data">, opened: Window | null, origins: ReadonlySet<string>, openedAt: string | null = null): Checked {
+export function checkMessage(e: Pick<MessageEvent, "origin" | "source" | "data">, mine: boolean, origins: ReadonlySet<string>, openedAt: string | null = null): Checked {
   if (!origins.has(e.origin)) {
-    const ours = opened !== null && e.source === opened && openedAt !== null && e.origin === openedAt;
+    const ours = mine && e.source !== null && openedAt !== null && e.origin === openedAt;
     return ours ? { ok: false, why: "moved", reason: PREVIEW_MOVED } : { ok: false, why: "origin" };
   }
-  if (opened === null || e.source !== opened) return { ok: false, why: "source" };
+  if (!mine || e.source === null) return { ok: false, why: "source" };
   if (overSize(e.data, OVERLAY_LIMITS.message)) return { ok: false, why: "size", reason: "That is too much to send: try without the picture, or a smaller element." };
   const parsed = overlayMessageSchema.safeParse(e.data);
   if (!parsed.success) return { ok: false, why: "invalid", reason: "dude couldn't read what the page sent." };
@@ -194,10 +201,11 @@ export function pinsFor(items: ReadonlyArray<FeedbackItem>, url: string, you: st
 export type CommentingState = "idle" | "waiting" | "open" | "silent" | "closed";
 
 export interface CommentingView {
+  /** The most relevant window's: one open, else one waiting, else the latest. */
   readonly state: CommentingState;
-  /** The server whose page the window was opened on. */
+  /** The server whose page that window was opened on. */
   readonly server: string | null;
-  /** Drafts saved from the window since it was opened. */
+  /** Drafts saved from the task's windows since each was opened or adopted. */
   readonly saved: number;
 }
 
@@ -223,28 +231,63 @@ export interface CommentingDeps {
   readonly onSaved: (id: string) => void;
   readonly onOpenItem: (id: string) => void;
   readonly onChange: (view: CommentingView) => void;
+  /**
+   * Whether this tab came here from a preview's Connect to dude (the
+   * preview-connect page): then a hello from this tab's own window.opener,
+   * at one of the task's preview origins, adopts that window.
+   */
+  readonly openerArrived?: () => boolean;
   readonly helloWaitMs?: number;
 }
 
 const PINS_KEY = "dude-preview-pins";
 
+/** The windows one task keeps: the named one and those adopted beside it. */
+export const MAX_WINDOWS = 8;
+
+/** How far up a window's openers dude looks for itself, as the overlay looks for dude. */
+const OPENER_STEPS = 5;
+
 /**
- * One task's commenting window: opens it, hears it, answers it. A plain
- * class (the task page's hook holds one) so the guards are tested without
- * React.
+ * One commenting window. Each keeps its own saves answered: a nonce is the
+ * overlay's in that window, and a window opened or adopted anew starts with
+ * none remembered, so nothing one page saved is answered to another.
  */
-export class PreviewCommenting {
-  #win: Window | null = null;
-  #url: string | null = null;
-  #state: CommentingState = "idle";
-  #server: string | null = null;
-  #saved = 0;
-  #pendingHighlight: string | null = null;
+interface Pane {
+  readonly win: Window;
+  url: string | null;
+  server: string | null;
+  state: CommentingState;
+  saved: number;
+  pendingHighlight: string | null;
   // The one save in flight (one draft from the window at a time), and the ones answered:
   // a nonce sent again (the overlay gave up waiting) is not saved twice.
-  #inFlight: string | null = null;
-  readonly #answered = new Map<string, Extract<DudeToOverlay, { type: "saved" }>>();
-  #timers: number[] = [];
+  inFlight: string | null;
+  readonly answered: Map<string, Extract<DudeToOverlay, { type: "saved" }>>;
+  helloTimer: number;
+  // When it was last opened, adopted or heard from: the view and the ways in prefer the latest.
+  touched: number;
+}
+
+const closedOrGone = (w: Window): boolean => {
+  try {
+    return w.closed;
+  } catch {
+    return true;
+  }
+};
+
+/**
+ * One task's commenting windows: opens the task's named one, adopts those
+ * that reach this tab, hears them, answers each. A plain class (the task
+ * page's hook holds one) so the guards are tested without React.
+ */
+export class PreviewCommenting {
+  #panes: Pane[] = [];
+  // The window open() opened by the task's name, once it has.
+  #named: Window | null = null;
+  #clock = 0;
+  #watch = 0;
   readonly #d: CommentingDeps;
   // This tab's window name, sent with each session for the overlay's Go to dude.
   readonly #tab: string | null;
@@ -262,27 +305,61 @@ export class PreviewCommenting {
 
   dispose(): void {
     this.#d.win.removeEventListener("message", this.onMessage);
-    this.#clearTimers();
+    this.#d.win.clearInterval(this.#watch);
+    this.#watch = 0;
+    for (const p of this.#panes) this.#d.win.clearTimeout(p.helloTimer);
   }
 
   get view(): CommentingView {
-    return { state: this.#state, server: this.#server, saved: this.#saved };
+    const latest = (fits: (p: Pane) => boolean) => this.#panes.filter(fits).sort((a, b) => b.touched - a.touched)[0];
+    const pick = latest((p) => p.state === "open") ?? latest((p) => p.state === "waiting") ?? latest((p) => p.state !== "idle");
+    return { state: pick?.state ?? "idle", server: pick?.server ?? null, saved: this.#panes.reduce((n, p) => n + p.saved, 0) };
   }
 
-  get window(): Window | null {
-    return this.#win;
+  /** The windows held now, the named one among them. */
+  get windows(): ReadonlyArray<Window> {
+    return this.#panes.map((p) => p.win);
   }
 
   #emit(): void {
     this.#d.onChange(this.view);
   }
 
-  #clearTimers(): void {
-    for (const t of this.#timers) {
-      this.#d.win.clearTimeout(t);
-      this.#d.win.clearInterval(t);
+  #paneOf(source: unknown): Pane | null {
+    return source ? this.#panes.find((p) => p.win === source) ?? null : null;
+  }
+
+  /** A window to hold: at the cap, the oldest closed one makes room, else the oldest the task's name doesn't hold. */
+  #add(win: Window, url: string | null, server: string | null): Pane {
+    if (this.#panes.length >= MAX_WINDOWS) {
+      const byAge = [...this.#panes].sort((a, b) => a.touched - b.touched);
+      this.#drop(byAge.find((p) => p.state === "closed" || closedOrGone(p.win)) ?? byAge.find((p) => p.win !== this.#named) ?? byAge[0]!);
     }
-    this.#timers = [];
+    const pane: Pane = { win, url, server, state: "waiting", saved: 0, pendingHighlight: null, inFlight: null, answered: new Map(), helloTimer: 0, touched: ++this.#clock };
+    this.#panes.push(pane);
+    this.#watchClosed();
+    return pane;
+  }
+
+  #drop(pane: Pane): void {
+    this.#d.win.clearTimeout(pane.helloTimer);
+    this.#panes = this.#panes.filter((p) => p !== pane);
+  }
+
+  /** One check a second, for every window held: one closed says so. */
+  #watchClosed(): void {
+    if (this.#watch) return;
+    this.#watch = this.#d.win.setInterval(() => {
+      let changed = false;
+      for (const p of this.#panes) {
+        if ((p.state === "open" || p.state === "waiting" || p.state === "silent") && closedOrGone(p.win)) {
+          p.state = "closed";
+          this.#d.win.clearTimeout(p.helloTimer);
+          changed = true;
+        }
+      }
+      if (changed) this.#emit();
+    }, 1_000);
   }
 
   /**
@@ -296,124 +373,134 @@ export class PreviewCommenting {
     // Without noopener: the overlay talks to its opener, and only to it.
     const w = this.#d.win.open(url, `dude-preview-${this.#d.taskId}`);
     if (!w) return false;
-    if (w !== this.#win) {
-      this.#saved = 0;
-      this.#answered.clear();
-    }
-    this.#win = w;
-    this.#url = url;
-    this.#server = server;
-    this.#pendingHighlight = highlight;
-    this.#state = "waiting";
-    this.#clearTimers();
-    this.#timers.push(this.#d.win.setTimeout(() => {
-      if (this.#state === "waiting") {
-        this.#state = "silent";
+    // The name gave another window (the last one was closed): what the last one saved is not this one's.
+    const before = this.#named && this.#named !== w ? this.#paneOf(this.#named) : null;
+    if (before) this.#drop(before);
+    this.#named = w;
+    const pane = this.#paneOf(w) ?? this.#add(w, url, server);
+    pane.url = url;
+    pane.server = server;
+    pane.pendingHighlight = highlight;
+    pane.state = "waiting";
+    pane.touched = ++this.#clock;
+    this.#d.win.clearTimeout(pane.helloTimer);
+    pane.helloTimer = this.#d.win.setTimeout(() => {
+      if (pane.state === "waiting") {
+        pane.state = "silent";
         this.#emit();
       }
-    }, this.#d.helloWaitMs ?? HELLO_WAIT_MS));
-    this.#watchClosed();
-    this.focus();
+    }, this.#d.helloWaitMs ?? HELLO_WAIT_MS);
+    this.#focus(pane);
     this.#emit();
     return true;
   }
 
-  #watchClosed(): void {
-    this.#timers.push(this.#d.win.setInterval(() => {
-      if (this.#win?.closed && this.#state !== "closed") {
-        this.#state = "closed";
-        this.#clearTimers();
-        this.#emit();
-      }
-    }, 1_000));
+  /** The latest window held, in one of `states` and not closed, that `fits`. */
+  #live(fits: (p: Pane) => boolean, ...states: CommentingState[]): Pane | null {
+    return this.#panes.filter((p) => states.includes(p.state) && !closedOrGone(p.win) && fits(p)).sort((a, b) => b.touched - a.touched)[0] ?? null;
   }
 
   /**
-   * The Feedback tab's way in (or the closed notice's Comment on preview) on `server`: the window brought forward
-   * when it is already open on that server, so the page and a half-written
-   * comment stay; opened at `url` otherwise.
+   * The Feedback tab's way in (or the closed notice's Comment on preview) on `server`: a window
+   * already open on that server brought forward, so the page and a
+   * half-written comment stay; the named window opened at `url` otherwise.
    */
   comment(url: string, server: string): boolean {
-    // By origin, not only server name: a window taken back after a reload knows its page, not its server.
-    const same = this.#server === server || this.#server === null && originOf(this.#url) !== null && originOf(this.#url) === originOf(url);
-    if (same && this.#live("open", "waiting")) {
-      this.focus();
+    // By origin, not only server name: an adopted window knows its page, not its server.
+    const at = this.#live((p) => p.server === server || p.server === null && originOf(p.url) !== null && originOf(p.url) === originOf(url), "open", "waiting");
+    if (at) {
+      this.#focus(at);
       return true;
     }
     return this.open(url, server);
   }
 
   /**
-   * A feedback card's Page link: the window brought forward when it is
-   * already on that page (origin and path), so a half-written comment stays;
-   * navigated to `url` otherwise.
+   * A feedback card's Page link: a window already on that page (origin and
+   * path) brought forward, so a half-written comment stays; the named
+   * window navigated to `url` otherwise.
    */
   visit(url: string, server: string): boolean {
-    if (this.#live("open", "waiting") && this.#url !== null && overlayPage(url) !== null && overlayPage(this.#url) === overlayPage(url)) {
-      this.focus();
+    const page = overlayPage(url);
+    const at = page === null ? null : this.#live((p) => p.url !== null && overlayPage(p.url) === page, "open", "waiting");
+    if (at) {
+      this.#focus(at);
       return true;
     }
     return this.open(url, server);
   }
 
-  // The window is in one of `states` and not closed.
-  #live(...states: CommentingState[]): boolean {
-    return states.includes(this.#state) && this.#win !== null && !this.#win.closed;
+  /** Brings the most relevant window forward, if it is still open. */
+  focus(): void {
+    const at = this.#live(() => true, "open", "waiting", "silent");
+    if (at) this.#focus(at);
   }
 
-  /** Brings the window forward, if it is still open. */
-  focus(): void {
+  #focus(pane: Pane): void {
     try {
-      if (this.#win && !this.#win.closed) this.#win.focus();
+      if (!closedOrGone(pane.win)) pane.win.focus();
     } catch {
       // Focus is the browser's to refuse.
     }
   }
 
-  /** Takes the overlay off the page; the window stays and the drafts stay. */
+  /** Takes the overlay off every window's page; the windows stay and the drafts stay. */
   stop(): void {
-    this.#post({ type: "stop", v: OVERLAY_PROTOCOL });
-    this.#clearTimers();
-    this.#state = "idle";
+    for (const p of this.#panes) {
+      this.#post(p, { type: "stop", v: OVERLAY_PROTOCOL });
+      this.#d.win.clearTimeout(p.helloTimer);
+      p.state = "idle";
+    }
     this.#emit();
   }
 
+  /** The closed and silent notices dismissed: closed windows are let go, silent ones are idle. */
   dismiss(): void {
-    if (this.#state === "closed" || this.#state === "silent") {
-      this.#state = "idle";
-      this.#emit();
+    let changed = false;
+    for (const p of [...this.#panes]) {
+      if (p.state === "closed") {
+        this.#drop(p);
+        changed = true;
+      } else if (p.state === "silent") {
+        p.state = "idle";
+        changed = true;
+      }
     }
+    if (changed) this.#emit();
   }
 
   /**
-   * Show on preview: marks an item on the open page, or opens its page
-   * and marks it once the overlay is there.
+   * Show on preview: marks an item on a window open on its page, or opens
+   * its page and marks it once the overlay is there.
    */
   show(item: FeedbackItem): boolean {
     if (item.anchor.kind !== "preview") return false;
+    const page = overlayPage(item.anchor.url);
     // Only "open": a highlight needs an overlay that has said hello.
-    if (this.#live("open") && overlayPage(this.#url ?? "") === overlayPage(item.anchor.url)) {
-      this.#post({ type: "highlight", v: OVERLAY_PROTOCOL, itemId: item.id });
-      this.focus();
+    const at = this.#live((p) => overlayPage(p.url ?? "") === page, "open");
+    if (at) {
+      this.#post(at, { type: "highlight", v: OVERLAY_PROTOCOL, itemId: item.id });
+      this.#focus(at);
       return true;
     }
-    return this.open(item.anchor.url, this.#server, item.id);
+    const origin = originOf(item.anchor.url);
+    const server = this.#panes.filter((p) => p.server !== null && originOf(p.url) === origin).sort((a, b) => b.touched - a.touched)[0]?.server ?? null;
+    return this.open(item.anchor.url, server, item.id);
   }
 
-  /** The page's pins and dude's theme again, after the list or the theme changed (a save, a submit, an agent's reply, the person's theme). */
+  /** Each open page's pins and dude's theme again, after the list or the theme changed (a save, a submit, an agent's reply, the person's theme). */
   refresh(): void {
-    if (this.#state === "open" && this.#url) this.#post(this.#session(this.#url));
+    for (const p of this.#panes) if (p.state === "open" && p.url) this.#post(p, this.#session(p.url));
   }
 
-  #post(msg: DudeToOverlay): void {
-    const w = this.#win;
-    const origin = originOf(this.#url);
-    if (!w || w.closed || !origin) return;
-    w.postMessage(msg, origin);
+  #post(pane: Pane, msg: DudeToOverlay): void {
+    const origin = originOf(pane.url);
+    if (closedOrGone(pane.win) || !origin) return;
+    pane.win.postMessage(msg, origin);
   }
 
-  #refuse(reason: string, nonce: string | undefined): void {
-    this.#post({ type: "refused", v: OVERLAY_PROTOCOL, ...(nonce !== undefined ? { nonce } : {}), reason });
+  #refuse(pane: Pane, reason: string, nonce: string | undefined): void {
+    this.#post(pane, { type: "refused", v: OVERLAY_PROTOCOL, ...(nonce !== undefined ? { nonce } : {}), reason });
   }
 
   #session(url: string): DudeToOverlay {
@@ -432,30 +519,31 @@ export class PreviewCommenting {
   }
 
   readonly onMessage = (e: MessageEvent): void => {
-    this.#adopt(e);
-    const checked = checkMessage(e, this.#win, this.#d.read().origins, originOf(this.#url));
+    const pane = this.#paneOf(e.source) ?? this.#adopt(e);
+    const checked = checkMessage(e, pane !== null, this.#d.read().origins, originOf(pane?.url));
     if (!checked.ok) {
-      if ("reason" in checked) {
+      if ("reason" in checked && pane) {
         const nonce = (e.data as { nonce?: unknown } | null)?.nonce;
-        this.#refuse(checked.reason, typeof nonce === "string" && nonce.length <= 100 ? nonce : undefined);
+        this.#refuse(pane, checked.reason, typeof nonce === "string" && nonce.length <= 100 ? nonce : undefined);
       }
       return;
     }
+    const p = pane!;
     const msg = checked.msg;
     switch (msg.type) {
       case "hello":
       case "navigated":
-        this.#url = msg.url;
-        if (this.#state !== "open") {
-          this.#state = "open";
-          this.#clearTimers();
-          this.#watchClosed();
+        p.url = msg.url;
+        p.touched = ++this.#clock;
+        if (p.state !== "open") {
+          p.state = "open";
+          this.#d.win.clearTimeout(p.helloTimer);
           this.#emit();
         }
-        this.#post(this.#session(msg.url));
-        if (this.#pendingHighlight) {
-          this.#post({ type: "highlight", v: OVERLAY_PROTOCOL, itemId: this.#pendingHighlight });
-          this.#pendingHighlight = null;
+        this.#post(p, this.#session(msg.url));
+        if (p.pendingHighlight) {
+          this.#post(p, { type: "highlight", v: OVERLAY_PROTOCOL, itemId: p.pendingHighlight });
+          p.pendingHighlight = null;
         }
         return;
       case "prefs":
@@ -465,53 +553,74 @@ export class PreviewCommenting {
         if (this.#d.read().items.some((i) => i.id === msg.itemId)) this.#d.onOpenItem(msg.itemId);
         return;
       case "draft": {
-        const done = this.#answered.get(msg.nonce);
+        const done = p.answered.get(msg.nonce);
         if (done) {
-          this.#post(done);
+          this.#post(p, done);
           return;
         }
-        if (this.#inFlight !== null) {
+        if (p.inFlight !== null) {
           // The same save sent again is answered when it lands; another one waits its turn.
-          if (msg.nonce !== this.#inFlight) this.#refuse("Still saving the last one", msg.nonce);
+          if (msg.nonce !== p.inFlight) this.#refuse(p, "Still saving the last one", msg.nonce);
           return;
         }
-        this.#inFlight = msg.nonce;
-        void this.#save(msg).finally(() => { this.#inFlight = null; });
+        p.inFlight = msg.nonce;
+        void this.#save(p, msg).finally(() => { p.inFlight = null; });
       }
     }
   };
 
   /**
-   * A tab that reloaded, or came back to the task, holds no handle on the
-   * window it opened. A hello from one of this task's preview origins whose
-   * sender's opener is this very window (the browser says so; a page can't
-   * forge it) is that window: it is taken back, so the overlay reconnects
-   * with its half-written comment in place.
+   * A window this tab holds no handle on, taken as one of the task's
+   * commenting windows: only on a hello or navigated, from one of this
+   * task's preview origins, about a page at that origin, and only when the
+   * browser says the sender is linked to this tab (a page can't forge
+   * `opener`):
+   * - this tab is up its chain of openers: a window this tab opened before
+   *   a reload, or a tab opened from one (target=_blank, ctrl-click);
+   * - or it is this tab's own opener, and this tab came from its Connect to
+   *   dude (`openerArrived`).
+   * The checks after it (size, schema, the page's origin) are checkMessage's,
+   * as for any window held.
    */
-  #adopt(e: MessageEvent): void {
-    if (this.#win !== null && !this.#win.closed) return;
+  #adopt(e: MessageEvent): Pane | null {
     const m = e.data as { type?: unknown; url?: unknown } | null;
-    if (!m || typeof m !== "object" || m.type !== "hello" && m.type !== "navigated" || typeof m.url !== "string") return;
-    if (!this.#d.read().origins.has(e.origin) || originOf(m.url) !== e.origin) return;
+    if (!m || typeof m !== "object" || m.type !== "hello" && m.type !== "navigated" || typeof m.url !== "string") return null;
+    if (!this.#d.read().origins.has(e.origin) || originOf(m.url) !== e.origin) return null;
     const source = e.source as Window | null;
-    let opener: unknown;
-    try {
-      opener = source?.opener;
-    } catch {
-      return;
-    }
-    if (!source || opener !== this.#d.win) return;
-    this.#win = source;
-    this.#url = m.url;
-    this.#saved = 0;
-    this.#answered.clear();
+    if (!source || !(this.#reachesMe(source) || this.#isMyOpener(source))) return null;
+    return this.#add(source, m.url, null);
   }
 
-  async #save(msg: Extract<OverlayToDude, { type: "draft" }>): Promise<void> {
+  #reachesMe(source: Window): boolean {
+    let at: Window = source;
+    for (let step = 0; step < OPENER_STEPS; step++) {
+      let next: unknown;
+      try {
+        next = at.opener;
+      } catch {
+        return false;
+      }
+      if (!next) return false;
+      if (next === this.#d.win) return true;
+      at = next as Window;
+    }
+    return false;
+  }
+
+  #isMyOpener(source: Window): boolean {
+    if (!this.#d.openerArrived?.()) return false;
+    try {
+      return this.#d.win.opener === source;
+    } catch {
+      return false;
+    }
+  }
+
+  async #save(pane: Pane, msg: Extract<OverlayToDude, { type: "draft" }>): Promise<void> {
     // The API's own limit, checked before any upload: a refused draft leaves no picture behind.
     const drafts = this.#d.read().drafts;
     if (drafts >= FEEDBACK_LIMITS.drafts) {
-      this.#refuse(`you have ${drafts} drafts on this task: submit or remove some first`, msg.nonce);
+      this.#refuse(pane, `you have ${drafts} drafts on this task: submit or remove some first`, msg.nonce);
       return;
     }
     let attachmentId: string | undefined;
@@ -531,15 +640,15 @@ export class PreviewCommenting {
     try {
       const anchor: OverlayAnchor & { attachmentId?: string } = { ...msg.anchor, ...(attachmentId ? { attachmentId } : {}) };
       const created = await this.#d.createDraft(anchor, msg.body);
-      this.#saved++;
+      pane.saved++;
       const saved = { type: "saved", v: OVERLAY_PROTOCOL, nonce: msg.nonce, id: created.id, drafts: created.drafts, picture } as const;
-      this.#answered.set(msg.nonce, saved);
-      if (this.#answered.size > 50) this.#answered.delete(this.#answered.keys().next().value!);
-      this.#post(saved);
+      pane.answered.set(msg.nonce, saved);
+      if (pane.answered.size > 50) pane.answered.delete(pane.answered.keys().next().value!);
+      this.#post(pane, saved);
       this.#d.onSaved(created.id);
       this.#emit();
     } catch (err) {
-      this.#refuse(err instanceof Error ? err.message : String(err), msg.nonce);
+      this.#refuse(pane, err instanceof Error ? err.message : String(err), msg.nonce);
     }
   }
 }

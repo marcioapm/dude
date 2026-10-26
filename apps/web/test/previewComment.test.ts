@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { DudeToOverlay, FeedbackItem, OverlayAnchor, RunServer, TaskServers } from "@dude/domain";
 import { OVERLAY_LIMITS, overlaySessionSchema } from "@dude/domain";
-import { PreviewCommenting, commentingOffer, pinsFor, previewOrigins, type CommentingDeps, type CommentingView } from "../src/previewComment.ts";
+import { MAX_WINDOWS, PreviewCommenting, checkMessage, commentingOffer, pinsFor, previewOrigins, type CommentingDeps, type CommentingView } from "../src/previewComment.ts";
 
 const WEB = "https://web-shop-1.preview.example.test";
 const API = "https://api-shop-1.preview.example.test";
@@ -522,4 +522,158 @@ test("a window taken back after a reload starts with nothing remembered: its old
   post({ type: "draft", v: 1, nonce: "n1", body: "x", anchor: anchor() }, WEB, reopened);
   await tick(5);
   expect(createDraft).toHaveBeenCalledTimes(2);
+});
+
+test("checkMessage refuses a source that is not one of dude's windows, and tells only one of them that its origin moved", () => {
+  const origins = new Set([WEB]);
+  const hello = { type: "hello", v: 1, url: `${WEB}/cart` };
+  expect(checkMessage({ origin: WEB, source: popup as unknown as Window, data: hello }, false, origins)).toEqual({ ok: false, why: "source" });
+  expect(checkMessage({ origin: WEB, source: null, data: hello }, true, origins)).toEqual({ ok: false, why: "source" });
+  expect(checkMessage({ origin: WEB, source: popup as unknown as Window, data: hello }, true, origins)).toMatchObject({ ok: true });
+  expect(checkMessage({ origin: API, source: popup as unknown as Window, data: hello }, false, origins, API)).toEqual({ ok: false, why: "origin" });
+  expect(checkMessage({ origin: API, source: popup as unknown as Window, data: hello }, true, origins, API)).toMatchObject({ ok: false, why: "moved" });
+});
+
+type Win = { postMessage: ReturnType<typeof mock>; closed: boolean; focus: () => void; opener?: unknown };
+const win = (opener: unknown = null): Win => ({ postMessage: mock(() => {}), closed: false, focus: () => {}, opener });
+const types = (w: Win) => w.postMessage.mock.calls.map((x) => (x[0] as DudeToOverlay).type);
+
+test("two windows of one task, the named one and a tab opened from it, are both answered, and each draft is saved to its own window", async () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  // A target=_blank link on the preview: its opener is the named window, whose opener is this tab.
+  const second = win({ ...popup, opener: window });
+  post({ type: "hello", v: 1, url: `${WEB}/greetings` }, WEB, second);
+  expect(types(second)).toEqual(["session"]);
+  expect(second.postMessage.mock.calls[0]![1]).toBe(WEB);
+  expect(c.windows.length).toBe(2);
+  post({ type: "draft", v: 1, nonce: "a", body: "first", anchor: anchor() });
+  post({ type: "draft", v: 1, nonce: "b", body: "second", anchor: anchor({ url: `${WEB}/greetings` }) }, WEB, second);
+  await tick(5);
+  expect(createDraft).toHaveBeenCalledTimes(2);
+  expect(told().filter((m) => m.type === "saved").map((m) => m.type === "saved" && m.nonce)).toEqual(["a"]);
+  expect(second.postMessage.mock.calls.map((x) => x[0] as DudeToOverlay).filter((m) => m.type === "saved").map((m) => m.type === "saved" && m.nonce)).toEqual(["b"]);
+  expect(c.view).toMatchObject({ state: "open", saved: 2 });
+});
+
+test("a window reachable only through two openers is adopted; one whose openers never reach this tab, or from another origin, is not", () => {
+  const middle = win(window);
+  const far = win(middle);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, far);
+  expect(types(far)).toEqual(["session"]);
+  expect(c.windows).toEqual([far as unknown as Window]);
+  // Openers that end in another tab.
+  const strangers = win(win(win({ postMessage() {}, closed: false })));
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, strangers);
+  expect(types(strangers)).toEqual([]);
+  // Linked to this tab, but at an origin that is no preview of this task's.
+  const elsewhere = win(window);
+  post({ type: "hello", v: 1, url: "https://evil.example.test/" }, "https://evil.example.test", elsewhere);
+  expect(types(elsewhere)).toEqual([]);
+  // A hello naming another origin than the one the browser says it came from.
+  const lying = win(window);
+  post({ type: "hello", v: 1, url: `${API}/` }, WEB, lying);
+  expect(types(lying)).toEqual([]);
+  // An opener chain too long: this tab is six steps up.
+  let deep: unknown = window;
+  for (let i = 0; i < 6; i++) deep = win(deep);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, deep);
+  expect(types(deep as Win)).toEqual([]);
+  // An opener that can't be read.
+  const sealed = win();
+  Object.defineProperty(sealed, "opener", { get: () => { throw new Error("blocked"); } });
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, sealed);
+  expect(types(sealed)).toEqual([]);
+  expect(c.windows.length).toBe(1);
+});
+
+test("a draft never adopts a window, even one linked to this tab", async () => {
+  const linked = win(window);
+  post({ type: "draft", v: 1, nonce: "n", body: "x", anchor: anchor() }, WEB, linked);
+  await tick(5);
+  expect(createDraft).not.toHaveBeenCalled();
+  expect(types(linked)).toEqual([]);
+  expect(c.windows.length).toBe(0);
+});
+
+test("this tab's own opener is adopted only when the tab came from Connect to dude", () => {
+  const preview = win();
+  const own = Object.getOwnPropertyDescriptor(window, "opener");
+  Object.defineProperty(window, "opener", { configurable: true, get: () => preview });
+  try {
+    post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, preview);
+    expect(types(preview)).toEqual([]);
+    let arrived = true;
+    c.dispose();
+    boot({ openerArrived: () => arrived });
+    post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, preview);
+    expect(types(preview)).toEqual(["session"]);
+    // Another window, not this tab's opener, still is not.
+    const other = win();
+    post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, other);
+    expect(types(other)).toEqual([]);
+    arrived = false;
+    c.dispose();
+    preview.postMessage.mockClear();
+    boot({ openerArrived: () => arrived });
+    post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, preview);
+    expect(types(preview)).toEqual([]);
+  } finally {
+    if (own) Object.defineProperty(window, "opener", own);
+    else delete (window as { opener?: unknown }).opener;
+  }
+});
+
+test("no more than MAX_WINDOWS are held: a closed one makes room first, else the oldest adopted, never the named one", () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const adopted = Array.from({ length: MAX_WINDOWS - 1 }, () => win(window));
+  for (const w of adopted) post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, w);
+  expect(c.windows.length).toBe(MAX_WINDOWS);
+  adopted[3]!.closed = true;
+  const next = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, next);
+  expect(c.windows.length).toBe(MAX_WINDOWS);
+  expect(c.windows).not.toContain(adopted[3] as unknown as Window);
+  expect(c.windows).toContain(next as unknown as Window);
+  // None closed: the oldest adopted goes, the named window stays.
+  const last = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, last);
+  expect(c.windows.length).toBe(MAX_WINDOWS);
+  expect(c.windows).not.toContain(adopted[0] as unknown as Window);
+  expect(c.windows).toContain(popup as unknown as Window);
+  expect(c.windows).toContain(last as unknown as Window);
+});
+
+test("refresh sends the session to every open window, each for its own page", () => {
+  items = [item("cart"), item("greet", { url: `${WEB}/greetings` })];
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const second = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/greetings` }, WEB, second);
+  const closed = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, closed);
+  closed.closed = true;
+  popup.postMessage.mockClear();
+  second.postMessage.mockClear();
+  closed.postMessage.mockClear();
+  c.refresh();
+  const only = (w: Win) => w.postMessage.mock.calls.map((x) => x[0] as DudeToOverlay).map((m) => m.type === "session" ? m.pins.map((p) => p.id) : m.type);
+  expect([only(popup as Win), only(second), only(closed)]).toEqual([[["cart"]], [["greet"]], []]);
+});
+
+test("Show on preview and a Page link go to the adopted window already on that page, not the named one", () => {
+  const it = item("fbk_g", { url: `${WEB}/greetings` });
+  items = [it];
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  let focused = 0;
+  const second = { ...win(window), focus: () => { focused++; } };
+  post({ type: "hello", v: 1, url: `${WEB}/greetings` }, WEB, second);
+  expect(c.show(it)).toBe(true);
+  expect(types(second).at(-1)).toBe("highlight");
+  expect(opened.length).toBe(1);
+  expect(c.visit(`${WEB}/greetings?x=1`, "web")).toBe(true);
+  expect(opened.length).toBe(1);
+  expect(focused).toBe(2);
 });
