@@ -114,7 +114,7 @@ export function HeldPanel({ client, task, you, runs, findings, verification, fee
       ) : null}
     </>
   );
-  const line = task.source && !hold?.round ? <>Review is done on <span className="ds-mono">{task.source.headBranch}</span>. No pull request is open yet.</>
+  const line = task.source?.kind === "branch" ? <>Review is done on <span className="ds-mono">{task.source.headBranch}</span>. No pull request is open yet.</>
     : <>Review{tester ? ", simplify and the browser test" : " and simplify"} passed. No pull request is open yet.</>;
   const round = hold && hold.round > 1 ? {
     n: hold.round, commitsSince: hold.commitsSince,

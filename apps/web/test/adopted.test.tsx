@@ -195,7 +195,10 @@ describe("an adopted branch waiting for Open or Draft under Deliver", () => {
     }
   }
   const held = (owner?: TaskDetail["owner"]) => new Held({ source: BRANCH_SOURCE, status: "awaiting_input", decider: "policy",
-    awaitingDecision: { point: "before_pull_request" }, pullRequestOpened: false, ...(owner ? { owner } : {}) }, []);
+    awaitingDecision: { point: "before_pull_request" }, pullRequestOpened: false,
+    // Deliver records a hold on every entry, an adopted branch's too.
+    hold: { round: 1, commitsSince: null, since: null, sentBack: false, repos: [{ name: "web-console", head: "stack/top", base: "stack/base", additions: 31, deletions: 4 }] },
+    ...(owner ? { owner } : {}) }, []);
 
   const panel = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=ready-for-review]");
   const button = (page: HTMLElement, name: string) =>
