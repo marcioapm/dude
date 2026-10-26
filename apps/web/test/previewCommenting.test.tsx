@@ -327,14 +327,15 @@ test("the open preview hears dude's resolved theme in its session, and again whe
   await until(() => themes().at(-1) === "light" || null, "a session in the light theme");
 });
 
-test("a tab that arrived from the preview's Connect to dude adopts its opener on the task page and answers it; one that didn't, doesn't", async () => {
+test("a tab that arrived from the preview's Connect to dude adopts its opener on the task page and answers it; one that didn't, or arrived for another task, doesn't", async () => {
   const own = Object.getOwnPropertyDescriptor(window, "opener");
   const preview = { postMessage: mock((_m: unknown, _o: string) => {}), closed: false, focus() {} };
   Object.defineProperty(window, "opener", { configurable: true, get: () => preview });
   try {
-    for (const arrived of [false, true]) {
+    for (const arrivedAt of [null, "wi_other", TASK_ID]) {
+      const arrived = arrivedAt === TASK_ID;
       sessionStorage.clear();
-      if (arrived) markPreviewArrival(window, TASK_ID);
+      if (arrivedAt) markPreviewArrival(window, arrivedAt);
       preview.postMessage.mockClear();
       const c = await page(new PreviewClient([web()]), "servers");
       await hello(preview, `${WEB}/cart`);
@@ -345,7 +346,7 @@ test("a tab that arrived from the preview's Connect to dude adopts its opener on
         await until(() => c.querySelector('[data-testid="commenting-notice"][data-state="open"]'), "the open notice");
       } else {
         await settle(50);
-        expect(sessions()).toEqual([]);
+        expect([arrivedAt, sessions()]).toEqual([arrivedAt, []]);
       }
       for (const u of mounted.splice(0)) await u();
     }

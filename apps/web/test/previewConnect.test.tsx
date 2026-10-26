@@ -86,8 +86,39 @@ test("with no opener it says to open it from a preview's Connect to dude, and li
   const s = await screen(client);
   expect(s.step()).toBe("no-opener");
   expect(s.container.textContent).toContain("Open this from a preview's Connect to dude button");
+  // A message with no source (as from a closed window) equals the absent opener, and a stranger's: neither is heard.
+  await hello(WEB, `${WEB}/`, null);
   await hello(WEB, `${WEB}/`, { postMessage() {} });
   expect(client.asked).toEqual([]);
+  expect(s.step()).toBe("no-opener");
+});
+
+test("a lookup that fails for another reason than not found says dude couldn't look the preview up", async () => {
+  const client = new LookupClient(() => Promise.reject(new ApiError(500, "internal", "database unavailable")));
+  const s = await screen(client);
+  await hello(WEB, `${WEB}/`);
+  await until(() => (s.step() === "failed" ? true : null), "the failed step");
+  expect(s.container.textContent).toContain("dude couldn't look the preview up");
+  expect(s.found).toEqual([]);
+});
+
+test("a hello in another protocol version is not looked up", async () => {
+  const client = new LookupClient(async () => FOUND);
+  await screen(client);
+  await act(async () => {
+    window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 2, url: `${WEB}/` }, origin: WEB, source: opener as MessageEventSource }));
+  });
+  expect(client.asked).toEqual([]);
+});
+
+test("hellos said again while the lookup is pending look it up once", async () => {
+  const client = new LookupClient(() => new Promise(() => {}));
+  const s = await screen(client);
+  await hello(WEB, `${WEB}/`);
+  await hello(WEB, `${WEB}/`);
+  await hello(WEB, `${WEB}/cart`);
+  expect(client.asked).toEqual([WEB]);
+  expect(s.step()).toBe("looking");
 });
 
 test("an opener that never says hello is said to have not answered", async () => {

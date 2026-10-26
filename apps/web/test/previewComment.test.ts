@@ -574,6 +574,11 @@ test("a window reachable only through two openers is adopted; one whose openers 
   const lying = win(window);
   post({ type: "hello", v: 1, url: `${API}/` }, WEB, lying);
   expect(types(lying)).toEqual([]);
+  // An opener chain at the limit: this tab is five steps up.
+  let five: unknown = window;
+  for (let i = 0; i < 5; i++) five = win(five);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, five);
+  expect(types(five as Win)).toEqual(["session"]);
   // An opener chain too long: this tab is six steps up.
   let deep: unknown = window;
   for (let i = 0; i < 6; i++) deep = win(deep);
@@ -584,7 +589,7 @@ test("a window reachable only through two openers is adopted; one whose openers 
   Object.defineProperty(sealed, "opener", { get: () => { throw new Error("blocked"); } });
   post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, sealed);
   expect(types(sealed)).toEqual([]);
-  expect(c.windows.length).toBe(1);
+  expect(c.windows.length).toBe(2);
 });
 
 test("a draft never adopts a window, even one linked to this tab", async () => {
@@ -711,4 +716,58 @@ test("Show on preview and a Page link go to the adopted window already on that p
   expect(c.visit(`${WEB}/greetings?x=1`, "web")).toBe(true);
   expect(opened.length).toBe(1);
   expect(focused).toBe(2);
+});
+
+test("Stop commenting takes the overlay off every window held, the adopted ones too", () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const second = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/greetings` }, WEB, second);
+  c.stop();
+  expect(told().at(-1)?.type).toBe("stop");
+  expect(types(second).at(-1)).toBe("stop");
+  expect(c.view.state).toBe("idle");
+});
+
+test("an adopted window that closes is seen: it doesn't hide the named window still open, and Dismiss lets it go", async () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const second = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/greetings` }, WEB, second);
+  second.closed = true;
+  await tick(1_100);
+  expect(c.view.state).toBe("open");
+  c.dismiss();
+  expect(c.windows).toEqual([popup as unknown as Window]);
+});
+
+test("the view is the latest open window's; an open one wins over a newer one waiting", () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  expect(c.view).toMatchObject({ state: "open", server: "web" });
+  // An adopted window on the API's origin, heard later: the latest open, and it names no server.
+  const second = win(window);
+  post({ type: "hello", v: 1, url: `${API}/` }, API, second);
+  expect(c.view).toMatchObject({ state: "open", server: null });
+  // The named window heard again: the latest open once more.
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  expect(c.view).toMatchObject({ state: "open", server: "web" });
+  // The named window reopened and not yet heard (waiting, and newest): the open adopted one is the view.
+  c.open(`${WEB}/other`, "web");
+  expect(c.view).toMatchObject({ state: "open", server: null });
+});
+
+test("Dismiss drops closed windows, so they no longer take a slot under MAX_WINDOWS", async () => {
+  c.open(`${WEB}/cart`, "web");
+  post({ type: "hello", v: 1, url: `${WEB}/cart` });
+  const adopted = Array.from({ length: MAX_WINDOWS - 1 }, () => win(window));
+  for (const w of adopted) post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, w);
+  expect(c.windows.length).toBe(MAX_WINDOWS);
+  adopted[2]!.closed = true;
+  adopted[5]!.closed = true;
+  await tick(1_100);
+  c.dismiss();
+  expect(c.windows.length).toBe(MAX_WINDOWS - 2);
+  expect(c.windows).not.toContain(adopted[2] as unknown as Window);
+  expect(c.windows).not.toContain(adopted[5] as unknown as Window);
 });
