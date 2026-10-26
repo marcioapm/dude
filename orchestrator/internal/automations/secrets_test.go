@@ -64,19 +64,23 @@ func TestAutomationRunsGetTheirPickedOrRoleSecrets(t *testing.T) {
 	h.automation("aut_org", "agent", schedule, map[string]any{"project_id": nil, "agent": own})
 	h.automation("aut_proj", "command", schedule, map[string]any{"command": "true"})
 	h.automation("aut_none", "command", schedule, map[string]any{"command": "true"})
+	h.automation("aut_proj_only", "command", schedule, map[string]any{"command": "true"})
 	h.automation("aut_qa", "agent", schedule, map[string]any{"agent": preset("qa_browser")})
 	h.automation("aut_qa_org", "agent", schedule, map[string]any{"project_id": nil, "agent": preset("qa_browser")})
 	h.automation("aut_inv", "agent", schedule, map[string]any{"agent": preset("investigator")})
 	exec(t, h.owner, `UPDATE automations SET secrets = '[{"source":"organization","name":"STATUSPAGE_KEY"},{"source":"organization","name":"GH_TOKEN"}]' WHERE id = 'aut_org'`)
 	exec(t, h.owner, `UPDATE automations SET secrets = '[{"source":"organization","name":"GH_TOKEN"},{"source":"organization","name":"NPM_TOKEN"},
 		{"source":"project","name":"DB_PASS"}]' WHERE id = 'aut_proj'`)
+	// A project pick of a name only the organisation holds: the source is part of the pick, so it gets nothing.
+	exec(t, h.owner, `UPDATE automations SET secrets = '[{"source":"project","name":"STATUSPAGE_KEY"}]' WHERE id = 'aut_proj_only'`)
 
 	for id, want := range map[string]map[string]string{
 		// Ticked for nobody, it still reaches an automation that picks it.
 		"aut_org": {"STATUSPAGE_KEY": "org-status", "GH_TOKEN": "org-gh"},
 		// The organisation's GH_TOKEN pick resolves to the project's.
-		"aut_proj": {"GH_TOKEN": "project-gh", "NPM_TOKEN": "org-npm", "DB_PASS": "project-db"},
-		"aut_none": {},
+		"aut_proj":      {"GH_TOKEN": "project-gh", "NPM_TOKEN": "org-npm", "DB_PASS": "project-db"},
+		"aut_proj_only": {},
+		"aut_none":      {},
 		// Tester: tester-ticked at both levels, the project's GH_TOKEN winning the name.
 		"aut_qa":     {"GH_TOKEN": "project-gh", "NPM_TOKEN": "org-npm", "SENTRY_TOKEN": "org-sentry"},
 		"aut_qa_org": {"NPM_TOKEN": "org-npm", "SENTRY_TOKEN": "org-sentry"},
