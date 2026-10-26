@@ -10,9 +10,9 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// PostFailedPrefix starts the reason of a run failed because its agent
+// postFailedPrefix starts the reason of a run failed because its agent
 // called post_to_chat with no Slack installation.
-const PostFailedPrefix = "post_to_chat failed: "
+const postFailedPrefix = "post_to_chat failed: "
 
 // EvRunFailedOnPost records the post_to_chat refusal (payload eventId) an
 // agent run was failed on: the run's page names that call, and only a run
@@ -35,7 +35,7 @@ func postFailed(ctx context.Context, tx pgx.Tx, runID string) (reason, eventID s
 	if err != nil {
 		return "", "", err
 	}
-	return PostFailedPrefix + reason, eventID, nil
+	return postFailedPrefix + reason, eventID, nil
 }
 
 // recordFailedOnPost records that a's run runID failed on the refusal eventID.

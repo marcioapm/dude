@@ -38,11 +38,6 @@ type chatOptions struct {
 	beforeCall func(tool string)
 }
 
-func setupChatPaged(t *testing.T, installed bool, pageSize int, more func(*fakeslack.Server)) chatFixture {
-	t.Helper()
-	return setupChatWith(t, installed, chatOptions{pageSize: pageSize, more: more})
-}
-
 func setupChatWith(t *testing.T, installed bool, o chatOptions) chatFixture {
 	t.Helper()
 	fake := fakeslack.New("cid", "csecret")
@@ -212,12 +207,12 @@ func TestPostToChatLookupRefusalsSpendNoPost(t *testing.T) {
 // A lookup by name that reaches its page bound says so and asks for the id,
 // posting nothing and spending none of the run's ten; the id then posts.
 func TestPostToChatAskedForTheIDWhenTheLookupCannotFinish(t *testing.T) {
-	c := setupChatPaged(t, true, 1, func(f *fakeslack.Server) {
+	c := setupChatWith(t, true, chatOptions{pageSize: 1, more: func(f *fakeslack.Server) {
 		for i := range 60 {
 			f.AddConversation(fakeslack.Conversation{ID: fmt.Sprintf("C1%08d", i), Team: "T1", Name: fmt.Sprintf("team-%02d", i), Kind: "public",
 				Members: []string{"UBT1"}})
 		}
-	})
+	}})
 	status, out := c.postToChat(t, "#team-59", "hello")
 	if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "could not finish looking up the channel #team-59; pass the channel id") {
 		t.Fatalf("past the bound: %d %v", status, out)
