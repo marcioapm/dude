@@ -1227,7 +1227,7 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		if n, err := delivery.BlockingFeedbackTx(r.Context(), tx, id, 0); err != nil {
 			return err
 		} else if n > 0 {
-			return fail(http.StatusConflict, "feedback_open", "%d feedback items from people are not handled yet", n)
+			return fail(http.StatusConflict, "feedback_open", "%s", delivery.FeedbackNotHandledText(n))
 		}
 		if d != nil && d.Step == "awaitRead" && d.Live() {
 			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET status = 'completed', awaiting_signals = '[]'::jsonb,

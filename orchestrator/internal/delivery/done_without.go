@@ -18,6 +18,12 @@ import (
 // Payload: {branch, repositories, heads}.
 const EvDoneWithoutPullRequest = "task.done_without_pull_request"
 
+// FeedbackNotHandledText is why finishing a task (Mark done, Done without
+// a pull request) is refused while n of the people's feedback items are open.
+func FeedbackNotHandledText(n int) string {
+	return fmt.Sprintf("%d feedback items from people are not handled yet", n)
+}
+
 // DoneWithoutPullRequestTx ends a delivery held before its pull request as
 // Done, its branch kept: refused unless the task's latest delivery is
 // Deliver's hold before its first pull request, or once the attempt has a
@@ -34,6 +40,12 @@ func DoneWithoutPullRequestTx(ctx context.Context, tx pgx.Tx, org, taskID string
 		}
 		if opened || len(d.State.PullRequestIDs) > 0 {
 			return lifecycleRefuse("pull_request_open", PullRequestOpenText)
+		}
+		// As Mark done: people's feedback still open is not dropped by finishing.
+		if n, err := BlockingFeedbackTx(ctx, tx, taskID, 0); err != nil {
+			return err
+		} else if n > 0 {
+			return lifecycleRefuse("feedback_open", "%s", FeedbackNotHandledText(n))
 		}
 		return nil
 	})
