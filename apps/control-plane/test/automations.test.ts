@@ -394,8 +394,18 @@ describe("runs", () => {
       VALUES ('evt_lt2', ${ORG}, 'slack.message.posted', 'agent', 'arn_lt', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_lt',
         ${{ channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p2", automationRunId: "arn_lt" }})`;
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_lt`))).failedCallId).toBeNull();
+    // The orchestrator records the refusal it failed the run on; the page names that one.
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      VALUES ('evt_ns3', ${ORG}, 'automation.run.failed_on_post', 'system', 'dude', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_ns',
+        ${{ automationId: a.id, automationRunId: "arn_ns", eventId: "evt_ns1" }})`;
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_ns`))).failedCallId).toBe("evt_ns1");
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_fx`))).failedCallId).toBeNull();
+    // Failed for its own reason (timed out), with a not-connected refusal and no post: it did not fail on the refusal.
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
+      ('arn_to', ${ORG}, ${a.id}, 'failed', 'timed out after 30 minutes', 'schedule')`;
+    await ev("evt_to1", "arn_to", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
+      reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme" });
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_to`))).failedCallId).toBeNull();
   });
 
   test("Run now, test-event evaluation and Start fresh go to the orchestrator as the person; members who neither edit nor own it are refused", async () => {

@@ -455,13 +455,13 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,
         response_excerpt AS "responseExcerpt", at FROM automation_run_requests WHERE run_id = ${r.id as string} ORDER BY at, try`) as Array<Record<string, unknown>>;
     return { ...runOut(r), containerStartedAt: iso(r.containerStartedAt), containerStoppedAt: iso(r.containerStoppedAt),
-      requests: requests.map((q) => ({ ...q, at: iso(q.at) })), ...(await toolCalls(scope, r.id as string, r.status === "failed")) };
+      requests: requests.map((q) => ({ ...q, at: iso(q.at) })), ...(await toolCalls(scope, r.id as string)) };
   });
   return json(out);
 }
 
-/** The ledger events an automation run's tool calls leave (orchestrator agenttools). */
-const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "slack.message.posted", "slack.message.refused"];
+/** The ledger events an automation run's tool calls leave (orchestrator agenttools), and the call it failed on (automations). */
+const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "slack.message.posted", "slack.message.refused", "automation.run.failed_on_post"];
 
 /**
  * An automation run's calls to dude's tools, oldest first: each finished
@@ -469,7 +469,7 @@ const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "slack.message.p
  * call that spent an attempt first is timed from it; a post carries its
  * channel and link. A post's text is left out: its message is in Slack.
  */
-async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
+async function toolCalls(scope: OrgScope, runId: string) {
   // run_id is the automation run's id on every event its agent's calls write (events_run_cursor_idx).
   const rows = (await scope.sql`SELECT id, event_type AS type, occurred_at AS at, payload FROM events
     WHERE run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
@@ -504,11 +504,9 @@ async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
       posted: !failed && tool === "post_to_chat" ? posts.shift() ?? null : null,
     });
   }
-  // The refusal the orchestrator failed the run on (automations.postFailed):
-  // its last not-connected one, when no post went after it. rows are in order.
-  const lastPost = rows.findLastIndex((e) => e.type === "slack.message.posted");
-  const failedAt = rows.findLastIndex((e) => e.type === "slack.message.refused" && e.payload.code === "not_connected");
-  return { toolCalls: out, failedCallId: failed && failedAt > lastPost ? rows[failedAt]!.id : null };
+  // The refusal the orchestrator failed the run on, as it recorded it (automations.EvRunFailedOnPost).
+  const failedOn = rows.find((e) => e.type === "automation.run.failed_on_post");
+  return { toolCalls: out, failedCallId: failedOn ? String(failedOn.payload.eventId) : null };
 }
 
 /**

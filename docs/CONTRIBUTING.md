@@ -849,18 +849,22 @@ their creator.
   `account_inactive`. When the agent's turn ends the run ends **failed** with
   "post_to_chat failed: " and that reason (`automations/post_to_chat.go`),
   unless a post went after the last such refusal (Slack connected during the
-  run), and its owner is told as for any failure. The page's Tools card shows
-  the attention callout on post_to_chat's row, linking Organisation settings
-  → Chat.
+  run), and its owner is told as for any failure. The refusal it failed on is
+  recorded as an `automation.run.failed_on_post` event (`eventId`); a run
+  that failed for another reason (timed out, crashed, cancelled) has none.
+  The page's Tools card shows the attention callout on post_to_chat's row,
+  linking Organisation settings → Chat.
 - **A run's tool calls.** `GET /v1/automations/:id/runs/:runId` carries
   `toolCalls`, read by the run's `run_id` from its ledger events
   (`agent.tool.dude`, the attempt before it for its duration, and the
   post/refusal events above), and `failedCallId`, the refusal the run failed
-  on; a post's text is never repeated there. The run detail shows them under
-  Log, each a `ToolCallCard` beside its time (`ToolCallRow`): a post with
-  `icon="slack"`, its answer when opened, and "Posted to **#channel** · Open
-  the message in Slack", a refused call with its error; the call named by
-  `failedCallId` gets a danger callout under Run. The Tools card's list is
+  on (that event's `eventId`, else null); a post's text is never repeated
+  there. The run detail shows them under Log, each a `ToolCallCard` beside
+  its time (`ToolCallRow`): a post with `icon="slack"`, its answer when
+  opened, and "Posted to **#channel** · Open the message in Slack", a refused
+  call with its error; the call named by `failedCallId` gets a danger callout
+  under Run, saying "Nothing was posted" when no call on the run posted and
+  "That message was not posted" otherwise. The Tools card's list is
   the app's copy of the orchestrator's (`tool-lists-automation.golden.md`).
 - **Prompt editor and history.** Own prompt and preset brief both use
   `MarkdownDocument`, `{{ }}` inserting `AUTOMATION_PROMPT_VARIABLES`.

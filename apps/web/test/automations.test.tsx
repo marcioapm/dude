@@ -617,4 +617,18 @@ describe("post_to_chat", () => {
     expect(other.querySelector("[data-testid=run-failed]")).toBeNull();
     expect(other.textContent).toContain("post_to_chat failed: the agent wrote this itself");
   });
+
+  test("a run that posted, then failed on a refused post, says that message was not posted, not that nothing was", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    client.automationRun = async (id, runId) => {
+      const r = await real(id, runId);
+      const posted = (await real(id, "arn_d1")).toolCalls;
+      return runId === "arn_d0" ? { ...r, toolCalls: [...posted, ...r.toolCalls] } : r;
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. That message was not posted; Márcio Martins was told.`);
+    expect(c.querySelector("[data-testid=posted-link]")).not.toBeNull();
+  });
 });

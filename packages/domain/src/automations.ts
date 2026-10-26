@@ -501,7 +501,7 @@ export interface AutomationRunDetail extends AutomationRun {
   requests: AutomationRunRequest[];
   /** The calls its agent made to dude's tools, oldest first. */
   toolCalls: AutomationToolCall[];
-  /** The tool call a failed run failed on: a post_to_chat refused for want of a Slack installation, with no post after it; null for none. */
+  /** The post_to_chat refusal the orchestrator failed the run on (its event id); null for a run that did not fail on one. */
   failedCallId: string | null;
 }
 

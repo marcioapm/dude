@@ -1108,7 +1108,8 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
           {run.costUsd !== null ? <span className="automationRunCost">· ${run.costUsd.toFixed(2)}</span> : null}</p>
         {run.reason && failedCall ? (
           <Callout tone="danger" data-testid="run-failed">
-            <b>Failed.</b> {run.reason}. Nothing was posted; {a.owner?.name ?? "its owner"} was told.
+            <b>Failed.</b> {run.reason}. {run.toolCalls.some((c) => c.posted) ? "That message was not posted" : "Nothing was posted"};{" "}
+            {a.owner?.name ?? "its owner"} was told.
           </Callout>
         ) : run.reason ? <SettingsNote>{run.reason}</SettingsNote> : null}
         {a.kind === "server" && run.containerStartedAt ? (
