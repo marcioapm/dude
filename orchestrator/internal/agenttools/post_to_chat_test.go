@@ -103,11 +103,11 @@ func TestPostToChatWithoutSlackSaysItIsNotConnected(t *testing.T) {
 	if n := len(c.fake.BotMessages()); n != 0 {
 		t.Errorf("%d messages reached Slack", n)
 	}
-	var said, code string
-	if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'error', payload->>'code' FROM events WHERE event_type = $1
-		AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvChatPostRefused).Scan(&said, &code); err != nil ||
-		!strings.HasPrefix(said, "Slack is not connected for Acme") || code != agenttools.PostNotConnected {
-		t.Errorf("the refusal on the run: %q %q %v", said, code, err)
+	var said, code, reason string
+	if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'error', payload->>'code', payload->>'reason' FROM events WHERE event_type = $1
+		AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvChatPostRefused).Scan(&said, &code, &reason); err != nil ||
+		!strings.HasPrefix(said, "Slack is not connected for Acme") || code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
+		t.Errorf("the refusal on the run: %q %q %q %v", said, code, reason, err)
 	}
 }
 

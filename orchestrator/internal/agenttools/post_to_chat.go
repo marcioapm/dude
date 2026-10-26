@@ -164,14 +164,15 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 }
 
 func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (postChecked, error) {
-	out, notConnected, err := checkPost(ctx, tx, c, in)
+	out, unconnectedOrg, err := checkPost(ctx, tx, c, in)
 	var refused refusal
 	if errors.As(err, &refused) && refused.event == nil && c.AutomationID != "" {
 		// Recorded once the call's transaction is gone: the run's log shows
 		// the refused call and why.
 		recorded := postRefused(in.Channel, refused.msg).(refusal)
-		if notConnected {
+		if unconnectedOrg != "" {
 			recorded.event.payload["code"] = PostNotConnected
+			recorded.event.payload["reason"] = NotConnectedReason(unconnectedOrg)
 		}
 		return out, recorded
 	}
@@ -179,52 +180,57 @@ func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) 
 }
 
 // PostNotConnected is the code of a post refused because the organisation
-// has no Slack installation: the automation run fails on it.
+// has no Slack installation: the automation run fails on it, with the
+// refusal's "reason" (NotConnectedReason).
 const PostNotConnected = "not_connected"
+
+// NotConnectedReason is why a run that posted with no Slack installation
+// for org failed.
+func NotConnectedReason(org string) string { return "Slack is not connected for " + org }
 
 // postRefused is a refusal recorded on the run as EvChatPostRefused.
 func postRefused(channel, msg string) error {
 	return refuseRecorded(EvChatPostRefused, map[string]any{"tool": "post_to_chat", "channel": channel, "error": msg}, msg)
 }
 
-// checkPost checks the call in the run's transaction; notConnected says it
-// was refused because the organisation has no Slack installation.
-func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out postChecked, notConnected bool, err error) {
+// checkPost checks the call in the run's transaction; unconnectedOrg is the
+// organisation's name when it was refused for having no Slack installation.
+func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out postChecked, unconnectedOrg string, err error) {
 	out.postToChatIn = in
 	if c.AutomationID == "" {
-		return out, false, refuseText(postRefusal("automations-only"))
+		return out, "", refuseText(postRefusal("automations-only"))
 	}
 	if out.Channel = postChannel(in.Channel); out.Channel == "" {
-		return out, false, refuseText(postRefusal("name-a-channel"))
+		return out, "", refuseText(postRefusal("name-a-channel"))
 	}
 	if n := utf8.RuneCountInString(in.Text); strings.TrimSpace(in.Text) == "" || n > postTextMax {
-		return out, false, refuse(postRefusal("text-length"), postTextMax, n)
+		return out, "", refuse(postRefusal("text-length"), postTextMax, n)
 	}
 	// The run's row, locked, serialises its calls: two at once cannot both
 	// take its last post. Counted as tool.limit counts (callsMade, every
 	// attempt once), checked here so the refusal says "messages per run".
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM automation_runs WHERE id = $1 FOR UPDATE`, c.RunID); err != nil {
-		return out, false, err
+		return out, "", err
 	}
 	_, made, err := callsMade(ctx, tx, c.RunID, "post_to_chat")
 	if err != nil {
-		return out, false, err
+		return out, "", err
 	}
 	if made >= postsPerRun {
-		return out, false, refuse(postRefusal("per-run"), postsPerRun)
+		return out, "", refuse(postRefusal("per-run"), postsPerRun)
 	}
 	switch target := c.env.prepared.(type) {
 	case error:
-		return out, false, target
+		return out, "", target
 	case postTarget:
 		out.postTarget = target
-		return out, false, nil
+		return out, "", nil
 	}
 	var org string
 	if err := tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, c.Org).Scan(&org); err != nil {
-		return out, false, err
+		return out, "", err
 	}
-	return out, true, refuse(postRefusal("not-connected"), org)
+	return out, org, refuse(postRefusal("not-connected"), org)
 }
 
 // postOutside posts, with no transaction open.

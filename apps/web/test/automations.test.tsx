@@ -590,4 +590,24 @@ describe("post_to_chat", () => {
     expect(call.querySelector("[data-testid=posted-link]")).toBeNull();
     expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the last one; its owner was told.");
   });
+
+  test("the danger callout follows the call the run failed on, not the reason's words nor which call came last", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    const search = { id: "evt_s", tool: "github_search", at: new Date().toISOString(), status: "completed" as const, args: { q: "is:pr" },
+      durationMs: 90, error: null, posted: null };
+    // A call after the refusal: the run still failed on the refusal.
+    client.automationRun = async (id, runId) => {
+      const r = await real(id, runId);
+      return runId === "arn_d0" ? { ...r, toolCalls: [...r.toolCalls, search] }
+        : { ...r, status: "failed", reason: "post_to_chat failed: the agent wrote this itself", failedCallId: null };
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    await until(() => c.querySelector("[data-testid=run-failed]"), "the failure");
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the post_to_chat call at");
+    const other = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d1" });
+    await until(() => other.querySelector("[data-testid=run-tools]"), "the log");
+    expect(other.querySelector("[data-testid=run-failed]")).toBeNull();
+    expect(other.textContent).toContain("post_to_chat failed: the agent wrote this itself");
+  });
 });

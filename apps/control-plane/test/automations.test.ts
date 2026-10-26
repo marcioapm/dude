@@ -366,6 +366,25 @@ describe("runs", () => {
       { id: "evt_d5", tool: "post_to_chat", at: "2026-10-23T15:04:00.000Z", status: "failed", args: { channel: "#random" }, durationMs: null,
         error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude", posted: null },
     ]);
+    expect(run.failedCallId).toBeNull();
+  });
+
+  test("a run failed on a post without Slack names the call it failed on; a refusal the agent could fix names none", async () => {
+    const { body: a } = await create("ana", { name: "Digest without Slack" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
+      ('arn_ns', ${ORG}, ${a.id}, 'failed', 'post_to_chat failed: Slack is not connected for Acme', 'schedule'),
+      ('arn_fx', ${ORG}, ${a.id}, 'failed', 'the agent gave up', 'schedule')`;
+    const ev = (id: string, run: string, at: string, payload: Record<string, unknown>) =>
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+        VALUES (${id}, ${ORG}, 'chat.message.refused', 'agent', ${run}, 'orchestrator', ${at}::timestamptz, ${run}, ${{ ...payload, automationRunId: run }})`;
+    await ev("evt_ns1", "arn_ns", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
+      reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app" });
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      VALUES ('evt_ns2', ${ORG}, 'agent.tool.dude', 'agent', 'arn_ns', 'orchestrator', '2026-10-23T15:04:00Z', 'arn_ns',
+        ${{ tool: "github_search", arguments: { q: "is:pr" }, result: {}, automationRunId: "arn_ns" }})`;
+    await ev("evt_fx1", "arn_fx", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#nowhere", error: "there is no channel #nowhere" });
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_ns`))).failedCallId).toBe("evt_ns1");
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_fx`))).failedCallId).toBeNull();
   });
 
   test("Run now, test-event evaluation and Start fresh go to the orchestrator as the person; members who neither edit nor own it are refused", async () => {

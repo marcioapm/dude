@@ -1098,16 +1098,15 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
   if (!run) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
-  // A run that failed on its last call to post_to_chat (the orchestrator's "post_to_chat failed: …").
-  const last = run.toolCalls.at(-1);
-  const failedCall = run.status === "failed" && last?.tool === "post_to_chat" && last.status === "failed"
-    && Boolean(run.reason?.startsWith("post_to_chat failed"));
+  // The call the run failed on (a post_to_chat without Slack), as the API names it.
+  const failedCall = run.failedCallId ? run.toolCalls.find((c) => c.id === run.failedCallId) ?? null : null;
+  const failedOnLast = failedCall !== null && failedCall === run.toolCalls.at(-1);
   return (
     <div data-testid="run-detail" className={runDetailClass}>
       <SettingsSection title="Run">
         <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span>
           {run.costUsd !== null ? <span className="automationFact">· ${run.costUsd.toFixed(2)}</span> : null}</p>
-        {run.reason && run.status === "failed" && failedCall ? (
+        {run.reason && failedCall ? (
           <Callout tone="danger" data-testid="run-failed">
             <b>Failed.</b> {run.reason}. Nothing was posted; {a.owner?.name ?? "its owner"} was told.
           </Callout>
@@ -1139,7 +1138,9 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
       {run.toolCalls.length > 0 ? (
         <SettingsSection title="Log" data-testid="run-tools">
           <SettingsNote>{run.toolCalls.length} tool {run.toolCalls.length === 1 ? "call" : "calls"}.{" "}
-            {failedCall ? "The run failed on the last one; its owner was told." : "Open one for its output."}</SettingsNote>
+            {failedOnLast ? "The run failed on the last one; its owner was told."
+              : failedCall ? `The run failed on the ${failedCall.tool} call at ${formatTimestamp(failedCall.at, "time")}; its owner was told.`
+              : "Open one for its output."}</SettingsNote>
           <ToolCallList calls={run.toolCalls} />
           {run.logTail ? <pre className="automationPayload">{run.logTail}</pre> : null}
         </SettingsSection>

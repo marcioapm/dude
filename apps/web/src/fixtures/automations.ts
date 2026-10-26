@@ -265,11 +265,11 @@ export class FixtureAutomations {
     if (!r) throw new Error(`no run ${runId}`);
     if (id === "aut_digest") {
       return { ...r, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-        stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [] };
+        stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null };
     }
     return { ...r, payloads: [{ deliveryId: DELIVERIES[0]!.id, event: "pull_request", action: "opened", body: DELIVERIES[0]!.body }],
       payloadsPurged: false, logTail: "Labelled #214: area/checkout.", exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-      stopReason: null, requests: [], toolCalls: [] };
+      stopReason: null, requests: [], toolCalls: [], failedCallId: null };
   }
 
   deliveries(): { deliveries: PastDelivery[] } {

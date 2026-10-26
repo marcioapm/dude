@@ -455,7 +455,7 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,
         response_excerpt AS "responseExcerpt", at FROM automation_run_requests WHERE run_id = ${r.id as string} ORDER BY at, try`) as Array<Record<string, unknown>>;
     return { ...runOut(r), containerStartedAt: iso(r.containerStartedAt), containerStoppedAt: iso(r.containerStoppedAt),
-      requests: requests.map((q) => ({ ...q, at: iso(q.at) })), toolCalls: await toolCalls(scope, r.id as string) };
+      requests: requests.map((q) => ({ ...q, at: iso(q.at) })), ...(await toolCalls(scope, r.id as string, r.status === "failed")) };
   });
   return json(out);
 }
@@ -469,7 +469,7 @@ const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "chat.message.po
  * call that spent an attempt first is timed from it; a post carries its
  * channel and link. A post's text is left out: its message is in Slack.
  */
-async function toolCalls(scope: OrgScope, runId: string) {
+async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
   // run_id is the automation run's id on every event its agent's calls write (events_run_cursor_idx).
   const rows = (await scope.sql`SELECT id, event_type AS type, occurred_at AS at, payload FROM events
     WHERE run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
@@ -503,7 +503,9 @@ async function toolCalls(scope: OrgScope, runId: string) {
       posted: !failed && tool === "post_to_chat" ? posts.shift() ?? null : null,
     });
   }
-  return out;
+  // The refusal the orchestrator failed the run on (automations.postFailed): its first not-connected one.
+  const failedOn = rows.find((e) => e.type === "chat.message.refused" && e.payload.code === "not_connected");
+  return { toolCalls: out, failedCallId: failed && failedOn ? failedOn.id : null };
 }
 
 /**

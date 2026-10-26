@@ -501,6 +501,8 @@ export interface AutomationRunDetail extends AutomationRun {
   requests: AutomationRunRequest[];
   /** The calls its agent made to dude's tools, oldest first. */
   toolCalls: AutomationToolCall[];
+  /** The tool call a failed run failed on: a post_to_chat refused for want of a Slack installation, with no post after it; null for none. */
+  failedCallId: string | null;
 }
 
 /** One call an automation run's agent made to a dude tool, as the run's ledger has it. */

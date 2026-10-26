@@ -18,13 +18,16 @@ func TestAnAgentRunFailsOnAPostWithoutSlack(t *testing.T) {
 		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Post the digest."}}})
 	exec(t, h.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES
 		('arn_ok', $1, 'aut_digest', 'running', 'schedule'), ('arn_noslack', $1, 'aut_digest', 'running', 'schedule')`, h.org)
-	refused := func(run, code, msg string) {
+	refused := func(run, code, msg, reason string) {
 		exec(t, h.owner, `INSERT INTO events (id, organization_id, project_id, event_type, actor_type, actor_id, source, run_id, payload)
-			VALUES ($1, $2, $3, $4, 'agent', $5, 'orchestrator', $5, jsonb_build_object('automationRunId', $5::text, 'code', $6::text, 'error', $7::text))`,
-			"evt_"+run+code, h.org, h.project, agenttools.EvChatPostRefused, run, code, msg)
+			VALUES ($1, $2, $3, $4, 'agent', $5, 'orchestrator', $5, jsonb_build_object('automationRunId', $5::text, 'code', $6::text,
+			'error', $7::text, 'reason', NULLIF($8, '')))`,
+			"evt_"+run+code, h.org, h.project, agenttools.EvChatPostRefused, run, code, msg, reason)
 	}
-	refused("arn_ok", "", "there is no channel #nowhere that dude's Slack bot can see: check the name")
-	refused("arn_noslack", agenttools.PostNotConnected, "Slack is not connected for Acme: an organisation admin adds dude's Slack app")
+	refused("arn_ok", "", "there is no channel #nowhere that dude's Slack bot can see: check the name", "")
+	// An organisation whose name holds ": " keeps all of it in the reason.
+	refused("arn_noslack", agenttools.PostNotConnected, "Slack is not connected for Acme: EU: an organisation admin adds dude's Slack app",
+		agenttools.NotConnectedReason("Acme: EU"))
 	ctx := context.Background()
 	var a Automation
 	if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) (err error) { a, err = Load(ctx, tx, "aut_digest"); return err }); err != nil {
@@ -42,7 +45,7 @@ func TestAnAgentRunFailsOnAPostWithoutSlack(t *testing.T) {
 	if r := got["arn_ok"]; r.Status != "succeeded" {
 		t.Errorf("a run with a post the agent could fix: %+v", r)
 	}
-	if r := got["arn_noslack"]; r.Status != "failed" || r.Reason != "post_to_chat failed: Slack is not connected for Acme" {
+	if r := got["arn_noslack"]; r.Status != "failed" || r.Reason != "post_to_chat failed: Slack is not connected for Acme: EU" {
 		t.Errorf("a run that posted with no Slack: %+v", r)
 	}
 	var told int
