@@ -337,6 +337,25 @@ describe("a preview's task, looked up by its origin", () => {
     await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind) VALUES ('run_look_other', ${OTHER}, 'prj_look_other', 'wi_look_other', 1, 'preview')`;
     await owner`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
       VALUES ('run_look_other', ${OTHER}, 'web', 'srv_look_other', 'web-oth-1-o.preview.example.test', 'https://web-oth-1-o.preview.example.test/')`;
+    // A server on a port of its own.
+    await owner`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+      VALUES ('run_look', ${ORG}, 'admin', 'srv_look_admin', 'port-look-1-web.preview.example.test', 'https://port-look-1-web.preview.example.test:8443/')`;
+    // A server row under an agent's Run, not a preview's.
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_look_agent', ${ORG}, ${PROJECT}, 42, 'agent')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind) VALUES ('run_look_agent', ${ORG}, ${PROJECT}, 'wi_look_agent', 1, 'agent')`;
+    await owner`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+      VALUES ('run_look_agent', ${ORG}, 'web', 'srv_look_agent', 'web-agent-1-web.preview.example.test', 'https://web-agent-1-web.preview.example.test/')`;
+  });
+
+  test("a server on its own port is found by its origin with that port, and not by the origin without it", async () => {
+    expect(await body(await lookup(memberKey, "https://port-look-1-web.preview.example.test:8443"))).toEqual({ organizationSlug: ORG, taskId: "wi_look", taskKey: "WEB-41", server: "admin" });
+    expect((await lookup(memberKey, "https://port-look-1-web.preview.example.test")).status).toBe(404);
+    // The default port written out is not the origin the browser gives.
+    expect((await lookup(memberKey, "https://port-look-1-web.preview.example.test:443")).status).toBe(400);
+  });
+
+  test("a server row under a Run that is not a preview is not found", async () => {
+    expect((await lookup(memberKey, "https://web-agent-1-web.preview.example.test")).status).toBe(404);
   });
 
   test("names the organisation, task and server of a live preview served at the origin", async () => {
