@@ -6,6 +6,12 @@
 
 import { PULL_REQUEST_CHOICE, PULL_REQUEST_CHOICES, type PullRequestChoice } from "@dude/domain";
 
+/** Why a task's choice can no longer change: a pull request is open. */
+export const PULL_REQUEST_OPEN_TEXT = "The pull request is already open.";
+
+/** A first name, for "Only Sam can change it." */
+export const firstName = (name: string) => name.split(" ")[0] ?? name;
+
 /** The label of the setting wherever it is shown. */
 export const BEFORE_PR_LABEL = "Before the pull request";
 

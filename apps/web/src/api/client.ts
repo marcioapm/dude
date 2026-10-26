@@ -116,6 +116,7 @@ import type {
   RelationSide,
   TaskRelations,
   TaskStatus,
+  PullRequestChoice,
 } from "@dude/domain";
 import type {
   ChatConnectStateView,
@@ -1097,8 +1098,18 @@ export class ApiClient {
     return this.#request("POST", `/v1/tasks/${taskId}/runs`, {});
   }
 
-  createTask(input: { projectId: string } & Partial<TaskFields> & { title: string }): Promise<Task> {
+  createTask(input: { projectId: string } & Partial<TaskFields> & { title: string; pullRequestChoice?: PullRequestChoice | null }): Promise<Task> {
     return this.#request("POST", "/v1/tasks", input);
+  }
+
+  /** What Deliver does before the task's pull request, its own (null: its project's): the owner's, until one is open. */
+  setPullRequestChoice(taskId: string, choice: PullRequestChoice | null): Promise<{ taskId: string; pullRequestChoice: PullRequestChoice | null }> {
+    return this.#request("PUT", `/v1/tasks/${encodeURIComponent(taskId)}/pull-request-choice`, { choice });
+  }
+
+  /** The owner's Done without a pull request, at Deliver's hold before it: the branch kept, the task Done. */
+  doneWithoutPullRequest(taskId: string): Promise<{ taskId: string; status: "done" }> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/done-without-pull-request`);
   }
 
   /** Edit a task. What it asks for is fixed once delivery starts; where it sits is not. */

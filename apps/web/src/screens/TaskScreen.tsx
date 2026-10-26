@@ -713,7 +713,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       ) : null}
 
       {editing ? (
-        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
+        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started, people.you)} onSaved={() => void load()} />
       ) : null}
       {lifecycle.dialogs}
       {stopping ? (
