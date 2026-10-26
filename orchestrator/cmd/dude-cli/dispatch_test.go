@@ -93,6 +93,11 @@ func TestHelpWithANoun(t *testing.T) {
 	if err != nil || n != 0 || got != want || !strings.HasPrefix(got, "usage: dude review-question VERB") {
 		t.Fatalf("help review-question: %v, %d requests\n%s", err, n, got)
 	}
+	verb, _, _ := runPlain(t, "task", "update", "--help")
+	got, err, n = runPlain(t, "help", "task", "update")
+	if err != nil || n != 0 || got != verb || !strings.HasPrefix(got, "usage: dude task update ") {
+		t.Fatalf("help task update: %v, %d requests\n%s", err, n, got)
+	}
 	top, err, n := runPlain(t, "help", "frobnicate")
 	if err != nil || n != 0 || top != usage() {
 		t.Fatalf("help frobnicate: %v, %d requests\n%s", err, n, top)

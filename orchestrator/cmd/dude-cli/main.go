@@ -526,6 +526,11 @@ func (c *cli) run(args []string) error {
 		}
 	}
 	if len(args) == 0 || isHelp(args[0]) {
+		if len(args) > 2 {
+			if _, ok := commands[args[1]+" "+args[2]]; ok {
+				return c.run([]string{args[1], args[2], "--help"})
+			}
+		}
 		if len(args) > 1 && len(verbs(args[1])) > 0 {
 			fmt.Fprint(c.out, nounUsage(args[1]))
 			return nil
