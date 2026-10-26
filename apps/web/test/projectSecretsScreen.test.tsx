@@ -42,6 +42,8 @@ test("the Servers page's Secrets lists the organisation's after the project's ow
   const shadowed = rows.find((r) => r.getAttribute("data-overridden") === "true")!;
   expect(shadowed.textContent).toContain("Overridden by this project's SEED_LLM_KEY");
   expect(shadowed.querySelector("[data-testid=overridden-by] svg")).not.toBeNull();
+  expect([...container.querySelectorAll("[data-testid=project-secrets] [data-struck=true]")].map((n) => n.textContent)).toEqual(["SEED_LLM_KEY"]);
+  expect(shadowed.querySelector("[data-struck=true]")).not.toBeNull();
   const status = rows.find((r) => r.getAttribute("data-secret") === "STATUSPAGE_KEY")!;
   expect(status.textContent).toContain("From Example");
   expect(status.textContent).toContain("Only automations that pick it");
