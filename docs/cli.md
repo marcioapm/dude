@@ -11,8 +11,36 @@ which acts as its Run and has other commands. This one is
 
 ## Install
 
-From a release, unpack `dude-cli_<version>_<os>_<arch>.tar.gz` (darwin or
-linux, arm64 or amd64) and put `bin/dude` on your `PATH`:
+On macOS or Linux (arm64 or amd64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/marcioapm/dude/main/scripts/install-cli.sh | sh
+```
+
+It downloads the latest release's `dude-cli_<version>_<os>_<arch>.tar.gz`
+from GitHub, checks it against the release's `SHA256SUMS`, and installs
+`bin/dude` to `~/.local/bin`, saying what to add to `PATH` when that is not
+on it. `DUDE_VERSION=v1.2.3` installs that release; `DUDE_INSTALL_DIR`
+installs somewhere else. (`DUDE_RELEASES_URL` replaces GitHub's API, for
+tests only.)
+
+Upgrade it later with the CLI itself:
+
+```sh
+dude upgrade --check              # {"current", "latest", "updateAvailable"}; changes nothing
+dude upgrade                      # to the latest release
+dude upgrade --version v1.2.3     # to that release, newer or older
+```
+
+`dude upgrade` downloads and verifies the same way, then writes the new
+binary next to the running one and renames it over it. It refuses when it
+cannot write there (installed by a package manager, or to a system
+directory): upgrade it the way it was installed, or re-run with permission.
+A build from a checkout (`dude --version` says `dev`) is replaced only with
+an explicit `--version`. On Windows it refuses; download the release by
+hand.
+
+By hand, from a release, unpack the tarball and put `bin/dude` on your `PATH`:
 
 ```sh
 tar -xzf dude-cli_v1.2.3_darwin_arm64.tar.gz -C ~/.local
@@ -32,7 +60,8 @@ without it, see [Where keys are kept](#where-keys-are-kept).
 
 1. In dude, **Your settings → Keys → New key for <organisation>**. Name it
    for where it will live ("Laptop"); copy it, it is shown once.
-2. Log in with the dude's address, and paste the key when asked:
+2. Log in with the dude's address, and paste the key when asked (it is not
+   shown as you type or paste it):
 
    ```sh
    dude login https://dude.acme.dev
@@ -288,6 +317,7 @@ A brainstorm is an agent to think something through with; it writes no code.
 
 | Command | Does |
 |---|---|
+| `upgrade [--version vX.Y.Z] [--check]` | Replaces this binary with a GitHub release of the CLI (see [Install](#install)); `--check` only compares versions |
 | `guide [PAGE]` | dude's guide: its pages, or one in full (the same text agents search). `dude --help` is this CLI's help. |
 | `judgements [--asker A] [--limit N] [--before ID]` | The judgement calls dude's models made lately; `--before` pages |
 | `judgement ID` | One in full |
@@ -424,6 +454,11 @@ request shows the server's answer, as in `dude: GET /v1/tasks/x: 404 {"error":�
 - **`not logged in`**: run `dude login URL`, or set `DUDE_API_KEY`.
 - **`the key for ORG is gone from the …`**: the keystore lost it, for
   example a new keychain. Log in again.
+- **`the server redirected (302) to …`** or **`answered with an HTML
+  page`**: something in front of the server (Cloudflare Access, a sign-in
+  proxy) wants a browser sign-in. The CLI follows no redirect, so the key
+  goes nowhere else. Check the URL (`dude whoami`), or have the proxy let
+  requests with an API key through.
 
 ## Adding a command
 

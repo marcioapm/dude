@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -116,6 +117,8 @@ Memory
   memory-archive ID | memory-restore ID
 
 dude itself
+  upgrade [--version vX.Y.Z] [--check]  replace this binary with a GitHub release of
+                                     the CLI (default: the latest); --check only compares
   guide [PAGE]                       dude's guide
   judgements [--asker A] [--limit N] [--before ID] | judgement ID
 
@@ -151,9 +154,13 @@ func main() {
 		creds:  resolve,
 		login:  login,
 		logout: logout,
-		http:   &http.Client{Timeout: 60 * time.Second},
+		http:   apiClient(nil),
 		stdin:  os.Stdin,
 		out:    os.Stdout,
+		errOut: os.Stderr,
+		term:   osTerminal{int(os.Stdin.Fd())},
+		// DUDE_RELEASES_URL is for tests: a fake GitHub releases API.
+		updater: newUpdater(os.Getenv("DUDE_RELEASES_URL")),
 	}
 	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 		c.prompt = func(s string) { fmt.Fprint(os.Stderr, s) }
@@ -178,10 +185,28 @@ type cli struct {
 	http   *http.Client
 	stdin  io.Reader
 	out    io.Writer
-	cached string
+	errOut io.Writer
+	// term, when stdin is a terminal, reads login's key without echo.
+	term terminal
+	// updater is upgrade's; nil in tests that do not set one.
+	updater *updater
+	cached  string
 	// prompt, when stdin is a terminal, asks for what is read next.
 	prompt func(string)
 }
+
+// apiClient follows no redirect: a sign-in proxy answers 302, and following
+// it would print the sign-in page as success and, on the same host, send the
+// key along.
+func apiClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
+		Timeout:       60 * time.Second,
+		Transport:     transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+const signInAdvice = "it is behind a sign-in; check the URL (dude whoami), or the server's API bypass for keys"
 
 type obj = map[string]any
 
@@ -230,8 +255,21 @@ func (c *cli) request(method, path string, body any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode/100 == 3 {
+		where := resp.Header.Get("Location")
+		if u, err := resp.Location(); err == nil {
+			where = u.String()
+		}
+		if where != "" {
+			where = " to " + where
+		}
+		return nil, fmt.Errorf("%s %s: the server redirected (%d)%s: %s", method, path, resp.StatusCode, where, signInAdvice)
+	}
 	if resp.StatusCode/100 != 2 {
 		return nil, &httpError{method, path, resp.StatusCode, strings.TrimSpace(string(raw))}
+	}
+	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt == "text/html" && strings.HasPrefix(path, "/v1/") {
+		return nil, fmt.Errorf("%s %s: the server answered with an HTML page, not JSON: %s", method, path, signInAdvice)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return obj{}, nil

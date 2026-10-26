@@ -5,9 +5,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+
+	"golang.org/x/term"
 )
 
 func init() {
@@ -102,6 +108,78 @@ func oneOf(what, v string, allowed ...string) error {
 	return fmt.Errorf("%s is %s", what, strings.Join(allowed, ", "))
 }
 
+// terminal is stdin when it may be a terminal; tests replace it.
+type terminal interface {
+	isTerminal() bool
+	readPassword() ([]byte, error)
+}
+
+type osTerminal struct{ fd int }
+
+func (t osTerminal) isTerminal() bool { return term.IsTerminal(t.fd) }
+
+// readPassword reads with echo off. A SIGINT or SIGTERM kills the process
+// before x/term's deferred restore runs, so the saved state is restored here
+// before exiting.
+func (t osTerminal) readPassword() ([]byte, error) {
+	st, err := term.GetState(t.fd)
+	if err != nil {
+		return term.ReadPassword(t.fd)
+	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(sigs)
+		close(done)
+	}()
+	go watchInterrupt(sigs, done, func() error { return term.Restore(t.fd, st) }, os.Stderr, os.Exit)
+	return term.ReadPassword(t.fd)
+}
+
+// watchInterrupt waits for a signal on sigs until done closes. On a signal
+// it restores the terminal, ends the prompt's line on w and exits with
+// 128 + the signal's number, a shell's code for death by it (130 for SIGINT).
+func watchInterrupt(sigs <-chan os.Signal, done <-chan struct{}, restore func() error, w io.Writer, exit func(int)) {
+	select {
+	case sig := <-sigs:
+		restore()
+		fmt.Fprintln(w)
+		code := 130
+		if s, ok := sig.(syscall.Signal); ok {
+			code = 128 + int(s)
+		}
+		exit(code)
+	case <-done:
+	}
+}
+
+// readKey is login's key: typed without echo on a terminal, else the first
+// line of stdin.
+func (c *cli) readKey(prompt string) (string, error) {
+	if c.term != nil && c.term.isTerminal() {
+		fmt.Fprint(c.errOut, prompt)
+		b, err := c.term.readPassword()
+		fmt.Fprintln(c.errOut)
+		if err != nil {
+			return "", fmt.Errorf("login: reading the key: %w", err)
+		}
+		if key := strings.TrimSpace(string(b)); key != "" {
+			return key, nil
+		}
+		return "", errors.New("login: the key is empty")
+	}
+	line, rerr := bufio.NewReader(c.stdin).ReadString('\n')
+	key := strings.TrimSpace(line)
+	if key == "" {
+		if rerr != nil {
+			return "", errors.New("login: no key on stdin")
+		}
+		return "", errors.New("login: the key is empty")
+	}
+	return key, nil
+}
+
 var moreCommands = map[string]command{
 	// Credentials
 	"login": {"URL", "log in to an organisation on the dude at URL with a key from Your settings → Keys (read from stdin)",
@@ -112,16 +190,9 @@ var moreCommands = map[string]command{
 				if err != nil {
 					return nil, err
 				}
-				if c.prompt != nil {
-					c.prompt("Key for " + base + " (dude: Your settings → Keys): ")
-				}
-				line, rerr := bufio.NewReader(c.stdin).ReadString('\n')
-				key := strings.TrimSpace(line)
-				if key == "" {
-					if rerr != nil {
-						return nil, errors.New("login: no key on stdin")
-					}
-					return nil, errors.New("login: the key is empty")
+				key, err := c.readKey("Key for " + base + " (dude: Your settings → Keys): ")
+				if err != nil {
+					return nil, err
 				}
 				c.base, c.cached = base, key
 				me, err := c.getObj("/v1/me")

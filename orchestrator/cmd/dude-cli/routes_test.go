@@ -14,9 +14,9 @@ import (
 	"testing"
 )
 
-// localCommands talk to no server: they read or change the credentials
-// file, or (api) call whatever route they are given.
-var localCommands = map[string]bool{"logout": true, "orgs": true, "use": true, "api": true}
+// localCommands talk to no dude server: they read or change the credentials
+// file, (api) call whatever route they are given, or (upgrade) call GitHub.
+var localCommands = map[string]bool{"logout": true, "orgs": true, "use": true, "api": true, "upgrade": true}
 
 // lookupRoutes are what project, taskID and runID call to resolve a PROJECT,
 // TASK or RUN argument: any command may send them on the way to its own route.
