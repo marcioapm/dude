@@ -40,12 +40,12 @@ func (h *postHarness) event(run, typ string, payload map[string]any) {
 }
 
 func (h *postHarness) notConnected(run, org string) {
-	h.event(run, agenttools.EvChatPostRefused, map[string]any{"tool": "post_to_chat", "code": agenttools.PostNotConnected,
+	h.event(run, agenttools.EvSlackPostRefused, map[string]any{"tool": "post_to_chat", "code": agenttools.PostNotConnected,
 		"error": "Slack is not connected for " + org + ": an organisation admin adds dude's Slack app", "reason": agenttools.NotConnectedReason(org)})
 }
 
 func (h *postHarness) posted(run string) {
-	h.event(run, agenttools.EvChatPosted, map[string]any{"channel": "#engineering", "ts": "1.2"})
+	h.event(run, agenttools.EvSlackPosted, map[string]any{"channel": "#engineering", "ts": "1.2"})
 }
 
 // finish ends every run as its agent's turn ending would: "succeeded".
@@ -72,7 +72,7 @@ func (h *postHarness) finish(runs ...string) map[string]runRow {
 // unknown channel the agent could fix) leaves its outcome to the agent.
 func TestAnAgentRunFailsOnAPostWithoutSlack(t *testing.T) {
 	h := newPostHarness(t, "arn_ok", "arn_noslack")
-	h.event("arn_ok", agenttools.EvChatPostRefused, map[string]any{"tool": "post_to_chat",
+	h.event("arn_ok", agenttools.EvSlackPostRefused, map[string]any{"tool": "post_to_chat",
 		"error": "there is no channel #nowhere that dude's Slack bot can see: check the name"})
 	// An organisation whose name holds ": " keeps all of it in the reason.
 	h.notConnected("arn_noslack", "Acme: EU")

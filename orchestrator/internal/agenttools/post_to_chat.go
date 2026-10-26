@@ -33,11 +33,11 @@ const (
 	postTextMax = 40000
 	// chatProvider is the provider post_to_chat posts through.
 	chatProvider = "slack"
-	// EvChatPosted records a message an automation's agent posted.
-	EvChatPosted = "chat.message.posted"
-	// EvChatPostRefused records a post the checks passed and Slack, or the
+	// EvSlackPosted records a message an automation's agent posted.
+	EvSlackPosted = "slack.message.posted"
+	// EvSlackPostRefused records a post the checks passed and Slack, or the
 	// channel lookup, refused: the run's log shows the call failed, and why.
-	EvChatPostRefused = "chat.message.refused"
+	EvSlackPostRefused = "slack.message.refused"
 )
 
 // channelFinder is a provider that finds a channel's id by its name.
@@ -92,25 +92,33 @@ func postChannel(raw string) string {
 	return ch
 }
 
+// textChecked is resolvePostChannel having checked the text's length and
+// found no channel to post in: checkPost refuses the call.
+type textChecked struct{}
+
 // resolvePostChannel is post_to_chat's prepare step: the organisation's
 // installation and the channel's id, read before the call's transaction
-// opens. It answers a postTarget, a refusal (the channel cannot be posted
-// in: refused with no budget spent), an error, or nil when checkPost refuses
-// the call on its own (no Slack, not an automation, no channel named).
+// opens. It answers a postTarget, a refusal (the text's length, or a channel
+// that cannot be posted in: refused with no budget spent), an error,
+// textChecked, or nil when checkPost refuses the call on its own (not an
+// automation, no channel named).
 func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any {
 	var in postToChatIn
 	if c.AutomationID == "" || json.Unmarshal(args, &in) != nil || c.env.db == nil {
 		return nil
 	}
-	channel := postChannel(in.Channel)
 	p, registered := c.env.chat.Get(chatProvider)
-	if channel == "" || !registered {
-		return nil
-	}
 	var inst chat.Installation
 	var installed bool
 	var made, recent int
 	if err := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
+		// The channel goes to Slack and to the ledger redacted, as Server.call
+		// redacts every argument after this step.
+		red, err := ledger.Redactor(ctx, tx, c.RunID)
+		if err != nil {
+			return err
+		}
+		in.Channel = red.String(in.Channel)
 		if inst, installed, err = chat.Installed(ctx, tx, chatProvider); err != nil {
 			return err
 		}
@@ -120,16 +128,24 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		// Lookup refusals write no call, so the minute's bound counts them here.
 		var lookups int
 		err = tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2
-			AND occurred_at > now() - interval '1 minute'`, c.RunID, EvChatPostRefused).Scan(&lookups)
+			AND occurred_at > now() - interval '1 minute'`, c.RunID, EvSlackPostRefused).Scan(&lookups)
 		recent += lookups
 		return err
 	}); err != nil {
 		return err
 	}
-	switch {
-	case !installed, made >= postsPerRun:
-		// checkPost refuses it, under the run's lock.
+	channel := postChannel(in.Channel)
+	if channel == "" {
 		return nil
+	}
+	// The agent's own text is measured, not its redacted copy.
+	if err := checkText(in.Text); err != nil {
+		return postRefused(channel, err.Error())
+	}
+	switch {
+	case !registered, !installed, made >= postsPerRun:
+		// checkPost refuses it, under the run's lock.
+		return textChecked{}
 	case recent >= callsPerMinute:
 		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
 	}
@@ -148,7 +164,9 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		case revokedCodes[apiCode(err)]:
 			return slackFailed(ctx, c, channel, err)
 		default:
-			// The post itself says whether the channel takes it.
+			// The post itself says whether the channel takes it; its name
+			// unknown, the channel is shown as the id it was given.
+			target.channelName = channel
 			noteFailure(ctx, c, err)
 		}
 		return target
@@ -205,9 +223,9 @@ const PostNotConnected = "not_connected"
 // for org failed.
 func NotConnectedReason(org string) string { return "Slack is not connected for " + org }
 
-// postRefused is a refusal recorded on the run as EvChatPostRefused.
+// postRefused is a refusal recorded on the run as EvSlackPostRefused.
 func postRefused(channel, msg string) error {
-	return refuseRecorded(EvChatPostRefused, map[string]any{"tool": "post_to_chat", "channel": channel, "error": msg}, msg)
+	return refuseRecorded(EvSlackPostRefused, map[string]any{"tool": "post_to_chat", "channel": channel, "error": msg}, msg)
 }
 
 // checkPost checks the call in the run's transaction; unconnectedOrg is the
@@ -220,8 +238,11 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 	if out.Channel = postChannel(in.Channel); out.Channel == "" {
 		return out, "", refuseText(postRefusal("name-a-channel"))
 	}
-	if n := utf8.RuneCountInString(in.Text); strings.TrimSpace(in.Text) == "" || n > postTextMax {
-		return out, "", refuse(postRefusal("text-length"), postTextMax, n)
+	if c.env.prepared == nil {
+		// resolvePostChannel, which measures the text before its redaction, did not run.
+		if err := checkText(in.Text); err != nil {
+			return out, "", err
+		}
 	}
 	// The run's row, locked, serialises its calls: two at once cannot both
 	// take its last post. Counted as tool.limit counts (callsMade, every
@@ -248,6 +269,14 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 		return out, "", err
 	}
 	return out, org, refuse(postRefusal("not-connected"), org)
+}
+
+// checkText refuses a post's text that is blank or longer than Slack takes.
+func checkText(text string) error {
+	if n := utf8.RuneCountInString(text); strings.TrimSpace(text) == "" || n > postTextMax {
+		return refuse(postRefusal("text-length"), postTextMax, n)
+	}
+	return nil
 }
 
 // postOutside posts, with no transaction open.
@@ -319,19 +348,19 @@ func noteFailure(ctx context.Context, c Caller, err error) {
 	}
 }
 
-// apiCode is the provider's error code ("not_in_channel"), the last word
-// of its error ("slack chat.postMessage: not_in_channel"), or "".
+// apiCode is the provider's error code ("not_in_channel"), or "" for an
+// error that carries none (slack.APIError's ErrorCode).
 func apiCode(err error) string {
-	msg := err.Error()
-	if i := strings.LastIndex(msg, ": "); i >= 0 && !strings.Contains(msg[i+2:], " ") {
-		return msg[i+2:]
+	var coded interface{ ErrorCode() string }
+	if errors.As(err, &coded) {
+		return coded.ErrorCode()
 	}
 	return ""
 }
 
 func recordPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postChecked, done postDone) (map[string]any, error) {
 	out := map[string]any{"channel": in.channelName, "channelId": in.channelID, "ts": done.ts, "permalink": done.permalink}
-	_, err := ledger.Append(ctx, tx, c.event(EvChatPosted, map[string]any{"provider": chatProvider, "channel": in.channelName,
+	_, err := ledger.Append(ctx, tx, c.event(EvSlackPosted, map[string]any{"provider": chatProvider, "channel": in.channelName,
 		"channelId": in.channelID, "ts": done.ts, "permalink": done.permalink}))
 	return out, err
 }

@@ -23,7 +23,7 @@ func postFailed(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 		WHERE r.run_id = $1 AND r.event_type = $2 AND r.payload->>'code' = $3
 		  AND NOT EXISTS (SELECT 1 FROM events p WHERE p.run_id = $1 AND p.event_type = $4 AND (p.occurred_at, p.cursor) > (r.occurred_at, r.cursor))
 		ORDER BY r.occurred_at DESC, r.cursor DESC LIMIT 1`,
-		runID, agenttools.EvChatPostRefused, agenttools.PostNotConnected, agenttools.EvChatPosted).Scan(&reason)
+		runID, agenttools.EvSlackPostRefused, agenttools.PostNotConnected, agenttools.EvSlackPosted).Scan(&reason)
 	if db.IsNotFound(err) {
 		return "", nil
 	}

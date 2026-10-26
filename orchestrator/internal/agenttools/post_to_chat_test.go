@@ -81,7 +81,7 @@ func TestPostToChatPostsToAChannelByNameAndAnswersItsPermalink(t *testing.T) {
 	// The post is on the run's ledger, with its link, for the run's log.
 	var link string
 	if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'permalink' FROM events
-		WHERE event_type = $1 AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvChatPosted).Scan(&link); err != nil || link != want {
+		WHERE event_type = $1 AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvSlackPosted).Scan(&link); err != nil || link != want {
 		t.Errorf("ledger link %q %v", link, err)
 	}
 }
@@ -115,7 +115,7 @@ func TestPostToChatWithoutSlackSaysItIsNotConnected(t *testing.T) {
 	}
 	var said, code, reason string
 	if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'error', payload->>'code', payload->>'reason' FROM events WHERE event_type = $1
-		AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvChatPostRefused).Scan(&said, &code, &reason); err != nil ||
+		AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvSlackPostRefused).Scan(&said, &code, &reason); err != nil ||
 		!strings.HasPrefix(said, "Slack is not connected for Acme") || code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
 		t.Errorf("the refusal on the run: %q %q %q %v", said, code, reason, err)
 	}
@@ -151,7 +151,7 @@ func TestPostToChatOutsideTheBotsChannelsSaysHowToInviteIt(t *testing.T) {
 	// Each refused post is recorded on the run, with why.
 	var refused int
 	if err := c.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE event_type = $1
-		AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvChatPostRefused).Scan(&refused); err != nil || refused != 5 {
+		AND payload->>'automationRunId' = 'arn_digest'`, agenttools.EvSlackPostRefused).Scan(&refused); err != nil || refused != 5 {
 		t.Errorf("refusals recorded: %d %v", refused, err)
 	}
 }
@@ -292,7 +292,7 @@ func TestPostToChatWithARevokedInstallationSaysItIsNotConnected(t *testing.T) {
 			}
 			var code, reason string
 			if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'code', payload->>'reason' FROM events WHERE event_type = $1
-				AND run_id = 'arn_digest'`, agenttools.EvChatPostRefused).Scan(&code, &reason); err != nil ||
+				AND run_id = 'arn_digest'`, agenttools.EvSlackPostRefused).Scan(&code, &reason); err != nil ||
 				code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
 				t.Errorf("the refusal on the run: %q %q %v", code, reason, err)
 			}
@@ -317,6 +317,34 @@ func TestPostToChatCountsSlacksRefusalOnTheInstallationsHealth(t *testing.T) {
 	if err := c.owner.QueryRow(context.Background(), `SELECT COALESCE(last_failure, '') FROM chat_installations WHERE organization_id = $1`,
 		c.org).Scan(&last); err != nil || !strings.Contains(last, "msg_too_long") {
 		t.Errorf("the installation's last failure: %q %v", last, err)
+	}
+}
+
+// A channel given by id whose lookup fails for another reason than "not
+// found" is still posted to, shown as the id it was given (no "#").
+func TestPostToChatByIDWhoseLookupFailedShowsTheID(t *testing.T) {
+	c := setupChat(t, true)
+	c.fake.FailNext("conversations.info", "missing_scope")
+	status, out := c.postToChat(t, "C0ENGINEER", "by id")
+	if status != 200 || out["channel"] != "C0ENGINEER" || out["channelId"] != "C0ENGINEER" {
+		t.Fatalf("by id, its name unread: %d %v", status, out)
+	}
+}
+
+// The limit is on the agent's text: a secret value's marker, shorter than
+// the value, does not bring an over-long text under it.
+func TestPostToChatMeasuresTheTextBeforeRedactingIt(t *testing.T) {
+	c := setupChat(t, true)
+	mustExec(t, c.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'GH_TOKEN', 'ghp-digest-s3cr3t-value', 'alue')`,
+		c.org, c.project)
+	mustExec(t, c.owner, `UPDATE automations SET secrets = '{GH_TOKEN}' WHERE id = 'aut_digest'`)
+	text := "ghp-digest-s3cr3t-value " + strings.Repeat("x", 40001-24)
+	status, out := c.postToChat(t, "#engineering", text)
+	if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "text is 1 to 40000 characters of Slack mrkdwn; this one is 40001") {
+		t.Fatalf("40,001 characters, a secret among them: %d %v", status, out)
+	}
+	if n := c.fake.Calls("chat.postMessage"); n != 0 {
+		t.Errorf("%d posts", n)
 	}
 }
 

@@ -827,8 +827,8 @@ their creator.
   run"), counted from the ledger as `limit(...)` counts, attempts included
   (`countingAttempts`), so a post Slack refused still spends one. Refusals
   say how to fix them: an unknown channel or one the bot is not in names
-  `/invite @dude`. Each post is a `chat.message.posted` event (channel, ts,
-  permalink) and each refused post a `chat.message.refused` one (its words),
+  `/invite @dude`. Each post is a `slack.message.posted` event (channel, ts,
+  permalink) and each refused post a `slack.message.refused` one (its words),
   on the run. `chat:write`, already among `slack.BotScopes`, covers posting
   in a channel the bot is in; no scope changes.
 - **Without Slack.** A run still starts (dude cannot tell from a prompt

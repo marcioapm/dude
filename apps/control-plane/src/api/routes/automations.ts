@@ -461,7 +461,7 @@ async function getRun(ctx: RequestContext): Promise<Response> {
 }
 
 /** The ledger events an automation run's tool calls leave (orchestrator agenttools). */
-const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "chat.message.posted", "chat.message.refused"];
+const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "slack.message.posted", "slack.message.refused"];
 
 /**
  * An automation run's calls to dude's tools, oldest first: each finished
@@ -479,7 +479,7 @@ async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
   for (const e of rows) {
     const tool = String(e.payload.tool ?? "");
     if (e.type === "agent.tool.attempted" && !e.payload.attempted) attempts.set(tool, [...(attempts.get(tool) ?? []), e.at]);
-    if (e.type === "chat.message.posted") posts.push({ channel: String(e.payload.channel ?? ""), permalink: String(e.payload.permalink ?? "") });
+    if (e.type === "slack.message.posted") posts.push({ channel: String(e.payload.channel ?? ""), permalink: String(e.payload.permalink ?? "") });
   }
   // The attempt a call wrote before its outside work, when it wrote one: the
   // earliest of its tool's not yet taken that came before the call ended.
@@ -489,12 +489,12 @@ async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
   };
   const out = [];
   for (const e of rows) {
-    if (e.type !== "agent.tool.dude" && e.type !== "chat.message.refused") continue;
+    if (e.type !== "agent.tool.dude" && e.type !== "slack.message.refused") continue;
     const tool = String(e.payload.tool ?? "");
     const raw = (e.payload.arguments ?? {}) as Record<string, unknown>;
     const { text: _text, body: _body, ...args } = raw;
     const start = e.type === "agent.tool.dude" && !e.payload.attempted ? null : startOf(tool, e.at);
-    const failed = e.type === "chat.message.refused";
+    const failed = e.type === "slack.message.refused";
     out.push({
       id: e.id, tool, at: iso(start ?? e.at)!, status: failed ? "failed" : "completed",
       args: failed ? { channel: e.payload.channel ?? null } : args,
@@ -505,8 +505,8 @@ async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
   }
   // The refusal the orchestrator failed the run on (automations.postFailed):
   // its last not-connected one, when no post went after it. rows are in order.
-  const lastPost = rows.findLastIndex((e) => e.type === "chat.message.posted");
-  const failedAt = rows.findLastIndex((e) => e.type === "chat.message.refused" && e.payload.code === "not_connected");
+  const lastPost = rows.findLastIndex((e) => e.type === "slack.message.posted");
+  const failedAt = rows.findLastIndex((e) => e.type === "slack.message.refused" && e.payload.code === "not_connected");
   return { toolCalls: out, failedCallId: failed && failedAt > lastPost ? rows[failedAt]!.id : null };
 }
 
