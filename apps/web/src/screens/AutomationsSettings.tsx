@@ -781,8 +781,7 @@ function AutomationSecrets({ client, a, orgName, preset, ro, project, chosen, on
       ) : (
         <SettingRow label="Secrets" block help={ORG_AUTOMATION_PICKS(orgName)} data-testid="automation-secrets">
           <SecretPicker orgName={orgName} org={org.secrets} disabled={ro} value={chosen} data-testid="secret-picker"
-            project={a.projectId ? { name: projectName, secrets: project } : undefined}
-            onChange={(next) => onChange(next.map((r) => ({ source: r.source, name: r.name })))} />
+            project={a.projectId ? { name: projectName, secrets: project } : undefined} onChange={onChange} />
         </SettingRow>
       )}
     </SettingsSection>
