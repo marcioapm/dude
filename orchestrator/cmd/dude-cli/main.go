@@ -1003,6 +1003,18 @@ var commands = map[string]command{
 		})},
 	"task done": {"TASK", "mark finished work that has nothing to merge done",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("POST", a[0], "/done", obj{}) })},
+	"task before-pr": {"TASK CHOICE", "what Deliver does before the pull request: open, draft, ask, or project (the project's)",
+		noFlags(func(c *cli, a []string) (any, error) {
+			var choice any
+			switch a[1] {
+			case "open", "draft", "ask":
+				choice = a[1]
+			case "project":
+			default:
+				return nil, errors.New("task before-pr: CHOICE is open, draft, ask or project")
+			}
+			return c.onTask("PUT", a[0], "/pull-request-choice", obj{"choice": choice})
+		})},
 
 	// Talking to the agents
 	"task chat": {"TASK TEXT", "a message in a task's Chat: starts or tells its conductor",

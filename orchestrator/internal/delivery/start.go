@@ -64,19 +64,25 @@ func (e TaskNotFound) Error() string { return fmt.Sprintf("task %s not found", e
 
 // PolicyFor is the task's project and the delivery policy it gets: the
 // factory's defaults, then the organization's, then the project's, each
-// layer setting only what it names.
+// layer setting only what it names; then the task's own choice before its
+// pull request (tasks.pull_request_choice), its only stored key.
 func PolicyFor(ctx context.Context, tx pgx.Tx, taskID string) (string, Policy, error) {
 	var projectID string
 	var orgPolicy, projectPolicy []byte
-	if err := tx.QueryRow(ctx, `SELECT w.project_id, o.delivery_policy, p.delivery_policy FROM tasks w
+	var choice *string
+	if err := tx.QueryRow(ctx, `SELECT w.project_id, o.delivery_policy, p.delivery_policy, w.pull_request_choice FROM tasks w
 		JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
-		WHERE w.id = $1`, taskID).Scan(&projectID, &orgPolicy, &projectPolicy); err != nil {
+		WHERE w.id = $1`, taskID).Scan(&projectID, &orgPolicy, &projectPolicy, &choice); err != nil {
 		if db.IsNotFound(err) {
 			return "", Policy{}, TaskNotFound{taskID}
 		}
 		return "", Policy{}, err
 	}
-	policy, err := ResolvePolicy(orgPolicy, projectPolicy)
+	var own json.RawMessage
+	if choice != nil {
+		own, _ = json.Marshal(map[string]string{"pullRequest": *choice})
+	}
+	policy, err := ResolvePolicy(orgPolicy, projectPolicy, own)
 	if err != nil {
 		return "", policy, fmt.Errorf("project %s: %w", projectID, err)
 	}

@@ -25,6 +25,7 @@ const ROOT = join(import.meta.dir, "../../..");
 const NAME = `dude_prchoice_test_${Bun.randomUUIDv7("hex").slice(-12)}`;
 const ORG = "org_prc";
 const PROJECT = "prj_prc";
+const GOAL = "Let people save the filters they use every day.";
 
 function databaseUrl(appRole = false): string {
   const url = new URL(OWNER_URL);
@@ -115,5 +116,29 @@ describe("before the pull request", () => {
     expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequest: "later" } })).status).toBe(400);
     const reset = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequest: null } });
     expect(((await reset.json()) as Json).delivery.pullRequest).toEqual({ value: "open", source: "default" });
+  });
+
+  test("a task is made with its own choice, and reads it with the project's and whether a pull request is open", async () => {
+    await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequest: "draft" } });
+    const made = await call("POST", "/v1/tasks", { projectId: PROJECT, title: "Saved filters", goal: GOAL, pullRequestChoice: "ask" });
+    if (made.status !== 201) throw new Error(await made.text());
+    const task = (await made.json()) as Json;
+    expect(task).toMatchObject({ pullRequestChoice: "ask", projectPullRequest: "draft", pullRequestOpened: false });
+    const [{ pull_request_choice }] = await owner`SELECT pull_request_choice FROM tasks WHERE id = ${task.id}`;
+    expect(pull_request_choice).toBe("ask");
+    const plain = (await (await call("POST", "/v1/tasks", { projectId: PROJECT, title: "Plain", goal: GOAL })).json()) as Json;
+    expect(plain.pullRequestChoice).toBeNull();
+    expect((await call("POST", "/v1/tasks", { projectId: PROJECT, title: "Bad", goal: GOAL, pullRequestChoice: "later" })).status).toBe(400);
+
+    await owner`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_prc', ${ORG}, ${PROJECT}, 'web', 'https://github.com/acme/web.git')`;
+    await owner`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+      VALUES ('pr_prc', ${ORG}, ${PROJECT}, ${task.id}, 'repo_prc', 1, 'https://x/1', 'b', 'main', 'h', 'T')`;
+    const read = (await (await call("GET", `/v1/tasks/${task.id}`)).json()) as Json;
+    expect(read.pullRequestOpened).toBe(true);
+  });
+
+  test("a change on the task is checked before it is forwarded", async () => {
+    expect((await call("PUT", "/v1/tasks/wi_x/pull-request-choice", { choice: "later" })).status).toBe(400);
+    expect((await call("PUT", "/v1/tasks/wi_x/pull-request-choice", {})).status).toBe(400);
   });
 });

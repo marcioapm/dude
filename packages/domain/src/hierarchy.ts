@@ -488,6 +488,12 @@ export const taskSchema = z.object({
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
   /** Its delivery is parked until its reviewers' open questions are answered or withdrawn. */
   heldByQuestions: z.boolean().default(false),
+  /** What Deliver does before its pull request, its own: null follows the project's (`projectPullRequest`). */
+  pullRequestChoice: z.enum(PULL_REQUEST_CHOICES).nullable().default(null),
+  /** Its project's choice before the pull request, as its settings say now. */
+  projectPullRequest: z.enum(PULL_REQUEST_CHOICES).default("open"),
+  /** Its current attempt has had a pull request: the choice no longer applies, and is fixed. */
+  pullRequestOpened: z.boolean().default(false),
   /** Why a person ended it (lifecycle.ts); null while it hasn't. */
   resolution: z.enum(["wont_do", "duplicate", "cant_reproduce", "nothing_to_merge"]).nullable().default(null),
   /** Closed as a duplicate of this key. */

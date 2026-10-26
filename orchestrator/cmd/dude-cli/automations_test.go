@@ -96,6 +96,9 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"automation", "next", "0 9 * * 1-5", "--tz", "Europe/Lisbon"}, "", "POST", "/v1/automations/schedule/next",
 			`{"cron":"0 9 * * 1-5","tz":"Europe/Lisbon"}`, ""},
 		{[]string{"automation", "subscriptions"}, "", "GET", "/v1/automations/subscriptions", ``, ""},
+		// Recorded here for cli-bodies.test.ts: a task command's body checked against its route's schema.
+		{[]string{"task", "before-pr", "wi_12", "ask"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":"ask"}`, ""},
+		{[]string{"task", "before-pr", "wi_12", "project"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":null}`, ""},
 	}
 }
 

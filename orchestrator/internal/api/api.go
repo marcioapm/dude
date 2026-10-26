@@ -142,6 +142,7 @@ func (s *Server) Handler() http.Handler {
 	s.sessionRoutes(mux)
 	s.noteRoutes(mux)
 	s.feedbackRoutes(mux)
+	s.pullRequestGateRoutes(mux)
 	s.chatProviderRoutes(mux)
 	// dude's own stance for each role: the one section of its instruction
 	// file a saved prompt takes the place of, and where a first edit starts.
