@@ -59,7 +59,7 @@ type fakeRelease struct {
 func (f *fakeRelease) serve(t *testing.T) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.requests = append(f.requests, r.URL.Path)
 		f.auths = append(f.auths, r.Header.Get("Authorization"))
@@ -95,6 +95,7 @@ func (f *fakeRelease) serve(t *testing.T) *httptest.Server {
 			http.NotFound(w, r)
 		}
 	}))
+	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
 }

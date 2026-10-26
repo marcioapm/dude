@@ -67,6 +67,8 @@ func TestInstallScriptTakesAVersion(t *testing.T) {
 	if err != nil || readFile(t, filepath.Join(dir, "dude")) != "dude v1.1.0 "+runtime.GOOS+"_"+runtime.GOARCH {
 		t.Fatalf("%v\n%s", err, stderr)
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if len(f.requests) == 0 || f.requests[0] != "/repos/marcioapm/dude/releases/tags/v1.1.0" {
 		t.Fatalf("asked %v", f.requests)
 	}
