@@ -16,7 +16,7 @@
  */
 
 import {
-  FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage, overlayWindowName,
+  FEEDBACK_LIMITS, OVERLAY_LIMITS, OVERLAY_OPENER_STEPS, OVERLAY_PROTOCOL, overSize, overlayMessageSchema, overlayPage, overlayWindowName,
   type DudeToOverlay, type FeedbackItem, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude, type TaskServers,
 } from "@dude/domain";
 
@@ -74,8 +74,6 @@ export const httpsOriginOf = (url: string | null | undefined): string | null => 
   }
 };
 
-const originOf = httpsOriginOf;
-
 /**
  * What the task's servers offer for commenting: nothing (no live preview,
  * or not one whose servers carry `commenting`), why not, or its ready
@@ -89,7 +87,7 @@ export function commentingOffer(data: TaskServers | null): CommentingOffer {
   if (off && !off.available) return { kind: "unavailable", reason: off.reason };
   return {
     kind: "available",
-    servers: marked.filter((s) => s.state === "ready" && originOf(s.url) !== null)
+    servers: marked.filter((s) => s.state === "ready" && httpsOriginOf(s.url) !== null)
       .map((s) => ({ name: s.name, url: s.url!, needsRestart: s.needsRestart === true })),
     restart: marked.filter((s) => s.needsRestart === true).map((s) => s.name),
   };
@@ -98,7 +96,7 @@ export function commentingOffer(data: TaskServers | null): CommentingOffer {
 /** The origins a message may come from: this task's preview servers' that carry the overlay. */
 export function previewOrigins(data: TaskServers | null): ReadonlySet<string> {
   if (!data?.run || data.run.kind !== "preview") return new Set();
-  return new Set(data.servers.filter((s) => s.commenting?.available).flatMap((s) => originOf(s.url) ?? []));
+  return new Set(data.servers.filter((s) => s.commenting?.available).flatMap((s) => httpsOriginOf(s.url) ?? []));
 }
 
 /** Whether Show on preview can work for a page: it is on one of the servers comments can be made on now. */
@@ -109,8 +107,8 @@ export function showable(offer: CommentingOffer, url: string): boolean {
 /** The server comments can be made on now whose origin `url` is at, or null. */
 export function serverOf(offer: CommentingOffer, url: string): CommentableServer | null {
   if (offer.kind !== "available") return null;
-  const origin = originOf(url);
-  return origin === null ? null : offer.servers.find((s) => originOf(s.url) === origin) ?? null;
+  const origin = httpsOriginOf(url);
+  return origin === null ? null : offer.servers.find((s) => httpsOriginOf(s.url) === origin) ?? null;
 }
 
 export type Checked =
@@ -142,7 +140,7 @@ export function checkMessage(e: Pick<MessageEvent, "origin" | "source" | "data">
   const msg = parsed.data;
   const url = msg.type === "draft" ? msg.anchor.url : msg.type === "hello" || msg.type === "navigated" ? msg.url : null;
   // An item is about the page that sent it, never another site's.
-  if (url !== null && originOf(url) !== e.origin) return { ok: false, why: "invalid", reason: "The page named another site." };
+  if (url !== null && httpsOriginOf(url) !== e.origin) return { ok: false, why: "invalid", reason: "The page named another site." };
   return { ok: true, msg };
 }
 
@@ -274,9 +272,6 @@ export function arrivedFromPreview(win: Pick<Window, "sessionStorage">, taskId: 
 /** The windows one task keeps: the named one and those adopted beside it. */
 export const MAX_WINDOWS = 8;
 
-/** How far up a window's openers dude looks for itself, as the overlay looks for dude. */
-const OPENER_STEPS = 5;
-
 /**
  * One commenting window. Each keeps its own saves answered: a nonce is the
  * overlay's in that window, and a window opened or adopted anew starts with
@@ -345,7 +340,7 @@ export class PreviewCommenting {
     return { state: pick?.state ?? "idle", server: pick?.server ?? null, saved: this.#panes.reduce((n, p) => n + p.saved, 0) };
   }
 
-  /** The windows held now, the named one among them. */
+  // For tests: the windows held now, the named one among them.
   get windows(): ReadonlyArray<Window> {
     return this.#panes.map((p) => p.win);
   }
@@ -397,7 +392,7 @@ export class PreviewCommenting {
    * preview origins.
    */
   open(url: string, server: string | null, highlight: string | null = null): boolean {
-    const origin = originOf(url);
+    const origin = httpsOriginOf(url);
     if (origin === null || !this.#d.read().origins.has(origin)) return false;
     // Without noopener: the overlay talks to its opener, and only to it.
     const w = this.#d.win.open(url, `dude-preview-${this.#d.taskId}`);
@@ -436,7 +431,7 @@ export class PreviewCommenting {
    */
   comment(url: string, server: string): boolean {
     // By origin, not only server name: an adopted window knows its page, not its server.
-    const at = this.#live((p) => p.server === server || p.server === null && originOf(p.url) !== null && originOf(p.url) === originOf(url), "open", "waiting");
+    const at = this.#live((p) => p.server === server || p.server === null && httpsOriginOf(p.url) !== null && httpsOriginOf(p.url) === httpsOriginOf(url), "open", "waiting");
     if (at) {
       this.#focus(at);
       return true;
@@ -512,8 +507,8 @@ export class PreviewCommenting {
       this.#focus(at);
       return true;
     }
-    const origin = originOf(item.anchor.url);
-    const server = this.#panes.filter((p) => p.server !== null && originOf(p.url) === origin).sort((a, b) => b.touched - a.touched)[0]?.server ?? null;
+    const origin = httpsOriginOf(item.anchor.url);
+    const server = this.#panes.filter((p) => p.server !== null && httpsOriginOf(p.url) === origin).sort((a, b) => b.touched - a.touched)[0]?.server ?? null;
     return this.open(item.anchor.url, server, item.id);
   }
 
@@ -523,7 +518,7 @@ export class PreviewCommenting {
   }
 
   #post(pane: Pane, msg: DudeToOverlay): void {
-    const origin = originOf(pane.url);
+    const origin = httpsOriginOf(pane.url);
     if (closedOrGone(pane.win) || !origin) return;
     pane.win.postMessage(msg, origin);
   }
@@ -551,7 +546,7 @@ export class PreviewCommenting {
     const held = this.#paneOf(e.source);
     const origins = this.#d.read().origins;
     const linked = held === null && origins.has(e.origin) && this.#linked(e.source as Window | null);
-    const checked = checkMessage(e, held !== null || linked, origins, originOf(held?.url));
+    const checked = checkMessage(e, held !== null || linked, origins, httpsOriginOf(held?.url));
     if (!checked.ok) {
       if ("reason" in checked && held) {
         const nonce = (e.data as { nonce?: unknown } | null)?.nonce;
@@ -625,7 +620,7 @@ export class PreviewCommenting {
 
   #reachesMe(source: Window): boolean {
     let at: Window = source;
-    for (let step = 0; step < OPENER_STEPS; step++) {
+    for (let step = 0; step < OVERLAY_OPENER_STEPS; step++) {
       let next: unknown;
       try {
         next = at.opener;

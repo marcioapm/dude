@@ -5,10 +5,11 @@
  * dude tab is reachable.
  *
  * It talks only to one dude window, and only by postMessage: the window
- * that opened it (or opened the preview page that opened it), or the dude
- * tab its Connect to dude opened. Posted with dude's origin as the target,
- * and heard only from that origin and that window. It holds no secret and requests nothing; dude's
- * tab does everything that needs the person's sign-in. Everything it
+ * that opened it (or opened the preview page that opened it), the dude tab
+ * its Connect to dude opened, or the dude window that last answered.
+ * Posted with dude's origin as the target, and heard only from that origin
+ * and that window. It holds no secret and requests nothing; dude's tab
+ * does everything that needs the person's sign-in. Everything it
  * draws is in a closed shadow root, so the page's CSS can't reach it and
  * its own can't leak. The page keeps working: nothing covers it but the
  * toolbar until Comment is pressed, and focus is taken only while picking
@@ -16,7 +17,7 @@
  */
 
 import {
-  OVERLAY_LIMITS, OVERLAY_PROTOCOL, OVERLAY_THEMES, overlayPage, overlayWindowName,
+  OVERLAY_LIMITS, OVERLAY_OPENER_STEPS, OVERLAY_PROTOCOL, OVERLAY_THEMES, overlayPage, overlayWindowName,
   type DudeToOverlay, type OverlayAnchor, type OverlayPin, type OverlayTheme, type OverlayToDude,
 } from "@dude/domain/previewOverlayProtocol";
 import { CSS } from "./css.ts";
@@ -130,9 +131,6 @@ const SVG = "http://www.w3.org/2000/svg";
 const asElement = (t: EventTarget | null): Element | null => (t !== null && (t as Node).nodeType === 1 ? (t as Element) : null);
 
 const withoutScheme = (url: string) => url.replace(/^https?:\/\//, "");
-
-/** How far up the opener chain the overlay looks for dude: a few tabs opened from tabs, not an unbounded walk. */
-const OPENER_STEPS = 5;
 
 const live = (w: Window | null | undefined): w is Window => {
   try {
@@ -367,7 +365,7 @@ export class Overlay {
   #dude(): Window | null {
     if (live(this.#connectWin)) return this.#connectWin;
     let at: Window = this.#win;
-    for (let step = 0; step < OPENER_STEPS; step++) {
+    for (let step = 0; step < OVERLAY_OPENER_STEPS; step++) {
       let next: Window | null;
       try {
         next = at.opener as Window | null;
@@ -394,8 +392,10 @@ export class Overlay {
     return true;
   }
 
-  #hello(): void {
-    if (this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href })) this.#saidHello = true;
+  // `between`: a hello sent between beats (at start, after a save went unanswered), which spares the next beat's own.
+  // A beat's own hello passes false, so it never spares the beat after it.
+  #hello(between = true): void {
+    if (this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href }) && between) this.#saidHello = true;
   }
 
   /**
@@ -421,10 +421,7 @@ export class Overlay {
         this.#render();
       }
     }
-    if (!said) {
-      this.#hello();
-      this.#saidHello = false;
-    }
+    if (!said) this.#hello(false);
   };
 
   #lost(to: "none" | "closed"): void {

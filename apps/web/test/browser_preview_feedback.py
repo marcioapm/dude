@@ -242,7 +242,7 @@ class CommentingOnAPreview(unittest.TestCase):
         page.bring_to_front()
         tray = page.get_by_test_id("fb-tray")
         expect(tray).to_have_attribute("data-count", "1")
-        expect(page.get_by_test_id("commenting-notice")).to_contain_text("1 draft saved from it so far")
+        expect(page.get_by_test_id("commenting-notice")).to_contain_text("1 draft saved from the preview so far")
         shoot(page, "dude-commenting-open")
         tray.get_by_role("button", name="Review").click()
         expect(tray.get_by_test_id("fb-tray-row")).to_contain_text("Preview")

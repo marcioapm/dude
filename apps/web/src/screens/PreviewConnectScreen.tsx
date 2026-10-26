@@ -27,7 +27,7 @@ type Step =
   | { kind: "none"; origin: string }
   | { kind: "failed"; why: string };
 
-/** This window's opener, or null when there is none or it can't be read. */
+// null when there is no opener or reading it throws.
 function openerOf(win: Window): Window | null {
   try {
     return (win.opener as Window | null) ?? null;
