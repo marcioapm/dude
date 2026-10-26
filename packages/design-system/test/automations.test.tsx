@@ -9,6 +9,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  AgentTools,
   ChipsInput,
   cronOf,
   DayToggles,
@@ -26,6 +27,8 @@ import {
   TriggerSummary,
 } from "../src/components/Automations.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
+import { PaneDensityContext } from "../src/gallery/Frame.tsx";
+import { AutomationsSection } from "../src/gallery/sections/Automations.tsx";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -202,5 +205,43 @@ describe("SchedulePicker and NextRuns", () => {
     expect([...el.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["Sat 24 Oct, 03:00", "Sun 25 Oct, 03:00"]);
     const none = await mount(<NextRuns tz="UTC" times={[]} />);
     expect(none.textContent).toBe("Never runs: no date matches.");
+  });
+});
+
+describe("an automation agent's tools", () => {
+  const tools = [
+    { name: "post_to_chat", what: "Posts a message to a channel.", fresh: true },
+    { name: "create_task", what: "Files a task." },
+  ];
+
+  test("each tool is its mono name and one line; New only on the fresh one", async () => {
+    const el = await mount(<AgentTools tools={tools} />);
+    const list = el.querySelector("ul[aria-label=\"The agent's tools\"]")!;
+    const rows = [...list.querySelectorAll("li")];
+    expect(rows.map((r) => r.getAttribute("data-tool"))).toEqual(["post_to_chat", "create_task"]);
+    expect(rows.map((r) => r.querySelector("code")?.textContent)).toEqual(["post_to_chat", "create_task"]);
+    expect(rows[0]!.textContent).toContain("New");
+    expect(rows[1]!.textContent).not.toContain("New");
+    expect(rows[1]!.textContent).toContain("Files a task.");
+    expect(el.querySelector("[data-testid=tool-unavailable]")).toBeNull();
+  });
+
+  test("an unavailable tool keeps its row and says why, that runs fail, and links the fix", async () => {
+    const el = await mount(<AgentTools tools={tools}
+      unavailable={{ post_to_chat: { why: "Slack is not connected for Acme", fix: { label: "Connect Slack in Organisation settings → Chat", href: "#chat" } } }} />);
+    const row = el.querySelector("li[data-tool=post_to_chat]")!;
+    expect(row.getAttribute("data-unavailable")).toBe("true");
+    const callout = row.querySelector("[data-testid=tool-unavailable]")!;
+    expect(callout.getAttribute("data-tone")).toBe("attention");
+    expect(callout.textContent).toBe("Slack is not connected for Acme. Runs that call it fail on the call. Connect Slack in Organisation settings → Chat");
+    expect(callout.querySelector("a")?.getAttribute("href")).toBe("#chat");
+    expect(el.querySelector("li[data-tool=create_task]")?.getAttribute("data-unavailable")).toBeNull();
+  });
+
+  test("the gallery's tools block mounts in all four panes", async () => {
+    const el = await mount(<PaneDensityContext.Provider value="both"><AutomationsSection mode="both" /></PaneDensityContext.Provider>);
+    const panes = [...el.querySelectorAll("#au-tools [data-theme]")].map((p) => `${p.getAttribute("data-theme")}·${p.getAttribute("data-density")}`);
+    expect(panes.sort()).toEqual(["dark·comfortable", "dark·compact", "light·comfortable", "light·compact"]);
+    expect(el.querySelectorAll("#au-tools [data-testid=tool-unavailable]").length).toBe(8);
   });
 });
