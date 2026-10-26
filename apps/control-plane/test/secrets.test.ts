@@ -404,6 +404,30 @@ describe("an organisation's secrets", () => {
     const [row] = await owner`SELECT value FROM organization_secrets WHERE name = 'NPM_TOKEN'`;
     expect(row.value).toBe(VALUE);
   });
+
+  test("a recipe's env that would override an organisation secret ticked for previews is refused, and the reverse", async () => {
+    const orgClash = "Server web in Web sets PORT in its own environment, which would override this in that project's previews. Rename one of them.";
+    // Adding one ticked for previews, named as web's env var.
+    const add = await call(adminKey, "POST", orgPath(), { name: "PORT", value: VALUE, recipients: ["previews", "tester"] });
+    expect(add.status).toBe(409);
+    expect(add.json.error.message).toBe(orgClash);
+    // Ticked for agents only, it is not a preview secret: added; ticking previews then is refused.
+    expect((await call(adminKey, "POST", orgPath(), { name: "PORT", value: VALUE, recipients: ["tester"] })).status).toBe(201);
+    const tick = await call(adminKey, "PUT", `${orgPath()}/PORT/recipients`, { recipients: ["tester", "previews"] });
+    expect(tick.status).toBe(409);
+    expect(tick.json.error.message).toBe(orgClash);
+    expect((await call(memberKey, "GET", orgPath())).json.secrets[0].recipients).toEqual(["tester"]);
+
+    // A recipe setting an organisation preview secret's name is refused, naming the server and the variable.
+    await call(adminKey, "POST", orgPath(), { name: "NPM_TOKEN", value: VALUE, recipients: ["previews"] });
+    const api = { name: "api", port: 8080, command: "go run .", env: [{ name: "NPM_TOKEN", value: "x" }] };
+    const put = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/api`, api);
+    expect(put.status).toBe(409);
+    expect(put.json.error.message).toBe("NPM_TOKEN is a preview secret of org_sec, and server api setting it would override it in previews. Rename one of them.");
+    // Once it is no longer ticked for previews, the recipe saves.
+    await call(adminKey, "PUT", `${orgPath()}/NPM_TOKEN/recipients`, { recipients: ["tester"] });
+    expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/api`, api)).status).toBe(200);
+  });
 });
 
 describe("migration 081", () => {

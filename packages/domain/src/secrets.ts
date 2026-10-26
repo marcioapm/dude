@@ -214,6 +214,22 @@ export function orgSecretNameProblem(name: string, secrets: readonly string[]): 
   return null;
 }
 
+/** An organisation secret ticked for previews that a project's recipe sets: the project's server env would win there. */
+export function orgSecretClashMessage(server: string, project: string, name: string): string {
+  return `Server ${server} in ${project} sets ${name} in its own environment, which would override this in that project's previews. Rename one of them.`;
+}
+
+/**
+ * Why a recipe's env cannot be saved beside the organisation's secrets in
+ * force for its project and ticked for previews: the first variable it
+ * sets that is one; null if none is.
+ */
+export function recipeOrgSecretClash(recipe: RecipeEnvNames, orgName: string, previewSecrets: readonly string[]): string | null {
+  const e = recipe.env.find((v) => previewSecrets.includes(v.name));
+  if (!e) return null;
+  return `${e.name} is a preview secret of ${orgName}, and server ${recipe.name} setting it would override it in previews. Rename one of them.`;
+}
+
 export const SECRET_SOURCES = ["organization", "project"] as const;
 export type SecretSource = typeof SECRET_SOURCES[number];
 

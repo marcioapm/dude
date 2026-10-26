@@ -11,6 +11,7 @@ import {
   EventTypes,
   addOrgSecretSchema,
   changeOrgSecretRecipientsSchema,
+  orgSecretClashMessage,
   orgSecretNameProblem,
   replaceSecretSchema,
   secretHint,
@@ -57,6 +58,22 @@ async function one(scope: OrgScope, name: string): Promise<OrgSecret> {
   return s;
 }
 
+/**
+ * Refuses giving `name` to previews while a project's recipe sets it in its
+ * env and the project holds no secret of its own by that name: the server's
+ * env would override it in that project's previews (servers.ts checks the
+ * other way round). The caller holds the organisation's row.
+ */
+async function refuseRecipeClash(scope: OrgScope, name: string, recipients: readonly string[]): Promise<void> {
+  if (!recipients.includes("previews")) return;
+  const [hit] = (await scope.sql`
+    SELECT s.name AS server, p.name AS project FROM project_servers s JOIN projects p ON p.id = s.project_id
+    WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(s.env) e WHERE e->>'name' = ${name})
+      AND NOT EXISTS (SELECT 1 FROM project_secrets ps WHERE ps.project_id = s.project_id AND ps.name = ${name})
+    ORDER BY lower(p.name), s.name LIMIT 1`) as Array<{ server: string; project: string }>;
+  if (hit) throw conflict(orgSecretClashMessage(hit.server, hit.project, name));
+}
+
 async function getOrgSecrets(ctx: RequestContext): Promise<Response> {
   const orgId = organizationOf(ctx);
   const admin = await isOrgAdmin(ctx);
@@ -93,6 +110,7 @@ async function addOrgSecret(ctx: RequestContext): Promise<Response> {
     const names = ((await scope.sql`SELECT name FROM organization_secrets`) as Array<{ name: string }>).map((r) => r.name);
     const problem = orgSecretNameProblem(input.name, names);
     if (problem) throw problem.kind === "conflict" ? conflict(problem.message) : badRequest(problem.message);
+    await refuseRecipeClash(scope, input.name, input.recipients ?? []);
     await scope.sql`
       INSERT INTO organization_secrets (organization_id, name, value, hint, updated_by, recipients)
       VALUES (${orgId}, ${input.name}, ${input.value}, ${secretHint(input.value)}, ${ctx.principal.personId},
@@ -126,11 +144,14 @@ async function changeOrgSecretRecipients(ctx: RequestContext): Promise<Response>
   const name = ctx.params.name!;
   const input = await parseBody(ctx.request, changeOrgSecretRecipientsSchema);
   const secret = await withOrg(orgId, async (scope) => {
+    // Takes turns with a recipe's save (servers.ts recipeOrgClash, FOR SHARE).
+    await scope.sql`SELECT 1 FROM organizations WHERE id = ${orgId} FOR NO KEY UPDATE`;
     const changed = await scope.sql`
       UPDATE organization_secrets SET recipients = ${scope.sql.array(input.recipients, "text")}::text[], updated_at = now(),
         updated_by = ${ctx.principal.personId}
       WHERE name = ${name} RETURNING name`;
     if (changed.length === 0) throw notFound(`the organisation has no secret ${name}`);
+    await refuseRecipeClash(scope, name, input.recipients); // rolls the update back
     await recordChange(scope, ctx, { [name]: { recipients: input.recipients } });
     return one(scope, name);
   });
