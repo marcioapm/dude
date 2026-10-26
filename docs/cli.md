@@ -254,15 +254,15 @@ noun is what it acts on.
 | `finding list [TASK] [--run RUN] [--status open]` | Review findings |
 | `finding resolve FINDING resolved\|accepted\|open [--note N]` | Settles a finding; `accepted` leaves it as it is |
 
-### review
+### review-question
 
 Questions reviewers asked a task's owner; they hold delivery until settled.
 
 | Command | Does |
 |---|---|
-| `review list TASK` | The task's reviewers' questions |
-| `review answer QUESTION TEXT` | Answers one (the task's owner) |
-| `review withdraw QUESTION [--reason R]` | Withdraws one unanswered (the task's owner) |
+| `review-question list TASK` | The task's reviewers' questions |
+| `review-question answer QUESTION TEXT` | Answers one (the task's owner) |
+| `review-question withdraw QUESTION [--reason R]` | Withdraws one unanswered (the task's owner) |
 
 ### pr
 
@@ -456,8 +456,8 @@ the same under the new name.
 | `leave` | `run leave` | `session` | `session show` |
 | `questions` | `question list` | `answer` | `question answer` |
 | `findings` | `finding list` | `resolve` | `finding resolve` |
-| `review-questions` | `review list` | `review-answer` | `review answer` |
-| `review-withdraw` | `review withdraw` | `prs` | `pr list` |
+| `review-questions` | `review-question list` | `review-answer` | `review-question answer` |
+| `review-withdraw` | `review-question withdraw` | `prs` | `pr list` |
 | `merge` | `pr merge` | `update-branch` | `pr update-branch` |
 | `rerun-checks` | `pr rerun-checks` | `resolve-conflicts` | `pr resolve-conflicts` |
 | `reviewers` | `pr reviewers` | `feedback` | `feedback list` |
@@ -601,7 +601,8 @@ a list when several do), or `{"apiOnly": "<why>"}`.
   `task`, `/v1/pull-requests/…` → `pr`, `/v1/repositories/…` → `repo`,
   `/v1/people` → `person`). A route nested under a task that acts on
   another resource takes that resource's noun
-  (`/v1/tasks/:id/review-questions` → `review list`). Reuse an existing
+  (`/v1/tasks/:id/review-questions` → `review-question list`). A noun of
+  two words is hyphenated and still counts as one word. Reuse an existing
   noun before adding one: a noun with one or two verbs folds into its
   parent when that reads naturally. The verb is `list`, `show`, `create`,
   `update`, `delete`, `archive`, `unarchive`, `enable`, `disable`,

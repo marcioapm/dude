@@ -222,17 +222,17 @@ var lifecycleCommands = map[string]command{
 	})},
 
 	// Reviewers' questions hold delivery until the task's owner settles them.
-	"review list": {"TASK", "questions reviewers asked the task's owner", noFlags(func(c *cli, a []string) (any, error) {
+	"review-question list": {"TASK", "questions reviewers asked the task's owner", noFlags(func(c *cli, a []string) (any, error) {
 		return c.onTask("GET", a[0], "/review-questions", nil)
 	})},
-	"review answer": {"QUESTION TEXT", "answer a reviewer's question (the task's owner)", noFlags(func(c *cli, a []string) (any, error) {
+	"review-question answer": {"QUESTION TEXT", "answer a reviewer's question (the task's owner)", noFlags(func(c *cli, a []string) (any, error) {
 		t, err := c.text(a[1])
 		if err != nil {
 			return nil, err
 		}
 		return c.post("/v1/review-questions/"+esc(a[0])+"/answer", obj{"answer": t})
 	})},
-	"review withdraw": {"QUESTION", "withdraw a reviewer's question unanswered (the task's owner)", func(fs *flag.FlagSet) doer {
+	"review-question withdraw": {"QUESTION", "withdraw a reviewer's question unanswered (the task's owner)", func(fs *flag.FlagSet) doer {
 		reason := fs.String("reason", "", "why")
 		return func(c *cli, a []string) (any, error) {
 			return c.post("/v1/review-questions/"+esc(a[0])+"/withdraw", setIf(obj{}, "reason", *reason))

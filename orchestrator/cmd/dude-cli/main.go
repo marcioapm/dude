@@ -73,7 +73,7 @@ var nouns = []struct{ name, help string }{
 	{"session", "an agent session and its child sessions"},
 	{"question", "the questions agents asked, and answering them"},
 	{"finding", "review findings, and settling them"},
-	{"review", "reviewers' questions to a task's owner"},
+	{"review-question", "reviewers' questions to a task's owner"},
 	{"pr", "a task's pull requests: merge, update, rerun checks, request reviews"},
 	{"feedback", "your review of a task's work, drafted and sent to its agents"},
 	{"project", "projects and their boards"},
@@ -90,8 +90,12 @@ var nouns = []struct{ name, help string }{
 func usage() string {
 	var b strings.Builder
 	b.WriteString(usageHead)
+	width := 0
 	for _, n := range nouns {
-		fmt.Fprintf(&b, "  %-12s%s\n", n.name, n.help)
+		width = max(width, len(n.name))
+	}
+	for _, n := range nouns {
+		fmt.Fprintf(&b, "  %-*s  %s\n", width, n.name, n.help)
 	}
 	b.WriteString(usageTail)
 	return b.String()
