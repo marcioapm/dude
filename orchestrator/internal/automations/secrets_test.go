@@ -2,6 +2,7 @@ package automations
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -31,18 +32,6 @@ func (h *harness) givenTo(id string) map[string]string {
 		out[s.Name] = s.Value
 	}
 	return out
-}
-
-func equalSecrets(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
 }
 
 // An own agent, a command and a server get exactly the secrets they pick,
@@ -86,7 +75,7 @@ func TestAutomationRunsGetTheirPickedOrRoleSecrets(t *testing.T) {
 		"aut_qa_org": {"NPM_TOKEN": "org-npm", "SENTRY_TOKEN": "org-sentry"},
 		"aut_inv":    {},
 	} {
-		if got := h.givenTo(id); !equalSecrets(got, want) {
+		if got := h.givenTo(id); !maps.Equal(got, want) {
 			t.Errorf("%s was given %v, want %v", id, got, want)
 		}
 	}
