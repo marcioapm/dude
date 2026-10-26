@@ -1086,6 +1086,17 @@ test("reloaded after Connect to dude, Connect opens preview-connect in the dude 
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
 
+test("the stored dude tab name is used once: Connect pressed again with no session between opens a new tab", () => {
+  page(CART, false);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
+  const opens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { opens.push(args); return fakeWin(); };
+  boot();
+  tid("ov-connect")!.click();
+  tid("ov-connect")!.click();
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"], [`${DUDE}/#/preview-connect`, "_blank"]]);
+});
+
 test("Connect to dude opens a new tab when the stored name is not one dude gives, or came from a dude tab this page didn't open", () => {
   page(CART, false);
   win.sessionStorage.setItem("dude-overlay-dudeWindow", "_self");

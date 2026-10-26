@@ -998,6 +998,8 @@ export class Overlay {
    */
   #connectToDude(): void {
     const stored = this.#session(CONNECT_NAME_KEY);
+    // Used once: a session from that tab writes it back, and a retry with none between gets a fresh tab.
+    this.#session(CONNECT_NAME_KEY, "");
     let w: Window | null = null;
     try {
       w = this.#win.open(`${this.#opts.dudeOrigin}/#/preview-connect`, overlayWindowName(stored) ? stored : "_blank");

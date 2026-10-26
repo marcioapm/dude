@@ -494,6 +494,35 @@ class CommentingOnAPreview(unittest.TestCase):
         expect(dude.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
         self.assertEqual(self.errors, [])
 
+    def test_connect_pressed_again_after_the_dude_tab_found_nothing_connects_in_a_new_tab(self):
+        ctx, page = self.context()
+        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=20_000)
+        page.close()
+        pv = ctx.new_page()
+        self.watch(pv)
+        pv.goto(f"{PREVIEW}/")
+        wait_ov(pv, "ov-connect")
+        with ctx.expect_page() as opened:
+            ov_click(pv, "ov-connect")
+        dude = opened.value
+        self.watch(dude)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        # From here this dude tab hears nothing from the preview, so its next lookup never happens.
+        dude.evaluate(f"() => addEventListener('message', (e) => {{ if (e.origin === '{PREVIEW}') e.stopImmediatePropagation(); }}, true)")
+        pv.reload()
+        wait_ov(pv, "ov-connect")
+        ov_click(pv, "ov-connect")
+        pv.wait_for_function("() => /didn't find this preview's task/.test(window.__ovRoot?.querySelector('[data-testid=ov-connect-note]')?.textContent ?? '')", timeout=30_000)
+        pages = len(ctx.pages)
+        with ctx.expect_page(timeout=20_000) as opened2:
+            ov_click(pv, "ov-connect")
+        fresh = opened2.value
+        self.watch(fresh)
+        self.assertEqual(len(ctx.pages), pages + 1)
+        fresh.wait_for_function(f"() => location.hash.includes('/task/{TASK}/')", timeout=20_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertEqual(self.errors, [])
+
     def test_dude_reloading_reconnects_by_itself_and_a_draft_saves(self):
         ctx, page = self.context()
         self.watch(page)
