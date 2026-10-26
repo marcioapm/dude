@@ -162,6 +162,14 @@ type Server struct {
 	// what a check run's read answers instead (403: no Checks permission).
 	CheckRuns      map[int64]CheckRun
 	CheckRunStatus int
+	// The id the one check run of SetChecks("run:…") reports: 77 when
+	// unset. A re-run on GitHub is a new check run, with a new id: a job
+	// re-run through the Actions API moves it on.
+	CheckRunID int64
+	// The id the one commit status of SetChecks("failure"), "success" or
+	// "pending" reports, listed in the combined status when set; unset,
+	// only the combined state is reported, with no statuses listed.
+	StatusID int64
 	// Actions job logs by id, the download host they redirect to, and a
 	// status the logs endpoint answers instead (403: no permission), with
 	// LogMessage as its message when set. LogSignature is the download
@@ -861,9 +869,11 @@ func (s *Server) Handler() http.Handler {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		s.mu.Lock()
 		s.JobsRerun = append(s.JobsRerun, id)
-		// As GitHub: the job re-run is queued again, not failed.
+		// As GitHub: the job re-run is queued again, not failed, as a new
+		// check run.
 		if strings.HasPrefix(s.checks, "run:") {
 			s.checks = "run:pending"
+			s.CheckRunID = max(s.CheckRunID, 77) + 1
 		}
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
@@ -1290,7 +1300,7 @@ func (s *Server) DeleteComment(number int, id int64) {
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	state := s.checks
+	state, id := s.checks, s.StatusID
 	s.mu.Unlock()
 	if strings.HasPrefix(state, "run:") || state == "none" {
 		// Actions only, or no CI on this commit: no commit statuses at all.
@@ -1300,15 +1310,24 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if state == "" {
 		state = "success"
 	}
-	write(w, 200, map[string]any{"state": state, "total_count": 1})
+	out := map[string]any{"state": state, "total_count": 1}
+	if id != 0 {
+		out["statuses"] = []any{map[string]any{"id": id, "context": "ci", "state": state,
+			"target_url": fmt.Sprintf("https://ci.test/%s/%d", s.Slug, id),
+			"created_at": "2026-09-28T10:00:00Z", "updated_at": "2026-09-28T10:04:12Z"}}
+	}
+	write(w, 200, out)
 }
 
 // checkRuns: GitHub Actions' way of reporting. SetChecks("run:failure")
 // reports through check runs instead of statuses.
 func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	state, forbidden, message := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage
+	state, forbidden, message, id := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage, s.CheckRunID
 	s.mu.Unlock()
+	if id == 0 {
+		id = 77
+	}
 	if message != "" {
 		fail(w, 403, message)
 		return
@@ -1323,9 +1342,9 @@ func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 		if conclusion == "pending" {
 			status, conclusion = "in_progress", ""
 		}
-		runs = append(runs, map[string]any{"id": 77, "name": "e2e", "status": status, "conclusion": conclusion,
+		runs = append(runs, map[string]any{"id": id, "name": "e2e", "status": status, "conclusion": conclusion,
 			"app":      map[string]string{"slug": "github-actions"},
-			"html_url": "https://github.test/" + s.Slug + "/runs/77", "started_at": "2026-09-28T10:00:00Z",
+			"html_url": fmt.Sprintf("https://github.test/%s/runs/%d", s.Slug, id), "started_at": "2026-09-28T10:00:00Z",
 			"completed_at": "2026-09-28T10:04:12Z"})
 	}
 	write(w, 200, map[string]any{"total_count": len(runs), "check_runs": runs})

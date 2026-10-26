@@ -14,11 +14,14 @@ package prs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -629,9 +632,16 @@ func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forg
 	}
 	// One signal per distinct change, however many deliveries report it.
 	// The head is part of it: checks failing again after a fix is a new
-	// failure, and must not be taken for the one already handled.
+	// failure, and must not be taken for the one already handled. The
+	// failing checks are part of it too: a fix that pushed nothing (the
+	// runner died, not the code) leaves the head where it was, and a
+	// re-run failing on it is a new check run or commit status, with a new
+	// id, so a new failure; the same ones failing again are not.
 	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State,
 		status.HeadSHA)
+	if checks := failingChecksKey(signal.Feedback); checks != "" {
+		key += ":checks:" + checks
+	}
 	// Readiness can come and go on the same head (approved, dismissed,
 	// approved again), and so can a conflict (resolved, then main moves
 	// into it again): each time is its own change, recorded as its own
@@ -681,6 +691,36 @@ func frozen(status *forge.Status, pr tracked) {
 	status.CheckList, status.Reviews = nil, nil
 	_ = json.Unmarshal(pr.ChecksJSON, &status.CheckList)
 	_ = json.Unmarshal(pr.ReviewsJSON, &status.Reviews)
+}
+
+// failingChecksKey names the checks a signal's CI feedback says failed,
+// whatever order GitHub listed them in: "" for none. Each is named by its
+// id (a check run's, or a commit status's), or by its name when it has
+// neither. A digest of fixed length, however many failed: the key is in
+// a unique index, which has a size limit. The list is hashed as JSON, so
+// a name with a separator in it cannot pass for two checks. The ids
+// themselves are in the signal's feedback, to read.
+func failingChecksKey(feedback []forge.ActionableFeedback) string {
+	var checks []string
+	for _, f := range feedback {
+		for _, c := range f.Checks {
+			switch {
+			case c.RunID != 0:
+				checks = append(checks, "run:"+strconv.FormatInt(c.RunID, 10))
+			case c.StatusID != 0:
+				checks = append(checks, "status:"+strconv.FormatInt(c.StatusID, 10))
+			default:
+				checks = append(checks, "name:"+c.Name)
+			}
+		}
+	}
+	if len(checks) == 0 {
+		return ""
+	}
+	slices.Sort(checks)
+	listed, _ := json.Marshal(checks)
+	sum := sha256.Sum256(listed)
+	return hex.EncodeToString(sum[:16])
 }
 
 func failingNames(checks []forge.Check) []string {

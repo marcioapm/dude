@@ -108,6 +108,10 @@ type Check struct {
 	// A check run's id, for its log and for running it again; 0 for a
 	// commit status, which has neither.
 	RunID int64 `json:"runId,omitempty"`
+	// A commit status's id; 0 for a check run. Each status posted is a new
+	// one, so a re-run's is not the failure before it. Never a RunID: it
+	// has no log and is not run again through the checks API.
+	StatusID int64 `json:"statusId,omitempty"`
 	// The app that reported it: "github-actions" for Actions, whose check
 	// run is a job, re-run through the Actions API.
 	App string `json:"app,omitempty"`
@@ -773,6 +777,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 		State      string `json:"state"`
 		TotalCount int    `json:"total_count"`
 		Statuses   []struct {
+			ID        int64  `json:"id"`
 			Context   string `json:"context"`
 			State     string `json:"state"`
 			TargetURL string `json:"target_url"`
@@ -787,7 +792,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 	var list []Check
 	for _, s := range combined.Statuses {
 		c := Check{Name: s.Context, URL: s.TargetURL, Status: "completed", Conclusion: s.State,
-			DurationMs: elapsed(s.CreatedAt, s.UpdatedAt)}
+			DurationMs: elapsed(s.CreatedAt, s.UpdatedAt), StatusID: s.ID}
 		if s.State == "pending" {
 			c.Status, c.Conclusion, c.DurationMs = "in_progress", "", 0
 		}

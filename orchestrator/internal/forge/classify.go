@@ -82,6 +82,8 @@ type FailingCheck struct {
 	Resumed bool   `json:"-"`
 	// The check run, to read its log from.
 	RunID int64 `json:"runId,omitempty"`
+	// The commit status, when it is one (Check.StatusID).
+	StatusID int64 `json:"statusId,omitempty"`
 }
 
 // Words that carry approval or thanks and nothing else.
@@ -218,7 +220,7 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 			Body: "Continuous integration is failing on this branch. Find out why and fix it."}
 		for _, c := range current.CheckList {
 			if c.Failed() {
-				f.Checks = append(f.Checks, FailingCheck{Name: c.Name, URL: c.URL, RunID: c.RunID})
+				f.Checks = append(f.Checks, FailingCheck{Name: c.Name, URL: c.URL, RunID: c.RunID, StatusID: c.StatusID})
 			}
 		}
 		actionable = append(actionable, f)
