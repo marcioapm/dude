@@ -453,6 +453,27 @@ describe("settings", () => {
     await hide(adminKey, []);
   });
 
+  test("a hidden project is no channel's usual project: left out of the read, refused on save, and back once shown", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_abs', ${ORG}, 'Acme Backend', 'abs', 'ABS'),
+      ('prj_sec', ${ORG}, 'Secret', 'sec', 'SEC') ON CONFLICT DO NOTHING`;
+    const usual = (ids: string[]) => call(adminKey, "PUT", "/v1/organization/chat/slack/channels/C78/projects",
+      { conversationName: "#ops", projectIds: ids });
+    const hide = (ids: string[]) => call(adminKey, "PUT", "/v1/organization/chat/slack/hidden-projects", { projectIds: ids });
+    const keys = (view: Json) => view.channels.find((c: Json) => c.conversationId === "C78").projects.map((p: Json) => p.key);
+    expect(keys(await (await usual(["prj_abs", "prj_sec"])).json() as Json)).toEqual(["ABS", "SEC"]);
+    await hide(["prj_sec"]);
+    // GET, as a member reads it: SEC is out.
+    expect(keys(await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json)).toEqual(["ABS"]);
+    // PUT naming it is refused, and changes nothing.
+    const refused = await usual(["prj_abs", "prj_sec"]);
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as Json).error.code).toBe("hidden_from_chat");
+    // Saving the set as shown keeps the hidden row, which comes back once it is shown.
+    expect(keys(await (await usual(["prj_abs"])).json() as Json)).toEqual(["ABS"]);
+    await hide([]);
+    expect(keys(await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json)).toEqual(["ABS", "SEC"]);
+  });
+
   test("a task filed from a chat-born session is fenced by its origin, but is not shown as having come from chat", async () => {
     await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_fil', ${ORG}, 'Filed', 'fil', 'FIL')
       ON CONFLICT DO NOTHING`;

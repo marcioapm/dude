@@ -334,7 +334,9 @@ async function getProjects(ctx: RequestContext): Promise<Response> {
       SELECT c.conversation_id AS "conversationId", max(c.name) AS "conversationName",
         COALESCE((SELECT json_agg(json_build_object('id', p.id, 'key', p.key_prefix, 'name', p.name) ORDER BY p.key_prefix)
           FROM chat_channel_projects cp JOIN projects p ON p.id = cp.project_id
-          WHERE cp.provider = ${provider.id} AND cp.external_workspace_id = ${i.workspace} AND cp.conversation_id = c.conversation_id), '[]') AS projects
+          WHERE cp.provider = ${provider.id} AND cp.external_workspace_id = ${i.workspace} AND cp.conversation_id = c.conversation_id
+            -- A project hidden from the provider is no channel's hint: routing never reads it either.
+            AND NOT EXISTS (SELECT 1 FROM chat_hidden_projects h WHERE h.provider = cp.provider AND h.project_id = cp.project_id)), '[]') AS projects
       FROM c GROUP BY c.conversation_id ORDER BY max(c.at) DESC LIMIT 200` : [];
     return { channels: [...channels], hidden: [...hidden], projects: [...projects], installed: Boolean(i) };
   });
@@ -360,9 +362,18 @@ async function putChannelProjects(ctx: RequestContext): Promise<Response> {
     const [i] = await sql`SELECT external_workspace_id AS workspace FROM chat_installations WHERE provider = ${provider.id}`;
     if (!i) throw new HttpError(409, `${provider.name} is not installed`, "not_installed");
     const ids = await knownProjects(sql, input.projectIds);
+    const hiddenIds = (await sql`SELECT project_id FROM chat_hidden_projects WHERE provider = ${provider.id}
+      AND project_id = ANY(${sql.array(ids, "TEXT")})`).map((r: { project_id: string }) => r.project_id);
+    if (hiddenIds.length) {
+      throw new HttpError(409, `${hiddenIds.join(", ")} ${hiddenIds.length === 1 ? "is" : "are"} hidden from ${provider.name}: ` +
+        `a channel can't be usually about a hidden project`, "hidden_from_chat");
+    }
     const name = input.conversationName?.trim() ?? "";
-    const removed = (await sql`DELETE FROM chat_channel_projects WHERE provider = ${provider.id} AND external_workspace_id = ${i.workspace}
-      AND conversation_id = ${conversation} AND NOT (project_id = ANY(${sql.array(ids, "TEXT")})) RETURNING project_id`)
+    // Rows of projects hidden since are kept (unhiding brings the hint
+    // back) and left out of every read; saving the shown set keeps them.
+    const removed = (await sql`DELETE FROM chat_channel_projects cp WHERE provider = ${provider.id} AND external_workspace_id = ${i.workspace}
+      AND conversation_id = ${conversation} AND NOT (project_id = ANY(${sql.array(ids, "TEXT")}))
+      AND NOT EXISTS (SELECT 1 FROM chat_hidden_projects h WHERE h.provider = cp.provider AND h.project_id = cp.project_id) RETURNING project_id`)
       .map((r: { project_id: string }) => r.project_id);
     const added: string[] = [];
     for (const id of ids) {

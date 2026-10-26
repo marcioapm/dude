@@ -413,6 +413,32 @@ describe("a chat-born session", () => {
     expect(text(c.querySelector("[data-testid=routing-line]"))).toContain("Skipped, not connectedGUGus");
     expect(text(c.querySelector("[data-testid=routing-line]"))).toContain("Asked the model once, on the Judgements tier.");
   });
+
+  test("made outside a thread, it quotes the channel before the mention, labelled so, as it quotes a thread", async () => {
+    const origin: SessionChatOrigin = {
+      provider: "slack", workspaceId: "T1", conversationId: "C9", conversationName: "#nightly", conversationKind: "public",
+      threadId: "1.5", permalink: "https://acme.slack.com/archives/C9/p1", requestedBy: "Eli",
+      channel: [{ by: "CI Bot", text: "Run #812 failed https://github.com/acme/api/actions/runs/812", inDude: false, app: true },
+        { by: "Eli", person: "per_eli", text: "seen it", inDude: true }],
+      routing: { route: "brainstorm", confidence: 0.9, reasoning: "Investigate.", added: [], skipped: [], requestId: "chr_2" },
+    };
+    const c = await show(<SessionOrigin origin={origin} names={(id) => (id === "per_eli" ? { id, name: "Eli Park" } : null)} />, "session-origin");
+    expect(c.querySelector("[data-testid=origin-thread]")).toBeNull();
+    const quoted = c.querySelector("[data-testid=origin-channel] figure")!;
+    expect(quoted.getAttribute("aria-label")).toBe("The channel #nightly before the mention, on Slack");
+    expect(text(quoted.querySelector("figcaption"))).toBe("Quoted from Slack·#nightly, before the mention·2 messagesOpen in Slack");
+    expect(text(quoted)).toContain("actions/runs/812");
+    expect(text(quoted)).toContain("Eli Park");
+  });
+
+  test("a task filed from outside a thread says it quotes the channel before the mention", async () => {
+    const origin = { provider: "slack", workspaceId: "T1", conversationId: "C9", conversationName: "#nightly", threadId: "1.5",
+      permalink: "https://acme.slack.com/archives/C9/p1", requestedBy: "Eli",
+      channel: [{ by: "CI Bot", text: "Run #812 failed", inDude: false }] };
+    const c = await show(<TaskOrigin origin={origin} names={() => null} />, "task-origin-thread");
+    expect(text(c.querySelector("h2"))).toBe("The Slack channel before the mention, as filed");
+    expect(c.querySelector("[data-testid=origin-channel]")).not.toBeNull();
+  });
 });
 
 describe("the settings menu", () => {

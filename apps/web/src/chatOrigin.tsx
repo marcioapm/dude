@@ -35,29 +35,40 @@ export function OriginLead({ provider }: { provider: string }) {
   return <span data-testid="card-origin"><ProviderGlyph provider={originProvider(provider)} size={12} inline /></span>;
 }
 
-/** The quoted thread an origin carries, as external text; nothing when it carries none. */
+/**
+ * What an origin quotes, as external text: the channel before a mention
+ * made outside a thread, else the thread; nothing when it carries neither.
+ */
 function OriginThread({ origin, names, clip }: { origin: ChatOrigin; names: (id: string) => { id: string; name: string } | null; clip?: number }) {
-  if (!origin.thread?.length) return null;
+  const channel = origin.channel?.length ? origin.channel : null;
+  const messages = channel ?? origin.thread;
+  if (!messages?.length) return null;
+  const p = originProvider(origin.provider);
+  const place = origin.conversationName || "a conversation";
   return (
-    <ExternalThread provider={originProvider(origin.provider)} place={origin.conversationName} href={origin.permalink || null} clip={clip}
-      messages={origin.thread.map((m) => ({ by: { display: m.by, person: m.inDude && m.person ? names(m.person) ?? { id: m.person, name: m.by } : null }, text: m.text }))} />
+    <div data-testid={channel ? "origin-channel" : "origin-thread"}>
+      <ExternalThread provider={p} place={channel ? `${place}, before the mention` : place} href={origin.permalink || null} clip={clip}
+        label={channel ? `The channel ${place} before the mention, on ${p.name}` : undefined}
+        messages={messages.map((m) => ({ by: { display: m.by, person: m.inDude && m.person ? names(m.person) ?? { id: m.person, name: m.by } : null }, text: m.text }))} />
+    </div>
   );
 }
 
 /**
  * A chat-filed task's overview, under its goal: where it was filed from
- * and the thread as it was filed.
+ * and the thread (or the channel before the mention) as it was filed.
  */
 export function TaskOrigin({ origin, names }: { origin: ChatOrigin; names: (id: string) => { id: string; name: string } | null }) {
   const p = originProvider(origin.provider);
+  const what = origin.channel?.length ? "channel before the mention" : "thread";
   return (
-    <section className="taskBlock" aria-label={`The ${p.name} thread, as filed`} data-testid="task-origin-thread">
+    <section className="taskBlock" aria-label={`The ${p.name} ${what}, as filed`} data-testid="task-origin-thread">
       <Callout tone="info" data-testid="task-origin-callout">
         Filed from {p.name}{origin.requestedBy ? ` by ${origin.requestedBy}'s mention` : ""} in {origin.conversationName || "a conversation"}, in the Backlog. Nothing runs until someone starts it.
       </Callout>
-      {origin.thread?.length ? (
+      {origin.thread?.length || origin.channel?.length ? (
         <>
-          <h2 className="ds-label">The {p.name} thread, as filed</h2>
+          <h2 className="ds-label">The {p.name} {what}, as filed</h2>
           <OriginThread origin={origin} names={names} />
         </>
       ) : null}
@@ -66,9 +77,10 @@ export function TaskOrigin({ origin, names }: { origin: ChatOrigin; names: (id: 
 }
 
 /**
- * The top of a chat-born session's transcript: the thread quoted as
- * external text, then dude's routing line with who it was shared with.
- * `names` resolves the added people's ids to people.
+ * The top of a chat-born session's transcript: the thread (or the channel
+ * before the mention) quoted as external text, then dude's routing line
+ * with who it was shared with. `names` resolves the added people's ids to
+ * people.
  */
 export function SessionOrigin({ origin, names, nested }: {
   origin: SessionChatOrigin;
