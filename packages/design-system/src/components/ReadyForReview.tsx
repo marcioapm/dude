@@ -72,7 +72,7 @@ export function ReadyForReview({
   const withFixer = sentBack || (state.kind === "waiting" && state.sentBack === true);
   const tone = state.kind === "yours" ? "attention" : sentBack ? "info" : "neutral";
   return (
-    <Callout tone={tone} className={cx(styles["root"], className)} data-state={state.kind} {...rest}>
+    <Callout tone={tone} fill className={cx(styles["root"], className)} data-state={state.kind} {...rest}>
       <div className={styles["body"]}>
         <div className={styles["head"]}>
           <p className={styles["lead"]}>

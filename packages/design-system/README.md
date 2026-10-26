@@ -938,7 +938,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   named "Ways to pick it back up", each button beside one muted sentence
   saying what it does (its `aria-describedby`, `calloutActionLineId`); the
   pairs stack, button over sentence, on the callout's own width (a
-  container query), so a narrow main pane stacks them too. Each opens one `Dialog` whose
+  container query), so a narrow main pane stacks them too. A `Callout`'s
+  body is otherwise as wide as its words; with `CalloutActions` in it, or
+  with `fill` (a notice whose rows span it and whose last action sits at
+  the row's end, as `ReadyForReview`), it takes the callout's width. Each opens one `Dialog` whose
   `ChoiceList` holds all three, so the choice is made with what each keeps
   and throws away in view: under it, one line per thing the task has —
   conversation, workspace, branch, agent session (labelled "Session") —
@@ -2566,7 +2569,9 @@ MarkdownCheatsheet.
   being reviewed and tested again, `waiting` on neutral with no
   Open or Done, and with `sentBack` "Sam's feedback is with a fixer"), `round` (round 2 on: commits since `GateAt`, and what it
   resolved), `heldMs`, and the owner's `onOpen`, `onDraft`, `onFeedback`
-  and `onDoneWithout` (only while `yours`; the app confirms first). Under
+  and   `onDoneWithout` (only while `yours`; the app confirms first). Its
+  `Callout` is `fill`: the rows span the notice and Done without sits at
+  the row's end. Under
   560px each repository's refs and Done without take their own lines.
 - **BeforePullRequestFact**: a task's delivery choice that can still
   change, under the task's facts in the Overview rail. The owner gets a

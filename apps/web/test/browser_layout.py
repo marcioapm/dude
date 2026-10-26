@@ -205,6 +205,29 @@ class PageHoldsStill(unittest.TestCase):
         self.assertNotIn(washes[2], (clear, washes[0]))
         self.assertEqual([w for i, w in enumerate(washes) if i not in (0, 2)], [clear] * (len(washes) - 2))
 
+    def test_the_held_panel_fills_the_notice_row(self):
+        # Each repository row spans the panel's body, and Done without a pull
+        # request ends where the rows end, at 1440 and at 1024.
+        for width in (1440, 1024):
+            context = self.browser.new_context(viewport={"width": width, "height": 900}, service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(f"{URL}/?fixtures=d&run=held#/task/{TASK}")
+            page.get_by_test_id("ready-for-review").wait_for()
+            at = page.evaluate("""() => {
+              const p = document.querySelector('[data-testid=ready-for-review]');
+              const body = p.querySelector('[aria-label="What would be opened"]').parentElement;
+              const done = [...p.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Done without a pull request');
+              const right = (el) => el.getBoundingClientRect().right;
+              return { panel: right(p) - parseFloat(getComputedStyle(p).paddingRight), body: right(body),
+                       rows: [...p.querySelectorAll('[aria-label="What would be opened"] li')].map(right), done: right(done) };
+            }""")
+            where = f"{width}: {at}"
+            self.assertAlmostEqual(at["body"], at["panel"], delta=1, msg=where)
+            for row in at["rows"]:
+                self.assertAlmostEqual(row, at["body"], delta=1, msg=where)
+            self.assertAlmostEqual(at["done"], at["body"], delta=1, msg=where)
+
 
 if __name__ == "__main__":
     unittest.main()
