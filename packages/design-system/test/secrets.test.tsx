@@ -1,14 +1,24 @@
 /**
- * SecretsChip, GivenTo and GivenToFieldset: names and recipients only.
- * Mounted in happy-dom and driven by the events a browser sends.
+ * SecretsChip, GivenTo, GivenToFieldset, OverriddenBy, SecretName,
+ * PresetSecrets and SecretPicker: names and recipients only. Mounted in
+ * happy-dom and driven by the events a browser sends; Secrets.module.css
+ * maps its classes as written, so the struck class can be asserted.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
-import { GivenTo, GivenToFieldset, OverriddenBy, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE, secretPicksInForce, type SecretPick } from "../src/components/Secrets.tsx";
-import { accessibleName, allByRole, byRole } from "./queries.ts";
+import { cssModuleAsWritten } from "./cssModule.ts";
+import type { SecretPick } from "../src/components/Secrets.tsx";
+
+mock.module(...cssModuleAsWritten(new URL("../src/components/Secrets.module.css", import.meta.url)));
+
+const { TooltipProvider } = await import("../src/primitives/Tooltip.tsx");
+const { GivenTo, GivenToFieldset, OverriddenBy, PresetSecrets, SecretName, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE, secretPicksInForce } =
+  await import("../src/components/Secrets.tsx");
+// The class Secrets.module.css declares for a struck name, as the mock maps it.
+const styles = { struck: "struck" };
+const { accessibleName, allByRole, byRole } = await import("./queries.ts");
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -72,6 +82,40 @@ describe("OverriddenBy", () => {
     expect(el.querySelector("[data-x=a]")!.textContent).toBe("Overridden by this project's GH_TOKEN");
     expect(el.querySelector("[data-x=b]")!.textContent).toBe("Overridden by platform's GH_TOKEN");
     expect(el.querySelector("[data-x=a] code")!.textContent).toBe("GH_TOKEN");
+    // Glyph and words, never colour alone.
+    expect(el.querySelector("[data-x=a] [data-testid=overridden-by] svg")).not.toBeNull();
+  });
+});
+
+describe("SecretName", () => {
+  test("mono; struck in the module's class when overridden; then From <org>, or an aside", async () => {
+    const el = await mount(<>
+      <span data-x="own"><SecretName name="GH_TOKEN" /></span>
+      <span data-x="struck"><SecretName name="GH_TOKEN" struck from="Acme" /></span>
+      <span data-x="aside"><SecretName name="GH_TOKEN" aside="platform has its own" /></span>
+    </>);
+    const name = (x: string) => el.querySelector(`[data-x=${x}] .ds-mono`)!;
+    expect(name("own").className.split(" ")).not.toContain(styles["struck"]);
+    expect(name("struck").className.split(" ")).toContain(styles["struck"]);
+    expect(el.querySelector("[data-x=struck]")!.textContent).toBe("GH_TOKENFrom Acme");
+    expect(el.querySelector("[data-x=struck] [data-source=organization] svg")).not.toBeNull();
+    expect(el.querySelector("[data-x=aside] [data-testid=secret-aside]")!.textContent).toBe("platform has its own");
+    expect(el.querySelector("[data-x=own]")!.textContent).toBe("GH_TOKEN");
+  });
+});
+
+describe("PresetSecrets", () => {
+  test("the lock glyph and what the role gets from each owner; none in its words", async () => {
+    const el = await mount(<>
+      <span data-x="a"><PresetSecrets role="Tester" given={[{ from: "Acme", names: ["NPM_TOKEN", "SENTRY_TOKEN"] }, { from: "platform", names: ["DATABASE_SEED_URL"] }]} /></span>
+      <span data-x="b"><PresetSecrets role="Reviewer" given={[{ from: "Acme", names: [] }]} /></span>
+      <span data-x="c"><PresetSecrets role="Investigator" given={[]} none="no secrets: it is not one of the agents a secret is given to" /></span>
+    </>);
+    expect(el.querySelector("[data-x=a]")!.textContent).toBe("Tester gets NPM_TOKEN, SENTRY_TOKEN from Acme · DATABASE_SEED_URL from platform");
+    expect([...el.querySelectorAll("[data-x=a] code")].map((c) => c.textContent)).toEqual(["NPM_TOKEN", "SENTRY_TOKEN", "DATABASE_SEED_URL"]);
+    expect(el.querySelector("[data-x=a] svg")).not.toBeNull();
+    expect(el.querySelector("[data-x=b]")!.textContent).toBe("Reviewer gets no secrets");
+    expect(el.querySelector("[data-x=c]")!.textContent).toBe("Investigator gets no secrets: it is not one of the agents a secret is given to");
   });
 });
 
@@ -102,6 +146,8 @@ describe("SecretPicker", () => {
     expect(shadowed.hasAttribute("disabled")).toBe(true);
     expect(shadowed.getAttribute("aria-checked")).toBe("false");
     expect(el.querySelector("[data-overridden=true]")!.textContent).toContain("Overridden by platform's GH_TOKEN");
+    expect(el.querySelector("[data-overridden=true] .ds-mono")!.className.split(" ")).toContain(styles["struck"]);
+    expect(el.querySelector("[data-overridden=true] [data-testid=overridden-by] svg")).not.toBeNull();
     expect(byRole(el, "checkbox", "GH_TOKEN (platform)").getAttribute("aria-checked")).toBe("true");
     await act(async () => byRole(el, "checkbox", "GH_TOKEN (platform)").click());
     expect(seen.at(-1)).toEqual([]);
@@ -129,6 +175,40 @@ describe("SecretPicker", () => {
       <Harness seen={[]} disabled /></>);
     expect(el.textContent).toContain("None yet.");
     expect(allByRole(el, "checkbox").every((b) => b.hasAttribute("disabled"))).toBe(true);
+  });
+});
+
+describe("the gallery's secrets blocks", () => {
+  // Each block in both themes and both densities: four panes, every state drawn once per pane.
+  async function block(id: string, next: string) {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { PaneDensityContext } = await import("../src/gallery/Frame.tsx");
+    const { SettingsGallerySection } = await import("../src/gallery/sections/Settings.tsx");
+    const h = renderToStaticMarkup(<TooltipProvider><PaneDensityContext.Provider value="both"><SettingsGallerySection mode="both" /></PaneDensityContext.Provider></TooltipProvider>);
+    const b = h.slice(h.indexOf(`id="${id}"`), h.indexOf(`id="${next}"`));
+    const panes = [...b.matchAll(/data-theme="(dark|light)"[^>]*data-density="(comfortable|compact)"/g)].map((m) => `${m[1]}/${m[2]}`);
+    expect(panes.sort()).toEqual(["dark/comfortable", "dark/compact", "light/comfortable", "light/compact"]);
+    return b.slice(b.indexOf("data-theme="));
+  }
+  const count = (h: string, re: RegExp) => (h.match(re) ?? []).length;
+
+  test("#secrets-overridden: the struck row, its From marker and aside, the disabled picker row, and a 390 frame", async () => {
+    const drawn = await block("secrets-overridden", "secrets-picker");
+    // The table at full width and at 390, then the picker row: three struck names a pane.
+    expect(count(drawn, /class="ds-mono struck"[^>]*>GH_TOKEN</g)).toBe(4 * 3);
+    expect(count(drawn, /data-testid="overridden-by"><svg/g)).toBe(4 * 3);
+    expect(count(drawn, />platform has its own</g)).toBe(4 * 2);
+    expect(count(drawn, /style="width:390px/g)).toBe(4);
+  });
+
+  test("#secrets-picker: organisation-only, both lists, none yet, disabled, the preset line and 390", async () => {
+    const drawn = await block("secrets-picker", "s-tiers");
+    const t = drawn.replace(/<[^>]+>/g, "");
+    expect(count(t, /None yet\./g)).toBe(4 * 2);
+    expect(count(drawn, /data-overridden="true"/g)).toBe(4 * 2);
+    expect(count(t, /Tester gets NPM_TOKEN, SENTRY_TOKEN from Acme · DATABASE_SEED_URL from platform/g)).toBe(4);
+    expect(count(t, /Investigator gets no secrets: it is not one of the agents a secret is given to/g)).toBe(4);
+    expect(count(drawn, /style="width:390px/g)).toBe(4);
   });
 });
 

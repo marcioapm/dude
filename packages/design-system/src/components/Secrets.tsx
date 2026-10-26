@@ -6,6 +6,7 @@ import { Fieldset } from "../primitives/Layout.tsx";
 import { Tooltip } from "../primitives/Tooltip.tsx";
 import { cx } from "../util/cx.ts";
 import chip from "./Machines.module.css";
+import { SettingSource } from "./Settings.tsx";
 import styles from "./Secrets.module.css";
 
 /*
@@ -61,6 +62,61 @@ export function OverriddenBy({ name, by = "this project's" }: OverriddenByProps)
 }
 
 export type SecretSource = "organization" | "project";
+
+export interface SecretNameProps {
+  readonly name: string;
+  /** A more specific secret of the same name replaces it: struck through in muted ink. */
+  readonly struck?: boolean | undefined;
+  /** An inherited row's owner: SettingSource "From <from>" after the name. */
+  readonly from?: string | undefined;
+  /** Muted xs words after the name, such as which projects have their own. */
+  readonly aside?: ReactNode;
+}
+
+/** A secret's name in a table cell: mono, struck when overridden, then its "From Acme" marker or aside, wrapping under it. */
+export function SecretName({ name, struck, from, aside }: SecretNameProps) {
+  return (
+    <span className={styles["name"]}>
+      <span className={cx("ds-mono", struck && styles["struck"])} data-struck={struck ? "true" : undefined}>{name}</span>
+      {from !== undefined ? <SettingSource source="organization" from={from} /> : null}
+      {aside ? <span className={styles["aside"]} data-testid="secret-aside">{aside}</span> : null}
+    </span>
+  );
+}
+
+export interface PresetSecretsProps {
+  /** The role's label: "Tester". */
+  readonly role: string;
+  /** Names its runs get from each owner, in order; an owner with none is left out. */
+  readonly given: readonly { readonly from: string; readonly names: readonly string[] }[];
+  /** Said after "<role> gets" when `given` names nothing. Default "no secrets". */
+  readonly none?: string | undefined;
+  readonly "data-testid"?: string | undefined;
+}
+
+/**
+ * A dude-role preset's secrets in place of a SecretPicker, read-only: the
+ * lock glyph and "Tester gets NPM_TOKEN, SENTRY_TOKEN from Acme ·
+ * DATABASE_SEED_URL from platform", what its role is ticked for.
+ */
+export function PresetSecrets({ role, given, none = "no secrets", "data-testid": testId }: PresetSecretsProps) {
+  const groups = given.filter((g) => g.names.length > 0);
+  return (
+    <span className={styles["preset"]} data-testid={testId}>
+      <Icon name="lock" size={12} className={styles["presetIcon"]} />
+      <span>
+        {role} gets{" "}
+        {groups.length === 0 ? none : groups.map((g, i) => (
+          <span key={g.from}>
+            {i ? " · " : null}
+            {g.names.map((n, j) => <span key={n}>{j ? ", " : ""}<code className="ds-mono">{n}</code></span>)}
+            {" "}<span className={styles["presetFrom"]}>from {g.from}</span>
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
 
 export interface SecretPick {
   readonly source: SecretSource;

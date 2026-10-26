@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GivenTo, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
+import { GivenTo, SecretName, SettingsHeader, SettingsNote, SettingsSection } from "@dude/design-system/components";
 import { Button, Callout, EmptyState, FormActions, RowMenu, Spinner, Table, TBody, Td, Th, THead, Tooltip, Tr } from "@dude/design-system/primitives";
 import { ORG_SECRET_NOBODY, secretRecipientLabel, type OrgSecretListing } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
@@ -18,7 +18,6 @@ import {
   AddSecretDialog, ChangeValueDialog, NO_TALKERS_NOTE, RecipientsDialog, REDACTION_NOTE, RemoveSecretDialog, SECRETS_NOTE,
   changedWords, recipientsDone, useSecretDialogs, type SecretLevel,
 } from "./ProjectSecrets.tsx";
-import "../secrets.css";
 
 export const ORG_SECRETS_HELP = (org: string) =>
   `Values every project's agents and previews may need, entered once for ${org}. Each reaches only the agents you tick, in every project, as an environment variable. A project secret of the same name takes its place in that project.`;
@@ -101,10 +100,7 @@ export function OrgSecretsPage({ client, orgName, admin }: { client: ApiClient; 
                   <Tooltip key={s.name} side="bottom" content={changedWords(s)}>
                     <Tr data-secret={s.name}>
                       <Td wrap>
-                        <span className="secretName">
-                          <span className="ds-mono">{s.name}</span>
-                          {s.overriddenIn.length ? <span className="secretAside" data-testid="has-own">{projectsHaveOwn(overriddenIn(s))}</span> : null}
-                        </span>
+                        <SecretName name={s.name} aside={s.overriddenIn.length ? <span data-testid="has-own">{projectsHaveOwn(overriddenIn(s))}</span> : undefined} />
                       </Td>
                       <Td wrap><GivenTo given={s.recipients.map(secretRecipientLabel)} none={ORG_SECRET_NOBODY} /></Td>
                       {admin ? (

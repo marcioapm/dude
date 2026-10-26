@@ -21,6 +21,7 @@ import {
   RepoFilterField,
   SchedulePicker,
   ScopeChip,
+  PresetSecrets,
   SecretPicker,
   secretPicksInForce,
   Segmented,
@@ -113,11 +114,9 @@ import {
   type SettingsResponse,
   type Trigger,
 } from "@dude/domain";
-import { Icon } from "@dude/design-system";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { useOrgSecrets } from "./OrgSecrets.tsx";
-import "../secrets.css";
 
 /** Where the automations pages are: a list, one automation (its tab), one run. */
 export interface AutomationsPlace {
@@ -788,19 +787,10 @@ function PresetSecretsLine({ role, orgName, org, project }: {
   const own = new Set((project?.secrets ?? []).map((s) => s.name));
   const fromProject = recipient ? (project?.secrets ?? []).filter((s) => s.recipients.includes(recipient)) : [];
   const fromOrg = recipient ? org.filter((s) => s.recipients.includes(recipient) && !own.has(s.name)) : [];
-  const names = (list: readonly { name: string }[]) => list.map((s, i) => <span key={s.name}>{i ? ", " : ""}<code className="ds-mono">{s.name}</code></span>);
-  const label = PRESET_ROLE_LABEL[role];
   return (
-    <span className="presetSecrets" data-testid="preset-secrets-line">
-      <Icon name="lock" size={12} />
-      <span>
-        {label} gets{" "}
-        {fromOrg.length ? <>{names(fromOrg)} <span className="presetSecretsFrom">from {orgName}</span></> : null}
-        {fromOrg.length && fromProject.length ? " · " : null}
-        {fromProject.length ? <>{names(fromProject)} <span className="presetSecretsFrom">from {project!.name}</span></> : null}
-        {!fromOrg.length && !fromProject.length ? (recipient ? "no secrets" : "no secrets: it is not one of the agents a secret is given to") : null}
-      </span>
-    </span>
+    <PresetSecrets role={PRESET_ROLE_LABEL[role]} data-testid="preset-secrets-line"
+      given={[{ from: orgName, names: fromOrg.map((s) => s.name) }, ...(project ? [{ from: project.name, names: fromProject.map((s) => s.name) }] : [])]}
+      none={recipient ? undefined : "no secrets: it is not one of the agents a secret is given to"} />
   );
 }
 

@@ -13,7 +13,7 @@
 
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { formatTimestamp } from "@dude/design-system";
-import { GivenTo, GivenToFieldset, OverriddenBy, SettingSource, SettingsNote, SettingsSection, TextButton } from "@dude/design-system/components";
+import { GivenTo, GivenToFieldset, OverriddenBy, SecretName, SettingsNote, SettingsSection, TextButton } from "@dude/design-system/components";
 import { Button, Callout, Dialog, EmptyState, FormActions, Input, RowMenu, SecretField, Table, TBody, Td, Th, THead, Tooltip, Tr, useToast } from "@dude/design-system/primitives";
 import {
   DEFAULT_SECRET_RECIPIENTS, ORG_SECRET_NOBODY, SECRET_NAME_HELP, SECRET_RECIPIENT_OPTIONS, SECRET_RECIPIENTS_REQUIRED, SECRET_VALUE_HELP,
@@ -22,7 +22,6 @@ import {
 } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
 import { FormDialog, errorText } from "../hooks/useSave.tsx";
-import "../secrets.css";
 
 export const SECRETS_HELP = "Values the project's previews and agents need but the repository must not hold. Each one reaches only who you give it to, as an environment variable.";
 export const SECRETS_NOTE = "Agent sessions and previews that start after you save get it; running ones keep what they have.";
@@ -134,10 +133,7 @@ export function ProjectSecretsSection({ client, projectId, secrets, recipes, can
                 <Tooltip key={`${source}:${s.name}`} side="bottom" content={changedWords(s)}>
                   <Tr data-secret={s.name} data-source={source} data-overridden={overridden ? "true" : undefined}>
                     <Td wrap>
-                      <span className="secretName">
-                        <span className={overridden ? "ds-mono secretStruck" : "ds-mono"}>{s.name}</span>
-                        {source === "organization" ? <SettingSource source="organization" from={orgName} /> : null}
-                      </span>
+                      <SecretName name={s.name} struck={overridden} from={source === "organization" ? orgName : undefined} />
                     </Td>
                     <Td wrap>
                       {overridden ? <OverriddenBy name={s.name} />

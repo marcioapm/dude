@@ -2939,9 +2939,10 @@ comments when opened there, never on the standalone Run page.
 ## Project secrets
 
 `src/components/Secrets.tsx`: `GivenTo`, `GivenToFieldset`, `SecretsChip`,
-`OverriddenBy`, `SecretPicker`. Gallery: Settings → *Project secrets*
-(`#s-secrets`), *OverriddenBy* (`#secrets-overridden`) and *SecretPicker*
-(`#secrets-picker`), in both themes and densities.
+`OverriddenBy`, `SecretName`, `SecretPicker`, `PresetSecrets`. Gallery:
+Settings → *Project secrets* (`#s-secrets`), *OverriddenBy / SecretName*
+(`#secrets-overridden`) and *SecretPicker / PresetSecrets*
+(`#secrets-picker`), in both themes and densities and at 390.
 
 - **Project secrets have their own SettingsSection.** Its title is
   "Secrets" and its note says who gets values, as environment variables.
@@ -2983,6 +2984,12 @@ comments when opened there, never on the standalone Run page.
   in muted xs text, the name in mono. It takes the place of the row's
   Given to (or a checkbox's description); the row's own name is struck
   through in muted ink. Glyph and words, never colour alone.
+- **SecretName** (`name`, `struck?`, `from?`, `aside?`): a secret's name
+  in a table cell, mono. `struck` strikes it through in muted ink (the row
+  `OverriddenBy` explains); `from` follows it with `SettingSource` "From
+  Acme" on an inherited row; `aside` follows it with muted xs words, such
+  as "platform has its own". The marker and aside wrap under a long name.
+  The app styles no secret name itself.
 - **SecretPicker** (`orgName`, `org`, `project?`, `value`, `onChange`,
   `disabled?`): an automation's secrets, as checkbox groups "Acme's" and,
   for a project automation, "platform's", side by side and stacked when
@@ -2994,6 +3001,11 @@ comments when opened there, never on the standalone Run page.
   is passed back as the project's (`secretPicksInForce`): that is the
   value its runs get, and unticking it removes the name. The value records
   the source as well as the name.
+- **PresetSecrets** (`role`, `given`, `none?`): one of dude's agents has
+  no picker; in its place, read-only, the `lock` glyph and "Tester gets
+  `NPM_TOKEN`, `SENTRY_TOKEN` from Acme · `DATABASE_SEED_URL` from
+  platform", the owners muted, each name mono. With none, "<role> gets"
+  and `none` ("no secrets" by default; the Investigator says why).
 - **The secrets an agent session got are a `SecretsChip`** beside
   `MachineChip` in its header: the `lock` glyph and "N secrets" on the
   raised shade, at the chip height. Its tooltip lists the names only and
