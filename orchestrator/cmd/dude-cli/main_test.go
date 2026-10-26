@@ -88,15 +88,29 @@ func runCLI(t *testing.T, srv *httptest.Server, stdin string, args ...string) (s
 		out:   &out,
 	}
 	err := c.run(args)
-	if len(args) == 0 {
+	// Requests are checked against the command run resolved, a top-level one or
+	// "NOUN VERB", after the --org flags run itself strips.
+	words := args
+	for len(words) > 0 && strings.HasPrefix(words[0], "--org=") || len(words) > 1 && words[0] == "--org" {
+		if words[0] == "--org" {
+			words = words[1:]
+		}
+		words = words[1:]
+	}
+	var name string
+	var nerr error
+	if len(words) > 0 {
+		name, _, nerr = commandName(words)
+	}
+	if nerr != nil || name == "" {
+		if len(sent) > 0 {
+			t.Errorf("%v resolves to no command but sent %d requests", args, len(sent))
+		}
 		return out.String(), err
 	}
-	// Requests are checked against the command run resolved, a top-level one or "NOUN VERB".
-	if name, _, nerr := commandName(args); nerr == nil && name != "" {
-		for _, s := range sent {
-			if msg := unmappedRequest(t, name, s); msg != "" {
-				t.Error(msg)
-			}
+	for _, s := range sent {
+		if msg := unmappedRequest(t, name, s); msg != "" {
+			t.Error(msg)
 		}
 	}
 	return out.String(), err

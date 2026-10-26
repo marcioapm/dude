@@ -28,10 +28,15 @@ func TestHelpListsTopLevelCommandsAndNouns(t *testing.T) {
 				t.Errorf("%v: no %q in\n%s", args, want, out)
 			}
 		}
+		at := 0
 		for _, n := range nouns {
-			if !strings.Contains(out, "\n  "+n.name+" ") {
-				t.Errorf("%v: noun %q not listed", args, n.name)
+			line := "\n  " + n.name + " "
+			i := strings.Index(out[at:], line)
+			if i < 0 {
+				t.Errorf("%v: noun %q missing or out of order", args, n.name)
+				continue
 			}
+			at += i + len(line)
 		}
 		if strings.Contains(out, "automation update") || strings.Contains(out, "task update") {
 			t.Errorf("%v: dude --help lists verbs:\n%s", args, out)
@@ -106,6 +111,11 @@ func TestUnknownNounAndVerb(t *testing.T) {
 	if !strings.Contains(err.Error(), strings.Join(verbs("task"), ", ")) {
 		t.Fatalf("unknown verb lists %q", err)
 	}
+	// A top-level command's name is no verb of a noun.
+	_, err, n = runPlain(t, "task", "whoami")
+	if err == nil || n != 0 || !strings.HasPrefix(err.Error(), `dude task has no "whoami"; its commands: `) {
+		t.Fatalf("top-level name as verb: %v, %d requests", err, n)
+	}
 }
 
 func TestVerbHelpNamesTheFullCommand(t *testing.T) {
@@ -117,7 +127,7 @@ func TestVerbHelpNamesTheFullCommand(t *testing.T) {
 	if err == nil || err.Error() != "usage: dude automation update ID SETTINGS" {
 		t.Fatalf("argument count: %v", err)
 	}
-	// The flag set is named for the full command too: its errors say so.
+	// A bad flag prints the full command's usage.
 	var out2 bytes.Buffer
 	c := &cli{out: &out2}
 	if err := c.run([]string{"task", "update", "wi_12", "--nope"}); err == nil || !strings.Contains(out2.String(), "usage: dude task update") {
@@ -138,6 +148,15 @@ func TestOrgBeforeANoun(t *testing.T) {
 	}
 }
 
+// runCLI checks the requests of a command after --org against routes.json.
+func TestOrgBeforeANounIsCheckedAgainstRoutes(t *testing.T) {
+	for _, args := range [][]string{{"--org", "x", "task", "list", "ABS"}, {"--org=x", "task", "list", "ABS"}} {
+		if _, err, n := runPlain(t, args...); err != nil || n == 0 {
+			t.Fatalf("%v: %v, %d requests", args, err, n)
+		}
+	}
+}
+
 // The flat names are gone, with no alias: each is an unknown command and
 // sends nothing.
 func TestOldFlatNamesAreUnknown(t *testing.T) {
@@ -151,6 +170,7 @@ func TestOldFlatNamesAreUnknown(t *testing.T) {
 		{"memories"},
 		{"people"},
 		{"epic-create", "ABS", "--title", "x"},
+		{"task update", "wi_12"},
 	} {
 		_, err, n := runPlain(t, args...)
 		if err == nil || err.Error() != `unknown command "`+args[0]+`"; see dude --help` || n != 0 {
