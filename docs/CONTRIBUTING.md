@@ -951,35 +951,26 @@ delivery handled twice makes nothing twice (`chat_requests` is unique per
 delivery). An install or a link is begun by a signed-in browser (an HttpOnly
 cookie whose hash the state holds) and finished only in that browser.
 
-**What routing reads (`chat/context.go`).** A mention in a thread reads that
-thread (`FetchThread`); a mention at a conversation's top level reads the
-channel before it instead (`FetchHistory`: at most 30 messages from the 24
-hours before the mention, oldest first, rendered within 12 000 characters,
-the oldest left out and counted), under `## The channel before it`. Both
-are quoted by `quoteMessages`: every message but dude's own (`BotUserID`),
-another app's (a CI bot's) by its name and marked "(an app)", never matched
-to a person; a message's text is its text, attachments (pretext, title and
-link, text, fields, footer) and blocks (section, header, context, rich_text,
-button links), repeats dropped, clipped to 2000 characters
-(`chat/slack/text.go`). What was read is kept on the delivery's decision (a
-retry reuses it), hashed into `context_hash`, sent in the recorded routing
-call, and quoted in the session's first message as untrusted text; of the
-channel, only the newest messages the 12 000 characters kept are stored
-(the decision, the session's and a task's origin, the goal), and task lists
-(`GET /v1/tasks`, navigation) return an origin without its quoted thread or
-channel. A channel read refused (no scope, not in the channel) is noted on
-the installation and routing goes on without it; a transient failure (a
-rate limit with Retry-After, the provider down) retries the delivery, as a
-thread read's does.
+**What routing reads (`chat/context.go`).** Thread mentions use `FetchThread`;
+top-level mentions use `FetchHistory`: at most 30 messages from the preceding
+24 hours, oldest first under `## The channel before it`. `quoteMessages`
+drops dude's own messages, names other apps as apps (never people), and clips
+each message to 2000 characters. Slack text includes attachment and block
+text and links, with repeats removed (`chat/slack/text.go`). Channel context
+keeps the newest messages within 12 000 characters and counts those omitted.
+The retained context is stored on the decision for retries, hashed into
+`context_hash`, recorded with the routing call, and quoted as untrusted text
+in the session briefing. Origins and goals retain only that bounded context;
+task lists and navigation strip quoted thread/channel text from origins.
+A refused channel read is noted on the installation and routing continues
+without it; transient failures retry the delivery, as thread reads do.
 
-**Hints, never rules.** Routing is also told where the conversation's last
-20 requests' results went (`## Where this conversation's earlier requests
-went`, read along `chat_requests_conversation_idx`) and what the channel is
-usually about (`chat_channel_projects`, `## This channel is usually about`).
-The built-in instructions say both are a prior the message and context
-override. An admin sets the usual projects on the provider's settings page
+**Hints, never rules.** Routing sees the projects of the conversation's last
+20 requests (`chat_requests_conversation_idx`) and its usual projects
+(`chat_channel_projects`). The message and context override both hints.
+An admin sets the usual projects on the provider's settings page
 (`PUT /v1/organization/chat/:provider/channels/:conversation/projects`) or
-from chat (`@dude this channel is usually about ABS`, the `channel_projects`
+from chat (`@dude this channel is usually about Acme`, the `channel_projects`
 route; anyone else is refused privately and nothing changes).
 
 **Hidden projects (`chat_hidden_projects`, migration 196).** An admin hides
@@ -1006,9 +997,10 @@ applies to new work:
   out), peers, memory, search, settings and `run_chat` there are refused or
   left out.
 
-Every reach goes through one predicate (`delivery.SessionHidesSQL` /
-`delivery.FenceOf`, and `agenttools/fence.go`'s `fenceOf`, which takes a
-task's own project out of its fence).
+SQL reads use `delivery.HiddenProjectSQL` or `SessionHidesSQL`; Go checks
+use `delivery.FenceOf`. Agent tools' `fenceOf` and delivery's `taskFence`
+exempt a task's own project. The provider comes from origin, so hiding takes
+effect on subsequent reads and survives reinstalling the integration.
 
 **Session tools for chat.** `chat_history` (capability `chat.read`, a
 brainstorm's by default) reads more of the conversation a session came from
