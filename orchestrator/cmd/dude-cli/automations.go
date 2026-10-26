@@ -299,7 +299,7 @@ var automationCommands = map[string]command{
 				return c.post(autPath(a[0], "/runs"), obj{"testEvent": te})
 			}
 		}},
-	"automation runs": {"ID", "an automation's runs, newest first, and its kept session", func(fs *flag.FlagSet) doer {
+	"automation run-list": {"ID", "an automation's runs, newest first, and its kept session", func(fs *flag.FlagSet) doer {
 		status := fs.String("status", "", "queued, running, succeeded, failed, skipped or cancelled")
 		limit := fs.Int("limit", 0, "at most this many, 1 to 200 (default 50)")
 		return func(c *cli, a []string) (any, error) {

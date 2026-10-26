@@ -379,7 +379,7 @@ owner and the admins transfer one, and its owner may run it.
 | `automation run ID` | Runs it now: a schedule as it is |
 | `automation run ID --delivery D` | On GitHub events: with a past delivery (from `automation deliveries`) |
 | `automation run ID --body FILE [--event E] [--action A] [--delivery-id D]` | On GitHub events: with a test event (`-` reads stdin; the event defaults to the automation's, the delivery id to a made-up `test-…`; `--action` is written into the body, which must name no other action) |
-| `automation runs ID [--status S] [--limit N]` | Its runs, newest first, and its kept session: `queued`, `running`, `succeeded`, `failed`, `skipped`, `cancelled` |
+| `automation run-list ID [--status S] [--limit N]` | Its runs, newest first, and its kept session: `queued`, `running`, `succeeded`, `failed`, `skipped`, `cancelled` |
 | `automation run-show ID RUN` | One run: its payloads, log tail, a Server's requests |
 | `automation deliveries ID` | The last 30 days' deliveries of its event |
 | `automation test ID BODY` | Whether an event body would run it: `{"matches": true}`, or the filter that skips it and why |
@@ -479,7 +479,7 @@ the same under the new name.
 | `automation-enable` | `automation enable` | `automation-disable` | `automation disable` |
 | `automation-delete` | `automation delete` | `automation-duplicate` | `automation duplicate` |
 | `automation-owner` | `automation owner` | `automation-secret` | `automation secret` |
-| `automation-run` | `automation run` | `automation-runs` | `automation runs` |
+| `automation-run` | `automation run` | `automation-runs` | `automation run-list` |
 | `automation-run-show` | `automation run-show` | `automation-deliveries` | `automation deliveries` |
 | `automation-test` | `automation test` | `automation-start-fresh` | `automation start-fresh` |
 | `automation-prompts` | `automation prompts` | `automation-prompt-restore` | `automation prompt-restore` |
@@ -551,7 +551,7 @@ dude automation show "$id" --settings \
   | dude automation update "$id" -
 dude automation enable "$id"
 dude automation run "$id"                                   # once now, to see it work
-dude automation runs "$id" --limit 1
+dude automation run-list "$id" --limit 1
 ```
 
 A command on pull requests, tried on an event before it is turned on:

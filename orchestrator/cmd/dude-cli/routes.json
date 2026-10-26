@@ -37,7 +37,7 @@
   "GET /v1/automations/:id": ["automation run", "automation show"],
   "GET /v1/automations/:id/deliveries": "automation deliveries",
   "GET /v1/automations/:id/prompt-history": ["automation prompt-restore", "automation prompts"],
-  "GET /v1/automations/:id/runs": "automation runs",
+  "GET /v1/automations/:id/runs": "automation run-list",
   "GET /v1/automations/:id/runs/:runId": "automation run-show",
   "GET /v1/automations/repositories": "automation repos",
   "GET /v1/automations/subscriptions": "automation subscriptions",
