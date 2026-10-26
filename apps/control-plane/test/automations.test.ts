@@ -351,19 +351,21 @@ describe("runs", () => {
     const ev = (id: string, type: string, at: string, payload: Record<string, unknown>) =>
       owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
         VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_d', 'orchestrator', ${at}::timestamptz, 'arn_d', ${{ ...payload, automationRunId: "arn_d" }})`;
-    await ev("evt_d1", "agent.tool.dude", "2026-10-23T15:00:05Z", { tool: "create_task", arguments: { title: "Fix it" }, result: {} });
+    await ev("evt_d1", "agent.tool.dude", "2026-10-23T15:00:05Z", { tool: "github_comment", arguments: { issue: 12, body: "Looks good" }, result: {} });
     await ev("evt_d2", "agent.tool.attempted", "2026-10-23T15:03:12Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" } });
     await ev("evt_d3", "slack.message.posted", "2026-10-23T15:03:12.640Z", { channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p1" });
     await ev("evt_d4", "agent.tool.dude", "2026-10-23T15:03:12.640Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" },
       result: { withheld: true }, attempted: true });
+    // A post Slack refused spent its attempt first: timed from it.
+    await ev("evt_d4a", "agent.tool.attempted", "2026-10-23T15:03:59.700Z", { tool: "post_to_chat", arguments: { channel: "#random", text: "x" } });
     await ev("evt_d5", "slack.message.refused", "2026-10-23T15:04:00Z", { tool: "post_to_chat", channel: "#random",
       error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude" });
     const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_d`));
     expect(run.toolCalls).toEqual([
-      { id: "evt_d1", tool: "create_task", at: "2026-10-23T15:00:05.000Z", status: "completed", args: { title: "Fix it" }, durationMs: null, error: null, posted: null },
+      { id: "evt_d1", tool: "github_comment", at: "2026-10-23T15:00:05.000Z", status: "completed", args: { issue: 12 }, durationMs: null, error: null, posted: null },
       { id: "evt_d4", tool: "post_to_chat", at: "2026-10-23T15:03:12.000Z", status: "completed", args: { channel: "#engineering" }, durationMs: 640,
         error: null, posted: { channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p1" } },
-      { id: "evt_d5", tool: "post_to_chat", at: "2026-10-23T15:04:00.000Z", status: "failed", args: { channel: "#random" }, durationMs: null,
+      { id: "evt_d5", tool: "post_to_chat", at: "2026-10-23T15:03:59.700Z", status: "failed", args: { channel: "#random" }, durationMs: 300,
         error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude", posted: null },
     ]);
     expect(run.failedCallId).toBeNull();

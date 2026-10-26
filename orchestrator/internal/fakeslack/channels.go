@@ -1,16 +1,21 @@
 package fakeslack
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // WithChannelList is the fake with conversations.list as well, as Slack
 // answers it to a bot: the workspace's public channels, and the private
 // ones the bot is in, each with is_member, paged by the call's limit and
-// cursor. Every other path is the fake's own.
+// cursor. Its chat.postMessage also refuses a section block longer than
+// Slack takes. Every other path is the fake's own.
 func (s *Server) WithChannelList() http.Handler { return s.WithChannelPages(0) }
 
 // WithChannelPages is WithChannelList whose pages hold at most pageSize
@@ -18,6 +23,9 @@ func (s *Server) WithChannelList() http.Handler { return s.WithChannelPages(0) }
 // of a walk over many pages.
 func (s *Server) WithChannelPages(pageSize int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat.postMessage" && s.refuseLongSection(w, r) {
+			return
+		}
 		if r.URL.Path != "/api/conversations.list" {
 			s.ServeHTTP(w, r)
 			return
@@ -90,4 +98,39 @@ func (s *Server) WithChannelPages(pageSize int) http.Handler {
 		page := append([]any{}, channels[from:to]...)
 		reply(w, map[string]any{"channels": page, "response_metadata": map[string]any{"next_cursor": next}})
 	})
+}
+
+// sectionMax is what Slack takes in a section block's text, in characters.
+const sectionMax = 3000
+
+// refuseLongSection answers a chat.postMessage whose blocks hold a section
+// longer than sectionMax with invalid_blocks, as Slack does, counting the
+// call; false, with r's body left to read, for any other.
+func (s *Server) refuseLongSection(w http.ResponseWriter, r *http.Request) bool {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	var call struct {
+		Blocks []struct {
+			Type string `json:"type"`
+			Text struct {
+				Text string `json:"text"`
+			} `json:"text"`
+		} `json:"blocks"`
+	}
+	if json.Unmarshal(raw, &call) != nil {
+		return false
+	}
+	for _, b := range call.Blocks {
+		if b.Type == "section" && utf8.RuneCountInString(b.Text.Text) > sectionMax {
+			s.mu.Lock()
+			s.calls["chat.postMessage"]++
+			s.mu.Unlock()
+			refuse(w, "invalid_blocks")
+			return true
+		}
+	}
+	return false
 }

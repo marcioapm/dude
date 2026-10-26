@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
@@ -23,25 +26,37 @@ type chatFixture struct {
 
 func setupChat(t *testing.T, installed bool) chatFixture {
 	t.Helper()
-	return setupChatPaged(t, installed, 0, nil)
+	return setupChatWith(t, installed, chatOptions{})
 }
 
-// setupChatPaged is setupChat whose conversations.list pages hold pageSize
-// channels (0: as asked), with more channels added before it serves.
+// chatOptions vary setupChat: conversations.list pages of pageSize channels
+// (0: as asked), more channels added before the fake serves, and the
+// server's BeforeCall hook.
+type chatOptions struct {
+	pageSize   int
+	more       func(*fakeslack.Server)
+	beforeCall func(tool string)
+}
+
 func setupChatPaged(t *testing.T, installed bool, pageSize int, more func(*fakeslack.Server)) chatFixture {
+	t.Helper()
+	return setupChatWith(t, installed, chatOptions{pageSize: pageSize, more: more})
+}
+
+func setupChatWith(t *testing.T, installed bool, o chatOptions) chatFixture {
 	t.Helper()
 	fake := fakeslack.New("cid", "csecret")
 	fake.AddTeam("T1", "Acme")
 	fake.AddConversation(fakeslack.Conversation{ID: "C0ENGINEER", Team: "T1", Name: "engineering", Kind: "public", Members: []string{"UBT1"}})
 	fake.AddConversation(fakeslack.Conversation{ID: "C0RANDOMXX", Team: "T1", Name: "random", Kind: "public"})
 	fake.AddConversation(fakeslack.Conversation{ID: "G0SECRETXX", Team: "T1", Name: "hiring", Kind: "private"})
-	if more != nil {
-		more(fake)
+	if o.more != nil {
+		o.more(fake)
 	}
-	srv := httptest.NewServer(fake.WithChannelPages(pageSize))
+	srv := httptest.NewServer(fake.WithChannelPages(o.pageSize))
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
-	f := setupWith(t, &agenttools.Server{Chat: chat.Registry{"slack": p}})
+	f := setupWith(t, &agenttools.Server{Chat: chat.Registry{"slack": p}, BeforeCall: o.beforeCall})
 	mustExec(t, f.owner, `UPDATE organizations SET name = 'Acme' WHERE id = $1`, f.org)
 	if installed {
 		mustExec(t, f.owner, `INSERT INTO chat_installations (id, organization_id, provider, external_workspace_id, workspace_name,
@@ -345,6 +360,97 @@ func TestPostToChatMeasuresTheTextBeforeRedactingIt(t *testing.T) {
 	}
 	if n := c.fake.Calls("chat.postMessage"); n != 0 {
 		t.Errorf("%d posts", n)
+	}
+}
+
+// Calls racing for the run's tenth post: held together just before their
+// transactions open (BeforeCall), so each passed the prepare step's count
+// of 9; the run's row lock lets exactly one of them post.
+func TestPostToChatConcurrentCallsTakeTheTenthPostOnce(t *testing.T) {
+	const racers = 5
+	var armed atomic.Bool
+	var arrived atomic.Int32
+	release := make(chan struct{})
+	c := setupChatWith(t, true, chatOptions{beforeCall: func(tool string) {
+		if tool != "post_to_chat" || !armed.Load() {
+			return
+		}
+		if arrived.Add(1) == racers {
+			close(release)
+		}
+		select {
+		case <-release:
+		case <-time.After(10 * time.Second):
+		}
+	}})
+	for i := range 9 {
+		if status, out := c.postToChat(t, "#engineering", fmt.Sprintf("post %d", i+1)); status != 200 {
+			t.Fatalf("post %d: %d %v", i+1, status, out)
+		}
+	}
+	armed.Store(true)
+	statuses := make([]int, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			statuses[i], _ = c.postToChat(t, "#engineering", fmt.Sprintf("racer %d", i))
+		}()
+	}
+	wg.Wait()
+	if arrived.Load() != racers {
+		t.Fatalf("%d of %d calls reached the barrier", arrived.Load(), racers)
+	}
+	ok := 0
+	for _, s := range statuses {
+		if s == 200 {
+			ok++
+		}
+	}
+	if ok != 1 {
+		t.Errorf("%d of the racing calls posted (%v), want 1", ok, statuses)
+	}
+	if n := len(c.fake.BotMessages()); n != 10 {
+		t.Errorf("%d messages reached Slack, want 10", n)
+	}
+}
+
+// Past one block's 3,000 characters the post is the message's plain text,
+// with no blocks (Slack refuses a longer section: invalid_blocks); a short
+// one is a section block.
+func TestPostToChatPostsLongTextWithoutBlocks(t *testing.T) {
+	c := setupChat(t, true)
+	long := strings.Repeat("é", 3001)
+	if status, out := c.postToChat(t, "#engineering", long); status != 200 {
+		t.Fatalf("3,001 characters: %d %v", status, out)
+	}
+	if status, out := c.postToChat(t, "#engineering", "short"); status != 200 {
+		t.Fatalf("short: %d %v", status, out)
+	}
+	msgs := c.fake.BotMessages()
+	if len(msgs) != 2 || msgs[0].Text != long || len(msgs[0].Blocks) != 0 && string(msgs[0].Blocks) != "null" {
+		t.Fatalf("the long post: %d messages, blocks %.80s", len(msgs), msgs[0].Blocks)
+	}
+	if !strings.Contains(string(msgs[1].Blocks), `"type":"section"`) {
+		t.Errorf("the short post's blocks: %s", msgs[1].Blocks)
+	}
+}
+
+// A transient Slack failure (rate-limited) says to try again, and the
+// attempt still counts.
+func TestPostToChatSaysToTryAgainWhenSlackIsBusy(t *testing.T) {
+	c := setupChat(t, true)
+	c.fake.FailRetryAfter("chat.postMessage", "ratelimited", 5, 1)
+	status, out := c.postToChat(t, "#engineering", "busy")
+	if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "Slack did not take the post (") ||
+		!strings.HasSuffix(fmt.Sprint(out["error"]), "nothing was posted; try again in a minute") {
+		t.Fatalf("rate-limited: %d %v", status, out)
+	}
+	var attempts int
+	if err := c.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE run_id = 'arn_digest' AND event_type = $1
+		AND payload->>'tool' = 'post_to_chat'`, agenttools.AttemptEventType).Scan(&attempts); err != nil || attempts != 1 {
+		t.Errorf("attempts recorded: %d %v", attempts, err)
 	}
 }
 

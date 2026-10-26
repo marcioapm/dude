@@ -112,6 +112,7 @@ def test_a_post_reaches_the_channel_and_the_run_shows_it_with_its_link(client: A
     sent = slack.messages(f"C{team}")
     assert [m["Text"] for m in sent] == ["*Weekly digest* :bar_chart: 12 merged"], sent
     assert sent[0]["ThreadTS"] == sent[0]["TS"], "a post starts its own thread"
+    assert sent[0]["User"] == f"UB{team}" and sent[0]["Bot"], "the post is the workspace's dude bot's"
     assert slack.messages(f"R{team}") == []
 
     posts = [c for c in run["toolCalls"] if c["tool"] == "post_to_chat"]
@@ -133,3 +134,4 @@ def test_without_slack_the_run_fails_on_the_call_and_says_so(client: ApiClient, 
     [call] = [c for c in run["toolCalls"] if c["tool"] == "post_to_chat"]
     assert call["status"] == "failed" and call["posted"] is None, call
     assert call["error"].startswith("Slack is not connected for Acme: an organisation admin adds dude's Slack app"), call
+    assert run["failedCallId"] == call["id"], run
