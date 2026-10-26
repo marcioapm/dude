@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Icon } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
 import { Checkbox } from "../primitives/Checkbox.tsx";
@@ -8,9 +9,10 @@ import chip from "./Machines.module.css";
 import styles from "./Secrets.module.css";
 
 /*
- * Project secrets: who gets one, and which ones an agent session got. The
- * design system knows recipients only as ids, labels and descriptions the
- * app passes, and only ever names, never values.
+ * Project and organisation secrets: who gets one, which ones an automation
+ * picks, and which ones an agent session got. The design system knows
+ * recipients only as ids, labels and descriptions the app passes, and only
+ * ever names and hints, never values.
  */
 
 export interface SecretRecipientOption {
@@ -22,15 +24,103 @@ export interface SecretRecipientOption {
 export interface GivenToProps {
   /** Labels of the recipients, in the app's order. */
   readonly given: readonly string[];
+  /** What an empty list reads as. Default "Nobody". */
+  readonly none?: ReactNode;
 }
 
-/** A secret's recipients in a table cell: neutral badges, or "Nobody" in muted words. */
-export function GivenTo({ given }: GivenToProps) {
-  if (given.length === 0) return <span className={styles["nobody"]}>Nobody</span>;
+/** A secret's recipients in a table cell: neutral badges, or `none` in muted words. */
+export function GivenTo({ given, none = "Nobody" }: GivenToProps) {
+  if (given.length === 0) return <span className={styles["nobody"]}>{none}</span>;
   return (
     <span className={styles["given"]}>
       {given.map((g) => <Badge key={g} size="sm">{g}</Badge>)}
     </span>
+  );
+}
+
+export interface OverriddenByProps {
+  /** The winning secret's name. */
+  readonly name: string;
+  /** Whose it is, before the name. Default "this project's". */
+  readonly by?: string | undefined;
+}
+
+/**
+ * On a secret a more specific one replaces: the layers glyph and
+ * "Overridden by this project's NAME", muted. It takes the place of the
+ * row's Given to or a checkbox's description; the row's own name is
+ * struck through.
+ */
+export function OverriddenBy({ name, by = "this project's" }: OverriddenByProps) {
+  return (
+    <span className={styles["overriddenBy"]} data-testid="overridden-by">
+      <Icon name="layers" size={12} className={styles["overriddenIcon"]} />
+      <span>Overridden by {by} <code className="ds-mono">{name}</code></span>
+    </span>
+  );
+}
+
+export type SecretSource = "organization" | "project";
+
+export interface SecretPick {
+  readonly source: SecretSource;
+  readonly name: string;
+}
+
+export interface SecretChoice {
+  readonly name: string;
+  /** The value's last characters, as the API shows them. */
+  readonly hint: string;
+}
+
+export interface SecretPickerProps {
+  readonly orgName: string;
+  readonly org: readonly SecretChoice[];
+  /** A project automation's project, with its own secrets. */
+  readonly project?: { readonly name: string; readonly secrets: readonly SecretChoice[] } | undefined;
+  readonly value: readonly SecretPick[];
+  readonly onChange: (next: SecretPick[]) => void;
+  readonly disabled?: boolean | undefined;
+  readonly "data-testid"?: string | undefined;
+}
+
+const samePick = (a: SecretPick, b: SecretPick) => a.source === b.source && a.name === b.name;
+
+/**
+ * An automation's secrets: checkbox groups "<org>'s" and, for a project
+ * automation, "<project>'s", side by side and stacked when narrow. A name
+ * the project also holds cannot be ticked under the organisation: it is
+ * disabled, struck through and described by OverriddenBy.
+ */
+export function SecretPicker({ orgName, org, project, value, onChange, disabled, "data-testid": testId }: SecretPickerProps) {
+  const own = new Set((project?.secrets ?? []).map((s) => s.name));
+  const toggle = (pick: SecretPick, on: boolean) =>
+    onChange(on ? [...value.filter((v) => !samePick(v, pick)), pick] : value.filter((v) => !samePick(v, pick)));
+  const group = (source: SecretSource, owner: string, list: readonly SecretChoice[]) => (
+    <div role="group" aria-label={`${owner}'s`} className={styles["pickGroup"]} data-source={source}>
+      <span className={styles["pickHead"]} aria-hidden="true">{owner}&rsquo;s</span>
+      {list.length === 0 ? <span className={styles["nobody"]}>None yet.</span> : list.map((s) => {
+        const overridden = source === "organization" && own.has(s.name);
+        const pick = { source, name: s.name };
+        return (
+          <div key={s.name} className={styles["pickRow"]} data-overridden={overridden ? "true" : undefined}>
+            <Checkbox
+              label={<span className={cx("ds-mono", overridden && styles["struck"])}>{s.name}</span>}
+              aria-label={`${s.name} (${owner})`}
+              checked={!overridden && value.some((v) => samePick(v, pick))}
+              disabled={disabled || overridden}
+              description={overridden ? <OverriddenBy name={s.name} by={`${project!.name}'s`} /> : `…${s.hint}`}
+              onCheckedChange={(on) => toggle(pick, on === true)} />
+          </div>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div className={styles["picker"]} data-testid={testId}>
+      {group("organization", orgName, org)}
+      {project ? group("project", project.name, project.secrets) : null}
+    </div>
   );
 }
 
@@ -67,10 +157,10 @@ export interface SecretsChipProps {
   readonly "data-testid"?: string | undefined;
 }
 
-export const SECRETS_TIP_SOURCE = "Given by project settings; values are never shown";
+export const SECRETS_TIP_SOURCE = "Given by project and organisation settings; values are never shown";
 
 /**
- * The project secrets an agent session got, in its header beside the
+ * The secrets an agent session got, in its header beside the
  * MachineChip: the lock glyph and "N secrets"; its tip lists the names.
  * Nothing for a session given none. A button only so the tip opens on
  * focus; it does nothing on a press.
@@ -87,7 +177,7 @@ export function SecretsChip({ names, "data-testid": testId }: SecretsChipProps) 
         <p className={styles["tipSource"]}>{SECRETS_TIP_SOURCE}</p>
       </div>
     }>
-      <button type="button" className={chip["chip"]} data-testid={testId} aria-label={`Project secrets: ${count}, ${names.join(", ")}`}>
+      <button type="button" className={chip["chip"]} data-testid={testId} aria-label={`Secrets: ${count}, ${names.join(", ")}`}>
         <Icon name="lock" size={12} className={chip["chipIcon"]} />
         <span className={cx(chip["chipName"], "ds-cap", "ds-tnum")}>{count}</span>
       </button>

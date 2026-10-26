@@ -51,9 +51,9 @@ describe("the session's bar", () => {
 });
 
 describe("the session's project secrets", () => {
-  const NAME = "Project secrets: 2 secrets, SNOWFLAKE_ACCOUNT, SNOWFLAKE_PASSWORD";
+  const NAME = "Secrets: 2 secrets, SNOWFLAKE_ACCOUNT, SNOWFLAKE_PASSWORD";
   /** Buttons whose accessible name starts as the secrets chip's does. */
-  const secretsChips = (page: HTMLElement) => allByRole(page, "button").filter((b) => accessibleName(b).startsWith("Project secrets"));
+  const secretsChips = (page: HTMLElement) => allByRole(page, "button").filter((b) => accessibleName(b).startsWith("Secrets: "));
 
   test("the header names how many it was given, after the machine; the tip lists names and no value", async () => {
     const page = await session({ client: new RunClient({ projectSecretNames: ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_PASSWORD"] }) });
