@@ -963,8 +963,14 @@ link, text, fields, footer) and blocks (section, header, context, rich_text,
 button links), repeats dropped, clipped to 2000 characters
 (`chat/slack/text.go`). What was read is kept on the delivery's decision (a
 retry reuses it), hashed into `context_hash`, sent in the recorded routing
-call, and quoted in the session's first message as untrusted text. A failed
-channel read is noted on the installation and routing goes on without it.
+call, and quoted in the session's first message as untrusted text; of the
+channel, only the newest messages the 12 000 characters kept are stored
+(the decision, the session's and a task's origin, the goal), and task lists
+(`GET /v1/tasks`, navigation) return an origin without its quoted thread or
+channel. A channel read refused (no scope, not in the channel) is noted on
+the installation and routing goes on without it; a transient failure (a
+rate limit with Retry-After, the provider down) retries the delivery, as a
+thread read's does.
 
 **Hints, never rules.** Routing is also told where the conversation's last
 20 requests' results went (`## Where this conversation's earlier requests
@@ -1008,7 +1014,11 @@ task's own project out of its fence).
 brainstorm's by default) reads more of the conversation a session came from
 — its thread, or the channel for a top-level mention — 30 messages a page
 before or after a message id, at most 30 reads a session an hour, recorded
-as `chat.read` with counts only, quoted as external text. The conversation
+as `chat.read` with counts only, quoted as external text. A page that starts
+where Slack's order does (the latest, or before a message on a channel;
+after one in a thread) is one call; the other way it pages Slack's cursor up
+to 1 000 messages and, past that, tells the agent to use a nearer message
+rather than give a page that is not next to the one named. The conversation
 is the session's origin's, never one the agent names. `github_run_jobs`
 (`github.read`) lists a GitHub Actions run's jobs from its id or link, for
 `github_check_log` to read the failed job's log; it counts against the same
