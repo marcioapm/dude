@@ -424,7 +424,7 @@ func TestOnlyTheMessageMethodsSendJSON(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		method := strings.TrimPrefix(r.URL.Path, "/api/")
 		got[method] = strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]
-		if strings.Contains(string(body), "xoxb-test") || (r.Header.Get("Authorization") != "Bearer xoxb-test" && method != "oauth.v2.access") {
+		if strings.Contains(string(body), "xoxb-test") || r.Header.Get("Authorization") != "Bearer xoxb-test" {
 			t.Errorf("%s: the token is not only a bearer: auth %q, body %q", method, r.Header.Get("Authorization"), body)
 		}
 		_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C1","name":"support","is_channel":true},"user":{"id":"U1","name":"m"},` +
@@ -437,11 +437,17 @@ func TestOnlyTheMessageMethodsSendJSON(t *testing.T) {
 	_, _ = p.Conversation(ctx, inst, "C1")
 	_, _ = p.ListMembers(ctx, inst, "C1")
 	_, _ = p.User(ctx, inst, "U1")
+	_, _ = p.FetchThread(ctx, inst, "C1", "1.2", "")
 	_, _ = p.PostReply(ctx, inst, "C1", "", chat.Reply{Text: "x"})
+	_ = p.PostEphemeral(ctx, inst, "C1", "", "U1", chat.Reply{Text: "x"})
+	_ = p.UpdateQuestion(ctx, inst, "C1", "1.2", chat.ExternalUser{}, "x")
 	_ = p.React(ctx, inst, "C1", "1.2", chat.ReactionWorking)
-	for method, want := range map[string]string{"conversations.info": "application/x-www-form-urlencoded",
-		"conversations.members": "application/x-www-form-urlencoded", "users.info": "application/x-www-form-urlencoded",
-		"reactions.add": "application/x-www-form-urlencoded", "chat.postMessage": "application/json"} {
+	_ = p.React(ctx, inst, "C1", "1.2", chat.ReactionDone)
+	_ = p.Revoke(ctx, inst)
+	const form, jsonBody = "application/x-www-form-urlencoded", "application/json"
+	for method, want := range map[string]string{"conversations.info": form, "conversations.members": form,
+		"conversations.replies": form, "users.info": form, "reactions.add": form, "reactions.remove": form, "auth.revoke": form,
+		"chat.postMessage": jsonBody, "chat.postEphemeral": jsonBody, "chat.update": jsonBody} {
 		if got[method] != want {
 			t.Errorf("%s sent as %q, want %q", method, got[method], want)
 		}
