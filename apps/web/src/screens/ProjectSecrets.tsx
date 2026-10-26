@@ -164,17 +164,19 @@ export function ProjectSecretsSection({ client, projectId, secrets, recipes, can
           {addAction ? <FormActions>{addAction}</FormActions> : null}
         </>
       )}
-      {inherited && inherited.secrets.length > 0 ? (
-        <SettingsNote icon="layers">
-          <span data-testid="inherited-note">
-            {orgName}&rsquo;s secrets are changed in{" "}
-            {inherited.onManage ? <TextButton onClick={inherited.onManage} data-testid="org-secrets-link">Organisation settings → Secrets</TextButton>
-              : "Organisation settings → Secrets"}
-            . A secret added here with the same name takes the place of {orgName}&rsquo;s in this project.
-          </span>
-        </SettingsNote>
-      ) : null}
-      <div className="projectSecretsNote" data-testid="secrets-note"><SettingsNote icon="info">{SECRETS_NOTE}</SettingsNote></div>
+      <div className="projectSecretsNote" data-testid="secrets-note">
+        {inherited && inherited.secrets.length > 0 ? (
+          <SettingsNote icon="layers">
+            <span data-testid="inherited-note">
+              {orgName}&rsquo;s secrets are changed in{" "}
+              {inherited.onManage ? <TextButton onClick={inherited.onManage} data-testid="org-secrets-link">Organisation settings → Secrets</TextButton>
+                : "Organisation settings → Secrets"}
+              . A secret added here with the same name takes the place of {orgName}&rsquo;s in this project.
+            </span>
+          </SettingsNote>
+        ) : null}
+        <SettingsNote icon="info">{SECRETS_NOTE}</SettingsNote>
+      </div>
       <SettingsNote icon="lock">{REDACTION_NOTE}</SettingsNote>
       {editing?.kind === "add" ? (
         <AddSecretDialog taken={secrets.map((s) => s.name)} recipes={recipes} busy={busy} problem={problem} onClose={close}

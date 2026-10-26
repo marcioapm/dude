@@ -463,10 +463,12 @@ describe("secrets and webhook wording", () => {
 
   test("one of dude's agents shows what its role gets, read-only; the Investigator gets none", async () => {
     const client = new FixtureClient("a");
+    // A project secret ticked for Tester joins the line, after the organisation's.
+    await client.changeProjectSecretRecipients(PROJECT.id, "DATABASE_SEED_URL", ["previews", "tester"]);
     const qa = await page(client, "aut_qa");
     const line = await until(() => qa.querySelector<HTMLElement>("[data-testid=preset-secrets-line]"), "the line");
     // Example's SEED_LLM_KEY is ticked for Tester, but web-console holds its own (Previews only): neither reaches it.
-    expect(line.textContent).toBe("Tester gets NPM_TOKEN, SENTRY_TOKEN from Example");
+    expect(line.textContent).toBe("Tester gets NPM_TOKEN, SENTRY_TOKEN from Example · DATABASE_SEED_URL from web-console");
     expect(qa.textContent).toContain(PRESET_SECRETS("Tester"));
     expect(qa.querySelector("[data-testid=secret-picker]")).toBeNull();
     for (const unmount of mounted) await unmount();

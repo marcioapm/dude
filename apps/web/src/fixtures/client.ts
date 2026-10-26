@@ -1189,4 +1189,11 @@ export class FixtureClient extends ApiClient {
     await wait(100);
     this.#orgSecrets.remove(name);
   }
+  // Organisation settings reads these on every page: answered here so the fixtures never reach a control plane.
+  override memoryIndex(): ReturnType<ApiClient["memoryIndex"]> {
+    return Promise.resolve({ health: {}, total: 0, waiting: 0, failed: 0, kinds: [], failures: [] });
+  }
+  override invitationCounts(): ReturnType<ApiClient["invitationCounts"]> {
+    return Promise.resolve({ pending: 0, expired: 0, accepted: 0, revoked: 0, all: 0 });
+  }
 }

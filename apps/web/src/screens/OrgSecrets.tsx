@@ -135,12 +135,10 @@ export function OrgSecretsPage({ client, orgName, admin }: { client: ApiClient; 
             {addAction ? <FormActions>{addAction}</FormActions> : null}
           </>
         )}
-        <div className="orgSecretsNotes">
-          <SettingsNote icon="layers">{ORG_SECRETS_SAME_NAME(orgName)}</SettingsNote>
-          <SettingsNote icon="info">{NO_TALKERS_NOTE}</SettingsNote>
-          <SettingsNote icon="info">{SECRETS_NOTE}</SettingsNote>
-          <SettingsNote icon="lock">{REDACTION_NOTE}</SettingsNote>
-        </div>
+        <SettingsNote icon="layers">{ORG_SECRETS_SAME_NAME(orgName)}</SettingsNote>
+        <SettingsNote icon="info">{NO_TALKERS_NOTE}</SettingsNote>
+        <SettingsNote icon="info">{SECRETS_NOTE}</SettingsNote>
+        <SettingsNote icon="lock">{REDACTION_NOTE}</SettingsNote>
       </SettingsSection>
       {editing?.kind === "add" ? (
         <AddSecretDialog level={level} taken={secrets.map((s) => s.name)} busy={busy} problem={saveProblem} onClose={close}
