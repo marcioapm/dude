@@ -557,7 +557,7 @@ describe("post_to_chat", () => {
 
   test("without Slack, post_to_chat's row says runs that call it fail, and links Organisation settings → Chat", async () => {
     const client = new FixtureClient("a");
-    await client.disconnectChat("slack");
+    await client.disconnectChat();
     const c = await page(client, { id: "aut_digest" });
     const callout = await until(() => c.querySelector<HTMLElement>("li[data-tool=post_to_chat] [data-testid=tool-unavailable]"), "the callout");
     expect(callout.textContent).toBe("Slack is not connected for Acme. Runs that call it fail on the call. Connect Slack in Organisation settings → Chat");
