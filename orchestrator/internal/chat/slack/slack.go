@@ -424,8 +424,9 @@ const (
 // or of a channel's top level (conversations.history) nearest the page's
 // bound, oldest first. Slack lists a channel newest first and a thread
 // oldest first: where its order starts at the bound (the latest page and
-// before on a channel; after in a thread) one call of Limit+1 decides the
-// page and whether there is more. The other way it follows Slack's cursor
+// before on a channel; after in a thread) a call of Limit+1 decides the
+// page and whether there is more, and a second call fills a page Slack
+// answered short. The other way it follows Slack's cursor
 // from the far end, up to pageScan messages, and says chat.ErrPageTooFar
 // when the bound is not reached by then rather than give a page that is
 // not next to it.
@@ -450,21 +451,39 @@ func (p *Provider) FetchPage(ctx context.Context, inst chat.Installation, conver
 	var all []message
 	more := false
 	if fromBound {
-		// A thread's replies may start with its root, which is not in the page.
+		// A thread's replies start with its root on the first call, which
+		// is not in the page.
 		args["limit"] = page.Limit + 1
 		if thread != "" {
 			args["limit"] = page.Limit + 2
 		}
-		var out struct {
-			Messages []message `json:"messages"`
-		}
-		if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
-			return nil, false, err
-		}
-		for _, m := range out.Messages {
-			if inPage(m) {
-				all = append(all, m)
+		// Slack may return fewer than limit while more remain (its cursor
+		// or has_more says so): one more call fills the page, and a
+		// transient failure of that one leaves the page short, with more.
+		for call := 0; call < 2 && len(all) <= page.Limit; call++ {
+			var out struct {
+				Messages []message `json:"messages"`
+				HasMore  bool      `json:"has_more"`
+				Meta     struct {
+					NextCursor string `json:"next_cursor"`
+				} `json:"response_metadata"`
 			}
+			if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
+				if t := (*chat.TransientError)(nil); call > 0 && errors.As(err, &t) {
+					break
+				}
+				return nil, false, err
+			}
+			for _, m := range out.Messages {
+				if inPage(m) {
+					all = append(all, m)
+				}
+			}
+			more = out.HasMore || out.Meta.NextCursor != ""
+			if out.Meta.NextCursor == "" {
+				break
+			}
+			args["cursor"] = out.Meta.NextCursor
 		}
 		// Nearest the bound first: a channel's newest, a thread's oldest.
 		if len(all) > page.Limit {

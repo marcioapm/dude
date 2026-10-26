@@ -162,6 +162,53 @@ func TestAPageReadsOnlyWhatDecidesItAndRefusesOneTooFar(t *testing.T) {
 	}
 }
 
+// Slack may answer a call with fewer messages than its limit while more
+// remain: a page read from its bound is filled by one more call, and when
+// even that leaves it short it still says there is more.
+func TestAPageSlackAnswersShortStillSaysThereIsMore(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	var ts []string
+	for i := range 40 {
+		ts = append(ts, fake.Post("C1", "", "U2", fmt.Sprintf("c%02d", i)))
+	}
+	root := ts[0]
+	var replies []string
+	for i := range 40 {
+		replies = append(replies, fake.Post("C1", root, "U1", fmt.Sprintf("r%02d", i)))
+	}
+	texts := func(ms []chat.ThreadMessage) string {
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.Text)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, c := range []struct {
+		name, thread string
+		pageSize     int
+		page         chat.Page
+		want         string
+	}{
+		// Four a call: the second call fills the page of five.
+		{"channel latest", "", 4, chat.Page{Limit: 5}, "c35,c36,c37,c38,c39"},
+		{"channel before", "", 4, chat.Page{Before: ts[20], Limit: 5}, "c15,c16,c17,c18,c19"},
+		{"thread after", root, 4, chat.Page{After: replies[10], Limit: 5}, "r11,r12,r13,r14,r15"},
+		// Two a call: two calls leave it short, and more remain.
+		{"channel latest, short", "", 2, chat.Page{Limit: 5}, "c36,c37,c38,c39"},
+		{"channel before, short", "", 2, chat.Page{Before: ts[20], Limit: 5}, "c16,c17,c18,c19"},
+		{"thread after, short", root, 2, chat.Page{After: replies[10], Limit: 5}, "r11,r12,r13,r14"},
+	} {
+		fake.SetPageSize(c.pageSize)
+		before := fake.Calls("conversations.history") + fake.Calls("conversations.replies")
+		got, more, err := p.FetchPage(ctx, inst, "C1", c.thread, c.page)
+		calls := fake.Calls("conversations.history") + fake.Calls("conversations.replies") - before
+		if err != nil || texts(got) != c.want || !more || calls != 2 {
+			t.Errorf("%s: %q more=%v (%v), %d calls; want %q more=true, 2 calls", c.name, texts(got), more, err, calls, c.want)
+		}
+	}
+}
+
 func TestABotsAttachmentsAndBlocksAreReadOnce(t *testing.T) {
 	fake, p, inst := world(t)
 	text, attachments, blocks := ciReport()
