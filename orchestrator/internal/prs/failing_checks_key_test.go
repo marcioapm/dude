@@ -36,7 +36,9 @@ func TestFailingChecksKey(t *testing.T) {
 	}
 	distinct := map[string]string{
 		"run 77": one, "run 78": key(ci(run(78))), "status 77": key(ci(status(77))),
+		"status 78": key(ci(status(78))), "named ci": key(ci(named("ci"))),
 		"named 77": key(ci(named("77"))), "runs 77 and 78": key(ci(run(77), run(78))),
+		"named a, run 5": key(ci(named("a"), run(5))), `named "a\nrun:5"`: key(ci(named("a\nrun:5"))),
 	}
 	seen := map[string]string{}
 	for what, k := range distinct {

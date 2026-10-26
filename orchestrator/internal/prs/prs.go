@@ -697,7 +697,9 @@ func frozen(status *forge.Status, pr tracked) {
 // whatever order GitHub listed them in: "" for none. Each is named by its
 // id (a check run's, or a commit status's), or by its name when it has
 // neither. A digest of fixed length, however many failed: the key is in
-// a unique index, which has a size limit.
+// a unique index, which has a size limit. The list is hashed as JSON, so
+// a name with a separator in it cannot pass for two checks. The ids
+// themselves are in the signal's feedback, to read.
 func failingChecksKey(feedback []forge.ActionableFeedback) string {
 	var checks []string
 	for _, f := range feedback {
@@ -716,7 +718,8 @@ func failingChecksKey(feedback []forge.ActionableFeedback) string {
 		return ""
 	}
 	slices.Sort(checks)
-	sum := sha256.Sum256([]byte(strings.Join(checks, "\n")))
+	listed, _ := json.Marshal(checks)
+	sum := sha256.Sum256(listed)
 	return hex.EncodeToString(sum[:16])
 }
 
