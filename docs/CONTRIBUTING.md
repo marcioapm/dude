@@ -817,36 +817,51 @@ their creator.
 - **post_to_chat.** Every automation agent has it (no per-automation switch,
   no channel allowlist): `{channel, text}` posts Slack mrkdwn as a new message
   (no thread) through the organisation's Slack installation, as its bot, and
-  answers `{channel, ts, permalink}` (`agenttools/post_to_chat.go`). `channel`
-  is a name (`#engineering` or `engineering`, found with
-  `conversations.list`, `slack.FindChannel`) or an id. `text` is 1–40,000
-  characters (Slack's limit; past a block's 3,000 it goes as the message's
-  plain text, `slack.PostText`); like every tool call's arguments it is
-  redacted with the run's secret values before it leaves dude. **10 posts a
-  run**: the 11th is refused ("post_to_chat is limited to 10 messages per
-  run"), counted from the ledger as `limit(...)` counts, attempts included
-  (`countingAttempts`), so a post Slack refused still spends one. Refusals
-  say how to fix them: an unknown channel or one the bot is not in names
-  `/invite @dude`. Each post is a `slack.message.posted` event (channel, ts,
+  answers `{channel, channelId, ts, permalink}` (`agenttools/post_to_chat.go`):
+  `channel` as people read it (`#engineering`), `channelId` Slack's id, to
+  post by again. `channel` is a name (`#engineering` or `engineering`, found
+  with `conversations.list`, `slack.FindChannel`, which remembers a channel
+  the bot is in for 5 minutes and, past 50 pages of 200, asks for the id
+  rather than saying there is none) or an id. The channel is looked up in the
+  tool's prepare step (`.before(resolvePostChannel)`), outside the call's
+  transaction. `text` is 1–40,000 characters of the agent's own text (Slack's
+  limit; past a block's 3,000 it goes as the message's plain text,
+  `slack.PostText`); like every tool call's arguments it is redacted with the
+  run's secret values before it leaves dude. **10 posts a run**: the 11th is
+  refused ("post_to_chat is limited to 10 messages per run"). Only a call
+  that reached `chat.postMessage` counts, including one Slack refused
+  (`countingAttempts`, counted from the ledger under a lock on the run's row);
+  a channel the lookup refused (unknown, the bot not in it, the lookup cut
+  short) and a refusal for want of Slack spend none. Refusals say how to fix
+  them: an unknown channel or one the bot is not in names `/invite @dude`.
+  Each post is a `slack.message.posted` event (channel, channel id, ts,
   permalink) and each refused post a `slack.message.refused` one (its words),
-  on the run. `chat:write`, already among `slack.BotScopes`, covers posting
-  in a channel the bot is in; no scope changes.
+  on the run. Slack's failures count on the installation's health
+  (`chat.NoteFailure`, as the chat service's own calls). `chat:write`,
+  already among `slack.BotScopes`, covers posting in a channel the bot is in;
+  no scope changes.
 - **Without Slack.** A run still starts (dude cannot tell from a prompt
   whether it will post). Its `post_to_chat` is refused with "Slack is not
   connected for <org>: an organisation admin adds dude's Slack app in
-  Organisation settings → Chat", recorded with code `not_connected`; when the
-  agent's turn ends the run ends **failed** with "post_to_chat failed: Slack
-  is not connected for <org>" (`automations/post_to_chat.go`), and its owner
-  is told as for any failure. The page's Tools card shows the attention
-  callout on post_to_chat's row, linking Organisation settings → Chat.
+  Organisation settings → Chat", recorded with code `not_connected` and the
+  structured `reason` "Slack is not connected for <org>"; so is a post whose
+  installation Slack answers `invalid_auth`, `token_revoked` or
+  `account_inactive`. When the agent's turn ends the run ends **failed** with
+  "post_to_chat failed: " and that reason (`automations/post_to_chat.go`),
+  unless a post went after the last such refusal (Slack connected during the
+  run), and its owner is told as for any failure. The page's Tools card shows
+  the attention callout on post_to_chat's row, linking Organisation settings
+  → Chat.
 - **A run's tool calls.** `GET /v1/automations/:id/runs/:runId` carries
-  `toolCalls`, read from the run's ledger events (`agent.tool.dude`, the
-  attempt before it for its duration, and the post/refusal events above); a
-  post's text is never repeated there. The run detail shows them under Log,
-  each a `ToolCallCard` beside its time (`ToolCallRow`): a post with
-  `icon="slack"` and "Posted to **#channel** · Open the message in Slack", a
-  refused call with its error; a run that failed on post_to_chat says so in a
-  danger callout under Run.
+  `toolCalls`, read by the run's `run_id` from its ledger events
+  (`agent.tool.dude`, the attempt before it for its duration, and the
+  post/refusal events above), and `failedCallId`, the refusal the run failed
+  on; a post's text is never repeated there. The run detail shows them under
+  Log, each a `ToolCallCard` beside its time (`ToolCallRow`): a post with
+  `icon="slack"`, its answer when opened, and "Posted to **#channel** · Open
+  the message in Slack", a refused call with its error; the call named by
+  `failedCallId` gets a danger callout under Run. The Tools card's list is
+  the app's copy of the orchestrator's (`tool-lists-automation.golden.md`).
 - **Prompt editor and history.** Own prompt and preset brief both use
   `MarkdownDocument`, `{{ }}` inserting `AUTOMATION_PROMPT_VARIABLES`.
   `automation_prompt_versions` (migration 183, the `prompt_versions` pattern)
