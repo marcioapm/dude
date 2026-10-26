@@ -29,6 +29,13 @@ export const SESSION_WAIT_MS = 3_000;
 /** How long dude has to answer a draft with saved or refused before the box says it didn't. */
 export const SAVE_WAIT_MS = 15_000;
 
+/**
+ * The heartbeat: while not connected, hello is said again this often, so a
+ * dude tab that reloaded (or a preview that did) finds the other again. While
+ * connected, hello is said only after two beats with nothing from dude.
+ */
+export const HEARTBEAT_MS = 2_000;
+
 export const SAVE_UNANSWERED = "dude didn't answer: its tab may have reloaded or left this task. Copy your words, or try Save again.";
 
 type Connection = "waiting" | "connected" | "none" | "closed";
@@ -42,6 +49,7 @@ export interface OverlayOptions {
   readonly draw?: (el: Element, win: Window) => Promise<string>;
   readonly sessionWaitMs?: number;
   readonly saveWaitMs?: number;
+  readonly heartbeatMs?: number;
   /** How often pins are moved to follow the page. */
   readonly tickMs?: number;
 }
@@ -202,6 +210,10 @@ export class Overlay {
   #collapsed = false;
   #page: string | null;
   #timers: number[] = [];
+  // A hello went out since the last beat: the beat says none, so there is never more than one a beat.
+  #saidHello = false;
+  // Beats in a row with nothing from dude while connected.
+  #quietBeats = 0;
   #stopped = false;
   readonly #firstPage: string | null;
   #at: { right: number; bottom: number } | null = null;
@@ -258,14 +270,15 @@ export class Overlay {
     if (!this.#opener()) {
       this.#connection = "none";
     } else {
-      this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href });
+      this.#hello();
       this.#timers.push(this.#win.setTimeout(() => {
         if (this.#connection === "waiting") this.#lost("none");
       }, this.#opts.sessionWaitMs ?? SESSION_WAIT_MS));
-      this.#timers.push(this.#win.setInterval(() => {
-        if (this.#connection === "connected" && !this.#opener()) this.#lost("closed");
-      }, 1_000));
     }
+    this.#timers.push(this.#win.setInterval(() => {
+      if (this.#connection === "connected" && !this.#opener()) this.#lost("closed");
+    }, 1_000));
+    this.#timers.push(this.#win.setInterval(this.#heartbeat, this.#opts.heartbeatMs ?? HEARTBEAT_MS));
     // Pins follow what the page draws, which may move without a scroll: moved in place, never redrawn.
     // The route is checked too, for an app that kept history's own pushState from before the overlay wrapped it.
     this.#timers.push(this.#win.setInterval(() => { this.#onRoute(); this.#placePins(); }, this.#opts.tickMs ?? 1_500));
@@ -327,6 +340,37 @@ export class Overlay {
     return true;
   }
 
+  #hello(): void {
+    if (this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href })) this.#saidHello = true;
+  }
+
+  /**
+   * One beat. Not connected: hello again. Connected: after two quiet beats,
+   * hello (dude answers every hello with a session, so a live tab just
+   * answers it, and the toolbar never flickers); a third quiet beat means the
+   * tab is gone or reloading, and the connection waits, still saying hello,
+   * for whichever tab answers next. The box and its words stay throughout.
+   */
+  readonly #heartbeat = (): void => {
+    if (this.#stopped || !this.#opener()) return;
+    const said = this.#saidHello;
+    this.#saidHello = false;
+    if (this.#connection === "connected") {
+      this.#quietBeats++;
+      if (this.#quietBeats < 2) return;
+      if (this.#quietBeats >= 3) {
+        this.#connection = "waiting";
+        this.#picking = false;
+        this.#hover = null;
+        this.#render();
+      }
+    }
+    if (!said) {
+      this.#hello();
+      this.#saidHello = false;
+    }
+  };
+
   #lost(to: "none" | "closed"): void {
     this.#connection = to;
     this.#picking = false;
@@ -339,6 +383,7 @@ export class Overlay {
     if (e.origin !== this.#opts.dudeOrigin || e.source !== this.#opener() || e.source === null) return;
     const m = e.data as DudeToOverlay;
     if (!m || typeof m !== "object" || m.v !== OVERLAY_PROTOCOL) return;
+    this.#quietBeats = 0;
     switch (m.type) {
       case "session":
         if (!validSession(m) || overlayPage(m.url) !== this.#page) return;
@@ -622,7 +667,7 @@ export class Overlay {
     this.#lateSent = this.#sent;
     this.#unanswered = true;
     this.#problem = SAVE_UNANSWERED;
-    this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href });
+    this.#hello();
     this.#render();
   }
 
@@ -972,6 +1017,7 @@ export class Overlay {
     if (lineShown && b.picLine.parentNode !== b.section) after?.after(b.picLine);
     else if (!lineShown) b.picLine.remove();
     setText(b.disconnected.lastElementChild!, this.#connection === "closed" ? " dude's tab was closed: this can't be saved from here. Copy your words, then open the task again."
+      : this.#connection === "waiting" ? " Reaching dude again: its tab may be reloading. Save comes back when it answers."
       : " This preview wasn't opened from dude: this can't be saved from here. Copy your words.");
     this.#toggle(b.section, b.disconnected, !connected, b.foot);
     setText(b.problem, this.#problem ?? "");

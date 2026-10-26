@@ -849,3 +849,78 @@ test("a session whose window name is not one dude gives is refused whole, before
   fromDude({ ...themed("dark"), dudeWindow: "dude-tab-ok" });
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
+
+// The heartbeat's interval, given a delay no other timer uses, is taken out of the window's timers and beaten by hand.
+const HB = 777;
+function heartbeatByHand(): () => void {
+  let beat: (() => void) | null = null;
+  const real = win.setInterval.bind(win);
+  win.setInterval = (fn: () => void, ms: number) => {
+    if (ms !== HB) return real(fn, ms);
+    beat = fn;
+    return 0;
+  };
+  return () => beat!();
+}
+const hellos = () => sent().filter((m) => m.type === "hello").length;
+
+test("dude's tab reloading: after two quiet beats hello again, after three reaching dude and hello each beat, and the reloaded tab's session reconnects with the box's words kept", async () => {
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB });
+  connect();
+  await writeOnPay("Half a thought");
+  expect(hellos()).toBe(1);
+  beat();
+  expect(hellos()).toBe(1);
+  // A message from dude (here a session, as any answer is) restarts the count.
+  connect();
+  beat();
+  beat();
+  expect(hellos()).toBe(2);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(hellos()).toBe(3);
+  expect(count('[data-testid="ov-save"]')).toBe(0);
+  expect(tid("ov-disconnected")!.textContent).toContain("Reaching dude again");
+  beat();
+  expect(hellos()).toBe(4);
+  // The reloaded tab is a new document in the same window: the browser gives the same opener as source.
+  connect();
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+  expect((tid("ov-save") as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("not connected, it says hello once a beat and never twice in one: a hello between beats spares the next beat's", async () => {
+  page(CART);
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB, sessionWaitMs: 10 });
+  expect(hellos()).toBe(1);
+  // The hello at start is this beat's.
+  beat();
+  expect(hellos()).toBe(1);
+  await tick(30);
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
+  for (let i = 0; i < 5; i++) beat();
+  expect(hellos()).toBe(6);
+  // Connected and answering, nothing extra is said.
+  connect();
+  for (let i = 0; i < 5; i++) { beat(); connect(); }
+  expect(hellos()).toBe(6);
+  // A save given up on between beats says hello: the next beat, which would have said one, does not.
+  overlay.stop();
+  page(CART);
+  const beat2 = heartbeatByHand();
+  boot({ heartbeatMs: HB, saveWaitMs: 20 });
+  connect();
+  await writeOnPay("Words");
+  beat2();
+  tid("ov-save")!.click();
+  await tick(50);
+  expect(hellos()).toBe(2);
+  beat2();
+  expect(hellos()).toBe(2);
+  beat2();
+  expect(hellos()).toBe(3);
+});
