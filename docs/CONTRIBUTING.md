@@ -907,7 +907,8 @@ log, 30 days, one per delivery), `organizations.chat_instructions`, and
 **The provider interface.** `orchestrator/internal/chat` is provider-neutral:
 a `Mention`, `Event`, `Interaction`, conversation kinds (`public`,
 `private`, `group`, `dm`), `Reply`, `Question`, `Reaction`, and the
-`Provider` interface (verify and parse webhooks; read a thread, a
+`Provider` interface (verify and parse webhooks; read a thread, a page of a
+thread or channel, the channel before a message, a
 conversation's kind and members, a user; post replies, ephemerals,
 questions; update a question; react; OAuth install and identity URLs and
 exchanges; revoke). Routing, the checks, binding, session access and
@@ -949,6 +950,57 @@ never bound; tasks in the Backlog, not started, with origin and blocked-by)
 delivery handled twice makes nothing twice (`chat_requests` is unique per
 delivery). An install or a link is begun by a signed-in browser (an HttpOnly
 cookie whose hash the state holds) and finished only in that browser.
+
+**What routing reads (`chat/context.go`).** A mention in a thread reads that
+thread (`FetchThread`); a mention at a conversation's top level reads the
+channel before it instead (`FetchHistory`: at most 30 messages from the 24
+hours before the mention, oldest first, rendered within 12 000 characters,
+the oldest left out and counted), under `## The channel before it`. Both
+are quoted by `quoteMessages`: every message but dude's own (`BotUserID`),
+another app's (a CI bot's) by its name and marked "(an app)", never matched
+to a person; a message's text is its text, attachments (pretext, title and
+link, text, fields, footer) and blocks (section, header, context, rich_text,
+button links), repeats dropped, clipped to 2000 characters
+(`chat/slack/text.go`). What was read is kept on the delivery's decision (a
+retry reuses it), hashed into `context_hash`, sent in the recorded routing
+call, and quoted in the session's first message as untrusted text. A failed
+channel read is noted on the installation and routing goes on without it.
+
+**Hints, never rules.** Routing is also told where the conversation's last
+20 requests' results went (`## Where this conversation's earlier requests
+went`, read along `chat_requests_conversation_idx`) and what the channel is
+usually about (`chat_channel_projects`, `## This channel is usually about`).
+The built-in instructions say both are a prior the message and context
+override. An admin sets the usual projects on the provider's settings page
+(`PUT /v1/organization/chat/:provider/channels/:conversation/projects`) or
+from chat (`@dude this channel is usually about ABS`, the `channel_projects`
+route; anyone else is refused privately and nothing changes).
+
+**Hidden projects (`chat_hidden_projects`, migration 196).** An admin hides
+projects from a provider on its settings page only (`PUT
+/v1/organization/chat/:provider/hidden-projects`), never from chat. What
+that provider's chat starts (a session, task or epic whose `origin.provider`
+it is) can never see them: they are out of the routing world and the hints,
+a decision naming one is refused as an invented project is, a member's link
+by hand is refused (409 `hidden_from_chat`), and every agent reach goes
+through one predicate (`delivery.SessionHidesSQL` / `delivery.FenceOf`):
+`SessionProjects`, `OrgProjects` and `SessionRepositories` leave them out
+(so the session's tools, briefing, checkout and credentials do),
+`readableRepos` leaves out a fenced task's repositories, and named lookups
+(`linkedProject`, `propose`'s link_project, `settings`, a related task's
+key) and a fenced task's own-project tools refuse saying so
+(`agenttools/fence.go`).
+
+**Session tools for chat.** `chat_history` (capability `chat.read`, a
+brainstorm's by default) reads more of the conversation a session came from
+— its thread, or the channel for a top-level mention — 30 messages a page
+before or after a message id, at most 30 reads a session an hour, recorded
+as `chat.read` with counts only, quoted as external text. The conversation
+is the session's origin's, never one the agent names. `github_run_jobs`
+(`github.read`) lists a GitHub Actions run's jobs from its id or link, for
+`github_check_log` to read the failed job's log; it counts against the same
+hourly GitHub reads (migrations 197–203 move the hourly-reads indexes to
+the predicate that names it).
 
 **Reactions follow the work.** 👀 goes on the mention as the loop's first
 stage of a delivery (never in the webhook request), once per delivery:
