@@ -216,7 +216,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     // every count (tracking-work.md, "Archive"). Their edges still count
     // below: an archived blocker still blocks.
     const epics = (await sql`
-      SELECT id, project_id AS "projectId", title, CASE WHEN origin->>'via' IS NOT NULL THEN NULL ELSE origin - 'thread' END AS origin FROM epics WHERE archived_at IS NULL
+      SELECT id, project_id AS "projectId", title, CASE WHEN origin->>'via' IS NOT NULL THEN NULL ELSE origin - 'thread' - 'channel' END AS origin FROM epics WHERE archived_at IS NULL
       ORDER BY position, created_at`) as EpicRow[];
 
     // `statusSince` is when the task last changed status, read from the

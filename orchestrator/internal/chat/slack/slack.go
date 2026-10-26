@@ -413,17 +413,24 @@ func tsAfter(a, b string) bool {
 	return x > y
 }
 
-// pageScan bounds how many messages FetchPage reads to find a page: Slack
-// lists a thread oldest first and a channel newest first, whichever way the
-// page goes.
-const pageScan = 1000
+// pageScan bounds how many messages FetchPage reads to find a page whose
+// bound is at the far end of Slack's order (pageCall a call).
+const (
+	pageScan = 1000
+	pageCall = 200
+)
 
-// FetchPage reads the messages of a thread (conversations.replies) or of a
-// channel's top level (conversations.history) between the page's bound and
-// the conversation's end that way, following Slack's cursor up to pageScan,
-// and keeps the Limit nearest the bound, oldest first.
+// FetchPage reads the Limit messages of a thread (conversations.replies)
+// or of a channel's top level (conversations.history) nearest the page's
+// bound, oldest first. Slack lists a channel newest first and a thread
+// oldest first: where its order starts at the bound (the latest page and
+// before on a channel; after in a thread) one call of Limit+1 decides the
+// page and whether there is more. The other way it follows Slack's cursor
+// from the far end, up to pageScan messages, and says chat.ErrPageTooFar
+// when the bound is not reached by then rather than give a page that is
+// not next to it.
 func (p *Provider) FetchPage(ctx context.Context, inst chat.Installation, conversation, thread string, page chat.Page) ([]chat.ThreadMessage, bool, error) {
-	method, args := "conversations.history", map[string]any{"channel": conversation, "limit": 200, "inclusive": false}
+	method, args := "conversations.history", map[string]any{"channel": conversation, "inclusive": false}
 	if thread != "" {
 		method, args["ts"] = "conversations.replies", thread
 	}
@@ -433,31 +440,64 @@ func (p *Provider) FetchPage(ctx context.Context, inst chat.Installation, conver
 	if page.After != "" {
 		args["oldest"] = page.After
 	}
+	// Slack's order runs away from the bound: newest first on a channel
+	// (the bound is its latest end, or before), oldest first in a thread
+	// read after a message.
+	fromBound := (thread == "" && page.After == "") || (thread != "" && page.After != "")
+	inPage := func(m message) bool {
+		return (page.Before == "" || tsAfter(page.Before, m.TS)) && (page.After == "" || tsAfter(m.TS, page.After))
+	}
 	var all []message
-	cursor, more := "", false
-	for len(all) < pageScan {
-		if cursor != "" {
-			args["cursor"] = cursor
+	more := false
+	if fromBound {
+		// A thread's replies may start with its root, which is not in the page.
+		args["limit"] = page.Limit + 1
+		if thread != "" {
+			args["limit"] = page.Limit + 2
 		}
 		var out struct {
 			Messages []message `json:"messages"`
-			HasMore  bool      `json:"has_more"`
-			Meta     struct {
-				NextCursor string `json:"next_cursor"`
-			} `json:"response_metadata"`
 		}
 		if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
 			return nil, false, err
 		}
 		for _, m := range out.Messages {
-			if (page.Before != "" && !tsAfter(page.Before, m.TS)) || (page.After != "" && !tsAfter(m.TS, page.After)) {
-				continue
+			if inPage(m) {
+				all = append(all, m)
 			}
-			all = append(all, m)
 		}
-		more = out.HasMore
-		if cursor = out.Meta.NextCursor; cursor == "" {
-			break
+		// Nearest the bound first: a channel's newest, a thread's oldest.
+		if len(all) > page.Limit {
+			all, more = all[:page.Limit], true
+		}
+	} else {
+		args["limit"] = pageCall
+		cursor, reached := "", false
+		for len(all) < pageScan {
+			if cursor != "" {
+				args["cursor"] = cursor
+			}
+			var out struct {
+				Messages []message `json:"messages"`
+				Meta     struct {
+					NextCursor string `json:"next_cursor"`
+				} `json:"response_metadata"`
+			}
+			if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
+				return nil, false, err
+			}
+			for _, m := range out.Messages {
+				if inPage(m) {
+					all = append(all, m)
+				}
+			}
+			if cursor = out.Meta.NextCursor; cursor == "" {
+				reached = true
+				break
+			}
+		}
+		if !reached {
+			return nil, false, chat.ErrPageTooFar
 		}
 	}
 	slices.SortFunc(all, func(a, b message) int {

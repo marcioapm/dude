@@ -2,6 +2,7 @@ package slack_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -85,6 +86,80 @@ func TestAPageIsTheMessagesNearestItsBoundOldestFirst(t *testing.T) {
 		}
 	}
 	_ = reply
+}
+
+// With Slack paging (here 7 messages a call), a page that starts where
+// Slack's order starts is one call of Limit+1; one at the far end follows
+// the cursor; one past what a read scans is refused, never a page that is
+// not next to its bound.
+func TestAPageReadsOnlyWhatDecidesItAndRefusesOneTooFar(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	fake.SetPageSize(7)
+	var ts []string
+	for i := range 60 {
+		ts = append(ts, fake.Post("C1", "", "U2", fmt.Sprintf("c%02d", i)))
+	}
+	root := ts[0]
+	var replies []string
+	for i := range 60 {
+		replies = append(replies, fake.Post("C1", root, "U1", fmt.Sprintf("r%02d", i)))
+	}
+	ids := func(ms []chat.ThreadMessage) string {
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.Text)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, c := range []struct {
+		name, thread string
+		page         chat.Page
+		first, last  string
+		more         bool
+		calls        int
+		limit        string
+	}{
+		// Newest first on a channel: the latest page, and before, are its first call.
+		{"channel latest", "", chat.Page{Limit: 5}, "c55", "c59", true, 1, "6"},
+		{"channel before", "", chat.Page{Before: ts[30], Limit: 5}, "c25", "c29", true, 1, "6"},
+		// Oldest first in a thread: after is its first call.
+		{"thread after", root, chat.Page{After: replies[10], Limit: 5}, "r11", "r15", true, 1, "7"},
+		// The far end: the cursor is followed to the bound (the channel's
+		// 19 after c40, the thread's root and 50 replies before r50).
+		{"channel after", "", chat.Page{After: ts[40], Limit: 5}, "c41", "c45", true, 3, "200"},
+		{"thread before", root, chat.Page{Before: replies[50], Limit: 5}, "r45", "r49", true, 8, "200"},
+	} {
+		before := fake.Calls("conversations.history") + fake.Calls("conversations.replies")
+		got, more, err := p.FetchPage(ctx, inst, "C1", c.thread, c.page)
+		calls := fake.Calls("conversations.history") + fake.Calls("conversations.replies") - before
+		method := "conversations.history"
+		if c.thread != "" {
+			method = "conversations.replies"
+		}
+		args := fake.Args(method)
+		if err != nil || len(got) != 5 || got[0].Text != c.first || got[4].Text != c.last || more != c.more || calls != c.calls ||
+			args[len(args)-calls]["limit"] != c.limit {
+			t.Errorf("%s: %q more=%v (%v), %d calls, limit %s; want %s..%s more=%v, %d calls, limit %s",
+				c.name, ids(got), more, err, calls, args[len(args)-calls]["limit"], c.first, c.last, c.more, c.calls, c.limit)
+		}
+	}
+	// The end of the channel: the latest page past the last message is empty, with nothing more.
+	if got, more, err := p.FetchPage(ctx, inst, "C1", "", chat.Page{After: ts[59], Limit: 5}); err != nil || len(got) != 0 || more {
+		t.Errorf("after the last message: %q more=%v (%v)", ids(got), more, err)
+	}
+	// Further than a read scans: refused, not a page from elsewhere.
+	fake.SetPageSize(0)
+	for i := range 1100 {
+		fake.Post("C1", "", "U2", fmt.Sprintf("n%04d", i))
+	}
+	before := fake.Calls("conversations.history")
+	if got, _, err := p.FetchPage(ctx, inst, "C1", "", chat.Page{After: ts[2], Limit: 5}); !errors.Is(err, chat.ErrPageTooFar) {
+		t.Errorf("a bound 1100 messages from the far end: %q (%v), want ErrPageTooFar", ids(got), err)
+	}
+	if n := fake.Calls("conversations.history") - before; n != 5 {
+		t.Errorf("the scan made %d calls, want 5 of 200", n)
+	}
 }
 
 func TestABotsAttachmentsAndBlocksAreReadOnce(t *testing.T) {

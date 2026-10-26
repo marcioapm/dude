@@ -394,13 +394,15 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 	if kept != nil && kept.Thread != nil {
 		h.Thread = *kept.Thread
 		if kept.Channel != nil {
-			h.Channel = *kept.Channel
+			h.Channel = kept.Channel.within(channelChars)
 		}
 	} else {
 		if h.Thread, err = s.thread(ctx, org, p, inst, m); err != nil {
 			return err
 		}
-		h.Channel = s.channelBefore(ctx, org, p, inst, m)
+		if h.Channel, err = s.channelBefore(ctx, org, p, inst, m); err != nil {
+			return err
+		}
 	}
 	r.ContextHash = h.hash()
 	world, err := s.world(ctx, org, who.Person, m, conv.Kind, connected)

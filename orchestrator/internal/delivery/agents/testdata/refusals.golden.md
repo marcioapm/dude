@@ -558,6 +558,10 @@ the chat this session came from is no longer connected to dude: its conversation
 
 the chat did not answer: try again in a while, or work with what you have
 
+## refusals/tools/chat/history-too-far
+
+that message is too far back or ahead to page to from here: use a nearer message's id, from a page you read
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

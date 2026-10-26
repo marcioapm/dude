@@ -172,18 +172,74 @@ func TestChatAThreadMentionReadsNoChannel(t *testing.T) {
 func TestChatAFailedChannelReadRoutesAnyway(t *testing.T) {
 	w := setup(t)
 	w.fake.Post("C1", "", "U2", "something top-level")
-	w.fake.FailNext("conversations.history", "missing_scope")
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
-	w.mention("Márcia", "C1", "", "what's going on?")
+	for _, code := range []string{"missing_scope", "not_in_channel"} {
+		w.fake.FailNext("conversations.history", code)
+		w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+		w.mention("Márcia", "C1", "", "what's going on? "+code)
+		if sent := w.model.last(); strings.Contains(sent, "The channel before it") {
+			t.Fatalf("%s: sent %s", code, sent)
+		}
+		if f := w.one(`SELECT last_failure FROM chat_installations WHERE organization_id = $1`, w.org); !strings.Contains(f, code) {
+			t.Fatalf("%s: the failure was not noted: %q", code, f)
+		}
+	}
 	got := w.requests()
-	if len(got) != 1 || got[0].Route != "brainstorm" || got[0].ResultKind != "session" {
+	if len(got) != 2 || got[0].Route != "brainstorm" || got[0].ResultKind != "session" || got[1].ResultKind != "session" {
 		t.Fatalf("requests %+v", got)
 	}
-	if sent := w.model.last(); strings.Contains(sent, "The channel before it") {
-		t.Fatalf("sent %s", sent)
+}
+
+// A rate-limited channel read is not routed blind: the delivery is retried
+// no sooner than Slack's Retry-After, as a thread read's is, and the retry
+// reads the channel.
+func TestChatARateLimitedChannelReadIsRetried(t *testing.T) {
+	w := setup(t)
+	w.fake.Post("C1", "", "U2", "the export failed at 02:00")
+	w.fake.FailRetryAfter("conversations.history", "ratelimited", 1, 30)
+	_, ev := w.receive("Márcia", "C1", "", "what's going on?")
+	w.once()
+	if e := w.event(ev); e.Processed || e.Decision || e.NextIn < 25*time.Second || !strings.Contains(e.LastError, "conversations.history") {
+		t.Fatalf("after a rate-limited channel read: %+v", e)
 	}
-	if f := w.one(`SELECT last_failure FROM chat_installations WHERE organization_id = $1`, w.org); !strings.Contains(f, "conversations.history") {
-		t.Fatalf("the failure was not noted: %q", f)
+	if w.model.calls() != 0 || len(w.requests()) != 0 {
+		t.Fatalf("routed without the channel: %d calls, %+v", w.model.calls(), w.requests())
+	}
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+	w.due()
+	w.once()
+	if sent := w.model.last(); !strings.Contains(sent, "the export failed at 02:00") {
+		t.Fatalf("the retry did not read the channel: %s", sent)
+	}
+}
+
+// What is stored of the channel is what the model was shown: the newest
+// messages within 12 000 characters, on the kept decision, the session's
+// origin and a task's origin and goal alike.
+func TestChatOnlyTheChannelShownIsStored(t *testing.T) {
+	w := setup(t)
+	long := strings.Repeat("y", 1900)
+	for i := range 10 {
+		w.fake.Post("C1", "", "U2", fmt.Sprintf("note %d %s", i, long))
+	}
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.95, "reasoning": "r", "project": "BIL", "title": "Look",
+		"goal": "Look at the nightly notes above."}))
+	w.mention("Márcia", "C1", "", "file it")
+	got := w.requests()
+	if len(got) != 1 || got[0].ResultKind != "task" {
+		t.Fatalf("requests %+v", got)
+	}
+	for what, q := range map[string]string{
+		"decision":    `SELECT decision->'channel'->'Messages' FROM chat_events WHERE organization_id = $1`,
+		"task origin": `SELECT origin->'channel' FROM tasks WHERE organization_id = $1 AND origin ? 'channel'`,
+	} {
+		stored := w.one(`SELECT (`+q+`)::text`, w.org)
+		if strings.Contains(stored, "note 0 ") || !strings.Contains(stored, "note 9 ") || len(stored) > 14000 {
+			t.Errorf("%s stores %d characters (note 0 kept: %v)", what, len(stored), strings.Contains(stored, "note 0 "))
+		}
+	}
+	goal := w.one(`SELECT goal FROM tasks WHERE organization_id = $1 AND origin ? 'channel'`, w.org)
+	if strings.Contains(goal, "note 0 ") || !strings.Contains(goal, "earlier messages left out") {
+		t.Errorf("goal %.300s", goal)
 	}
 }
 

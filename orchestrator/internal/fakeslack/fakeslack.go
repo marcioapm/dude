@@ -83,6 +83,8 @@ type Server struct {
 	calls                  map[string]int
 	// The arguments of each conversations.history and .replies call, in order.
 	args map[string][]map[string]string
+	// The most messages one history or replies call returns (SetPageSize).
+	pageSize int
 	// Methods answered with a Slack error, so many times, for a failure test.
 	failNext map[string]failure
 }
@@ -330,6 +332,35 @@ func (s *Server) Calls(method string) int {
 	return s.calls[method]
 }
 
+// SetPageSize caps how many messages one conversations.history or
+// .replies call returns, whatever its limit, as Slack's own caps do (0:
+// the call's limit alone).
+func (s *Server) SetPageSize(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pageSize = n
+}
+
+// paged is the page of msgs a call's limit and cursor (an offset) ask
+// for, and the next page's cursor ("" at the end).
+func (s *Server) paged(msgs []any, a map[string]json.RawMessage) ([]any, string) {
+	limit, _ := strconv.Atoi(str(a, "limit"))
+	if limit <= 0 {
+		limit = 100
+	}
+	if s.pageSize > 0 {
+		limit = min(limit, s.pageSize)
+	}
+	from, _ := strconv.Atoi(str(a, "cursor"))
+	from = min(from, len(msgs))
+	to := min(from+limit, len(msgs))
+	next := ""
+	if to < len(msgs) {
+		next = strconv.Itoa(to)
+	}
+	return append([]any{}, msgs[from:to]...), next
+}
+
 // Args are the arguments of each call of a conversations.history or
 // conversations.replies, in order.
 func (s *Server) Args(method string) []map[string]string {
@@ -561,17 +592,15 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 			refuse(w, "thread_not_found")
 			return
 		}
-		reply(w, map[string]any{"messages": msgs, "response_metadata": map[string]any{"next_cursor": ""}})
+		// Oldest first, as Slack lists replies.
+		page, next := s.paged(msgs, a)
+		reply(w, map[string]any{"messages": page, "has_more": next != "", "response_metadata": map[string]any{"next_cursor": next}})
 	case "conversations.history":
 		c, ok := conv()
 		if !ok {
 			return
 		}
 		latest, oldest := tsNum(str(a, "latest")), tsNum(str(a, "oldest"))
-		limit, _ := strconv.Atoi(str(a, "limit"))
-		if limit <= 0 {
-			limit = 100
-		}
 		var top []Message
 		for _, m := range s.messages {
 			if m.Channel != c.ID || m.ThreadTS != m.TS {
@@ -583,12 +612,14 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 			}
 			top = append(top, m)
 		}
+		// Newest first, as Slack lists a channel.
 		sort.SliceStable(top, func(i, j int) bool { return tsNum(top[i].TS) > tsNum(top[j].TS) })
 		msgs := []any{}
-		for _, m := range top[:min(len(top), limit)] {
+		for _, m := range top {
 			msgs = append(msgs, m.wire(team))
 		}
-		reply(w, map[string]any{"messages": msgs, "has_more": len(top) > limit})
+		page, next := s.paged(msgs, a)
+		reply(w, map[string]any{"messages": page, "has_more": next != "", "response_metadata": map[string]any{"next_cursor": next}})
 	case "users.info":
 		u, ok := s.users[str(a, "user")]
 		if !ok || u.Team != team {

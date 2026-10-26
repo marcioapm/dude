@@ -23,6 +23,9 @@ var (
 	// ErrNotInstalled is a session whose chat installation is gone (removed,
 	// revoked, or another workspace's now).
 	ErrNotInstalled = errors.New("the chat this session came from is no longer installed")
+	// ErrPageTooFar is a page whose bound is further from where the
+	// provider lists from than a read scans: a nearer message is needed.
+	ErrPageTooFar = errors.New("that message is too far back or ahead to page to from here")
 )
 
 // HistoryMessage is one message read, quoted: its id (to page from), its
@@ -84,6 +87,9 @@ func (s *Service) ReadHistory(ctx context.Context, org, session, before, after s
 		thread, h.Scope = origin.ThreadID, "thread"
 	}
 	msgs, more, err := p.FetchPage(ctx, inst, origin.ConversationID, thread, Page{Before: before, After: after, Limit: HistoryPageMax})
+	if errors.Is(err, ErrPageTooFar) {
+		return History{}, err
+	}
 	if err != nil {
 		s.noteFailure(ctx, org, origin.Provider, err)
 		return History{}, err

@@ -83,6 +83,8 @@ func readChat(ctx context.Context, c Caller, read chatRead) (chat.History, error
 		return h, refuseText(rChatHistoryNotFromChat)
 	case errors.Is(err, chat.ErrNotInstalled):
 		return h, refuseText(rChatHistoryNotInstalled)
+	case errors.Is(err, chat.ErrPageTooFar):
+		return h, refuseText(rChatHistoryTooFar)
 	case err != nil:
 		return h, refuse(rChatHistoryUnavailable)
 	}

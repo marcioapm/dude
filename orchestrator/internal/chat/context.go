@@ -22,6 +22,8 @@ import (
 // session are told it.
 type threadContext struct {
 	Messages []quotedMessage
+	// Older messages read and left out to fit (within).
+	Omitted int `json:",omitempty"`
 }
 
 type quotedMessage struct {
@@ -96,12 +98,10 @@ func (h heard) channel() string {
 	return h.Channel.renderWithin(channelChars)
 }
 
-// renderWithin is render keeping the newest messages that fit in limit
-// characters, opening with how many older ones were left out.
-func (t threadContext) renderWithin(limit int) string {
-	if len(t.Messages) == 0 {
-		return ""
-	}
+// within keeps the newest messages whose rendering fits in limit
+// characters, counting the older ones left out: what is stored and quoted
+// is only what the model was shown.
+func (t threadContext) within(limit int) threadContext {
 	kept, size := len(t.Messages), 0
 	for i := len(t.Messages) - 1; i >= 0; i-- {
 		n := len([]rune(threadContext{Messages: t.Messages[i : i+1]}.render())) + 1
@@ -111,9 +111,19 @@ func (t threadContext) renderWithin(limit int) string {
 		size += n
 		kept = i
 	}
-	text := threadContext{Messages: t.Messages[kept:]}.render()
-	if kept > 0 {
-		text = fmt.Sprintf("(%d earlier %s left out)\n%s", kept, plural(kept, "message", "messages"), text)
+	return threadContext{Messages: t.Messages[kept:], Omitted: t.Omitted + kept}
+}
+
+// renderWithin is render keeping the newest messages that fit in limit
+// characters, opening with how many older ones were left out.
+func (t threadContext) renderWithin(limit int) string {
+	if len(t.Messages) == 0 {
+		return ""
+	}
+	t = t.within(limit)
+	text := t.render()
+	if t.Omitted > 0 {
+		text = fmt.Sprintf("(%d earlier %s left out)\n%s", t.Omitted, plural(t.Omitted, "message", "messages"), text)
 	}
 	return text
 }
@@ -124,24 +134,29 @@ func topLevel(m Mention) bool { return m.ThreadID == "" || m.ThreadID == m.Messa
 
 // channelBefore reads the conversation before a top-level mention: up to
 // channelMessagesMax from channelWindow before it, oldest first, quoted as
-// a thread is. A failed read is noted and leaves it out: it never fails
-// the mention.
-func (s *Service) channelBefore(ctx context.Context, org string, p Provider, inst Installation, m Mention) threadContext {
+// a thread is, and only the newest that fit in channelChars. A transient
+// failure (a rate limit, the provider down) is returned, for the delivery
+// to be retried as a thread read's is; a refusal (no scope, not in the
+// channel) is noted and leaves the channel out: it never fails the mention.
+func (s *Service) channelBefore(ctx context.Context, org string, p Provider, inst Installation, m Mention) (threadContext, error) {
 	if !topLevel(m) || m.MessageID == "" {
-		return threadContext{}
+		return threadContext{}, nil
 	}
 	msgs, err := p.FetchHistory(ctx, inst, m.ConversationID, m.MessageID, channelWindow, channelMessagesMax)
 	if err != nil {
 		s.noteFailure(ctx, org, m.Provider, err)
-		return threadContext{}
+		if transient, _ := IsTransient(err); transient {
+			return threadContext{}, err
+		}
+		return threadContext{}, nil
 	}
 	slices.Reverse(msgs)
 	quoted, err := s.quoteMessages(ctx, org, p, inst, msgs, m.MessageID)
 	if err != nil {
 		s.log().Warn("quoting the channel before a mention failed", "provider", m.Provider, "error", err)
-		return threadContext{}
+		return threadContext{}, nil
 	}
-	return threadContext{Messages: quoted}
+	return threadContext{Messages: quoted}.within(channelChars), nil
 }
 
 // thread reads the mention's thread, without the mention: everyone's

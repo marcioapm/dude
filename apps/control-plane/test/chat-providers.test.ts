@@ -465,6 +465,21 @@ describe("settings", () => {
     expect(nav).not.toContain("ssn_x");
   });
 
+  test("a task's list row carries its origin without the conversation quoted on it; its own page has it", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_q', ${ORG}, 'Quoted', 'quo', 'QUO')
+      ON CONFLICT DO NOTHING`;
+    const channel = Array.from({ length: 6 }, (_, i) => ({ by: "CI Bot", app: true, text: `report ${i} ` + "z".repeat(1900) }));
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, origin) VALUES ('wi_quoted', ${ORG}, 'prj_q', 1, 'Quoted',
+      ${{ provider: "slack", conversationName: "#nightly", topLevel: true, channel, thread: [{ by: "Ana", text: "a thread line" }] }}::jsonb)`;
+    const list = await (await call(adminKey, "GET", "/v1/tasks?projectId=prj_q")).json() as Json;
+    const row = list.tasks.find((t: Json) => t.id === "wi_quoted");
+    expect(row.origin).toEqual({ provider: "slack", conversationName: "#nightly", topLevel: true });
+    expect(JSON.stringify(list).length).toBeLessThan(4000);
+    const detail = await (await call(adminKey, "GET", "/v1/tasks/wi_quoted")).json() as Json;
+    expect(detail.origin.channel.length).toBe(6);
+    expect(detail.origin.thread[0].text).toBe("a thread line");
+  });
+
   test("disconnect is an admin's, and unlinking one's own", async () => {
     expect((await call(memberKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(403);
     expect((await call(adminKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(204);
