@@ -271,6 +271,15 @@ async function markTaskDone(ctx: RequestContext): Promise<Response> {
     "{}", ctx.principal);
 }
 
+/**
+ * Done without a pull request: the owner's answer to Deliver's hold before
+ * the pull request. The branch stays, no pull request opens, the task is Done.
+ */
+async function doneWithoutPullRequest(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/done-without-pull-request`,
+    "{}", ctx.principal);
+}
+
 export const pullRequestChoiceInput = z.object({ choice: z.enum(PULL_REQUEST_CHOICES).nullable() }).strict();
 
 /**
@@ -722,6 +731,7 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/runs", createRun);
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
+  router.post("/v1/tasks/:id/done-without-pull-request", doneWithoutPullRequest);
   router.put("/v1/tasks/:id/pull-request-choice", setPullRequestChoice);
   router.post("/v1/tasks/:id/close", closeTask);
   router.post("/v1/tasks/:id/reopen", lifecycleStep("reopen"));

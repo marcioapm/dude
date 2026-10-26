@@ -453,5 +453,13 @@
     "body": {
       "choice": null
     }
+  },
+  {
+    "args": [
+      "task",
+      "done-without-pr",
+      "wi_12"
+    ],
+    "route": "POST /v1/tasks/:id/done-without-pull-request"
   }
 ]

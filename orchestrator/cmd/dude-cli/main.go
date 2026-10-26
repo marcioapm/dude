@@ -1003,6 +1003,8 @@ var commands = map[string]command{
 		})},
 	"task done": {"TASK", "mark finished work that has nothing to merge done",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("POST", a[0], "/done", obj{}) })},
+	"task done-without-pr": {"TASK", "finish a task held before its pull request: Done, its branch kept, no pull request",
+		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("POST", a[0], "/done-without-pull-request", nil) })},
 	"task before-pr": {"TASK CHOICE", "what Deliver does before the pull request: open, draft, ask, or project (the project's)",
 		noFlags(func(c *cli, a []string) (any, error) {
 			var choice any

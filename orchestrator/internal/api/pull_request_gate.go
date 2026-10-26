@@ -13,6 +13,36 @@ import (
 
 func (s *Server) pullRequestGateRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /internal/tasks/{id}/pull-request-choice", s.auth(s.setPullRequestChoice))
+	mux.Handle("POST /internal/tasks/{id}/done-without-pull-request", s.auth(s.doneWithoutPullRequest))
+}
+
+// doneWithoutPullRequest is the owner's answer to Deliver's hold before the
+// pull request: Done, the branch kept, no pull request.
+func (s *Server) doneWithoutPullRequest(w http.ResponseWriter, r *http.Request, org string) error {
+	taskID := r.PathValue("id")
+	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		a, err := lifecycleActor(r.Context(), tx, r)
+		if err != nil {
+			return err
+		}
+		var exists bool
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM tasks WHERE id = $1)`, taskID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return fail(http.StatusNotFound, "not_found", "task %s not found", taskID)
+		}
+		if err := ownerOnly(r.Context(), tx, taskID, a.Person, "finish"); err != nil {
+			return err
+		}
+		return lifecycleFailure(delivery.DoneWithoutPullRequestTx(r.Context(), tx, org, taskID, a))
+	})
+	if err != nil {
+		return err
+	}
+	s.kick()
+	write(w, http.StatusOK, map[string]any{"taskId": taskID, "status": "done"})
+	return nil
 }
 
 func (s *Server) setPullRequestChoice(w http.ResponseWriter, r *http.Request, org string) error {

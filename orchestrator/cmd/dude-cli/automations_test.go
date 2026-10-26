@@ -99,6 +99,7 @@ func automationCases(t *testing.T) []automationCase {
 		// Recorded here for cli-bodies.test.ts: a task command's body checked against its route's schema.
 		{[]string{"task", "before-pr", "wi_12", "ask"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":"ask"}`, ""},
 		{[]string{"task", "before-pr", "wi_12", "project"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":null}`, ""},
+		{[]string{"task", "done-without-pr", "wi_12"}, "", "POST", "/v1/tasks/wi_12/done-without-pull-request", ``, ""},
 	}
 }
 

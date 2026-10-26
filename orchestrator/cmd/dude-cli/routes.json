@@ -247,6 +247,7 @@
   "POST /v1/tasks/:id/decider": "task decider",
   "POST /v1/tasks/:id/deliver": ["task create", "task start"],
   "POST /v1/tasks/:id/done": "task done",
+  "POST /v1/tasks/:id/done-without-pull-request": "task done-without-pr",
   "POST /v1/tasks/:id/feedback/drafts": ["feedback draft", "feedback send"],
   "POST /v1/tasks/:id/feedback/submit": ["feedback send", "feedback submit"],
   "POST /v1/tasks/:id/preview": "task preview",

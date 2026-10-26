@@ -70,6 +70,7 @@ const bodies: Record<string, (r: Recorded) => ZodTypeAny[]> = {
   "POST /v1/automations/:id/prompt-history/restore": () => [restorePromptSchema],
   "POST /v1/automations/schedule/next": () => [scheduleNextBody],
   "PUT /v1/tasks/:id/pull-request-choice": () => [pullRequestChoiceInput],
+  "POST /v1/tasks/:id/done-without-pull-request": () => [],
 };
 
 // dude CLI routes with a body that nothing here checks yet. It only shrinks:
