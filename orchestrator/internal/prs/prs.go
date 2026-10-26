@@ -14,6 +14,8 @@ package prs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -630,14 +632,15 @@ func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forg
 	}
 	// One signal per distinct change, however many deliveries report it.
 	// The head is part of it: checks failing again after a fix is a new
-	// failure, and must not be taken for the one already handled. So are
-	// the check runs failing: a fix that pushed nothing (the runner died,
-	// not the code) leaves the head where it was, and a re-run failing on
-	// it is a new check run, so a new failure, not the one handled.
+	// failure, and must not be taken for the one already handled. The
+	// failing checks are part of it too: a fix that pushed nothing (the
+	// runner died, not the code) leaves the head where it was, and a
+	// re-run failing on it is a new check run or commit status, with a new
+	// id, so a new failure; the same ones failing again are not.
 	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State,
 		status.HeadSHA)
-	if runs := failingRuns(signal.Feedback); runs != "" {
-		key += ":runs:" + runs
+	if checks := failingChecksKey(signal.Feedback); checks != "" {
+		key += ":checks:" + checks
 	}
 	// Readiness can come and go on the same head (approved, dismissed,
 	// approved again), and so can a conflict (resolved, then main moves
@@ -690,22 +693,31 @@ func frozen(status *forge.Status, pr tracked) {
 	_ = json.Unmarshal(pr.ReviewsJSON, &status.Reviews)
 }
 
-// failingRuns: the check runs a signal's CI feedback names as failing,
-// sorted; "" for none. A commit status has no run id, and is named
-// instead.
-func failingRuns(feedback []forge.ActionableFeedback) string {
-	var runs []string
+// failingChecksKey names the checks a signal's CI feedback says failed,
+// whatever order GitHub listed them in: "" for none. Each is named by its
+// id (a check run's, or a commit status's), or by its name when it has
+// neither. A digest of fixed length, however many failed: the key is in
+// a unique index, which has a size limit.
+func failingChecksKey(feedback []forge.ActionableFeedback) string {
+	var checks []string
 	for _, f := range feedback {
 		for _, c := range f.Checks {
-			if c.RunID != 0 {
-				runs = append(runs, strconv.FormatInt(c.RunID, 10))
-			} else {
-				runs = append(runs, c.Name)
+			switch {
+			case c.RunID != 0:
+				checks = append(checks, "run:"+strconv.FormatInt(c.RunID, 10))
+			case c.StatusID != 0:
+				checks = append(checks, "status:"+strconv.FormatInt(c.StatusID, 10))
+			default:
+				checks = append(checks, "name:"+c.Name)
 			}
 		}
 	}
-	slices.Sort(runs)
-	return strings.Join(runs, ",")
+	if len(checks) == 0 {
+		return ""
+	}
+	slices.Sort(checks)
+	sum := sha256.Sum256([]byte(strings.Join(checks, "\n")))
+	return hex.EncodeToString(sum[:16])
 }
 
 func failingNames(checks []forge.Check) []string {
