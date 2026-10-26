@@ -20,6 +20,7 @@ The organisation's values are the defaults every project starts from. On a proje
 
 - **From** the organisation's name — the project follows the organisation.
 - **Overridden** — the project set its own. **Reset** puts the organisation's value back.
+- **Default** — a project-only setting the project has not set; dude's built-in default applies. **Reset to the default** puts it back.
 
 A project can change its agent roles, its delivery policy, its network list, its servers and its runtime image. GitHub, Models, Judgements, Machines and Images belong to the organisation alone.
 
@@ -46,6 +47,8 @@ Where neither sets a value, dude's built-in default applies.
 ## Delivery policy
 
 **Delivery → Loop** includes **Unmet criterion rounds** (`maxStillRounds`) and **Regression rounds** (`maxRegressionRounds`). Both default to 2 and accept whole numbers from 0 to 20; 0 disables that convergence limit. They follow the organisation/project inheritance and Reset rules above. A delivery freezes these limits when it starts; older frozen policies without them keep both off. See [When the loop stops](help:delivery#when-the-loop-stops) for how the rounds count.
+
+**Delivery → Review → Before the pull request** (`pullRequest`: **Open it**, **Open as draft** or **Ask me first**; default **Open it**) is on a project's Delivery page only: the organisation has no value for it, and each project starts from the default. A task's owner can override it for that task. See [Before the pull request](help:delivery#before-the-pull-request).
 
 Older deliveries are not changed by enabling a bound now; **Start over** reads today's policy. Reaching a convergence bound asks for the owner's direction rather than starting another undirected fixer.
 
