@@ -13,6 +13,7 @@ import { SQL } from "bun";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { type AddressInfo, connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { listMigrationFiles, migrate, outsideTransaction, repoMigrationsDir } from "../src/db/migrate.ts";
 
@@ -955,6 +956,68 @@ test("a migrate retried while an earlier build of its index still runs refuses, 
   } finally {
     builder.release();
     holder.release();
+    await sql.end();
+  }
+}, 120_000);
+
+test("a migrate whose connection drops while its backend still builds the index leaves the build alone and records nothing", async () => {
+  const { url, sql } = await migratedBefore("198");
+  // The migrator reaches Postgres through a relay whose client sides are cut
+  // while the server sides stay open: Postgres keeps building, as a backend
+  // does whose client vanished without a FIN reaching it.
+  const pairs: { client: Socket; server: Socket }[] = [];
+  const target = new URL(url);
+  const relay = createServer((client) => {
+    const server = connect(Number(target.port || 5432), target.hostname);
+    client.pipe(server);
+    server.pipe(client);
+    client.on("error", () => {});
+    server.on("error", () => {});
+    pairs.push({ client, server });
+  });
+  await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  const relayed = new URL(url);
+  relayed.host = `127.0.0.1:${(relay.address() as AddressInfo).port}`;
+  const holder = await sql.reserve();
+  const validity = async () => [...await sql`SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass('events_task_tool_attempts_idx')`];
+  try {
+    // An open snapshot holds the build in its wait.
+    await holder`BEGIN ISOLATION LEVEL REPEATABLE READ`;
+    await holder`SELECT count(*) FROM events`;
+    const migrating = migrate(relayed.toString(), { log: () => {} }).then(() => "", (err: Error) => err.message);
+    let running = false;
+    for (let i = 0; i < 200 && !running; i++) {
+      const [row] = await sql`SELECT EXISTS (SELECT 1 FROM pg_stat_progress_create_index
+        WHERE index_relid = to_regclass('events_task_tool_attempts_idx')) AS running`;
+      running = row?.running === true;
+      if (!running) await Bun.sleep(50);
+    }
+    expect(running).toBe(true);
+    for (const { client, server } of pairs.splice(0)) {
+      server.unpipe(client);
+      client.destroy();
+    }
+    // A drop would wait on the held build; the migrator must settle without one.
+    const settled = await Promise.race([migrating, Bun.sleep(10_000).then(() => null)]);
+    expect(settled).not.toBeNull();
+    expect(settled).not.toBe("");
+    expect(await validity()).toEqual([{ valid: false }]);
+    expect([...await sql`SELECT EXISTS (SELECT 1 FROM pg_stat_progress_create_index
+      WHERE index_relid = to_regclass('events_task_tool_attempts_idx')) AS running`]).toEqual([{ running: true }]);
+    expect((await recorded(url)).map((m) => m.version)).not.toContain("198");
+
+    await holder`COMMIT`;
+    for (let i = 0; i < 200 && (await validity())[0]?.valid !== true; i++) await Bun.sleep(50);
+    expect(await validity()).toEqual([{ valid: true }]);
+    expect((await migrate(url, { log: () => {} })).applied).toContain("198_events_task_tool_attempts_idx.sql");
+    expect(await validity()).toEqual([{ valid: true }]);
+  } finally {
+    holder.release();
+    for (const { client, server } of pairs) {
+      client.destroy();
+      server.destroy();
+    }
+    relay.close();
     await sql.end();
   }
 }, 120_000);

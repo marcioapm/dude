@@ -145,9 +145,13 @@ async function dropIfInvalid(sql: SQL, index: string): Promise<boolean> {
  * otherwise wait that build out, drop the index it made, and build it again.
  */
 async function refuseWhileBuilding(sql: SQL, index: string): Promise<void> {
+  if (await building(sql, index)) throw new Error(`a build of ${index} is still running; migrate again when it finishes`);
+}
+
+async function building(sql: SQL, index: string): Promise<boolean> {
   const [row] = await sql`SELECT EXISTS (SELECT 1 FROM pg_stat_progress_create_index
     WHERE index_relid = to_regclass(${index})) AS building`;
-  if (row?.building) throw new Error(`a build of ${index} is still running; migrate again when it finishes`);
+  return row?.building === true;
 }
 
 export async function migrate(
@@ -197,10 +201,14 @@ export async function migrate(
         // here and the file not recorded. A success never leaves it invalid:
         // the leftover IF NOT EXISTS could skip was dropped just above, and
         // none was being built.
+        // A statement that failed on the client's side (a dropped connection)
+        // can leave its backend still building: that index is left alone,
+        // and the next migrate refuses until the build ends. A failed check
+        // drops nothing either.
         try {
           await sql.unsafe(contents);
         } catch (err) {
-          if (index) await dropIfInvalid(sql, index);
+          if (index && !(await building(sql, index).catch(() => true))) await dropIfInvalid(sql, index);
           throw err;
         }
         await sql`INSERT INTO schema_migrations (version, name, checksum)
