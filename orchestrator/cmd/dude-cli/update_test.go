@@ -52,7 +52,9 @@ type fakeRelease struct {
 	sums string
 	// redirect sends asset downloads to this URL's host instead.
 	redirect string
-	mu       sync.Mutex
+	// assetBase replaces the server's own URL in browser_download_url.
+	assetBase string
+	mu        sync.Mutex
 	requests []string
 	auths    []string
 }
@@ -69,9 +71,13 @@ func (f *fakeRelease) serve(t *testing.T) *httptest.Server {
 		switch {
 		case r.URL.Path == base+"/latest" || r.URL.Path == base+"/tags/"+f.tag:
 			rel := map[string]any{"tag_name": f.tag}
+			base := srv.URL
+			if f.assetBase != "" {
+				base = f.assetBase
+			}
 			var assets []map[string]string
 			for name := range f.assets {
-				assets = append(assets, map[string]string{"name": name, "browser_download_url": srv.URL + "/download/" + f.tag + "/" + name})
+				assets = append(assets, map[string]string{"name": name, "browser_download_url": base + "/download/" + f.tag + "/" + name})
 			}
 			rel["assets"] = assets
 			json.NewEncoder(w).Encode(rel)
@@ -213,6 +219,28 @@ func TestUpdateFollowsAssetRedirectsOnlyWithinGitHub(t *testing.T) {
 	}
 	if len(assets.requests) != 0 {
 		t.Fatalf("the other host was asked %v", assets.requests)
+	}
+}
+
+func TestUpdateRefusesAnAssetURLOutsideGitHub(t *testing.T) {
+	other := newFakeRelease(t, "v1.2.0")
+	otherSrv := other.serve(t)
+	// Another host name for the same loopback server: refused, so it is
+	// never asked. Only loopback, so a broken check still reaches no network.
+	f := newFakeRelease(t, "v1.2.0")
+	f.assetBase = strings.Replace(otherSrv.URL, "127.0.0.1", "localhost", 1)
+	c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
+	err := c.run([]string{"update"})
+	if err == nil || !strings.Contains(err.Error(), "refusing to download from localhost") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := readFile(t, exe); got != "old binary" {
+		t.Fatalf("binary changed: %q", got)
+	}
+	other.mu.Lock()
+	defer other.mu.Unlock()
+	if len(other.requests) != 0 {
+		t.Fatalf("the other host was asked %v", other.requests)
 	}
 }
 
