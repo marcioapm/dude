@@ -52,3 +52,6 @@ __pycache__/
 
 # Built by apps/web overlay/build.ts (bun run build:overlay)
 /apps/web/public/feedback/overlay.js
+
+# A delegated run's scratch logs
+/.review-scratch/
