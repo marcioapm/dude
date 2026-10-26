@@ -610,11 +610,16 @@ export class PreviewCommenting {
 
   /**
    * A linked window taken as one of the task's commenting windows, once its
-   * hello or navigated has passed checkMessage. At the cap it takes only a
-   * closed window's slot: a live window is never let go for a newcomer.
+   * hello or navigated has passed checkMessage. At the cap it takes only the
+   * slot of the oldest window that is closed or stopped (`idle`): a live
+   * window is never let go for a newcomer.
    */
   #adopt(source: Window, url: string): Pane | null {
-    if (this.#panes.length >= MAX_WINDOWS && !this.#panes.some((p) => p.state === "closed" || closedOrGone(p.win))) return null;
+    if (this.#panes.length >= MAX_WINDOWS) {
+      const free = [...this.#panes].sort((a, b) => a.touched - b.touched).find((p) => p.state === "closed" || p.state === "idle" || closedOrGone(p.win));
+      if (!free) return null;
+      this.#drop(free);
+    }
     return this.#add(source, url, null);
   }
 

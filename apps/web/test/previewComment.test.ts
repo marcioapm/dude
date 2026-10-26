@@ -771,3 +771,21 @@ test("Dismiss drops closed windows, so they no longer take a slot under MAX_WIND
   expect(c.windows).not.toContain(adopted[2] as unknown as Window);
   expect(c.windows).not.toContain(adopted[5] as unknown as Window);
 });
+
+test("after Stop commenting, a stopped window gives up its slot: a ninth linked window is adopted and answered, in place of the oldest", () => {
+  const adopted = Array.from({ length: MAX_WINDOWS }, () => win(window));
+  for (const w of adopted) post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, w);
+  expect(c.windows.length).toBe(MAX_WINDOWS);
+  c.stop();
+  const ninth = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, ninth);
+  expect(types(ninth)).toEqual(["session"]);
+  expect(c.windows.length).toBe(MAX_WINDOWS);
+  expect(c.windows).toContain(ninth as unknown as Window);
+  expect(c.windows).not.toContain(adopted[0] as unknown as Window);
+  // The ninth is live now: a tenth takes the next stopped window's slot, never the ninth's.
+  const tenth = win(window);
+  post({ type: "hello", v: 1, url: `${WEB}/cart` }, WEB, tenth);
+  expect(c.windows).toContain(ninth as unknown as Window);
+  expect(c.windows).not.toContain(adopted[1] as unknown as Window);
+});
