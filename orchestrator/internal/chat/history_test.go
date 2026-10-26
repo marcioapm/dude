@@ -83,6 +83,14 @@ func TestChatARateLimitedHistoryReadIsNotAFailureOfTheInstallation(t *testing.T)
 		return w.count(`SELECT COALESCE(failed_today, 0) FROM chat_installations WHERE organization_id = $1`, w.org)
 	}
 	before := failed()
+	// The latest page reads from Slack's bound.
+	w.fake.FailNext("conversations.history", "ratelimited")
+	if _, err := w.svc.ReadHistory(w.ctx, w.org, session, "", ""); !errors.Is(err, chat.ErrRateLimited) {
+		t.Fatalf("a rate-limited latest page: %v, want ErrRateLimited", err)
+	}
+	if n := failed(); n != before {
+		t.Fatalf("failed_today went from %d to %d on a rate limit of the latest page", before, n)
+	}
 	// A channel read after a message pages from Slack's far end.
 	w.fake.FailNext("conversations.history", "ratelimited")
 	if _, err := w.svc.ReadHistory(w.ctx, w.org, session, "", latest.Messages[0].ID); !errors.Is(err, chat.ErrRateLimited) {

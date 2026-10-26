@@ -210,6 +210,13 @@ func TestAPageSlackAnswersShortStillSaysThereIsMore(t *testing.T) {
 			t.Errorf("%s: %q more=%v (%v), %d calls; want %q more=true, 2 calls", c.name, texts(got), more, err, calls, c.want)
 		}
 	}
+	// A rate-limited second call leaves the first call's page, short, with more.
+	fake.SetPageSize(4)
+	fake.FailAfter("conversations.history", "ratelimited", 1, 1)
+	got, more, err := p.FetchPage(ctx, inst, "C1", "", chat.Page{Limit: 5})
+	if err != nil || texts(got) != "c36,c37,c38,c39" || !more {
+		t.Errorf("a refill rate-limited: %q more=%v (%v); want the first call's four, more=true, no error", texts(got), more, err)
+	}
 }
 
 func TestABotsAttachmentsAndBlocksAreReadOnce(t *testing.T) {

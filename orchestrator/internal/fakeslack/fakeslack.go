@@ -92,6 +92,8 @@ type Server struct {
 type failure struct {
 	code        string
 	left, after int
+	// Calls of the method answered normally before the first failure.
+	skip int
 }
 
 type code struct{ kind, team, user, redirect string }
@@ -201,6 +203,14 @@ func (s *Server) FailRetryAfter(method, code string, n, after int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.failNext[method] = failure{code: code, left: n, after: after}
+}
+
+// FailAfter is FailTimes past the next ok calls of method, which answer
+// normally: the (ok+1)th call is the first to fail.
+func (s *Server) FailAfter(method, code string, ok, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failNext[method] = failure{code: code, left: n, after: 1, skip: ok}
 }
 
 // Post adds a person's message, in thread (a new root with ""), returning its ts.
@@ -490,7 +500,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 		}
 		s.args[method] = append(s.args[method], got)
 	}
-	if f, ok := s.failNext[method]; ok {
+	if f, ok := s.failNext[method]; ok && f.skip > 0 {
+		f.skip--
+		s.failNext[method] = f
+	} else if ok {
 		if f.left--; f.left <= 0 {
 			delete(s.failNext, method)
 		} else {
