@@ -1829,6 +1829,19 @@ body {
   gap: var(--ds-space-8) var(--ds-space-12);
 }
 /* General feedback's way in: a quiet line that opens the same editor a line comment uses. */
+/* The Feedback tab while a delivery is held before its pull request: where its words go (nowhere on GitHub). */
+.feedbackBeforePR {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+.feedbackBeforePR > svg {
+  flex: none;
+  color: var(--ds-color-text-muted);
+  align-self: center;
+}
 .feedbackGeneral {
   display: flex;
   flex-wrap: wrap;

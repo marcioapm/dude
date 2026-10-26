@@ -213,11 +213,11 @@ describe("the Relations section", () => {
       { id: TASK_ID, key: "CP-44", title: "Billing page", status: "running" as const },
     ] }];
     const { container: p, unmount } = await mount(
-      <TooltipProvider>
+      <TooltipProvider><ToastProvider>
         <PeopleProvider client={client}>
           <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab={OVERVIEW} tree={tree} />
         </PeopleProvider>
-      </TooltipProvider>,
+      </ToastProvider></TooltipProvider>,
     );
     mounted.push(unmount);
     await click(await until(() => p.querySelector("[data-testid=add-relation]"), "Add relation"));

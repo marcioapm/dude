@@ -138,6 +138,21 @@ describe("a task held on Ask me first", () => {
     expect([...settled.children].map((c) => text(c))).toEqual(["", "Saved filters should be per project.", "resolved in 9a1c07e"]);
   });
 
+  test("the Feedback tab, while held, says nothing goes to GitHub and that items hold the pull request's opening", async () => {
+    const client = new Held(atHold());
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+        <TaskScreen client={client} taskId={TASK_ID} tab="feedback" onOpenRun={() => {}} onBack={() => {}} />
+      </PeopleProvider></ToastProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    const tab = await until(() => container.querySelector<HTMLElement>("[data-testid=feedback-tab]"), "the Feedback tab");
+    expect(text(tab.querySelector("[data-testid=feedback-before-pr]"))).toBe(
+      "Feedback before the pull request: nothing goes to GitHub. GitHub's reviewers and CI see none of it; it stays on the task.");
+    expect(container.textContent).toContain("What holds the pull request");
+    expect(container.textContent).not.toContain("What holds the merge");
+  });
+
   test("a project whose preview is configured but not running offers Start preview", async () => {
     const servers = { run: null, servers: [], recipes: [{ name: "web", port: 3000, command: "bun dev", workdir: "", setup: null, autostartInPreviews: true }] } as unknown as TaskServers;
     const client = new Held(atHold(), servers);

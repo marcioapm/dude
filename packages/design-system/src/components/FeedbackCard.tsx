@@ -36,19 +36,28 @@ export interface FeedbackStatusSpec {
   readonly description: string;
 }
 
-/** What an item is shown as: a tone, a glyph and words. `withWhom` names the agent that has a delivered one ("Fix"). */
-export function feedbackStatusSpec(status: FeedbackStatus, pending = false, withWhom?: string): FeedbackStatusSpec {
+/** What an open item holds: the merge, or, while a delivery is held before its pull request, its opening. */
+export type FeedbackHolds = "merge" | "pull request";
+
+const heldThing = (holds: FeedbackHolds) => (holds === "merge" ? "the merge" : "the pull request's opening");
+
+/**
+ * What an item is shown as: a tone, a glyph and words. `withWhom` names the
+ * agent that has a delivered one ("Fix"); `holds` what an open one holds.
+ */
+export function feedbackStatusSpec(status: FeedbackStatus, pending = false, withWhom?: string, holds: FeedbackHolds = "merge"): FeedbackStatusSpec {
+  const held = heldThing(holds);
   switch (status) {
     case "draft":
       return { tone: "neutral", glyph: "lock", label: "Draft · only you", description: "Nobody else sees it, and no agent, until you submit it." };
     case "open":
-      return { tone: "neutral", glyph: "circle-dotted", label: "Open", description: "Submitted; no agent has it yet. It holds the merge." };
+      return { tone: "neutral", glyph: "circle-dotted", label: "Open", description: `Submitted; no agent has it yet. It holds ${held}.` };
     case "delivered":
       return { tone: "info", glyph: "agent", label: withWhom ? `With ${withWhom}` : "With an agent",
-        description: "An agent has it. It holds the merge until it is resolved or answered." };
+        description: `An agent has it. It holds ${held} until it is resolved or answered.` };
     case "resolved":
       return pending
-        ? { tone: "info", glyph: "clock", label: "Resolved · not yet published", description: "Resolved in a commit not yet pushed: it holds the merge until it is." }
+        ? { tone: "info", glyph: "clock", label: "Resolved · not yet published", description: `Resolved in a commit not yet pushed: it holds ${held} until it is.` }
         : { tone: "success", glyph: "check", label: "Resolved", description: "Done with. Anyone on the task can reopen it." };
     case "replied":
       return { tone: "neutral", glyph: "message", label: "Answered", description: "Answered rather than changed. It holds nothing; reopen it to ask again." };
@@ -59,8 +68,10 @@ export function feedbackStatusSpec(status: FeedbackStatus, pending = false, with
 export const feedbackHolds = (status: FeedbackStatus, pending: boolean): boolean =>
   status === "open" || status === "delivered" || (status === "resolved" && pending);
 
-export function FeedbackStatusBadge({ status, pending, withWhom }: { readonly status: FeedbackStatus; readonly pending?: boolean; readonly withWhom?: string | undefined }) {
-  const spec = feedbackStatusSpec(status, pending, withWhom);
+export function FeedbackStatusBadge({ status, pending, withWhom, holds }: {
+  readonly status: FeedbackStatus; readonly pending?: boolean; readonly withWhom?: string | undefined; readonly holds?: FeedbackHolds | undefined;
+}) {
+  const spec = feedbackStatusSpec(status, pending, withWhom, holds);
   return (
     <Tooltip content={spec.description}>
       <span tabIndex={0} className={styles["statusWrap"]} data-testid="fb-status" data-status={status}>
@@ -315,6 +326,8 @@ export interface FeedbackCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
   readonly onEditingChange?: ((editing: boolean) => void) | undefined;
   readonly maxLength?: number | undefined;
   readonly now?: number | undefined;
+  /** What an open item holds: the merge, or a held delivery's pull request opening. */
+  readonly holds?: FeedbackHolds | undefined;
 }
 
 const PLACEMENT_WORDS = {
@@ -324,7 +337,7 @@ const PLACEMENT_WORDS = {
 
 /** One item: who wrote it and when, where it went, its status, what it is on, its words and thread, and what can be done with it. */
 export function FeedbackCard({ item, thread = [], inline, placement, readOnly, imageUrl, onOpenPage, onJump, onReply, onResolve, onReopen, onSaveDraft, onDelete,
-  editing: editingGiven, onEditingChange, maxLength, now = Date.now(), className, ...rest }: FeedbackCardProps) {
+  editing: editingGiven, onEditingChange, maxLength, now = Date.now(), holds = "merge", className, ...rest }: FeedbackCardProps) {
   const [ownEditing, setOwnEditing] = useState(false);
   const editing = editingGiven ?? ownEditing;
   const setEditing = (on: boolean) => {
@@ -369,7 +382,7 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
         </span>
         <span className={styles["spacer"]} />
         {placement === "outdated" ? <Badge tone="neutral" icon="file-diff" size="sm">Lines changed since</Badge> : null}
-        <FeedbackStatusBadge status={item.status} pending={item.resolutionPending} withWhom={item.withWhom} />
+        <FeedbackStatusBadge status={item.status} pending={item.resolutionPending} withWhom={item.withWhom} holds={holds} />
       </header>
       {inline ? null : <div className={styles["anchorRow"]}><FeedbackAnchorLine anchor={a} onJump={a.kind === "general" ? undefined : onJump} /></div>}
       {a.kind === "code" && (!inline || placement) ? <FeedbackExcerpt anchor={a} note={placement ? PLACEMENT_WORDS[placement] : undefined} /> : null}
@@ -384,7 +397,7 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
       <FeedbackThread entries={thread} now={now} />
       {pending ? (
         <p className={styles["pendingLine"]} data-testid="fb-pending">
-          <Icon name="clock" size={12} /> Counts as resolved once <code className={styles["sha"]}>{item.resolvedCommit?.slice(0, 7)}</code> is published; until then it holds the merge.
+          <Icon name="clock" size={12} /> Counts as resolved once <code className={styles["sha"]}>{item.resolvedCommit?.slice(0, 7)}</code> is published; until then it holds {heldThing(holds)}.
           If its agent stops without publishing it, the item opens again by itself.
         </p>
       ) : null}
@@ -434,7 +447,7 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
                 </Button>
               ) : null}
               {onReopen && (item.status === "replied" || (item.status === "resolved" && !pending)) ? (
-                <Tooltip content="Open again: it goes to whoever drives the task now, and holds the merge.">
+                <Tooltip content={`Open again: it goes to whoever drives the task now, and holds ${heldThing(holds)}.`}>
                   <Button size="sm" variant="quiet" leadingIcon="retry" disabled={busy !== null} onClick={() => void act("reopen", onReopen)} data-testid="fb-reopen">
                     {busy === "reopen" ? "Reopening…" : "Reopen"}
                   </Button>

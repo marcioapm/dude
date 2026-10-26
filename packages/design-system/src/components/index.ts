@@ -36,7 +36,7 @@ export {
   SubmitFeedbackDialog, feedbackHolds, feedbackStatusSpec, lineWords,
 } from "./FeedbackCard.tsx";
 export type {
-  CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,
+  CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackHolds, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,
 } from "./FeedbackCard.tsx";
 export type { DiffViewProps, DiffFileProps, FileDiff, DiffHunk, DiffLine, DiffLineKind, FileChangeKind } from "./DiffView.tsx";
 export { LogStream } from "./LogStream.tsx";

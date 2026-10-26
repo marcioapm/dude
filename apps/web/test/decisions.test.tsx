@@ -88,9 +88,9 @@ class DecisionsClient extends FixtureClient {
 
 async function page(client: DecisionsClient, opened: string[] = []) {
   const { container, unmount } = await mount(
-    <PeopleProvider client={client}>
+    <ToastProvider><PeopleProvider client={client}>
       <TaskScreen client={client} taskId={TASK_ID} onOpenRun={(id) => opened.push(id)} onBack={() => {}} />
-    </PeopleProvider>,
+    </PeopleProvider></ToastProvider>,
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");
