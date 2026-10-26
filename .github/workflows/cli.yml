@@ -11,6 +11,7 @@ on:
       - apps/control-plane/test/cli-*.test.ts
       - orchestrator/go.mod
       - orchestrator/go.sum
+      - scripts/install-cli.sh
       - .github/workflows/cli.yml
   push:
     branches: [main]
@@ -21,6 +22,7 @@ on:
       - apps/control-plane/test/cli-*.test.ts
       - orchestrator/go.mod
       - orchestrator/go.sum
+      - scripts/install-cli.sh
       - .github/workflows/cli.yml
 
 permissions:
@@ -58,6 +60,9 @@ jobs:
       - name: go test
         working-directory: orchestrator
         run: go test -count=1 ./cmd/dude-cli/...
+
+      - name: shellcheck the install script
+        run: shellcheck -s sh scripts/install-cli.sh
 
       - name: The CLI's routes and bodies against the API
         run: bun test ./apps/control-plane/test/cli-routes.test.ts ./apps/control-plane/test/cli-bodies.test.ts
