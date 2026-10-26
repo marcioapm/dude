@@ -144,8 +144,11 @@ func redactor(ctx context.Context, tx pgx.Tx, proxyKey string, taskID *string, h
 		list = append(list, redact.Secret{Name: name, Value: value})
 	}
 	if taskID != nil {
+		// Not secrets_in_force: an organisation value the project overrides is
+		// redacted too, on purpose, since the task's Runs may predate the
+		// override. UNION drops a pair both levels hold with one value.
 		rows, err := tx.Query(ctx, `SELECT s.name, s.value FROM project_secrets s JOIN tasks t ON t.project_id = s.project_id WHERE t.id = $1
-			UNION ALL SELECT o.name, o.value FROM organization_secrets o JOIN tasks t ON t.organization_id = o.organization_id WHERE t.id = $1`, *taskID)
+			UNION SELECT o.name, o.value FROM organization_secrets o JOIN tasks t ON t.organization_id = o.organization_id WHERE t.id = $1`, *taskID)
 		if err != nil {
 			return nil, err
 		}

@@ -218,8 +218,10 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   (`organization_secrets`, migration 210) are the same one level up: each
   ticks its recipients for every project, may be ticked for none (then only
   automations that pick it get it), and a project secret of the same name
-  wins in that project. Every reader goes through `secrets_in_force(org,
-  project)`: phase Runs, previews, the round-resume checks. One redactor
+  wins in that project. Every reader that gives values goes through
+  `secrets_in_force(org, project)`: phase Runs, previews, the round-resume
+  checks. The judge's redactor reads both tables instead, so an overridden
+  organisation value is redacted too. One redactor
   (`internal/redact`) runs
   where agent text enters dude: `ledger.Append`, dude's tool calls,
   `run_diffs`, served text artifacts; and the work is scanned before lux
