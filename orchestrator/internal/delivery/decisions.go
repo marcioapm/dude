@@ -281,6 +281,11 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 				if released, err := w.choiceReleased(ctx, sc, st); err != nil || released {
 					return workflow.Result{Next: "openPullRequest", State: st}, err
 				}
+				if humanFeedback(sc) {
+					if res, fixing, err := w.feedbackAtGate(ctx, sc, st); fixing || err != nil {
+						return res, err
+					}
+				}
 				return w.parkAtGate(ctx, sc, st, false)
 			}
 		}
@@ -440,9 +445,10 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 // before its pull request for its owner.
 const ReasonReadyForReview = "Ready for your review"
 
-// atGate waits at a gate Deliver holds: the person's answer.
+// atGate waits at a gate Deliver holds: the person's answer, or the
+// people's feedback (feedbackAtGate).
 func atGate(st *State) workflow.Result {
-	return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}
+	return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision, SignalHumanFeedback}}
 }
 
 // Hold is where Deliver last held the delivery before its pull request:
@@ -496,6 +502,32 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 	st.Hold.CommitsSince = &n
 	return nil
 }
+
+// feedbackAtGate takes the people's feedback signalled to a hold Deliver
+// keeps before the pull request: with items open, the task goes back to a
+// fix with a fresh loop budget, as the reader's wait does (awaitRead), and
+// the round's review, simplify and test bring it back to the hold at its
+// new heads, which asks again (gateHeld compares heads). Handled already,
+// nothing starts.
+func (w *steps) feedbackAtGate(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
+	open, err := w.s.OpenFeedbackIDs(ctx, sc.OrganizationID, st)
+	if err != nil || len(open) == 0 {
+		return workflow.Result{}, false, err
+	}
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", ReasonFixingFeedback); err != nil {
+		return workflow.Result{}, false, err
+	}
+	st.Decision = nil
+	st.Decisions++
+	st.Retries++
+	st.Iteration, st.PendingRunIDs = 0, nil
+	res, err := w.next(ctx, sc, st, PointReviewed, "fix", feedbackOpenLine(feedbackBeforePR, len(open)))
+	return res, true, err
+}
+
+// ReasonFixingFeedback is the task's status reason while a fix of the
+// feedback its owner sent from the hold runs.
+const ReasonFixingFeedback = "fixing your feedback"
 
 // phaseStep is the step that creates a phase's Runs; a fix of pull request
 // feedback is the pull request's fix.

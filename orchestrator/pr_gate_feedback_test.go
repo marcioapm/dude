@@ -1,0 +1,146 @@
+package orchestrator_test
+
+// Feedback while Deliver holds a delivery before its pull request: the
+// owner's items start a fix round, which comes back to the hold at its new
+// heads; a signal whose items are handled starts nothing; and Open is
+// refused while an item is open.
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+)
+
+func (w *world) holdRound(task string) (round, commitsSince int) {
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE((state->'hold'->>'round')::int, 0),
+		COALESCE((state->'hold'->>'commitsSince')::int, -1) FROM workflow_runs WHERE task_id = $1`, task).Scan(&round, &commitsSince)
+	return round, commitsSince
+}
+
+// An item submitted at the hold, general or pinned on the preview, goes to
+// a fixer with the task running "fixing your feedback"; the fixer resolves
+// it, the round is reviewed again, and the hold comes back at the new heads
+// as round 2, which the owner opens.
+func TestFeedbackAtTheHoldStartsAFixRoundAndComesBack(t *testing.T) {
+	for _, kind := range []string{"general", "preview"} {
+		t.Run(kind, func(t *testing.T) {
+			w := newWorld(t)
+			ana := w.person("Ana")
+			task := w.atTheHold(ana)
+			var before map[string]string
+			_ = w.owner.QueryRow(context.Background(), `SELECT state->'heads' FROM workflow_runs WHERE task_id = $1`, task).Scan(&before)
+			fixesBefore := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+			ar := w.resolveAsItPublishes(task, "fbi_held", itsNewHead, nil)
+			var code int
+			var body map[string]any
+			if kind == "general" {
+				code, body = w.feedback(ana, task, "fbi_held", "Name the saved filter after its query.")
+			} else {
+				code, body = w.previewFeedback(ana, task, "fbi_held", "The Save button is cut off.", "")
+			}
+			if code != 201 || body["routedTo"] != "workflow" || body["waiting"] != nil {
+				t.Fatalf("submit at the hold: %d %v", code, body)
+			}
+			w.until("a fixer given the item", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_held' = ANY(feedback_item_ids)`, task) > 0
+			})
+			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+				AND payload->>'status' = 'running' AND payload->>'reason' = $2`, task, delivery.ReasonFixingFeedback); n != 1 {
+				t.Errorf("%d moves to running for the owner's feedback", n)
+			}
+			w.until("back at the hold, round 2", func() bool { r, _ := w.holdRound(task); return r == 2 && w.heldBeforePR(task) })
+			if fixer, _, answer := ar.state(); fixer == "" || !strings.HasPrefix(answer, "200 ") {
+				t.Fatalf("the fixer's resolution: %s %s", fixer, answer)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'
+				AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND 'fbi_held' = ANY(feedback_item_ids))`, task); n == 0 {
+				t.Error("the fix round was not reviewed")
+			}
+			if w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task) <= fixesBefore {
+				t.Error("no fix ran")
+			}
+			if _, since := w.holdRound(task); since < 1 {
+				t.Errorf("%d commits since the first hold", since)
+			}
+			if len(w.gh.Pulls()) != 0 || w.readyForReview(task) != 2 {
+				t.Fatalf("%d pull requests, %d moves to ready for review", len(w.gh.Pulls()), w.readyForReview(task))
+			}
+			if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+				t.Fatalf("Open at round 2: %d %v", status, out)
+			}
+			w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			var at map[string]string
+			_ = w.owner.QueryRow(context.Background(), `SELECT state->'gateAt'->'heads' FROM workflow_runs WHERE task_id = $1`, task).Scan(&at)
+			if at["target"] == "" || at["target"] == before["target"] {
+				t.Errorf("opened at %v, want the new heads, not %v", at, before)
+			}
+		})
+	}
+}
+
+// A feedback signal whose items are handled already starts nothing: the
+// delivery stays held. An item open with no signal refuses the owner's
+// Open with how many are open.
+func TestAtTheHoldHandledFeedbackStartsNothingAndOpenFeedbackRefusesOpen(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	task := w.atTheHold(ana)
+	fixes := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	var wf string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM workflow_runs WHERE task_id = $1`, task).Scan(&wf); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := w.runtime.Signal(ctx, w.org, wf, delivery.SignalHumanFeedback, map[string]any{"itemIds": []string{"fbi_gone"}}, "handled"); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n != fixes || !w.heldBeforePR(task) {
+		t.Fatalf("a handled signal: %d fixes (was %d), held %v", n, fixes, w.heldBeforePR(task))
+	}
+	mustExec(t, w.owner, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+		SELECT 'fbt_quiet', $1, $2, task_attempt($2), person_id, 'quiet' FROM api_keys WHERE id = $3`, w.org, task, ana)
+	for _, id := range []string{"fbi_q1", "fbi_q2"} {
+		mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind,
+				anchor, status, submitted_at)
+			SELECT $4, $1, $2, task_attempt($2), 'fbt_quiet', person_id, 'Quiet', 'general', '{"kind":"general"}', 'open', now()
+			FROM api_keys WHERE id = $3`, w.org, task, ana, id)
+	}
+	status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true})
+	e, _ := out["error"].(map[string]any)
+	if status != 409 || e["code"] != "feedback_open" || e["message"] != "2 feedback items still open" {
+		t.Fatalf("Open with two items open: %d %v", status, out)
+	}
+	for range 3 {
+		w.pump()
+	}
+	if len(w.gh.Pulls()) != 0 {
+		t.Fatal("a pull request opened past open feedback")
+	}
+}
+
+// Under the conductor the hold's feedback is the conductor's, as before: a
+// wake reason, and no fix the workflow starts on its own.
+func TestUnderTheConductorFeedbackAtTheGateWakesTheConductor(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.reachGate(task)
+	ana := w.person("Ana")
+	fixes := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	if code, body := w.feedback(ana, task, "fbi_cond", "Name the saved filter after its query."); code != 201 || body["routedTo"] != "conductor" {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	for range 4 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeFeedback); n != 1 {
+		t.Errorf("%d feedback wakes", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n != fixes {
+		t.Errorf("the workflow started a fix under the conductor")
+	}
+}
