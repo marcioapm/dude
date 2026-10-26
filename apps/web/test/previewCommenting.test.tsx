@@ -15,6 +15,7 @@ import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID, YOU, PEOPLE } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
+import { markPreviewArrival } from "../src/previewComment.ts";
 
 const WEB = "https://web-shop-1.preview.example.test";
 
@@ -324,6 +325,35 @@ test("the open preview hears dude's resolved theme in its session, and again whe
   expect(themes().at(-1)).toBe("dark");
   await act(async () => setPreference!("light"));
   await until(() => themes().at(-1) === "light" || null, "a session in the light theme");
+});
+
+test("a tab that arrived from the preview's Connect to dude adopts its opener on the task page and answers it; one that didn't, doesn't", async () => {
+  const own = Object.getOwnPropertyDescriptor(window, "opener");
+  const preview = { postMessage: mock((_m: unknown, _o: string) => {}), closed: false, focus() {} };
+  Object.defineProperty(window, "opener", { configurable: true, get: () => preview });
+  try {
+    for (const arrived of [false, true]) {
+      sessionStorage.clear();
+      if (arrived) markPreviewArrival(window, TASK_ID);
+      preview.postMessage.mockClear();
+      const c = await page(new PreviewClient([web()]), "servers");
+      await hello(preview, `${WEB}/cart`);
+      const sessions = () => preview.postMessage.mock.calls.filter((x) => (x[0] as { type: string }).type === "session");
+      if (arrived) {
+        await until(() => sessions().length > 0 || null, "the session for the adopted opener");
+        expect(sessions()[0]![1]).toBe(WEB);
+        await until(() => c.querySelector('[data-testid="commenting-notice"][data-state="open"]'), "the open notice");
+      } else {
+        await settle(50);
+        expect(sessions()).toEqual([]);
+      }
+      for (const u of mounted.splice(0)) await u();
+    }
+  } finally {
+    sessionStorage.clear();
+    if (own) Object.defineProperty(window, "opener", own);
+    else delete (window as { opener?: unknown }).opener;
+  }
 });
 
 function previewDraft(id: string, url: string): FeedbackItem {

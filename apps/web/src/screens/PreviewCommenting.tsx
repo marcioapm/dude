@@ -15,7 +15,7 @@ import type { ApiClient } from "../api/client.ts";
 import type { ServersState } from "../hooks/useServers.ts";
 import type { People } from "../people.tsx";
 import {
-  COMMENTING_UNAVAILABLE, PreviewCommenting, commentingOffer, previewOrigins, serverOf, showable,
+  COMMENTING_UNAVAILABLE, PreviewCommenting, arrivedFromPreview, commentingOffer, previewOrigins, serverOf, showable,
   type CommentingOffer, type CommentingView,
 } from "../previewComment.ts";
 import type { TaskFeedbackController } from "./FeedbackSection.tsx";
@@ -79,6 +79,7 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
     onSaved: (id) => latest.current.fb.flash(id),
     onOpenItem: (id) => latest.current.onOpenItem(id),
     onChange: setView,
+    openerArrived: () => arrivedFromPreview(window, taskId),
   }), [client, taskId]);
   useEffect(() => commenting.listen(), [commenting]);
   // The open page's pins and theme follow dude: a save, a submit, an agent's reply, the person switching light or dark.

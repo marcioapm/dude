@@ -242,6 +242,35 @@ export interface CommentingDeps {
 
 const PINS_KEY = "dude-preview-pins";
 
+const ARRIVAL_KEY = "dude-preview-connect";
+
+/**
+ * This tab came from a preview's Connect to dude and was sent to `taskId`:
+ * kept in the tab's sessionStorage, never the URL, so it outlives the tab's
+ * reload and its moves inside the app but can't be pasted. It only lets the
+ * task adopt this tab's own window.opener; the browser decides what that is.
+ */
+export function markPreviewArrival(win: Pick<Window, "sessionStorage">, taskId: string): void {
+  try {
+    win.sessionStorage.setItem(ARRIVAL_KEY, taskId);
+    arrivedFor = null;
+  } catch {
+    // No storage: the module's copy, which lasts until this tab reloads.
+    arrivedFor = taskId;
+  }
+}
+
+let arrivedFor: string | null = null;
+
+/** Whether this tab arrived at `taskId` from a preview's Connect to dude. */
+export function arrivedFromPreview(win: Pick<Window, "sessionStorage">, taskId: string): boolean {
+  try {
+    return win.sessionStorage.getItem(ARRIVAL_KEY) === taskId;
+  } catch {
+    return arrivedFor === taskId;
+  }
+}
+
 /** The windows one task keeps: the named one and those adopted beside it. */
 export const MAX_WINDOWS = 8;
 

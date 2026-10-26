@@ -96,4 +96,13 @@ describe("places", () => {
     expect(formatPlace({ view: "help", page: "a b", section: "c/d" })).toBe("#/help/a%20b/c%2Fd");
     expect(parsePlace("#/help/a%20b/c%2Fd")).toEqual({ view: "help", page: "a b", section: "c/d" });
   });
+
+  test("a preview's Connect to dude lands on its own place, apart from a chat provider's connect", () => {
+    expect(formatPlace({ view: "previewConnect" })).toBe("#/preview-connect");
+    expect(parsePlace("#/preview-connect")).toEqual({ view: "previewConnect" });
+    expect(parsePlace("#/o/acme/preview-connect")).toEqual({ view: "previewConnect" });
+    expect(parsePlace(formatPlace({ view: "previewConnect" }))).toEqual({ view: "previewConnect" });
+    expect(parsePlace("#/connect/slack?state=s")).toEqual({ view: "connect", provider: "slack", state: "s" });
+    expect(parsePlace("#/preview-connect/extra")).toBeNull();
+  });
 });

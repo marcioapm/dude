@@ -25,7 +25,7 @@ import { Reconnecting } from "./Reconnecting.tsx";
 import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "./hooks/useEventStream.ts";
 import { useVisibleInterval } from "./hooks/useVisibleInterval.ts";
 import { errorText } from "./hooks/useSave.tsx";
-import { formatPlace, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
+import { formatPlace, inOrganization, inTree, parsePlace, treeSelection, type Place } from "./place.ts";
 import { startPush } from "./push.ts";
 import { ArchiveEpicConfirm, DeleteEpicDialog, EpicDialog, epicRef, rowActions, type Intent } from "./screens/actions.tsx";
 import { NewProjectDialog } from "./screens/NewProjectDialog.tsx";
@@ -34,6 +34,7 @@ import { NotFound } from "./screens/NotFound.tsx";
 import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { ConnectScreen } from "./screens/ConnectScreen.tsx";
+import { PreviewConnectScreen } from "./screens/PreviewConnectScreen.tsx";
 import { EpicOrigin, OriginLead } from "./chatOrigin.tsx";
 
 /** A chat-born card's lead: defined once, so the memoised cards keep their props. */
@@ -492,6 +493,12 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "connect") {
     main = <ConnectScreen client={client} provider={place.provider} state={place.state} onSettings={() => go({ view: "mySettings" })}
       me={people.me ? { ...people.me, organisation: account?.current.name } : null} onSignOut={onSignOut} />;
+  } else if (place?.view === "previewConnect") {
+    // To the task in its organisation, in this tab (window.opener stays the preview), in place of this page.
+    main = <PreviewConnectScreen client={client} onFound={(found) => {
+      window.history.replaceState(null, "", inOrganization(found.organizationSlug, `#/task/${encodeURIComponent(found.taskId)}/servers`));
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }} />;
   } else if (place?.view === "help") {
     main = <HelpScreen client={client} page={place.page} section={place.section} onPage={(page) => go({ view: "help", page })}
       onSection={(page, section) => go({ view: "help", page, section })} />;
@@ -919,6 +926,8 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
       return "Open to everyone";
     case "connect":
       return "Connect";
+    case "previewConnect":
+      return "Connect a preview";
     case "projectSettings":
       return [projects?.find((p) => p.id === place.projectId)?.name, "Settings"].filter(Boolean).join(" · ");
     case "tree": {
