@@ -183,6 +183,22 @@ func (w *world) hiddenBlocker() (blocker, task string) {
 	return blocker, task
 }
 
+// mergeHidden merges hiddenBlocker's SEC-7 on a pull request of its own
+// project, through the status move that releases its dependants.
+func (w *world) mergeHidden(blocker string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE tasks SET status = 'review' WHERE id = $1`, blocker)
+	mustExec(w.t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
+			head_branch, base_branch, head_sha, title, state)
+		VALUES ('pr_sec_' || $1, $2, $3, $1, $4, 77, 'u', 'h', 'main', 's', 't', 'merged')`, blocker, w.org, "prj_sec_"+w.org, "repo_sec_"+w.org)
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		_, err := delivery.SetTaskStatusTx(context.Background(), tx, w.org, "prj_sec_"+w.org, blocker, "", "done", "pull requests merged")
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
 // A task from chat blocked by a task in another project hidden from that
 // chat is still refused its start, but its conductor is not told the
 // hidden task's key or status.
@@ -218,16 +234,7 @@ func TestAHiddenBlockersMergeIsNotNamedToWhatItReleases(t *testing.T) {
 	w.blocks(blocker, task)
 	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role, base_refs)
 		VALUES ('run_c_'||$1, $2, $3, $1, 1, 'paused', 'agent', 'conductor', '{}')`, task, w.org, w.project)
-	mustExec(t, w.owner, `UPDATE tasks SET status = 'review' WHERE id = $1`, blocker)
-	mustExec(t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
-			head_branch, base_branch, head_sha, title, state)
-		VALUES ('pr_sec_' || $1, $2, $3, $1, $4, 77, 'u', 'h', 'main', 's', 't', 'merged')`, blocker, w.org, "prj_sec_"+w.org, "repo_sec_"+w.org)
-	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-		_, err := delivery.SetTaskStatusTx(context.Background(), tx, w.org, "prj_sec_"+w.org, blocker, "", "done", "pull requests merged")
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	w.mergeHidden(blocker)
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.unblocked' AND payload->>'by' = 'SEC-7'`, task); n != 1 {
 		t.Fatalf("the hidden blocker's merge did not release the task: %d task.unblocked", n)
 	}
@@ -238,6 +245,33 @@ func TestAHiddenBlockersMergeIsNotNamedToWhatItReleases(t *testing.T) {
 	notice := w.str(`SELECT payload::text FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'unblocked'`, task)
 	if !strings.Contains(notice, "SEC-7 merged — "+w.keyOf(task)+" can start.") {
 		t.Fatalf("the Chat notice, read by people only, does not name the merged task: %s", notice)
+	}
+}
+
+// A start when unblocked with Talk it through, released by the merge of a
+// task in a project hidden from its chat, opens its conductor without the
+// merged task's key; the auto_started notice, for people, names it.
+func TestAHiddenBlockersMergeIsNotNamedInTheTalkItStarts(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("conductor", "fake/scripted")
+	blocker, task := w.hiddenBlocker()
+	w.blocks(blocker, task)
+	w.autoStart(task, "talk")
+	w.mergeHidden(blocker)
+	if w.fireAutoStarts() != 1 {
+		t.Fatal("the worker took no request")
+	}
+	run := w.str(`SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor'`, task)
+	opening := w.str(`SELECT payload->>'text' FROM events WHERE run_id = $1 AND event_type = 'chat.message' ORDER BY cursor LIMIT 1`, run)
+	if !strings.Contains(opening, "nothing was in front of it, and a task in a project hidden from slack merged.") || strings.Contains(opening, "SEC") {
+		t.Fatalf("the conductor's opening: %q", opening)
+	}
+	if prompt := w.str(`SELECT prompt FROM runs WHERE id = $1`, run); strings.Contains(prompt, "SEC-7") {
+		t.Fatalf("the conductor's briefing names the hidden task: %q", prompt)
+	}
+	notice := w.str(`SELECT payload->>'text' FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'auto_started'`, task)
+	if !strings.HasPrefix(notice, "SEC-7 merged — "+w.keyOf(task)+" started (") {
+		t.Fatalf("the auto_started notice, read by people only: %q", notice)
 	}
 }
 
