@@ -460,7 +460,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
           <Tab value="runs">Runs</Tab>
         </TabList>
         <TabPanel value="settings">
-          <AutomationSettings client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} onTry={() => setRunning(true)} />
+          <AutomationSettings key={a.id} client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} onTry={() => setRunning(true)} />
         </TabPanel>
         <TabPanel value="runs">
           {place.runId ? <RunDetail client={client} a={a} runId={place.runId} />
@@ -476,6 +476,8 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
   );
 }
 
+const SECRETS_LOADING = "The project's secrets are still loading; save again in a moment.";
+
 function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: {
   client: ApiClient;
   a: Automation;
@@ -488,8 +490,15 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   const [subs, setSubs] = useState<EventSubscriptions | null>(null);
   const [groups, setGroups] = useState<Array<{ project: string; repos: string[] }>>([]);
   const { busy, problem, save } = useSave();
-  // The project's own secret names, once AutomationSecrets has read them: a save resolves picks against them.
-  const [projectNames, setProjectNames] = useState<readonly string[]>([]);
+  // A project's own secrets, null until read: a save resolves picks against their names, so it waits for them.
+  const [project, setProject] = useState<ProjectSecret[] | null>(a.projectId ? null : []);
+  useEffect(() => {
+    if (!a.projectId) return;
+    let live = true;
+    client.projectSecrets(a.projectId).then((r) => live && setProject(r.secrets), () => live && setProject([]));
+    return () => { live = false; };
+  }, [client, a.projectId]);
+  const picksInForce = (refs: SecretRef[]) => project ? secretPicksInForce(refs, project.map((s) => s.name)) : null;
   useEffect(() => { setForm(inputOf(a)); }, [a]);
   useEffect(() => {
     if (form.trigger.kind === "github") client.eventSubscriptions().then(setSubs, () => setSubs(null));
@@ -514,13 +523,19 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   }, []);
   // Saving the prompt or brief saves the automation with it, so each save is a version in its history.
   const saveText = async (agent: AutomationInput["agent"]) => {
-    const next = { ...form, agent, secrets: secretPicksInForce(form.secrets, projectNames) };
+    const secrets = picksInForce(form.secrets);
+    if (!secrets) throw new Error(SECRETS_LOADING);
+    const next = { ...form, agent, secrets };
     const wrong = automationProblem(next, scope);
     if (wrong) throw new Error(wrong.message);
     onSaved(await client.updateAutomation(a.id, next));
   };
   return (
-    <form className="settingsForm" onSubmit={(e) => { e.preventDefault(); void save(() => client.updateAutomation(a.id, { ...form, secrets: secretPicksInForce(form.secrets, projectNames) }).then(onSaved), undefined, "Automation saved"); }}>
+    <form className="settingsForm" onSubmit={(e) => {
+      e.preventDefault();
+      const secrets = picksInForce(form.secrets);
+      if (secrets) void save(() => client.updateAutomation(a.id, { ...form, secrets }).then(onSaved), undefined, "Automation saved");
+    }}>
       <fieldset disabled={ro} className="plainFieldset">
         <SettingsSection title="Trigger">
           <SettingRow label="Runs on">
@@ -684,7 +699,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
         ) : null}
 
         {a.kind !== "webhook" ? <AutomationSecrets client={client} a={a} orgName={orgName} preset={preset?.preset.role ?? null} ro={ro}
-          chosen={form.secrets} onChange={(refs) => set("secrets", refs)} onProjectNames={setProjectNames} /> : null}
+          project={project} chosen={form.secrets} onChange={(refs) => set("secrets", refs)} /> : null}
         <SettingsSection title="Notifications">
           <SettingRow label="When a run fails" help={a.ownerLeftAt ? `Every one of ${orgName}'s admins is told.` : "Its owner is told."}>
             <Switch checked={form.notifyOnFailure} label={form.notifyOnFailure ? "Notify" : "Don't notify"} disabled={ro} onCheckedChange={(v) => set("notifyOnFailure", v)} />
@@ -703,7 +718,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
         <div className="automationSave">
           {invalid ? <Callout tone="attention">{invalid.message}</Callout> : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
-          <Button type="submit" variant="primary" disabled={busy || !dirty || Boolean(invalid)}>Save</Button>
+          <Button type="submit" variant="primary" disabled={busy || !dirty || Boolean(invalid)} loading={project === null}>Save</Button>
         </div>
       )}
     </form>
@@ -749,16 +764,11 @@ function ProjectReposRow({ client, projectId, ro, value, onChange }: {
   );
 }
 
-function AutomationSecrets({ client, a, orgName, preset, ro, chosen, onChange, onProjectNames }: {
+function AutomationSecrets({ client, a, orgName, preset, ro, project, chosen, onChange }: {
   client: ApiClient; a: Automation; orgName: string; preset: PresetRole | null; ro: boolean;
-  chosen: SecretRef[]; onChange: (refs: SecretRef[]) => void; onProjectNames: (names: readonly string[]) => void;
+  project: ProjectSecret[] | null; chosen: SecretRef[]; onChange: (refs: SecretRef[]) => void;
 }) {
   const org = useOrgSecrets(client);
-  const [project, setProject] = useState<ProjectSecret[] | null>(a.projectId ? null : []);
-  useEffect(() => {
-    if (a.projectId) client.projectSecrets(a.projectId).then((r) => setProject(r.secrets), () => setProject([]));
-  }, [client, a.projectId]);
-  useEffect(() => { onProjectNames((project ?? []).map((s) => s.name)); }, [project, onProjectNames]);
   const projectName = a.projectName ?? "the project";
   return (
     <SettingsSection title="Secrets">

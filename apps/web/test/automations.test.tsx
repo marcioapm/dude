@@ -488,6 +488,36 @@ describe("secrets and webhook wording", () => {
     expect(client.fixtureAutomation("aut_investigate").secrets.map((r) => r.name)).not.toContain("GH_TOKEN");
   });
 
+  test("Save waits for the project's secrets; then an overridden organisation pick is sent as the project's", async () => {
+    const client = new FixtureClient("a");
+    // web-console holds its own SEED_LLM_KEY; this pick predates it.
+    (client.fixtureAutomation("aut_investigate") as { secrets: unknown }).secrets = [{ source: "organization", name: "SEED_LLM_KEY" }];
+    let release = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const read = client.projectSecrets.bind(client);
+    client.projectSecrets = async () => { await gate; return read(); };
+    const sent: unknown[] = [];
+    const update = client.updateAutomation.bind(client);
+    client.updateAutomation = (id, input) => { sent.push(input.secrets); return update(id, input); };
+    const c = await page(client, "aut_investigate");
+    const notify = await until(() => [...c.querySelectorAll<HTMLElement>("[role=switch]")]
+      .find((s) => s.closest("label")?.textContent === "Notify"), "the failure switch");
+    await click(notify);
+    const submit = c.querySelector<HTMLButtonElement>("button[type=submit]")!;
+    expect(submit.disabled).toBe(true);
+    expect(submit.getAttribute("aria-busy")).toBe("true");
+    await click(submit);
+    await settle(120);
+    expect(sent).toEqual([]);
+
+    await act(async () => release());
+    await until(() => c.querySelector("[data-testid=secret-picker]"), "the picker");
+    expect(submit.disabled).toBe(false);
+    await click(submit);
+    await until(() => (sent.length ? sent : null), "the save");
+    expect(sent).toEqual([[{ source: "project", name: "SEED_LLM_KEY" }]]);
+  });
+
   test("one of dude's agents shows what its role gets, read-only; the Investigator gets none", async () => {
     const client = new FixtureClient("a");
     // A project secret ticked for Tester joins the line, after the organisation's.
