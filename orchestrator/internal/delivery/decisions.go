@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -145,7 +146,7 @@ var pointLabel = func() map[string]string {
 // deciding as the step entered the pull request gate leaves it required.
 func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, point, step, line string) (workflow.Result, error) {
 	if st.conducted() && point == PointBeforePR {
-		st.GateRequired = true
+		st.GateRequired, st.ChoiceGate = true, false
 	}
 	st.Routed = &Routed{Point: point, Policy: step, Next: step, Line: line}
 	return workflow.Result{Next: step, State: st}, nil
@@ -230,7 +231,7 @@ func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *
 	st.Decision = &Pending{Point: point, Policy: policy,
 		Adopted: st.Source != nil && st.HeadRunID == "" && (point == PointStart || point == PointImplemented)}
 	if point == PointBeforePR {
-		st.GateRequired = true
+		st.GateRequired, st.ChoiceGate = true, false
 	}
 	note := decisionWaitingNote(point, line)
 	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
@@ -275,6 +276,11 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 				return workflow.Result{}, err
 			}
 			if !ok {
+				// The task's Ask me first, changed since it held: the
+				// opening step reads the choice again.
+				if released, err := w.choiceReleased(ctx, sc, st); err != nil || released {
+					return workflow.Result{Next: "openPullRequest", State: st}, err
+				}
 				return w.parkAtGate(ctx, sc, st, false)
 			}
 		}
@@ -399,28 +405,96 @@ func AuthorizeGateTx(ctx context.Context, tx pgx.Tx, wfID string, st *State, dra
 	return err
 }
 
-// parkAtGate parks a delivery Deliver decides at the pull request gate the
-// conductor entered, asking the person, until they answer Open or Draft or
-// confirm the opening at a hand-back. entering: it parks there now, which
-// is recorded once.
+// parkAtGate parks a delivery Deliver decides at the pull request gate —
+// one the conductor entered, an adopted branch's, or the task's Ask me
+// first — asking the person, until they answer Open or Draft or confirm the
+// opening at a hand-back. It also waits on the people's feedback, which
+// sends the work to a fix (feedbackAtGate). entering: it parks there now,
+// which is recorded once, with the heads it is shown at (State.Hold).
 func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *State, entering bool) (workflow.Result, error) {
 	st.Decision = &Pending{Point: PointBeforePR, Policy: "openPullRequest"}
 	note := "Deliver waits for the person's Open or Draft before it opens the pull request."
+	if entering {
+		if err := w.holdAt(ctx, sc, st); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		if err := askGateTx(ctx, tx, sc.OrganizationID, st); err != nil || !entering {
 			return err
 		}
 		return emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": PointBeforePR,
-			"policy": "openPullRequest", "actions": []string{}, "phases": []string{}, "note": note})
+			"policy": "openPullRequest", "actions": []string{}, "phases": []string{}, "note": note, "round": st.Hold.Round})
 	}); err != nil {
 		return workflow.Result{}, err
 	}
-	if st.adoptedBranch() && !st.conducted() {
-		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", "Open or Draft the pull request"); err != nil {
+	if (st.adoptedBranch() || st.ChoiceGate) && !st.conducted() {
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", ReasonReadyForReview); err != nil {
 			return workflow.Result{}, err
 		}
 	}
-	return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}, nil
+	return atGate(st), nil
+}
+
+// ReasonReadyForReview is the task's status reason while Deliver holds it
+// before its pull request for its owner.
+const ReasonReadyForReview = "Ready for your review"
+
+// atGate waits at a gate Deliver holds: the person's answer.
+func atGate(st *State) workflow.Result {
+	return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}
+}
+
+// Hold is where Deliver last held the delivery before its pull request:
+// the round (1, then one more after each fix of the people's feedback), the
+// heads it is shown at, and the heads the round before was shown at, with
+// the commits between them in each repository GitHub could compare.
+type Hold struct {
+	Round        int               `json:"round"`
+	Heads        map[string]string `json:"heads"`
+	Since        map[string]string `json:"since,omitempty"`
+	CommitsSince *int              `json:"commitsSince,omitempty"`
+}
+
+// holdAt records the hold at st's heads: a new round when they moved since
+// the last one.
+func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) error {
+	heads := nonNilMap(st.Heads)
+	if st.Hold != nil && maps.Equal(st.Hold.Heads, heads) {
+		return nil
+	}
+	if st.Hold == nil {
+		st.Hold = &Hold{Round: 1, Heads: maps.Clone(heads)}
+		return nil
+	}
+	prev := st.Hold.Heads
+	st.Hold = &Hold{Round: st.Hold.Round + 1, Heads: maps.Clone(heads), Since: prev}
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil || gh == nil {
+		return nil
+	}
+	var repos []Repository
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		repos, err = TaskRepositories(ctx, tx, st.TaskID)
+		return err
+	}); err != nil {
+		return err
+	}
+	n := 0
+	for _, repo := range repos {
+		from, to := prev[repo.Name], heads[repo.Name]
+		if from == "" || to == "" || from == to {
+			continue
+		}
+		cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), from, to)
+		if err != nil {
+			// Not measured: the panel says nothing of the count.
+			return nil
+		}
+		n += cmp.AheadBy
+	}
+	st.Hold.CommitsSince = &n
+	return nil
 }
 
 // phaseStep is the step that creates a phase's Runs; a fix of pull request

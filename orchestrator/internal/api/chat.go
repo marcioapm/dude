@@ -372,6 +372,15 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 			return err
 		}
 		handedBack := body.Decider == delivery.DeciderPolicy
+		if handedBack && d.AtGate() && body.OpenPullRequest && d.State.Decider != delivery.DeciderConductor {
+			// Deliver's own hold: the people's open feedback goes to a fixer
+			// first, as the opening step would send it.
+			if n, err := delivery.BlockingFeedbackTx(r.Context(), tx, taskID, d.State.Attempt); err != nil {
+				return err
+			} else if n > 0 {
+				return fail(http.StatusConflict, "feedback_open", "%s", delivery.FeedbackStillOpenText(n))
+			}
+		}
 		if handedBack && d.AtGate() {
 			// Handed back at the gate, Deliver opens the pull request at once:
 			// only on the person's Open or Draft, or their confirmation,

@@ -193,6 +193,13 @@ type State struct {
 	// opening needs an authorization at the current heads (gateHeld), or
 	// an Open or Draft at them, whoever decides by then.
 	GateRequired bool `json:"gateRequired,omitempty"`
+	// The gate is required because the task's choice before its pull
+	// request was Ask me first when Deliver reached it (PullRequestChoiceTx):
+	// a change of the choice while held releases it (choiceReleased).
+	ChoiceGate bool `json:"choiceGate,omitempty"`
+	// Where Deliver last held the delivery before its pull request, for the
+	// person reading it: the round and the heads it was shown at.
+	Hold *Hold `json:"hold,omitempty"`
 	// Authorization heads and draft mode, owned by the row. GateOpened and
 	// Draft are latched and outlive a head change; gateHeld checks these heads.
 	GateAt *GateAt `json:"gateAt,omitempty"`
@@ -1422,7 +1429,7 @@ func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State
 	}
 	// A person's branch is never published as a pull request without their Open or Draft.
 	if st.adoptedBranch() {
-		st.GateRequired = true
+		st.GateRequired, st.ChoiceGate = true, false
 	}
 	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", line)
 }
@@ -1565,6 +1572,21 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	// policy chose to open waits for the person's answer like any other, and
 	// one handed back after the conductor entered the gate opens only with
 	// the person's Open or Draft at the heads it opens.
+	if len(st.PullRequestIDs) == 0 && (!st.GateRequired || st.ChoiceGate) {
+		// The task's choice before its first pull request, read now: Ask me
+		// first holds as a gate the conductor entered does; Open as draft
+		// opens a draft. Never once the attempt has had a pull request.
+		choice, err := w.s.FirstPullRequestChoice(ctx, sc.OrganizationID, st.TaskID)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if choice != "" {
+			st.GateRequired, st.ChoiceGate = choice == PullRequestAsk, choice == PullRequestAsk
+			if !st.GateRequired {
+				st.Draft = choice == PullRequestDraft
+			}
+		}
+	}
 	if len(st.PullRequestIDs) == 0 && (st.conducted() || st.GateRequired) && !st.gateHeld() {
 		if st.conducted() {
 			return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")

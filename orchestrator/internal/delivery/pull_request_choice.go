@@ -9,6 +9,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // What Deliver does before a task's first pull request: the task's own
@@ -54,11 +55,11 @@ func PullRequestChoiceTx(ctx context.Context, tx pgx.Tx, taskID string) (string,
 }
 
 // FirstPullRequestChoice is the task's choice before its pull request, as
-// the step that opens it reads it: open once the current attempt has had a
+// the step that opens it reads it: "" once the current attempt has had a
 // pull request, whatever the choice says, so only the first opening is
 // held or made a draft by it.
 func (s *Store) FirstPullRequestChoice(ctx context.Context, org, taskID string) (string, error) {
-	choice := PullRequestOpen
+	choice := ""
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		opened, err := PullRequestOpenedTx(ctx, tx, taskID)
 		if err != nil || opened {
@@ -68,6 +69,38 @@ func (s *Store) FirstPullRequestChoice(ctx context.Context, org, taskID string) 
 		return err
 	})
 	return choice, err
+}
+
+// choiceReleased says a hold the task's Ask me first made is no longer
+// asked for: its choice changed since. It drops the hold's decision; the
+// opening step reads the choice again.
+func (w *steps) choiceReleased(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
+	if !st.ChoiceGate {
+		return false, nil
+	}
+	choice, err := w.s.FirstPullRequestChoice(ctx, sc.OrganizationID, st.TaskID)
+	if err != nil || choice == PullRequestAsk || choice == "" {
+		return false, err
+	}
+	st.Decision = nil
+	st.Decisions++
+	st.GateRequired, st.ChoiceGate = false, false
+	return true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "the owner changed what happens before the pull request")
+}
+
+// FeedbackStillOpenText is why the opening is refused at the hold while
+// the people's feedback is open.
+func FeedbackStillOpenText(n int) string {
+	if n == 1 {
+		return "1 feedback item still open"
+	}
+	return fmt.Sprintf("%d feedback items still open", n)
+}
+
+// HeldByChoice says the task's delivery is held before its pull request by
+// its Ask me first, under Deliver: a change of the choice wakes it.
+func (d *Delivery) HeldByChoice() bool {
+	return d != nil && d.AtGate() && d.State.ChoiceGate && !d.State.conducted()
 }
 
 // ChoiceRefusal is a change of the task's choice that is not made: its

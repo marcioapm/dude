@@ -33,14 +33,28 @@ func (s *Server) setPullRequestChoice(w http.ResponseWriter, r *http.Request, or
 	}
 	p := principalOf(r)
 	var changed bool
+	var wake string
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		var err error
 		changed, err = delivery.SetPullRequestChoiceTx(r.Context(), tx, org, taskID, choice,
 			delivery.Actor{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})
-		return choiceFailure(err)
+		if err != nil || !changed {
+			return choiceFailure(err)
+		}
+		// Held by its Ask me first: the hold reads the choice again.
+		d, err := delivery.ReadDelivery(r.Context(), tx, taskID)
+		if err == nil && d.HeldByChoice() {
+			wake = d.WorkflowID
+		}
+		return err
 	})
 	if err != nil {
 		return err
+	}
+	if wake != "" {
+		if err := s.Workflow.Signal(r.Context(), org, wake, delivery.SignalConductorDecision, map[string]any{"action": "choice"}, ""); err != nil {
+			return err
+		}
 	}
 	s.kick()
 	var out any

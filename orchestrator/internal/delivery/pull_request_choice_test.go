@@ -78,12 +78,21 @@ func TestATasksPullRequestChoiceIsItsOwnersUntilAPullRequestOpens(t *testing.T) 
 	if err := set("per_sam", ""); err != nil || choice() != delivery.PullRequestDraft {
 		t.Fatalf("back to the project's: %v, %q", err, choice())
 	}
+	store := &delivery.Store{DB: app}
+	if got, err := store.FirstPullRequestChoice(ctx, org, "wi_c"); err != nil || got != delivery.PullRequestDraft {
+		t.Fatalf("before any pull request the opening reads %q, %v", got, err)
+	}
 
 	exec(t, owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
 		VALUES ('pr_c', $1, 'prj_c', 'wi_c', 'repo_c', 1, 'https://x/1', 'b', 'main', 'h1', 'T', 'closed')`, org)
 	err := set("per_sam", "ask")
 	if r, _ := delivery.IsChoiceRefusal(err); r.Code != "pull_request_open" || r.Msg != delivery.PullRequestOpenText {
 		t.Fatalf("a change with a pull request on record: %v", err)
+	}
+	// Only the first opening reads the choice: a later one (another
+	// repository's, a re-open) opens as Deliver always has.
+	if got, err := store.FirstPullRequestChoice(ctx, org, "wi_c"); err != nil || got != "" {
+		t.Fatalf("with a pull request on record the opening reads %q, %v", got, err)
 	}
 }
 
