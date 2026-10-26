@@ -37,6 +37,11 @@ CREATE POLICY tenant_isolation ON organization_secrets
   WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE, DELETE ON organization_secrets TO dude_app;
 
+-- Organisation settings → Secrets lists, per name, the projects holding one
+-- of their own: under row-level security that read filters project_secrets
+-- by organisation and name, which its key (project_id, name) cannot serve.
+CREATE INDEX project_secrets_org_name_idx ON project_secrets (organization_id, name);
+
 -- The secrets in force for a project (pid NULL: the organisation alone):
 -- the project's own, then the organisation's whose name the project does
 -- not hold. Every reader that hands values to a Run, a preview or an
