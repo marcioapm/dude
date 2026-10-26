@@ -39,7 +39,8 @@ its own fallback.
    software-delivery system and must answer only
    `{"decision":"yes"|"no"|"unsure","confidence":<0..1>,"reasoning":"…"}`,
    then the question with the context under `## Context`; `max_tokens`
-   1024, temperature 0, the tier's effort and headers. No `response_format`:
+   1024, no temperature (the proxy answered 400 to one for Claude and GPT tiers
+   alike), the tier's effort and headers. No `response_format`:
    it is not carried across providers. The answer is read tolerantly: the
    first balanced `{…}` object (a Markdown fence and prose around it are
    skipped), valid only with a decision of yes, no or unsure and a

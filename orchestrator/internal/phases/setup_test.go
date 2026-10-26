@@ -30,12 +30,14 @@ func newSetupWorkspace(t *testing.T) *setupWorkspace {
 	w := &setupWorkspace{t: t, root: t.TempDir(), hooks: hooks}
 	home := t.TempDir()
 	runEnv := map[string]string{}
-	workloadGitConfig(runEnv, true)
-	runEnv["GIT_CONFIG_VALUE_1"] = include // DudeGitConfig, here
+	workloadGitConfig(runEnv)
 	w.env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"), "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@x",
 		"GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@x"}
 	for k, v := range runEnv {
+		if v == DudeGitConfig {
+			v = include
+		}
 		w.env = append(w.env, k+"="+v)
 	}
 	return w

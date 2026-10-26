@@ -414,6 +414,43 @@ func TestTheFakeRefusesMissingScopesAndChannelsTheBotIsNotIn(t *testing.T) {
 	}
 }
 
+// Only message methods send JSON; tokens are bearer-only for every call.
+func TestOnlyTheMessageMethodsSendJSON(t *testing.T) {
+	got := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		method := strings.TrimPrefix(r.URL.Path, "/api/")
+		got[method] = strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]
+		if strings.Contains(string(body), "xoxb-test") || r.Header.Get("Authorization") != "Bearer xoxb-test" {
+			t.Errorf("%s: the token is not only a bearer: auth %q, body %q", method, r.Header.Get("Authorization"), body)
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C1","name":"support","is_channel":true},"user":{"id":"U1","name":"m"},` +
+			`"messages":[],"members":[],"ts":"1.2","response_metadata":{"next_cursor":""}}`))
+	}))
+	t.Cleanup(srv.Close)
+	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
+	inst := chat.Installation{WorkspaceID: "T1", Token: "xoxb-test"}
+	ctx := context.Background()
+	p.Conversation(ctx, inst, "C1")
+	p.ListMembers(ctx, inst, "C1")
+	p.User(ctx, inst, "U1")
+	p.FetchThread(ctx, inst, "C1", "1.2", "")
+	p.PostReply(ctx, inst, "C1", "", chat.Reply{Text: "x"})
+	p.PostEphemeral(ctx, inst, "C1", "", "U1", chat.Reply{Text: "x"})
+	p.UpdateQuestion(ctx, inst, "C1", "1.2", chat.ExternalUser{}, "x")
+	p.React(ctx, inst, "C1", "1.2", chat.ReactionWorking)
+	p.React(ctx, inst, "C1", "1.2", chat.ReactionDone)
+	p.Revoke(ctx, inst)
+	const form, jsonBody = "application/x-www-form-urlencoded", "application/json"
+	for method, want := range map[string]string{"conversations.info": form, "conversations.members": form,
+		"conversations.replies": form, "users.info": form, "reactions.add": form, "reactions.remove": form, "auth.revoke": form,
+		"chat.postMessage": jsonBody, "chat.postEphemeral": jsonBody, "chat.update": jsonBody} {
+		if got[method] != want {
+			t.Errorf("%s sent as %q, want %q", method, got[method], want)
+		}
+	}
+}
+
 // A Slack answer that echoes the bot token or the app's client secret
 // (in its error, or a non-JSON body) never carries it into dude's error,
 // which is logged and stored as the installation's last failure.

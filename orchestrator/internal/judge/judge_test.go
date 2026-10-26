@@ -162,8 +162,11 @@ func TestAJudgementIsOneCallRecorded(t *testing.T) {
 		t.Fatalf("%d requests", w.proxy.count())
 	}
 	body := w.proxy.bodies[0]
-	if body["model"] != "gpt-6-sol-mini" || body["reasoning_effort"] != "low" || body["max_tokens"] != float64(1024) || body["temperature"] != float64(0) {
+	if body["model"] != "gpt-6-sol-mini" || body["reasoning_effort"] != "low" || body["max_tokens"] != float64(1024) {
 		t.Errorf("body = %v", body)
+	}
+	if _, has := body["temperature"]; has {
+		t.Errorf("temperature sent: %v", body)
 	}
 	if _, has := body["response_format"]; has {
 		t.Errorf("response_format sent: %v", body)

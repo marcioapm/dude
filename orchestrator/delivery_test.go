@@ -1130,7 +1130,7 @@ func TestWhatDudeSendsLux(t *testing.T) {
 		t.Errorf("network = %+v, want egress to the model provider and Exa's search only", spec.Network)
 	}
 	// The tools it runs colour their output, which the chat renders.
-	if spec.Env["FORCE_COLOR"] != "1" || spec.Env["TERM"] == "" || spec.Env["GIT_CONFIG_VALUE_0"] != "always" {
+	if spec.Env["FORCE_COLOR"] != "1" || spec.Env["TERM"] == "" {
 		t.Errorf("env = %v, want colour forced", spec.Env)
 	}
 	if spec.Labels["dude.run"] == "" || spec.Labels["dude.task"] != wi {

@@ -1456,6 +1456,86 @@ func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparis
 	return cmp, err
 }
 
+// FileAt is path's content at ref (a commit), read raw from GitHub's
+// contents API. Content over limit bytes is an *Error with Refusal
+// RefusalTooLarge, read no further; a path absent at ref is GitHub's 404.
+// A redirect is followed as JobLogTail follows one, without the token
+// unless it stays on the same host.
+func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64) ([]byte, error) {
+	segments := strings.Split(path, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	target := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", g.cred.APIBaseURL, slug, strings.Join(segments, "/"), url.QueryEscape(ref))
+	token, err := g.Token(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	authorization := "Bearer " + token
+	if isAgentRead(ctx) {
+		if err := reserveAgentRequest(target, authorization, "core"); err != nil {
+			return nil, err
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Accept", "application/vnd.github.raw")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	client := *g.http
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return errors.New("too many redirects reading a file's content")
+		}
+		if next.Response != nil {
+			noteRate(target, authorization, next.Response.Header)
+		}
+		// A renamed repository's 301 stays on GitHub's host and needs the token.
+		if next.URL.Host != via[0].URL.Host {
+			next.Header.Del("Authorization")
+		}
+		if next.URL.User != nil || (via[0].URL.Scheme == "https" && next.URL.Scheme != "https") {
+			return errors.New("unsafe redirect reading a file's content")
+		}
+		return nil
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, &Unreachable{err}
+	}
+	defer res.Body.Close()
+	if res.Request != nil && res.Request.URL.Host == req.URL.Host {
+		noteRate(target, authorization, res.Header)
+	}
+	if res.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+		var e struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(data, &e)
+		if e.Message == "" {
+			e.Message = fmt.Sprintf("GET contents of %s at %s failed", path, ref)
+		}
+		refusal := &Error{Status: res.StatusCode, Message: e.Message}
+		markRateLimit(refusal, res.Header, "rate limit: ")
+		if Transient(refusal) {
+			refusal.RetryAfter = retryAfter(res.Header, time.Now())
+		}
+		return nil, refusal
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, &Unreachable{err}
+	}
+	if int64(len(data)) > limit {
+		return nil, &Error{Status: http.StatusRequestEntityTooLarge, Refusal: RefusalTooLarge,
+			Message: fmt.Sprintf("%s at %s is over %d bytes", path, ref, limit)}
+	}
+	return data, nil
+}
+
 // CompareCommits returns the ancestry-bearing compare response for phase
 // advancement. Ordinary callers use Compare and do not materialize commits.
 func (g *GitHub) CompareCommits(ctx context.Context, slug, base, head string) (CommitComparison, error) {

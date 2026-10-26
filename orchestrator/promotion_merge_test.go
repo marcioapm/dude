@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -65,6 +66,58 @@ func TestAPromotionMergesTheCandidateInOverABaseMergeThatLandedDuringItsCheck(t 
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.pushed' AND payload->>'to' = $2`, w.wi, m); n != 0 {
 		t.Errorf("the candidate's merge recorded as someone else's push %d times", n)
 	}
+}
+
+// notesLines is a ten-line NOTES.md whose first and last lines are given.
+func notesLines(first, last string) string {
+	return first + "\n2\n3\n4\n5\n6\n7\n8\n9\n" + last + "\n"
+}
+
+// newBothSidesWorld is newPRFixWorld whose task edited NOTES.md's last
+// line; the base's own edit of its first line is left to the test.
+func newBothSidesWorld(t *testing.T) *prFixWorld {
+	return newPRFixWorldAt(t, prAt{test: true, seed: map[string]string{"NOTES.md": notesLines("1", "10")},
+		edit: map[string]string{"NOTES.md": notesLines("1", "ten, the task's")}})
+}
+
+// Update branch, pressed while the fix is checked, merges a base that
+// edited NOTES.md, which the task edited too, in another hunk. GitHub's
+// merge is exactly git's merge of the file: promotion merges the checked
+// candidate in on top rather than stopping as pull_request_moved.
+func TestAPromotionMergesTheCandidateInOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
+	w := newBothSidesWorld(t)
+	var x, checked string
+	w.onTest = func() {
+		checked = w.candidate()
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"NOTES.md": notesLines("one, the base's", "10")})
+		x = w.gh.MergeInto(w.branch, "main", nil)
+	}
+	w.comment("Please rename the greeting.")
+	w.untilPromoted()
+	if r := w.escalationReason(w.wi); r != "" {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	if out, _ := exec.Command("git", "-C", w.gh.Repo, "show", x+":NOTES.md").Output(); string(out) != notesLines("one, the base's", "ten, the task's") {
+		t.Fatalf("the base merge's NOTES.md is %q, want both edits", out)
+	}
+	m := w.gh.SHA(w.branch)
+	if got := w.gh.Parents(m); checked == "" || !slices.Equal(got, []string{x, checked}) {
+		t.Fatalf("the pull request's head %.8s has parents %v, want the base merge %.8s then the checked candidate %.8s", m, got, x, checked)
+	}
+	w.headsAre(m)
+}
+
+// The same base merge, but its NOTES.md also carries a person's edit made
+// in GitHub's editor: not git's merge of the file, so promotion stops as
+// pull_request_moved and the branch keeps the merge.
+func TestAPromotionIsRefusedOverABaseMergeOfAFileBothSidesEditedCarryingAnEdit(t *testing.T) {
+	w := newBothSidesWorld(t)
+	var x string
+	w.onTest = func() {
+		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"NOTES.md": notesLines("one, the base's", "10")})
+		x = w.gh.MergeInto(w.branch, "main", map[string]string{"NOTES.md": notesLines("one, the base's", "ten, the task's") + "and a person's\n"})
+	}
+	w.refusedOver(&x)
 }
 
 // A person's own commit lands on the pull request's branch while the fix
