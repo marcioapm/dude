@@ -98,11 +98,12 @@ func messages(question, context string) []llm.Message {
 	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}
 }
 
-// call is the request a question on t is sent as.
+// call is the request a question on t is sent as. No temperature: the
+// proxy refuses one for the Claude models ("Bad request", seen live on
+// every tier), and a reasoning model ignores it anyway.
 func call(t Tier, question, context string) llm.Call {
-	temperature := 0.0
 	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question, context),
-		MaxTokens: maxTokens, Temperature: &temperature}
+		MaxTokens: maxTokens}
 }
 
 // LoadTier reads a tier in tx's organisation: ErrNoModel when it names

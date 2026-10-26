@@ -63,8 +63,8 @@ func (s Service) Structured(ctx context.Context, org string, ask StructuredAsk) 
 	if maxTok == 0 {
 		maxTok = 2048
 	}
-	temperature := 0.0
-	sent := llm.Call{Model: tier.Model, Effort: tier.Effort, Headers: tier.Headers, MaxTokens: maxTok, Temperature: &temperature,
+	// No temperature, as call (judge.go) says why.
+	sent := llm.Call{Model: tier.Model, Effort: tier.Effort, Headers: tier.Headers, MaxTokens: maxTok,
 		Timeout: s.Timeout, Messages: []llm.Message{{Role: "system", Content: ask.Instructions}, {Role: "user", Content: strings.TrimSpace(ask.Input)}}}
 	done, askErr := s.LLM.Complete(ctx, sent)
 	var out Structured
