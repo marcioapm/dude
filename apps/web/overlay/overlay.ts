@@ -40,6 +40,9 @@ export const HEARTBEAT_MS = 2_000;
 /** Beats waiting with no answer (10 s at HEARTBEAT_MS) before the panel offers Connect to dude again. */
 const WAITING_BEATS = 5;
 
+// The dude tab Connect to dude opened, by its window name, in this tab's sessionStorage (outlives a reload).
+const CONNECT_NAME_KEY = "dudeWindow";
+
 export const SAVE_UNANSWERED = "dude didn't answer: its tab may have reloaded or left this task. Copy your words, or try Save again.";
 
 type Connection = "waiting" | "connected" | "none" | "closed";
@@ -234,6 +237,8 @@ export class Overlay {
   // The dude tab Connect to dude opened, or the dude window that last answered with a session; and what the click came to.
   #connectWin: Window | null = null;
   #connect: "opened" | "blocked" | null = null;
+  // The tab this page's Connect to dude opened: only its window name is kept for a reload.
+  #connectOpened: Window | null = null;
   #stopped = false;
   readonly #firstPage: string | null;
   #at: { right: number; bottom: number } | null = null;
@@ -449,6 +454,9 @@ export class Overlay {
         this.#showPins = m.showPins !== false;
         this.#dudeTheme = m.theme ?? null;
         this.#dudeWindow = m.dudeWindow ?? null;
+        // Kept for this tab's next document: a reload's Connect to dude goes back to the tab Connect opened.
+        // A dude tab reached otherwise didn't come from this page, so its name is not one to send preview-connect to.
+        this.#session(CONNECT_NAME_KEY, e.source === this.#connectOpened ? m.dudeWindow ?? "" : "");
         this.#applyTheme();
         if (this.#unanswered) {
           // dude's tab is back: the box keeps its words, and Save is for it again.
@@ -983,15 +991,19 @@ export class Overlay {
   }
 
   /**
-   * Connect to dude, inside the click: opens dude's preview-connect page in
-   * a new tab, deliberately with an opener (no noopener), so that tab can
-   * hear this page's hello, find the task whose preview this is, and adopt
-   * this window. The heartbeat then says hello to it until it answers.
+   * Connect to dude, inside the click: opens dude's preview-connect page,
+   * deliberately with an opener (no noopener), so that tab can hear this
+   * page's hello, find the task whose preview this is, and adopt this
+   * window. In a new tab, or, after this tab reloaded, in the dude tab an
+   * earlier Connect opened (its opener is still this tab), found by the
+   * window name its session gave. The heartbeat then says hello to it
+   * until it answers.
    */
   #connectToDude(): void {
+    const stored = this.#session(CONNECT_NAME_KEY);
     let w: Window | null = null;
     try {
-      w = this.#win.open(`${this.#opts.dudeOrigin}/#/preview-connect`, "_blank");
+      w = this.#win.open(`${this.#opts.dudeOrigin}/#/preview-connect`, overlayWindowName(stored) ? stored : "_blank");
     } catch {
       w = null;
     }
@@ -999,6 +1011,7 @@ export class Overlay {
       this.#connect = "blocked";
     } else {
       this.#connectWin = w;
+      this.#connectOpened = w;
       this.#connect = "opened";
       this.#connection = "waiting";
       this.#waitBeats = 0;

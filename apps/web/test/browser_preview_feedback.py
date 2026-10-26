@@ -465,6 +465,35 @@ class CommentingOnAPreview(unittest.TestCase):
         expect(dude.get_by_test_id("fb-tray")).to_have_attribute("data-count", "1")
         self.assertEqual(self.errors, [])
 
+    def test_a_preview_reloaded_after_connect_to_dude_connects_again_through_the_same_dude_tab(self):
+        ctx, page = self.context()
+        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=20_000)
+        page.close()
+        pv = ctx.new_page()
+        self.watch(pv)
+        pv.goto(f"{PREVIEW}/")
+        wait_ov(pv, "ov-connect")
+        with ctx.expect_page() as opened:
+            ov_click(pv, "ov-connect")
+        dude = opened.value
+        self.watch(dude)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        dude.evaluate("() => { window.__sameDocument = true; window.__hashes = []; addEventListener('hashchange', () => __hashes.push(location.hash)); }")
+        # The reload: the preview's new document has no opener and no handle on dude's tab.
+        pv.reload()
+        wait_ov(pv, "ov-connect")
+        pages = len(ctx.pages)
+        ov_click(pv, "ov-connect")
+        # The same dude tab goes to preview-connect, then to the task, and the preview connects: no second dude tab.
+        dude.wait_for_function("() => window.__hashes?.some((h) => h.includes('preview-connect'))", timeout=10_000)
+        dude.wait_for_function(f"() => location.hash.includes('/task/{TASK}/')", timeout=20_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertEqual(len(ctx.pages), pages)
+        # A hash change in the app already loaded, not a new load.
+        self.assertTrue(dude.evaluate("() => window.__sameDocument === true"))
+        expect(dude.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
+        self.assertEqual(self.errors, [])
+
     def test_dude_reloading_reconnects_by_itself_and_a_draft_saves(self):
         ctx, page = self.context()
         self.watch(page)

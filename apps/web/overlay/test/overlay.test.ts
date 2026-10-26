@@ -996,6 +996,46 @@ test("Connect to dude opens dude's preview-connect page with an opener, says hel
   expect(count('[data-testid="ov-comment"]')).toBe(1);
 });
 
+test("reloaded after Connect to dude, Connect opens preview-connect in the dude tab it opened before, by the window name that tab's session gave", () => {
+  page(CART, false);
+  const dudeTab = fakeWin();
+  const opens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { opens.push(args); return dudeTab; };
+  boot();
+  tid("ov-connect")!.click();
+  fromDude({ ...sessionFor(), dudeWindow: "dude-tab-abc123" } as DudeToOverlay, DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  // The reload: a new document in the same tab, which keeps the tab's sessionStorage and has no opener.
+  const kept = win.sessionStorage.getItem("dude-overlay-dudeWindow");
+  overlay.stop();
+  page(CART, false);
+  if (kept !== null) win.sessionStorage.setItem("dude-overlay-dudeWindow", kept);
+  const reopens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { reopens.push(args); return dudeTab; };
+  boot();
+  tid("ov-connect")!.click();
+  expect(reopens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"]]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("Connect to dude opens a new tab when the stored name is not one dude gives, or came from a dude tab this page didn't open", () => {
+  page(CART, false);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "_self");
+  const opens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { opens.push(args); return fakeWin(); };
+  boot();
+  tid("ov-connect")!.click();
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
+  // A dude tab that opened this preview (reached as its opener) has its own opener: its name is not kept.
+  overlay.stop();
+  page(CART);
+  boot();
+  fromDude({ ...sessionFor(), dudeWindow: "dude-tab-opener" } as DudeToOverlay);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(win.sessionStorage.getItem("dude-overlay-dudeWindow") ?? "").toBe("");
+});
+
 test("a blocked pop-up is said in the panel, and Connect to dude can be pressed again", () => {
   page(CART, false);
   let next: FakeWin | null = null;
