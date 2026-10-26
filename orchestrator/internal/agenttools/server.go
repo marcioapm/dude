@@ -79,6 +79,8 @@ type Server struct {
 	// PublicURL is dude's https origin (auth.public_url), the base of a
 	// guide section's link; "", links are the web app's hash path alone.
 	PublicURL string
+	// Chat is the chat providers post_to_chat posts through.
+	Chat ChatProviders
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -121,6 +123,7 @@ type env struct {
 	syncBaseWait    time.Duration
 	syncPR          func(ctx context.Context, org, prID string) error
 	publicURL       string
+	chat            ChatProviders
 	prepared        any
 }
 
@@ -471,7 +474,7 @@ func (c Caller) agent() capabilities.Agent {
 func (c Caller) tools() []tool {
 	if c.AutomationID != "" {
 		create, _ := find("create_task", c.Role, c.grants)
-		return append(append([]tool{create}, githubReadTools...), automationCommentTool)
+		return append(append([]tool{create}, githubReadTools...), automationCommentTool, postToChatTool)
 	}
 	return granted(c.Role, c.grants)
 }
@@ -676,7 +679,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
-		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL}
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL, chat: s.Chat}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}
