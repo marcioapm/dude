@@ -574,10 +574,10 @@ var moreCommands = map[string]command{
 			return c.post("/v1/memory/memories", body)
 		}
 	}},
-	"memory archive": {"ID", "archive a memory (memory restore brings it back)", noFlags(func(c *cli, a []string) (any, error) {
+	"memory archive": {"ID", "archive a memory (memory unarchive brings it back)", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/memory/memories/"+esc(a[0])+"/archive", nil)
 	})},
-	"memory restore": {"ID", "restore an archived memory", noFlags(func(c *cli, a []string) (any, error) {
+	"memory unarchive": {"ID", "bring an archived memory back", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/memory/memories/"+esc(a[0])+"/restore", nil)
 	})},
 

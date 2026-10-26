@@ -305,7 +305,7 @@ var routeCases = []routeCase{
 	{[]string{"question", "answer", "q_1", "yes"}, "POST", "/v1/questions/q_1/answer", `{"text":"yes"}`},
 	{[]string{"memory", "show", "mem_1"}, "GET", "/v1/memory/memories/mem_1", ``},
 	{[]string{"memory", "archive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/archive", ``},
-	{[]string{"memory", "restore", "mem_1"}, "POST", "/v1/memory/memories/mem_1/restore", ``},
+	{[]string{"memory", "unarchive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/restore", ``},
 	{[]string{"task", "update", "wi_12", "--repo", "web"}, "PATCH", "/v1/tasks/wi_12", `{"repositories":[{"access":"write","id":"rep_web"}]}`},
 	{[]string{"task", "create", "ABS", "--title", "New", "--goal", "A goal long enough to save.", "--repo", "web", "--related", "ABS-12"}, "POST", "/v1/tasks/wi_13/relations", `{"kind":"related","task":"ABS-12"}`},
 }

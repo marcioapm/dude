@@ -198,7 +198,7 @@
   "POST /v1/memory/index/retry": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "POST /v1/memory/memories": "memory add",
   "POST /v1/memory/memories/:id/archive": "memory archive",
-  "POST /v1/memory/memories/:id/restore": "memory restore",
+  "POST /v1/memory/memories/:id/restore": "memory unarchive",
   "POST /v1/models/test": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "POST /v1/models/tiers": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "POST /v1/models/upgrade/dismiss": { "apiOnly": "browser-only: the web app's own plumbing (uploads, downloads, live streams, pickers, badges, push)" },

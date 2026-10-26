@@ -346,7 +346,7 @@ A brainstorm is an agent to think something through with; it writes no code.
 | `brainstorm answer ID QUESTION [TEXT] [--choice N]...` | Answers its question |
 | `brainstorm file ID PROPOSAL ITEM...` | Files a proposal's items (by index) as tasks |
 | `brainstorm invite ID PERSON... [--role chat\|read]` | Invites people |
-| `brainstorm rename ID TITLE`, `brainstorm retry ID`, `brainstorm archive ID`, `brainstorm unarchive ID` | Renames, retries, archives, restores |
+| `brainstorm rename ID TITLE`, `brainstorm retry ID`, `brainstorm archive ID`, `brainstorm unarchive ID` | Renames, retries, archives, unarchives |
 
 ### memory
 
@@ -356,7 +356,7 @@ A brainstorm is an agent to think something through with; it writes no code.
 | `memory list [--project P] [--text T] [--archived]` | Lists memories |
 | `memory show ID` | One in full |
 | `memory add --title T --content C [--kind fact\|procedure\|note] [--project P]` | Remembers something |
-| `memory archive ID`, `memory restore ID` | Archives or restores |
+| `memory archive ID`, `memory unarchive ID` | Archives or unarchives |
 
 ### automation
 
@@ -472,7 +472,7 @@ the same under the new name.
 | `brainstorm-archive` | `brainstorm archive` | `brainstorm-unarchive` | `brainstorm unarchive` |
 | `memory-search` | `memory search` | `memories` | `memory list` |
 | `memory` | `memory show` | `memory-add` | `memory add` |
-| `memory-archive` | `memory archive` | `memory-restore` | `memory restore` |
+| `memory-archive` | `memory archive` | `memory-restore` | `memory unarchive` |
 | `judgements` | `judgement list` | `judgement` | `judgement show` |
 | `automations` | `automation list` | `automation ID` | `automation show ID` |
 | `automation-create` | `automation create` | `automation-update` | `automation update` |
