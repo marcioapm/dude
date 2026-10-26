@@ -2989,8 +2989,11 @@ comments when opened there, never on the standalone Run page.
   narrow. Each checkbox is the mono name, with `…last4` as its
   description, and is named "GH_TOKEN (Acme)" so the two GH_TOKENs differ.
   A name the project also holds cannot be ticked under the organisation:
-  it is disabled, struck through and described by `OverriddenBy`. The
-  value records the source as well as the name.
+  it is disabled, struck through and described by `OverriddenBy`. An
+  organisation pick of such a name shows as the project's row ticked and
+  is passed back as the project's (`secretPicksInForce`): that is the
+  value its runs get, and unticking it removes the name. The value records
+  the source as well as the name.
 - **The secrets an agent session got are a `SecretsChip`** beside
   `MachineChip` in its header: the `lock` glyph and "N secrets" on the
   raised shade, at the chip height. Its tooltip lists the names only and

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
-import { GivenTo, GivenToFieldset, OverriddenBy, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE, type SecretPick } from "../src/components/Secrets.tsx";
+import { GivenTo, GivenToFieldset, OverriddenBy, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE, secretPicksInForce, type SecretPick } from "../src/components/Secrets.tsx";
 import { accessibleName, allByRole, byRole } from "./queries.ts";
 
 let root: Root | null = null;
@@ -78,8 +78,8 @@ describe("OverriddenBy", () => {
 describe("SecretPicker", () => {
   const ORG = [{ name: "GH_TOKEN", hint: "Q8e2" }, { name: "NPM_TOKEN", hint: "x0Lm" }];
   const PROJECT = { name: "platform", secrets: [{ name: "GH_TOKEN", hint: "pf91" }] };
-  function Harness({ seen, project, disabled }: { seen: SecretPick[][]; project?: typeof PROJECT; disabled?: boolean }) {
-    const [v, setV] = useState<SecretPick[]>([{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }]);
+  function Harness({ seen, project, disabled, initial }: { seen: SecretPick[][]; project?: typeof PROJECT; disabled?: boolean; initial?: SecretPick[] }) {
+    const [v, setV] = useState<SecretPick[]>(initial ?? [{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }]);
     return <SecretPicker orgName="Acme" org={ORG} project={project} value={v} disabled={disabled} onChange={(n) => { seen.push(n); setV(n); }} />;
   }
 
@@ -100,12 +100,28 @@ describe("SecretPicker", () => {
     expect(allByRole(el, "group").map(accessibleName)).toEqual(["Acme's", "platform's"]);
     const shadowed = byRole(el, "checkbox", "GH_TOKEN (Acme)");
     expect(shadowed.hasAttribute("disabled")).toBe(true);
-    // Never shown ticked, though the value still names it.
     expect(shadowed.getAttribute("aria-checked")).toBe("false");
     expect(el.querySelector("[data-overridden=true]")!.textContent).toContain("Overridden by platform's GH_TOKEN");
     expect(byRole(el, "checkbox", "GH_TOKEN (platform)").getAttribute("aria-checked")).toBe("true");
     await act(async () => byRole(el, "checkbox", "GH_TOKEN (platform)").click());
-    expect(seen.at(-1)).toEqual([{ source: "organization", name: "GH_TOKEN" }]);
+    expect(seen.at(-1)).toEqual([]);
+  });
+
+  test("an organisation pick the project overrides is the project's row ticked, saved as the project's, and unticking removes it", async () => {
+    const seen: SecretPick[][] = [];
+    const el = await mount(<Harness seen={seen} project={PROJECT} initial={[{ source: "organization", name: "GH_TOKEN" }]} />);
+    expect(byRole(el, "checkbox", "GH_TOKEN (Acme)").getAttribute("aria-checked")).toBe("false");
+    expect(byRole(el, "checkbox", "GH_TOKEN (platform)").getAttribute("aria-checked")).toBe("true");
+    await act(async () => byRole(el, "checkbox", "NPM_TOKEN (Acme)").click());
+    expect(seen.at(-1)).toEqual([{ source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }]);
+    await act(async () => byRole(el, "checkbox", "GH_TOKEN (platform)").click());
+    expect(seen.at(-1)).toEqual([{ source: "organization", name: "NPM_TOKEN" }]);
+  });
+
+  test("secretPicksInForce turns an overridden organisation pick into the project's, once", () => {
+    expect(secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }], ["GH_TOKEN"]))
+      .toEqual([{ source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }]);
+    expect(secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }], [])).toEqual([{ source: "organization", name: "GH_TOKEN" }]);
   });
 
   test("none yet, and disabled for a reader", async () => {

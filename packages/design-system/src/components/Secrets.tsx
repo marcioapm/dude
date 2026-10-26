@@ -87,15 +87,31 @@ export interface SecretPickerProps {
 const samePick = (a: SecretPick, b: SecretPick) => a.source === b.source && a.name === b.name;
 
 /**
+ * `value` as runs resolve it: an organisation pick whose name the project
+ * holds becomes the project's pick (its value is what the run gets), once.
+ */
+export function secretPicksInForce(value: readonly SecretPick[], projectNames: readonly string[]): SecretPick[] {
+  const own = new Set(projectNames);
+  const out: SecretPick[] = [];
+  for (const v of value) {
+    const pick: SecretPick = v.source === "organization" && own.has(v.name) ? { source: "project", name: v.name } : { source: v.source, name: v.name };
+    if (!out.some((o) => samePick(o, pick))) out.push(pick);
+  }
+  return out;
+}
+
+/**
  * An automation's secrets: checkbox groups "<org>'s" and, for a project
  * automation, "<project>'s", side by side and stacked when narrow. A name
  * the project also holds cannot be ticked under the organisation: it is
- * disabled, struck through and described by OverriddenBy.
+ * disabled, struck through and described by OverriddenBy. An organisation
+ * pick of such a name shows, and is passed back, as the project's.
  */
 export function SecretPicker({ orgName, org, project, value, onChange, disabled, "data-testid": testId }: SecretPickerProps) {
   const own = new Set((project?.secrets ?? []).map((s) => s.name));
+  const picks = secretPicksInForce(value, [...own]);
   const toggle = (pick: SecretPick, on: boolean) =>
-    onChange(on ? [...value.filter((v) => !samePick(v, pick)), pick] : value.filter((v) => !samePick(v, pick)));
+    onChange(on ? [...picks.filter((v) => !samePick(v, pick)), pick] : picks.filter((v) => !samePick(v, pick)));
   const group = (source: SecretSource, owner: string, list: readonly SecretChoice[]) => (
     <div role="group" aria-label={`${owner}'s`} className={styles["pickGroup"]} data-source={source}>
       <span className={styles["pickHead"]} aria-hidden="true">{owner}&rsquo;s</span>
@@ -107,7 +123,7 @@ export function SecretPicker({ orgName, org, project, value, onChange, disabled,
             <Checkbox
               label={<span className={cx("ds-mono", overridden && styles["struck"])}>{s.name}</span>}
               aria-label={`${s.name} (${owner})`}
-              checked={!overridden && value.some((v) => samePick(v, pick))}
+              checked={!overridden && picks.some((v) => samePick(v, pick))}
               disabled={disabled || overridden}
               description={overridden ? <OverriddenBy name={s.name} by={`${project!.name}'s`} /> : `…${s.hint}`}
               onCheckedChange={(on) => toggle(pick, on === true)} />

@@ -461,6 +461,33 @@ describe("secrets and webhook wording", () => {
     expect(client.fixtureAutomation("aut_investigate").secrets).toContainEqual({ source: "project", name: "DATABASE_SEED_URL" });
   });
 
+  test("an organisation pick the project then overrides saves as the project's; unticking it leaves no ref of that name", async () => {
+    const client = new FixtureClient("a");
+    const first = await page(client, "aut_investigate");
+    await until(() => first.querySelector("[data-testid=secret-picker]"), "the picker");
+    await click(box(first, "GH_TOKEN (Example)")!);
+    await click(first.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.some((r) => r.name === "GH_TOKEN") ? true : null, "saved the organisation's");
+    expect(client.fixtureAutomation("aut_investigate").secrets).toContainEqual({ source: "organization", name: "GH_TOKEN" });
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+
+    await client.addProjectSecret(PROJECT.id, "GH_TOKEN", "ghp_project_value", ["implementer"]);
+    const c = await page(client, "aut_investigate");
+    await until(() => c.querySelector("[data-testid=secret-picker]"), "the picker");
+    expect(box(c, "GH_TOKEN (Example)")!.getAttribute("aria-checked")).toBe("false");
+    expect(box(c, "GH_TOKEN (web-console)")!.getAttribute("aria-checked")).toBe("true");
+    await click(box(c, "DATABASE_SEED_URL (web-console)")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.some((r) => r.name === "DATABASE_SEED_URL") ? true : null, "saved");
+    expect(client.fixtureAutomation("aut_investigate").secrets.filter((r) => r.name === "GH_TOKEN")).toEqual([{ source: "project", name: "GH_TOKEN" }]);
+
+    await click(box(c, "GH_TOKEN (web-console)")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.some((r) => r.name === "GH_TOKEN") ? null : true, "saved without GH_TOKEN");
+    expect(client.fixtureAutomation("aut_investigate").secrets.map((r) => r.name)).not.toContain("GH_TOKEN");
+  });
+
   test("one of dude's agents shows what its role gets, read-only; the Investigator gets none", async () => {
     const client = new FixtureClient("a");
     // A project secret ticked for Tester joins the line, after the organisation's.

@@ -22,6 +22,7 @@ import {
   SchedulePicker,
   ScopeChip,
   SecretPicker,
+  secretPicksInForce,
   Segmented,
   SessionMark,
   SettingField,
@@ -488,6 +489,8 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   const [subs, setSubs] = useState<EventSubscriptions | null>(null);
   const [groups, setGroups] = useState<Array<{ project: string; repos: string[] }>>([]);
   const { busy, problem, save } = useSave();
+  // The project's own secret names, once AutomationSecrets has read them: a save resolves picks against them.
+  const [projectNames, setProjectNames] = useState<readonly string[]>([]);
   useEffect(() => { setForm(inputOf(a)); }, [a]);
   useEffect(() => {
     if (form.trigger.kind === "github") client.eventSubscriptions().then(setSubs, () => setSubs(null));
@@ -512,13 +515,13 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   }, []);
   // Saving the prompt or brief saves the automation with it, so each save is a version in its history.
   const saveText = async (agent: AutomationInput["agent"]) => {
-    const next = { ...form, agent };
+    const next = { ...form, agent, secrets: secretPicksInForce(form.secrets, projectNames) };
     const wrong = automationProblem(next, scope);
     if (wrong) throw new Error(wrong.message);
     onSaved(await client.updateAutomation(a.id, next));
   };
   return (
-    <form className="settingsForm" onSubmit={(e) => { e.preventDefault(); void save(() => client.updateAutomation(a.id, form).then(onSaved), undefined, "Automation saved"); }}>
+    <form className="settingsForm" onSubmit={(e) => { e.preventDefault(); void save(() => client.updateAutomation(a.id, { ...form, secrets: secretPicksInForce(form.secrets, projectNames) }).then(onSaved), undefined, "Automation saved"); }}>
       <fieldset disabled={ro} className="plainFieldset">
         <SettingsSection title="Trigger">
           <SettingRow label="Runs on">
@@ -682,7 +685,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
         ) : null}
 
         {a.kind !== "webhook" ? <AutomationSecrets client={client} a={a} orgName={orgName} preset={preset?.preset.role ?? null} ro={ro}
-          chosen={form.secrets} onChange={(refs) => set("secrets", refs)} /> : null}
+          chosen={form.secrets} onChange={(refs) => set("secrets", refs)} onProjectNames={setProjectNames} /> : null}
         <SettingsSection title="Notifications">
           <SettingRow label="When a run fails" help={a.ownerLeftAt ? `Every one of ${orgName}'s admins is told.` : "Its owner is told."}>
             <Switch checked={form.notifyOnFailure} label={form.notifyOnFailure ? "Notify" : "Don't notify"} disabled={ro} onCheckedChange={(v) => set("notifyOnFailure", v)} />
@@ -747,15 +750,16 @@ function ProjectReposRow({ client, projectId, ro, value, onChange }: {
   );
 }
 
-function AutomationSecrets({ client, a, orgName, preset, ro, chosen, onChange }: {
+function AutomationSecrets({ client, a, orgName, preset, ro, chosen, onChange, onProjectNames }: {
   client: ApiClient; a: Automation; orgName: string; preset: PresetRole | null; ro: boolean;
-  chosen: SecretRef[]; onChange: (refs: SecretRef[]) => void;
+  chosen: SecretRef[]; onChange: (refs: SecretRef[]) => void; onProjectNames: (names: readonly string[]) => void;
 }) {
   const org = useOrgSecrets(client);
   const [project, setProject] = useState<ProjectSecret[] | null>(a.projectId ? null : []);
   useEffect(() => {
     if (a.projectId) client.projectSecrets(a.projectId).then((r) => setProject(r.secrets), () => setProject([]));
   }, [client, a.projectId]);
+  useEffect(() => { onProjectNames((project ?? []).map((s) => s.name)); }, [project, onProjectNames]);
   const projectName = a.projectName ?? "the project";
   return (
     <SettingsSection title="Secrets">
