@@ -26,25 +26,27 @@ export const ORG_SECRETS_SAME_NAME = (org: string) =>
 
 /**
  * The organisation this screen is in: the account's current one, the
- * client's, or, with an API key naming none, the one `/v1/me` answers.
+ * client's, or, with an API key naming none, the one `/v1/me` answers;
+ * `problem` when that read fails.
  */
-export function useOrgId(client: ApiClient): string | undefined {
+export function useOrgId(client: ApiClient): { orgId: string | undefined; problem: string | null } {
   const account = useAccount();
   const known = account?.current.id ?? client.organizationId;
   const [asked, setAsked] = useState<string | undefined>(undefined);
+  const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     if (known) return;
     let live = true;
-    client.me().then((m) => { if (live) setAsked(m.organization.id); }, () => undefined);
+    client.me().then((m) => { if (live) setAsked(m.organization.id); }, (e: unknown) => { if (live) setProblem(errorText(e)); });
     return () => { live = false; };
   }, [client, known]);
-  return known ?? asked;
+  return { orgId: known ?? asked, problem: known ? null : problem };
 }
 
 /** The organisation's secrets, read once for a screen; reload after a change. */
 export function useOrgSecrets(client: ApiClient, given?: string | undefined) {
   const found = useOrgId(client);
-  const orgId = given ?? found;
+  const orgId = given ?? found.orgId;
   const [secrets, setSecrets] = useState<OrgSecretListing[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const latest = useRef(0);
@@ -56,7 +58,7 @@ export function useOrgSecrets(client: ApiClient, given?: string | undefined) {
     }, (e: unknown) => { if (mine === latest.current) setProblem(errorText(e)); });
   }, [client, orgId]);
   useEffect(reload, [reload]);
-  return { secrets, problem, reload, orgId };
+  return { secrets, problem: problem ?? (orgId ? null : found.problem), reload, orgId };
 }
 
 const projectsHaveOwn = (names: readonly string[]) => `${names.join(", ")} ${names.length === 1 ? "has" : "have"} its own`;

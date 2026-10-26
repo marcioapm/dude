@@ -101,4 +101,16 @@ describe("Organisation settings → Secrets", () => {
     const now = (await client.organizationSecrets("org_example")).secrets.find((s) => s.name === "GH_TOKEN")!;
     expect(now.recipients).toEqual(["implementer", "fixer", "reviewer"]);
   });
+
+  test("with no organisation known and /v1/me failing, it says so rather than loading forever", async () => {
+    class Unknown extends FixtureClient {
+      override get organizationId() { return undefined; }
+      override me(): ReturnType<FixtureClient["me"]> { return Promise.reject(new Error("The server is unavailable.")); }
+    }
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider><OrgSecretsPage client={new Unknown("a")} orgName="Example" admin /></ToastProvider></TooltipProvider>);
+    mounted.push(unmount);
+    await until(() => container.textContent?.includes("The server is unavailable.") ? true : null, "the problem");
+    expect(container.querySelector("[role=status]")?.textContent ?? "").not.toContain("Loading");
+  });
 });
