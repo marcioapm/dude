@@ -35,6 +35,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
@@ -80,7 +81,7 @@ type Server struct {
 	// guide section's link; "", links are the web app's hash path alone.
 	PublicURL string
 	// Chat is the chat providers post_to_chat posts through.
-	Chat ChatProviders
+	Chat chat.Registry
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -123,7 +124,8 @@ type env struct {
 	syncBaseWait    time.Duration
 	syncPR          func(ctx context.Context, org, prID string) error
 	publicURL       string
-	chat            ChatProviders
+	chat            chat.Registry
+	db              *db.DB
 	prepared        any
 }
 
@@ -679,7 +681,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
-		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL, chat: s.Chat}
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL, chat: s.Chat, db: s.DB}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}
