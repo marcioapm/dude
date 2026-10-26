@@ -149,9 +149,12 @@ func TestUpdateReplacesTheBinary(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			f := newFakeRelease(t, "v1.2.0")
 			srv := f.serve(t)
-			c, exe, out, _ := selfUpdateCLI(t, srv, "v1.1.0")
+			c, exe, out, errOut := selfUpdateCLI(t, srv, "v1.1.0")
 			if err := c.run(args); err != nil {
 				t.Fatal(err)
+			}
+			if want := "dude updated from v1.1.0 to v1.2.0 (" + exe + ")\n"; errOut.String() != want {
+				t.Fatalf("stderr %q, want %q", errOut, want)
 			}
 			if got := readFile(t, exe); got != "dude v1.2.0 linux_amd64" {
 				t.Fatalf("binary: %q", got)

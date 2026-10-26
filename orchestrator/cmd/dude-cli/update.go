@@ -307,6 +307,7 @@ func (u *updater) update(c *cli, want string) (any, error) {
 	if err := replace(exe, bin); err != nil {
 		return nil, fmt.Errorf("update: %w; %s is unchanged", err, exe)
 	}
+	c.say(fmt.Sprintf("dude updated from %s to %s (%s)", u.current, r.Tag, exe))
 	return obj{"updated": true, "from": u.current, "to": r.Tag, "path": exe}, nil
 }
 
