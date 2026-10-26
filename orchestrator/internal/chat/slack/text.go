@@ -17,8 +17,6 @@ type message struct {
 	BotID       string                 `json:"bot_id"`
 	Username    string                 `json:"username"`
 	BotProfile  *struct{ Name string } `json:"bot_profile"`
-	Subtype     string                 `json:"subtype"`
-	ThreadTS    string                 `json:"thread_ts"`
 	Attachments []attachment           `json:"attachments"`
 	Blocks      []json.RawMessage      `json:"blocks"`
 }
