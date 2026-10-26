@@ -511,7 +511,9 @@ export const EventTypes = {
   /**
    * dude pushed a fix to an open pull request and asked again for a review
    * from those whose latest review was on an older head. Payload:
-   * `{ number, repo, head, reviewersRequested?, reviewersRefused?, error? }`.
+   * `{ number, repo, head, reviewersRequested?, reviewersRefused?, error?,
+   * pullRequestHead? }`; pullRequestHead is the head GitHub showed when it
+   * had not caught up with dude's push yet.
    */
   PullRequestReviewRerequested: "pull_request.review_rerequested",
   /**

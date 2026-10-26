@@ -273,7 +273,7 @@ func (c *rerequestClaim) ask(ctx context.Context, gh *forge.GitHub, slug string)
 		}
 		if at != c.head {
 			// Recorded as nobody asked, without an event: the log says why.
-			slog.Info("not asking reviewers again: the branch is past dude's commit", "task", c.taskID,
+			slog.Info("not asking reviewers again: the branch is not at dude's commit", "task", c.taskID,
 				"repo", c.repo, "number", c.number, "head", c.head, "pullRequestHead", stale.Head, "branch", at)
 			return nil, nil
 		}

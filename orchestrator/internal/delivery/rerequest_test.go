@@ -278,7 +278,7 @@ func TestALaggingPullRequestWhoseBranchCannotBeReadRecordsWhy(t *testing.T) {
 	if got := f.asks("target"); len(got) != 0 {
 		t.Errorf("asked %v", got)
 	}
-	if e := f.eventFor("target", head); e["error"] == nil || e["pullRequestHead"] != before {
+	if e := f.eventFor("target", head); !strings.Contains(fmt.Sprint(e["error"]), "502") || e["pullRequestHead"] != before {
 		t.Errorf("recorded %v, want GitHub's refusal and the head it showed", e)
 	}
 }
