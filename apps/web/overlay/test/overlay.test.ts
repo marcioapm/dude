@@ -1097,6 +1097,28 @@ test("the stored dude tab name is used once: Connect pressed again with no sessi
   expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"], [`${DUDE}/#/preview-connect`, "_blank"]]);
 });
 
+test("a page opened from a preview page drops the dude tab name its storage inherited; one opened by another origin keeps it", async () => {
+  page(CART, false);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
+  // The preview page that opened this one: same origin, and itself opened by no one, so Connect is offered.
+  opener = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: null }) as unknown as Opener;
+  const opens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { opens.push(args); return fakeWin(); };
+  boot();
+  tid("ov-connect")!.click();
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
+  // A page another origin opened, reloaded after Connect: that opener is not one of this preview's pages.
+  overlay.stop();
+  page(CART);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
+  const reopens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { reopens.push(args); return fakeWin(); };
+  boot();
+  await tick(80);
+  tid("ov-connect")!.click();
+  expect(reopens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"]]);
+});
+
 test("Connect to dude opens a new tab when the stored name is not one dude gives, or came from a dude tab this page didn't open", () => {
   page(CART, false);
   win.sessionStorage.setItem("dude-overlay-dudeWindow", "_self");

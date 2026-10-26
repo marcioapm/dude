@@ -264,6 +264,14 @@ export class Overlay {
     this.host.setAttribute("style", "all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647");
     this.#root = this.host.attachShadow({ mode: "closed" });
     this.#collapsed = this.#session("hidden") === "1";
+    // A page opened from a preview page was given a copy of that page's sessionStorage: the dude tab name in it is the opener's.
+    let opener: Window | null = null;
+    try {
+      opener = win.opener as Window | null;
+    } catch {
+      opener = null;
+    }
+    if (live(opener) && this.#sameOrigin(opener)) this.#session(CONNECT_NAME_KEY, "");
     const layer = () => this.#h("div", { class: "layer" });
     this.#lay = { pins: layer(), catchers: layer(), hover: layer(), box: layer(), bar: layer() };
     this.#top = this.#h("div", { class: "root", "data-overlay": "" }, this.#lay.pins, this.#lay.catchers, this.#lay.hover, this.#lay.box, this.#lay.bar);
@@ -373,16 +381,19 @@ export class Overlay {
         return null;
       }
       if (!live(next)) return null;
-      let same = false;
-      try {
-        same = next.location.origin === this.#win.location.origin;
-      } catch {
-        // Another origin's window throws on location.origin: not a page of this preview.
-      }
-      if (!same) return next;
+      if (!this.#sameOrigin(next)) return next;
       at = next;
     }
     return null;
+  }
+
+  #sameOrigin(w: Window): boolean {
+    try {
+      return w.location.origin === this.#win.location.origin;
+    } catch {
+      // Another origin's window throws on location.origin: not a page of this preview.
+      return false;
+    }
   }
 
   #post(msg: OverlayToDude): boolean {
