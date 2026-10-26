@@ -260,6 +260,12 @@ func TestPostToChatRedactsTheRunsSecretValues(t *testing.T) {
 		!strings.Contains(msgs[0].Text, "to read the stats") {
 		t.Fatalf("Slack got %+v", msgs)
 	}
+	// A channel holding the value is redacted in the prepare step too: the
+	// refusal names the marker, never the value.
+	status, out := c.postToChat(t, "#ghp-digest-s3cr3t-value", "hello")
+	if said := fmt.Sprint(out["error"]); status != 422 || !strings.Contains(said, "#[REDACTED:GH_TOKEN]") || strings.Contains(said, "ghp-digest-s3cr3t-value") {
+		t.Errorf("a channel holding the secret: %d %v", status, out)
+	}
 	var leaked int
 	if err := c.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE organization_id = $1 AND payload::text LIKE '%ghp-digest-s3cr3t-value%'`,
 		c.org).Scan(&leaked); err != nil || leaked != 0 {

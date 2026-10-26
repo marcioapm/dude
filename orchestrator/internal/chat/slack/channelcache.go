@@ -15,6 +15,8 @@ const channelTTL = 5 * time.Minute
 type channelCache struct {
 	mu    sync.Mutex
 	found map[channelKey]foundChannel
+	// now is the clock, time.Now when nil.
+	now func() time.Time
 }
 
 type channelKey struct{ installation, name string }
@@ -24,11 +26,18 @@ type foundChannel struct {
 	at time.Time
 }
 
+func (c *channelCache) clock() time.Time {
+	if c.now == nil {
+		return time.Now()
+	}
+	return c.now()
+}
+
 func (c *channelCache) get(key channelKey) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	hit, ok := c.found[key]
-	if !ok || time.Since(hit.at) >= channelTTL {
+	if !ok || c.clock().Sub(hit.at) >= channelTTL {
 		return "", false
 	}
 	return hit.id, true
@@ -38,7 +47,7 @@ func (c *channelCache) get(key channelKey) (string, bool) {
 func (c *channelCache) put(key channelKey, id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now()
+	now := c.clock()
 	for k, v := range c.found {
 		if now.Sub(v.at) >= channelTTL {
 			delete(c.found, k)

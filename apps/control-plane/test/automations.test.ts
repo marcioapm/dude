@@ -360,6 +360,10 @@ describe("runs", () => {
     await ev("evt_d4a", "agent.tool.attempted", "2026-10-23T15:03:59.700Z", { tool: "post_to_chat", arguments: { channel: "#random", text: "x" } });
     await ev("evt_d5", "slack.message.refused", "2026-10-23T15:04:00Z", { tool: "post_to_chat", channel: "#random",
       error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude" });
+    // Another run's event is not this run's, whatever its payload says: calls are read by run_id.
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      VALUES ('evt_x1', ${ORG}, 'agent.tool.dude', 'agent', 'arn_x', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_x',
+        ${{ tool: "github_search", arguments: {}, result: {}, automationRunId: "arn_d" }})`;
     const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_d`));
     expect(run.toolCalls).toEqual([
       { id: "evt_d1", tool: "github_comment", at: "2026-10-23T15:00:05.000Z", status: "completed", args: { issue: 12 }, durationMs: null, error: null, posted: null },
