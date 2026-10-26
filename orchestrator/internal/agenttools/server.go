@@ -684,6 +684,11 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL, chat: s.Chat, db: s.DB}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
+		// A prepare step may refuse the call before its arguments are redacted or counted.
+		if refused, ok := c.env.prepared.(refusal); ok {
+			s.recordRefusal(ctx, c, t, refused)
+			return nil, refused
+		}
 	}
 	if s.BeforeCall != nil {
 		s.BeforeCall(t.name)
