@@ -8,14 +8,16 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 )
 
-// localCommands talk to no dude server: they read or change the credentials
-// file, (api) call whatever route they are given, or (upgrade) call GitHub.
+// localCommands are top-level commands that talk to no dude server: they read
+// or change the credentials file, (api) call whatever route they are given,
+// or (upgrade) call GitHub.
 var localCommands = map[string]bool{"logout": true, "orgs": true, "use": true, "api": true, "upgrade": true}
 
 // lookupRoutes are what project, taskID and runID call to resolve a PROJECT,
@@ -197,6 +199,26 @@ func TestALiteralRouteBeatsItsParamSibling(t *testing.T) {
 	}
 	if why := unmappedRequest(t, "automation show", call{method: "GET", path: "/v1/automations/aut_1"}); why != "" {
 		t.Fatal(why)
+	}
+}
+
+// Every key in commands is a top-level name or "NOUN VERB", and the
+// dispatcher reaches it from its own words: no key is shadowed or unreachable.
+func TestEveryCommandIsReachableByItsWords(t *testing.T) {
+	for key := range commands {
+		words := strings.Split(key, " ")
+		if len(words) > 2 || slices.Contains(words, "") {
+			t.Errorf("%q: a command is NAME or NOUN VERB", key)
+			continue
+		}
+		if len(words) == 2 {
+			if _, top := commands[words[0]]; top {
+				t.Errorf("%q: top-level command %q shadows the noun", key, words[0])
+			}
+		}
+		if name, _, err := commandName(words); err != nil || name != key {
+			t.Errorf("%q: dispatches to %q, %v", key, name, err)
+		}
 	}
 }
 
