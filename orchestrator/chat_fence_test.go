@@ -176,6 +176,55 @@ func TestAParkedSessionAgentHoldingAHiddenProjectsCheckoutIsReplaced(t *testing.
 	}
 }
 
+// A chat-born session's cards are not filed into a project hidden from its
+// chat since it was linked: a new task there, an edit of one of its tasks
+// and a relation naming one are each refused, and nothing is written. Once
+// the project is no longer hidden, the same card files.
+func TestASessionsCardsAreNotFiledIntoAProjectHiddenSinceItWasLinked(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	mustExec(t, s.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id = $1`, id)
+	s.linkWeb(id)
+	wc := s.taskIn(s.webProject, "Console export", s.marcio)
+	bl := s.taskIn(s.project, "Billing export", s.marcio)
+	proposal := s.proposal(id, []delivery.ProposalItem{
+		{Kind: "task", Project: "WC", Title: "Console usage page", Goal: "Show the usage per day on the console."},
+		{Kind: "edit", Task: s.keyOf(wc), After: &delivery.TaskText{Goal: ptr("A goal long enough to keep, edited from chat")}},
+		{Kind: "relation", From: s.keyOf(wc), To: s.keyOf(bl), RelationKind: "blocks", Why: "the console reads it"},
+	})
+	written := func() int {
+		return s.count(`SELECT count(*) FROM tasks WHERE title = 'Console usage page'`) +
+			s.count(`SELECT count(*) FROM tasks WHERE id = $1 AND goal LIKE '%edited from chat'`, wc) +
+			s.count(`SELECT count(*) FROM task_relations WHERE from_task_id = $1`, wc)
+	}
+	mustExec(t, s.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, s.org, s.webProject)
+	out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": proposal, "items": []int{0, 1, 2}})
+	results, _ := out["results"].([]any)
+	if len(results) != 3 {
+		t.Fatalf("file: %v", out)
+	}
+	for i, r := range results {
+		m := r.(map[string]any)
+		why, _ := m["why"].(string)
+		if want := []string{"project WC is not linked", "is not a task of a linked project", "is not a task of a linked project"}[i]; m["status"] != "refused" || !strings.Contains(why, want) {
+			t.Errorf("item %v into a hidden project: %v, want refused saying %q", m["item"], m, want)
+		}
+	}
+	if n := written(); n != 0 {
+		t.Fatalf("%d rows written into the hidden project", n)
+	}
+	mustExec(t, s.owner, `DELETE FROM chat_hidden_projects WHERE project_id = $1`, s.webProject)
+	out = s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": proposal, "items": []int{0, 1, 2}})
+	for _, r := range out["results"].([]any) {
+		if m := r.(map[string]any); m["status"] != "filed" {
+			t.Errorf("item %v once no longer hidden: %v", m["item"], m)
+		}
+	}
+	if n := written(); n != 3 {
+		t.Fatalf("%d of the 3 writes once no longer hidden", n)
+	}
+}
+
 // A task filed from a session started in dude has no origin and is not fenced.
 func TestATaskFiledFromASessionNotFromChatIsUnaffected(t *testing.T) {
 	s := newSessionWorld(t)
