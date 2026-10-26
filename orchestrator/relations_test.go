@@ -225,6 +225,22 @@ func TestABlockerInAProjectHiddenFromTheTasksChatIsNotNamed(t *testing.T) {
 	}
 }
 
+// A task's own project is never fenced from it: a task from chat whose own
+// project is hidden from that chat has a blocker there named, key and state.
+func TestABlockerInTheTasksOwnHiddenProjectIsNamed(t *testing.T) {
+	w := conducting(t)
+	blocker, task := w.task(), w.task()
+	mustExec(t, w.owner, `UPDATE tasks SET origin = '{"provider":"slack"}' WHERE id = $1`, task)
+	mustExec(t, w.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, w.project)
+	w.talk(task)
+	w.blocks(blocker, task)
+	want := w.keyOf(task) + " is blocked by " + w.keyOf(blocker) + " (not started): it can start once that's merged."
+	status, out := w.as(task, "start_phase", `{"phase":"implement"}`)
+	if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, want) {
+		t.Fatalf("start_phase: %d %q, want refused saying %q", status, msg, want)
+	}
+}
+
 // The merge of a task in a project hidden from a dependant's chat releases
 // the dependant; its conductor's wake says so without the merged task's
 // key, and its Chat notice, which only people read, names it.
