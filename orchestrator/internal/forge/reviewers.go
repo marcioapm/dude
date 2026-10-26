@@ -167,10 +167,9 @@ type StaleReviews struct {
 	Branch, BranchRepo string
 	// Reviewers whose latest review is on another commit than the one
 	// asked about and who are not asked again already, in the order they
-	// first reviewed. Never the
-	// author, and never an App's account ("Bot", "<slug>[bot]"): GitHub
-	// refuses to request a review of either, and a review App such as
-	// CodeRabbit reviews every push without being asked.
+	// first reviewed. Never the author, and never an App's account ("Bot",
+	// "<slug>[bot]"): GitHub refuses to request a review of either, and a
+	// review App such as CodeRabbit reviews every push without being asked.
 	Logins []string
 }
 
@@ -191,6 +190,9 @@ func (g *GitHub) StaleReviewers(ctx context.Context, slug string, number int, of
 		of = p.Head.SHA
 	}
 	out := StaleReviews{Head: p.Head.SHA, Branch: p.Head.Ref, BranchRepo: slug, Logins: staleReviewers(p, reviews, of)}
+	// GitHub says null for a fork since deleted: the base repository is
+	// then read, where a branch of that name is never at a commit dude
+	// pushed to the fork.
 	if p.Head.Repo != nil && p.Head.Repo.FullName != "" {
 		out.BranchRepo = p.Head.Repo.FullName
 	}

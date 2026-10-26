@@ -265,12 +265,18 @@ func (c *rerequestClaim) ask(ctx context.Context, gh *forge.GitHub, slug string)
 		// The branch says which it is. Someone pushed on top of dude's
 		// commit when the branch is past it: the head is theirs, and so is
 		// asking for a review of it.
+		// What GitHub showed is kept with what is recorded, so a lagging
+		// read is told from a current one.
+		payload["pullRequestHead"] = stale.Head
 		at, err := gh.BranchSHA(ctx, stale.BranchRepo, stale.Branch)
 		if err != nil {
 			payload["error"] = err.Error()
 			return payload, nil
 		}
 		if at != c.head {
+			// Recorded as nobody asked, without an event: the log says why.
+			slog.Info("not asking reviewers again: the branch is past dude's commit", "task", c.taskID,
+				"repo", c.repo, "number", c.number, "head", c.head, "pullRequestHead", stale.Head, "branch", at)
 			return nil, nil
 		}
 	}

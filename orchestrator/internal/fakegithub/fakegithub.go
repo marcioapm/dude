@@ -100,6 +100,9 @@ type Server struct {
 	// by pull request: GitHub moves a pull request's head a few seconds
 	// after its branch moves.
 	LaggingHead map[int]string
+	// A status a branch's ref read answers instead, by branch (502: GitHub
+	// failing).
+	RefStatus map[string]int
 	// The collaborator permission endpoint refuses (a token without the
 	// scope).
 	PermissionRefused bool
@@ -692,6 +695,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/contents/{path...}", s.contents)
 	mux.HandleFunc("PATCH "+prefix+"/git/refs/heads/{branch...}", s.updateRef)
 	mux.HandleFunc("GET "+prefix+"/git/ref/heads/{branch...}", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		status := s.RefStatus[r.PathValue("branch")]
+		s.mu.Unlock()
+		if status != 0 {
+			fail(w, status, http.StatusText(status))
+			return
+		}
 		sha := s.SHA(r.PathValue("branch"))
 		if sha == "" {
 			fail(w, 404, "Not Found")

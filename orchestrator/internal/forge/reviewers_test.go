@@ -233,12 +233,13 @@ func TestStaleReviewersReadsEveryPage(t *testing.T) {
 func TestStaleReviewersOfACommitTheHeadLags(t *testing.T) {
 	fake, gh, head, old := stalePull(t)
 	reviewed(fake, on("ana", "COMMENTED", old), on("bo", "APPROVED", head))
-	fake.Set(func(s *fakegithub.Server) { s.LaggingHead = map[int]string{1: old} })
+	pull := fake.Pull(1)
+	fake.Set(func(s *fakegithub.Server) { s.LaggingHead = map[int]string{1: old}; pull.HeadRepo = "fork/api" })
 	got, err := gh.StaleReviewers(context.Background(), "acme/api", 1, head)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Head != old || got.Branch != fake.Pull(1).Head || got.BranchRepo != "acme/api" || !slices.Equal(got.Logins, []string{"ana"}) {
+	if got.Head != old || got.Branch != pull.Head || got.BranchRepo != "fork/api" || !slices.Equal(got.Logins, []string{"ana"}) {
 		t.Errorf("stale %+v, want ana, on GitHub's head %s and branch %s", got, old, fake.Pull(1).Head)
 	}
 	if got := staleOf(t, gh); !slices.Equal(got.Logins, []string{"bo"}) {

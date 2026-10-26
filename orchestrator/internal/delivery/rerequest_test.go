@@ -253,8 +253,54 @@ func TestAPullRequestWhoseHeadLagsDudesPushStillAsksItsReviewers(t *testing.T) {
 	if len(asks) != 1 || !slices.Equal(asks[0].Logins, []string{"jerv"}) {
 		t.Fatalf("review requests %v, want jerv once", asks)
 	}
-	if got := names(f.eventFor("target", head)["reviewersRequested"]); !slices.Equal(got, []string{"jerv"}) {
+	e := f.eventFor("target", head)
+	if got := names(e["reviewersRequested"]); !slices.Equal(got, []string{"jerv"}) {
 		t.Errorf("recorded as asked: %v", got)
+	}
+	if e["pullRequestHead"] != before {
+		t.Errorf("recorded GitHub's head as %v, want %s", e["pullRequestHead"], before)
+	}
+}
+
+// The branch cannot be read while the pull request lags: nobody is asked,
+// and GitHub's refusal is recorded with the head, not lost.
+func TestALaggingPullRequestWhoseBranchCannotBeReadRecordsWhy(t *testing.T) {
+	f := newRerequestFixture(t, "target")
+	before := f.gh["target"].SHA("feature")
+	head := f.fix("target")
+	f.gh["target"].Set(func(s *fakegithub.Server) {
+		s.LaggingHead = map[int]string{1: before}
+		s.RefStatus = map[string]int{"feature": 502}
+	})
+	if err := f.rerequest(map[string]string{"target": head}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.asks("target"); len(got) != 0 {
+		t.Errorf("asked %v", got)
+	}
+	if e := f.eventFor("target", head); e["error"] == nil || e["pullRequestHead"] != before {
+		t.Errorf("recorded %v, want GitHub's refusal and the head it showed", e)
+	}
+}
+
+// The branch deleted while the pull request lags: there is nothing of
+// dude's on GitHub to ask about, so nobody is asked and nothing recorded.
+func TestALaggingPullRequestWhoseBranchIsGoneIsNotAskedAbout(t *testing.T) {
+	f := newRerequestFixture(t, "target")
+	before := f.gh["target"].SHA("feature")
+	head := f.fix("target")
+	if err := f.gh["target"].DeleteBranch("feature"); err != nil {
+		t.Fatal(err)
+	}
+	f.gh["target"].Set(func(s *fakegithub.Server) { s.LaggingHead = map[int]string{1: before} })
+	if err := f.rerequest(map[string]string{"target": head}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.asks("target"); len(got) != 0 {
+		t.Errorf("asked %v", got)
+	}
+	if e := f.events(); len(e) != 0 {
+		t.Errorf("recorded %v", e)
 	}
 }
 
