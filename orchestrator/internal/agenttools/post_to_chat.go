@@ -139,10 +139,17 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 	shown := "#" + strings.TrimPrefix(channel, "#")
 	target := postTarget{inst: inst, provider: p, channelID: channel, channelName: shown}
 	if channelID.MatchString(channel) {
-		if info, err := p.Conversation(ctx, inst, channel); err == nil {
+		info, err := p.Conversation(ctx, inst, channel)
+		switch {
+		case err == nil:
 			target.channelName = info.Name
-		} else if apiCode(err) == "channel_not_found" {
+		case apiCode(err) == "channel_not_found":
 			return refused("unknown-channel", channel)
+		case revokedCodes[apiCode(err)]:
+			return slackFailed(ctx, c, channel, err)
+		default:
+			// The post itself says whether the channel takes it.
+			noteFailure(ctx, c, err)
 		}
 		return target
 	}
@@ -153,7 +160,7 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 	id, member, found, err := finder.FindChannel(ctx, inst, channel)
 	switch {
 	case err != nil:
-		return slackFailed(refused, err)
+		return slackFailed(ctx, c, channel, err)
 	case !found:
 		return refused("unknown-channel", shown)
 	case !member:
@@ -171,12 +178,20 @@ func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) 
 		// the refused call and why.
 		recorded := postRefused(in.Channel, refused.msg).(refusal)
 		if unconnectedOrg != "" {
-			recorded.event.payload["code"] = PostNotConnected
-			recorded.event.payload["reason"] = NotConnectedReason(unconnectedOrg)
+			recorded = notConnected(in.Channel, unconnectedOrg)
 		}
 		return out, recorded
 	}
 	return out, err
+}
+
+// notConnected is the refusal of a post for want of a Slack installation
+// for org, recorded with the code and reason the run fails on.
+func notConnected(channel, org string) refusal {
+	r := postRefused(channel, refuse(postRefusal("not-connected"), org).Error()).(refusal)
+	r.event.payload["code"] = PostNotConnected
+	r.event.payload["reason"] = NotConnectedReason(org)
+	return r
 }
 
 // PostNotConnected is the code of a post refused because the organisation
@@ -246,7 +261,7 @@ func postOutside(ctx context.Context, c Caller, in postChecked) (postDone, error
 		case "not_in_channel":
 			return postDone{}, refused("not-in-channel", in.channelName)
 		}
-		return postDone{}, slackFailed(refused, err)
+		return postDone{}, slackFailed(ctx, c, in.Channel, err)
 	}
 	return postDone{ts: ts, permalink: in.provider.Permalink(in.inst, in.channelID, ts, "")}, nil
 }
@@ -269,13 +284,37 @@ func post(ctx context.Context, in postChecked) (string, error) {
 	return in.provider.PostReply(ctx, in.inst, in.channelID, "", chat.Reply{Text: in.Text})
 }
 
-// slackFailed is a provider error said to the agent: a transient one to
-// try again, any other with Slack's own code.
-func slackFailed(refused func(string, ...any) error, err error) error {
-	if t := (*chat.TransientError)(nil); errors.As(err, &t) {
-		return refused("slack-busy", err.Error())
+// revokedCodes are Slack's answers for an installation that no longer
+// works: the post is refused as not connected, and the run fails on it.
+var revokedCodes = map[string]bool{"invalid_auth": true, "token_revoked": true, "account_inactive": true}
+
+// slackFailed is a provider error, counted for the installation's health
+// and said to the agent: a revoked installation as not connected, a
+// transient error to try again, any other with Slack's own code.
+func slackFailed(ctx context.Context, c Caller, channel string, err error) error {
+	noteFailure(ctx, c, err)
+	if revokedCodes[apiCode(err)] {
+		var org string
+		if qerr := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, c.Org).Scan(&org)
+		}); qerr != nil {
+			return qerr
+		}
+		return notConnected(channel, org)
 	}
-	return refused("slack-refused", err.Error())
+	name := "slack-refused"
+	if t := (*chat.TransientError)(nil); errors.As(err, &t) {
+		name = "slack-busy"
+	}
+	return postRefused(channel, refuse(postRefusal(name), err.Error()).Error())
+}
+
+// noteFailure counts err for the installation's health, as the chat
+// service counts its own calls' failures.
+func noteFailure(ctx context.Context, c Caller, err error) {
+	if c.env.db != nil {
+		chat.NoteFailure(ctx, c.env.db, nil, c.Org, chatProvider, err)
+	}
 }
 
 // apiCode is the provider's error code ("not_in_channel"), the last word

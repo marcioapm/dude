@@ -228,16 +228,7 @@ func loadInstallation(ctx context.Context, tx pgx.Tx, provider string) (Installa
 
 // noteFailure counts a failed call to the provider for the installation's health.
 func (s *Service) noteFailure(ctx context.Context, org, provider string, failure error) {
-	if failure == nil {
-		return
-	}
-	s.log().Warn("chat provider call failed", "organization", org, "provider", provider, "error", failure)
-	_ = s.DB.InOrg(context.WithoutCancel(ctx), org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE chat_installations SET last_failure = $2,
-			failed_today = CASE WHEN failures_day = current_date THEN failed_today + 1 ELSE 1 END, failures_day = current_date
-			WHERE provider = $1`, provider, clip(failure.Error(), 500))
-		return err
-	})
+	NoteFailure(ctx, s.DB, s.log(), org, provider, failure)
 }
 
 func clip(s string, n int) string {

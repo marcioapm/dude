@@ -243,6 +243,52 @@ func TestPostToChatRefusesTextOverSlacksLimit(t *testing.T) {
 	}
 }
 
+// An installation Slack no longer honours is not connected: the post is
+// refused with the code the run fails on, and the failure is on the
+// installation's health as any chat call's is, whichever call met it.
+func TestPostToChatWithARevokedInstallationSaysItIsNotConnected(t *testing.T) {
+	for _, tc := range []struct{ code, method, channel string }{
+		{"token_revoked", "chat.postMessage", "#engineering"},
+		{"invalid_auth", "conversations.list", "#engineering"},
+		{"account_inactive", "conversations.info", "C0ENGINEER"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			c := setupChat(t, true)
+			c.fake.FailNext(tc.method, tc.code)
+			status, out := c.postToChat(t, tc.channel, "hello")
+			if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "Slack is not connected for Acme") {
+				t.Fatalf("%s on %s: %d %v", tc.code, tc.method, status, out)
+			}
+			var code, reason string
+			if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'code', payload->>'reason' FROM events WHERE event_type = $1
+				AND run_id = 'arn_digest'`, agenttools.EvChatPostRefused).Scan(&code, &reason); err != nil ||
+				code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
+				t.Errorf("the refusal on the run: %q %q %v", code, reason, err)
+			}
+			var failed int
+			var last string
+			if err := c.owner.QueryRow(context.Background(), `SELECT failed_today, COALESCE(last_failure, '') FROM chat_installations
+				WHERE organization_id = $1`, c.org).Scan(&failed, &last); err != nil || failed != 1 || !strings.Contains(last, tc.code) {
+				t.Errorf("the installation's health: %d %q %v", failed, last, err)
+			}
+		})
+	}
+}
+
+// Any other Slack failure is on the installation's health too.
+func TestPostToChatCountsSlacksRefusalOnTheInstallationsHealth(t *testing.T) {
+	c := setupChat(t, true)
+	c.fake.FailNext("chat.postMessage", "msg_too_long")
+	if status, _ := c.postToChat(t, "#engineering", "refused"); status != 422 {
+		t.Fatalf("refused by Slack: %d", status)
+	}
+	var last string
+	if err := c.owner.QueryRow(context.Background(), `SELECT COALESCE(last_failure, '') FROM chat_installations WHERE organization_id = $1`,
+		c.org).Scan(&last); err != nil || !strings.Contains(last, "msg_too_long") {
+		t.Errorf("the installation's last failure: %q %v", last, err)
+	}
+}
+
 // Only an automation's agent has the tool.
 func TestPostToChatIsAnAutomationsTool(t *testing.T) {
 	c := setupChat(t, true)
