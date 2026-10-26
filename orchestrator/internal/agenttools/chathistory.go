@@ -27,7 +27,8 @@ const EvChatRead = "chat.read"
 // chatReadsPerHour bounds a session's chat_history reads.
 const chatReadsPerHour = 30
 
-// chatReadsInHour counts a session's chat_history attempts of the last hour.
+// chatReadsInHour counts a session's chat_history attempts of the last
+// hour, along events_session_tool_attempts_idx (migration 197).
 const chatReadsInHour = `SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'agent.tool.attempted'
 	AND payload->>'tool' = 'chat_history' AND occurred_at > now() - interval '1 hour'`
 

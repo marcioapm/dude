@@ -130,10 +130,11 @@ func TestRunChatReadsItsConversationIndex(t *testing.T) {
 	check("after 169's recovery")
 }
 
-// Migration 203 rebuilds a v3 GitHub reads index a cancelled 197, 198 or
-// 199 left INVALID, and the hourly counts read it again.
-func TestAnInvalidGitHubReadIndexIsRebuiltBy203(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "203")
+// Migration 167 rebuilds a v2 GitHub reads index a cancelled 163 or 164
+// left INVALID; 197 to 202 then replace both with the counted-attempt
+// indexes, which the hourly counts read.
+func TestAnInvalidGitHubReadIndexIsRebuiltBy167AndReplaced(t *testing.T) {
+	owner, apply := dbtest.Upgrade(t, "167")
 	ctx := context.Background()
 	if _, err := owner.Exec(ctx, `INSERT INTO organizations (id, name, slug) VALUES ('org_g', 'G', 'g')`); err != nil {
 		t.Fatal(err)
@@ -145,7 +146,7 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy203(t *testing.T) {
 		FROM generate_series(1, 5000) n`); err != nil {
 		t.Fatal(err)
 	}
-	for _, ix := range []string{"events_session_github_reads_v3_idx", "events_task_github_reads_v3_idx", "events_automation_github_reads_v2_idx"} {
+	for _, ix := range []string{"events_session_github_reads_v2_idx", "events_task_github_reads_v2_idx"} {
 		invalidate(t, owner, ix)
 	}
 	apply()
@@ -153,12 +154,12 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy203(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct{ index, query, scope string }{
-		{"events_session_github_reads_v3_idx", githubReadsBySession, "ses_0"},
-		{"events_task_github_reads_v3_idx", githubReadsByTask, "tsk_0"},
-		{"events_automation_github_reads_v2_idx", `SELECT count(*) FROM events WHERE payload->>'automationId' = $1` + githubReadsInHour, "aut_0"},
+		{"events_session_tool_attempts_idx", githubReadsBySession, "ses_0"},
+		{"events_task_tool_attempts_idx", githubReadsByTask, "tsk_0"},
+		{"events_automation_tool_attempts_idx", `SELECT count(*) FROM events WHERE payload->>'automationId' = $1` + githubReadsInHour, "aut_0"},
 	} {
 		if !valid(t, owner, c.index) {
-			t.Errorf("203 left %s invalid", c.index)
+			t.Errorf("%s is invalid", c.index)
 		}
 		var n int
 		if err := owner.QueryRow(ctx, c.query, c.scope).Scan(&n); err != nil {

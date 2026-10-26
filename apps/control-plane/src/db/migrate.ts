@@ -9,7 +9,8 @@
  * a statement Postgres refuses in a transaction (CREATE INDEX CONCURRENTLY):
  * one statement, recorded once it succeeded. It must be safe to run again
  * (IF NOT EXISTS), as a crash between the statement and its record runs it
- * again on the next migrate.
+ * again on the next migrate. One that builds an index concurrently is
+ * recorded only once the index is valid (dropIfInvalid).
  *
  *   bun run src/db/migrate.ts                  # apply pending migrations
  *   bun run src/db/migrate.ts --status         # list applied/pending
@@ -117,6 +118,28 @@ export function outsideTransaction(contents: string): boolean {
   return contents.split("\n", 1)[0]?.trim() === NO_TRANSACTION;
 }
 
+/** The index a no-transaction file builds with CREATE INDEX CONCURRENTLY, or null. */
+export function concurrentIndex(contents: string): string | null {
+  const m = /CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+(?:IF\s+NOT\s+EXISTS\s+)?("[^"]+"|[\w.]+)/i.exec(contents);
+  return m?.[1] ?? null;
+}
+
+/**
+ * A concurrent build that was cancelled or failed leaves its index in the
+ * catalog, INVALID, and IF NOT EXISTS would skip it on the next run. Such an
+ * index is dropped (concurrently: no lock that blocks writes) before its
+ * file runs, and again if the file left it invalid, which is then not
+ * recorded: the next migrate builds it afresh, and a later file that drops
+ * the index it replaces never runs over an invalid one. Says whether it
+ * dropped one.
+ */
+async function dropIfInvalid(sql: SQL, index: string): Promise<boolean> {
+  const [row] = await sql`SELECT NOT i.indisvalid AS invalid FROM pg_index i WHERE i.indexrelid = to_regclass(${index})`;
+  if (!row?.invalid) return false;
+  await sql.unsafe(`DROP INDEX CONCURRENTLY IF EXISTS ${index}`);
+  return true;
+}
+
 export async function migrate(
   databaseUrl: string,
   opts: { log?: (msg: string) => void } = {},
@@ -152,7 +175,21 @@ export async function migrate(
 
       log(`applying ${file.name}`);
       if (outsideTransaction(contents)) {
-        await sql.unsafe(contents);
+        const index = concurrentIndex(contents);
+        // An earlier interrupted build's leftover, which IF NOT EXISTS would skip.
+        if (index) await dropIfInvalid(sql, index);
+        try {
+          await sql.unsafe(contents);
+        } catch (err) {
+          if (index) await dropIfInvalid(sql, index);
+          throw err;
+        }
+        if (index && (await dropIfInvalid(sql, index))) {
+          throw new Error(
+            `Migration ${file.name} left index ${index} invalid (an interrupted concurrent build); ` +
+              `it was dropped and the migration not recorded: migrate again to build it.`,
+          );
+        }
         await sql`INSERT INTO schema_migrations (version, name, checksum)
                   VALUES (${file.version}, ${file.name}, ${sum})`;
         applied.push(file.name);

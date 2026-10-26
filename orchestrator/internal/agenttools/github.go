@@ -159,9 +159,9 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 
 // A session's and a task's GitHub reads in the last hour: the GitHub read
 // tools' and refresh_pull_requests' attempts (a refresh records one per pull
-// request it syncs). Both share one predicate, the WHERE of their partial
-// indexes (migrations 197-199), written with literals, as a parameter would
-// not prove the index's WHERE.
+// request it syncs). The scope and time are served by the tool-agnostic
+// partial indexes of counted attempts (migrations 197-199); the tool list
+// is a filter over those few rows, so a new read tool needs no index.
 const (
 	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'github_run_jobs', 'refresh_pull_requests')
 		AND occurred_at > now() - interval '1 hour'`

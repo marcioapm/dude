@@ -1012,8 +1012,14 @@ as `chat.read` with counts only, quoted as external text. The conversation
 is the session's origin's, never one the agent names. `github_run_jobs`
 (`github.read`) lists a GitHub Actions run's jobs from its id or link, for
 `github_check_log` to read the failed job's log; it counts against the same
-hourly GitHub reads (migrations 197–203 move the hourly-reads indexes to
-the predicate that names it).
+hourly GitHub reads. Those counts, and `chat_history`'s, read the
+tool-agnostic indexes of counted attempts (`event_type =
+'agent.tool.attempted'` by session, task or automation and time, migrations
+197–199, which replace the tool-list indexes 200–202 drop); the tool list
+is a filter in the query, so a new counted tool needs no migration. The
+migrator records a `CREATE INDEX CONCURRENTLY` file only once its index is
+valid, and drops (concurrently) one an interrupted build left invalid, so
+the next migrate builds it afresh.
 
 **Reactions follow the work.** 👀 goes on the mention as the loop's first
 stage of a delivery (never in the webhook request), once per delivery:
