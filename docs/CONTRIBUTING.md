@@ -214,12 +214,22 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 - **Publishing is a property of the phase** (`Publishes`): a reviewer's
   container is never pushed.
 - **Project secrets reach the phases each names** (`phases/projectsecrets.go`),
-  never the conductor or brainstorm. One redactor (`internal/redact`) runs
+  never the conductor or brainstorm. **Organisation secrets**
+  (`organization_secrets`, migration 210) are the same one level up: each
+  ticks its recipients for every project, may be ticked for none (then only
+  automations that pick it get it), and a project secret of the same name
+  wins in that project. Every reader goes through `secrets_in_force(org,
+  project)`: phase Runs, previews, the round-resume checks. One redactor
+  (`internal/redact`) runs
   where agent text enters dude: `ledger.Append`, dude's tool calls,
   `run_diffs`, served text artifacts; and the work is scanned before lux
   pushes it (`phases/pushscan.go`). A Run's values come from
-  `run_secret_values` (migration 130). Operator view:
-  [operations](operations.md#project-secrets).
+  `run_secret_values` (migrations 130, 210), organisation values included.
+  Routes: `/v1/organizations/:id/secrets[/:name]` mirror the project's
+  (`api/routes/orgSecrets.ts`; admins change, members read, "Picked by" for
+  admins). Operator view:
+  [operations](operations.md#project-secrets),
+  [organisation secrets](operations.md#organisation-secrets).
 - **A turn is done when the agent goes busy then idle**, as lux's shim
   reports it in the output stream, in order with the agent's messages.
   The exception is a turn that ends with something open for a person: a
@@ -827,10 +837,22 @@ their creator.
   a kept session is ended; the API calls the orchestrator's Start fresh to
   cancel its kept lux Run before deleting the row (and refuses to delete
   if that fails). Both actions require the scope's editor permission.
-- **Secrets.** Chosen project secrets are given to each run as environment
-  variables. Organisation automations choose none: secrets belong to each
-  project, and a project automation is needed to use its secrets. The org
-  page says so instead of showing a picker; the API rejects names there.
+- **Secrets.** An automation picks secrets by source:
+  `secrets: [{source: organization|project, name}]` (migration 210 turned
+  the old name lists into project refs). An own agent, a command or a server
+  gets exactly its picks: an organisation automation the organisation's, a
+  project automation those and its project's. A project automation's
+  organisation pick whose name the project also holds resolves to the
+  project's value at run start (`automation_secrets_given`); the picker
+  shows that row disabled. One of dude's agents picks none: it gets what its
+  role is ticked for at both levels (Tester → tester, Reviewer → reviewer;
+  the Investigator is no recipient), shown read-only. Values are given as
+  environment variables and redact the run's tool calls
+  (`automation_run_secret_values`); a resume gives the current value of
+  every one again.
+- **Checked out None** on a scheduled organisation automation (`repos =
+  "none"`) runs in an empty workspace with its image's tools; Some keeps the
+  repository filter deciding.
 - **Sessions.** Ephemeral (a fresh Run, cancelled at the end) or Resumable:
   one session per automation (`automation_sessions`), stopped and kept at
   the end of a run and resumed by the next firing, until `expiry_days`
