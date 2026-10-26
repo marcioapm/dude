@@ -469,9 +469,9 @@ export interface AgentToolUnavailable {
 /**
  * The tools an automation's agent can call: a wrench, the mono name, an
  * info "New" badge when `fresh`, and its one line, in two columns that
- * stack when the list's own width is narrow (400px). An unavailable tool keeps its row, with an attention
- * Callout under it saying why, that runs calling it fail on the call, and
- * the fix as a link.
+ * stack under 400px of the list's own width. An unavailable tool keeps its
+ * row, with an attention Callout under it saying why, that runs calling it
+ * fail on the call, and the fix as a link.
  */
 export function AgentTools({ tools, unavailable }: {
   readonly tools: readonly AgentTool[];
