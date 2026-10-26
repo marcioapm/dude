@@ -117,9 +117,8 @@ Memory
   memory-archive ID | memory-restore ID
 
 dude itself
-  update [--version vX.Y.Z] [--check]   replace this binary with a GitHub release of
+  upgrade [--version vX.Y.Z] [--check]  replace this binary with a GitHub release of
                                      the CLI (default: the latest); --check only compares
-                                     (also self-update; update TASK changes a task)
   guide [PAGE]                       dude's guide
   judgements [--asker A] [--limit N] [--before ID] | judgement ID
 
@@ -189,7 +188,7 @@ type cli struct {
 	errOut io.Writer
 	// term, when stdin is a terminal, reads login's key without echo.
 	term terminal
-	// updater is self-update's; nil in tests that do not set one.
+	// updater is upgrade's; nil in tests that do not set one.
 	updater *updater
 	cached  string
 	// prompt, when stdin is a terminal, asks for what is read next.
@@ -532,20 +531,14 @@ func (c *cli) run(args []string) error {
 		return nil
 	}
 	name := args[0]
-	// shown is the command as typed: dude update without a TASK runs
-	// self-update but its messages still say dude update.
-	shown := name
-	if name == "update" && selfUpdateArgs(args[1:]) {
-		name = "self-update"
-	}
 	cmd, ok := commands[name]
 	if !ok {
 		return fmt.Errorf("unknown command %q; see dude --help", name)
 	}
-	fs := flag.NewFlagSet("dude "+shown, flag.ContinueOnError)
+	fs := flag.NewFlagSet("dude "+name, flag.ContinueOnError)
 	fs.SetOutput(c.out)
 	fs.Usage = func() {
-		fmt.Fprintf(c.out, "usage: dude %s %s\n\n%s\n", shown, cmd.args, cmd.help)
+		fmt.Fprintf(c.out, "usage: dude %s %s\n\n%s\n", name, cmd.args, cmd.help)
 		fs.PrintDefaults()
 	}
 	do := cmd.flags(fs)
@@ -569,7 +562,7 @@ func (c *cli) run(args []string) error {
 		}
 	}
 	if len(pos) < min || (max >= 0 && len(pos) > max) {
-		return fmt.Errorf("usage: dude %s %s", shown, cmd.args)
+		return fmt.Errorf("usage: dude %s %s", name, cmd.args)
 	}
 	for len(pos) < max {
 		pos = append(pos, "")

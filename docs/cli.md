@@ -24,22 +24,21 @@ on it. `DUDE_VERSION=v1.2.3` installs that release; `DUDE_INSTALL_DIR`
 installs somewhere else. (`DUDE_RELEASES_URL` replaces GitHub's API, for
 tests only.)
 
-Update it later with the CLI itself:
+Upgrade it later with the CLI itself:
 
 ```sh
-dude update --check              # {"current", "latest", "updateAvailable"}; changes nothing
-dude update                      # to the latest release
-dude update --version v1.2.3     # to that release, newer or older
+dude upgrade --check              # {"current", "latest", "updateAvailable"}; changes nothing
+dude upgrade                      # to the latest release
+dude upgrade --version v1.2.3     # to that release, newer or older
 ```
 
-`dude update` downloads and verifies the same way, then writes the new
+`dude upgrade` downloads and verifies the same way, then writes the new
 binary next to the running one and renames it over it. It refuses when it
 cannot write there (installed by a package manager, or to a system
-directory): update it the way it was installed, or re-run with permission.
+directory): upgrade it the way it was installed, or re-run with permission.
 A build from a checkout (`dude --version` says `dev`) is replaced only with
 an explicit `--version`. On Windows it refuses; download the release by
-hand. `dude update TASK …` is still the command that changes a task;
-`dude self-update` is the same as `dude update` with no TASK.
+hand.
 
 By hand, from a release, unpack the tarball and put `bin/dude` on your `PATH`:
 
@@ -318,7 +317,7 @@ A brainstorm is an agent to think something through with; it writes no code.
 
 | Command | Does |
 |---|---|
-| `update [--version vX.Y.Z] [--check]` | Replaces this binary with a GitHub release of the CLI (see [Install](#install)); `--check` only compares versions |
+| `upgrade [--version vX.Y.Z] [--check]` | Replaces this binary with a GitHub release of the CLI (see [Install](#install)); `--check` only compares versions |
 | `guide [PAGE]` | dude's guide: its pages, or one in full (the same text agents search). `dude --help` is this CLI's help. |
 | `judgements [--asker A] [--limit N] [--before ID]` | The judgement calls dude's models made lately; `--before` pages |
 | `judgement ID` | One in full |

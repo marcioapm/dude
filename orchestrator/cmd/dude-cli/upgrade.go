@@ -253,23 +253,23 @@ func (u *updater) check() (obj, error) {
 	return obj{"current": u.current, "latest": r.Tag, "updateAvailable": !devBuild(u.current) && newer(r.Tag, u.current)}, nil
 }
 
-func (u *updater) update(c *cli, want string) (any, error) {
+func (u *updater) upgrade(c *cli, want string) (any, error) {
 	if u.goos != "darwin" && u.goos != "linux" {
-		return nil, fmt.Errorf("update: dude update works on macOS and Linux only; on %s, download dude-cli from https://github.com/marcioapm/dude/releases or build it with go build ./cmd/dude-cli", u.goos)
+		return nil, fmt.Errorf("upgrade: dude upgrade works on macOS and Linux only; on %s, download dude-cli from https://github.com/marcioapm/dude/releases or build it with go build ./cmd/dude-cli", u.goos)
 	}
 	if want != "" && !strings.HasPrefix(want, "v") {
 		want = "v" + want
 	}
 	if want == "" && devBuild(u.current) {
-		return nil, fmt.Errorf("update: this is a development build (%s); give --version vX.Y.Z to replace it with a release", u.current)
+		return nil, fmt.Errorf("upgrade: this is a development build (%s); give --version vX.Y.Z to replace it with a release", u.current)
 	}
 	exe, err := u.exe()
 	if err != nil {
-		return nil, fmt.Errorf("update: where this binary is: %w", err)
+		return nil, fmt.Errorf("upgrade: where this binary is: %w", err)
 	}
 	r, err := u.release(want)
 	if err != nil {
-		return nil, fmt.Errorf("update: %w", err)
+		return nil, fmt.Errorf("upgrade: %w", err)
 	}
 	if r.Tag == u.current || (want == "" && !newer(r.Tag, u.current)) {
 		c.say("dude is already at " + u.current + "; nothing to do")
@@ -278,7 +278,7 @@ func (u *updater) update(c *cli, want string) (any, error) {
 	dir := filepath.Dir(exe)
 	probe, err := os.CreateTemp(dir, ".dude-update-*")
 	if err != nil {
-		return nil, fmt.Errorf("update: cannot write to %s, where this binary is (%s): update it the way it was installed, or re-run with permission to write there", dir, exe)
+		return nil, fmt.Errorf("upgrade: cannot write to %s, where this binary is (%s): upgrade it the way it was installed, or re-run with permission to write there", dir, exe)
 	}
 	probe.Close()
 	os.Remove(probe.Name())
@@ -286,28 +286,28 @@ func (u *updater) update(c *cli, want string) (any, error) {
 	name := fmt.Sprintf("dude-cli_%s_%s_%s.tar.gz", r.Tag, u.goos, u.goarch)
 	sums, err := u.asset(r, "SHA256SUMS")
 	if err != nil {
-		return nil, fmt.Errorf("update: %w", err)
+		return nil, fmt.Errorf("upgrade: %w", err)
 	}
 	wantSum, err := checksum(sums, name)
 	if err != nil {
-		return nil, fmt.Errorf("update: %w", err)
+		return nil, fmt.Errorf("upgrade: %w", err)
 	}
 	tarball, err := u.asset(r, name)
 	if err != nil {
-		return nil, fmt.Errorf("update: %w", err)
+		return nil, fmt.Errorf("upgrade: %w", err)
 	}
 	got := sha256.Sum256(tarball)
 	if gotSum := hex.EncodeToString(got[:]); gotSum != wantSum {
-		return nil, fmt.Errorf("update: %s's SHA-256 is %s, but SHA256SUMS says %s; %s is unchanged", name, gotSum, wantSum, exe)
+		return nil, fmt.Errorf("upgrade: %s's SHA-256 is %s, but SHA256SUMS says %s; %s is unchanged", name, gotSum, wantSum, exe)
 	}
 	bin, err := binary(tarball)
 	if err != nil {
-		return nil, fmt.Errorf("update: %s: %w", name, err)
+		return nil, fmt.Errorf("upgrade: %s: %w", name, err)
 	}
 	if err := replace(exe, bin); err != nil {
-		return nil, fmt.Errorf("update: %w; %s is unchanged", err, exe)
+		return nil, fmt.Errorf("upgrade: %w; %s is unchanged", err, exe)
 	}
-	c.say(fmt.Sprintf("dude updated from %s to %s (%s)", u.current, r.Tag, exe))
+	c.say(fmt.Sprintf("dude upgraded from %s to %s (%s)", u.current, r.Tag, exe))
 	return obj{"updated": true, "from": u.current, "to": r.Tag, "path": exe}, nil
 }
 
@@ -341,40 +341,19 @@ func (c *cli) say(msg string) {
 	}
 }
 
-// selfUpdateArgs is whether `dude update ARGS` means self-update: no TASK,
-// which update needs, and only self-update's flags, or a bare -h/--help.
-func selfUpdateArgs(args []string) bool {
-	if len(args) == 0 {
-		return true
-	}
-	name, _, _ := strings.Cut(strings.TrimLeft(args[0], "-"), "=")
-	if !strings.HasPrefix(args[0], "-") {
-		return false
-	}
-	if name == "h" || name == "help" {
-		for _, a := range args[1:] {
-			if !strings.HasPrefix(a, "-") {
-				return false
-			}
-		}
-		return true
-	}
-	return name == "check" || name == "version"
-}
-
 func init() {
-	commands["self-update"] = command{"", "replace this binary with a release of the dude CLI from GitHub (default: the latest); dude update without a TASK does the same",
+	commands["upgrade"] = command{"", "replace this binary with a release of the dude CLI from GitHub (default: the latest)",
 		func(fs *flag.FlagSet) doer {
 			want := fs.String("version", "", "a release, vX.Y.Z, instead of the latest")
 			check := fs.Bool("check", false, "only print the current and the latest version")
 			return func(c *cli, _ []string) (any, error) {
 				if c.updater == nil {
-					return nil, errors.New("update: not available in this build")
+					return nil, errors.New("upgrade: not available in this build")
 				}
 				if *check {
 					return c.updater.check()
 				}
-				return c.updater.update(c, *want)
+				return c.updater.upgrade(c, *want)
 			}
 		}}
 }

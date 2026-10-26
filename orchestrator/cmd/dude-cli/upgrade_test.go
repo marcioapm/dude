@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -135,9 +134,9 @@ func newFakeRelease(t *testing.T, tag string) *fakeRelease {
 	return f
 }
 
-// selfUpdateCLI is a cli whose updater replaces a fake binary at a temp
+// upgradeCLI is a cli whose updater replaces a fake binary at a temp
 // path, from srv, as linux/amd64 at version current.
-func selfUpdateCLI(t *testing.T, srv *httptest.Server, current string) (*cli, string, *bytes.Buffer, *bytes.Buffer) {
+func upgradeCLI(t *testing.T, srv *httptest.Server, current string) (*cli, string, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	exe := filepath.Join(t.TempDir(), "bin", "dude")
 	os.MkdirAll(filepath.Dir(exe), 0o755)
@@ -161,12 +160,12 @@ func readFile(t *testing.T, p string) string {
 	return string(b)
 }
 
-func TestUpdateReplacesTheBinary(t *testing.T) {
-	for _, args := range [][]string{{"update"}, {"self-update"}, {"update", "--version", "v1.2.0"}, {"update", "--version=1.2.0"}} {
+func TestUpgradeReplacesTheBinary(t *testing.T) {
+	for _, args := range [][]string{{"upgrade"}, {"upgrade", "--version", "v1.2.0"}, {"upgrade", "--version=1.2.0"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			f := newFakeRelease(t, "v1.2.0")
 			srv := f.serve(t)
-			c, exe, out, errOut := selfUpdateCLI(t, srv, "v1.1.0")
+			c, exe, out, errOut := upgradeCLI(t, srv, "v1.1.0")
 			// A hard link keeps the old inode: a rename leaves it alone, an
 			// in-place write would change it.
 			keep := filepath.Join(filepath.Dir(exe), "dude.old")
@@ -179,7 +178,7 @@ func TestUpdateReplacesTheBinary(t *testing.T) {
 			if got := readFile(t, keep); got != "old binary" {
 				t.Fatalf("the old binary was written in place: %q", got)
 			}
-			if want := "dude updated from v1.1.0 to v1.2.0 (" + exe + ")\n"; errOut.String() != want {
+			if want := "dude upgraded from v1.1.0 to v1.2.0 (" + exe + ")\n"; errOut.String() != want {
 				t.Fatalf("stderr %q, want %q", errOut, want)
 			}
 			if got := readFile(t, exe); got != "dude v1.2.0 linux_amd64" {
@@ -204,7 +203,7 @@ func TestUpdateReplacesTheBinary(t *testing.T) {
 	}
 }
 
-func TestUpdateFollowsAssetRedirectsOnlyWithinGitHub(t *testing.T) {
+func TestUpgradeFollowsAssetRedirectsOnlyWithinGitHub(t *testing.T) {
 	assets := newFakeRelease(t, "v1.2.0")
 	assetSrv := assets.serve(t)
 
@@ -212,16 +211,16 @@ func TestUpdateFollowsAssetRedirectsOnlyWithinGitHub(t *testing.T) {
 	f := newFakeRelease(t, "v1.2.0")
 	srv := f.serve(t)
 	f.redirect = srv.URL
-	c, exe, _, _ := selfUpdateCLI(t, srv, "v1.1.0")
-	if err := c.run([]string{"update"}); err != nil || readFile(t, exe) != "dude v1.2.0 linux_amd64" {
+	c, exe, _, _ := upgradeCLI(t, srv, "v1.1.0")
+	if err := c.run([]string{"upgrade"}); err != nil || readFile(t, exe) != "dude v1.2.0 linux_amd64" {
 		t.Fatalf("same-origin redirect: %v %q", err, readFile(t, exe))
 	}
 
 	f = newFakeRelease(t, "v1.2.0")
 	srv = f.serve(t)
 	f.redirect = strings.Replace(assetSrv.URL, "127.0.0.1", "localhost", 1)
-	c, exe, _, _ = selfUpdateCLI(t, srv, "v1.1.0")
-	err := c.run([]string{"update"})
+	c, exe, _, _ = upgradeCLI(t, srv, "v1.1.0")
+	err := c.run([]string{"upgrade"})
 	if err == nil || !strings.Contains(err.Error(), "refusing a redirect to localhost") {
 		t.Fatalf("err = %v", err)
 	}
@@ -233,15 +232,15 @@ func TestUpdateFollowsAssetRedirectsOnlyWithinGitHub(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesAnAssetURLOutsideGitHub(t *testing.T) {
+func TestUpgradeRefusesAnAssetURLOutsideGitHub(t *testing.T) {
 	other := newFakeRelease(t, "v1.2.0")
 	otherSrv := other.serve(t)
 	// Another host name for the same loopback server: refused, so it is
 	// never asked. Only loopback, so a broken check still reaches no network.
 	f := newFakeRelease(t, "v1.2.0")
 	f.assetBase = strings.Replace(otherSrv.URL, "127.0.0.1", "localhost", 1)
-	c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-	err := c.run([]string{"update"})
+	c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+	err := c.run([]string{"upgrade"})
 	if err == nil || !strings.Contains(err.Error(), "refusing to download from localhost") {
 		t.Fatalf("err = %v", err)
 	}
@@ -257,7 +256,7 @@ func TestUpdateRefusesAnAssetURLOutsideGitHub(t *testing.T) {
 
 // Entries ahead of bin/dude that are named dude, or are a link named
 // bin/dude, are skipped: the regular bin/dude is what is installed.
-func TestUpdateInstallsBinDudePastDecoys(t *testing.T) {
+func TestUpgradeInstallsBinDudePastDecoys(t *testing.T) {
 	for name, decoy := range map[string][]any{
 		"share/dude":        {tar.Header{Name: "share/dude", Mode: 0o755, Typeflag: tar.TypeReg}, "decoy"},
 		"dude":              {tar.Header{Name: "dude", Mode: 0o755, Typeflag: tar.TypeReg}, "decoy"},
@@ -269,8 +268,8 @@ func TestUpdateInstallsBinDudePastDecoys(t *testing.T) {
 			asset := "dude-cli_v1.2.0_linux_amd64.tar.gz"
 			f.assets[asset] = tarball(t, append(decoy, tar.Header{Name: "bin/dude", Mode: 0o755, Typeflag: tar.TypeReg}, "dude v1.2.0 linux_amd64")...)
 			f.sums = sha(f.assets[asset]) + "  " + asset + "\n"
-			c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-			if err := c.run([]string{"update"}); err != nil {
+			c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+			if err := c.run([]string{"upgrade"}); err != nil {
 				t.Fatal(err)
 			}
 			if got := readFile(t, exe); got != "dude v1.2.0 linux_amd64" {
@@ -295,12 +294,12 @@ func TestGitHubHosts(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesAWrongChecksum(t *testing.T) {
+func TestUpgradeRefusesAWrongChecksum(t *testing.T) {
 	f := newFakeRelease(t, "v1.2.0")
 	name := "dude-cli_v1.2.0_linux_amd64.tar.gz"
 	f.sums = strings.Repeat("0", 64) + "  " + name + "\n"
-	c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-	err := c.run([]string{"update"})
+	c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+	err := c.run([]string{"upgrade"})
 	if err == nil || !strings.Contains(err.Error(), "SHA256SUMS says") || !strings.Contains(err.Error(), "unchanged") {
 		t.Fatalf("err = %v", err)
 	}
@@ -309,11 +308,11 @@ func TestUpdateRefusesAWrongChecksum(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesATarballSHA256SUMSDoesNotList(t *testing.T) {
+func TestUpgradeRefusesATarballSHA256SUMSDoesNotList(t *testing.T) {
 	f := newFakeRelease(t, "v1.2.0")
 	f.sums = sha(f.assets["dude-cli_v1.2.0_darwin_arm64.tar.gz"]) + "  dude-cli_v1.2.0_darwin_arm64.tar.gz\n"
-	c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-	if err := c.run([]string{"update"}); err == nil || !strings.Contains(err.Error(), "no line for dude-cli_v1.2.0_linux_amd64.tar.gz") {
+	c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+	if err := c.run([]string{"upgrade"}); err == nil || !strings.Contains(err.Error(), "no line for dude-cli_v1.2.0_linux_amd64.tar.gz") {
 		t.Fatalf("err = %v", err)
 	}
 	if got := readFile(t, exe); got != "old binary" {
@@ -321,12 +320,12 @@ func TestUpdateRefusesATarballSHA256SUMSDoesNotList(t *testing.T) {
 	}
 }
 
-func TestUpdateNamesAMissingAsset(t *testing.T) {
+func TestUpgradeNamesAMissingAsset(t *testing.T) {
 	for _, missing := range []string{"dude-cli_v1.2.0_linux_amd64.tar.gz", "SHA256SUMS"} {
 		f := newFakeRelease(t, "v1.2.0")
 		delete(f.assets, missing)
-		c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-		if err := c.run([]string{"update"}); err == nil || !strings.Contains(err.Error(), "release v1.2.0 has no "+missing) {
+		c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+		if err := c.run([]string{"upgrade"}); err == nil || !strings.Contains(err.Error(), "release v1.2.0 has no "+missing) {
 			t.Fatalf("%s: err = %v", missing, err)
 		}
 		if got := readFile(t, exe); got != "old binary" {
@@ -334,13 +333,13 @@ func TestUpdateNamesAMissingAsset(t *testing.T) {
 		}
 	}
 	f := newFakeRelease(t, "v1.2.0")
-	c, _, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-	if err := c.run([]string{"update", "--version", "v9.9.9"}); err == nil || !strings.Contains(err.Error(), "no release v9.9.9") {
+	c, _, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+	if err := c.run([]string{"upgrade", "--version", "v9.9.9"}); err == nil || !strings.Contains(err.Error(), "no release v9.9.9") {
 		t.Fatalf("unknown version: %v", err)
 	}
 }
 
-func TestUpdateCheck(t *testing.T) {
+func TestUpgradeCheck(t *testing.T) {
 	for _, tc := range []struct {
 		current, want string
 	}{
@@ -350,8 +349,8 @@ func TestUpdateCheck(t *testing.T) {
 		{"dev", `{"current":"dev","latest":"v1.2.0","updateAvailable":false}`},
 	} {
 		f := newFakeRelease(t, "v1.2.0")
-		c, exe, out, _ := selfUpdateCLI(t, f.serve(t), tc.current)
-		if err := c.run([]string{"update", "--check"}); err != nil {
+		c, exe, out, _ := upgradeCLI(t, f.serve(t), tc.current)
+		if err := c.run([]string{"upgrade", "--check"}); err != nil {
 			t.Fatal(err)
 		}
 		var got map[string]any
@@ -365,11 +364,11 @@ func TestUpdateCheck(t *testing.T) {
 	}
 }
 
-func TestUpdateAtTheLatestDoesNothing(t *testing.T) {
+func TestUpgradeAtTheLatestDoesNothing(t *testing.T) {
 	for _, current := range []string{"v1.2.0", "v1.3.0"} {
 		f := newFakeRelease(t, "v1.2.0")
-		c, exe, _, errOut := selfUpdateCLI(t, f.serve(t), current)
-		if err := c.run([]string{"update"}); err != nil {
+		c, exe, _, errOut := upgradeCLI(t, f.serve(t), current)
+		if err := c.run([]string{"upgrade"}); err != nil {
 			t.Fatal(err)
 		}
 		if readFile(t, exe) != "old binary" || len(f.requests) != 1 || !strings.Contains(errOut.String(), "already at "+current) {
@@ -378,27 +377,27 @@ func TestUpdateAtTheLatestDoesNothing(t *testing.T) {
 	}
 }
 
-func TestUpdateOfADevBuildNeedsAVersion(t *testing.T) {
+func TestUpgradeOfADevBuildNeedsAVersion(t *testing.T) {
 	f := newFakeRelease(t, "v1.2.0")
-	c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "dev")
-	if err := c.run([]string{"update"}); err == nil || !strings.Contains(err.Error(), "development build") || len(f.requests) != 0 {
+	c, exe, _, _ := upgradeCLI(t, f.serve(t), "dev")
+	if err := c.run([]string{"upgrade"}); err == nil || !strings.Contains(err.Error(), "development build") || len(f.requests) != 0 {
 		t.Fatalf("err = %v, requests %v", err, f.requests)
 	}
-	if err := c.run([]string{"update", "--version", "v1.2.0"}); err != nil || readFile(t, exe) != "dude v1.2.0 linux_amd64" {
+	if err := c.run([]string{"upgrade", "--version", "v1.2.0"}); err != nil || readFile(t, exe) != "dude v1.2.0 linux_amd64" {
 		t.Fatalf("with --version: %v", err)
 	}
 }
 
-func TestUpdateRefusesAnUnwritableDirectory(t *testing.T) {
+func TestUpgradeRefusesAnUnwritableDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes to a 0555 directory")
 	}
 	f := newFakeRelease(t, "v1.2.0")
-	c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
+	c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
 	dir := filepath.Dir(exe)
 	os.Chmod(dir, 0o555)
 	t.Cleanup(func() { os.Chmod(dir, 0o755) })
-	err := c.run([]string{"update"})
+	err := c.run([]string{"upgrade"})
 	if err == nil || !strings.Contains(err.Error(), "cannot write to "+dir) || !strings.Contains(err.Error(), "the way it was installed") {
 		t.Fatalf("err = %v", err)
 	}
@@ -407,25 +406,27 @@ func TestUpdateRefusesAnUnwritableDirectory(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesWindows(t *testing.T) {
+func TestUpgradeRefusesWindows(t *testing.T) {
 	f := newFakeRelease(t, "v1.2.0")
-	c, _, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
+	c, _, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
 	c.updater.goos = "windows"
-	if err := c.run([]string{"update"}); err == nil || !strings.Contains(err.Error(), "macOS and Linux only") || len(f.requests) != 0 {
+	if err := c.run([]string{"upgrade"}); err == nil || !strings.Contains(err.Error(), "macOS and Linux only") || len(f.requests) != 0 {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-// update TASK still changes a task; only update without one updates dude.
-func TestUpdateWithATaskIsTheTaskCommand(t *testing.T) {
-	for args, self := range map[string]bool{
-		"": true, "--check": true, "-check": true, "--version v1.2.0": true, "--version=v1.2.0": true,
-		"wi_12 --title x": false, "--title x wi_12": false,
-		"--help": true, "-h": true, "--help wi_12": false, "wi_12 --help": false,
-	} {
-		if got := selfUpdateArgs(strings.Fields(args)); got != self {
-			t.Errorf("update %s: self-update %v, want %v", args, got, self)
+// update is the task command only: without a TASK it is a usage error and
+// never reaches the updater.
+func TestUpdateIsTheTaskCommand(t *testing.T) {
+	f := newFakeRelease(t, "v1.2.0")
+	c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+	for _, args := range [][]string{{"update"}, {"update", "--check"}, {"update", "--version", "v1.2.0"}} {
+		if err := c.run(args); err == nil || !strings.HasPrefix(err.Error(), "usage: dude update TASK") && !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Errorf("%v: err = %v", args, err)
 		}
+	}
+	if readFile(t, exe) != "old binary" || len(f.requests) != 0 {
+		t.Fatalf("update without a TASK reached the updater: %v", f.requests)
 	}
 	srv, calls := fakeDude(t)
 	if _, err := runCLI(t, srv, "", "update", "wi_12", "--title", "x"); err != nil || last(*calls).method != "PATCH" {
@@ -433,32 +434,22 @@ func TestUpdateWithATaskIsTheTaskCommand(t *testing.T) {
 	}
 }
 
-func TestUpdateHelpAndUsageNameDudeUpdate(t *testing.T) {
+func TestUpgradeHelpAndUsageNameDudeUpgrade(t *testing.T) {
 	for _, help := range []string{"--help", "-h"} {
 		f := newFakeRelease(t, "v1.2.0")
-		c, _, out, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-		if err := c.run([]string{"update", help}); err != nil {
+		c, _, out, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+		if err := c.run([]string{"upgrade", help}); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.HasPrefix(out.String(), "usage: dude update \n") || !strings.Contains(out.String(), "-check") || strings.Contains(out.String(), "-title") {
+		if !strings.HasPrefix(out.String(), "usage: dude upgrade \n") || !strings.Contains(out.String(), "-check") || !strings.Contains(out.String(), "-version") {
 			t.Fatalf("%s:\n%s", help, out)
 		}
 	}
-	f := newFakeRelease(t, "v1.2.0")
-	c, _, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
-	if err := c.run([]string{"update", "--check", "extra"}); err == nil || err.Error() != "usage: dude update " || len(f.requests) != 0 {
-		t.Fatalf("err = %v, requests %v", err, f.requests)
-	}
-}
-
-// self-update claims dude update's --check and --version, so the task
-// command must never grow flags by those names.
-func TestTaskUpdateHasNoSelfUpdateFlags(t *testing.T) {
-	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	commands["update"].flags(fs)
-	for _, name := range []string{"check", "version"} {
-		if fs.Lookup(name) != nil {
-			t.Errorf("update TASK has a --%s flag, which dude update would read as self-update's", name)
+	for _, args := range [][]string{{"upgrade", "extra"}, {"upgrade", "--check", "extra"}} {
+		f := newFakeRelease(t, "v1.2.0")
+		c, _, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
+		if err := c.run(args); err == nil || err.Error() != "usage: dude upgrade " || len(f.requests) != 0 {
+			t.Fatalf("%v: err = %v, requests %v", args, err, f.requests)
 		}
 	}
 }
