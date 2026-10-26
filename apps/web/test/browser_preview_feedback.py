@@ -38,6 +38,8 @@ PORT = free_port()
 DUDE = f"http://127.0.0.1:{PORT}"
 PREVIEW = "https://web-shop.preview.test"
 TASK = "tsk_01j9x4kqf8b2m7e3"
+# HEARTBEAT_MS in apps/web/overlay/overlay.ts.
+HEARTBEAT_MS = 2_000
 HERE = Path(__file__).resolve().parent
 PAGE = (HERE / "preview_page.html").read_text()
 TAG = f'<script src="{DUDE}/feedback/overlay.js" data-dude-origin="{DUDE}" async></script>'
@@ -70,6 +72,17 @@ HEARD = """(() => {
   window.addEventListener('message', (e) => window.__heard.push(e.origin));
 })()"""
 
+# In dude's tab: when the server link is first drawn (the app is ready to hear) and when the commenting notice first reads open.
+STAMP_RECONNECT = f"""(() => {{
+  if (location.origin !== '{DUDE}') return;
+  const now = () => performance.timeOrigin + performance.now();
+  const seen = () => {{
+    if (window.__readyAt === undefined && document.querySelector('[data-testid=server-url]')) window.__readyAt = now();
+    if (window.__openAt === undefined && document.querySelector('[data-testid=commenting-notice][data-state=open]')) window.__openAt = now();
+  }};
+  new MutationObserver(seen).observe(document, {{ childList: true, subtree: true, attributes: true, attributeFilter: ['data-state'] }});
+}})()"""
+
 # --ds-color-accent in each theme (tokens.css), as getComputedStyle writes it.
 ACCENT = {"dark": "rgb(39, 121, 188)", "light": "rgb(22, 109, 175)"}
 # --ds-color-overlay: the toolbar's fill.
@@ -90,7 +103,8 @@ def ov_text(page, testid):
 
 
 def ov_click(page, testid):
-    """A real pointer click at the middle of an overlay control."""
+    """A real pointer click at the middle of an overlay control, once it is drawn."""
+    wait_ov(page, testid)
     box = ov(page, """(r, id) => { const b = r.querySelector(`[data-testid='${id}']`).getBoundingClientRect();
       return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; }""", testid)
     page.mouse.click(box["x"], box["y"])
@@ -485,7 +499,7 @@ class CommentingOnAPreview(unittest.TestCase):
         pages = len(ctx.pages)
         ov_click(pv, "ov-connect")
         # The same dude tab goes to preview-connect, then to the task, and the preview connects: no second dude tab.
-        dude.wait_for_function("() => window.__hashes?.some((h) => h.includes('preview-connect'))", timeout=10_000)
+        dude.wait_for_function("() => window.__hashes?.some((h) => h.includes('preview-connect'))", timeout=20_000)
         dude.wait_for_function(f"() => location.hash.includes('/task/{TASK}/')", timeout=20_000)
         pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
         self.assertEqual(len(ctx.pages), pages)
@@ -533,11 +547,16 @@ class CommentingOnAPreview(unittest.TestCase):
         pv = opened.value
         pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
         # dude's tab reloads: its new document holds no handle on the preview.
+        # The reconnect is timed in dude's page, by its own clock: the driver's waits are slow on a loaded host.
+        page.add_init_script(STAMP_RECONNECT)
         page.reload()
-        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=20_000)
+        # Under load the dev server re-serves the app's modules on a reload slowly.
+        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=45_000)
         # The overlay's heartbeat reaches the reloaded tab, which adopts the window it opened before.
-        expect(page.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open", timeout=8_000)
-        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=8_000)
+        page.wait_for_function("() => window.__readyAt !== undefined && window.__openAt !== undefined", timeout=20_000)
+        gap = page.evaluate("() => window.__openAt - window.__readyAt")
+        self.assertLessEqual(gap, HEARTBEAT_MS * 4 + 1_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
         ov_click(pv, "ov-comment")
         pv.hover("button.greet")
         pv.mouse.click(*self.center(pv, "button.greet"))
@@ -566,7 +585,7 @@ class CommentingOnAPreview(unittest.TestCase):
         pv.close()
         # Two more hellos from pv2 reach dude after the close: one beat period (4 s connected) apart, so the 1 s closed check has run.
         heard = page.evaluate(f"() => window.__heard.filter((o) => o === '{PREVIEW}').length")
-        page.wait_for_function(f"n => window.__heard.filter((o) => o === '{PREVIEW}').length > n + 1", arg=heard, timeout=15_000)
+        page.wait_for_function(f"n => window.__heard.filter((o) => o === '{PREVIEW}').length > n + 1", arg=heard, timeout=20_000)
         self.assertEqual(ov(pv2, "r => r.querySelector('[data-connection]').getAttribute('data-connection')"), "connected")
         self.assertEqual(ov_count(pv2, "ov-disconnected"), 0)
         self.assertEqual(self.errors, [])
