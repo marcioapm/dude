@@ -1131,6 +1131,10 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 		if err != nil {
 			return "", "", "", err
 		}
+		// Filed from a chat-born session: fenced as the session is.
+		if err := delivery.InheritOrigin(ctx, tx, "epics", epicID, sessionID, ""); err != nil {
+			return "", "", "", err
+		}
 		// Its notes, pinned as the filer's from the session, in order.
 		for _, text := range item.Notes {
 			if _, err := delivery.PinNoteTx(ctx, tx, org, delivery.PinInput{EpicID: epicID, Text: text, Person: f.Person,
@@ -1169,6 +1173,9 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 			}
 		}
 		id, key, err := delivery.CreateTaskTx(ctx, tx, org, project, f, epic, item.Title, strings.TrimSpace(item.Goal), item.AcceptanceCriteria)
+		if err == nil {
+			err = delivery.InheritOrigin(ctx, tx, "tasks", id, sessionID, "")
+		}
 		return key, id, "", err
 	case "edit":
 		k, _ := delivery.TaskKey(item.Task)

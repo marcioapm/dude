@@ -58,7 +58,9 @@ const TASK_SELECT = `
         THEN substring(w.state->>'branch' from '/attempt-([0-9]{1,6})$')::int END, 1),
       'decider', COALESCE(w.state->>'decider', 'policy'), 'branch', NULLIF(w.state->>'branch', '')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
-  title, goal, acceptance_criteria AS "acceptanceCriteria", status, origin,
+  title, goal, acceptance_criteria AS "acceptanceCriteria", status,
+  -- An origin a task inherited from a chat-born session (via) fences it but is not where it came from.
+  CASE WHEN origin->>'via' IS NOT NULL THEN NULL ELSE origin END AS origin,
   -- Lifecycle (migrations 157/158): why a person ended it, and whether it is put away.
   resolution, archived_at AS "archivedAt",
   (SELECT person_ref(p) FROM people p WHERE p.id = tasks.closed_by) AS "closedBy",

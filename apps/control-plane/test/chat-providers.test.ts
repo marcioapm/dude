@@ -453,6 +453,18 @@ describe("settings", () => {
     await hide(adminKey, []);
   });
 
+  test("a task filed from a chat-born session is fenced by its origin, but is not shown as having come from chat", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_fil', ${ORG}, 'Filed', 'fil', 'FIL')
+      ON CONFLICT DO NOTHING`;
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, origin) VALUES
+      ('wi_via', ${ORG}, 'prj_fil', 1, 'Through a session', '{"provider":"slack","via":"session","from":"ssn_x"}'::jsonb),
+      ('wi_direct', ${ORG}, 'prj_fil', 2, 'From Slack', '{"provider":"slack","conversationName":"#nightly"}'::jsonb)`;
+    expect((await (await call(adminKey, "GET", "/v1/tasks/wi_via")).json() as Json).origin).toBeNull();
+    expect((await (await call(adminKey, "GET", "/v1/tasks/wi_direct")).json() as Json).origin.conversationName).toBe("#nightly");
+    const nav = JSON.stringify(await (await call(adminKey, "GET", "/v1/navigation")).json());
+    expect(nav).not.toContain("ssn_x");
+  });
+
   test("disconnect is an admin's, and unlinking one's own", async () => {
     expect((await call(memberKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(403);
     expect((await call(adminKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(204);

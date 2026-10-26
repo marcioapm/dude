@@ -22,18 +22,18 @@ var errHandled = errors.New("the delivery was handled already")
 // A session's also carries the thread as quoted and how it was routed, for
 // its routing line.
 type Origin struct {
-	Provider         string          `json:"provider"`
-	WorkspaceID      string          `json:"workspaceId"`
-	ConversationID   string          `json:"conversationId"`
-	ConversationName string          `json:"conversationName"`
-	ConversationKind string          `json:"conversationKind"`
-	ThreadID         string          `json:"threadId"`
+	Provider         string `json:"provider"`
+	WorkspaceID      string `json:"workspaceId"`
+	ConversationID   string `json:"conversationId"`
+	ConversationName string `json:"conversationName"`
+	ConversationKind string `json:"conversationKind"`
+	ThreadID         string `json:"threadId"`
 	// The mention was at the conversation's top level, not in a thread:
 	// its context is the channel before it.
-	TopLevel  bool            `json:"topLevel,omitempty"`
-	Permalink string          `json:"permalink"`
-	RequestedBy      string          `json:"requestedBy"`
-	Thread           []quotedMessage `json:"thread,omitempty"`
+	TopLevel    bool            `json:"topLevel,omitempty"`
+	Permalink   string          `json:"permalink"`
+	RequestedBy string          `json:"requestedBy"`
+	Thread      []quotedMessage `json:"thread,omitempty"`
 	// The channel before a top-level mention, as quoted.
 	Channel []quotedMessage `json:"channel,omitempty"`
 	Routing *routingFacts   `json:"routing,omitempty"`

@@ -55,10 +55,9 @@ func (f Fence) Keep(projects []string) []string {
 }
 
 // FenceOf is the fence of the session (or, with no session, the task)
-// named: its origin's provider's hidden projects. A task filed from a
-// session started from chat has its own origin only when chat filed it; a
-// task with none is fenced by the session that proposed it only through
-// that session's own tools.
+// named: its origin's provider's hidden projects. A task or epic filed from
+// a chat-born session, or made by such a task's agent, carries the
+// provider in its own origin (InheritOrigin), so it is fenced the same way.
 func FenceOf(ctx context.Context, tx pgx.Tx, sessionID, taskID string) (Fence, error) {
 	var provider *string
 	var err error
@@ -91,4 +90,39 @@ func HiddenFrom(ctx context.Context, tx pgx.Tx, provider string) (Fence, error) 
 	}
 	hidden, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	return Fence{Provider: provider, Hidden: hidden}, err
+}
+
+// InheritOrigin gives a task or epic (table "tasks" or "epics", id) made
+// from a session or a task that came from chat that origin's provider, so
+// the same fence holds for it: {provider, via, from} with via "session" or
+// "task" and from its id. It carries no conversation: it did not come from
+// chat itself. Nothing is written when the source has no chat provider, or
+// the row has an origin of its own.
+func InheritOrigin(ctx context.Context, tx pgx.Tx, table, id, fromSession, fromTask string) error {
+	var provider *string
+	var via, from string
+	var err error
+	switch {
+	case fromSession != "":
+		via, from = "session", fromSession
+		err = tx.QueryRow(ctx, `SELECT origin->>'provider' FROM sessions WHERE id = $1`, fromSession).Scan(&provider)
+	case fromTask != "":
+		via, from = "task", fromTask
+		err = tx.QueryRow(ctx, `SELECT COALESCE(t.origin->>'provider', e.origin->>'provider') FROM tasks t
+			LEFT JOIN epics e ON e.id = t.epic_id WHERE t.id = $1`, fromTask).Scan(&provider)
+	default:
+		return nil
+	}
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil || provider == nil || *provider == "" {
+		return err
+	}
+	query := `UPDATE tasks SET origin = jsonb_build_object('provider', $2::text, 'via', $3::text, 'from', $4::text) WHERE id = $1 AND origin IS NULL`
+	if table == "epics" {
+		query = `UPDATE epics SET origin = jsonb_build_object('provider', $2::text, 'via', $3::text, 'from', $4::text) WHERE id = $1 AND origin IS NULL`
+	}
+	_, err = tx.Exec(ctx, query, id, *provider, via, from)
+	return err
 }

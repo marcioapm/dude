@@ -364,6 +364,10 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 		id, c.Org, c.ProjectID, number, epicID, title, strings.TrimSpace(in.Goal), criteria, byRun, byAutomation); err != nil {
 		return createTaskOut{}, err
 	}
+	// Made by the agent of a task (or session) that came from chat: fenced as it is.
+	if err := delivery.InheritOrigin(ctx, tx, "tasks", id, c.SessionID, c.TaskID); err != nil {
+		return createTaskOut{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO task_people (task_id, person_id, organization_id, position)
 		SELECT $1, p.id, $2, 0 FROM task_people tp JOIN people p ON p.id = tp.person_id
 		WHERE tp.task_id = $3 AND p.removed_at IS NULL
