@@ -37,7 +37,6 @@ func TestStructuredIsRecordedAsAJudgementWithItsOwnInstructions(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 	body := w.proxy.bodies[0]
-	// Chat routing is sent without a temperature too: the proxy answers 400 to one for the Claude models.
 	if _, has := body["temperature"]; has {
 		t.Errorf("temperature sent: %v", body)
 	}

@@ -263,10 +263,8 @@ type APIError struct{ Method, Code string }
 
 func (e *APIError) Error() string { return fmt.Sprintf("slack %s: %s", e.Method, e.Code) }
 
-// jsonMethods are the methods dude calls with a JSON body: they carry
-// blocks, which a form cannot. Slack reads JSON only for some write
-// methods; a read (conversations.info, users.info, …) given JSON answers
-// invalid_arguments, so every other method is form-encoded.
+// jsonMethods send blocks as JSON; other methods use form encoding
+// because Slack reads reject JSON with invalid_arguments.
 var jsonMethods = map[string]bool{"chat.postMessage": true, "chat.postEphemeral": true, "chat.update": true}
 
 // call POSTs one Web API method, as JSON for jsonMethods and form-encoded

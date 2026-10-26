@@ -98,11 +98,7 @@ func messages(question, context string) []llm.Message {
 	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}
 }
 
-// call is the request a question on t is sent as. No temperature: the
-// proxy refuses one for the Claude models ("Bad request", seen live on
-// every tier). A non-reasoning model then samples at its provider's
-// default, so a repeated question can differ; the answer is parsed
-// tolerantly and a failure falls back, so nothing relies on it.
+// call omits temperature: the proxy answers 400 to one (seen for Claude and GPT tiers).
 func call(t Tier, question, context string) llm.Call {
 	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question, context),
 		MaxTokens: maxTokens}

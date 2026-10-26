@@ -165,7 +165,6 @@ func TestAJudgementIsOneCallRecorded(t *testing.T) {
 	if body["model"] != "gpt-6-sol-mini" || body["reasoning_effort"] != "low" || body["max_tokens"] != float64(1024) {
 		t.Errorf("body = %v", body)
 	}
-	// The proxy answers 400 to a temperature for the Claude models.
 	if _, has := body["temperature"]; has {
 		t.Errorf("temperature sent: %v", body)
 	}

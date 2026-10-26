@@ -362,8 +362,7 @@ func str(a map[string]json.RawMessage, k string) string {
 	return ""
 }
 
-// jsonMethods are the methods that read a JSON body, as Slack's do: any
-// other method given one answers invalid_arguments, as Slack's reads do.
+// jsonMethods accept JSON; other methods reject it with invalid_arguments.
 var jsonMethods = map[string]bool{"chat.postMessage": true, "chat.postEphemeral": true, "chat.update": true,
 	"reactions.add": true, "reactions.remove": true}
 

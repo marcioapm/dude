@@ -414,10 +414,7 @@ func TestTheFakeRefusesMissingScopesAndChannelsTheBotIsNotIn(t *testing.T) {
 	}
 }
 
-// Slack reads a JSON body only for some write methods; its reads answer
-// invalid_arguments to one (seen live on conversations.info). So only the
-// methods that carry blocks go as JSON, and every call carries the token
-// as a bearer, never in the body.
+// Only message methods send JSON; tokens are bearer-only for every call.
 func TestOnlyTheMessageMethodsSendJSON(t *testing.T) {
 	got := map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -434,16 +431,16 @@ func TestOnlyTheMessageMethodsSendJSON(t *testing.T) {
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
 	inst := chat.Installation{WorkspaceID: "T1", Token: "xoxb-test"}
 	ctx := context.Background()
-	_, _ = p.Conversation(ctx, inst, "C1")
-	_, _ = p.ListMembers(ctx, inst, "C1")
-	_, _ = p.User(ctx, inst, "U1")
-	_, _ = p.FetchThread(ctx, inst, "C1", "1.2", "")
-	_, _ = p.PostReply(ctx, inst, "C1", "", chat.Reply{Text: "x"})
-	_ = p.PostEphemeral(ctx, inst, "C1", "", "U1", chat.Reply{Text: "x"})
-	_ = p.UpdateQuestion(ctx, inst, "C1", "1.2", chat.ExternalUser{}, "x")
-	_ = p.React(ctx, inst, "C1", "1.2", chat.ReactionWorking)
-	_ = p.React(ctx, inst, "C1", "1.2", chat.ReactionDone)
-	_ = p.Revoke(ctx, inst)
+	p.Conversation(ctx, inst, "C1")
+	p.ListMembers(ctx, inst, "C1")
+	p.User(ctx, inst, "U1")
+	p.FetchThread(ctx, inst, "C1", "1.2", "")
+	p.PostReply(ctx, inst, "C1", "", chat.Reply{Text: "x"})
+	p.PostEphemeral(ctx, inst, "C1", "", "U1", chat.Reply{Text: "x"})
+	p.UpdateQuestion(ctx, inst, "C1", "1.2", chat.ExternalUser{}, "x")
+	p.React(ctx, inst, "C1", "1.2", chat.ReactionWorking)
+	p.React(ctx, inst, "C1", "1.2", chat.ReactionDone)
+	p.Revoke(ctx, inst)
 	const form, jsonBody = "application/x-www-form-urlencoded", "application/json"
 	for method, want := range map[string]string{"conversations.info": form, "conversations.members": form,
 		"conversations.replies": form, "users.info": form, "reactions.add": form, "reactions.remove": form, "auth.revoke": form,
