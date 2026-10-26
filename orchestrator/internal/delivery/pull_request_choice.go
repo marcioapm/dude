@@ -60,16 +60,24 @@ func PullRequestChoiceTx(ctx context.Context, tx pgx.Tx, taskID string) (string,
 // held or made a draft by it.
 func (s *Store) FirstPullRequestChoice(ctx context.Context, org, taskID string) (string, error) {
 	choice := ""
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		opened, err := PullRequestOpenedTx(ctx, tx, taskID)
-		if err != nil || opened {
-			return err
-		}
-		choice, err = PullRequestChoiceTx(ctx, tx, taskID)
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		choice, err = firstPullRequestChoiceTx(ctx, tx, taskID)
 		return err
 	})
 	return choice, err
 }
+
+func firstPullRequestChoiceTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	opened, err := PullRequestOpenedTx(ctx, tx, taskID)
+	if err != nil || opened {
+		return "", err
+	}
+	return PullRequestChoiceTx(ctx, tx, taskID)
+}
+
+// ReasonChoiceChanged is the task's status reason once a change of its
+// choice released the hold its Ask me first made.
+const ReasonChoiceChanged = "the owner changed what happens before the pull request"
 
 // choiceReleased says a hold the task's Ask me first made is no longer
 // asked for: its choice changed since. It drops the hold's decision; the
@@ -82,10 +90,34 @@ func (w *steps) choiceReleased(ctx context.Context, sc workflow.StepContext, st 
 	if err != nil || choice == PullRequestAsk || choice == "" {
 		return false, err
 	}
+	releaseChoiceGate(st)
+	return true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", ReasonChoiceChanged)
+}
+
+func releaseChoiceGate(st *State) {
 	st.Decision = nil
 	st.Decisions++
 	st.GateRequired, st.ChoiceGate = false, false
-	return true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "the owner changed what happens before the pull request")
+}
+
+// choiceReleasedAtCommitTx reads the choice again as a step parking at the
+// hold its Ask me first makes commits (recheck): a change saved while the
+// step entered the hold found no hold to signal (HeldByChoice), so the park
+// becomes the opening here, in the transition's transaction.
+func choiceReleasedAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, res workflow.Result) (workflow.Result, bool, error) {
+	d := st.Decision
+	if res.Next != "conductorDecision" || !st.ChoiceGate || st.conducted() || d == nil || d.Point != PointBeforePR || d.Taken != nil {
+		return res, false, nil
+	}
+	choice, err := firstPullRequestChoiceTx(ctx, tx, st.TaskID)
+	if err != nil || choice == PullRequestAsk || choice == "" {
+		return res, false, err
+	}
+	releaseChoiceGate(st)
+	if _, err := SetTaskStatusTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID, "", "running", ReasonChoiceChanged); err != nil {
+		return res, false, err
+	}
+	return workflow.Result{Next: "openPullRequest", State: st}, true, nil
 }
 
 // FeedbackStillOpenText is why the opening is refused at the hold while

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -158,6 +159,40 @@ func TestChangingAskMeFirstWhileHeldOpensThePullRequest(t *testing.T) {
 		t.Fatalf("the owner's change: %d %v", code, out)
 	}
 	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+}
+
+// The owner changes Ask me first to Open it while Deliver is entering the
+// hold: no hold is on record yet to wake, so the step's commit reads the
+// choice again and opens instead of holding.
+func TestAChoiceChangedWhileEnteringTheHoldOpensThePullRequest(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	task := w.task()
+	w.assignOwner(task, ana)
+	var once sync.Once
+	armed := w.gated(func(step, next string) {
+		if step != "openPullRequest" || next != "conductorDecision" {
+			return
+		}
+		once.Do(func() {
+			if code, out := w.putAs(ana, "/internal/tasks/"+task+"/pull-request-choice", map[string]any{"choice": "open"}); code != 200 {
+				t.Errorf("the owner's change while entering the hold: %d %v", code, out)
+			}
+		})
+	})
+	armed.Store(true)
+	w.deliver(task)
+	w.projectChoice(delivery.PullRequestAsk)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if w.gh.Pulls()[0].Draft {
+		t.Error("Open it opened a draft")
+	}
+	if w.heldBeforePR(task) {
+		t.Error("the delivery is still held")
+	}
+	if s := w.taskStatus(task); s == "awaiting_input" {
+		t.Errorf("task %s once its pull request opened", s)
+	}
 }
 
 // The owner's Open authorizes the heads they saw. Heads that moved before

@@ -167,7 +167,9 @@ type Routed struct {
 // reached is the conductor's when the row, locked now, says the conductor
 // decides — whether it did when the step was claimed, or took over while
 // the step's mechanics ran — and the policy's otherwise. A gate
-// authorization the step asked for (gateAuthorized) is recorded here too.
+// authorization the step asked for (gateAuthorized) is recorded here too,
+// and a park at the hold of the task's Ask me first reads the choice again
+// (choiceReleasedAtCommitTx).
 func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
 	if sc.Step != "decide" {
 		var raw []byte
@@ -183,8 +185,11 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		}
 	}
 	st, ok := res.State.(*State)
-	if !ok || st.Routed == nil && !st.authorizeGate {
+	if !ok {
 		return res, false, nil
+	}
+	if st.Routed == nil && !st.authorizeGate {
+		return choiceReleasedAtCommitTx(ctx, tx, sc, st, res)
 	}
 	if st.authorizeGate {
 		st.authorizeGate = false
