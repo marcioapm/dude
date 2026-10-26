@@ -120,12 +120,15 @@ type ConversationInfo struct {
 	Name string
 }
 
-// ThreadMessage is one message of a thread, oldest first.
+// ThreadMessage is one message of a thread or channel. Text is everything
+// the message shows as text: its body, attachments and blocks, links kept.
+// A bot's message carries the bot's name as the provider shows it.
 type ThreadMessage struct {
-	ID     string
-	UserID string
-	Text   string
-	Bot    bool
+	ID      string
+	UserID  string
+	Text    string
+	Bot     bool
+	BotName string
 }
 
 // Reply is what dude posts: words, and optionally a link with its label

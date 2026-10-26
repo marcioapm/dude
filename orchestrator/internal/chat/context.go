@@ -28,6 +28,8 @@ type quotedMessage struct {
 	Person string `json:"person,omitempty"`
 	Text   string `json:"text"`
 	InDude bool   `json:"inDude"`
+	// Posted by an app (a bot), never a person of the organisation.
+	App bool `json:"app,omitempty"`
 }
 
 func (t threadContext) hash() string {
@@ -39,12 +41,15 @@ func (t threadContext) hash() string {
 }
 
 // render is the thread as text: each message by its author, people not
-// in dude marked so.
+// in dude and apps marked so.
 func (t threadContext) render() string {
 	var b strings.Builder
 	for _, m := range t.Messages {
 		by := m.By
-		if !m.InDude {
+		switch {
+		case m.App:
+			by += " (an app)"
+		case !m.InDude:
 			by += " (not in dude)"
 		}
 		fmt.Fprintf(&b, "> %s: %s\n", by, strings.ReplaceAll(m.Text, "\n", "\n> "))
@@ -79,9 +84,17 @@ func (s *Service) quote(ctx context.Context, org string, p Provider, inst Instal
 }
 
 func (s *Service) quoteMessages(ctx context.Context, org string, p Provider, inst Installation, msgs []ThreadMessage, skip string) ([]quotedMessage, error) {
-	var users []string
+	// dude's own messages are its replies, not context; every other bot's
+	// (a CI report, an alert) is kept, by its name, never as a person.
+	msgs = slices.DeleteFunc(slices.Clone(msgs), func(m ThreadMessage) bool {
+		return m.ID == skip || (m.UserID != "" && m.UserID == inst.BotUserID)
+	})
+	var users, bots []string
 	for _, msg := range msgs {
-		if !msg.Bot && msg.ID != skip && msg.UserID != "" && !slices.Contains(users, msg.UserID) {
+		switch {
+		case msg.Bot && msg.BotName == "" && msg.UserID != "" && !slices.Contains(bots, msg.UserID):
+			bots = append(bots, msg.UserID)
+		case !msg.Bot && msg.UserID != "" && !slices.Contains(users, msg.UserID):
 			users = append(users, msg.UserID)
 		}
 	}
@@ -109,20 +122,20 @@ func (s *Service) quoteMessages(ctx context.Context, org string, p Provider, ins
 	}
 	var strangers []string
 	for _, u := range users {
-		if _, ok := people[u]; !ok && u != inst.BotUserID {
+		if _, ok := people[u]; !ok {
 			strangers = append(strangers, u)
 		}
 	}
-	names := s.names(ctx, p, inst, strangers)
+	names := s.names(ctx, p, inst, append(strangers, bots...))
 	var out []quotedMessage
 	for _, msg := range msgs {
-		if msg.Bot || msg.ID == skip || msg.UserID == inst.BotUserID {
-			continue
-		}
 		q := quotedMessage{Text: clip(msg.Text, 2000)}
-		if person, ok := people[msg.UserID]; ok {
+		switch person, ok := people[msg.UserID]; {
+		case msg.Bot:
+			q.App, q.By = true, firstNonEmpty(msg.BotName, names[msg.UserID], "an app")
+		case ok:
 			q.Person, q.By, q.InDude = person[0], person[1], true
-		} else {
+		default:
 			q.By = names[msg.UserID]
 		}
 		out = append(out, q)

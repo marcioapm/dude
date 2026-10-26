@@ -52,8 +52,9 @@ export const chatOriginSchema = z.object({
   permalink: z.string(),
   /** The provider display name of who asked. */
   requestedBy: z.string(),
-  /** The thread as it was filed (a task's, a session's). */
-  thread: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean() }))
+  /** The thread as it was filed (a task's, a session's); `app` marks a bot's message. */
+  thread: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean(),
+    app: z.boolean().optional() }))
     .optional(),
 });
 export type ChatOrigin = z.infer<typeof chatOriginSchema>;

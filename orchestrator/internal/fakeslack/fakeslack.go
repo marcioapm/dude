@@ -42,10 +42,14 @@ type Conversation struct {
 }
 
 // Message is one message in a conversation; ThreadTS is its thread's root.
+// Bot is dude's own message; BotID and BotName are another app's (a CI
+// bot's), whose words may be in Attachments and Blocks as well as Text.
 type Message struct {
 	Channel, TS, ThreadTS, User, Text string
 	Bot                               bool
+	BotID, BotName                    string
 	Blocks                            json.RawMessage
+	Attachments                       json.RawMessage
 }
 
 // Ephemeral is a message shown to one person.
@@ -200,6 +204,49 @@ func (s *Server) Post(channel, thread, user, text string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.post(Message{Channel: channel, ThreadTS: thread, User: user, Text: text})
+}
+
+// PostApp adds another app's message (botID, shown as name), with its
+// attachments and blocks as Slack's JSON (nil for none), returning its ts.
+func (s *Server) PostApp(channel, thread, botID, name, text string, attachments, blocks any) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := Message{Channel: channel, ThreadTS: thread, Text: text, BotID: botID, BotName: name}
+	if attachments != nil {
+		m.Attachments, _ = json.Marshal(attachments)
+	}
+	if blocks != nil {
+		m.Blocks, _ = json.Marshal(blocks)
+	}
+	return s.post(m)
+}
+
+// PostOwn adds a message by team's dude app, as its chat.postMessage would.
+func (s *Server) PostOwn(channel, thread, team, text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.post(Message{Channel: channel, ThreadTS: thread, User: "UB" + team, Text: text, Bot: true})
+}
+
+// wire is m as conversations.replies and conversations.history return it.
+func (m Message) wire(team string) map[string]any {
+	msg := map[string]any{"ts": m.TS, "text": m.Text, "thread_ts": m.ThreadTS}
+	if m.User != "" {
+		msg["user"] = m.User
+	}
+	switch {
+	case m.Bot:
+		msg["bot_id"] = "B" + team
+	case m.BotID != "":
+		msg["bot_id"], msg["username"], msg["subtype"] = m.BotID, m.BotName, "bot_message"
+	}
+	if len(m.Attachments) > 0 {
+		msg["attachments"] = m.Attachments
+	}
+	if len(m.Blocks) > 0 {
+		msg["blocks"] = m.Blocks
+	}
+	return msg
 }
 
 func (s *Server) post(m Message) string {
@@ -475,11 +522,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 			if oldest != "" && m.TS <= oldest {
 				continue
 			}
-			msg := map[string]any{"ts": m.TS, "user": m.User, "text": m.Text, "thread_ts": m.ThreadTS}
-			if m.Bot {
-				msg["bot_id"] = "B" + team
-			}
-			msgs = append(msgs, msg)
+			msgs = append(msgs, m.wire(team))
 		}
 		if !found {
 			refuse(w, "thread_not_found")
@@ -622,6 +665,8 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request, what string) {
 	var in struct {
 		ID, Team, Name, RealName, Kind, Channel, Thread, User, Text, Installer, Signer string
 		Members                                                                        []string
+		BotID                                                                          string
+		Attachments, Blocks                                                            json.RawMessage
 	}
 	if r.Method == http.MethodPost {
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -641,6 +686,15 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request, what string) {
 		s.AuthorizeAs(in.Installer, in.Signer)
 	case "post":
 		out["ts"] = s.Post(in.Channel, in.Thread, in.User, in.Text)
+	case "post-app":
+		var attachments, blocks any
+		if len(in.Attachments) > 0 {
+			attachments = in.Attachments
+		}
+		if len(in.Blocks) > 0 {
+			blocks = in.Blocks
+		}
+		out["ts"] = s.PostApp(in.Channel, in.Thread, in.BotID, in.Name, in.Text, attachments, blocks)
 	case "state":
 		out["messages"], out["ephemerals"], out["updates"] = s.BotMessages(), s.Ephemerals(), s.Updates()
 		s.mu.Lock()

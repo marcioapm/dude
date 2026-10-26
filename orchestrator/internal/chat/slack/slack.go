@@ -384,13 +384,8 @@ func (p *Provider) FetchThread(ctx context.Context, inst chat.Installation, conv
 			args["oldest"], args["inclusive"] = since, false
 		}
 		var page struct {
-			Messages []struct {
-				TS    string `json:"ts"`
-				User  string `json:"user"`
-				Text  string `json:"text"`
-				BotID string `json:"bot_id"`
-			} `json:"messages"`
-			Meta struct {
+			Messages []message `json:"messages"`
+			Meta     struct {
 				NextCursor string `json:"next_cursor"`
 			} `json:"response_metadata"`
 		}
@@ -401,7 +396,7 @@ func (p *Provider) FetchThread(ctx context.Context, inst chat.Installation, conv
 			if since != "" && !tsAfter(m.TS, since) {
 				continue
 			}
-			out = append(out, chat.ThreadMessage{ID: m.TS, UserID: m.User, Text: m.Text, Bot: m.BotID != ""})
+			out = append(out, m.threadMessage())
 		}
 		if cursor = page.Meta.NextCursor; cursor == "" {
 			break
