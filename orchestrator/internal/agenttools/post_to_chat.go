@@ -40,9 +40,11 @@ const (
 	EvSlackPostRefused = "slack.message.refused"
 )
 
-// channelFinder is a provider that finds a channel's id by its name.
+// channelFinder is a provider that finds a channel's id by its name, and
+// forgets what it found when a post there is refused.
 type channelFinder interface {
 	FindChannel(ctx context.Context, inst chat.Installation, name string) (id string, member, found bool, err error)
+	ForgetChannel(inst chat.Installation, name string)
 }
 
 // channelID is a Slack conversation id as an agent may give one: C (public),
@@ -286,7 +288,11 @@ func postOutside(ctx context.Context, c Caller, in postChecked) (postDone, error
 	}
 	ts, err := post(ctx, in)
 	if err != nil {
-		switch apiCode(err) {
+		code := apiCode(err)
+		if finder, ok := in.provider.(channelFinder); ok && (code == "channel_not_found" || code == "not_in_channel") {
+			finder.ForgetChannel(in.inst, in.Channel)
+		}
+		switch code {
 		case "channel_not_found":
 			return postDone{}, refused("unknown-channel", in.channelName)
 		case "not_in_channel":

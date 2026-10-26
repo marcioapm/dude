@@ -39,7 +39,7 @@ var (
 // bot is in is remembered for channelTTL; one it is not in, or none, is
 // looked up again on the next call (the bot may have been invited since).
 func (p *Provider) FindChannel(ctx context.Context, inst chat.Installation, name string) (id string, member, found bool, err error) {
-	name = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "#"))
+	name = channelName(name)
 	key := channelKey{p, inst.Token, name}
 	channelsMu.Lock()
 	hit, ok := channels[key]
@@ -79,6 +79,19 @@ func (p *Provider) FindChannel(ctx context.Context, inst chat.Installation, name
 		}
 	}
 	return "", false, false, chat.ErrChannelLookupCut
+}
+
+// channelName is a channel's name as FindChannel compares it.
+func channelName(name string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "#"))
+}
+
+// ForgetChannel drops what FindChannel remembers of name, for a post Slack
+// refused there (the bot removed, the channel archived or renamed).
+func (p *Provider) ForgetChannel(inst chat.Installation, name string) {
+	channelsMu.Lock()
+	defer channelsMu.Unlock()
+	delete(channels, channelKey{p, inst.Token, channelName(name)})
 }
 
 // remember keeps a found channel's id, dropping the expired ones.

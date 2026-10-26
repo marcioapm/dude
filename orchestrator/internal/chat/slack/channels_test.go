@@ -79,6 +79,14 @@ func TestFindChannelRemembersAChannelTheBotIsIn(t *testing.T) {
 	if n := fake.Calls("conversations.list"); n != 3 {
 		t.Errorf("%d lookups in all, want 3", n)
 	}
+	// Forgotten (a post there was refused), it is looked up again.
+	p.ForgetChannel(inst, "#C002")
+	if _, _, _, err := p.FindChannel(context.Background(), inst, "c002"); err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.Calls("conversations.list"); n != 4 {
+		t.Errorf("%d lookups after ForgetChannel, want 4", n)
+	}
 }
 
 func TestFindChannelPassesSlacksErrorThrough(t *testing.T) {

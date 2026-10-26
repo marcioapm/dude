@@ -454,6 +454,30 @@ func TestPostToChatSaysToTryAgainWhenSlackIsBusy(t *testing.T) {
 	}
 }
 
+// A post Slack refuses because the bot is no longer in the channel, or the
+// channel is gone, drops the remembered lookup: the next call looks the
+// channel up again rather than spending another post on the stale id.
+func TestPostToChatLooksTheChannelUpAgainAfterSlackSaysItIsGone(t *testing.T) {
+	for _, code := range []string{"not_in_channel", "channel_not_found"} {
+		t.Run(code, func(t *testing.T) {
+			c := setupChat(t, true)
+			if status, out := c.postToChat(t, "#engineering", "first"); status != 200 {
+				t.Fatalf("first: %d %v", status, out)
+			}
+			c.fake.FailNext("chat.postMessage", code)
+			if status, _ := c.postToChat(t, "#engineering", "refused"); status != 422 {
+				t.Fatalf("%s: %d", code, status)
+			}
+			if status, out := c.postToChat(t, "#engineering", "again"); status != 200 {
+				t.Fatalf("again: %d %v", status, out)
+			}
+			if n := c.fake.Calls("conversations.list"); n != 2 {
+				t.Errorf("%d lookups, want 2 (the first, and one after Slack's %s)", n, code)
+			}
+		})
+	}
+}
+
 // Only an automation's agent has the tool.
 func TestPostToChatIsAnAutomationsTool(t *testing.T) {
 	c := setupChat(t, true)
