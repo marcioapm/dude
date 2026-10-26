@@ -107,7 +107,8 @@ export function PresetSecrets({ role, given, none = "no secrets", "data-testid":
       <span>
         {role} gets{" "}
         {groups.length === 0 ? none : groups.map((g, i) => (
-          <span key={g.from}>
+          // An organisation and a project may share a display name: the key is the group's place.
+          <span key={i}>
             {i ? " · " : null}
             {g.names.map((n, j) => <span key={n}>{j ? ", " : ""}<code className="ds-mono">{n}</code></span>)}
             {" "}<span className={styles["presetFrom"]}>from {g.from}</span>

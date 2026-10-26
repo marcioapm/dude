@@ -5,7 +5,7 @@
  * maps its classes as written, so the struck class can be asserted.
  */
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { cssModuleAsWritten } from "./cssModule.ts";
@@ -116,6 +116,18 @@ describe("PresetSecrets", () => {
     expect(el.querySelector("[data-x=a] svg")).not.toBeNull();
     expect(el.querySelector("[data-x=b]")!.textContent).toBe("Reviewer gets no secrets");
     expect(el.querySelector("[data-x=c]")!.textContent).toBe("Investigator gets no secrets: it is not one of the agents a secret is given to");
+  });
+
+  test("an organisation and a project of one name are two groups, with no duplicate key", async () => {
+    const errors: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => void errors.push(args.map(String).join(" ")));
+    try {
+      const el = await mount(<PresetSecrets role="Tester" given={[{ from: "web", names: ["NPM_TOKEN"] }, { from: "web", names: ["SEED_URL"] }]} />);
+      expect(el.textContent).toBe("Tester gets NPM_TOKEN from web · SEED_URL from web");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(errors.filter((e) => e.includes("same key"))).toEqual([]);
   });
 });
 
