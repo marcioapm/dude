@@ -8,14 +8,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-// CI failed because its runner was shut down, not because of the change.
-// The fixer rightly pushed nothing, so the head stayed where it was; the
-// job was re-run and failed again on that head. That second failure is a
-// new one, and gets a fixer of its own: the delivery must not go on
-// waiting on a pull request whose checks are red. The same checks failing
-// again are not new: read as pending in between, they wake nobody.
-// Through check runs (Actions), re-run as a person re-runs them, and
-// through commit statuses alike.
+// A runner failure can leave the fixer nothing to push. A re-run failing on
+// that unchanged head must wake another fixer; rereading the same failure must not.
 func TestChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnotherFix(t *testing.T) {
 	for _, via := range []string{"check run", "commit status"} {
 		t.Run(via, func(t *testing.T) {
@@ -50,9 +44,7 @@ func TestChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnother
 				t.Fatalf("the fixer that changed nothing moved the head: %s, was %s", got, head)
 			}
 
-			// Re-run: pending, then failing again as a new check on the same
-			// head. An Actions job re-run is a new check run; a CI that posts
-			// statuses posts a new one.
+			// A re-run creates a new check run or commit status on the same head.
 			if via == "check run" {
 				if code, body := w.callAs(w.person("owner"), "/internal/pull-requests/"+w.prOf(wi)+"/rerun-failed", map[string]any{}); code != 200 {
 					t.Fatalf("rerun: %d %v", code, body)
@@ -68,10 +60,8 @@ func TestChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnother
 				return w.prFixesDone(wi) == 2 && w.waitingOnPR(wi)
 			})
 
-			// The same failing check, read as pending for a moment and failing
-			// again: not a new failure. GitHub refusing the check-runs read
-			// is read as pending; for statuses, the same status read as
-			// pending stands in for any such reading.
+			// A forbidden check-runs read is treated as pending. For statuses,
+			// simulate that uncertainty without changing the status ID.
 			if via == "check run" {
 				w.gh.Set(func(s *fakegithub.Server) { s.CheckRunsForbidden = true })
 				w.untilChecks(wi, "pending")
