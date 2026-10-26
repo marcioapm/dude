@@ -15,12 +15,15 @@ const PostFailedPrefix = "post_to_chat failed: "
 
 // postFailed is why a run whose agent's turn ended must fail: a
 // post_to_chat refused because the organisation has no Slack installation
-// (the run cannot do what it was for); "" for none.
+// (the run cannot do what it was for), with no post after it (Slack was
+// connected during the run); "" for none.
 func postFailed(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 	var reason string
-	err := tx.QueryRow(ctx, `SELECT payload->>'reason' FROM events
-		WHERE run_id = $2 AND event_type = $1 AND payload->>'code' = $3
-		ORDER BY occurred_at LIMIT 1`, agenttools.EvChatPostRefused, runID, agenttools.PostNotConnected).Scan(&reason)
+	err := tx.QueryRow(ctx, `SELECT r.payload->>'reason' FROM events r
+		WHERE r.run_id = $1 AND r.event_type = $2 AND r.payload->>'code' = $3
+		  AND NOT EXISTS (SELECT 1 FROM events p WHERE p.run_id = $1 AND p.event_type = $4 AND (p.occurred_at, p.cursor) > (r.occurred_at, r.cursor))
+		ORDER BY r.occurred_at DESC, r.cursor DESC LIMIT 1`,
+		runID, agenttools.EvChatPostRefused, agenttools.PostNotConnected, agenttools.EvChatPosted).Scan(&reason)
 	if db.IsNotFound(err) {
 		return "", nil
 	}

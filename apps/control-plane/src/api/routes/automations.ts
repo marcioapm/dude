@@ -503,9 +503,11 @@ async function toolCalls(scope: OrgScope, runId: string, failed: boolean) {
       posted: !failed && tool === "post_to_chat" ? posts.shift() ?? null : null,
     });
   }
-  // The refusal the orchestrator failed the run on (automations.postFailed): its first not-connected one.
-  const failedOn = rows.find((e) => e.type === "chat.message.refused" && e.payload.code === "not_connected");
-  return { toolCalls: out, failedCallId: failed && failedOn ? failedOn.id : null };
+  // The refusal the orchestrator failed the run on (automations.postFailed):
+  // its last not-connected one, when no post went after it. rows are in order.
+  const lastPost = rows.findLastIndex((e) => e.type === "chat.message.posted");
+  const failedAt = rows.findLastIndex((e) => e.type === "chat.message.refused" && e.payload.code === "not_connected");
+  return { toolCalls: out, failedCallId: failed && failedAt > lastPost ? rows[failedAt]!.id : null };
 }
 
 /**
