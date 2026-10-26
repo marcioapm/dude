@@ -141,4 +141,19 @@ describe("before the pull request", () => {
     expect((await call("PUT", "/v1/tasks/wi_x/pull-request-choice", { choice: "later" })).status).toBe(400);
     expect((await call("PUT", "/v1/tasks/wi_x/pull-request-choice", {})).status).toBe(400);
   });
+
+  test("a held task reads its hold and since when from the delivery; once a pull request is on record, no hold", async () => {
+    const task = (await (await call("POST", "/v1/tasks", { projectId: PROJECT, title: "Held", goal: GOAL })).json()) as Json;
+    const since = "2026-10-26T09:30:00.123456Z";
+    const hold = { round: 1, heads: { web: "abc" }, since, repos: [{ name: "web", head: "dude/x", base: "main", additions: 3, deletions: 1 }] };
+    await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
+      VALUES ('wf_prc_hold', ${ORG}, 'task.delivery', 'prc-hold', ${task.id}, 'waiting', 'conductorDecision',
+              ${JSON.stringify({ decision: { point: "before_pull_request" }, hold })}::jsonb)`;
+    const held = (await (await call("GET", `/v1/tasks/${task.id}`)).json()) as Json;
+    expect(held.hold.round).toBe(1);
+    expect(Date.parse(held.hold.since)).toBe(Date.parse(since));
+    await owner`UPDATE workflow_runs SET state = state || '{"pullRequestIds":["pr_x"]}'::jsonb WHERE id = 'wf_prc_hold'`;
+    const opened = (await (await call("GET", `/v1/tasks/${task.id}`)).json()) as Json;
+    expect(opened.hold).toBeNull();
+  });
 });

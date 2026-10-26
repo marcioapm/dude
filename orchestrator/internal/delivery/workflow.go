@@ -1621,6 +1621,10 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		st.PRIteration = 0
 	}
 	st.PullRequestIDs = prIDs
+	if len(prIDs) > 0 {
+		// The hold is over: nothing reads it once a pull request is on record.
+		st.Hold = nil
+	}
 	if len(prIDs) == 0 {
 		// Nothing changed in any repository: the work is what the agents
 		// published. A person reads it and says when it is done, or gives

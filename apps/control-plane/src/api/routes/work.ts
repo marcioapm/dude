@@ -53,11 +53,11 @@ const DECIDING_JSON = `
   COALESCE((SELECT p.delivery_policy->>'pullRequest' FROM projects p WHERE p.id = tasks.project_id), 'open') AS "projectPullRequest",
   EXISTS (SELECT 1 FROM pull_requests pr LEFT JOIN runs r ON r.id = pr.run_id
     WHERE pr.task_id = tasks.id AND COALESCE(r.attempt, task_attempt(tasks.id)) = task_attempt(tasks.id)) AS "pullRequestOpened",
-  -- Where Deliver last held its live delivery before the pull request (the orchestrator's State.Hold), and since when.
-  (SELECT w.state->'hold' || jsonb_build_object('since', (SELECT max(e.occurred_at) FROM events e WHERE e.task_id = tasks.id
-      AND e.event_type = 'conductor.decision_awaited' AND e.payload->>'point' = 'before_pull_request'))
-   FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery' AND w.status IN ('running', 'waiting')
-     AND w.state ? 'hold' ORDER BY w.created_at DESC LIMIT 1) AS hold`;
+  -- Where Deliver holds its live delivery before the pull request, and since when (the orchestrator's State.Hold);
+  -- null once a pull request is on record.
+  (SELECT w.state->'hold' FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery'
+     AND w.status IN ('running', 'waiting') AND w.state ? 'hold' AND NOT w.state ? 'pullRequestIds'
+   ORDER BY w.created_at DESC LIMIT 1) AS hold`;
 
 const TASK_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},

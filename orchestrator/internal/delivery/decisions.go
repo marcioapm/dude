@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -433,8 +434,15 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 		if err := askGateTx(ctx, tx, sc.OrganizationID, st); err != nil || !entering {
 			return err
 		}
-		return emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": PointBeforePR,
-			"policy": "openPullRequest", "actions": []string{}, "phases": []string{}, "note": note, "round": st.Hold.Round})
+		// The hold's time is its event's, to the microsecond Postgres keeps.
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		st.Hold.Since = &now
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvDecisionAwaited, OrganizationID: sc.OrganizationID,
+			ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow",
+			Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, OccurredAt: now,
+			Payload: map[string]any{"point": PointBeforePR, "policy": "openPullRequest", "actions": []string{}, "phases": []string{},
+				"note": note, "round": st.Hold.Round}})
+		return err
 	}); err != nil {
 		return workflow.Result{}, err
 	}
@@ -458,13 +466,16 @@ func atGate(st *State) workflow.Result {
 
 // Hold is where Deliver last held the delivery before its pull request:
 // the round (1, then one more after each fix of the people's feedback), the
-// heads it is shown at, and the heads the round before was shown at, with
-// the commits between them in each repository GitHub could compare; and
-// what each repository would open (Repos), measured against its base.
+// heads it is shown at, when it last parked there (Since), and the heads
+// the round before was shown at (Previous), with the commits between them
+// in each repository GitHub could compare; and what each repository would
+// open (Repos), measured against its base. Cleared once a pull request
+// opens.
 type Hold struct {
 	Round        int               `json:"round"`
 	Heads        map[string]string `json:"heads"`
-	Since        map[string]string `json:"since,omitempty"`
+	Since        *time.Time        `json:"since,omitempty"`
+	Previous     map[string]string `json:"previous,omitempty"`
 	CommitsSince *int              `json:"commitsSince,omitempty"`
 	Repos        []HeldRepo        `json:"repos,omitempty"`
 }
@@ -493,7 +504,7 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 		st.Hold = &Hold{Round: 1, Heads: maps.Clone(heads)}
 	} else {
 		prev = st.Hold.Heads
-		st.Hold = &Hold{Round: st.Hold.Round + 1, Heads: maps.Clone(heads), Since: prev}
+		st.Hold = &Hold{Round: st.Hold.Round + 1, Heads: maps.Clone(heads), Previous: prev}
 	}
 	var repos []Repository
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {

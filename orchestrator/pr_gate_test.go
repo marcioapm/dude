@@ -81,6 +81,12 @@ func TestAskMeFirstHoldsTheFirstPullRequestForItsOwner(t *testing.T) {
 	w := newWorld(t)
 	ana, bo := w.person("Ana"), w.person("Bo")
 	task := w.atTheHold(ana)
+	// The hold carries when it parked, the time its event has.
+	if n := w.count(`SELECT count(*) FROM workflow_runs w JOIN events e ON e.task_id = w.task_id
+		WHERE w.task_id = $1 AND e.event_type = $2 AND e.payload->>'point' = 'before_pull_request'
+		  AND (w.state->'hold'->>'since')::timestamptz = e.occurred_at`, task, delivery.EvDecisionAwaited); n != 1 {
+		t.Fatalf("the hold's since matches %d of its events", n)
+	}
 	if status, out := w.callAs(bo, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 403 {
 		t.Fatalf("someone else's Open: %d %v", status, out)
 	}
@@ -93,6 +99,12 @@ func TestAskMeFirstHoldsTheFirstPullRequestForItsOwner(t *testing.T) {
 	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if w.gh.Pulls()[0].Draft {
 		t.Error("Open opened a draft")
+	}
+	w.until("the pull request on record", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'pullRequestIds'`, task) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'hold'`, task); n != 0 {
+		t.Error("the hold outlived the pull request")
 	}
 	if code, out := w.putAs(ana, "/internal/tasks/"+task+"/pull-request-choice", map[string]any{"choice": "draft"}); code != 409 {
 		t.Fatalf("a change once the pull request is open: %d %v", code, out)
