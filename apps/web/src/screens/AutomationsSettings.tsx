@@ -108,7 +108,7 @@ import {
 } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
-import { AutomationToolList, runDetailClass, ToolCallList } from "./automationTools.tsx";
+import { AutomationToolList, ToolCallList } from "./automationTools.tsx";
 
 /** Where the automations pages are: a list, one automation (its tab), one run. */
 export interface AutomationsPlace {
@@ -1102,7 +1102,7 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
   const failedCall = run.failedCallId ? run.toolCalls.find((c) => c.id === run.failedCallId) ?? null : null;
   const failedOnLast = failedCall !== null && failedCall === run.toolCalls.at(-1);
   return (
-    <div data-testid="run-detail" className={runDetailClass}>
+    <div data-testid="run-detail" className="automationRunDetail">
       <SettingsSection title="Run">
         <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span>
           {run.costUsd !== null ? <span className="automationRunCost">· ${run.costUsd.toFixed(2)}</span> : null}</p>

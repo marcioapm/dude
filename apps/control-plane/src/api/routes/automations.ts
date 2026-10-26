@@ -478,9 +478,9 @@ async function toolCalls(scope: OrgScope, runId: string) {
   const posts: Array<{ channel: string; channelId: string; ts: string; permalink: string }> = [];
   for (const e of rows) {
     const tool = String(e.payload.tool ?? "");
+    const str = (k: string) => String(e.payload[k] ?? "");
     if (e.type === "agent.tool.attempted" && !e.payload.attempted) attempts.set(tool, [...(attempts.get(tool) ?? []), e.at]);
-    if (e.type === "slack.message.posted") posts.push({ channel: String(e.payload.channel ?? ""), channelId: String(e.payload.channelId ?? ""), ts: String(e.payload.ts ?? ""),
-      permalink: String(e.payload.permalink ?? "") });
+    if (e.type === "slack.message.posted") posts.push({ channel: str("channel"), channelId: str("channelId"), ts: str("ts"), permalink: str("permalink") });
   }
   // The attempt a call wrote before its outside work, when it wrote one: the
   // earliest of its tool's not yet taken that came before the call ended.
@@ -492,8 +492,7 @@ async function toolCalls(scope: OrgScope, runId: string) {
   for (const e of rows) {
     if (e.type !== "agent.tool.dude" && e.type !== "slack.message.refused") continue;
     const tool = String(e.payload.tool ?? "");
-    const raw = (e.payload.arguments ?? {}) as Record<string, unknown>;
-    const { text: _text, body: _body, ...args } = raw;
+    const { text: _text, body: _body, ...args } = (e.payload.arguments ?? {}) as Record<string, unknown>;
     const start = e.type === "agent.tool.dude" && !e.payload.attempted ? null : startOf(tool, e.at);
     const failed = e.type === "slack.message.refused";
     out.push({

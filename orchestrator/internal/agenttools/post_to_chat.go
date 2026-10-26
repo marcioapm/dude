@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -151,9 +152,6 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 	case recent >= callsPerMinute:
 		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
 	}
-	refused := func(name string, a ...any) error {
-		return postRefused(channel, refuse(postRefusal(name), a...).Error())
-	}
 	shown := "#" + strings.TrimPrefix(channel, "#")
 	target := postTarget{inst: inst, provider: p, channelID: channel, channelName: shown}
 	if channelID.MatchString(channel) {
@@ -162,7 +160,7 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		case err == nil:
 			target.channelName = info.Name
 		case apiCode(err) == "channel_not_found":
-			return refused("unknown-channel", channel)
+			return refusedIn(channel, "unknown-channel", channel)
 		case revokedCodes[apiCode(err)]:
 			return slackFailed(ctx, c, channel, err)
 		default:
@@ -175,18 +173,18 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 	}
 	finder, ok := p.(channelFinder)
 	if !ok {
-		return refused("unknown-channel", shown)
+		return refusedIn(channel, "unknown-channel", shown)
 	}
 	id, member, found, err := finder.FindChannel(ctx, inst, channel)
 	switch {
 	case errors.Is(err, chat.ErrChannelLookupCut):
-		return refused("lookup-cut", shown)
+		return refusedIn(channel, "lookup-cut", shown)
 	case err != nil:
 		return slackFailed(ctx, c, channel, err)
 	case !found:
-		return refused("unknown-channel", shown)
+		return refusedIn(channel, "unknown-channel", shown)
 	case !member:
-		return refused("not-in-channel", shown)
+		return refusedIn(channel, "not-in-channel", shown)
 	}
 	target.channelID = id
 	return target
@@ -210,7 +208,7 @@ func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) 
 // notConnected is the refusal of a post for want of a Slack installation
 // for org, recorded with the code and reason the run fails on.
 func notConnected(channel, org string) refusal {
-	r := postRefused(channel, refuse(postRefusal("not-connected"), org).Error()).(refusal)
+	r := refusedIn(channel, "not-connected", org).(refusal)
 	r.event.payload["code"] = PostNotConnected
 	r.event.payload["reason"] = NotConnectedReason(org)
 	return r
@@ -228,6 +226,16 @@ func NotConnectedReason(org string) string { return "Slack is not connected for 
 // postRefused is a refusal recorded on the run as EvSlackPostRefused.
 func postRefused(channel, msg string) error {
 	return refuseRecorded(EvSlackPostRefused, map[string]any{"tool": "post_to_chat", "channel": channel, "error": msg}, msg)
+}
+
+// refusedIn is postRefused with the refusal template name's words.
+func refusedIn(channel, name string, a ...any) error {
+	return postRefused(channel, fmt.Sprintf(postRefusal(name), a...))
+}
+
+func orgName(ctx context.Context, tx pgx.Tx, org string) (name string, err error) {
+	err = tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, org).Scan(&name)
+	return name, err
 }
 
 // checkPost checks the call in the run's transaction; unconnectedOrg is the
@@ -266,8 +274,8 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 		out.postTarget = target
 		return out, "", nil
 	}
-	var org string
-	if err := tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, c.Org).Scan(&org); err != nil {
+	org, err := orgName(ctx, tx, c.Org)
+	if err != nil {
 		return out, "", err
 	}
 	return out, org, refuse(postRefusal("not-connected"), org)
@@ -281,24 +289,23 @@ func checkText(text string) error {
 	return nil
 }
 
+// outsideRefusals are the refusal templates of Slack's answers that the
+// channel no longer takes the bot's posts.
+var outsideRefusals = map[string]string{"channel_not_found": "unknown-channel", "not_in_channel": "not-in-channel"}
+
 // postOutside posts, with no transaction open.
 func postOutside(ctx context.Context, c Caller, in postChecked) (postDone, error) {
-	refused := func(name string, a ...any) error {
-		return postRefused(in.Channel, refuse(postRefusal(name), a...).Error())
-	}
 	ts, err := post(ctx, in)
 	if err != nil {
-		code := apiCode(err)
-		if finder, ok := in.provider.(channelFinder); ok && (code == "channel_not_found" || code == "not_in_channel") {
+		name, ok := outsideRefusals[apiCode(err)]
+		if !ok {
+			return postDone{}, slackFailed(ctx, c, in.Channel, err)
+		}
+		// The remembered lookup is stale: the next call looks the channel up again.
+		if finder, ok := in.provider.(channelFinder); ok {
 			finder.ForgetChannel(in.inst, in.Channel)
 		}
-		switch code {
-		case "channel_not_found":
-			return postDone{}, refused("unknown-channel", in.channelName)
-		case "not_in_channel":
-			return postDone{}, refused("not-in-channel", in.channelName)
-		}
-		return postDone{}, slackFailed(ctx, c, in.Channel, err)
+		return postDone{}, refusedIn(in.Channel, name, in.channelName)
 	}
 	return postDone{ts: ts, permalink: in.provider.Permalink(in.inst, in.channelID, ts, "")}, nil
 }
@@ -332,8 +339,9 @@ func slackFailed(ctx context.Context, c Caller, channel string, err error) error
 	noteFailure(ctx, c, err)
 	if revokedCodes[apiCode(err)] {
 		var org string
-		if qerr := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, c.Org).Scan(&org)
+		if qerr := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
+			org, err = orgName(ctx, tx, c.Org)
+			return err
 		}); qerr != nil {
 			return qerr
 		}
@@ -343,7 +351,7 @@ func slackFailed(ctx context.Context, c Caller, channel string, err error) error
 	if t := (*chat.TransientError)(nil); errors.As(err, &t) {
 		name = "slack-busy"
 	}
-	return postRefused(channel, refuse(postRefusal(name), err.Error()).Error())
+	return refusedIn(channel, name, err.Error())
 }
 
 // noteFailure counts err for the installation's health, as the chat

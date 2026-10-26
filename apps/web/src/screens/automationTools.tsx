@@ -10,7 +10,7 @@ import type { AutomationToolCall } from "@dude/domain";
 import { formatPlace } from "../place.ts";
 
 /** What an automation's agent can call, besides the shell in its machine (orchestrator agenttools, Caller.tools). */
-export function automationTools(orgName: string): AgentTool[] {
+function automationTools(orgName: string): AgentTool[] {
   // The orchestrator's list, in its order: orchestrator/internal/delivery/agents/testdata/tool-lists-automation.golden.md.
   return [
     { name: "post_to_chat", fresh: true,
@@ -25,7 +25,7 @@ export function automationTools(orgName: string): AgentTool[] {
 }
 
 /** Why post_to_chat cannot post here, when the organisation has no Slack installation. */
-export function slackMissing(orgName: string): Record<string, AgentToolUnavailable> {
+function slackMissing(orgName: string): Record<string, AgentToolUnavailable> {
   return { post_to_chat: { why: `Slack is not connected for ${orgName}`,
     fix: { label: "Connect Slack in Organisation settings → Chat", href: formatPlace({ view: "orgSettings", page: "chat" }) } } };
 }
@@ -40,7 +40,7 @@ export function AutomationToolList({ orgName, slackInstalled }: { orgName: strin
 }
 
 /** One call in a run's log: its time in mono, then the call's card; a post links its message in Slack. */
-export function ToolCallRow({ call }: { call: AutomationToolCall }) {
+function ToolCallRow({ call }: { call: AutomationToolCall }) {
   const post = call.tool === "post_to_chat";
   const channel = typeof call.args["channel"] === "string" ? (call.args["channel"] as string) : null;
   const { posted } = call;
@@ -49,7 +49,7 @@ export function ToolCallRow({ call }: { call: AutomationToolCall }) {
       <time className="automationToolCallAt ds-mono ds-hint" dateTime={call.at}>{formatTimestamp(call.at, "time")}</time>
       <ToolCallCard name={call.tool} status={call.status} durationMs={call.durationMs ?? undefined}
         {...(post ? { icon: "slack" as const, summary: <span className="ds-mono">{posted?.channel ?? channel ?? ""}</span> } : { args: call.args })}
-        {...(posted ? { result: JSON.stringify({ channel: posted.channel, channelId: posted.channelId, ts: posted.ts, permalink: posted.permalink }, null, 2) } : {})}
+        {...(posted ? { result: JSON.stringify(posted, null, 2) } : {})}
         {...(call.error ? { error: call.error } : {})}
         note={posted ? (
           <p className="automationToolCallPosted ds-hint" data-testid="posted-link">
@@ -60,9 +60,6 @@ export function ToolCallRow({ call }: { call: AutomationToolCall }) {
     </div>
   );
 }
-
-/** The class a run's detail lays its sections out with. */
-export const runDetailClass = "automationRunDetail";
 
 /** A run's calls, oldest first. */
 export function ToolCallList({ calls }: { calls: readonly AutomationToolCall[] }) {
