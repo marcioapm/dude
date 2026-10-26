@@ -279,13 +279,12 @@ test("a picture that can't be drawn says why in the box and the draft is saved w
   expect("picture" in draft).toBe(false);
 });
 
-test("opened with no opener it says to open the preview from dude, and never offers Comment or Save", () => {
+test("opened with no opener it offers Connect to dude, and never offers Comment or Save", () => {
   page(CART, false);
   boot();
-  expect(tid("ov-no-opener")!.textContent).toContain("Open this preview from dude to comment");
-  // Any of the task's links in dude opens it with the comment tool: there is no Comment button to press.
-  expect(tid("ov-no-opener")!.textContent).toContain("Open the preview from any of the task's links in dude");
-  expect(tid("ov-no-opener")!.textContent).not.toContain("press Comment");
+  expect(tid("ov-no-opener")!.textContent).toContain("Connect to dude to comment: dude opens and finds this preview's task");
+  expect(tid("ov-connect")!.localName).toBe("button");
+  expect(tid("ov-no-opener")!.textContent).toContain("Hide for this tab");
   expect(count('[data-testid="ov-comment"]')).toBe(0);
   expect(count('[data-testid="ov-save"]')).toBe(0);
 });
@@ -293,7 +292,7 @@ test("opened with no opener it says to open the preview from dude, and never off
 test("an opener that never answers is treated as none after the wait", async () => {
   boot();
   await tick(80);
-  expect(tid("ov-no-opener")!.textContent).toContain("Open this preview from dude to comment");
+  expect(tid("ov-no-opener")!.textContent).toContain("Connect to dude to comment");
   expect(count('[data-testid="ov-comment"]')).toBe(0);
   // A late session still connects: the tab may have been slow.
   connect();
@@ -315,6 +314,8 @@ test("dude's tab closing mid-comment keeps the words, offers Copy text and no Sa
   expect(count('[data-testid="ov-copy"]')).toBe(1);
   expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
   expect(tid("ov-disconnected")!.textContent).toContain("dude's tab was closed");
+  // The closed panel offers Connect to dude too.
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
 });
 
 test("pins only what resolves to exactly one element; the rest are listed as not found here", () => {
@@ -923,4 +924,85 @@ test("not connected, it says hello once a beat and never twice in one: a hello b
   expect(hellos()).toBe(2);
   beat2();
   expect(hellos()).toBe(3);
+});
+
+type FakeWin = { postMessage: ReturnType<typeof mock>; closed: boolean; focus: () => void; opener?: unknown; location?: unknown };
+const fakeWin = (extra: Partial<FakeWin> = {}): FakeWin => ({ postMessage: mock(() => {}), closed: false, focus: () => {}, ...extra });
+const posted = (w: FakeWin) => w.postMessage.mock.calls.map((c) => [(c[0] as OverlayToDude).type, c[1]]);
+const sessionFor = (): DudeToOverlay => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true });
+
+test("Connect to dude opens dude's preview-connect page with an opener, says hello to that tab each beat, and only its session connects", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  const opens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { opens.push(args); return dudeTab; };
+  boot({ heartbeatMs: HB });
+  beat();
+  expect(opens).toEqual([]);
+  tid("ov-connect")!.click();
+  // No third argument: no noopener, no noreferrer, so the new tab's window.opener is this page.
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
+  expect(tid("ov-connect-note")!.getAttribute("data-connect")).toBe("opened");
+  expect(posted(dudeTab)).toEqual([]);
+  beat();
+  beat();
+  expect(posted(dudeTab)).toEqual([["hello", DUDE], ["hello", DUDE]]);
+  // Another window at dude's origin, and the right window from another origin, are not heard.
+  fromDude(sessionFor(), DUDE, fakeWin());
+  fromDude(sessionFor(), "https://evil.example.test", dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-comment"]')).toBe(0);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-no-opener"]')).toBe(0);
+  expect(count('[data-testid="ov-comment"]')).toBe(1);
+});
+
+test("a blocked pop-up is said in the panel, and Connect to dude can be pressed again", () => {
+  page(CART, false);
+  let next: FakeWin | null = null;
+  win.open = () => next;
+  boot();
+  tid("ov-connect")!.click();
+  expect(tid("ov-connect-note")!.textContent).toContain("The browser blocked dude's tab from opening");
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
+  next = fakeWin();
+  tid("ov-connect")!.click();
+  expect(tid("ov-connect-note")!.getAttribute("data-connect")).toBe("opened");
+});
+
+test("a page opened from a preview page reaches dude through its openers: hello goes to dude, and only dude's reply is heard", () => {
+  page(CART, false);
+  const dudeTab = fakeWin();
+  // The page that opened this one: the same preview, so readable, and opened by dude.
+  const previewPage = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: dudeTab });
+  opener = previewPage as unknown as Opener;
+  boot();
+  expect(posted(dudeTab)).toEqual([["hello", DUDE]]);
+  expect(posted(previewPage)).toEqual([]);
+  fromDude(sessionFor(), DUDE, previewPage);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("the walk up the openers stops after five same-origin pages, and at an opener that can't be read past", () => {
+  page(CART, false);
+  const dudeTab = fakeWin();
+  const origin = new URL(PAGE).origin;
+  let top: FakeWin = dudeTab;
+  for (let i = 0; i < 5; i++) top = fakeWin({ location: { origin }, opener: top });
+  opener = top as unknown as Opener;
+  boot();
+  // dude is six steps up: too far, so nothing is said to anyone.
+  expect(posted(dudeTab)).toEqual([]);
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
+  overlay.stop();
+  page(CART, false);
+  const throws = fakeWin({ location: { origin } });
+  Object.defineProperty(throws, "opener", { get: () => { throw new Error("blocked"); } });
+  opener = throws as unknown as Opener;
+  boot();
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
 });

@@ -1,12 +1,13 @@
 /**
  * dude's overlay on a branch preview's pages: a toolbar, picking an
  * element (hover label, ↑ wider, Esc out), the comment box, pins of the
- * task's items on this page, and the panel that says to open the preview
- * from dude when no dude tab opened it.
+ * task's items on this page, and the panel offering Connect to dude when no
+ * dude tab is reachable.
  *
- * It talks only to the window that opened it, and only by postMessage:
- * posted with dude's origin as the target, and heard only from that
- * origin and that window. It holds no secret and requests nothing; dude's
+ * It talks only to one dude window, and only by postMessage: the window
+ * that opened it (or opened the preview page that opened it), or the dude
+ * tab its Connect to dude opened. Posted with dude's origin as the target,
+ * and heard only from that origin and that window. It holds no secret and requests nothing; dude's
  * tab does everything that needs the person's sign-in. Everything it
  * draws is in a closed shadow root, so the page's CSS can't reach it and
  * its own can't leak. The page keeps working: nothing covers it but the
@@ -124,6 +125,17 @@ const asElement = (t: EventTarget | null): Element | null => (t !== null && (t a
 
 const withoutScheme = (url: string) => url.replace(/^https?:\/\//, "");
 
+/** How far up the opener chain the overlay looks for dude: a few tabs opened from tabs, not an unbounded walk. */
+const OPENER_STEPS = 5;
+
+const live = (w: Window | null | undefined): w is Window => {
+  try {
+    return !!w && !w.closed;
+  } catch {
+    return false;
+  }
+};
+
 // overlaySessionSchema's rules, by hand: the overlay bundles no zod.
 const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme", "dudeWindow"]);
 const PIN_KEYS = new Set(["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"]);
@@ -214,6 +226,9 @@ export class Overlay {
   #saidHello = false;
   // Beats in a row with nothing from dude while connected.
   #quietBeats = 0;
+  // The dude tab Connect to dude opened, and what the click came to: opened, or refused by the browser.
+  #connectWin: Window | null = null;
+  #connect: "opened" | "blocked" | null = null;
   #stopped = false;
   readonly #firstPage: string | null;
   #at: { right: number; bottom: number } | null = null;
@@ -267,7 +282,7 @@ export class Overlay {
     }
     this.#osDark?.addEventListener?.("change", this.#onOsTheme);
     this.#applyTheme();
-    if (!this.#opener()) {
+    if (!this.#dude()) {
       this.#connection = "none";
     } else {
       this.#hello();
@@ -276,7 +291,12 @@ export class Overlay {
       }, this.#opts.sessionWaitMs ?? SESSION_WAIT_MS));
     }
     this.#timers.push(this.#win.setInterval(() => {
-      if (this.#connection === "connected" && !this.#opener()) this.#lost("closed");
+      if (this.#connection === "connected" && !this.#dude()) this.#lost("closed");
+      // The tab Connect to dude opened was closed before it answered: back to the panel's first words.
+      else if (this.#connection === "waiting" && this.#connect === "opened" && !this.#dude()) {
+        this.#connect = null;
+        this.#lost("none");
+      }
     }, 1_000));
     this.#timers.push(this.#win.setInterval(this.#heartbeat, this.#opts.heartbeatMs ?? HEARTBEAT_MS));
     // Pins follow what the page draws, which may move without a scroll: moved in place, never redrawn.
@@ -324,17 +344,40 @@ export class Overlay {
 
   // ------------------------------------------------------------------ dude
 
-  #opener(): Window | null {
-    try {
-      const o = this.#win.opener as Window | null;
-      return o && !o.closed ? o : null;
-    } catch {
-      return null;
+  /**
+   * The dude window to talk to: the tab Connect to dude opened, else the
+   * first opener up the chain that is not one of this preview's own pages
+   * (a link with target=_blank opened from a connected page has that page as
+   * its opener). Not same-origin does not prove it is dude: messages are
+   * posted with dude's origin as the target, and heard only from dude's
+   * origin and this very window, so anything else hears nothing and says
+   * nothing that is heard.
+   */
+  #dude(): Window | null {
+    if (live(this.#connectWin)) return this.#connectWin;
+    let at: Window = this.#win;
+    for (let step = 0; step < OPENER_STEPS; step++) {
+      let next: Window | null;
+      try {
+        next = at.opener as Window | null;
+      } catch {
+        return null;
+      }
+      if (!live(next)) return null;
+      let same = false;
+      try {
+        same = next.location.origin === this.#win.location.origin;
+      } catch {
+        // Another origin's window throws on location.origin: not a page of this preview.
+      }
+      if (!same) return next;
+      at = next;
     }
+    return null;
   }
 
   #post(msg: OverlayToDude): boolean {
-    const o = this.#opener();
+    const o = this.#dude();
     if (!o) return false;
     o.postMessage(msg, this.#opts.dudeOrigin);
     return true;
@@ -352,7 +395,7 @@ export class Overlay {
    * for whichever tab answers next. The box and its words stay throughout.
    */
   readonly #heartbeat = (): void => {
-    if (this.#stopped || !this.#opener()) return;
+    if (this.#stopped || !this.#dude()) return;
     const said = this.#saidHello;
     this.#saidHello = false;
     if (this.#connection === "connected") {
@@ -380,7 +423,7 @@ export class Overlay {
   }
 
   readonly #onMessage = (e: MessageEvent): void => {
-    if (e.origin !== this.#opts.dudeOrigin || e.source !== this.#opener() || e.source === null) return;
+    if (e.origin !== this.#opts.dudeOrigin || e.source !== this.#dude() || e.source === null) return;
     const m = e.data as DudeToOverlay;
     if (!m || typeof m !== "object" || m.v !== OVERLAY_PROTOCOL) return;
     this.#quietBeats = 0;
@@ -388,6 +431,7 @@ export class Overlay {
       case "session":
         if (!validSession(m) || overlayPage(m.url) !== this.#page) return;
         this.#connection = "connected";
+        this.#connect = null;
         this.#task = String(m.task).slice(0, 40);
         this.#pins = Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
         this.#drafts = Number(m.drafts) || 0;
@@ -911,7 +955,7 @@ export class Overlay {
    * opener's focus(), which some browsers honour.
    */
   #goToDude(): void {
-    const opener = this.#opener();
+    const opener = this.#dude();
     if (!opener) return;
     if (this.#dudeWindow) {
       try {
@@ -925,6 +969,29 @@ export class Overlay {
       }
     }
     try { opener.focus(); } catch { /* another origin's window may refuse */ }
+  }
+
+  /**
+   * Connect to dude, inside the click: opens dude's preview-connect page in
+   * a new tab, deliberately with an opener (no noopener), so that tab can
+   * hear this page's hello, find the task whose preview this is, and adopt
+   * this window. The heartbeat then says hello to it until it answers.
+   */
+  #connectToDude(): void {
+    let w: Window | null = null;
+    try {
+      w = this.#win.open(`${this.#opts.dudeOrigin}/#/preview-connect`, "_blank");
+    } catch {
+      w = null;
+    }
+    if (!w) {
+      this.#connect = "blocked";
+    } else {
+      this.#connectWin = w;
+      this.#connect = "opened";
+      this.#connection = "waiting";
+    }
+    this.#render();
   }
 
   #beside(r: DOMRect, w: number, h: number): { left: number; top: number } {
@@ -1090,7 +1157,8 @@ export class Overlay {
   }
 
   #panelFor(): HTMLElement | null {
-    if (this.#connection === "none" || this.#connection === "closed") return this.#noOpener();
+    // After Connect to dude, until a session: the panel stays, so a dude tab that found no task can be tried again.
+    if (this.#connection === "none" || this.#connection === "closed" || this.#connection === "waiting" && this.#connect !== null) return this.#noOpener();
     if (this.#toast && !this.#picking) return this.#toastFor(this.#toast);
     if (this.#panel === "pins") return this.#pinsPanel();
     return null;
@@ -1098,13 +1166,17 @@ export class Overlay {
 
   #noOpener(): HTMLElement {
     const closed = this.#connection === "closed";
+    const note = this.#connect === "blocked" ? "The browser blocked dude's tab from opening: allow pop-ups for this site, or press Connect to dude again."
+      : this.#connect === "opened" && this.#connection === "waiting" ? "dude opened in a new tab and is looking for this preview's task. This connects once it finds it."
+      : null;
     return this.#h("div", { class: "panel", "data-testid": "ov-no-opener" },
-      this.#h("div", { class: "ph" }, this.#h("b", {}, closed ? "dude's tab was closed" : "Open this preview from dude to comment")),
+      this.#h("div", { class: "ph" }, this.#h("b", {}, closed ? "dude's tab was closed" : "Connect to dude to comment")),
       this.#h("p", { class: "pp" }, closed
-        ? "Your saved drafts are kept in dude. To pick more, open the task again and open the preview from any of its links there: this window is reused."
-        : "Comments on a preview are made from its task, so dude knows who you are and which task they belong to. Open the preview from any of the task's links in dude (its Servers tab, its Overview, a comment's page) and the comment tool starts."),
+        ? "Your saved drafts are kept in dude. Connect to dude to pick more: dude opens and finds this preview's task."
+        : "Connect to dude to comment: dude opens and finds this preview's task. Comments are made through your dude tab, so dude knows who you are and which task they belong to."),
+      note ? this.#h("p", { class: "pp", role: "status", "data-testid": "ov-connect-note", "data-connect": this.#connect ?? "" }, note) : null,
       this.#h("div", { class: "pf" },
-        this.#h("a", { class: "btn primary", href: this.#opts.dudeOrigin, target: "_blank", rel: "noopener", "data-k": "open-dude" }, this.#g("link", 12), "Open dude"),
+        this.#h("button", { type: "button", class: "primary", "data-k": "connect-dude", "data-testid": "ov-connect", onclick: () => this.#connectToDude() }, this.#g("link", 12), "Connect to dude"),
         this.#h("button", { type: "button", "data-k": "hide", onclick: () => { this.#collapsed = true; this.#session("hidden", "1"); this.#render(); this.#focusKey("pill"); } }, "Hide for this tab")));
   }
 
