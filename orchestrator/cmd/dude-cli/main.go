@@ -261,7 +261,10 @@ func (c *cli) request(method, path string, body any) (any, error) {
 		if u, err := resp.Location(); err == nil {
 			where = u.String()
 		}
-		return nil, fmt.Errorf("%s %s: the server redirected (%d) to %s: %s", method, path, resp.StatusCode, where, signInAdvice)
+		if where != "" {
+			where = " to " + where
+		}
+		return nil, fmt.Errorf("%s %s: the server redirected (%d)%s: %s", method, path, resp.StatusCode, where, signInAdvice)
 	}
 	if resp.StatusCode/100 != 2 {
 		return nil, &httpError{method, path, resp.StatusCode, strings.TrimSpace(string(raw))}

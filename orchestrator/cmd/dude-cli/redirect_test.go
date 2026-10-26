@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,18 @@ func TestRedirectIsAnErrorAndSendsNothingOn(t *testing.T) {
 				t.Fatalf("printed the page: %s", out)
 			}
 		})
+	}
+}
+
+func TestRedirectWithoutLocationNamesNoTarget(t *testing.T) {
+	for _, status := range []int{http.StatusNotModified, http.StatusFound} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
+		t.Cleanup(srv.Close)
+		_, err := runCLI(t, srv, "", "api", "GET", "/v1/me")
+		want := fmt.Sprintf("GET /v1/me: the server redirected (%d): it is behind a sign-in", status)
+		if err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Fatalf("%d: err = %v, want %q…", status, err, want)
+		}
 	}
 }
 
