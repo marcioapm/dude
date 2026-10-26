@@ -44,6 +44,12 @@ describe("organisation secrets", () => {
     expect(secrets.orgSecretNameProblem("GIT_TOKEN", [])?.kind).toBe("invalid");
     expect(secrets.orgSecretNameProblem("NPM_TOKEN", ["GH_TOKEN"])).toBeNull();
   });
+
+  test("secretPicksInForce turns an overridden organisation pick into the project's, once", () => {
+    expect(secrets.secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }], ["GH_TOKEN"]))
+      .toEqual([{ source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }]);
+    expect(secrets.secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }], [])).toEqual([{ source: "organization", name: "GH_TOKEN" }]);
+  });
 });
 
 describe("project secret recipients", () => {

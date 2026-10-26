@@ -14,7 +14,7 @@ import type { SecretPick } from "../src/components/Secrets.tsx";
 mock.module(...cssModuleAsWritten(new URL("../src/components/Secrets.module.css", import.meta.url)));
 
 const { TooltipProvider } = await import("../src/primitives/Tooltip.tsx");
-const { GivenTo, GivenToFieldset, OverriddenBy, PresetSecrets, SecretName, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE, secretPicksInForce } =
+const { GivenTo, GivenToFieldset, OverriddenBy, PresetSecrets, SecretName, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE } =
   await import("../src/components/Secrets.tsx");
 // The class Secrets.module.css declares for a struck name, as the mock maps it.
 const styles = { struck: "struck" };
@@ -174,12 +174,6 @@ describe("SecretPicker", () => {
     expect(seen.at(-1)).toEqual([{ source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }]);
     await act(async () => byRole(el, "checkbox", "GH_TOKEN (platform)").click());
     expect(seen.at(-1)).toEqual([{ source: "organization", name: "NPM_TOKEN" }]);
-  });
-
-  test("secretPicksInForce turns an overridden organisation pick into the project's, once", () => {
-    expect(secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }], ["GH_TOKEN"]))
-      .toEqual([{ source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }]);
-    expect(secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }], [])).toEqual([{ source: "organization", name: "GH_TOKEN" }]);
   });
 
   test("none yet, and disabled for a reader", async () => {

@@ -180,7 +180,7 @@ export { DocOutline, DocSearchResults, docResultId, markWords, queryWords } from
 export type { DocOutlinePage, DocOutlineProps, DocOutlineSection, DocSearchResult, DocSearchResultsProps } from "./DocOutline.tsx";
 export { FitBar, MachineChip, MachineRaises, MachineTip, ProportionBar, ReservedSwatch, UsedBy } from "./Machines.tsx";
 export type { FitBarProps, MachineChipProps, MachineRaise, MachineRaisesProps, ProportionBarProps, ProportionSegment } from "./Machines.tsx";
-export { GivenTo, GivenToFieldset, OverriddenBy, PresetSecrets, SecretName, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE, secretPicksInForce } from "./Secrets.tsx";
+export { GivenTo, GivenToFieldset, OverriddenBy, PresetSecrets, SecretName, SecretPicker, SecretsChip, SECRETS_TIP_SOURCE } from "./Secrets.tsx";
 export type {
   GivenToFieldsetProps, GivenToProps, OverriddenByProps, PresetSecretsProps, SecretChoice, SecretNameProps, SecretPick, SecretPickerProps, SecretRecipientOption, SecretsChipProps,
 } from "./Secrets.tsx";

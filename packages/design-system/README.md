@@ -2998,7 +2998,7 @@ Settings → *Project secrets* (`#s-secrets`), *OverriddenBy / SecretName*
   A name the project also holds cannot be ticked under the organisation:
   it is disabled, struck through and described by `OverriddenBy`. An
   organisation pick of such a name shows as the project's row ticked and
-  is passed back as the project's (`secretPicksInForce`): that is the
+  is passed back as the project's (`@dude/domain`'s `secretPicksInForce`): that is the
   value its runs get, and unticking it removes the name. The value records
   the source as well as the name.
 - **PresetSecrets** (`role`, `given`, `none?`): one of dude's agents has

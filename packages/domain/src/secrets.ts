@@ -244,6 +244,21 @@ export function sameSecretRef(a: SecretRef, b: SecretRef): boolean {
   return a.source === b.source && a.name === b.name;
 }
 
+/**
+ * `refs` as runs resolve them (automation_secrets_given): an organisation
+ * pick whose name the project holds becomes the project's pick, since its
+ * value is what the run gets; each pick once.
+ */
+export function secretPicksInForce(refs: readonly SecretRef[], projectNames: readonly string[]): SecretRef[] {
+  const own = new Set(projectNames);
+  const out: SecretRef[] = [];
+  for (const r of refs) {
+    const pick: SecretRef = { source: r.source === "organization" && own.has(r.name) ? "project" : r.source, name: r.name };
+    if (!out.some((o) => sameSecretRef(o, pick))) out.push(pick);
+  }
+  return out;
+}
+
 export interface ResolvedSecret<T extends { name: string } = ProjectSecret> {
   source: SecretSource;
   secret: T;

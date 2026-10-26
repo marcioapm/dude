@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { secretPicksInForce } from "@dude/domain";
 import { Icon } from "../icons/index.tsx";
 import { Badge } from "../primitives/Badge.tsx";
 import { Checkbox } from "../primitives/Checkbox.tsx";
@@ -142,20 +143,6 @@ export interface SecretPickerProps {
 }
 
 const samePick = (a: SecretPick, b: SecretPick) => a.source === b.source && a.name === b.name;
-
-/**
- * `value` as runs resolve it: an organisation pick whose name the project
- * holds becomes the project's pick (its value is what the run gets), once.
- */
-export function secretPicksInForce(value: readonly SecretPick[], projectNames: readonly string[]): SecretPick[] {
-  const own = new Set(projectNames);
-  const out: SecretPick[] = [];
-  for (const v of value) {
-    const pick: SecretPick = v.source === "organization" && own.has(v.name) ? { source: "project", name: v.name } : { source: v.source, name: v.name };
-    if (!out.some((o) => samePick(o, pick))) out.push(pick);
-  }
-  return out;
-}
 
 /**
  * An automation's secrets: checkbox groups "<org>'s" and, for a project
