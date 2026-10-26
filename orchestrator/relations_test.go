@@ -210,8 +210,8 @@ func TestABlockerInAProjectHiddenFromTheTasksChatIsNotNamed(t *testing.T) {
 }
 
 // The merge of a task in a project hidden from a dependant's chat releases
-// the dependant; its conductor's wake and its Chat notice say so without
-// the merged task's key.
+// the dependant; its conductor's wake says so without the merged task's
+// key, and its Chat notice, which only people read, names it.
 func TestAHiddenBlockersMergeIsNotNamedToWhatItReleases(t *testing.T) {
 	w := conducting(t)
 	blocker, task := w.hiddenBlocker()
@@ -236,8 +236,8 @@ func TestAHiddenBlockersMergeIsNotNamedToWhatItReleases(t *testing.T) {
 		t.Fatalf("the conductor's wake: %q", wake)
 	}
 	notice := w.str(`SELECT payload::text FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'unblocked'`, task)
-	if !strings.Contains(notice, "A task in a project hidden from slack merged — "+w.keyOf(task)+" can start.") || strings.Contains(notice, "SEC") {
-		t.Fatalf("the Chat notice: %s", notice)
+	if !strings.Contains(notice, "SEC-7 merged — "+w.keyOf(task)+" can start.") {
+		t.Fatalf("the Chat notice, read by people only, does not name the merged task: %s", notice)
 	}
 }
 

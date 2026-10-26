@@ -107,9 +107,10 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 		if !d.Free {
 			continue
 		}
-		// The dependant's Chat and conductor see the merged task only as
-		// the dependant's fence allows; "shown" is that name, for the
-		// notices its start when unblocked gives later.
+		// The dependant's conductor sees the merged task only as the
+		// dependant's fence allows; "shown" is that name, kept for the Talk
+		// it through opening its start when unblocked gives later. Chat
+		// notices are read by people only and name the task.
 		shown, err := shownTask(ctx, tx, d.ID, projectID, key)
 		if err != nil {
 			return err
@@ -123,8 +124,8 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 			if _, err := tx.Exec(ctx, `UPDATE task_auto_starts SET due_at = now() WHERE task_id = $1`, d.ID); err != nil {
 				return err
 			}
-		} else if err := event(EvChatNotice, map[string]any{"about": "unblocked", "by": shown,
-			"text": fmt.Sprintf("%s merged — %s can start. Nothing started it: Deliver or Talk it through when you're ready.", capitalised(shown), d.Key)}); err != nil {
+		} else if err := event(EvChatNotice, map[string]any{"about": "unblocked", "by": key,
+			"text": fmt.Sprintf("%s merged — %s can start. Nothing started it: Deliver or Talk it through when you're ready.", key, d.Key)}); err != nil {
 			return err
 		}
 		if err := wakeUnblockedTx(ctx, tx, org, d.ID, d.Key, key, shown, d.Auto); err != nil {
@@ -446,17 +447,13 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		if err := event(EvAutoStartRefused, map[string]any{"by": by, "blockers": BlockersPayload(blocked.Blockers)}); err != nil {
 			return err
 		}
-		masked, err := maskBlockers(ctx, tx, taskID, blocked.Blockers)
-		if err != nil {
-			return err
-		}
-		words := blockerWords(masked)
+		words := blockerWords(blocked.Blockers)
 		that := "that merges"
 		if len(words) > 1 {
 			that = "they merge"
 		}
 		return event(EvChatNotice, map[string]any{"about": "auto_start_refused", "text": fmt.Sprintf(
-			"%s merged, but %s is still blocked by %s: it starts when %s, as %s asked.", capitalised(shown), taskKey, KeyList(words), that, first)})
+			"%s merged, but %s is still blocked by %s: it starts when %s, as %s asked.", capitalised(by), taskKey, KeyList(words), that, first)})
 	}
 	if err != nil {
 		return err
@@ -479,7 +476,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		return err
 	}
 	return event(EvChatNotice, map[string]any{"about": "auto_started", "text": fmt.Sprintf(
-		"%s merged — %s started (%s), as %s asked. Nothing else was waiting in front of it.", capitalised(shown), taskKey, howLabel[how], first)})
+		"%s merged — %s started (%s), as %s asked. Nothing else was waiting in front of it.", capitalised(by), taskKey, howLabel[how], first)})
 }
 
 // howLabel names each way to start (HowDeliver, HowTalk) as its button does.
@@ -520,7 +517,7 @@ func (a *AutoStarts) failed(ctx context.Context, tx pgx.Tx, org, taskID, generat
 	if err != nil {
 		return err
 	}
-	_, by, _, err := lastUnblock(ctx, tx, taskID)
+	by, _, _, err := lastUnblock(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
