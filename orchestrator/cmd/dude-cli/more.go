@@ -5,9 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 )
@@ -112,8 +116,39 @@ type terminal interface {
 
 type osTerminal struct{ fd int }
 
-func (t osTerminal) isTerminal() bool              { return term.IsTerminal(t.fd) }
-func (t osTerminal) readPassword() ([]byte, error) { return term.ReadPassword(t.fd) }
+func (t osTerminal) isTerminal() bool { return term.IsTerminal(t.fd) }
+
+// readPassword reads with echo off. A SIGINT or SIGTERM kills the process
+// before x/term's deferred restore runs, so the saved state is restored here
+// before exiting.
+func (t osTerminal) readPassword() ([]byte, error) {
+	st, err := term.GetState(t.fd)
+	if err != nil {
+		return term.ReadPassword(t.fd)
+	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(sigs)
+		close(done)
+	}()
+	go watchInterrupt(sigs, done, func() error { return term.Restore(t.fd, st) }, os.Stderr, os.Exit)
+	return term.ReadPassword(t.fd)
+}
+
+// watchInterrupt waits for a signal on sigs until done closes. On a signal
+// it restores the terminal, ends the prompt's line on w and exits with 130,
+// the shell's code for death by SIGINT.
+func watchInterrupt(sigs <-chan os.Signal, done <-chan struct{}, restore func() error, w io.Writer, exit func(int)) {
+	select {
+	case <-sigs:
+		restore()
+		fmt.Fprintln(w)
+		exit(130)
+	case <-done:
+	}
+}
 
 // readKey is login's key: typed without echo on a terminal, else the first
 // line of stdin.

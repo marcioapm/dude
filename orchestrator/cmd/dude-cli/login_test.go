@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,29 @@ func TestLoginOnATerminalReadsWithoutEcho(t *testing.T) {
 	if strings.Contains(out.String()+errOut.String(), "typed-key") || strings.Contains(out.String(), "Key for") {
 		t.Fatalf("stdout %q, stderr %q", out.String(), errOut.String())
 	}
+}
+
+func TestInterruptAtThePromptRestoresTheTerminal(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	var restored, exited bool
+	code := -1
+	var w bytes.Buffer
+	sigs <- os.Interrupt
+	watchInterrupt(sigs, done, func() error {
+		if exited || w.Len() != 0 {
+			t.Error("restored after the newline or the exit")
+		}
+		restored = true
+		return nil
+	}, &w, func(c int) { exited, code = true, c })
+	if !restored || w.String() != "\n" || code != 130 {
+		t.Fatalf("restored %v, wrote %q, exit %d", restored, w.String(), code)
+	}
+
+	// After the read, a closed done ends the watch without touching anything.
+	close(done)
+	watchInterrupt(make(chan os.Signal), done, func() error { t.Error("restored"); return nil }, &w, func(int) { t.Error("exited") })
 }
 
 func TestLoginOnATerminalRefusesAnEmptyKey(t *testing.T) {
