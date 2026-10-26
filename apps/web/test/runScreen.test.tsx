@@ -61,7 +61,7 @@ describe("the session's project secrets", () => {
     expect(shown.textContent).toBe("2 secrets");
     const machine = machineChip(page)!;
     expect(machine.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(await tipOf(shown)).toBe("SNOWFLAKE_ACCOUNTSNOWFLAKE_PASSWORDGiven by project settings; values are never shown");
+    expect(await tipOf(shown)).toBe("SNOWFLAKE_ACCOUNTSNOWFLAKE_PASSWORDGiven by project and organisation settings; values are never shown");
   });
 
   test("a Run given none has no chip", async () => {

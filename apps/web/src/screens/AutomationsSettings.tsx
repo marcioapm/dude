@@ -21,6 +21,7 @@ import {
   RepoFilterField,
   SchedulePicker,
   ScopeChip,
+  SecretPicker,
   Segmented,
   SessionMark,
   SettingField,
@@ -74,7 +75,9 @@ import {
   AUTOMATION_PROMPT_VARIABLES,
   AUTOMATION_POST_RETRY,
   COMMAND_MAX_BYTES,
-  ORG_AUTOMATION_SECRETS,
+  ORG_AUTOMATION_PICKS,
+  PRESET_SECRET_RECIPIENT,
+  PRESET_SECRETS,
   CONCURRENCY,
   CONCURRENCY_LABEL,
   EVENT_ACTIONS,
@@ -103,11 +106,17 @@ import {
   type ModelTier,
   type PastDelivery,
   type PresetRole,
+  type OrgSecret,
+  type ProjectSecret,
+  type SecretRef,
   type SettingsResponse,
   type Trigger,
 } from "@dude/domain";
+import { Icon } from "@dude/design-system";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
+import { useOrgSecrets } from "./OrgSecrets.tsx";
+import "../secrets.css";
 
 /** Where the automations pages are: a list, one automation (its tab), one run. */
 export interface AutomationsPlace {
@@ -527,7 +536,17 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           ) : (
             <EventTrigger trigger={trigger} subs={subs} disabled={ro} onChange={(t) => set("trigger", t)} />
           )}
-          {a.projectId ? null : (
+          {a.projectId ? null : trigger.kind === "schedule" && a.kind !== "webhook" ? (
+            <SettingRow label="Checked out" help="What each run checks out. None: it starts in an empty workspace, with its image's tools." data-testid="org-checked-out">
+              <Segmented<"none" | "some"> label="Checked out" value={form.repos === "none" ? "none" : "some"} disabled={ro} data-testid="repos-checked-out"
+                onChange={(m) => setForm((f) => ({ ...f, repos: m === "none" ? "none" : "all", repoFilter: m === "none" ? null : f.repoFilter }))}
+                options={[{ value: "none", label: "None" }, { value: "some", label: "Some" }]} />
+              {form.repos !== "none" ? (
+                <RepoFilterField value={(form.repoFilter ?? { mode: "all", repos: [] }) as RepoFilterValue} org={orgName} groups={groups} disabled={ro}
+                  onChange={(v) => set("repoFilter", { mode: v.mode, repos: [...v.repos] })} />
+              ) : null}
+            </SettingRow>
+          ) : (
             <SettingRow label="Repositories" help={trigger.kind === "schedule" ? "What each run checks out." : "Where its events may come from."}>
               <RepoFilterField value={(form.repoFilter ?? { mode: "all", repos: [] }) as RepoFilterValue} org={orgName} groups={groups} disabled={ro}
                 onChange={(v) => set("repoFilter", { mode: v.mode, repos: [...v.repos] })} />
@@ -573,7 +592,9 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           <SettingsSection title="Agent" data-testid="agent-source">
             <SettingRow label="Agent">
               <Segmented<"own" | "preset"> label="Agent" value={preset ? "preset" : "own"} disabled={ro}
-                onChange={(s) => set("agent", s === "own" ? { own: { prompt: "" } } : { preset: { role: "qa_browser", overrides: {} }, brief: "" })}
+                onChange={(s) => setForm((f) => ({ ...f, agent: s === "own" ? { own: { prompt: "" } } : { preset: { role: "qa_browser", overrides: {} }, brief: "" },
+                  // One of dude's agents gets what its role is given; it keeps no picks.
+                  secrets: s === "preset" ? [] : f.secrets }))}
                 options={[{ value: "own", label: "Its own agent" }, { value: "preset", label: "One of dude's agents" }]} />
               {preset ? (
                 <Select<PresetRole> label="Role" value={preset.preset.role} disabled={ro}
@@ -660,8 +681,8 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           </SettingsSection>
         ) : null}
 
-        {a.kind !== "webhook" ? <AutomationSecrets client={client} projectId={a.projectId} ro={ro} chosen={form.secrets}
-          onChange={(names) => set("secrets", names)} /> : null}
+        {a.kind !== "webhook" ? <AutomationSecrets client={client} a={a} orgName={orgName} preset={preset?.preset.role ?? null} ro={ro}
+          chosen={form.secrets} onChange={(refs) => set("secrets", refs)} /> : null}
         <SettingsSection title="Notifications">
           <SettingRow label="When a run fails" help={a.ownerLeftAt ? `Every one of ${orgName}'s admins is told.` : "Its owner is told."}>
             <Switch checked={form.notifyOnFailure} label={form.notifyOnFailure ? "Notify" : "Don't notify"} disabled={ro} onCheckedChange={(v) => set("notifyOnFailure", v)} />
@@ -726,26 +747,56 @@ function ProjectReposRow({ client, projectId, ro, value, onChange }: {
   );
 }
 
-function AutomationSecrets({ client, projectId, ro, chosen, onChange }: {
-  client: ApiClient; projectId: string | null; ro: boolean; chosen: string[]; onChange: (names: string[]) => void;
+function AutomationSecrets({ client, a, orgName, preset, ro, chosen, onChange }: {
+  client: ApiClient; a: Automation; orgName: string; preset: PresetRole | null; ro: boolean;
+  chosen: SecretRef[]; onChange: (refs: SecretRef[]) => void;
 }) {
-  const [names, setNames] = useState<string[] | null>(null);
+  const org = useOrgSecrets(client);
+  const [project, setProject] = useState<ProjectSecret[] | null>(a.projectId ? null : []);
   useEffect(() => {
-    if (projectId) client.projectSecrets(projectId).then((r) => setNames(r.secrets.map((s) => s.name)), () => setNames([]));
-  }, [client, projectId]);
+    if (a.projectId) client.projectSecrets(a.projectId).then((r) => setProject(r.secrets), () => setProject([]));
+  }, [client, a.projectId]);
+  const projectName = a.projectName ?? "the project";
   return (
     <SettingsSection title="Secrets">
-      {!projectId ? <SettingsNote>{ORG_AUTOMATION_SECRETS}</SettingsNote> : (
-        <SettingRow label="Project secrets" help="Only those chosen here are given to each run, as environment variables.">
-          {names === null ? <Spinner label="Loading secrets…" /> : names.length === 0 ? <span>No project secrets.</span> : (
-            <div role="group" aria-label="Project secrets">
-              {names.map((name) => <Checkbox key={name} label={name} checked={chosen.includes(name)} disabled={ro}
-                onCheckedChange={(checked) => onChange(checked ? [...chosen, name] : chosen.filter((s) => s !== name))} />)}
-            </div>
-          )}
+      {org.secrets === null || project === null ? (
+        <SettingRow label="Secrets">{org.problem ? <span>{org.problem}</span> : <Spinner label="Loading secrets…" />}</SettingRow>
+      ) : preset ? (
+        <SettingRow label="Secrets" help={PRESET_SECRETS(PRESET_ROLE_LABEL[preset])} data-testid="preset-secrets">
+          <PresetSecretsLine role={preset} orgName={orgName} org={org.secrets} project={a.projectId ? { name: projectName, secrets: project } : undefined} />
+        </SettingRow>
+      ) : (
+        <SettingRow label="Secrets" block help={ORG_AUTOMATION_PICKS(orgName)} data-testid="automation-secrets">
+          <SecretPicker orgName={orgName} org={org.secrets} disabled={ro} value={chosen} data-testid="secret-picker"
+            project={a.projectId ? { name: projectName, secrets: project } : undefined}
+            onChange={(next) => onChange(next.map((r) => ({ source: r.source, name: r.name })))} />
         </SettingRow>
       )}
     </SettingsSection>
+  );
+}
+
+/** What a dude-role preset's runs get: its role's ticks at both levels, the project's winning a name. */
+function PresetSecretsLine({ role, orgName, org, project }: {
+  role: PresetRole; orgName: string; org: readonly OrgSecret[]; project?: { name: string; secrets: readonly ProjectSecret[] } | undefined;
+}) {
+  const recipient = PRESET_SECRET_RECIPIENT[role];
+  const own = new Set((project?.secrets ?? []).map((s) => s.name));
+  const fromProject = recipient ? (project?.secrets ?? []).filter((s) => s.recipients.includes(recipient)) : [];
+  const fromOrg = recipient ? org.filter((s) => s.recipients.includes(recipient) && !own.has(s.name)) : [];
+  const names = (list: readonly { name: string }[]) => list.map((s, i) => <span key={s.name}>{i ? ", " : ""}<code className="ds-mono">{s.name}</code></span>);
+  const label = PRESET_ROLE_LABEL[role];
+  return (
+    <span className="presetSecrets" data-testid="preset-secrets-line">
+      <Icon name="lock" size={12} />
+      <span>
+        {label} gets{" "}
+        {fromOrg.length ? <>{names(fromOrg)} <span className="presetSecretsFrom">from {orgName}</span></> : null}
+        {fromOrg.length && fromProject.length ? " · " : null}
+        {fromProject.length ? <>{names(fromProject)} <span className="presetSecretsFrom">from {project!.name}</span></> : null}
+        {!fromOrg.length && !fromProject.length ? (recipient ? "no secrets" : "no secrets: it is not one of the agents a secret is given to") : null}
+      </span>
+    </span>
   );
 }
 

@@ -12,6 +12,7 @@ import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, PROJECT } from "../src/fixtures/data.ts";
+import { ORG_AUTOMATION_PICKS, PRESET_SECRETS } from "@dude/domain";
 import { AutomationPage, AutomationsList, NewAutomationDialog, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -67,7 +68,7 @@ describe("the organisation's list", () => {
   test("the count, next run as a day and time / On event / Off, and the filters as words with no labels", async () => {
     const c = await show(<AutomationsList client={new FixtureClient("a")} orgName="Example" projectId={null} canCreate onOpen={() => undefined} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
-    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("6 automations");
+    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("8 automations");
     const next = (id: string) => rows(c).find((r) => r.getAttribute("data-id") === id)!.querySelectorAll("td")[6]!.textContent;
     expect(next("aut_triage")).toBe("On event");
     expect(next("aut_changelog")).toBe("Off");
@@ -83,7 +84,8 @@ describe("the organisation's list", () => {
     const opened: string[] = [];
     const c = await show(<AutomationsList client={client} orgName="Example" projectId={null} canCreate onOpen={(id) => opened.push(id)} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
-    expect(names(c)).toEqual(["PR triage", "Nightly dependency audit", "Weekly cost report", "Release notes to Slack", "Nightly QA pass", "Changelog builder"]);
+    expect(names(c)).toEqual(["PR triage", "Weekly PR digest", "Nightly dependency audit", "Weekly cost report", "Release notes to Slack", "Nightly QA pass",
+      "Changelog builder", "Investigate a failed deploy"]);
     const cost = rows(c).find((r) => r.getAttribute("data-id") === "aut_cost")!;
     expect(cost.querySelector('[data-held="true"]')?.getAttribute("aria-label")).toBe("Example's admins");
     const sw = rows(c)[0]!.querySelector<HTMLElement>("[data-testid=automation-enabled]")!;
@@ -91,7 +93,7 @@ describe("the organisation's list", () => {
     await click(sw);
     expect(opened).toEqual([]);
     expect((await client.automation("aut_triage")).enabled).toBe(false);
-    await click(rows(c)[1]!);
+    await click(rows(c)[2]!);
     expect(opened).toEqual(["aut_audit"]);
   });
 });
@@ -102,7 +104,7 @@ describe("a project's list", () => {
     const here = await until(() => c.querySelector("[data-testid=also-running]"), "Also running here");
     expect(here.textContent).toContain("Also running here, from Example");
     const own = rows(c).filter((r) => !here.contains(r)).map(nameOf);
-    expect(own).toEqual(["Nightly QA pass", "Changelog builder"]);
+    expect(own).toEqual(["Nightly QA pass", "Changelog builder", "Investigate a failed deploy"]);
     const theirs = rows(c).filter((r) => here.contains(r)).map(nameOf);
     expect(theirs).toContain("PR triage");
     expect(theirs).toContain("Release notes to Slack");
@@ -427,24 +429,63 @@ describe("the header's ⋯ menu", () => {
 });
 
 describe("secrets and webhook wording", () => {
-  test("an organisation automation explains project secrets instead of offering a picker", async () => {
-    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
-      onPlace={() => undefined} onBack={() => undefined} />);
-    await until(() => c.querySelector("[data-testid=owner-row]"), "the page");
-    expect(c.textContent).toContain("Secrets belong to a project, so an organisation automation is given none. Make it a project's automation to use that project's secrets.");
-    expect(c.querySelectorAll("[role=group][aria-label='Project secrets']").length).toBe(0);
+  const page = (client: FixtureClient, id: string) => show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id }}
+    onPlace={() => undefined} onBack={() => undefined} />);
+  const box = (c: HTMLElement, name: string) => [...c.querySelectorAll<HTMLElement>("[role=checkbox]")].find((b) => b.getAttribute("aria-label") === name);
+
+  test("an organisation automation picks from the organisation's secrets only", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, "aut_triage");
+    const picker = await until(() => c.querySelector<HTMLElement>("[data-testid=secret-picker]"), "the picker");
+    expect([...picker.querySelectorAll("[role=group]")].map((g) => g.getAttribute("aria-label"))).toEqual(["Example's"]);
+    expect(c.textContent).toContain(ORG_AUTOMATION_PICKS("Example"));
+    expect(box(c, "STATUSPAGE_KEY (Example)")!.getAttribute("aria-checked")).toBe("true");
+    await click(box(c, "NPM_TOKEN (Example)")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_triage").secrets.length === 2 ? true : null, "saved");
+    expect((await client.automation("aut_triage")).secrets).toEqual([
+      { source: "organization", name: "STATUSPAGE_KEY" }, { source: "organization", name: "NPM_TOKEN" }]);
   });
 
-  test("a project automation chooses its project's secrets and saves those names", async () => {
+  test("a project automation picks from both lists; the organisation's same name is disabled and says the project's wins", async () => {
     const client = new FixtureClient("a");
-    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
-      onPlace={() => undefined} onBack={() => undefined} />);
-    const group = await until(() => c.querySelector<HTMLElement>("[role=group][aria-label='Project secrets']"), "the secrets");
-    expect(group.textContent).toContain("DATABASE_SEED_URL");
-    await click(group.querySelector<HTMLElement>("[role=checkbox]")!);
+    const c = await page(client, "aut_investigate");
+    const picker = await until(() => c.querySelector<HTMLElement>("[data-testid=secret-picker]"), "the picker");
+    expect([...picker.querySelectorAll("[role=group]")].map((g) => g.getAttribute("aria-label"))).toEqual(["Example's", "web-console's"]);
+    const shadowed = box(c, "SEED_LLM_KEY (Example)")!;
+    expect(shadowed.hasAttribute("disabled")).toBe(true);
+    expect(picker.querySelector("[data-overridden=true]")!.textContent).toContain("Overridden by web-console's SEED_LLM_KEY");
+    await click(box(c, "DATABASE_SEED_URL (web-console)")!);
     await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
-    await until(() => client.fixtureAutomation("aut_qa").secrets.length === 1 ? true : null, "saved");
-    expect((await client.automation("aut_qa")).secrets).toEqual(["DATABASE_SEED_URL"]);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.length === 3 ? true : null, "saved");
+    expect(client.fixtureAutomation("aut_investigate").secrets).toContainEqual({ source: "project", name: "DATABASE_SEED_URL" });
+  });
+
+  test("one of dude's agents shows what its role gets, read-only; the Investigator gets none", async () => {
+    const client = new FixtureClient("a");
+    const qa = await page(client, "aut_qa");
+    const line = await until(() => qa.querySelector<HTMLElement>("[data-testid=preset-secrets-line]"), "the line");
+    // Example's SEED_LLM_KEY is ticked for Tester, but web-console holds its own (Previews only): neither reaches it.
+    expect(line.textContent).toBe("Tester gets NPM_TOKEN, SENTRY_TOKEN from Example");
+    expect(qa.textContent).toContain(PRESET_SECRETS("Tester"));
+    expect(qa.querySelector("[data-testid=secret-picker]")).toBeNull();
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const audit = await page(client, "aut_audit");
+    const none = await until(() => audit.querySelector<HTMLElement>("[data-testid=preset-secrets-line]"), "the line");
+    expect(none.textContent).toBe("Investigator gets no secrets: it is not one of the agents a secret is given to");
+  });
+
+  test("a scheduled organisation automation checks out None or Some", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, "aut_digest");
+    const row = await until(() => c.querySelector<HTMLElement>("[data-testid=org-checked-out]"), "the row");
+    const none = [...row.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "None")!;
+    expect(none.getAttribute("aria-pressed")).toBe("true");
+    expect(row.querySelector("[data-testid=repo-filter]")).toBeNull();
+    await click([...row.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Some")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_digest").repos === "all" ? true : null, "saved Some");
   });
 
   test("a webhook says retried once, on 5xx or no answer in 30 seconds", async () => {
