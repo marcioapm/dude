@@ -48,6 +48,55 @@ func installScriptFrom(t *testing.T, script, srv string, env ...string) (dir, st
 	return dir, errBuf.String(), err
 }
 
+// fakeUname is a directory whose uname reports sysname and machine, for the
+// front of the script's PATH.
+func fakeUname(t *testing.T, sysname, machine string) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncase \"$1\" in -s) echo " + sysname + " ;; -m) echo " + machine + " ;; *) exit 2 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "uname"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// The payload is never run, so every platform's mapping is tested on any host.
+func TestInstallScriptMapsUname(t *testing.T) {
+	for _, tc := range []struct{ sysname, machine, want string }{
+		{"Linux", "aarch64", "dude v1.2.0 linux_arm64"},
+		{"Linux", "x86_64", "dude v1.2.0 linux_amd64"},
+		{"Darwin", "x86_64", "dude v1.2.0 darwin_amd64"},
+		{"Darwin", "arm64", "dude v1.2.0 darwin_arm64"},
+		{"FreeBSD", "amd64", ""},
+	} {
+		t.Run(tc.sysname+"/"+tc.machine, func(t *testing.T) {
+			f := newFakeRelease(t, "v1.2.0")
+			path := "PATH=" + fakeUname(t, tc.sysname, tc.machine) + string(os.PathListSeparator) + os.Getenv("PATH")
+			dir, stderr, err := installScript(t, f.serve(t).URL, path)
+			if tc.want == "" {
+				if err == nil || !strings.Contains(stderr, "not FreeBSD") {
+					t.Fatalf("err %v, stderr:\n%s", err, stderr)
+				}
+				if _, serr := os.Stat(filepath.Join(dir, "dude")); !os.IsNotExist(serr) {
+					t.Fatalf("installed: %v", serr)
+				}
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				if len(f.requests) != 0 {
+					t.Fatalf("asked %v", f.requests)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%v\n%s", err, stderr)
+			}
+			if got := readFile(t, filepath.Join(dir, "dude")); got != tc.want {
+				t.Fatalf("installed %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInstallScriptInstallsTheRelease(t *testing.T) {
 	f := newFakeRelease(t, "v1.2.0")
 	dir, stderr, err := installScript(t, f.serve(t).URL)

@@ -107,12 +107,13 @@ func (f *fakeRelease) serve(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// newFakeRelease is release tag with tarballs for darwin/arm64, linux/amd64
-// and this machine, whose bin/dude is "dude TAG OS_ARCH", and their SHA256SUMS.
+// newFakeRelease is release tag with tarballs for darwin and linux, arm64
+// and amd64, and this machine, whose bin/dude is "dude TAG OS_ARCH", and
+// their SHA256SUMS.
 func newFakeRelease(t *testing.T, tag string) *fakeRelease {
 	f := &fakeRelease{tag: tag, assets: map[string][]byte{}}
 	var sums strings.Builder
-	for _, osArch := range []string{"darwin_arm64", "linux_amd64", runtime.GOOS + "_" + runtime.GOARCH} {
+	for _, osArch := range []string{"darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64", runtime.GOOS + "_" + runtime.GOARCH} {
 		name := fmt.Sprintf("dude-cli_%s_%s.tar.gz", tag, osArch)
 		if _, dup := f.assets[name]; dup {
 			continue
