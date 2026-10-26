@@ -362,7 +362,16 @@ func str(a map[string]json.RawMessage, k string) string {
 	return ""
 }
 
+// jsonMethods are the methods that read a JSON body, as Slack's do: any
+// other method given one answers invalid_arguments, as Slack's reads do.
+var jsonMethods = map[string]bool{"chat.postMessage": true, "chat.postEphemeral": true, "chat.update": true,
+	"reactions.add": true, "reactions.remove": true}
+
 func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") && !jsonMethods[method] {
+		refuse(w, "invalid_arguments")
+		return
+	}
 	a, err := args(r)
 	if err != nil {
 		refuse(w, "invalid_arguments")

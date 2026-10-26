@@ -263,9 +263,16 @@ type APIError struct{ Method, Code string }
 
 func (e *APIError) Error() string { return fmt.Sprintf("slack %s: %s", e.Method, e.Code) }
 
-// call POSTs one Web API method as JSON with token (form-encoded with
-// none, as the OAuth methods take client credentials) and decodes the
-// answer into out, an ok:false into an *APIError. Its error never carries
+// jsonMethods are the methods dude calls with a JSON body: they carry
+// blocks, which a form cannot. Slack reads JSON only for some write
+// methods; a read (conversations.info, users.info, …) given JSON answers
+// invalid_arguments, so every other method is form-encoded.
+var jsonMethods = map[string]bool{"chat.postMessage": true, "chat.postEphemeral": true, "chat.update": true}
+
+// call POSTs one Web API method, as JSON for jsonMethods and form-encoded
+// otherwise, with token as a bearer (none for the OAuth exchanges, which
+// take client credentials), and decodes the answer into out, an ok:false
+// into an *APIError. Its error never carries
 // the token or the app's secrets, however Slack's answer echoes them: it
 // is logged and kept as the installation's last failure.
 func (p *Provider) call(ctx context.Context, token, method string, args map[string]any, out any) error {
@@ -299,7 +306,7 @@ func (p *Provider) scrub(token string, err error) error {
 func (p *Provider) send(ctx context.Context, token, method string, args map[string]any, out any) error {
 	var body io.Reader
 	contentType := "application/json; charset=utf-8"
-	if token == "" {
+	if !jsonMethods[method] {
 		form := url.Values{}
 		for k, v := range args {
 			form.Set(k, fmt.Sprint(v))
