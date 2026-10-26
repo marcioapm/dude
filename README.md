@@ -292,18 +292,19 @@ image: agents run an image the operator builds and hosts, for which
 ```
 cd orchestrator && go build -o ~/.local/bin/dude ./cmd/dude-cli
 dude login https://dude.absmartly.dev   # paste a key from Your settings → Keys
-dude projects
-dude create ABS --title "…" --goal - --criterion "…" --start <<'EOF'
+dude project list
+dude task create ABS --title "…" --goal - --criterion "…" --start <<'EOF'
 …
 EOF
-dude show ABS-12
+dude task show ABS-12
 ```
 
 `dude login` keeps one key per organisation, in the macOS keychain, the Secret
 Service keyring on Linux, or the Windows Credential Manager (in
 `~/.config/dude/credentials.toml` where there is none). Commands act in the last
-organisation logged in to, or `--org` / `DUDE_ORG`. Every command, and how keys
-are kept, is in [`docs/cli.md`](docs/cli.md).
+organisation logged in to, or `--org` / `DUDE_ORG`. Commands are a noun and a
+verb (`dude task update`, `dude automation show`; `dude NOUN` lists its verbs).
+Every command, and how keys are kept, is in [`docs/cli.md`](docs/cli.md).
 
 Deploying a release — its layout, every setting, the database roles and the
 order of an upgrade — is in [`docs/operations.md`](docs/operations.md).
