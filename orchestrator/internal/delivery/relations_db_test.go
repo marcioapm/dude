@@ -293,7 +293,7 @@ func TestRelationsOfStaysLinearUnderRowLevelSecurity(t *testing.T) {
 		}
 		before := rowsRead(t, tx)
 		var err error
-		if rels, err = RelationsOf(context.Background(), tx, ids); err != nil {
+		if rels, err = RelationsOf(context.Background(), tx, ids, nil); err != nil {
 			return err
 		}
 		read, total = readSince(t, tx, before)

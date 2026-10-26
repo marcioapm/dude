@@ -721,8 +721,10 @@ type taskFacts struct {
 // before filing edits it; inserts referencing them (KEY SHARE) go on.
 func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []delivery.ProposalItem, lock bool) (fileFacts, error) {
 	f := fileFacts{projects: map[string]bool{}, orgProjects: map[string]string{}, tasks: map[string]taskFacts{}}
+	// A project hidden from the chat the session came from is not one its
+	// cards may be filed into, though it was linked before it was hidden.
 	rows, err := tx.Query(ctx, `SELECT upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
-		WHERE sp.session_id = $1`, sessionID)
+		WHERE sp.session_id = $1 AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id"), sessionID)
 	if err != nil {
 		return f, err
 	}
@@ -780,7 +782,7 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = t.id) AND t.status NOT IN ('aborted', 'failed')
 		FROM unnest($2::text[], $3::int[]) AS k(prefix, number)
 		JOIN projects p ON upper(p.key_prefix) = k.prefix
-		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1
+		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1 AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id")+`
 		JOIN tasks t ON t.project_id = p.id AND t.number = k.number
 		LEFT JOIN LATERAL (SELECT pe.id, pe.name, person_ref(pe) AS ref FROM task_people tp JOIN people pe ON pe.id = tp.person_id
 			WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) o ON true

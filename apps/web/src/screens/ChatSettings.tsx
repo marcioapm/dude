@@ -439,7 +439,7 @@ function ProjectsSection({ client, provider, orgName }: { client: ApiClient; pro
         )}
       </SettingRow>
       <SettingRow label={`Hidden from ${provider.name}`} fill
-        help={`Nothing started from ${provider.name} can see these: they are left out of routing, never linked, and every tool of its sessions and tasks refuses them, their repositories, tasks and memory. Set here only, never from ${provider.name}. A member of ${orgName} can still use them outside ${provider.name}.`}>
+        help={`Nothing new from ${provider.name} can see these: they are left out of routing, never linked, and every tool of its sessions refuses them, their repositories, tasks and memory. A task already filed in one keeps working on its own project, and reaches no other hidden one. Set here only, never from ${provider.name}. A member of ${orgName} can still use them outside ${provider.name}.`}>
         <ProjectChips label="Hidden" chosen={view.hidden} all={view.projects} canEdit={view.canEdit} busy={busy} testId="chat-hidden"
           onChange={(ids) => void save(async () => setView(await client.setHiddenProjects(provider.id, ids)), undefined, "Hidden projects saved")} />
       </SettingRow>

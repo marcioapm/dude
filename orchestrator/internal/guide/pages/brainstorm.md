@@ -63,7 +63,7 @@ Besides the checkouts, the brainstorm agent can:
 - for a session started from chat, read more of the conversation it came from: its thread, or the channel when the request was not in one, 30 messages a page, at most 30 reads an hour (`chat_history`);
 - read dude's settings as they apply to the session (`settings`).
 
-A session started from chat never sees a project an admin hid from that chat (on the chat provider's settings page): it is not offered, cannot be linked, and every tool refuses it.
+A session started from chat never sees a project an admin hid from that chat (on the chat provider's settings page): it is not offered, cannot be linked, and every tool refuses it, its investigators' included. Hiding applies to new work: a task already filed in a project that is hidden later keeps working on it, and still reaches no other hidden project.
 
 Its machine is small and does not run code. What needs running to be known, it says is not checked, and proposes a task that finds out.
 

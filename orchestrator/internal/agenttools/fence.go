@@ -14,15 +14,22 @@ import (
 // A session or task started from chat is fenced from the projects hidden
 // from its provider (delivery.Fence). A session's own tools read projects
 // through delivery.SessionProjects and OrgProjects, which leave fenced ones
-// out; fenced is the check every other reach makes: a task agent's own
-// project, a project or task named by key, a memory's project.
+// out; fenced is the check every other reach makes: a project or task named
+// by key, a relation's other side, a peer, a memory's project.
 
-// fenceOf is c's fence: its session's, else its task's.
+// fenceOf is c's fence: its session's, else its task's. Hiding applies to
+// new work: a task's (or a conductor's) own project is never fenced from
+// it, so a task already in a project hidden since keeps working on it.
 func fenceOf(ctx context.Context, tx pgx.Tx, c Caller) (delivery.Fence, error) {
 	if c.AutomationID != "" {
 		return delivery.Fence{}, nil
 	}
-	return delivery.FenceOf(ctx, tx, c.SessionID, c.TaskID)
+	f, err := delivery.FenceOf(ctx, tx, c.SessionID, c.TaskID)
+	if err != nil || c.SessionID != "" || c.ProjectID == "" || !f.Hides(c.ProjectID) {
+		return f, err
+	}
+	f.Hidden = slices.DeleteFunc(slices.Clone(f.Hidden), func(p string) bool { return p == c.ProjectID })
+	return f, nil
 }
 
 // fenced refuses project for c when it is hidden from c's chat provider;
@@ -70,24 +77,30 @@ func hiddenNamed(ctx context.Context, tx pgx.Tx, c Caller, key string) error {
 	return refuse(rProjectHiddenFromChat, prefix, f.Provider)
 }
 
-// ownProjectTools are the task agents' tools that read or write their own
-// task's project (its tasks, epics, repositories, memory and settings): a
-// task filed from chat whose project was hidden since is refused them. The
-// GitHub reads are fenced by readableRepos.
-var ownProjectTools = []string{"list_tasks", "list_epics", "list_repositories", "request_repository", "create_task",
-	"search_memory", "get_memory", "remember", "settings", "run_chat", "run_diff"}
+// sessionChild says c is a Run a session's agent started (start_agent): it
+// has the session and neither task nor project, and reads as its session.
+func sessionChild(c Caller) bool {
+	return c.SessionID != "" && c.ProjectID == "" && c.TaskID == "" && !sessionAgent(c.Role)
+}
 
-func reachesOwnProject(t tool) bool { return !t.session && slices.Contains(ownProjectTools, t.name) }
+// peersInReach are peers less those in a project fenced off from c.
+func peersInReach(ctx context.Context, tx pgx.Tx, c Caller, peers []delivery.Peer) ([]delivery.Peer, error) {
+	f, err := fenceOf(ctx, tx, c)
+	if err != nil || len(f.Hidden) == 0 {
+		return peers, err
+	}
+	return slices.DeleteFunc(peers, func(p delivery.Peer) bool { return f.Hides(p.ProjectID) }), nil
+}
 
-// ownProjectFenced refuses a task agent's call when its own task's project
-// is hidden from the chat provider its task was filed from.
-func ownProjectFenced(ctx context.Context, tx pgx.Tx, c Caller) error {
-	if c.SessionID != "" || c.ProjectID == "" {
-		return nil
+// peerInReach is delivery.PeerByKey, a peer in a fenced project being none.
+func peerInReach(ctx context.Context, tx pgx.Tx, c Caller, key string) (delivery.Peer, bool, error) {
+	p, ok, err := delivery.PeerByKey(ctx, tx, c.TaskID, key)
+	if err != nil || !ok {
+		return p, ok, err
 	}
 	f, err := fenceOf(ctx, tx, c)
-	if err != nil || !f.Hides(c.ProjectID) {
-		return err
+	if err != nil || f.Hides(p.ProjectID) {
+		return delivery.Peer{}, false, err
 	}
-	return refuse(rTaskProjectHiddenFromChat, f.Provider)
+	return p, true, nil
 }

@@ -394,7 +394,7 @@ func settingsScopes(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (or
 		rows, err = tx.Query(ctx, cols+`WHERE p.id = $1`, c.ProjectID)
 	case c.SessionID != "":
 		rows, err = tx.Query(ctx, cols+`JOIN session_projects sp ON sp.project_id = p.id WHERE sp.session_id = $1
-			ORDER BY p.key_prefix, p.name`, c.SessionID)
+			AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id")+` ORDER BY p.key_prefix, p.name`, c.SessionID)
 	default:
 		return org, nil, nil
 	}

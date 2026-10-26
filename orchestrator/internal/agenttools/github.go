@@ -136,13 +136,9 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 			projects = append(projects, p.ID)
 		}
 	} else if c.ProjectID != "" {
+		// A task's own project, even one hidden from its chat since: hiding
+		// applies to new work (fenceOf).
 		projects = []string{c.ProjectID}
-		// A task filed from chat reads nothing of a project hidden since.
-		f, err := fenceOf(ctx, tx, c)
-		if err != nil {
-			return nil, err
-		}
-		projects = f.Keep(projects)
 	}
 	rows, err := tx.Query(ctx, `SELECT url FROM repositories WHERE project_id = ANY($1) ORDER BY name`, projects)
 	if err != nil {

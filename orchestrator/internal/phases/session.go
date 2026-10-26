@@ -12,6 +12,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -186,13 +187,23 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 // tells it where each is; and brings every checkout it holds to its
 // default branch, fast-forward only ("fetch the latest").
 func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, in *lux.ResumeInput) error {
-	var have, again []string
+	var have, again, fenced []string
 	var repos []delivery.SessionRepo
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT lux_repositories FROM runs WHERE id = $1`, r.ID).Scan(&have); err != nil {
 			return err
 		}
-		var err error
+		// A checkout of a project fenced off from the session since it was
+		// made: lux cannot take a repository out of a Run.
+		rows, err := tx.Query(ctx, `SELECT `+delivery.SessionSpecNameSQL+` FROM repositories repo JOIN projects p ON p.id = repo.project_id
+			WHERE `+delivery.SessionHidesSQL("$1", "repo.project_id")+` AND `+delivery.SessionSpecNameSQL+` = ANY($2::text[])`,
+			r.SessionID, db.NonNil(have))
+		if err != nil {
+			return err
+		}
+		if fenced, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil || len(fenced) > 0 {
+			return err
+		}
 		if repos, err = delivery.SessionRepositories(ctx, tx, r.SessionID); err != nil {
 			return err
 		}
@@ -202,7 +213,7 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		}
 		// Asked for again by the agent (refresh_checkout) after its clone
 		// failed on this session, and not linked by a member since: by spec name.
-		rows, err := tx.Query(ctx, `SELECT DISTINCT f.payload->>'repository' FROM events f
+		rows, err = tx.Query(ctx, `SELECT DISTINCT f.payload->>'repository' FROM events f
 			WHERE f.session_id = $1 AND f.event_type = 'repository.clone_failed' AND EXISTS (SELECT 1 FROM events q
 				WHERE q.session_id = $1 AND q.event_type = $2 AND q.occurred_at > f.occurred_at
 				  AND q.payload->>'project' = f.payload->>'key'
@@ -217,6 +228,9 @@ func (s *Syncer) sessionResume(ctx context.Context, r phaseRun, spec lux.Spec, i
 		return err
 	}); err != nil {
 		return err
+	}
+	if len(fenced) > 0 {
+		return errCheckoutFenced{fenced}
 	}
 	bySpec := map[string]lux.Repository{}
 	if spec.Git != nil {
@@ -288,6 +302,42 @@ func (s *Syncer) sessionWebChanged(ctx context.Context, tx pgx.Tx, r phaseRun, w
 // linked, checked out at path.
 func linkedTold(key, name, path string) string {
 	return linked.Render(struct{ Key, Name, Path string }{key, name, path})
+}
+
+// errCheckoutFenced: a session's agent holds a checkout (by spec name) of
+// a project now fenced off from its session, which no resume can remove.
+type errCheckoutFenced struct{ repos []string }
+
+func (e errCheckoutFenced) Error() string {
+	return "it holds a checkout of a project hidden from its chat since: " + strings.Join(e.repos, ", ")
+}
+
+// retireFenced replaces a parked session agent holding a fenced checkout
+// instead of resuming it: aborted (the syncer then cancels its lux Run and
+// its workspace), its unread messages handed to a fresh agent whose spec
+// and briefing are the fenced SessionRepositories and SessionProjects.
+func (s *Syncer) retireFenced(ctx context.Context, r phaseRun, why errCheckoutFenced) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		if err := delivery.LockSession(ctx, tx, r.SessionID); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
+			control_reason = $2, ended_at = now(), keep = false WHERE id = $1 AND status IN ('scheduled', 'starting', 'running', 'paused')`,
+			r.ID, why.Error())
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if err := delivery.StopSessionChildrenTx(ctx, tx, r.ID); err != nil {
+			return err
+		}
+		ref := r.ref()
+		if _, err := ledger.Append(ctx, tx, ref.Event("run.completed", ledger.ActorSystem,
+			map[string]any{"status": "aborted", "reason": why.Error()})); err != nil {
+			return err
+		}
+		_, err = delivery.SessionHandOver(ctx, tx, ref)
+		return err
+	})
 }
 
 var (

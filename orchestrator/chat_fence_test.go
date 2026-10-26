@@ -10,6 +10,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // A session started from chat can never see a project hidden from that
@@ -91,10 +92,10 @@ func toolsAs(s *sessionWorld, task, run string) func(tool, args string) (int, st
 }
 
 // A task (and epic) filed from a chat-born session's card carries the
-// session's provider, marked as through the session; its agents are fenced
-// when its project is hidden from that provider, and a task its agent
-// makes inherits the same. The task page does not say it came from Slack.
-func TestATaskFiledFromAChatBornSessionIsFencedAsTheSessionIs(t *testing.T) {
+// session's provider, marked as through the session, and a task its agent
+// makes inherits the same. Once its project is hidden from that provider,
+// the task keeps working on its own project: hiding applies to new work.
+func TestATaskFiledFromAChatBornSessionKeepsItsOwnProjectOnceHidden(t *testing.T) {
 	s := newSessionWorld(t)
 	session := s.session()
 	mustExec(t, s.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id = $1`, session)
@@ -107,24 +108,71 @@ func TestATaskFiledFromAChatBornSessionIsFencedAsTheSessionIs(t *testing.T) {
 		t.Fatalf("epic origin via %q", o)
 	}
 	call := toolsAs(s, task, "run_filed_impl")
-	if status, body := call("list_tasks", `{}`); status != 200 {
-		t.Fatalf("before hiding: %d %s", status, body)
-	}
 	mustExec(t, s.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, s.org, s.project)
 	for _, c := range [][2]string{{"list_tasks", `{}`}, {"list_repositories", `{}`}, {"search_memory", `{"query":"export"}`},
-		{"create_task", `{"title":"More","goal":"Another piece of the nightly export work."}`}} {
-		status, body := call(c[0], c[1])
-		if status != 422 || !strings.Contains(body, "this task's project is hidden from what is started from slack") {
-			t.Errorf("%s: %d %s", c[0], status, body)
+		{"create_task", `{"title":"Follow-up","goal":"Measure the nightly export after the fix."}`}} {
+		if status, body := call(c[0], c[1]); status != 200 {
+			t.Errorf("%s on its own hidden project: %d %s", c[0], status, body)
 		}
-	}
-	// A task its agent made before the hiding carries the provider, through the task.
-	mustExec(t, s.owner, `DELETE FROM chat_hidden_projects WHERE organization_id = $1`, s.org)
-	if status, body := call("create_task", `{"title":"Follow-up","goal":"Measure the nightly export after the fix."}`); status != 200 {
-		t.Fatalf("create_task: %d %s", status, body)
 	}
 	if o := s.one(`SELECT concat_ws('|', origin->>'provider', origin->>'via', origin->>'from') FROM tasks WHERE title = 'Follow-up'`); o != "slack|task|"+task {
 		t.Fatalf("an agent-made task's origin %s", o)
+	}
+	// Another project hidden from Slack is still out of its reach: a
+	// relation into it shows nothing of it.
+	other := s.taskIn(s.webProject, "Console export", s.marcio)
+	mustExec(t, s.owner, `INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+		VALUES ($1, $2, $3, 'blocks', $4)`, s.org, other, task, s.marcio)
+	if status, body := call("list_tasks", `{}`); status != 200 || !strings.Contains(body, "WC-") {
+		t.Fatalf("list_tasks before hiding WC: %d %s", status, body)
+	}
+	mustExec(t, s.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, s.org, s.webProject)
+	if status, body := call("list_tasks", `{}`); status != 200 || strings.Contains(body, "WC-") {
+		t.Errorf("list_tasks shows another hidden project's task: %d %s", status, body)
+	}
+}
+
+// A chat-born session's agent parked holding a checkout of a project an
+// admin hid from that chat since is not resumed with it (lux cannot take a
+// repository out of a Run): the next message ends it and a fresh agent,
+// without the checkout, takes the message.
+func TestAParkedSessionAgentHoldingAHiddenProjectsCheckoutIsReplaced(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
+	run := s.started(id)
+	s.linkWeb(id)
+	s.untilWebCheckedOut(run)
+	mustExec(t, s.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id = $1`, id)
+	mustExec(t, s.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, s.org, s.webProject)
+	s.parkSession(run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "carry on"})
+	var next string
+	s.until("a fresh agent took the message", func() bool {
+		next, _ = s.brainstorm(id)
+		return next != run && s.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, next) == 1
+	})
+	if n := s.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, run); n != 1 {
+		t.Errorf("the agent holding the hidden checkout was not ended")
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text LIKE '%carry on%'`, next); n == 0 &&
+		!strings.Contains(s.one(`SELECT prompt FROM runs WHERE id = $1`, next), "carry on") {
+		t.Errorf("the fresh agent was not given the message")
+	}
+	v := s.luxRun(next)
+	if v == nil {
+		t.Fatalf("no lux Run for the fresh agent")
+	}
+	if v.spec.Git != nil {
+		for _, r := range v.spec.Git.Repositories {
+			if r.Name == lux.SpecName("WC-web") {
+				t.Errorf("the fresh agent checks out the hidden project's repository")
+			}
+		}
+	}
+	if strings.Contains(v.raw, "WC-web") || strings.Contains(v.raw, "web-console") {
+		t.Errorf("the fresh agent's spec names the hidden project: %s", v.raw)
 	}
 }
 

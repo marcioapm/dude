@@ -231,7 +231,11 @@ func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (lis
 	for i, t := range all {
 		ids[i] = t.ID
 	}
-	rels, err := delivery.RelationsOf(ctx, tx, ids)
+	f, err := fenceOf(ctx, tx, c)
+	if err != nil {
+		return out, err
+	}
+	rels, err := delivery.RelationsOf(ctx, tx, ids, f.Hidden)
 	if err != nil {
 		return out, err
 	}

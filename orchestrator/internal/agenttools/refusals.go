@@ -137,7 +137,6 @@ const (
 	rNameTaskWhosePullRequestsRefresh      = "name the task whose pull requests to refresh, by its key"
 	rRefreshingTakesGithubReads            = "a refresh takes one GitHub read for each open pull request, %d here, and %d of the hour's %d are left: wait, or work with what pull_requests last read"
 	rProjectHiddenFromChat                 = "%s is hidden from what is started from %s: this session or task can't see it, its repositories, tasks or memory"
-	rTaskProjectHiddenFromChat             = "this task's project is hidden from what is started from %s: its tools can't reach it"
 	rChatHistoryBeforeOrAfter              = "page with before or with after, not both"
 	rChatHistoryNotFromChat                = "this session was not started from a chat: there is no conversation to read"
 	rChatHistoryNotInstalled               = "the chat this session came from is no longer connected to dude: its conversation can't be read; ask a member what it said"

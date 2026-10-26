@@ -978,18 +978,31 @@ route; anyone else is refused privately and nothing changes).
 
 **Hidden projects (`chat_hidden_projects`, migration 196).** An admin hides
 projects from a provider on its settings page only (`PUT
-/v1/organization/chat/:provider/hidden-projects`), never from chat. What
-that provider's chat starts (a session, task or epic whose `origin.provider`
-it is) can never see them: they are out of the routing world and the hints,
-a decision naming one is refused as an invented project is, a member's link
-by hand is refused (409 `hidden_from_chat`), and every agent reach goes
-through one predicate (`delivery.SessionHidesSQL` / `delivery.FenceOf`):
-`SessionProjects`, `OrgProjects` and `SessionRepositories` leave them out
-(so the session's tools, briefing, checkout and credentials do),
-`readableRepos` leaves out a fenced task's repositories, and named lookups
-(`linkedProject`, `propose`'s link_project, `settings`, a related task's
-key) and a fenced task's own-project tools refuse saying so
-(`agenttools/fence.go`).
+/v1/organization/chat/:provider/hidden-projects`), never from chat. Hiding
+applies to new work:
+- A session started from that provider's chat (`sessions.origin.provider`)
+  never sees a hidden project, nor do the investigators its agent starts:
+  `SessionProjects`, `OrgProjects` and `SessionRepositories` leave it out
+  (so the session's tools, briefing, checkout and credentials do, and an
+  investigator's `search_memory`/`get_memory` are scoped to them), as do
+  `settings` and filing a card. A parked agent still holding a checkout of a
+  project hidden since is not resumed with it (lux cannot remove a
+  repository from a Run): it is ended and a fresh agent, without it, takes
+  the next message.
+- Nothing new from chat is filed into or linked to a hidden project: it is
+  out of the routing world and the hints, a decision naming one is refused
+  as an invented project is, and a member's link by hand is refused (409
+  `hidden_from_chat`).
+- A task or epic whose `origin.provider` it is, and whose own project is
+  hidden later, keeps working on its own project: all its tools, Runs,
+  checkout and delivery go on. It never reaches any other hidden project:
+  its repositories, tasks, relations (`RelationsOf` leaves the other side
+  out), peers, memory, search, settings and `run_chat` there are refused or
+  left out.
+
+Every reach goes through one predicate (`delivery.SessionHidesSQL` /
+`delivery.FenceOf`, and `agenttools/fence.go`'s `fenceOf`, which takes a
+task's own project out of its fence).
 
 **Session tools for chat.** `chat_history` (capability `chat.read`, a
 brainstorm's by default) reads more of the conversation a session came from

@@ -530,10 +530,6 @@ no section %s in dude's guide: search it with types ["doc"] for the ids it has
 
 %s is hidden from what is started from %s: this session or task can't see it, its repositories, tasks or memory
 
-## refusals/tools/chat/task-project-hidden
-
-this task's project is hidden from what is started from %s: its tools can't reach it
-
 ## refusals/tools/github/run-id-run-from-1-or-its-link
 
 runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>)

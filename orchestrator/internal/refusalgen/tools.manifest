@@ -133,7 +133,6 @@ rNoOpenPullRequestOnGithub             refusals/tools/refresh/no-open-pull-reque
 rNameTaskWhosePullRequestsRefresh      refusals/tools/refresh/name-task-whose-pull-requests-refresh
 rRefreshingTakesGithubReads            refusals/tools/refresh/refreshing-takes-github-reads
 rProjectHiddenFromChat                 refusals/tools/chat/project-hidden
-rTaskProjectHiddenFromChat             refusals/tools/chat/task-project-hidden
 rChatHistoryBeforeOrAfter              refusals/tools/chat/history-before-or-after
 rChatHistoryNotFromChat                refusals/tools/chat/history-not-from-chat
 rChatHistoryNotInstalled               refusals/tools/chat/history-not-installed

@@ -37,7 +37,7 @@ func message(ctx context.Context, tx pgx.Tx, c Caller, in messageIn) (delivery.S
 	if key == "" || strings.ContainsAny(key, ",*") || strings.EqualFold(key, "all") || strings.EqualFold(key, "epic") {
 		return delivery.Sent{}, refuseText(rMessageGoesOnePeerByIts)
 	}
-	peer, ok, err := delivery.PeerByKey(ctx, tx, c.TaskID, key)
+	peer, ok, err := peerInReach(ctx, tx, c, key)
 	if err != nil {
 		return delivery.Sent{}, err
 	}
