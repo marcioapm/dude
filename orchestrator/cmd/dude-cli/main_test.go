@@ -88,9 +88,13 @@ func runCLI(t *testing.T, srv *httptest.Server, stdin string, args ...string) (s
 		out:   &out,
 	}
 	err := c.run(args)
-	if len(args) > 0 {
+	if len(args) == 0 {
+		return out.String(), err
+	}
+	// Requests are checked against the command run resolved, a top-level one or "NOUN VERB".
+	if name, _, nerr := commandName(args); nerr == nil && name != "" {
 		for _, s := range sent {
-			if msg := unmappedRequest(t, args[0], s); msg != "" {
+			if msg := unmappedRequest(t, name, s); msg != "" {
 				t.Error(msg)
 			}
 		}
@@ -102,23 +106,23 @@ func last(calls []call) call { return calls[len(calls)-1] }
 
 func TestTaskRefsUseOneLookup(t *testing.T) {
 	for _, args := range [][]string{
-		{"show", "abs-12"},
-		{"show", "wi_12"},
-		{"chat", "ABS-12", "hello"},
-		{"feedback-draft", "ABS-12", "hello", "--path", "a.go", "--lines", "1"},
-		{"findings", "ABS-12", "--run", "ABS-12"},
-		{"feedback-draft", "ABS-12", "hello", "--path", "a.go", "--lines", "1", "--run", "ABS-12"},
-		{"events", "wi_12"},
+		{"task", "show", "abs-12"},
+		{"task", "show", "wi_12"},
+		{"task", "chat", "ABS-12", "hello"},
+		{"feedback", "draft", "ABS-12", "hello", "--path", "a.go", "--lines", "1"},
+		{"finding", "list", "ABS-12", "--run", "ABS-12"},
+		{"feedback", "draft", "ABS-12", "hello", "--path", "a.go", "--lines", "1", "--run", "ABS-12"},
+		{"task", "events", "wi_12"},
 	} {
 		srv, calls := fakeDude(t)
 		if _, err := runCLI(t, srv, "", args...); err != nil {
 			t.Fatal(err)
 		}
-		want, first := 2, "/v1/tasks/"+args[1]
-		switch args[0] {
-		case "show":
+		want, first := 2, "/v1/tasks/"+args[2]
+		switch args[0] + " " + args[1] {
+		case "task show":
 			want = 1
-		case "events": // an id needs no lookup
+		case "task events": // an id needs no lookup
 			want, first = 1, "/v1/events?taskId=wi_12"
 		}
 		if len(*calls) != want || (*calls)[0].path != first {
@@ -129,7 +133,7 @@ func TestTaskRefsUseOneLookup(t *testing.T) {
 
 func TestShowResolvesKeyAndBriefs(t *testing.T) {
 	srv, calls := fakeDude(t)
-	out, err := runCLI(t, srv, "", "show", "abs-12")
+	out, err := runCLI(t, srv, "", "task", "show", "abs-12")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +156,7 @@ func TestShowResolvesKeyAndBriefs(t *testing.T) {
 func TestCreateWithReposRelationsAndStart(t *testing.T) {
 	srv, calls := fakeDude(t)
 	_, err := runCLI(t, srv, "the goal, long enough to pass",
-		"create", "ABS", "--title", "New", "--goal", "-", "--criterion", "a", "--criterion", "b",
+		"task", "create", "ABS", "--title", "New", "--goal", "-", "--criterion", "a", "--criterion", "b",
 		"--repo", "api:read", "--blocked-by", "ABS-12", "--start")
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +190,7 @@ func TestCreateWithReposRelationsAndStart(t *testing.T) {
 
 func TestCreateRefusesUnknownRepo(t *testing.T) {
 	srv, _ := fakeDude(t)
-	_, err := runCLI(t, srv, "", "create", "ABS", "--title", "x", "--goal", "a goal of sixteen+", "--repo", "nope")
+	_, err := runCLI(t, srv, "", "task", "create", "ABS", "--title", "x", "--goal", "a goal of sixteen+", "--repo", "nope")
 	if err == nil || !strings.Contains(err.Error(), "it has: api, web") {
 		t.Fatalf("err = %v", err)
 	}
@@ -194,7 +198,7 @@ func TestCreateRefusesUnknownRepo(t *testing.T) {
 
 func TestRunRefIsTasksNewestRun(t *testing.T) {
 	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, "", "steer", "ABS-12", "look at X", "--interrupt"); err != nil {
+	if _, err := runCLI(t, srv, "", "run", "steer", "ABS-12", "look at X", "--interrupt"); err != nil {
 		t.Fatal(err)
 	}
 	c := last(*calls)
@@ -205,7 +209,7 @@ func TestRunRefIsTasksNewestRun(t *testing.T) {
 
 func TestUpdateEpicNoneSendsNull(t *testing.T) {
 	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, "", "update", "wi_12", "--epic", "none"); err != nil {
+	if _, err := runCLI(t, srv, "", "task", "update", "wi_12", "--epic", "none"); err != nil {
 		t.Fatal(err)
 	}
 	c := last(*calls)
@@ -221,9 +225,9 @@ func TestAnswerBodies(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"answer", "q_1", "because", "--choice", "0", "--choice", "2"}, `{"answers":[{"choices":[0,2],"text":"because"}]}`},
-		{[]string{"answer", "q_1", "--choice", "1"}, `{"answers":[{"choices":[1]}]}`},
-		{[]string{"answer", "q_1", "because"}, `{"text":"because"}`},
+		{[]string{"question", "answer", "q_1", "because", "--choice", "0", "--choice", "2"}, `{"answers":[{"choices":[0,2],"text":"because"}]}`},
+		{[]string{"question", "answer", "q_1", "--choice", "1"}, `{"answers":[{"choices":[1]}]}`},
+		{[]string{"question", "answer", "q_1", "because"}, `{"text":"because"}`},
 	} {
 		srv, calls := fakeDude(t)
 		if _, err := runCLI(t, srv, "", tc.args...); err != nil {
@@ -238,8 +242,8 @@ func TestAnswerBodies(t *testing.T) {
 
 func TestRelateNeedsExactlyOne(t *testing.T) {
 	srv, _ := fakeDude(t)
-	if _, err := runCLI(t, srv, "", "relate", "wi_12"); err == nil {
-		t.Fatal("relate with no kind succeeded")
+	if _, err := runCLI(t, srv, "", "task", "relate", "wi_12"); err == nil {
+		t.Fatal("task relate with no kind succeeded")
 	}
 }
 
@@ -264,7 +268,7 @@ func TestAPIBodyFromStdin(t *testing.T) {
 
 func TestCommandHelpSucceeds(t *testing.T) {
 	srv, calls := fakeDude(t)
-	out, err := runCLI(t, srv, "", "events", "--help")
+	out, err := runCLI(t, srv, "", "task", "events", "--help")
 	if err != nil || !strings.Contains(out, "nextCursor") || len(*calls) != 0 {
 		t.Fatalf("help: %q %v %+v", out, err, *calls)
 	}
@@ -272,8 +276,8 @@ func TestCommandHelpSucceeds(t *testing.T) {
 
 func TestArgumentCountIsChecked(t *testing.T) {
 	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, "", "show"); err == nil {
-		t.Fatal("show without TASK succeeded")
+	if _, err := runCLI(t, srv, "", "task", "show"); err == nil {
+		t.Fatal("task show without TASK succeeded")
 	}
 	if _, err := runCLI(t, srv, "", "frobnicate"); err == nil {
 		t.Fatal("unknown command succeeded")

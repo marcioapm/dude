@@ -192,10 +192,10 @@ func TestMain(m *testing.M) {
 // The server sends /v1/automations/subscriptions to its literal route, not to
 // /v1/automations/:id, so a command mapped only to the :id route may not send it.
 func TestALiteralRouteBeatsItsParamSibling(t *testing.T) {
-	if why := unmappedRequest(t, "automation", call{method: "GET", path: "/v1/automations/subscriptions"}); !strings.Contains(why, "does not map GET /v1/automations/subscriptions to automation") {
-		t.Fatalf("automation sending GET /v1/automations/subscriptions: %q", why)
+	if why := unmappedRequest(t, "automation show", call{method: "GET", path: "/v1/automations/subscriptions"}); !strings.Contains(why, "does not map GET /v1/automations/subscriptions to automation show") {
+		t.Fatalf("automation show sending GET /v1/automations/subscriptions: %q", why)
 	}
-	if why := unmappedRequest(t, "automation", call{method: "GET", path: "/v1/automations/aut_1"}); why != "" {
+	if why := unmappedRequest(t, "automation show", call{method: "GET", path: "/v1/automations/aut_1"}); why != "" {
 		t.Fatal(why)
 	}
 }
@@ -248,44 +248,44 @@ func checkRequest(t *testing.T, c call, want routeCase) string {
 var routeCases = []routeCase{
 	{[]string{"login", "http://placeholder"}, "GET", "/v1/me", ``},
 	{[]string{"whoami"}, "GET", "/v1/me", ``},
-	{[]string{"people"}, "GET", "/v1/people", ``},
-	{[]string{"projects"}, "GET", "/v1/projects", ``},
-	{[]string{"repos", "ABS"}, "GET", "/v1/projects/prj_1", ``},
-	{[]string{"epics", "ABS"}, "GET", "/v1/projects/prj_1/epics", ``},
-	{[]string{"overview", "ABS"}, "GET", "/v1/projects/prj_1/overview", ``},
-	{[]string{"list", "ABS", "--status", "review"}, "GET", "/v1/tasks?projectId=prj_1&status=review", ``},
-	{[]string{"show", "wi_12"}, "GET", "/v1/tasks/wi_12", ``},
-	{[]string{"raw", "wi_12"}, "GET", "/v1/tasks/wi_12", ``},
-	{[]string{"relations", "wi_12"}, "GET", "/v1/tasks/wi_12/relations", ``},
-	{[]string{"metrics", "wi_12"}, "GET", "/v1/tasks/wi_12/metrics", ``},
-	{[]string{"prs", "wi_12"}, "GET", "/v1/pull-requests?taskId=wi_12", ``},
-	{[]string{"run", "run_9"}, "GET", "/v1/runs/run_9", ``},
-	{[]string{"diff", "run_9"}, "GET", "/v1/runs/run_9/diff", ``},
-	{[]string{"directives", "run_9"}, "GET", "/v1/runs/run_9/directives", ``},
-	{[]string{"session", "ses_1"}, "GET", "/v1/sessions/ses_1", ``},
-	{[]string{"questions", "wi_12"}, "GET", "/v1/questions?taskId=wi_12", ``},
-	{[]string{"artifacts", "wi_12"}, "GET", "/v1/artifacts?taskId=wi_12", ``},
-	{[]string{"servers", "wi_12"}, "GET", "/v1/tasks/wi_12/servers", ``},
-	{[]string{"repo-requests"}, "GET", "/v1/repository-requests", ``},
-	{[]string{"epic-delete", "ep_1"}, "DELETE", "/v1/epics/ep_1", ``},
-	{[]string{"epic-metrics", "ep_1"}, "GET", "/v1/epics/ep_1/metrics", ``},
-	{[]string{"peers", "ep_1"}, "GET", "/v1/epics/ep_1/peers", ``},
-	{[]string{"threads", "ep_1"}, "GET", "/v1/epics/ep_1/threads", ``},
-	{[]string{"notes", "ep_1"}, "GET", "/v1/epics/ep_1/notes", ``},
-	{[]string{"note-retire", "ep_1", "2"}, "POST", "/v1/epics/ep_1/notes/2/retire", ``},
-	{[]string{"auto-start", "wi_12", "--how", "talk"}, "PUT", "/v1/tasks/wi_12/auto-start", `{"how":"talk"}`},
-	{[]string{"no-auto-start", "wi_12"}, "DELETE", "/v1/tasks/wi_12/auto-start", ``},
-	{[]string{"relate", "wi_12", "--related", "ABS-3", "--why", "same bug"}, "POST", "/v1/tasks/wi_12/relations", `{"kind":"related","task":"ABS-3","why":"same bug"}`},
-	{[]string{"done", "wi_12"}, "POST", "/v1/tasks/wi_12/done", `{}`},
-	{[]string{"assign", "wi_12", "per_1"}, "PUT", "/v1/tasks/wi_12/people", `{"people":["per_1"]}`},
-	{[]string{"retry", "wi_12"}, "POST", "/v1/tasks/wi_12/retry", ``},
-	{[]string{"leave", "run_9"}, "POST", "/v1/runs/run_9/leave", ``},
-	{[]string{"answer", "q_1", "yes"}, "POST", "/v1/questions/q_1/answer", `{"text":"yes"}`},
-	{[]string{"memory", "mem_1"}, "GET", "/v1/memory/memories/mem_1", ``},
-	{[]string{"memory-archive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/archive", ``},
-	{[]string{"memory-restore", "mem_1"}, "POST", "/v1/memory/memories/mem_1/restore", ``},
-	{[]string{"update", "wi_12", "--repo", "web"}, "PATCH", "/v1/tasks/wi_12", `{"repositories":[{"access":"write","id":"rep_web"}]}`},
-	{[]string{"create", "ABS", "--title", "New", "--goal", "A goal long enough to save.", "--repo", "web", "--related", "ABS-12"}, "POST", "/v1/tasks/wi_13/relations", `{"kind":"related","task":"ABS-12"}`},
+	{[]string{"person", "list"}, "GET", "/v1/people", ``},
+	{[]string{"project", "list"}, "GET", "/v1/projects", ``},
+	{[]string{"repo", "list", "ABS"}, "GET", "/v1/projects/prj_1", ``},
+	{[]string{"epic", "list", "ABS"}, "GET", "/v1/projects/prj_1/epics", ``},
+	{[]string{"project", "overview", "ABS"}, "GET", "/v1/projects/prj_1/overview", ``},
+	{[]string{"task", "list", "ABS", "--status", "review"}, "GET", "/v1/tasks?projectId=prj_1&status=review", ``},
+	{[]string{"task", "show", "wi_12"}, "GET", "/v1/tasks/wi_12", ``},
+	{[]string{"task", "raw", "wi_12"}, "GET", "/v1/tasks/wi_12", ``},
+	{[]string{"task", "relations", "wi_12"}, "GET", "/v1/tasks/wi_12/relations", ``},
+	{[]string{"task", "metrics", "wi_12"}, "GET", "/v1/tasks/wi_12/metrics", ``},
+	{[]string{"pr", "list", "wi_12"}, "GET", "/v1/pull-requests?taskId=wi_12", ``},
+	{[]string{"run", "show", "run_9"}, "GET", "/v1/runs/run_9", ``},
+	{[]string{"run", "diff", "run_9"}, "GET", "/v1/runs/run_9/diff", ``},
+	{[]string{"run", "directives", "run_9"}, "GET", "/v1/runs/run_9/directives", ``},
+	{[]string{"session", "show", "ses_1"}, "GET", "/v1/sessions/ses_1", ``},
+	{[]string{"question", "list", "wi_12"}, "GET", "/v1/questions?taskId=wi_12", ``},
+	{[]string{"task", "artifacts", "wi_12"}, "GET", "/v1/artifacts?taskId=wi_12", ``},
+	{[]string{"task", "servers", "wi_12"}, "GET", "/v1/tasks/wi_12/servers", ``},
+	{[]string{"repo", "requests"}, "GET", "/v1/repository-requests", ``},
+	{[]string{"epic", "delete", "ep_1"}, "DELETE", "/v1/epics/ep_1", ``},
+	{[]string{"epic", "metrics", "ep_1"}, "GET", "/v1/epics/ep_1/metrics", ``},
+	{[]string{"epic", "peers", "ep_1"}, "GET", "/v1/epics/ep_1/peers", ``},
+	{[]string{"epic", "threads", "ep_1"}, "GET", "/v1/epics/ep_1/threads", ``},
+	{[]string{"note", "list", "ep_1"}, "GET", "/v1/epics/ep_1/notes", ``},
+	{[]string{"note", "retire", "ep_1", "2"}, "POST", "/v1/epics/ep_1/notes/2/retire", ``},
+	{[]string{"task", "auto-start", "wi_12", "--how", "talk"}, "PUT", "/v1/tasks/wi_12/auto-start", `{"how":"talk"}`},
+	{[]string{"task", "no-auto-start", "wi_12"}, "DELETE", "/v1/tasks/wi_12/auto-start", ``},
+	{[]string{"task", "relate", "wi_12", "--related", "ABS-3", "--why", "same bug"}, "POST", "/v1/tasks/wi_12/relations", `{"kind":"related","task":"ABS-3","why":"same bug"}`},
+	{[]string{"task", "done", "wi_12"}, "POST", "/v1/tasks/wi_12/done", `{}`},
+	{[]string{"task", "assign", "wi_12", "per_1"}, "PUT", "/v1/tasks/wi_12/people", `{"people":["per_1"]}`},
+	{[]string{"task", "retry", "wi_12"}, "POST", "/v1/tasks/wi_12/retry", ``},
+	{[]string{"run", "leave", "run_9"}, "POST", "/v1/runs/run_9/leave", ``},
+	{[]string{"question", "answer", "q_1", "yes"}, "POST", "/v1/questions/q_1/answer", `{"text":"yes"}`},
+	{[]string{"memory", "show", "mem_1"}, "GET", "/v1/memory/memories/mem_1", ``},
+	{[]string{"memory", "archive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/archive", ``},
+	{[]string{"memory", "restore", "mem_1"}, "POST", "/v1/memory/memories/mem_1/restore", ``},
+	{[]string{"task", "update", "wi_12", "--repo", "web"}, "PATCH", "/v1/tasks/wi_12", `{"repositories":[{"access":"write","id":"rep_web"}]}`},
+	{[]string{"task", "create", "ABS", "--title", "New", "--goal", "A goal long enough to save.", "--repo", "web", "--related", "ABS-12"}, "POST", "/v1/tasks/wi_13/relations", `{"kind":"related","task":"ABS-12"}`},
 }
 
 func TestRouteCases(t *testing.T) {

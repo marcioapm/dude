@@ -415,21 +415,24 @@ func TestUpgradeRefusesWindows(t *testing.T) {
 	}
 }
 
-// update is the task command only: without a TASK it is a usage error and
-// never reaches the updater.
+// task update is the task command only: without a TASK it is a usage error
+// and never reaches the updater; a bare update is no command at all.
 func TestUpdateIsTheTaskCommand(t *testing.T) {
 	f := newFakeRelease(t, "v1.2.0")
 	c, exe, _, _ := upgradeCLI(t, f.serve(t), "v1.1.0")
-	for _, args := range [][]string{{"update"}, {"update", "--check"}, {"update", "--version", "v1.2.0"}} {
-		if err := c.run(args); err == nil || !strings.HasPrefix(err.Error(), "usage: dude update TASK") && !strings.Contains(err.Error(), "flag provided but not defined") {
+	for _, args := range [][]string{{"task", "update"}, {"task", "update", "--check"}, {"task", "update", "--version", "v1.2.0"}} {
+		if err := c.run(args); err == nil || !strings.HasPrefix(err.Error(), "usage: dude task update TASK") && !strings.Contains(err.Error(), "flag provided but not defined") {
 			t.Errorf("%v: err = %v", args, err)
 		}
+	}
+	if err := c.run([]string{"update", "--check"}); err == nil || err.Error() != `unknown command "update"; see dude --help` {
+		t.Errorf("update: err = %v", err)
 	}
 	if readFile(t, exe) != "old binary" || len(f.requests) != 0 {
 		t.Fatalf("update without a TASK reached the updater: %v", f.requests)
 	}
 	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, "", "update", "wi_12", "--title", "x"); err != nil || last(*calls).method != "PATCH" {
+	if _, err := runCLI(t, srv, "", "task", "update", "wi_12", "--title", "x"); err != nil || last(*calls).method != "PATCH" {
 		t.Fatalf("%v %+v", err, *calls)
 	}
 }

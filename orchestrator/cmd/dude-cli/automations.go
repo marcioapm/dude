@@ -25,8 +25,8 @@ func init() {
 }
 
 // automationReadOnly are the fields GET /v1/automations/:id answers that its
-// PUT refuses (automationInputSchema is strict): automation-update drops them,
-// so `dude automation ID` output, edited, is its input.
+// PUT refuses (automationInputSchema is strict): automation update drops them,
+// so `dude automation show ID` output, edited, is its input.
 var automationReadOnly = []string{"id", "projectId", "projectName", "enabled", "owner", "ownerLeftAt",
 	"webhookSecretHint", "nextRunAt", "lastRun", "canEdit", "canTransfer", "createdAt", "updatedAt"}
 
@@ -73,7 +73,7 @@ func automationRequest(method, suffix string, body any) func(*flag.FlagSet) doer
 }
 
 var automationCommands = map[string]command{
-	"automations": {"PROJECT?", "the organisation's automations and every project's, filtered; with PROJECT, its own and the organisation's that also run there",
+	"automation list": {"PROJECT?", "the organisation's automations and every project's, filtered; with PROJECT, its own and the organisation's that also run there",
 		func(fs *flag.FlagSet) doer {
 			scope := fs.String("scope", "", "organization or project: only the organisation's, or only projects'")
 			trigger := fs.String("trigger", "", "schedule or github")
@@ -108,7 +108,7 @@ var automationCommands = map[string]command{
 				}
 				if a[0] != "" {
 					if *scope != "" || *trigger != "" || *kind != "" || *enabled != "" || *mine || *name != "" {
-						return nil, errors.New("automations: filters list the organisation's; a PROJECT's list takes none")
+						return nil, errors.New("automation list: filters list the organisation's; a PROJECT's list takes none")
 					}
 					pid, err := c.projectID(a[0])
 					if err != nil {
@@ -143,8 +143,8 @@ var automationCommands = map[string]command{
 				return out, nil
 			}
 		}},
-	"automation": {"ID", "one automation in full; --settings: only what automation-update takes", func(fs *flag.FlagSet) doer {
-		settings := fs.Bool("settings", false, "only its settings, the input automation-update takes")
+	"automation show": {"ID", "one automation in full; --settings: only what automation update takes", func(fs *flag.FlagSet) doer {
+		settings := fs.Bool("settings", false, "only its settings, the input automation update takes")
 		return func(c *cli, a []string) (any, error) {
 			o, err := c.getObj(autPath(a[0], ""))
 			if err != nil || !*settings {
@@ -156,7 +156,7 @@ var automationCommands = map[string]command{
 			return o, nil
 		}
 	}},
-	"automation-create": {"PROJECT?", "a new automation, the organisation's or PROJECT's; it starts disabled, with defaults to change with automation-update",
+	"automation create": {"PROJECT?", "a new automation, the organisation's or PROJECT's; it starts disabled, with defaults to change with automation update",
 		func(fs *flag.FlagSet) doer {
 			name := fs.String("name", "", "its name (required)")
 			kind := fs.String("kind", "", "agent, command, server or webhook (required)")
@@ -165,7 +165,7 @@ var automationCommands = map[string]command{
 			tz := fs.String("tz", "", "a schedule's time zone, e.g. Europe/Lisbon (default: UTC)")
 			return func(c *cli, a []string) (any, error) {
 				if *name == "" || *kind == "" || *trigger == "" {
-					return nil, errors.New("automation-create: --name, --kind and --trigger are required")
+					return nil, errors.New("automation create: --name, --kind and --trigger are required")
 				}
 				if err := oneOf("--kind", *kind, "agent", "command", "server", "webhook"); err != nil {
 					return nil, err
@@ -176,7 +176,7 @@ var automationCommands = map[string]command{
 				body := obj{"name": *name, "kind": *kind, "trigger": *trigger}
 				if *preset != "" {
 					if *kind != "agent" {
-						return nil, errors.New("automation-create: --preset goes with --kind agent")
+						return nil, errors.New("automation create: --preset goes with --kind agent")
 					}
 					if err := oneOf("--preset", *preset, "qa_browser", "reviewer", "investigator"); err != nil {
 						return nil, err
@@ -194,34 +194,34 @@ var automationCommands = map[string]command{
 				return c.post("/v1/automations", body)
 			}
 		}},
-	"automation-update": {"ID SETTINGS", "replace an automation's settings with SETTINGS, a JSON file or - (stdin): dude automation ID output, edited",
+	"automation update": {"ID SETTINGS", "replace an automation's settings with SETTINGS, a JSON file or - (stdin): dude automation show ID output, edited",
 		noFlags(func(c *cli, a []string) (any, error) {
 			s, err := c.jsonArg("SETTINGS", a[1])
 			if err != nil {
 				return nil, err
 			}
 			if id, ok := s["id"].(string); ok && id != a[0] {
-				return nil, fmt.Errorf("automation-update: SETTINGS are %s's, not %s's", id, a[0])
+				return nil, fmt.Errorf("automation update: SETTINGS are %s's, not %s's", id, a[0])
 			}
 			for _, k := range automationReadOnly {
 				delete(s, k)
 			}
 			return c.request("PUT", autPath(a[0], ""), s)
 		})},
-	"automation-enable":  {"ID", "turn an automation on", automationRequest("PUT", "/enabled", obj{"enabled": true})},
-	"automation-disable": {"ID", "turn an automation off; a kept session stays", automationRequest("PUT", "/enabled", obj{"enabled": false})},
-	"automation-delete": {"ID", "delete an automation and its runs' history", noFlags(func(c *cli, a []string) (any, error) {
+	"automation enable":  {"ID", "turn an automation on", automationRequest("PUT", "/enabled", obj{"enabled": true})},
+	"automation disable": {"ID", "turn an automation off; a kept session stays", automationRequest("PUT", "/enabled", obj{"enabled": false})},
+	"automation delete": {"ID", "delete an automation and its runs' history", noFlags(func(c *cli, a []string) (any, error) {
 		if _, err := c.request("DELETE", autPath(a[0], ""), nil); err != nil {
 			return nil, err
 		}
 		return obj{"deleted": a[0]}, nil
 	})},
-	"automation-duplicate": {"ID", "copy an automation: off, \"NAME (copy)\", owned by you", automationRequest("POST", "/duplicate", nil)},
-	"automation-owner": {"ID PERSON", "hand an automation to another member (its owner or an admin); PERSON is an id from people",
+	"automation duplicate": {"ID", "copy an automation: off, \"NAME (copy)\", owned by you", automationRequest("POST", "/duplicate", nil)},
+	"automation owner": {"ID PERSON", "hand an automation to another member (its owner or an admin); PERSON is an id from person list",
 		noFlags(func(c *cli, a []string) (any, error) {
 			return c.request("PUT", autPath(a[0], "/owner"), obj{"personId": a[1]})
 		})},
-	"automation-secret": {"ID", "replace a webhook automation's signing secret, read from stdin (16 to 256 characters); it is never shown again",
+	"automation secret": {"ID", "replace a webhook automation's signing secret, read from stdin (16 to 256 characters); it is never shown again",
 		noFlags(func(c *cli, a []string) (any, error) {
 			if c.prompt != nil {
 				c.prompt("Signing secret for " + a[0] + ": ")
@@ -229,11 +229,11 @@ var automationCommands = map[string]command{
 			line, _ := bufio.NewReader(c.stdin).ReadString('\n')
 			secret := strings.TrimSpace(line)
 			if secret == "" {
-				return nil, errors.New("automation-secret: no secret on stdin")
+				return nil, errors.New("automation secret: no secret on stdin")
 			}
 			// webhookSecretSchema's bounds are zod's string length: UTF-16 code units.
 			if n := len(utf16.Encode([]rune(secret))); n < 16 || n > 256 {
-				return nil, fmt.Errorf("automation-secret: the secret is %d characters; it takes 16 to 256", n)
+				return nil, fmt.Errorf("automation secret: the secret is %d characters; it takes 16 to 256", n)
 			}
 			v, err := c.request("PUT", autPath(a[0], "/webhook-secret"), obj{"secret": secret})
 			if err != nil {
@@ -246,9 +246,9 @@ var automationCommands = map[string]command{
 			o, _ := v.(obj)
 			return pick(o, "id", "name", "webhookSecretHint"), nil
 		})},
-	"automation-run": {"ID", "run an automation now: a schedule as it is; on GitHub events, a past delivery or a test event",
+	"automation run": {"ID", "run an automation now: a schedule as it is; on GitHub events, a past delivery or a test event",
 		func(fs *flag.FlagSet) doer {
-			delivery := fs.String("delivery", "", "a past delivery's id, from automation-deliveries")
+			delivery := fs.String("delivery", "", "a past delivery's id, from automation deliveries")
 			body := fs.String("body", "", "a test event's body: a JSON file, or - for stdin")
 			event := fs.String("event", "", "with --body: the GitHub event (default: the automation's)")
 			action := fs.String("action", "", "with --body: its action, e.g. opened, written into the body when the body names none")
@@ -256,7 +256,7 @@ var automationCommands = map[string]command{
 			return func(c *cli, a []string) (any, error) {
 				if *body == "" {
 					if *event != "" || *action != "" || *deliveryID != "" {
-						return nil, errors.New("automation-run: --event, --action and --delivery-id go with --body")
+						return nil, errors.New("automation run: --event, --action and --delivery-id go with --body")
 					}
 					if *delivery != "" {
 						return c.post(autPath(a[0], "/runs"), obj{"deliveryId": *delivery})
@@ -264,7 +264,7 @@ var automationCommands = map[string]command{
 					return c.post(autPath(a[0], "/runs"), obj{})
 				}
 				if *delivery != "" {
-					return nil, errors.New("automation-run: --delivery or --body, not both")
+					return nil, errors.New("automation run: --delivery or --body, not both")
 				}
 				b, err := c.jsonArg("--body", *body)
 				if err != nil {
@@ -273,7 +273,7 @@ var automationCommands = map[string]command{
 				if *action != "" {
 					// The run's filters read the action from the body, not testEvent.action.
 					if own := b["action"]; own != nil && own != *action {
-						return nil, fmt.Errorf("automation-run: --action %s, but the body's action is %v", *action, own)
+						return nil, fmt.Errorf("automation run: --action %s, but the body's action is %v", *action, own)
 					}
 					b["action"] = *action
 				}
@@ -285,7 +285,7 @@ var automationCommands = map[string]command{
 					}
 					t, _ := aut["trigger"].(obj)
 					if ev = str(t, "event"); ev == "" {
-						return nil, errors.New("automation-run: a scheduled automation takes no test event")
+						return nil, errors.New("automation run: a scheduled automation takes no test event")
 					}
 				}
 				id := *deliveryID
@@ -299,7 +299,7 @@ var automationCommands = map[string]command{
 				return c.post(autPath(a[0], "/runs"), obj{"testEvent": te})
 			}
 		}},
-	"automation-runs": {"ID", "an automation's runs, newest first, and its kept session", func(fs *flag.FlagSet) doer {
+	"automation runs": {"ID", "an automation's runs, newest first, and its kept session", func(fs *flag.FlagSet) doer {
 		status := fs.String("status", "", "queued, running, succeeded, failed, skipped or cancelled")
 		limit := fs.Int("limit", 0, "at most this many, 1 to 200 (default 50)")
 		return func(c *cli, a []string) (any, error) {
@@ -318,13 +318,13 @@ var automationCommands = map[string]command{
 			return c.request("GET", autPath(a[0], "/runs")+query("status", *status, "limit", l), nil)
 		}
 	}},
-	"automation-run-show": {"ID RUN", "one run of an automation: what triggered it, its log's end, a Server's requests",
+	"automation run-show": {"ID RUN", "one run of an automation: what triggered it, its log's end, a Server's requests",
 		noFlags(func(c *cli, a []string) (any, error) {
 			return c.request("GET", autPath(a[0], "/runs/"+esc(a[1])), nil)
 		})},
-	"automation-deliveries": {"ID", "the last 30 days' deliveries of a GitHub automation's event, for automation-run --delivery",
+	"automation deliveries": {"ID", "the last 30 days' deliveries of a GitHub automation's event, for automation run --delivery",
 		automationRequest("GET", "/deliveries", nil)},
-	"automation-test": {"ID BODY", "whether an event body (a JSON file, or - for stdin) would run a GitHub automation, and which filter skips it if not",
+	"automation test": {"ID BODY", "whether an event body (a JSON file, or - for stdin) would run a GitHub automation, and which filter skips it if not",
 		noFlags(func(c *cli, a []string) (any, error) {
 			b, err := c.jsonArg("BODY", a[1])
 			if err != nil {
@@ -332,11 +332,11 @@ var automationCommands = map[string]command{
 			}
 			return c.post(autPath(a[0], "/test-event/evaluate"), obj{"body": b})
 		})},
-	"automation-start-fresh": {"ID", "end an automation's kept session; its next run starts a new one",
+	"automation start-fresh": {"ID", "end an automation's kept session; its next run starts a new one",
 		automationRequest("POST", "/start-fresh", nil)},
-	"automation-prompts": {"ID", "every saved version of an agent automation's prompt or brief, newest first",
+	"automation prompts": {"ID", "every saved version of an agent automation's prompt or brief, newest first",
 		automationRequest("GET", "/prompt-history", nil)},
-	"automation-prompt-restore": {"ID VERSION", "save an earlier prompt version again as the newest; VERSION is its number or id, from automation-prompts",
+	"automation prompt-restore": {"ID VERSION", "save an earlier prompt version again as the newest; VERSION is its number or id, from automation prompts",
 		noFlags(func(c *cli, a []string) (any, error) {
 			version := a[1]
 			if n, err := strconv.Atoi(version); err == nil {
@@ -351,19 +351,19 @@ var automationCommands = map[string]command{
 					}
 				}
 				if version == "" {
-					return nil, fmt.Errorf("automation-prompt-restore: %s has no prompt version %d", a[0], n)
+					return nil, fmt.Errorf("automation prompt-restore: %s has no prompt version %d", a[0], n)
 				}
 			}
 			return c.post(autPath(a[0], "/prompt-history/restore"), obj{"versionId": version})
 		})},
-	"automation-repos": {"", "every project's repositories, for an organisation automation's repoFilter",
+	"automation repos": {"", "every project's repositories, for an organisation automation's repoFilter",
 		noFlags(func(c *cli, _ []string) (any, error) { return c.request("GET", "/v1/automations/repositories", nil) })},
-	"automation-next": {"CRON", "a schedule's next three times, as dude's scheduler computes them", func(fs *flag.FlagSet) doer {
+	"automation next": {"CRON", "a schedule's next three times, as dude's scheduler computes them", func(fs *flag.FlagSet) doer {
 		tz := fs.String("tz", "UTC", "its time zone, e.g. Europe/Lisbon")
 		return func(c *cli, a []string) (any, error) {
 			return c.post("/v1/automations/schedule/next", obj{"cron": a[0], "tz": *tz})
 		}
 	}},
-	"automation-subscriptions": {"", "the GitHub events the organisation is subscribed to, for a trigger's event",
+	"automation subscriptions": {"", "the GitHub events the organisation is subscribed to, for a trigger's event",
 		noFlags(func(c *cli, _ []string) (any, error) { return c.request("GET", "/v1/automations/subscriptions", nil) })},
 }

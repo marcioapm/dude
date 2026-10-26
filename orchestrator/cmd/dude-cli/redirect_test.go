@@ -47,8 +47,8 @@ func TestRedirectIsAnErrorAndSendsNothingOn(t *testing.T) {
 		crossHost bool
 		args      []string
 	}{
-		{"same host", false, []string{"projects"}},
-		{"another host", true, []string{"projects"}},
+		{"same host", false, []string{"project", "list"}},
+		{"another host", true, []string{"project", "list"}},
 		{"api, same host", false, []string{"api", "GET", "/v1/me"}},
 		{"api, another host", true, []string{"api", "GET", "/v1/me"}},
 	} {
@@ -91,7 +91,7 @@ func TestHTMLAnswerIsAnError(t *testing.T) {
 		io.WriteString(w, "<!DOCTYPE html><title>Sign in</title>")
 	}))
 	t.Cleanup(srv.Close)
-	for _, args := range [][]string{{"projects"}, {"api", "GET", "/v1/me"}, {"api", "GET", "v1/me"}} {
+	for _, args := range [][]string{{"project", "list"}, {"api", "GET", "/v1/me"}, {"api", "GET", "v1/me"}} {
 		out, err := runCLI(t, srv, "", args...)
 		if err == nil || !strings.Contains(err.Error(), "HTML page") || !strings.Contains(err.Error(), "behind a sign-in") {
 			t.Fatalf("%v: %q %v", args, out, err)

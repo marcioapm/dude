@@ -1,13 +1,15 @@
 [
   {
     "args": [
-      "automations"
+      "automation",
+      "list"
     ],
     "route": "GET /v1/automations"
   },
   {
     "args": [
-      "automations",
+      "automation",
+      "list",
       "--scope",
       "project",
       "--trigger",
@@ -32,7 +34,8 @@
   },
   {
     "args": [
-      "automations",
+      "automation",
+      "list",
       "ABS"
     ],
     "route": "GET /v1/projects/:id/automations"
@@ -40,13 +43,15 @@
   {
     "args": [
       "automation",
+      "show",
       "aut_1"
     ],
     "route": "GET /v1/automations/:id"
   },
   {
     "args": [
-      "automation-create",
+      "automation",
+      "create",
       "--name",
       "Morning digest",
       "--kind",
@@ -66,7 +71,8 @@
   },
   {
     "args": [
-      "automation-create",
+      "automation",
+      "create",
       "ABS",
       "--name",
       "Review",
@@ -88,7 +94,8 @@
   },
   {
     "args": [
-      "automation-create",
+      "automation",
+      "create",
       "--name",
       "Release hook",
       "--kind",
@@ -105,7 +112,8 @@
   },
   {
     "args": [
-      "automation-update",
+      "automation",
+      "update",
       "aut_1",
       "testdata/automation-get.json"
     ],
@@ -143,7 +151,8 @@
   },
   {
     "args": [
-      "automation-enable",
+      "automation",
+      "enable",
       "aut_1"
     ],
     "route": "PUT /v1/automations/:id/enabled",
@@ -153,7 +162,8 @@
   },
   {
     "args": [
-      "automation-disable",
+      "automation",
+      "disable",
       "aut_1"
     ],
     "route": "PUT /v1/automations/:id/enabled",
@@ -163,21 +173,24 @@
   },
   {
     "args": [
-      "automation-delete",
+      "automation",
+      "delete",
       "aut_1"
     ],
     "route": "DELETE /v1/automations/:id"
   },
   {
     "args": [
-      "automation-duplicate",
+      "automation",
+      "duplicate",
       "aut_1"
     ],
     "route": "POST /v1/automations/:id/duplicate"
   },
   {
     "args": [
-      "automation-owner",
+      "automation",
+      "owner",
       "aut_1",
       "per_2"
     ],
@@ -188,7 +201,8 @@
   },
   {
     "args": [
-      "automation-secret",
+      "automation",
+      "secret",
       "aut_1"
     ],
     "route": "PUT /v1/automations/:id/webhook-secret",
@@ -198,7 +212,8 @@
   },
   {
     "args": [
-      "automation-run",
+      "automation",
+      "run",
       "aut_1"
     ],
     "route": "POST /v1/automations/:id/runs",
@@ -206,7 +221,8 @@
   },
   {
     "args": [
-      "automation-run",
+      "automation",
+      "run",
       "aut_gh",
       "--delivery",
       "dlv_1"
@@ -218,7 +234,8 @@
   },
   {
     "args": [
-      "automation-run",
+      "automation",
+      "run",
       "aut_gh",
       "--body",
       "-",
@@ -244,7 +261,8 @@
   },
   {
     "args": [
-      "automation-run",
+      "automation",
+      "run",
       "aut_gh",
       "--body",
       "-",
@@ -270,7 +288,8 @@
   },
   {
     "args": [
-      "automation-run",
+      "automation",
+      "run",
       "aut_gh",
       "--body",
       "-",
@@ -295,7 +314,8 @@
   },
   {
     "args": [
-      "automation-runs",
+      "automation",
+      "runs",
       "aut_1",
       "--status",
       "failed",
@@ -310,7 +330,8 @@
   },
   {
     "args": [
-      "automation-run-show",
+      "automation",
+      "run-show",
       "aut_1",
       "arn_1"
     ],
@@ -318,14 +339,16 @@
   },
   {
     "args": [
-      "automation-deliveries",
+      "automation",
+      "deliveries",
       "aut_gh"
     ],
     "route": "GET /v1/automations/:id/deliveries"
   },
   {
     "args": [
-      "automation-test",
+      "automation",
+      "test",
       "aut_gh",
       "-"
     ],
@@ -341,21 +364,24 @@
   },
   {
     "args": [
-      "automation-start-fresh",
+      "automation",
+      "start-fresh",
       "aut_1"
     ],
     "route": "POST /v1/automations/:id/start-fresh"
   },
   {
     "args": [
-      "automation-prompts",
+      "automation",
+      "prompts",
       "aut_1"
     ],
     "route": "GET /v1/automations/:id/prompt-history"
   },
   {
     "args": [
-      "automation-prompt-restore",
+      "automation",
+      "prompt-restore",
       "aut_1",
       "1"
     ],
@@ -366,7 +392,8 @@
   },
   {
     "args": [
-      "automation-prompt-restore",
+      "automation",
+      "prompt-restore",
       "aut_1",
       "apv_2"
     ],
@@ -377,13 +404,15 @@
   },
   {
     "args": [
-      "automation-repos"
+      "automation",
+      "repos"
     ],
     "route": "GET /v1/automations/repositories"
   },
   {
     "args": [
-      "automation-next",
+      "automation",
+      "next",
       "0 9 * * 1-5",
       "--tz",
       "Europe/Lisbon"
@@ -396,7 +425,8 @@
   },
   {
     "args": [
-      "automation-subscriptions"
+      "automation",
+      "subscriptions"
     ],
     "route": "GET /v1/automations/subscriptions"
   }
