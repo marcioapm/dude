@@ -43,17 +43,20 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		{"evt_t_other_tool", "agent.tool.attempted", "request_review", "", "tsk_a", "5 minutes"},
 		{"evt_t_b", "agent.tool.attempted", "github_pull_request", "", "tsk_b", "5 minutes"},
 	}
-	var attempts []string
+	var attempts, automated []string
 	for _, e := range events {
 		if _, err := owner.Exec(ctx, `INSERT INTO events (id, organization_id, event_type, session_id, task_id, occurred_at,
 			actor_type, actor_id, source, payload)
 			VALUES ($1, 'org_g', $2, NULLIF($3, ''), NULLIF($4, ''), now() - $5::interval, 'agent', 'run_x', 'agent',
-				jsonb_build_object('tool', $6::text, 'automationId', CASE WHEN $3 = 'ses_a' THEN 'aut_a' END))`,
+				jsonb_strip_nulls(jsonb_build_object('tool', $6::text, 'automationId', CASE WHEN $3 = 'ses_a' THEN 'aut_a' END)))`,
 			e.id, e.typ, e.session, e.task, e.age, e.tool); err != nil {
 			t.Fatal(err)
 		}
 		if e.typ == "agent.tool.attempted" {
 			attempts = append(attempts, e.id)
+			if e.session == "ses_a" {
+				automated = append(automated, e.id)
+			}
 		}
 	}
 	// The same scopes' other events, many of them: a scan of the scope's
@@ -71,10 +74,13 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	for _, ix := range []struct{ name, scope string }{
-		{"events_session_tool_attempts_idx", "session_id"},
-		{"events_task_tool_attempts_idx", "task_id"},
-		{"events_automation_tool_attempts_idx", ""},
+	for _, ix := range []struct {
+		name, scope string
+		holds       []string
+	}{
+		{"events_session_tool_attempts_idx", "session_id", attempts},
+		{"events_task_tool_attempts_idx", "task_id", attempts},
+		{"events_automation_tool_attempts_idx", "organization_id", automated},
 	} {
 		var columns []string
 		var predicate string
@@ -108,7 +114,7 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 			held = append(held, id)
 		}
 		rows.Close()
-		if want := slices.Sorted(slices.Values(attempts)); !slices.Equal(held, want) {
+		if want := slices.Sorted(slices.Values(ix.holds)); !slices.Equal(held, want) {
 			t.Errorf("%s holds %v, want %v", ix.name, held, want)
 		}
 	}
@@ -119,7 +125,6 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		t.Errorf("%d of the tool-list indexes remain (%v)", old, err)
 	}
 
-	byAutomation := `SELECT count(*) FROM events WHERE payload->>'automationId' = $1` + githubReadsInHour
 	for _, c := range []struct {
 		query, scope, index string
 		want                int
@@ -130,9 +135,10 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		{githubReadsByTask, "tsk_a", "events_task_tool_attempts_idx", 4},
 		{githubReadsByTask, "tsk_b", "events_task_tool_attempts_idx", 1},
 		{githubReadsByTask, "tsk_none", "events_task_tool_attempts_idx", 0},
-		{byAutomation, "aut_a", "events_automation_tool_attempts_idx", 6},
+		{githubReadsByAutomation, "aut_a", "events_automation_tool_attempts_idx", 6},
 		{chatReadsInHour, "ses_a", "events_session_tool_attempts_idx", 1},
 	} {
+		reset := asApp(t, owner, "org_g")
 		var n int
 		if err := owner.QueryRow(ctx, c.query, c.scope).Scan(&n); err != nil || n != c.want {
 			t.Errorf("reads of %s in the last hour: %d (%v), want %d", c.scope, n, err, c.want)
@@ -140,5 +146,6 @@ func TestTheGitHubReadIndexesAreBuiltAndTheHourlyCountsCountReads(t *testing.T) 
 		if !planUses(t, owner, c.index, c.query, c.scope) {
 			t.Errorf("the hourly count of %s does not read %s", c.scope, c.index)
 		}
+		reset()
 	}
 }

@@ -167,6 +167,9 @@ const (
 		AND occurred_at > now() - interval '1 hour'`
 	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1` + githubReadsInHour
 	githubReadsByTask    = `SELECT count(*) FROM events WHERE task_id = $1` + githubReadsInHour
+	// `payload ? 'automationId'` is 199's index predicate, which the
+	// planner proves only from the same clause.
+	githubReadsByAutomation = `SELECT count(*) FROM events WHERE payload ? 'automationId' AND payload->>'automationId' = $1` + githubReadsInHour
 )
 
 // checkGitHubRead holds a read to the repositories the caller may read and
@@ -239,7 +242,7 @@ func githubReadsThisHour(ctx context.Context, tx pgx.Tx, c Caller) (int, error) 
 		count, scope = githubReadsBySession, c.SessionID
 	}
 	if c.AutomationID != "" {
-		count, scope = `SELECT count(*) FROM events WHERE payload->>'automationId' = $1`+githubReadsInHour, c.AutomationID
+		count, scope = githubReadsByAutomation, c.AutomationID
 	}
 	var reads int
 	err := tx.QueryRow(ctx, count, scope).Scan(&reads)

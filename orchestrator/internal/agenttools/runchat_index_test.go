@@ -44,6 +44,25 @@ func planUses(t *testing.T, owner *pgx.Conn, index, query string, args ...any) b
 	return true
 }
 
+// asApp runs owner's next queries as the app does, dude_app under org's
+// row security, until the returned func resets it: a plan read as the
+// owner has no organisation qual and is not the plan production runs.
+func asApp(t *testing.T, owner *pgx.Conn, org string) func() {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := owner.Exec(ctx, `SET ROLE dude_app`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `SELECT set_config('app.organization_id', $1, false)`, org); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := owner.Exec(ctx, `RESET ROLE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // invalidate marks index INVALID, as a cancelled CREATE INDEX CONCURRENTLY
 // leaves it (the test database's owner is its superuser).
 func invalidate(t *testing.T, owner *pgx.Conn, index string) {
@@ -156,11 +175,12 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy167AndReplaced(t *testing.T) {
 	for _, c := range []struct{ index, query, scope string }{
 		{"events_session_tool_attempts_idx", githubReadsBySession, "ses_0"},
 		{"events_task_tool_attempts_idx", githubReadsByTask, "tsk_0"},
-		{"events_automation_tool_attempts_idx", `SELECT count(*) FROM events WHERE payload->>'automationId' = $1` + githubReadsInHour, "aut_0"},
+		{"events_automation_tool_attempts_idx", githubReadsByAutomation, "aut_0"},
 	} {
 		if !valid(t, owner, c.index) {
 			t.Errorf("%s is invalid", c.index)
 		}
+		reset := asApp(t, owner, "org_g")
 		var n int
 		if err := owner.QueryRow(ctx, c.query, c.scope).Scan(&n); err != nil {
 			t.Fatal(err)
@@ -168,5 +188,6 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy167AndReplaced(t *testing.T) {
 		if !planUses(t, owner, c.index, c.query, c.scope) {
 			t.Errorf("the hourly count of %s does not read %s", c.scope, c.index)
 		}
+		reset()
 	}
 }
