@@ -107,9 +107,7 @@ func TestAtTheHoldHandledFeedbackStartsNothingAndOpenFeedbackRefusesOpen(t *test
 	if err := w.runtime.Signal(ctx, w.org, wf, delivery.SignalHumanFeedback, map[string]any{"itemIds": []string{"fbi_gone"}}, "handled"); err != nil {
 		t.Fatal(err)
 	}
-	for range 4 {
-		w.pump()
-	}
+	w.until("the handled signal taken", func() bool { return w.signalsTaken(task) })
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n != fixes || !w.heldBeforePR(task) {
 		t.Fatalf("a handled signal: %d fixes (was %d), held %v", n, fixes, w.heldBeforePR(task))
 	}
@@ -134,6 +132,48 @@ func TestAtTheHoldHandledFeedbackStartsNothingAndOpenFeedbackRefusesOpen(t *test
 	}
 }
 
+// A fixer that commits but leaves the owner's item open: the round's
+// review/fix loop runs out and escalates on the item, and nothing opens.
+// Once the owner settles the item and tries again, the delivery comes back
+// to the hold, where Done without a pull request is still theirs.
+func TestAFixerThatLeavesTheItemOpenEscalatesFromTheHold(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	task := w.atTheHold(ana)
+	if code, body := w.feedback(ana, task, "fbi_left", "Name the saved filter after its query."); code != 201 {
+		t.Fatalf("submit at the hold: %d %v", code, body)
+	}
+	w.until("the escalation", func() bool { return w.escalationReason(task) != "" || len(w.gh.Pulls()) > 0 })
+	var reason, ids string
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'escalation'->>'reason', ''),
+		COALESCE(state->'escalation'->'detail'->>'feedbackIds', '') FROM workflow_runs WHERE task_id = $1`, task).Scan(&reason, &ids)
+	if reason != "stuck" || !strings.Contains(ids, "fbi_left") {
+		t.Fatalf("escalation %q on %q, want stuck on fbi_left", reason, ids)
+	}
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened past an open item", n)
+	}
+	if s := w.feedbackStatus("fbi_left"); s == "resolved" {
+		t.Fatalf("the item is %s", s)
+	}
+	if code, body := w.callAs(ana, "/internal/feedback/fbi_left/resolve", map[string]any{}); code != 200 {
+		t.Fatalf("the owner settles the item: %d %v", code, body)
+	}
+	if code, body := w.decide(ana, task, "retry", ""); code != 200 {
+		t.Fatalf("try again: %d %v", code, body)
+	}
+	w.until("back at the hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened after the retry", n)
+	}
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/done-without-pull-request", map[string]any{}); status != 200 {
+		t.Fatalf("Done without back at the hold: %d %v", status, out)
+	}
+	if s := w.taskStatus(task); s != "done" {
+		t.Fatalf("task %s, want done", s)
+	}
+}
+
 // Under the conductor the hold's feedback is the conductor's, as before: a
 // wake reason, and no fix the workflow starts on its own.
 func TestUnderTheConductorFeedbackAtTheGateWakesTheConductor(t *testing.T) {
@@ -145,9 +185,9 @@ func TestUnderTheConductorFeedbackAtTheGateWakesTheConductor(t *testing.T) {
 	if code, body := w.feedback(ana, task, "fbi_cond", "Name the saved filter after its query."); code != 201 || body["routedTo"] != "conductor" {
 		t.Fatalf("submit: %d %v", code, body)
 	}
-	for range 4 {
-		w.pump()
-	}
+	w.until("the conductor's feedback wake", func() bool {
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeFeedback) > 0
+	})
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeFeedback); n != 1 {
 		t.Errorf("%d feedback wakes", n)
 	}

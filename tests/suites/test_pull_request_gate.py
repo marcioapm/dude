@@ -50,6 +50,8 @@ def test_open_as_draft_opens_a_draft_and_asks_nobody(client: ApiClient, forge_pr
     pr = wait_until(lambda: _pull_requests(client, task["id"]), timeout=90, message="no pull request")[0]
     assert fake_github.pulls[pr["number"]].draft is True
     assert _task(client, task["id"])["pullRequestOpened"] is True
+    awaited = [e for e in client.events(taskId=task["id"]) if e["eventType"] == "conductor.decision_awaited"]
+    assert awaited == [], awaited
 
 
 def test_ask_me_first_holds_until_its_owner_opens_it_and_feedback_goes_round_first(
@@ -87,7 +89,9 @@ def test_ask_me_first_holds_until_its_owner_opens_it_and_feedback_goes_round_fir
     wait_until(fixers_given, timeout=60, message="feedback at the hold was given to no fixer")
     assert len([r for r in client.task_runs(task["id"]) if r["phase"] == "fix"]) > fixes_before
     assert _task(client, task["id"])["status"] == "running"
-    # The scripted fixer answers nothing; Bo's reply settles the item so the loop can clear.
+    # The scripted fixer commits but never resolves the item through dude_feedback_resolve, so a person's reply
+    # is what settles it: without it the review/fix loop runs out and the hold becomes an escalation
+    # (orchestrator TestAFixerThatLeavesTheItemOpenEscalatesFromTheHold).
     assert bo.post(f"/v1/feedback/{item['id']}/reply", {"body": "Bonjour is enough."}).status_code == 200
 
     # Back at the hold, round 2, once the item is handled.

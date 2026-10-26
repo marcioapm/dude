@@ -61,15 +61,16 @@ describe("ReadyForReview", () => {
     expect(named(host!, "Done without a pull request").length).toBe(0);
   });
 
-  test("the tone follows whose move it is", async () => {
-    const tone = async (state: Parameters<typeof ReadyForReview>[0]["state"]) => {
+  test("the title says whose move it is", async () => {
+    const title = async (state: Parameters<typeof ReadyForReview>[0]["state"]) => {
       await act(async () => root ? root.render(<TooltipProvider><ReadyForReview line="x" repositories={[REPO]} state={state} /></TooltipProvider>) : undefined);
-      return host!.querySelector("[data-tone]")?.getAttribute("data-tone");
+      return host!.querySelector("strong")?.textContent;
     };
     await mount(<span />);
-    expect(await tone({ kind: "yours" })).toBe("attention");
-    expect(await tone({ kind: "sent-back", items: 1, openRefused: "1 feedback item still open" })).toBe("info");
-    expect(await tone({ kind: "waiting", on: "Sam" })).toBe("neutral");
+    expect(await title({ kind: "yours" })).toBe("Ready for your review.");
+    expect(await title({ kind: "sent-back", items: 1, openRefused: "1 feedback item still open" })).toBe("Sent back:");
+    expect(await title({ kind: "waiting", on: "Sam" })).toBe("Ready for Sam's review.");
+    expect(await title({ kind: "waiting", on: "Sam", sentBack: true })).toBe("Sam's feedback is with a fixer.");
   });
 
   test("the rows are a list named for what would be opened, and each Changes names its repository", async () => {

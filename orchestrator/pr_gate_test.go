@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // putAs puts to the orchestrator's internal API as one person.
@@ -44,6 +46,14 @@ func (w *world) projectChoice(choice string) {
 func (w *world) heldBeforePR(task string) bool {
 	return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting' AND step = 'conductorDecision'
 		AND state->'decision'->>'point' = 'before_pull_request' AND NOT state->'decision' ? 'taken'`, task) == 1
+}
+
+// signalsTaken says the task's delivery has consumed every signal sent to
+// it: the step a signal wakes has run. What a test then finds absent did
+// not happen, rather than not yet.
+func (w *world) signalsTaken(task string) bool {
+	return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs wf ON wf.id = s.workflow_run_id
+		WHERE wf.task_id = $1 AND s.consumed_at IS NULL`, task) == 0
 }
 
 // readyForReview counts the task's moves to awaiting_input for its owner's review.
@@ -242,6 +252,105 @@ func TestAnUnresolvedProjectPolicyNeverOpensPastTheChoice(t *testing.T) {
 	}
 }
 
+// Under the conductor, a project on Ask me first: the conductor's
+// open_pull_request is refused until the person is asked and answers, and
+// nothing opens; once handed back at the gate Deliver holds it and asks,
+// and only the owner's Open opens. Nobody else's does.
+func TestUnderTheConductorAskMeFirstIsThePersonsQuestion(t *testing.T) {
+	w := conducting(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	task := w.task()
+	w.assignOwner(task, ana)
+	w.projectChoice(delivery.PullRequestAsk)
+	w.reachGate(task)
+	w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not been asked")
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened before the person was asked", n)
+	}
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not answered")
+	if w.conductorQuestion(task) == "" {
+		t.Fatal("no gate question for the person")
+	}
+	if n := w.count(`SELECT count(*) FROM questions q JOIN workflow_runs wf ON wf.task_id = q.task_id
+		WHERE q.task_id = $1 AND q.status = 'open' AND q.pr_gate_heads = wf.state->'heads'`, task); n != 1 {
+		t.Fatalf("%d open gate questions at the delivery's heads", n)
+	}
+
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("hand-back at the gate: %d %v", status, out)
+	}
+	w.until("Deliver holding the gate, the hand-back's wake taken", func() bool {
+		return w.decider(task) == "policy" && w.decisionAt(task) == delivery.PointBeforePR && w.signalsTaken(task) || len(w.gh.Pulls()) > 0
+	})
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened after the hand-back, unanswered", n)
+	}
+	if status, out := w.callAs(bo, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 403 {
+		t.Fatalf("someone else's Open: %d %v", status, out)
+	}
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+		t.Fatalf("the owner's Open: %d %v", status, out)
+	}
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if w.gh.Pulls()[0].Draft {
+		t.Error("Open opened a draft")
+	}
+}
+
+// A task across two repositories, its first pull request open in one: a
+// fix of that pull request's feedback that changes the other opens the
+// second one with nobody asked, under Ask me first, and not as a draft
+// under Open as draft. Only the first opening reads the choice.
+func TestOnlyTheFirstOpeningReadsTheChoice(t *testing.T) {
+	for _, choice := range []string{delivery.PullRequestAsk, delivery.PullRequestDraft} {
+		t.Run(choice, func(t *testing.T) {
+			w := newWorld(t)
+			ana := w.person("Ana")
+			var prOpen atomic.Bool
+			scripted := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				b := scripted(spec)
+				labels, _ := spec["labels"].(map[string]any)
+				switch {
+				case labels["dude.phase"] == "implement":
+					// web is left for the pull request's fix to change first.
+					b.Commit = map[string]string{"target:FACTORY.md": "work\n"}
+				case labels["dude.phase"] == "fix" && prOpen.Load():
+					b.Commit = map[string]string{"web:FIX.md": "fix\n"}
+				}
+				return b
+			}
+			task := w.task()
+			w.addWeb(task, "write")
+			w.assignOwner(task, ana)
+			w.projectChoice(choice)
+			w.deliver(task)
+			if choice == delivery.PullRequestAsk {
+				w.until("the hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
+				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+					t.Fatalf("the owner's Open: %d %v", status, out)
+				}
+			}
+			w.until("the target pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+			if got := w.gh.Pulls()[0].Draft; got != (choice == delivery.PullRequestDraft) {
+				t.Fatalf("the first pull request's draft %v under %s", got, choice)
+			}
+			prOpen.Store(true)
+			w.gh.ReviewSaying(1, "alice", "CHANGES_REQUESTED", "Please rename the helper.")
+			w.sync()
+			w.until("the second pull request", func() bool { w.sync(); return len(w.web.Pulls()) == 1 })
+			if w.web.Pulls()[0].Draft {
+				t.Error("the second pull request opened as a draft")
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = 'before_pull_request'`,
+				task, delivery.EvDecisionAwaited); n != map[string]int{delivery.PullRequestAsk: 1, delivery.PullRequestDraft: 0}[choice] {
+				t.Errorf("%d holds before a pull request under %s", n, choice)
+			}
+		})
+	}
+}
+
 // The owner's Open authorizes the heads they saw. Heads that moved before
 // the opening step ran are not opened: the hold asks again.
 func TestAHoldWhoseHeadsMovedAsksAgain(t *testing.T) {
@@ -254,9 +363,8 @@ func TestAHoldWhoseHeadsMovedAsksAgain(t *testing.T) {
 	// The heads move before the step that opens runs.
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{heads,target}', '"0123456789abcdef0123456789abcdef01234567"')
 		WHERE task_id = $1`, task)
-	for range 4 {
-		w.pump()
-	}
+	// The step that wakes on the Open ran at the new heads: its signal consumed, the delivery waiting again.
+	w.until("the step that opens to run", func() bool { return w.signalsTaken(task) && w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
 	if n := len(w.gh.Pulls()); n != 0 {
 		t.Fatalf("%d pull requests opened at heads the owner did not see", n)
 	}

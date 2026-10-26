@@ -4,6 +4,10 @@ package orchestrator_test
 // the pull request.
 
 import (
+	"context"
+	"encoding/json"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -59,6 +63,86 @@ func TestDoneWithoutAPullRequestKeepsTheBranchAndFinishes(t *testing.T) {
 	}
 	if s := w.taskStatus(open); s == "done" {
 		t.Fatal("a task with an open pull request was finished without it")
+	}
+}
+
+// A delivery still at work is not held: Done without a pull request is
+// refused with not_held, and the delivery keeps working to its pull
+// request.
+func TestDoneWithoutAPullRequestIsRefusedWhileTheDeliveryWorks(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	task := w.task()
+	w.assignOwner(task, ana)
+	w.deliver(task)
+	w.until("a Run at work", func() bool { return w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, task) > 0 })
+	status, out := w.callAs(ana, "/internal/tasks/"+task+"/done-without-pull-request", map[string]any{})
+	e, _ := out["error"].(map[string]any)
+	if status != 409 || e["code"] != "not_held" {
+		t.Fatalf("Done without while the delivery works: %d %v", status, out)
+	}
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if s := w.taskStatus(task); s == "done" {
+		t.Fatalf("task %s after a refused Done without", s)
+	}
+}
+
+// Under the conductor, at its gate before the pull request, Done without a
+// pull request is refused: the gate's answer is the conductor's question.
+// Handed back at the gate, Deliver holds it and asks on the conductor; the
+// owner's Done without then cancels that question, ends every reason to
+// wake the conductor, and records the repositories and heads it kept.
+func TestDoneWithoutAPullRequestUnderTheConductor(t *testing.T) {
+	w := conducting(t)
+	ana := w.person("Ana")
+	task := w.task()
+	w.assignOwner(task, ana)
+	w.reachGate(task)
+	path := "/internal/tasks/" + task + "/done-without-pull-request"
+	status, out := w.callAs(ana, path, map[string]any{})
+	if e, _ := out["error"].(map[string]any); status != 409 || e["code"] != "not_held" {
+		t.Fatalf("Done without at the conductor's gate: %d %v", status, out)
+	}
+	if s := w.taskStatus(task); s == "done" {
+		t.Fatal("finished under the conductor")
+	}
+
+	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("hand-back at the gate: %d %v", status, out)
+	}
+	w.until("Deliver's gate question", func() bool { return w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0 })
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened with the gate unanswered", n)
+	}
+	var heads map[string]string
+	_ = w.owner.QueryRow(context.Background(), `SELECT state->'heads' FROM workflow_runs WHERE task_id = $1`, task).Scan(&heads)
+	if status, out := w.callAs(ana, path, map[string]any{}); status != 200 {
+		t.Fatalf("Done without once handed back: %d %v", status, out)
+	}
+	if s := w.taskStatus(task); s != "done" {
+		t.Fatalf("task %s, want done", s)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task); n != 0 {
+		t.Errorf("%d gate questions still open", n)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'cancelled'`, task); n != 1 {
+		t.Errorf("%d gate questions cancelled, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
+		t.Errorf("%d reasons to wake the conductor still live", n)
+	}
+	var payload struct {
+		Repositories []string          `json:"repositories"`
+		Heads        map[string]string `json:"heads"`
+	}
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT payload FROM events WHERE task_id = $1 AND event_type = $2`,
+		task, delivery.EvDoneWithoutPullRequest).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	_ = json.Unmarshal(raw, &payload)
+	if !slices.Equal(payload.Repositories, []string{"target"}) || !maps.Equal(payload.Heads, heads) || heads["target"] == "" {
+		t.Errorf("event repositories %v heads %v, want [target] and %v", payload.Repositories, payload.Heads, heads)
 	}
 }
 

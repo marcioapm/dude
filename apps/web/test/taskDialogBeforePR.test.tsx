@@ -10,10 +10,10 @@ import { afterEach, expect, test } from "bun:test";
 import type { PullRequestChoice } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, until } from "./dom.ts";
-import type { Epic, ProjectDetail, Task } from "../src/api/client.ts";
+import type { Epic, ProjectDetail, Task, TaskDetail } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PROJECT } from "../src/fixtures/data.ts";
-import { TaskDialog, type ExistingTask } from "../src/screens/TaskDialog.tsx";
+import { PROJECT, TASK_ID } from "../src/fixtures/data.ts";
+import { TaskDialog, existingTask, type ExistingTask } from "../src/screens/TaskDialog.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -69,7 +69,7 @@ async function type(el: Element, proto: object, text: string) {
   });
 }
 
-const existingTask = (extra: Partial<ExistingTask> = {}): ExistingTask => ({
+const draftTask = (extra: Partial<ExistingTask> = {}): ExistingTask => ({
   id: "tsk_1", fixed: null, title: "Saved filters", goal: "Let people save the filters they use.", acceptanceCriteria: [],
   epicId: null, repositories: [], pullRequestChoice: null, ...extra,
 });
@@ -90,7 +90,7 @@ test("a new task follows its project unless the person picks, and is created wit
 
 test("an edit saves a change of it, back to the project's as null", async () => {
   const client = new Recording("a");
-  const trigger = await open(client, existingTask({ pullRequestChoice: "ask" }));
+  const trigger = await open(client, draftTask({ pullRequestChoice: "ask" }));
   expect(trigger.textContent).toContain("Ask me first");
   await pick(trigger, "project");
   await click(document.querySelector<HTMLButtonElement>("[data-testid=task-save]")!);
@@ -98,9 +98,20 @@ test("an edit saves a change of it, back to the project's as null", async () => 
   expect(client.set).toEqual([["tsk_1", null]]);
 });
 
-test("once a pull request is open the field is disabled and says why", async () => {
+test("once a pull request is open the field is disabled and says why, as the task's read gives it", async () => {
   const client = new Recording("a");
-  const trigger = await open(client, existingTask({ choiceLocked: "The pull request is already open." }));
+  const detail = await client.getTask(TASK_ID);
+  const you = detail.owner!.id;
+  const trigger = await open(client, existingTask({ ...detail, pullRequestOpened: true } as TaskDetail, true, you));
   expect(trigger.hasAttribute("disabled") || trigger.getAttribute("data-disabled") !== null).toBe(true);
   expect(document.body.textContent).toContain("The pull request is already open.");
+});
+
+test("someone else's task: the field is disabled with whose it is", async () => {
+  const client = new Recording("a");
+  const detail = await client.getTask(TASK_ID);
+  const sams = { ...detail, pullRequestOpened: false, owner: { id: "u_sam", name: "Sam Lee", photoUrl: null, online: false } } as TaskDetail;
+  const trigger = await open(client, existingTask(sams, true, "u_me"));
+  expect(trigger.hasAttribute("disabled") || trigger.getAttribute("data-disabled") !== null).toBe(true);
+  expect(document.body.textContent).toContain("Only Sam can change it.");
 });
