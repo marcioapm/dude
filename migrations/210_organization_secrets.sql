@@ -72,8 +72,8 @@ LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 -- A preset's dropped picks are recorded first, as the API records a change
--- (routes/automations.ts record(): system actor, names only), so its owner
--- can see what its runs stop getting and tick the role instead. The id is
+-- (routes/automations.ts record(): system actor, names only): an audit
+-- record in the ledger naming the picks each preset lost. The id is
 -- newId("event")'s shape, as 106 builds it.
 INSERT INTO events (id, organization_id, project_id, event_type, actor_type, actor_id, source, payload)
 SELECT 'evt_' || lpad(b36.v, 9, '0') || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16),
