@@ -98,11 +98,10 @@ func messages(question, context string) []llm.Message {
 	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}
 }
 
-// call is the request a question on t is sent as.
+// call omits temperature: the proxy answers 400 to one (seen for Claude and GPT tiers).
 func call(t Tier, question, context string) llm.Call {
-	temperature := 0.0
 	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question, context),
-		MaxTokens: maxTokens, Temperature: &temperature}
+		MaxTokens: maxTokens}
 }
 
 // LoadTier reads a tier in tx's organisation: ErrNoModel when it names

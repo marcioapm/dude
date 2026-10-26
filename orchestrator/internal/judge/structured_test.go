@@ -37,6 +37,9 @@ func TestStructuredIsRecordedAsAJudgementWithItsOwnInstructions(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 	body := w.proxy.bodies[0]
+	if _, has := body["temperature"]; has {
+		t.Errorf("temperature sent: %v", body)
+	}
 	msgs := body["messages"].([]any)
 	if body["model"] != "gpt-6-sol-mini" || msgs[0].(map[string]any)["content"] != "Route it." || msgs[0].(map[string]any)["role"] != "system" {
 		t.Fatalf("sent %v", body)
