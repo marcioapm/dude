@@ -424,6 +424,11 @@ request shows the server's answer, as in `dude: GET /v1/tasks/x: 404 {"error":�
 - **`not logged in`**: run `dude login URL`, or set `DUDE_API_KEY`.
 - **`the key for ORG is gone from the …`**: the keystore lost it, for
   example a new keychain. Log in again.
+- **`the server redirected (302) to …`** or **`answered with an HTML
+  page`**: something in front of the server (Cloudflare Access, a sign-in
+  proxy) wants a browser sign-in. The CLI follows no redirect, so the key
+  goes nowhere else. Check the URL (`dude whoami`), or have the proxy let
+  requests with an API key through.
 
 ## Adding a command
 

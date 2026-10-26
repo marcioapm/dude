@@ -83,7 +83,7 @@ func runCLI(t *testing.T, srv *httptest.Server, stdin string, args ...string) (s
 	c := &cli{
 		creds: func(string) (string, string, error) { return srv.URL, "k3y", nil },
 		login: func(string, string, string, bool) (string, error) { return "test keystore", nil },
-		http:  &http.Client{Transport: recorder{srv.Client().Transport, &sent}},
+		http:  apiClient(recorder{srv.Client().Transport, &sent}),
 		stdin: strings.NewReader(stdin),
 		out:   &out,
 	}
