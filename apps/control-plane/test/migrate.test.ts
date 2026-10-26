@@ -962,18 +962,20 @@ test("a migrate retried while an earlier build of its index still runs refuses, 
 
 test("a migrate whose connection drops while its backend still builds the index leaves the build alone and records nothing", async () => {
   const { url, sql } = await migratedBefore("198");
-  // The migrator reaches Postgres through a relay whose client sides are cut
-  // while the server sides stay open: Postgres keeps building, as a backend
-  // does whose client vanished without a FIN reaching it.
-  const pairs: { client: Socket; server: Socket }[] = [];
+  // The migrator reaches Postgres through a relay. The building statement's
+  // client side is cut while its server side stays open: Postgres keeps
+  // building, as a backend does whose client vanished without a FIN reaching it.
+  const pairs: { client: Socket; server: Socket; building: boolean }[] = [];
   const target = new URL(url);
   const relay = createServer((client) => {
     const server = connect(Number(target.port || 5432), target.hostname);
+    const pair = { client, server, building: false };
+    client.on("data", (b: Buffer) => { pair.building ||= b.includes("CREATE INDEX CONCURRENTLY"); });
     client.pipe(server);
     server.pipe(client);
     client.on("error", () => {});
     server.on("error", () => {});
-    pairs.push({ client, server });
+    pairs.push(pair);
   });
   await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
   const relayed = new URL(url);
@@ -985,18 +987,19 @@ test("a migrate whose connection drops while its backend still builds the index 
     await holder`BEGIN ISOLATION LEVEL REPEATABLE READ`;
     await holder`SELECT count(*) FROM events`;
     const migrating = migrate(relayed.toString(), { log: () => {} }).then(() => "", (err: Error) => err.message);
-    let running = false;
-    for (let i = 0; i < 200 && !running; i++) {
+    let builder: number | undefined;
+    for (let i = 0; i < 200 && builder === undefined; i++) {
       const [row] = await sql`SELECT EXISTS (SELECT 1 FROM pg_stat_progress_create_index
         WHERE index_relid = to_regclass('events_task_tool_attempts_idx')) AS running`;
-      running = row?.running === true;
-      if (!running) await Bun.sleep(50);
+      if (row?.running === true) builder = pairs.findIndex((p) => p.building);
+      if (builder === undefined) await Bun.sleep(50);
     }
-    expect(running).toBe(true);
-    for (const { client, server } of pairs.splice(0)) {
-      server.unpipe(client);
-      client.destroy();
-    }
+    expect(builder).toBeGreaterThanOrEqual(0);
+    // Only the building statement's connection is cut; the migrator's
+    // other pooled connections stay up for what it does next.
+    const cut = pairs[builder!]!;
+    cut.server.unpipe(cut.client);
+    cut.client.destroy();
     // A drop would wait on the held build; the migrator must settle without one.
     const settled = await Promise.race([migrating, Bun.sleep(10_000).then(() => null)]);
     expect(settled).not.toBeNull();
