@@ -138,14 +138,18 @@ func (t osTerminal) readPassword() ([]byte, error) {
 }
 
 // watchInterrupt waits for a signal on sigs until done closes. On a signal
-// it restores the terminal, ends the prompt's line on w and exits with 130,
-// the shell's code for death by SIGINT.
+// it restores the terminal, ends the prompt's line on w and exits with
+// 128 + the signal's number, a shell's code for death by it (130 for SIGINT).
 func watchInterrupt(sigs <-chan os.Signal, done <-chan struct{}, restore func() error, w io.Writer, exit func(int)) {
 	select {
-	case <-sigs:
+	case sig := <-sigs:
 		restore()
 		fmt.Fprintln(w)
-		exit(130)
+		code := 130
+		if s, ok := sig.(syscall.Signal); ok {
+			code = 128 + int(s)
+		}
+		exit(code)
 	case <-done:
 	}
 }

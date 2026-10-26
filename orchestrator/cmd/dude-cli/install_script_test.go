@@ -48,12 +48,13 @@ func installScriptFrom(t *testing.T, script, srv string, env ...string) (dir, st
 	return dir, errBuf.String(), err
 }
 
-// fakeUname is a directory whose uname reports sysname and machine, for the
-// front of the script's PATH.
-func fakeUname(t *testing.T, sysname, machine string) string {
+// fakeUname is a directory whose uname answers FAKE_UNAME_S and FAKE_UNAME_M,
+// for the front of the script's PATH. One per test: the first exec of a new
+// executable costs macOS about 0.2 s.
+func fakeUname(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	script := "#!/bin/sh\ncase \"$1\" in -s) echo " + sysname + " ;; -m) echo " + machine + " ;; *) exit 2 ;; esac\n"
+	script := "#!/bin/sh\ncase \"$1\" in -s) echo \"$FAKE_UNAME_S\" ;; -m) echo \"$FAKE_UNAME_M\" ;; *) exit 2 ;; esac\n"
 	if err := os.WriteFile(filepath.Join(dir, "uname"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +63,7 @@ func fakeUname(t *testing.T, sysname, machine string) string {
 
 // The payload is never run, so every platform's mapping is tested on any host.
 func TestInstallScriptMapsUname(t *testing.T) {
+	uname := fakeUname(t)
 	for _, tc := range []struct{ sysname, machine, want string }{
 		{"Linux", "aarch64", "dude v1.2.0 linux_arm64"},
 		{"Linux", "x86_64", "dude v1.2.0 linux_amd64"},
@@ -71,8 +73,8 @@ func TestInstallScriptMapsUname(t *testing.T) {
 	} {
 		t.Run(tc.sysname+"/"+tc.machine, func(t *testing.T) {
 			f := newFakeRelease(t, "v1.2.0")
-			path := "PATH=" + fakeUname(t, tc.sysname, tc.machine) + string(os.PathListSeparator) + os.Getenv("PATH")
-			dir, stderr, err := installScript(t, f.serve(t).URL, path)
+			path := "PATH=" + uname + string(os.PathListSeparator) + os.Getenv("PATH")
+			dir, stderr, err := installScript(t, f.serve(t).URL, path, "FAKE_UNAME_S="+tc.sysname, "FAKE_UNAME_M="+tc.machine)
 			if tc.want == "" {
 				if err == nil || !strings.Contains(stderr, "not FreeBSD") {
 					t.Fatalf("err %v, stderr:\n%s", err, stderr)

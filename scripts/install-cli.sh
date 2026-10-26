@@ -16,10 +16,15 @@ fail() {
   exit 1
 }
 
-# fetch URL FILE: a stalled transfer (under 1 KiB/s for 60 s) fails rather
+# fetch URL FILE: https only, redirects included (DUDE_RELEASES_URL, for
+# tests, lifts that); a stalled transfer (under 1 KiB/s for 60 s) fails rather
 # than hanging, while a slow but moving one is not cut off.
 fetch() {
-  curl -fsSL --connect-timeout 15 --speed-limit 1024 --speed-time 60 -o "$2" "$1"
+  if [ -n "${DUDE_RELEASES_URL:-}" ]; then
+    curl -fsSL --connect-timeout 15 --speed-limit 1024 --speed-time 60 -o "$2" "$1"
+  else
+    curl -fsSL --proto =https --proto-redir =https --connect-timeout 15 --speed-limit 1024 --speed-time 60 -o "$2" "$1"
+  fi
 }
 
 # The whole script is one function, called on the last line, so a download

@@ -191,7 +191,7 @@ func TestUpgradeReplacesTheBinary(t *testing.T) {
 			if err := json.Unmarshal(out.Bytes(), &got); err != nil || got["to"] != "v1.2.0" || got["from"] != "v1.1.0" || got["updated"] != true {
 				t.Fatalf("output %s %v", out, err)
 			}
-			if left, _ := filepath.Glob(filepath.Join(filepath.Dir(exe), ".dude-update-*")); len(left) != 0 {
+			if left, _ := filepath.Glob(filepath.Join(filepath.Dir(exe), ".dude-upgrade-*")); len(left) != 0 {
 				t.Fatalf("left behind %v", left)
 			}
 			for _, a := range f.auths {

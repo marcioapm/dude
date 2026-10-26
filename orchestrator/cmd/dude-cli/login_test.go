@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -81,6 +82,12 @@ func TestInterruptAtThePromptRestoresTheTerminal(t *testing.T) {
 	}, &w, func(c int) { exited, code = true, c })
 	if !restored || w.String() != "\n" || code != 130 {
 		t.Fatalf("restored %v, wrote %q, exit %d", restored, w.String(), code)
+	}
+
+	sigs <- syscall.SIGTERM
+	watchInterrupt(sigs, make(chan struct{}), func() error { return nil }, &w, func(c int) { code = c })
+	if code != 143 {
+		t.Fatalf("SIGTERM exit %d, want 143", code)
 	}
 
 	// After the read, a closed done ends the watch without touching anything.

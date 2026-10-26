@@ -276,7 +276,7 @@ func (u *updater) upgrade(c *cli, want string) (any, error) {
 		return obj{"current": u.current, "latest": r.Tag, "updated": false}, nil
 	}
 	dir := filepath.Dir(exe)
-	probe, err := os.CreateTemp(dir, ".dude-update-*")
+	probe, err := os.CreateTemp(dir, ".dude-upgrade-*")
 	if err != nil {
 		return nil, fmt.Errorf("upgrade: cannot write to %s, where this binary is (%s): upgrade it the way it was installed, or re-run with permission to write there", dir, exe)
 	}
@@ -314,7 +314,7 @@ func (u *updater) upgrade(c *cli, want string) (any, error) {
 // replace writes bin next to exe, then renames it over exe, so exe is
 // always one whole binary or the other.
 func replace(exe string, bin []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(exe), ".dude-update-*")
+	f, err := os.CreateTemp(filepath.Dir(exe), ".dude-upgrade-*")
 	if err != nil {
 		return err
 	}
