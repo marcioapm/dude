@@ -44,6 +44,9 @@ ALTER TABLE chat_hidden_projects FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON chat_hidden_projects
   USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE, DELETE ON chat_hidden_projects TO dude_app;
+-- The syncer leaves a fenced project's repositories out of a session's
+-- checkout, across tenants.
+GRANT SELECT ON chat_hidden_projects TO dude_sweeper;
 
 -- The channel_projects route: a mention that sets the conversation's projects.
 ALTER TABLE chat_requests DROP CONSTRAINT chat_requests_route_check;

@@ -292,9 +292,28 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 		return fail(http.StatusBadRequest, "bad_request", "at most %d projects", linksMax)
 	}
 	var projectIDs, repoIDs []string
+	// A session started from chat can never see a project hidden from its
+	// provider, whoever links it: a member's new link by hand is refused
+	// too. One linked before it was hidden may stay in the set (every read
+	// leaves it out).
+	fence, err := delivery.FenceOf(ctx, tx, sessionID, "")
+	if err != nil {
+		return err
+	}
 	for _, l := range projects {
 		if slices.Contains(projectIDs, l.ProjectID) {
 			return fail(http.StatusBadRequest, "bad_request", "project %s is named twice", l.ProjectID)
+		}
+		if fence.Hides(l.ProjectID) {
+			var linked bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_projects WHERE session_id = $1 AND project_id = $2)`,
+				sessionID, l.ProjectID).Scan(&linked); err != nil {
+				return err
+			}
+			if !linked {
+				return fail(http.StatusConflict, "hidden_from_chat",
+					"this session was started from %s, and an admin hid project %s from it: it can't be linked here", fence.Provider, l.ProjectID)
+			}
 		}
 		var n int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM projects WHERE id = $1`, l.ProjectID).Scan(&n); err != nil {
@@ -325,7 +344,7 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(projectIDs), org); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO session_repositories (session_id, repository_id, organization_id)
+	_, err = tx.Exec(ctx, `INSERT INTO session_repositories (session_id, repository_id, organization_id)
 		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(repoIDs), org)
 	return err
 }

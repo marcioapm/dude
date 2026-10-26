@@ -5,6 +5,36 @@ import (
 	"testing"
 )
 
+func TestChatAHiddenProjectIsNeverRoutedTo(t *testing.T) {
+	w := setup(t)
+	sec := "prj_sec_" + w.org
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'Secret', 'sec', 'SEC')`, sec, w.org)
+	w.exec(`INSERT INTO chat_channel_projects (organization_id, provider, external_workspace_id, conversation_id, project_id)
+		VALUES ($1, 'slack', 'T1', 'C1', $2), ($1, 'slack', 'T1', 'C1', $3)`, w.org, sec, w.project)
+	w.exec(`INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, sec)
+	// The model names it anyway: refused as an invented project is.
+	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.95, "reasoning": "the keys", "title": "Rotate keys",
+		"goal": "Rotate the vault keys every month.", "project": "SEC"}))
+	w.mention("Márcia", "C1", "", "file a task to rotate the SEC keys")
+	sent := w.model.last()
+	if strings.Contains(sent, "SEC (Secret)") || !strings.Contains(sent, "BIL (Billing)") {
+		t.Fatalf("the hidden project is in the routing input: %s", sent)
+	}
+	if strings.Contains(sent, "usually about\\n\\nSEC") || !strings.Contains(sent, "usually about\\n\\nBIL (a hint") {
+		t.Fatalf("hints: %s", sent)
+	}
+	got := w.requests()
+	if len(got) != 1 || got[0].AskedRoute != "task" || !strings.Contains(got[0].Reasoning, `project "SEC" is not one of the person's`) {
+		t.Fatalf("requests %+v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM tasks WHERE project_id = $1`, sec); n != 0 {
+		t.Fatal("a task was filed in the hidden project")
+	}
+	if n := w.count(`SELECT count(*) FROM session_projects WHERE project_id = $1`, sec); n != 0 {
+		t.Fatal("a session was linked to the hidden project")
+	}
+}
+
 func TestChatRoutingIsToldWhereTheConversationsRequestsWent(t *testing.T) {
 	w := setup(t)
 	brainstorm := func(project any) string {

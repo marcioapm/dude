@@ -22,6 +22,20 @@ func HiddenProjectSQL(projectCol, providerExpr string) string {
 	return fmt.Sprintf(`EXISTS (SELECT 1 FROM chat_hidden_projects hp WHERE hp.project_id = %s AND hp.provider = %s)`, projectCol, providerExpr)
 }
 
+// SessionHidesSQL is the SQL test that the project in projectCol is fenced
+// off from the session in sessionExpr: hidden from the chat provider the
+// session was started from. The one predicate every session read of a
+// project, its repositories and its checkout shares.
+func SessionHidesSQL(sessionExpr, projectCol string) string {
+	return fmt.Sprintf(`EXISTS (SELECT 1 FROM sessions fs JOIN chat_hidden_projects hp ON hp.provider = fs.origin->>'provider'
+		WHERE fs.id = %s AND hp.project_id = %s)`, sessionExpr, projectCol)
+}
+
+// SessionRepoHiddenSQL is SessionHidesSQL over session_repositories sr and
+// repositories repo, as a constant for the syncer's constant predicates.
+const SessionRepoHiddenSQL = `EXISTS (SELECT 1 FROM sessions fs JOIN chat_hidden_projects hp ON hp.provider = fs.origin->>'provider'
+		WHERE fs.id = sr.session_id AND hp.project_id = repo.project_id)`
+
 // Fence is what a session or task started from chat may not reach: the
 // projects hidden from its provider. The zero Fence fences nothing.
 type Fence struct {

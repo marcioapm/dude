@@ -136,4 +136,8 @@ const (
 	rNoOpenPullRequestOnGithub             = "none of the task's open pull requests is on GitHub: pull_requests lists them as dude has them"
 	rNameTaskWhosePullRequestsRefresh      = "name the task whose pull requests to refresh, by its key"
 	rRefreshingTakesGithubReads            = "a refresh takes one GitHub read for each open pull request, %d here, and %d of the hour's %d are left: wait, or work with what pull_requests last read"
+	rProjectHiddenFromChat                 = "%s is hidden from what is started from %s: this session or task can't see it, its repositories, tasks or memory"
+	rTaskProjectHiddenFromChat             = "this task's project is hidden from what is started from %s: its tools can't reach it"
+	rRunIdRunFrom1OrItsLink                = "runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>)"
+	rRunLinkIsAnotherRepository            = "%s is a run of another repository than %s: leave repo out, or name the link's"
 )

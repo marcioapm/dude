@@ -95,6 +95,9 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 			return p, nil
 		}
 	}
+	if err := hiddenNamed(ctx, tx, c, key); err != nil {
+		return delivery.LinkedProject{}, err
+	}
 	return delivery.LinkedProject{}, refuse(rProjectNotLinkedThisSession, key)
 }
 
@@ -523,6 +526,9 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				return proposeOut{}, refuse(rItemNewEpicHasNoNote, n, item.Replaces)
 			}
 		case "link_project":
+			if err := hiddenNamed(ctx, tx, c, item.Project); err != nil {
+				return proposeOut{}, refuse(rItem, n, err)
+			}
 			p, err := orgProject(orgProjects, item.Project)
 			if err != nil {
 				return proposeOut{}, refuse(rItem, n, err)

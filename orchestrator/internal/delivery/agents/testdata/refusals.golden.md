@@ -526,6 +526,22 @@ section is one of %s, or left out for all
 
 no section %s in dude's guide: search it with types ["doc"] for the ids it has
 
+## refusals/tools/chat/project-hidden
+
+%s is hidden from what is started from %s: this session or task can't see it, its repositories, tasks or memory
+
+## refusals/tools/chat/task-project-hidden
+
+this task's project is hidden from what is started from %s: its tools can't reach it
+
+## refusals/tools/github/run-id-run-from-1-or-its-link
+
+runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>)
+
+## refusals/tools/github/run-link-is-another-repository
+
+%s is a run of another repository than %s: leave repo out, or name the link's
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

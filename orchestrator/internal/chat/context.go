@@ -248,7 +248,9 @@ const (
 func (s *Service) world(ctx context.Context, org, person string, m Mention, kind string, connected []string) (World, error) {
 	w := World{Conversation: m.ConversationID, Kind: kind}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM projects WHERE key_prefix IS NOT NULL`).Scan(&w.ProjectsTotal); err != nil {
+		hidden := delivery.HiddenProjectSQL("p.id", "$3")
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM projects p WHERE key_prefix IS NOT NULL AND NOT `+
+			delivery.HiddenProjectSQL("p.id", "$1"), m.Provider).Scan(&w.ProjectsTotal); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT p.id, p.key_prefix, p.name,
@@ -256,7 +258,7 @@ func (s *Service) world(ctx context.Context, org, person string, m Mention, kind
 				  FROM (SELECT e.id, e.title, e.position FROM epics e WHERE e.project_id = p.id AND COALESCE(e.state, 'active') <> 'done'
 				        ORDER BY e.created_at DESC LIMIT $1) e), '[]'),
 				(SELECT count(*) FROM epics e WHERE e.project_id = p.id AND COALESCE(e.state, 'active') <> 'done')
-			FROM projects p WHERE p.key_prefix IS NOT NULL ORDER BY p.name LIMIT $2`, epicsMax, projectsMax)
+			FROM projects p WHERE p.key_prefix IS NOT NULL AND NOT `+hidden+` ORDER BY p.name LIMIT $2`, epicsMax, projectsMax, m.Provider)
 		if err != nil {
 			return err
 		}

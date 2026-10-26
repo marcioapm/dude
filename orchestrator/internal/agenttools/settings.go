@@ -383,6 +383,9 @@ func settingsScopes(ctx context.Context, tx pgx.Tx, c Caller, in settingsIn) (or
 	var rows pgx.Rows
 	var err error
 	name := strings.TrimSpace(in.Project)
+	if err := hiddenNamed(ctx, tx, c, name); err != nil {
+		return org, nil, err
+	}
 	switch {
 	case name != "":
 		rows, err = tx.Query(ctx, cols+`WHERE p.id = $1 OR upper(p.key_prefix) = upper($1) OR lower(p.name) = lower($1)

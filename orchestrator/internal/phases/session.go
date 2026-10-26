@@ -20,11 +20,13 @@ import (
 // SessionRepo.SpecName in the spec, never pushed, and no push branch at all.
 
 // sessionRepoMissing (SQL, over runs r): a repository linked to the Run's
-// session that its lux Run does not hold yet — brought by a resume.
+// session that its lux Run does not hold yet — brought by a resume. None of
+// a project fenced off from the session.
 const sessionRepoMissing = `EXISTS (SELECT 1 FROM session_repositories sr
 	JOIN repositories repo ON repo.id = sr.repository_id JOIN projects p ON p.id = repo.project_id
 	JOIN session_projects spj ON spj.session_id = sr.session_id AND spj.project_id = repo.project_id
-	WHERE sr.session_id = r.session_id AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
+	WHERE sr.session_id = r.session_id AND NOT ` + delivery.SessionRepoHiddenSQL + `
+	  AND NOT (` + delivery.SessionSpecNameSQL + ` = ANY (r.lux_repositories)))`
 
 // brainstormAnywhere is whether a brainstorm may reach any host, the one
 // answer its spec (its network, and Codex's search forced live over the

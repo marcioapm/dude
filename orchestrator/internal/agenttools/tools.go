@@ -399,6 +399,9 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 			if !ok {
 				return createTaskOut{}, refuse(rNoTaskInThisOrganisationNothing, side.name, k)
 			}
+			if err := fenced(ctx, tx, c, other.ProjectID, ""); err != nil {
+				return createTaskOut{}, err
+			}
 			if err := delivery.AddRelationTx(ctx, tx, c.Org, delivery.Edge{Here: here, Other: other, Side: side.name, RunID: c.RunID}); err != nil {
 				if r, ok := err.(delivery.RelationRefusal); ok {
 					return createTaskOut{}, refuse(rNothingWasCreated, strings.ReplaceAll(side.name, "_", " "), k, r.Msg)

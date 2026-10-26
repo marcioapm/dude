@@ -725,6 +725,11 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		if err := withinLimits(ctx, tx, c, t); err != nil {
 			return err
 		}
+		if reachesOwnProject(t) {
+			if err := ownProjectFenced(ctx, tx, c); err != nil {
+				return err
+			}
+		}
 		result, err := t.run(ctx, tx, c, args)
 		if err != nil {
 			return err
