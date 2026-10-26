@@ -197,15 +197,22 @@ describe("an adopted branch waiting for Open or Draft under Deliver", () => {
   const held = (owner?: TaskDetail["owner"]) => new Held({ source: BRANCH_SOURCE, status: "awaiting_input", decider: "policy",
     awaitingDecision: { point: "before_pull_request" }, ...(owner ? { owner } : {}) }, []);
 
-  for (const [button, draft] of [["Open", false], ["Draft", true]] as const) {
-    test(`${button} hands it to Deliver with openPullRequest and draft ${draft}`, async () => {
+  const panel = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=ready-for-review]");
+  const button = (page: HTMLElement, name: string) =>
+    [...(panel(page)?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((b) => text(b) === name)!;
+  const answers = (page: HTMLElement) => ["Open pull request", "Open as draft"].map((n) => button(page, n));
+
+  for (const [name, draft] of [["Open pull request", false], ["Open as draft", true]] as const) {
+    test(`${name} hands it to Deliver with openPullRequest and draft ${draft}`, async () => {
       const client = held();
       const page = await taskPage(client);
-      const card = page.querySelector<HTMLElement>("[data-testid=open-or-draft]")!;
-      expect(text(card.querySelector("p"))).toBe("Open the pull request? Review is done on stack/top. dude opens its pull request into stack/base once you say how.");
-      expect([...card.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Open", "Draft"]);
-      await click(card.querySelector(`[data-testid=open-or-draft-${draft ? "draft" : "open"}]`)!);
-      await until(() => !page.querySelector("[data-testid=open-or-draft]") || null, "the card to go once answered");
+      const card = panel(page)!;
+      expect(card.getAttribute("data-state")).toBe("yours");
+      expect(text(card.querySelector("p"))).toBe("Ready for your review. Review is done on stack/top. No pull request is open yet.");
+      const repo = card.querySelector('[aria-label="What would be opened"] li')!;
+      expect(repo.querySelector('[title]')?.getAttribute("title")).toBe("stack/top into stack/base");
+      await click(button(page, name));
+      await until(() => !panel(page) || null, "the panel to go once answered");
       expect(client.deciders).toEqual([{ decider: "policy", openPullRequest: true, draft }]);
     });
   }
@@ -213,27 +220,27 @@ describe("an adopted branch waiting for Open or Draft under Deliver", () => {
   test("only its owner is offered Open and Draft; anyone else reads whom it waits on", async () => {
     const client = held({ id: "u_ana", name: "Ana Ribeiro", photoUrl: null, online: false });
     const page = await taskPage(client);
-    const card = page.querySelector<HTMLElement>("[data-testid=open-or-draft]")!;
-    expect(card.querySelectorAll("button").length).toBe(0);
-    expect(text(card.querySelector(".escalationWaiting"))).toBe("Waiting for Ana Ribeiro to decide.");
+    const card = panel(page)!;
+    expect(card.getAttribute("data-state")).toBe("waiting");
+    expect([...card.querySelectorAll("button")].map((b) => text(b))).not.toContain("Open pull request");
+    expect(card.textContent).toContain("Waiting for Ana…");
+    expect(card.textContent).not.toContain("Done without a pull request");
     expect(client.deciders).toEqual([]);
   });
-
-  const buttons = (page: HTMLElement) => [...page.querySelectorAll<HTMLButtonElement>("[data-testid=open-or-draft] button")];
 
   test("refused, it says why, keeps the notice, and Open and Draft work again", async () => {
     const client = held();
     const succeed = client.setDecider.bind(client);
     client.setDecider = async () => { throw new ApiError(502, "github_unavailable", "GitHub unavailable"); };
     const page = await taskPage(client);
-    await click(page.querySelector("[data-testid=open-or-draft-open]")!);
-    const alert = await until(() => page.querySelector("[data-testid=open-or-draft] [role=alert]"), "the refusal");
+    await click(button(page, "Open pull request"));
+    const alert = await until(() => page.querySelector(".taskNotices [role=alert]"), "the refusal");
     expect(text(alert)).toBe("Could not open the pull request: GitHub unavailable");
-    expect(page.querySelectorAll("[data-testid=open-or-draft]").length).toBe(1);
-    expect(buttons(page).map((b) => [b.textContent, b.disabled])).toEqual([["Open", false], ["Draft", false]]);
+    expect(page.querySelectorAll("[data-testid=ready-for-review]").length).toBe(1);
+    expect(answers(page).map((b) => b.disabled)).toEqual([false, false]);
     client.setDecider = succeed;
-    await click(page.querySelector("[data-testid=open-or-draft-draft]")!);
-    await until(() => !page.querySelector("[data-testid=open-or-draft]") || null, "the card to go after the retry");
+    await click(button(page, "Open as draft"));
+    await until(() => !panel(page) || null, "the panel to go after the retry");
     expect(client.deciders).toEqual([{ decider: "policy", openPullRequest: true, draft: true }]);
   });
 
@@ -249,23 +256,23 @@ describe("an adopted branch waiting for Open or Draft under Deliver", () => {
       return succeed(...args);
     };
     const page = await taskPage(client);
-    await click(page.querySelector("[data-testid=open-or-draft-open]")!);
-    expect(buttons(page).map((b) => b.disabled)).toEqual([true, true]);
-    await click(page.querySelector("[data-testid=open-or-draft-open]")!);
-    await click(page.querySelector("[data-testid=open-or-draft-draft]")!);
+    await click(button(page, "Open pull request"));
+    expect(answers(page).map((b) => b.disabled)).toEqual([true, true]);
+    await click(button(page, "Open pull request"));
+    await click(button(page, "Open as draft"));
     await settle();
     expect(calls).toBe(1);
     expect(client.deciders).toEqual([]);
     await act(async () => land());
-    await until(() => !page.querySelector("[data-testid=open-or-draft]") || null, "the card to go once answered");
+    await until(() => !panel(page) || null, "the panel to go once answered");
     expect(calls).toBe(1);
     expect(client.deciders).toEqual([{ decider: "policy", openPullRequest: true, draft: false }]);
   });
 
-  test("an adopted pull request, new work, or a conductor deciding gets no Open or Draft card", async () => {
-    for (const patch of [{ source: PR_SOURCE }, { source: null }, { source: BRANCH_SOURCE, decider: "conductor" as const }]) {
-      const page = await taskPage(new AdoptedClient({ decider: "policy", awaitingDecision: { point: "before_pull_request" }, ...patch }, []));
-      expect(page.querySelectorAll("[data-testid=open-or-draft]").length).toBe(0);
+  test("a conductor deciding gets no held panel: the gate is its question in Chat", async () => {
+    for (const patch of [{ source: PR_SOURCE, decider: "conductor" as const }, { source: BRANCH_SOURCE, decider: "conductor" as const }]) {
+      const page = await taskPage(new AdoptedClient({ awaitingDecision: { point: "before_pull_request" }, ...patch }, []));
+      expect(page.querySelectorAll("[data-testid=ready-for-review]").length).toBe(0);
     }
   });
 

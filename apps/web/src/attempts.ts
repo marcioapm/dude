@@ -154,6 +154,11 @@ export const attemptStatus = (task: TaskDetail, attempt: number, current: number
  */
 export function attemptMark(task: TaskDetail, attempt: number, current: number): { status: Status; label?: string } {
   const status = attemptStatus(task, attempt, current);
+  // Deliver's hold before the pull request, and a fix of the feedback its owner sent from there.
+  if (attempt === current && task.decider !== "conductor" && !task.pullRequestOpened) {
+    if (status === "awaiting_input" && task.awaitingDecision?.point === "before_pull_request") return { status, label: READY_FOR_REVIEW };
+    if (status === "running" && task.hold) return { status, label: FIXING_FEEDBACK };
+  }
   if (attempt !== current || status !== "running" || task.decider !== "conductor" || !task.awaitingDecision) return { status };
   const working = task.runs.some((r) => isAttemptWork(r)
     && (r.status !== "paused" || r.dudePause === "machine") && !TERMINAL_RUN_STATUSES.includes(r.status));
@@ -162,6 +167,9 @@ export function attemptMark(task: TaskDetail, attempt: number, current: number):
 
 /** The task header's word for a conducted task that waits, with nothing working, on what is said in its Chat. */
 export const WAITING_ON_CHAT = "Waiting on Chat";
+/** The header's words while Deliver holds the task before its pull request, and while it fixes the owner's feedback from there. */
+export const READY_FOR_REVIEW = "Ready for your review";
+export const FIXING_FEEDBACK = "Fixing your feedback";
 
 export interface SetAside {
   /** Who started over, by name; null when the ledger does not say. */

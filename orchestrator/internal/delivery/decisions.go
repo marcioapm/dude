@@ -454,30 +454,41 @@ func atGate(st *State) workflow.Result {
 // Hold is where Deliver last held the delivery before its pull request:
 // the round (1, then one more after each fix of the people's feedback), the
 // heads it is shown at, and the heads the round before was shown at, with
-// the commits between them in each repository GitHub could compare.
+// the commits between them in each repository GitHub could compare; and
+// what each repository would open (Repos), measured against its base.
 type Hold struct {
 	Round        int               `json:"round"`
 	Heads        map[string]string `json:"heads"`
 	Since        map[string]string `json:"since,omitempty"`
 	CommitsSince *int              `json:"commitsSince,omitempty"`
+	Repos        []HeldRepo        `json:"repos,omitempty"`
+}
+
+// HeldRepo is one repository a held delivery would open a pull request in:
+// its branch into its base, and the lines it changes there (nil when
+// GitHub could not compare them).
+type HeldRepo struct {
+	Name      string `json:"name"`
+	Head      string `json:"head"`
+	Base      string `json:"base"`
+	Additions *int   `json:"additions,omitempty"`
+	Deletions *int   `json:"deletions,omitempty"`
 }
 
 // holdAt records the hold at st's heads: a new round when they moved since
-// the last one.
+// the last one. What it reads of GitHub is for the person; a compare it
+// cannot make leaves its numbers out.
 func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) error {
 	heads := nonNilMap(st.Heads)
 	if st.Hold != nil && maps.Equal(st.Hold.Heads, heads) {
 		return nil
 	}
+	var prev map[string]string
 	if st.Hold == nil {
 		st.Hold = &Hold{Round: 1, Heads: maps.Clone(heads)}
-		return nil
-	}
-	prev := st.Hold.Heads
-	st.Hold = &Hold{Round: st.Hold.Round + 1, Heads: maps.Clone(heads), Since: prev}
-	gh, err := w.forges.For(ctx, sc.OrganizationID)
-	if err != nil || gh == nil {
-		return nil
+	} else {
+		prev = st.Hold.Heads
+		st.Hold = &Hold{Round: st.Hold.Round + 1, Heads: maps.Clone(heads), Since: prev}
 	}
 	var repos []Repository
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
@@ -486,20 +497,43 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 	}); err != nil {
 		return err
 	}
-	n := 0
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil {
+		gh = nil
+	}
+	n, counted := 0, prev != nil && gh != nil
 	for _, repo := range repos {
-		from, to := prev[repo.Name], heads[repo.Name]
-		if from == "" || to == "" || from == to {
+		to := heads[repo.Name]
+		if to == "" {
 			continue
 		}
-		cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), from, to)
-		if err != nil {
-			// Not measured: the panel says nothing of the count.
-			return nil
+		base := repo.DefaultBranch
+		if b := st.Bases[repo.Name]; b != "" {
+			base = b
 		}
-		n += cmp.AheadBy
+		held := HeldRepo{Name: repo.Name, Head: st.Branch, Base: base}
+		if gh != nil {
+			if cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), base, to); err == nil && !cmp.Truncated() {
+				add, del := 0, 0
+				for _, f := range cmp.Files {
+					add, del = add+f.Additions, del+f.Deletions
+				}
+				held.Additions, held.Deletions = &add, &del
+			}
+		}
+		st.Hold.Repos = append(st.Hold.Repos, held)
+		if from := prev[repo.Name]; counted && from != "" && from != to {
+			cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), from, to)
+			if err != nil {
+				counted = false
+				continue
+			}
+			n += cmp.AheadBy
+		}
 	}
-	st.Hold.CommitsSince = &n
+	if counted {
+		st.Hold.CommitsSince = &n
+	}
 	return nil
 }
 
