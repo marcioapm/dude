@@ -1036,6 +1036,25 @@ test("Connect to dude opens a new tab when the stored name is not one dude gives
   expect(win.sessionStorage.getItem("dude-overlay-dudeWindow") ?? "").toBe("");
 });
 
+test("after Connect to dude, ten seconds with no session says dude didn't find the task or didn't answer, and offers Connect again", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  win.open = () => fakeWin();
+  boot({ heartbeatMs: HB });
+  tid("ov-connect")!.click();
+  for (let i = 0; i < 4; i++) beat();
+  expect(tid("ov-connect-note")!.textContent).toContain("is looking for this preview's task");
+  beat();
+  const note = tid("ov-connect-note")!.textContent!;
+  expect(note).toContain("dude didn't find this preview's task, or didn't answer");
+  expect(note).toContain("press Connect to dude again");
+  expect(note).not.toContain("is looking");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  // Pressed again, the note starts over.
+  tid("ov-connect")!.click();
+  expect(tid("ov-connect-note")!.textContent).toContain("is looking for this preview's task");
+});
+
 test("a blocked pop-up is said in the panel, and Connect to dude can be pressed again", () => {
   page(CART, false);
   let next: FakeWin | null = null;

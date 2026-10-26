@@ -1199,6 +1199,7 @@ export class Overlay {
     const closed = this.#connection === "closed";
     const unheard = this.#unheard() && this.#connect === null;
     const note = this.#connect === "blocked" ? "The browser blocked dude's tab from opening: allow pop-ups for this site, or press Connect to dude again."
+      : this.#connect === "opened" && this.#unheard() ? "dude didn't find this preview's task, or didn't answer: its tab says which. To try again, press Connect to dude again."
       : this.#connect === "opened" && this.#connection === "waiting" ? "dude opened in a new tab and is looking for this preview's task. This connects once it finds it."
       : null;
     return this.#h("div", { class: "panel", "data-testid": "ov-no-opener" },
