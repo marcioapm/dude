@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -629,9 +630,15 @@ func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forg
 	}
 	// One signal per distinct change, however many deliveries report it.
 	// The head is part of it: checks failing again after a fix is a new
-	// failure, and must not be taken for the one already handled.
+	// failure, and must not be taken for the one already handled. So are
+	// the check runs failing: a fix that pushed nothing (the runner died,
+	// not the code) leaves the head where it was, and a re-run failing on
+	// it is a new check run, so a new failure, not the one handled.
 	key := fmt.Sprintf("pr:%s:%s:%s:%s:%s:%s", pr.ID, signal.Kind, strings.Join(ids, ","), status.Checks, status.State,
 		status.HeadSHA)
+	if runs := failingRuns(signal.Feedback); runs != "" {
+		key += ":runs:" + runs
+	}
 	// Readiness can come and go on the same head (approved, dismissed,
 	// approved again), and so can a conflict (resolved, then main moves
 	// into it again): each time is its own change, recorded as its own
@@ -681,6 +688,24 @@ func frozen(status *forge.Status, pr tracked) {
 	status.CheckList, status.Reviews = nil, nil
 	_ = json.Unmarshal(pr.ChecksJSON, &status.CheckList)
 	_ = json.Unmarshal(pr.ReviewsJSON, &status.Reviews)
+}
+
+// failingRuns: the check runs a signal's CI feedback names as failing,
+// sorted; "" for none. A commit status has no run id, and is named
+// instead.
+func failingRuns(feedback []forge.ActionableFeedback) string {
+	var runs []string
+	for _, f := range feedback {
+		for _, c := range f.Checks {
+			if c.RunID != 0 {
+				runs = append(runs, strconv.FormatInt(c.RunID, 10))
+			} else {
+				runs = append(runs, c.Name)
+			}
+		}
+	}
+	slices.Sort(runs)
+	return strings.Join(runs, ",")
 }
 
 func failingNames(checks []forge.Check) []string {

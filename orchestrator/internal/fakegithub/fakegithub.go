@@ -162,6 +162,9 @@ type Server struct {
 	// what a check run's read answers instead (403: no Checks permission).
 	CheckRuns      map[int64]CheckRun
 	CheckRunStatus int
+	// The id the one check run of SetChecks("run:…") reports: 77 when
+	// unset. A re-run on GitHub is a new check run, with a new id.
+	CheckRunID int64
 	// Actions job logs by id, the download host they redirect to, and a
 	// status the logs endpoint answers instead (403: no permission), with
 	// LogMessage as its message when set. LogSignature is the download
@@ -1307,8 +1310,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 // reports through check runs instead of statuses.
 func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	state, forbidden, message := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage
+	state, forbidden, message, id := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage, s.CheckRunID
 	s.mu.Unlock()
+	if id == 0 {
+		id = 77
+	}
 	if message != "" {
 		fail(w, 403, message)
 		return
@@ -1323,9 +1329,9 @@ func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 		if conclusion == "pending" {
 			status, conclusion = "in_progress", ""
 		}
-		runs = append(runs, map[string]any{"id": 77, "name": "e2e", "status": status, "conclusion": conclusion,
+		runs = append(runs, map[string]any{"id": id, "name": "e2e", "status": status, "conclusion": conclusion,
 			"app":      map[string]string{"slug": "github-actions"},
-			"html_url": "https://github.test/" + s.Slug + "/runs/77", "started_at": "2026-09-28T10:00:00Z",
+			"html_url": fmt.Sprintf("https://github.test/%s/runs/%d", s.Slug, id), "started_at": "2026-09-28T10:00:00Z",
 			"completed_at": "2026-09-28T10:04:12Z"})
 	}
 	write(w, 200, map[string]any{"total_count": len(runs), "check_runs": runs})
