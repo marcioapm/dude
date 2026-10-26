@@ -179,6 +179,11 @@ export function FeedbackSection({ mode }: { readonly mode: PaneMode }) {
             <Label>Sent back, two items</Label>
             <ReadyForReview line={HELD_LINE} repositories={[WEB, API]} evidence={<ReviewEvidence chips={CHIPS} />}
               state={{ kind: "sent-back", items: 2, openRefused: "2 feedback items still open" }} onFeedback={() => {}} />
+            <Label>Sent back, every item handled: the round is reviewed and tested again</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} evidence={<ReviewEvidence chips={CHIPS} />}
+              state={{ kind: "sent-back", items: 0, openRefused: "Being reviewed and tested again" }} onFeedback={() => {}} />
+            <Label>Someone else's, while the owner's feedback is with a fixer</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} state={{ kind: "waiting", on: "Sam", sentBack: true }} onFeedback={() => {}} />
             <Label>An adopted branch: its own head name, no evidence</Label>
             <ReadyForReview line={<>Review is done on <span className="ds-mono">stack/top</span>. No pull request is open yet.</>}
               repositories={[{ name: "web-console", head: "stack/top", base: "stack/base", additions: 31, deletions: 4 }]} state={{ kind: "yours" }}

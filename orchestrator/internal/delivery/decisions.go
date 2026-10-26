@@ -429,6 +429,7 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 		if err := w.holdAt(ctx, sc, st); err != nil {
 			return workflow.Result{}, err
 		}
+		st.Hold.SentBack = false
 	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		if err := askGateTx(ctx, tx, sc.OrganizationID, st); err != nil || !entering {
@@ -469,8 +470,9 @@ func atGate(st *State) workflow.Result {
 // heads it is shown at, when it last parked there (Since), and the heads
 // the round before was shown at (Previous), with the commits between them
 // in each repository GitHub could compare; and what each repository would
-// open (Repos), measured against its base. Cleared once a pull request
-// opens.
+// open (Repos), measured against its base. SentBack: the people's feedback
+// sent from the hold is being fixed, until the delivery parks there again.
+// Cleared once a pull request opens.
 type Hold struct {
 	Round        int               `json:"round"`
 	Heads        map[string]string `json:"heads"`
@@ -478,6 +480,7 @@ type Hold struct {
 	Previous     map[string]string `json:"previous,omitempty"`
 	CommitsSince *int              `json:"commitsSince,omitempty"`
 	Repos        []HeldRepo        `json:"repos,omitempty"`
+	SentBack     bool              `json:"sentBack,omitempty"`
 }
 
 // HeldRepo is one repository a held delivery would open a pull request in:
@@ -571,6 +574,9 @@ func (w *steps) feedbackAtGate(ctx context.Context, sc workflow.StepContext, st 
 	st.Decisions++
 	st.Retries++
 	st.Iteration, st.PendingRunIDs = 0, nil
+	if st.Hold != nil {
+		st.Hold.SentBack = true
+	}
 	res, err := w.next(ctx, sc, st, PointReviewed, "fix", feedbackOpenLine(feedbackBeforePR, len(open)))
 	return res, true, err
 }

@@ -13,6 +13,7 @@ import type { Status } from "@dude/design-system/tokens";
 import { TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
 import type { PullRequest, Run, TaskDetail, TaskSource } from "./api/client.ts";
 import { actorName, humanActor } from "./api/conversation.ts";
+import { heldAtGate, sentBackFromGate } from "./beforePullRequest.ts";
 import { instant } from "./instant.ts";
 import { howRunStopped } from "./screens/Recovery.tsx";
 import type { People } from "./people.tsx";
@@ -155,9 +156,9 @@ export const attemptStatus = (task: TaskDetail, attempt: number, current: number
 export function attemptMark(task: TaskDetail, attempt: number, current: number): { status: Status; label?: string } {
   const status = attemptStatus(task, attempt, current);
   // Deliver's hold before the pull request, and a fix of the feedback its owner sent from there.
-  if (attempt === current && task.decider !== "conductor" && !task.pullRequestOpened) {
-    if (status === "awaiting_input" && task.awaitingDecision?.point === "before_pull_request") return { status, label: READY_FOR_REVIEW };
-    if (status === "running" && task.hold) return { status, label: FIXING_FEEDBACK };
+  if (attempt === current) {
+    if (status === "awaiting_input" && heldAtGate(task)) return { status, label: READY_FOR_REVIEW };
+    if (status === "running" && sentBackFromGate(task)) return { status, label: FIXING_FEEDBACK };
   }
   if (attempt !== current || status !== "running" || task.decider !== "conductor" || !task.awaitingDecision) return { status };
   const working = task.runs.some((r) => isAttemptWork(r)

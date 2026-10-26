@@ -101,11 +101,12 @@ import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
 import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, isAdoptedPr, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 import { SourceLine } from "./StartsFrom.tsx";
-import { HeldPanel, fixingFeedback, heldBeforePullRequest } from "./HeldPanel.tsx";
+import { HeldPanel } from "./HeldPanel.tsx";
+import { heldAtGate, sentBackFromGate } from "../beforePullRequest.ts";
 import { BeforePullRequestControl } from "./BeforePullRequestControl.tsx";
 import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
-import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, heldBeforeItsPullRequest, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
+import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 import { OriginLine, TaskOrigin } from "../chatOrigin.tsx";
@@ -593,7 +594,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
   const source = item.source ?? null;
   // A delivery Deliver holds before its pull request for its owner (an adopted branch, Ask me first), or a fix of their feedback from there.
-  const held = !earlier && (heldBeforePullRequest(item) || fixingFeedback(item));
+  const held = !earlier && (heldAtGate(item) || sentBackFromGate(item));
   // The held panel's preview: open a running one with commenting; start one the project can make; else nothing.
   const previewServer = commenting.offer.kind === "available" ? commenting.offer.servers[0] : undefined;
   const heldPreview = previewServer ? { kind: "open" as const, open: () => commenting.open(previewServer) }
@@ -654,7 +655,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
             {!earlier ? lifecycle.marks : null}
             {driver}
-            {!earlier ? <MergeHoldChip count={feedback.blocking} beforePR={heldBeforeItsPullRequest(item)} onOpen={() => pickTab("feedback")} /> : null}
+            {!earlier ? <MergeHoldChip count={feedback.blocking} beforePR={heldAtGate(item) || sentBackFromGate(item)} onOpen={() => pickTab("feedback")} /> : null}
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}

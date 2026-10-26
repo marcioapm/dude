@@ -17,10 +17,15 @@ export interface HeldRepository {
   readonly deletions: number;
 }
 
-/** Whose move it is at the hold. `on` is the owner's first name; `items` the feedback items a fixer has. */
+/**
+ * Whose move it is at the hold. `on` is the owner's first name; `items` the
+ * feedback items a fixer still has (0: handled, the round is being reviewed
+ * and tested again). `waiting` with `sentBack`: the owner's feedback is with
+ * a fixer, as anyone else reads it.
+ */
 export type ReadyForReviewState =
   | { readonly kind: "yours" }
-  | { readonly kind: "waiting"; readonly on: string }
+  | { readonly kind: "waiting"; readonly on: string; readonly sentBack?: boolean | undefined }
   | { readonly kind: "sent-back"; readonly items: number; readonly openRefused: string };
 
 /** A round after the owner's feedback: commits since the hold was last shown, and what it resolved. */
@@ -64,6 +69,7 @@ export function ReadyForReview({
   line, repositories, evidence, state, round, heldMs, onChanges, onOpen, onDraft, onFeedback, onDoneWithout, busy, className, ...rest
 }: ReadyForReviewProps) {
   const sentBack = state.kind === "sent-back";
+  const withFixer = sentBack || (state.kind === "waiting" && state.sentBack === true);
   const tone = state.kind === "yours" ? "attention" : sentBack ? "info" : "neutral";
   return (
     <Callout tone={tone} className={cx(styles["root"], className)} data-state={state.kind} {...rest}>
@@ -71,9 +77,20 @@ export function ReadyForReview({
         <div className={styles["head"]}>
           <p className={styles["lead"]}>
             {state.kind === "sent-back" ? (
+              state.items > 0 ? (
+                <>
+                  <strong>Sent back:</strong> a fixer is working on your {state.items} {state.items === 1 ? "item" : "items"}. The hold comes
+                  back at its new heads, reviewed and tested again.
+                </>
+              ) : (
+                <>
+                  <strong>Sent back:</strong> your feedback is handled, and the round is being reviewed and tested again. The hold comes
+                  back at its new heads.
+                </>
+              )
+            ) : state.kind === "waiting" && state.sentBack ? (
               <>
-                <strong>Sent back:</strong> a fixer is working on your {state.items} {state.items === 1 ? "item" : "items"}. The hold comes
-                back at its new heads, reviewed and tested again.
+                <strong>{state.on}'s feedback is with a fixer.</strong> The hold comes back at its new heads, reviewed and tested again.
               </>
             ) : (
               <>
@@ -81,7 +98,7 @@ export function ReadyForReview({
               </>
             )}
           </p>
-          {heldMs !== undefined && !sentBack ? (
+          {heldMs !== undefined && !withFixer ? (
             <span className={styles["age"]}>held <Duration ms={heldMs} format="age" tone="muted" dot={false} /></span>
           ) : null}
         </div>

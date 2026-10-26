@@ -195,7 +195,7 @@ describe("an adopted branch waiting for Open or Draft under Deliver", () => {
     }
   }
   const held = (owner?: TaskDetail["owner"]) => new Held({ source: BRANCH_SOURCE, status: "awaiting_input", decider: "policy",
-    awaitingDecision: { point: "before_pull_request" }, ...(owner ? { owner } : {}) }, []);
+    awaitingDecision: { point: "before_pull_request" }, pullRequestOpened: false, ...(owner ? { owner } : {}) }, []);
 
   const panel = (page: HTMLElement) => page.querySelector<HTMLElement>("[data-testid=ready-for-review]");
   const button = (page: HTMLElement, name: string) =>

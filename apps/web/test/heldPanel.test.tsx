@@ -12,7 +12,7 @@ import type { FeedbackItem, TaskServers } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
-import type { TaskDetail } from "../src/api/client.ts";
+import { ApiError, type TaskDetail } from "../src/api/client.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 
@@ -23,12 +23,14 @@ afterEach(async () => {
   mounted = [];
 });
 
-const HOLD = { round: 1, commitsSince: null, since: new Date(Date.now() - 22 * 60_000).toISOString(),
+const HOLD = { round: 1, commitsSince: null, since: new Date(Date.now() - 22 * 60_000).toISOString(), sentBack: false,
   repos: [{ name: "web", head: "dude/web-142-saved-filters", base: "main", additions: 412, deletions: 38 },
     { name: "api", head: "dude/web-142-saved-filters", base: "main", additions: 96, deletions: 4 }] };
 
 class Held extends FixtureClient {
   finished = 0;
+  /** Done without a pull request is refused with this message. */
+  refuseDone: string | null = null;
   constructor(private patch: Partial<TaskDetail>, private servers?: TaskServers) {
     super("d");
   }
@@ -39,6 +41,7 @@ class Held extends FixtureClient {
     return Promise.resolve({ pullRequests: [] });
   }
   override async doneWithoutPullRequest(taskId: string) {
+    if (this.refuseDone) throw new ApiError(409, "feedback_open", this.refuseDone);
     this.finished++;
     this.patch = { ...this.patch, status: "done", awaitingDecision: null, hold: null };
     return { taskId, status: "done" as const };
@@ -47,6 +50,17 @@ class Held extends FixtureClient {
     return this.servers ? Promise.resolve(this.servers) : super.taskServers();
   }
 }
+
+/** A reader not yet known: the people list never answers. */
+class Unknown extends Held {
+  override listPeople(): Promise<never> {
+    return Promise.reject(new Error("offline"));
+  }
+}
+
+const delivered = (id: string): FeedbackItem => ({ id, taskId: TASK_ID, attempt: 1, batchId: "b", author: null, body: "Per project", anchor: { kind: "general" },
+  status: "delivered", deliveredRunId: null, resolvedCommit: null, resolutionPending: false, outdated: false, routedTo: "workflow",
+  submittedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), history: [] });
 
 const atHold = (extra: Partial<TaskDetail> = {}) => ({ status: "awaiting_input" as const, decider: "policy" as const, source: null,
   awaitingDecision: { point: "before_pull_request" as const }, hold: HOLD, pullRequestOpened: false, ...extra });
@@ -110,11 +124,8 @@ describe("a task held on Ask me first", () => {
   });
 
   test("sent back, a fixer works on the items and Open is refused with how many are open", async () => {
-    const client = new Held(atHold({ status: "running", awaitingDecision: null }));
-    const item = (id: string): FeedbackItem => ({ id, taskId: TASK_ID, attempt: 1, batchId: "b", author: null, body: "Per project", anchor: { kind: "general" },
-      status: "delivered", deliveredRunId: null, resolvedCommit: null, resolutionPending: false, outdated: false, routedTo: "workflow",
-      submittedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), history: [] });
-    client.feedbackItems = [item("f1"), item("f2")];
+    const client = new Held(atHold({ status: "running", awaitingDecision: null, hold: { ...HOLD, sentBack: true } }));
+    client.feedbackItems = [delivered("f1"), delivered("f2")];
     const page = await taskPage(client);
     const card = await until(() => panel(page), "the panel");
     expect(card.getAttribute("data-state")).toBe("sent-back");
@@ -125,6 +136,62 @@ describe("a task held on Ask me first", () => {
     expect(named(card, "Done without a pull request")).toBeUndefined();
     const chip = await until(() => page.querySelector<HTMLElement>("[data-testid=merge-hold]"), "the header's chip");
     expect(text(chip)).toBe("2 feedback items hold the pull request");
+  });
+
+  test("sent back with every item handled, the round is said to be reviewed and tested again, never 0 items", async () => {
+    const client = new Held(atHold({ status: "running", awaitingDecision: null, hold: { ...HOLD, sentBack: true } }));
+    const page = await taskPage(client);
+    const card = await until(() => panel(page), "the panel");
+    expect(text(card)).toContain("Sent back: your feedback is handled, and the round is being reviewed and tested again.");
+    expect(text(card)).not.toMatch(/\b0 (items|feedback)/);
+    const open = named(card, "Open pull request")!;
+    expect(document.getElementById(open.getAttribute("aria-describedby")!)?.textContent).toBe("Being reviewed and tested again");
+  });
+
+  test("running with a hold it is not sent back from (after Open, or a change of the choice) claims no fixer at work", async () => {
+    const client = new Held(atHold({ status: "running", awaitingDecision: null, hold: { ...HOLD, sentBack: false } }));
+    const page = await taskPage(client);
+    await act(async () => settle());
+    expect(page.querySelectorAll("[data-testid=ready-for-review]").length).toBe(0);
+    expect(text(page.querySelector("[data-testid=header-status]"))).not.toContain("Fixing your feedback");
+    expect(page.textContent).not.toContain("a fixer is working");
+  });
+
+  test("anyone else, while the owner's feedback is with a fixer, waits with Write feedback and no Open", async () => {
+    const client = new Held(atHold({ status: "running", awaitingDecision: null, hold: { ...HOLD, sentBack: true },
+      owner: { id: "u_sam", name: "Sam Lee", photoUrl: null, online: false } }));
+    client.feedbackItems = [delivered("f1")];
+    const page = await taskPage(client);
+    const card = await until(() => panel(page), "the panel");
+    expect(card.getAttribute("data-state")).toBe("waiting");
+    expect(text(card)).toContain("Sam's feedback is with a fixer.");
+    expect(text(card)).not.toContain("your 1 item");
+    expect(named(card, "Write feedback")).toBeDefined();
+    for (const n of ["Open pull request", "Open as draft", "Show feedback", "Done without a pull request"]) expect(named(card, n)).toBeUndefined();
+  });
+
+  test("before the reader is known, the panel waits on the owner, also while sent back", async () => {
+    for (const hold of [HOLD, { ...HOLD, sentBack: true }]) {
+      const client = new Unknown(atHold(hold.sentBack ? { status: "running", awaitingDecision: null, hold } : {}));
+      const page = await taskPage(client);
+      const card = await until(() => panel(page), "the panel");
+      expect(card.getAttribute("data-state")).toBe("waiting");
+      for (const n of ["Open pull request", "Open as draft", "Done without a pull request"]) expect(named(card, n)).toBeUndefined();
+      for (const unmount of mounted.splice(0)) await unmount();
+    }
+  });
+
+  test("Done without a pull request that fails says why, and the panel stays", async () => {
+    const client = new Held(atHold());
+    client.refuseDone = "2 feedback items still open";
+    const page = await taskPage(client);
+    const card = await until(() => panel(page), "the panel");
+    await click(named(card, "Done without a pull request")!);
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the confirmation");
+    await click([...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => text(b) === "Done without a pull request")!);
+    const alert = await until(() => page.querySelector<HTMLElement>("[role=alert]"), "the alert");
+    expect(text(alert)).toBe("Could not finish it: 2 feedback items still open");
+    expect(page.querySelectorAll("[data-testid=ready-for-review]").length).toBe(1);
   });
 
   test("round 2 says how many commits since the owner last looked, and what it resolved", async () => {

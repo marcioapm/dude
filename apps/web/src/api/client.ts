@@ -359,11 +359,11 @@ export const READY_FOR_REVIEW_WAITING = "Ready for your review: no pull request 
  * and as its driver.
  */
 export function withWaitingFor(projects: NavProject[]): NavProject[] {
-  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean; heldForReview?: boolean }): NavTask => {
-    const { decider, conductorLive, heldForReview, ...rest } = t;
+  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean }): NavTask => {
+    const { decider, conductorLive, ...rest } = t;
     const driven = decider ? { ...rest, driver: driverMode(decider, conductorLive === true) } : rest;
-    if (t.escalation) return { ...driven, waitingFor: escalationWords(t.escalation).short };
-    return heldForReview ? { ...driven, waitingFor: READY_FOR_REVIEW_WAITING } : driven;
+    if (t.escalation) return { ...driven, heldForReview: false, waitingFor: escalationWords(t.escalation).short };
+    return t.heldForReview ? { ...driven, waitingFor: READY_FOR_REVIEW_WAITING } : driven;
   };
   return projects.map((p) => ({
     ...p,

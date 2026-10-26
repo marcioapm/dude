@@ -142,7 +142,7 @@ export class FixtureClient extends ApiClient {
     this.#nav = navigationFor(scenario);
     if (as === "asks") this.#nav = withViewerAsks(this.#nav);
     if (this.#held) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e,
-      tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, waitingFor: READY_FOR_REVIEW_WAITING } : t)) })) }));
+      tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, heldForReview: true, waitingFor: READY_FOR_REVIEW_WAITING } : t)) })) }));
     // Waiting on a peer, the implementer's row says on whom, as the tree's read does.
     if (this.#peers) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id !== TASK_ID ? t : {
       ...t, runs: t.runs?.map((a) => ({ ...a, sessions: a.sessions.map((s) => (s.id === RUN_ID ? { ...s, activity: "Waiting on WC-212" } : s)) })) })) })) }));
@@ -339,6 +339,7 @@ export class FixtureClient extends ApiClient {
     const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
     const head = "dude/wc-214-checkout-steps";
     const hold = { round: as === "held-round-2" ? 2 : 1, commitsSince: as === "held-round-2" ? 3 : null, since: ago(22 * 60_000),
+      sentBack: as === "held-feedback",
       repos: [{ name: "web", head, base: "main", additions: 412, deletions: 38 }, { name: "api", head, base: "main", additions: 96, deletions: 4 }] };
     const feedback = (id: string, body: string, status: FeedbackItem["status"], resolvedCommit: string | null): FeedbackItem => ({
       id, taskId: TASK_ID, attempt: 1, batchId: "fb_held", author: { id: YOU, name: PEOPLE[0]!.name }, body, anchor: { kind: "general" },

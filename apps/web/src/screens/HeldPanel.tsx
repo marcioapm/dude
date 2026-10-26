@@ -6,28 +6,24 @@
  * and draft), Send feedback (the Feedback tab, whose submit sends the work
  * to a fixer), and Done without a pull request (confirmed first). Only the
  * owner is offered them, as the API allows; anyone else reads whom it
- * waits on. While a fix of the owner's feedback runs, the panel says so and
- * Open is refused with how many items are open.
+ * waits on. While a fix of the owner's feedback runs, the owner reads so,
+ * with Open refused while items are open; anyone else reads that the
+ * owner's feedback is with a fixer.
  */
 
 import { useState } from "react";
-import { ReadyForReview, ReviewEvidence, type EvidenceChip } from "@dude/design-system/components";
-import { Button, Dialog, Icon } from "@dude/design-system";
+import { ReadyForReview, ReviewEvidence, type EvidenceChip, type ReadyForReviewState } from "@dude/design-system/components";
+import { Button, Dialog, Icon, firstName } from "@dude/design-system";
 import { REVIEWER_CATEGORY_LABEL, type ReviewerCategory } from "@dude/domain";
 import type { ApiClient, FeedbackItem, Finding, Run, TaskDetail, Verification } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
-import { firstName } from "../beforePullRequest.ts";
-
-/** Whether the task's delivery is held at the pull request under Deliver, for its owner's review. */
-export const heldBeforePullRequest = (task: Pick<TaskDetail, "decider" | "awaitingDecision">): boolean =>
-  task.decider !== "conductor" && task.awaitingDecision?.point === "before_pull_request";
-
-/** Deliver works on the owner's feedback sent from the hold. */
-export const fixingFeedback = (task: Pick<TaskDetail, "decider" | "hold" | "status" | "pullRequestOpened">): boolean =>
-  task.decider !== "conductor" && Boolean(task.hold) && task.status === "running" && !task.pullRequestOpened;
+import { sentBackFromGate } from "../beforePullRequest.ts";
 
 /** "2 feedback items still open". */
 export const stillOpen = (n: number) => `${n} feedback ${n === 1 ? "item" : "items"} still open`;
+
+/** Why Open waits once the feedback sent back is handled: the round's review and test run first. */
+export const BEING_REVIEWED = "Being reviewed and tested again";
 
 const open = (s: FeedbackItem["status"]) => s === "open" || s === "delivered";
 
@@ -59,7 +55,7 @@ export function HeldPanel({ client, task, you, runs, findings, verification, fee
   const owner = task.owner ? firstName(task.owner.name) : null;
   const someoneElse = task.owner !== null && you !== null && task.owner.id !== you;
   const openItems = feedback.filter((i) => i.submittedAt !== null && open(i.status)).length;
-  const sentBack = fixingFeedback(task);
+  const sentBack = sentBackFromGate(task);
   const repositories = (hold?.repos ?? []).map((r) => ({ name: r.name, head: r.head, base: r.base, additions: r.additions ?? 0, deletions: r.deletions ?? 0 }));
   if (repositories.length === 0 && task.source) {
     repositories.push({ name: task.source.repository, head: task.source.headBranch, base: task.source.baseBranch, additions: 0, deletions: 0 });
@@ -96,7 +92,7 @@ export function HeldPanel({ client, task, you, runs, findings, verification, fee
   const left = findings.filter((f) => f.status === "open").length;
   const tester = verification && !verification.stale ? verification : null;
   const testerPassed = tester !== null && tester.criteria.every((c) => c.status === "pass" || c.decision !== null);
-  const whose = someoneElse && owner ? owner : "you";
+  const whose = (someoneElse || you === null) && owner ? owner : "you";
   const chips: EvidenceChip[] = [
     ...(reviewers.length > 0 ? [{ id: "reviewers", icon: "check" as const, ok: true, onOpen: onFindings,
       label: <><b>{reviewers.length} {reviewers.length === 1 ? "reviewer" : "reviewers"}</b> passed</>,
@@ -124,9 +120,11 @@ export function HeldPanel({ client, task, you, runs, findings, verification, fee
     n: hold.round, commitsSince: hold.commitsSince,
     settled: feedback.filter((i) => i.status === "resolved" && i.submittedAt !== null).map((i) => ({ id: i.id, text: i.body, commit: i.resolvedCommit?.slice(0, 7) ?? null })),
   } : undefined;
-  const state = sentBack ? { kind: "sent-back" as const, items: openItems, openRefused: stillOpen(openItems) }
-    : someoneElse ? { kind: "waiting" as const, on: owner ?? "the owner" }
-    : { kind: "yours" as const };
+  // Only the owner, once known, reads the sent-back panel and its refused Open; anyone else, or a reader not yet known, waits.
+  const on = owner ?? "the owner";
+  const state: ReadyForReviewState = someoneElse || you === null ? { kind: "waiting", on, sentBack }
+    : sentBack ? { kind: "sent-back", items: openItems, openRefused: openItems > 0 ? stillOpen(openItems) : BEING_REVIEWED }
+    : { kind: "yours" };
   const heldMs = hold?.since ? Math.max(0, Date.now() - Date.parse(hold.since)) : undefined;
 
   return (
@@ -136,7 +134,7 @@ export function HeldPanel({ client, task, you, runs, findings, verification, fee
         line={line}
         repositories={repositories}
         evidence={evidence}
-        state={you === null && !sentBack ? { kind: "waiting", on: owner ?? "the owner" } : state}
+        state={state}
         round={round}
         heldMs={heldMs}
         busy={busy}

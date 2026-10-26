@@ -525,7 +525,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   Sam…" on the neutral tone, with **Write feedback**. Feedback sent from the
   hold turns it info: "**Sent back:** a fixer is working on your 2 items…".
   The Open buttons stay drawn and refused with "2 feedback items still
-  open". Findings left for a person never refuse them. When the fix's round
+  open"; once every item is handled it says the round is being reviewed and
+  tested again, never "0 items". Anyone else, meanwhile, reads "**Sam's
+  feedback is with a fixer.**" on the neutral tone, with **Write feedback**
+  and no Open. Findings left for a person never refuse them. When the fix's round
   passes, the panel is back: "Round 2 · after your feedback", "+3 commits
   since you last looked", and each item it resolved with its commit. With a
   conductor deciding, the same question is its gate question in Chat.
@@ -2559,8 +2562,9 @@ MarkdownCheatsheet.
   would be opened", `→` read "into", each Changes named "Changes in web"),
   `evidence`, `state` (`yours` on the attention tone, `sent-back` on info
   with both Open buttons `RefusedButton`s whose reason is also a visible
-  line hidden from the accessibility tree, `waiting` on neutral with no
-  Open or Done), `round` (round 2 on: commits since `GateAt`, and what it
+  line hidden from the accessibility tree; `items: 0` says the round is
+  being reviewed and tested again, `waiting` on neutral with no
+  Open or Done, and with `sentBack` "Sam's feedback is with a fixer"), `round` (round 2 on: commits since `GateAt`, and what it
   resolved), `heldMs`, and the owner's `onOpen`, `onDraft`, `onFeedback`
   and `onDoneWithout` (only while `yours`; the app confirms first). Under
   560px each repository's refs and Done without take their own lines.

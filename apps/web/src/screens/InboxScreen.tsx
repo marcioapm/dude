@@ -13,7 +13,7 @@ import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, ty
 import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, PageWithRail, PageRail, PageRailBlock, FacetList, SharedMark, WaitingList, WaitingRow } from "@dude/design-system/components";
 import { Button, EmptyState, Tabs, TabList, Tab, TabPanel, useToast } from "@dude/design-system/primitives";
 import { sessionTitle, severalLine, type SessionsList } from "@dude/domain";
-import { READY_FOR_REVIEW_WAITING, type ApiClient } from "../api/client.ts";
+import type { ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople } from "../people.tsx";
@@ -160,7 +160,7 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
     const owner = taskOwner(it.task);
     const since = toMs(it.task.statusSince);
     // Held before its pull request for its owner's review: the review is what is asked.
-    const held = !it.session && it.task.waitingFor === READY_FOR_REVIEW_WAITING;
+    const held = !it.session && it.task.heldForReview === true;
     const ask = it.session ? (it.session.activity ?? "is waiting for you")
       : held ? <>{it.task.key ?? it.task.title} is ready for {mine ? "your" : owner ? `${firstName(owner.name)}'s` : "its owner's"} review</>
       : waitingWords(it.task);

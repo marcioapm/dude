@@ -19,6 +19,11 @@ func (w *world) holdRound(task string) (round, commitsSince int) {
 	return round, commitsSince
 }
 
+// holdSentBack says the task's hold records its feedback being fixed.
+func (w *world) holdSentBack(task string) bool {
+	return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->'hold'->>'sentBack')::boolean`, task) == 1
+}
+
 // An item submitted at the hold, general or pinned on the preview, goes to
 // a fixer with the task running "fixing your feedback"; the fixer resolves
 // it, the round is reviewed again, and the hold comes back at the new heads
@@ -46,11 +51,17 @@ func TestFeedbackAtTheHoldStartsAFixRoundAndComesBack(t *testing.T) {
 			w.until("a fixer given the item", func() bool {
 				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_held' = ANY(feedback_item_ids)`, task) > 0
 			})
+			if !w.holdSentBack(task) {
+				t.Error("the hold does not say its feedback was sent back")
+			}
 			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
 				AND payload->>'status' = 'running' AND payload->>'reason' = $2`, task, delivery.ReasonFixingFeedback); n != 1 {
 				t.Errorf("%d moves to running for the owner's feedback", n)
 			}
 			w.until("back at the hold, round 2", func() bool { r, _ := w.holdRound(task); return r == 2 && w.heldBeforePR(task) })
+			if w.holdSentBack(task) {
+				t.Error("back at the hold, it still says sent back")
+			}
 			if fixer, _, answer := ar.state(); fixer == "" || !strings.HasPrefix(answer, "200 ") {
 				t.Fatalf("the fixer's resolution: %s %s", fixer, answer)
 			}

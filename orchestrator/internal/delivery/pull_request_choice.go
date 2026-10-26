@@ -98,6 +98,9 @@ func releaseChoiceGate(st *State) {
 	st.Decision = nil
 	st.Decisions++
 	st.GateRequired, st.ChoiceGate = false, false
+	if st.Hold != nil {
+		st.Hold.SentBack = false
+	}
 }
 
 // choiceReleasedAtCommitTx reads the choice again as a step parking at the

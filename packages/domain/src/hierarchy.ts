@@ -497,8 +497,9 @@ export const taskSchema = z.object({
   /**
    * Where Deliver last held its live delivery before the pull request: the
    * round, the commits since the round before was shown (null: not
-   * counted), what each repository would open, and when it was held; null
-   * when it never held.
+   * counted), what each repository would open, when it was held, and
+   * whether the owner's feedback from it is being fixed (sentBack); null
+   * when it never held, and once a pull request is on record.
    */
   hold: z.object({
     round: z.number().int(),
@@ -506,6 +507,7 @@ export const taskSchema = z.object({
     repos: z.array(z.object({ name: z.string(), head: z.string(), base: z.string(),
       additions: z.number().int().nullable().default(null), deletions: z.number().int().nullable().default(null) })).default([]),
     since: z.string().nullable().default(null),
+    sentBack: z.boolean().default(false),
   }).nullable().default(null),
   /** Why a person ended it (lifecycle.ts); null while it hasn't. */
   resolution: z.enum(["wont_do", "duplicate", "cant_reproduce", "nothing_to_merge"]).nullable().default(null),
