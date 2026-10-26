@@ -34,6 +34,7 @@ func TestGoldenAutomationTools(t *testing.T) {
 		{"not-connected", fmt.Sprintf(postRefusal("not-connected"), "Acme")},
 		{"unknown-channel", fmt.Sprintf(postRefusal("unknown-channel"), "#nowhere")},
 		{"not-in-channel", fmt.Sprintf(postRefusal("not-in-channel"), "#random")},
+		{"lookup-cut", fmt.Sprintf(postRefusal("lookup-cut"), "#team-59")},
 		{"slack-busy", fmt.Sprintf(postRefusal("slack-busy"), "slack chat.postMessage answered 503")},
 		{"slack-refused", fmt.Sprintf(postRefusal("slack-refused"), "slack chat.postMessage: msg_too_long")},
 	})

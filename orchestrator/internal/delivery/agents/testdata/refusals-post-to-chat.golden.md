@@ -26,6 +26,10 @@ there is no channel #nowhere that dude's Slack bot can see: check the name, or f
 
 dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude, then call again. Nothing was posted
 
+## lookup-cut
+
+could not finish looking up the channel #team-59; pass the channel id (C0123ABCD): the workspace has more channels than one lookup reads. Nothing was posted
+
 ## slack-busy
 
 Slack did not take the post (slack chat.postMessage answered 503): nothing was posted; try again in a minute

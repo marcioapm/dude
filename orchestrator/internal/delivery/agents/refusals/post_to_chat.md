@@ -12,6 +12,8 @@
 
 {{- define "refusals/post-to-chat/not-in-channel"}}dude's Slack bot is not in %s: ask someone in the channel to run /invite @dude, then call again. Nothing was posted{{end}}
 
+{{- define "refusals/post-to-chat/lookup-cut"}}could not finish looking up the channel %s; pass the channel id (C0123ABCD): the workspace has more channels than one lookup reads. Nothing was posted{{end}}
+
 {{- define "refusals/post-to-chat/slack-busy"}}Slack did not take the post (%s): nothing was posted; try again in a minute{{end}}
 
 {{- define "refusals/post-to-chat/slack-refused"}}Slack refused the post: %s. Nothing was posted{{end}}

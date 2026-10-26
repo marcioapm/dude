@@ -3,17 +3,28 @@ package fakeslack
 import (
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 // WithChannelList is the fake with conversations.list as well, as Slack
 // answers it to a bot: the workspace's public channels, and the private
-// ones the bot is in, each with is_member; one page. Every other path is
-// the fake's own.
-func (s *Server) WithChannelList() http.Handler {
+// ones the bot is in, each with is_member, paged by the call's limit and
+// cursor. Every other path is the fake's own.
+func (s *Server) WithChannelList() http.Handler { return s.WithChannelPages(0) }
+
+// WithChannelPages is WithChannelList whose pages hold at most pageSize
+// channels whatever limit the call asks (0: the call's limit), for a test
+// of a walk over many pages.
+func (s *Server) WithChannelPages(pageSize int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/conversations.list" {
 			s.ServeHTTP(w, r)
+			return
+		}
+		a, err := args(r)
+		if err != nil {
+			refuse(w, "invalid_arguments")
 			return
 		}
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -25,6 +36,10 @@ func (s *Server) WithChannelList() http.Handler {
 				delete(s.failNext, "conversations.list")
 			} else {
 				s.failNext["conversations.list"] = f
+			}
+			if f.code == "ratelimited" {
+				w.Header().Set("Retry-After", strconv.Itoa(f.after))
+				w.WriteHeader(http.StatusTooManyRequests)
 			}
 			refuse(w, f.code)
 			return
@@ -43,7 +58,7 @@ func (s *Server) WithChannelList() http.Handler {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		channels := []any{}
+		var channels []any
 		for _, id := range ids {
 			c := s.convs[id]
 			member := contains(c.Members, "UB"+team)
@@ -52,6 +67,27 @@ func (s *Server) WithChannelList() http.Handler {
 			}
 			channels = append(channels, map[string]any{"id": c.ID, "name": c.Name, "is_private": c.Kind == "private", "is_member": member})
 		}
-		reply(w, map[string]any{"channels": channels, "response_metadata": map[string]any{"next_cursor": ""}})
+		// Slack's limit is 1 to 1000, 100 when not given; its cursor is
+		// opaque (here, the offset of the page's first channel).
+		limit, _ := strconv.Atoi(str(a, "limit"))
+		if limit <= 0 || limit > 1000 {
+			limit = 100
+		}
+		if pageSize > 0 && pageSize < limit {
+			limit = pageSize
+		}
+		from := 0
+		if cur := str(a, "cursor"); cur != "" {
+			if from, err = strconv.Atoi(strings.TrimPrefix(cur, "offset:")); err != nil || from < 0 || from > len(channels) {
+				refuse(w, "invalid_cursor")
+				return
+			}
+		}
+		to, next := min(from+limit, len(channels)), ""
+		if to < len(channels) {
+			next = "offset:" + strconv.Itoa(to)
+		}
+		page := append([]any{}, channels[from:to]...)
+		reply(w, map[string]any{"channels": page, "response_metadata": map[string]any{"next_cursor": next}})
 	})
 }

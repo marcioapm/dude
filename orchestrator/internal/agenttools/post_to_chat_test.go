@@ -23,12 +23,22 @@ type chatFixture struct {
 
 func setupChat(t *testing.T, installed bool) chatFixture {
 	t.Helper()
+	return setupChatPaged(t, installed, 0, nil)
+}
+
+// setupChatPaged is setupChat whose conversations.list pages hold pageSize
+// channels (0: as asked), with more channels added before it serves.
+func setupChatPaged(t *testing.T, installed bool, pageSize int, more func(*fakeslack.Server)) chatFixture {
+	t.Helper()
 	fake := fakeslack.New("cid", "csecret")
 	fake.AddTeam("T1", "Acme")
 	fake.AddConversation(fakeslack.Conversation{ID: "C0ENGINEER", Team: "T1", Name: "engineering", Kind: "public", Members: []string{"UBT1"}})
 	fake.AddConversation(fakeslack.Conversation{ID: "C0RANDOMXX", Team: "T1", Name: "random", Kind: "public"})
 	fake.AddConversation(fakeslack.Conversation{ID: "G0SECRETXX", Team: "T1", Name: "hiring", Kind: "private"})
-	srv := httptest.NewServer(fake.WithChannelList())
+	if more != nil {
+		more(fake)
+	}
+	srv := httptest.NewServer(fake.WithChannelPages(pageSize))
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
 	f := setupWith(t, &agenttools.Server{Chat: chat.Registry{"slack": p}})
@@ -181,6 +191,27 @@ func TestPostToChatLookupRefusalsSpendNoPost(t *testing.T) {
 	}
 	if n := len(c.fake.BotMessages()); n != 10 {
 		t.Errorf("%d messages reached Slack, want 10", n)
+	}
+}
+
+// A lookup by name that reaches its page bound says so and asks for the id,
+// posting nothing and spending none of the run's ten; the id then posts.
+func TestPostToChatAskedForTheIDWhenTheLookupCannotFinish(t *testing.T) {
+	c := setupChatPaged(t, true, 1, func(f *fakeslack.Server) {
+		for i := range 60 {
+			f.AddConversation(fakeslack.Conversation{ID: fmt.Sprintf("C1%08d", i), Team: "T1", Name: fmt.Sprintf("team-%02d", i), Kind: "public",
+				Members: []string{"UBT1"}})
+		}
+	})
+	status, out := c.postToChat(t, "#team-59", "hello")
+	if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "could not finish looking up the channel #team-59; pass the channel id") {
+		t.Fatalf("past the bound: %d %v", status, out)
+	}
+	if n := c.fake.Calls("chat.postMessage"); n != 0 {
+		t.Errorf("%d posts", n)
+	}
+	if status, out := c.postToChat(t, "C100000059", "hello"); status != 200 || out["channel"] != "#team-59" {
+		t.Fatalf("by id: %d %v", status, out)
 	}
 }
 

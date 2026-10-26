@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -12,3 +13,8 @@ import (
 func Installed(ctx context.Context, tx pgx.Tx, provider string) (Installation, bool, error) {
 	return loadInstallation(ctx, tx, provider)
 }
+
+// ErrChannelLookupCut is a lookup of a channel by name that stopped at its
+// page bound without finding it: the channel may exist past it, so it is
+// not "not found".
+var ErrChannelLookupCut = errors.New("could not finish looking up the channel; pass the channel id")

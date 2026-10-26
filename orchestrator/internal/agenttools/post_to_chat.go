@@ -52,7 +52,7 @@ var channelID = regexp.MustCompile(`^[CGD][A-Z0-9]{8,}$`)
 var postRefusals = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
 	for _, name := range []string{"automations-only", "name-a-channel", "text-length", "per-run", "not-connected", "unknown-channel",
-		"not-in-channel", "slack-busy", "slack-refused"} {
+		"not-in-channel", "lookup-cut", "slack-busy", "slack-refused"} {
 		out[name] = delivery.MustText("refusals/post-to-chat/" + name)
 	}
 	return out
@@ -68,8 +68,8 @@ type postToChatIn struct {
 
 // postTarget is the channel resolvePostChannel found, and how to post in it.
 type postTarget struct {
-	inst                  chat.Installation
-	provider              chat.Provider
+	inst                   chat.Installation
+	provider               chat.Provider
 	channelID, channelName string
 }
 
@@ -159,6 +159,8 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 	}
 	id, member, found, err := finder.FindChannel(ctx, inst, channel)
 	switch {
+	case errors.Is(err, chat.ErrChannelLookupCut):
+		return refused("lookup-cut", shown)
 	case err != nil:
 		return slackFailed(ctx, c, channel, err)
 	case !found:
