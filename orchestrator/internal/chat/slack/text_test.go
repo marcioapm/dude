@@ -123,8 +123,10 @@ func TestAPageReadsOnlyWhatDecidesItAndRefusesOneTooFar(t *testing.T) {
 		// Newest first on a channel: the latest page, and before, are its first call.
 		{"channel latest", "", chat.Page{Limit: 5}, "c55", "c59", true, 1, "6"},
 		{"channel before", "", chat.Page{Before: ts[30], Limit: 5}, "c25", "c29", true, 1, "6"},
-		// Oldest first in a thread: after is its first call.
+		// Oldest first in a thread: after is its first call. Slack puts the
+		// root first in it, counted in the limit, so it asks for Limit+2.
 		{"thread after", root, chat.Page{After: replies[10], Limit: 5}, "r11", "r15", true, 1, "7"},
+		{"thread after, one more left", root, chat.Page{After: replies[53], Limit: 5}, "r54", "r58", true, 1, "7"},
 		// The far end: the cursor is followed to the bound (the channel's
 		// 19 after c40, the thread's root and 50 replies before r50).
 		{"channel after", "", chat.Page{After: ts[40], Limit: 5}, "c41", "c45", true, 3, "200"},
@@ -194,10 +196,11 @@ func TestAPageSlackAnswersShortStillSaysThereIsMore(t *testing.T) {
 		{"channel latest", "", 4, chat.Page{Limit: 5}, "c35,c36,c37,c38,c39"},
 		{"channel before", "", 4, chat.Page{Before: ts[20], Limit: 5}, "c15,c16,c17,c18,c19"},
 		{"thread after", root, 4, chat.Page{After: replies[10], Limit: 5}, "r11,r12,r13,r14,r15"},
-		// Two a call: two calls leave it short, and more remain.
+		// Two a call: two calls leave it short, and more remain (a thread's
+		// first call spends one on its root).
 		{"channel latest, short", "", 2, chat.Page{Limit: 5}, "c36,c37,c38,c39"},
 		{"channel before, short", "", 2, chat.Page{Before: ts[20], Limit: 5}, "c16,c17,c18,c19"},
-		{"thread after, short", root, 2, chat.Page{After: replies[10], Limit: 5}, "r11,r12,r13,r14"},
+		{"thread after, short", root, 2, chat.Page{After: replies[10], Limit: 5}, "r11,r12,r13"},
 	} {
 		fake.SetPageSize(c.pageSize)
 		before := fake.Calls("conversations.history") + fake.Calls("conversations.replies")

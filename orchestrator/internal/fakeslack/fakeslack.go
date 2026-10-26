@@ -577,22 +577,27 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 		}
 		root, oldest, latest := str(a, "ts"), str(a, "oldest"), str(a, "latest")
 		var msgs []any
-		found := false
+		var parent any
 		for _, m := range s.messages {
 			if m.Channel != c.ID || m.ThreadTS != root {
 				continue
 			}
-			found = found || m.TS == root
+			if m.TS == root {
+				parent = m.wire(team)
+				continue
+			}
 			if oldest != "" && m.TS <= oldest || latest != "" && m.TS >= latest {
 				continue
 			}
 			msgs = append(msgs, m.wire(team))
 		}
-		if !found {
+		if parent == nil {
 			refuse(w, "thread_not_found")
 			return
 		}
-		// Oldest first, as Slack lists replies.
+		// Oldest first, as Slack lists replies, the parent first whatever
+		// oldest and latest say, on the first page, counted in its limit.
+		msgs = append([]any{parent}, msgs...)
 		page, next := s.paged(msgs, a)
 		reply(w, map[string]any{"messages": page, "has_more": next != "", "response_metadata": map[string]any{"next_cursor": next}})
 	case "conversations.history":
