@@ -164,13 +164,20 @@ export function FeedbackTray({ client, task, fb, current, prs, openBlockers }: {
   );
 }
 
-/** "3 feedback items hold the merge", beside the status: neutral, never amber, a way to the Feedback tab. */
-export function MergeHoldChip({ count, onOpen }: { count: number; onOpen: () => void }) {
+/** Deliver holds the task before its first pull request, or is fixing what its owner sent from there. */
+export const heldBeforeItsPullRequest = (task: Pick<TaskDetail, "decider" | "pullRequestOpened" | "awaitingDecision" | "hold" | "status">): boolean =>
+  task.decider !== "conductor" && !task.pullRequestOpened
+  && (task.awaitingDecision?.point === "before_pull_request" || (Boolean(task.hold) && task.status === "running"));
+
+/** "3 feedback items hold the merge" (or, held before it, the pull request), beside the status: neutral, never amber, a way to the Feedback tab. */
+export function MergeHoldChip({ count, beforePR = false, onOpen }: { count: number; beforePR?: boolean; onOpen: () => void }) {
   if (count === 0) return null;
   return (
-    <Tooltip content="Submitted feedback not yet handled: dude won't merge the pull request, and the task can't be marked done, until each is resolved or answered.">
+    <Tooltip content={beforePR
+      ? "Submitted feedback not yet handled: the pull request is not opened until each is resolved or answered."
+      : "Submitted feedback not yet handled: dude won't merge the pull request, and the task can't be marked done, until each is resolved or answered."}>
       <button type="button" className="mergeHold" onClick={onOpen} data-testid="merge-hold">
-        <Icon name="comments" size={12} /> <b>{plural(count, "feedback item")}</b> {count === 1 ? "holds" : "hold"} the merge
+        <Icon name="comments" size={12} /> <b>{plural(count, "feedback item")}</b> {count === 1 ? "holds" : "hold"} the {beforePR ? "pull request" : "merge"}
       </button>
     </Tooltip>
   );
@@ -249,8 +256,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   const readOnly = earlier || done;
   const authors = [...new Set(submitted.map((i) => i.author?.name.split(" ")[0] ?? "someone"))];
   // Held before its pull request (or fixing what was sent from there): an open item holds the pull request's opening.
-  const beforePR = !earlier && task.decider !== "conductor" && !task.pullRequestOpened
-    && (task.awaitingDecision?.point === "before_pull_request" || (Boolean(task.hold) && task.status === "running"));
+  const beforePR = !earlier && heldBeforeItsPullRequest(task);
   const holds = beforePR ? "pull request" as const : "merge" as const;
 
   const card = (i: FeedbackItem) => {

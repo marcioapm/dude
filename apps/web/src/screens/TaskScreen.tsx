@@ -105,7 +105,7 @@ import { HeldPanel, fixingFeedback, heldBeforePullRequest } from "./HeldPanel.ts
 import { BeforePullRequestControl } from "./BeforePullRequestControl.tsx";
 import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
-import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
+import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, heldBeforeItsPullRequest, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 import { OriginLine, TaskOrigin } from "../chatOrigin.tsx";
@@ -654,7 +654,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
             {!earlier ? lifecycle.marks : null}
             {driver}
-            {!earlier ? <MergeHoldChip count={feedback.blocking} onOpen={() => pickTab("feedback")} /> : null}
+            {!earlier ? <MergeHoldChip count={feedback.blocking} beforePR={heldBeforeItsPullRequest(item)} onOpen={() => pickTab("feedback")} /> : null}
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}

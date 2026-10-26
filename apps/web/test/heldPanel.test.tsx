@@ -123,6 +123,8 @@ describe("a task held on Ask me first", () => {
     expect(open.getAttribute("aria-disabled")).toBe("true");
     expect(document.getElementById(open.getAttribute("aria-describedby")!)?.textContent).toBe("2 feedback items still open");
     expect(named(card, "Done without a pull request")).toBeUndefined();
+    const chip = await until(() => page.querySelector<HTMLElement>("[data-testid=merge-hold]"), "the header's chip");
+    expect(text(chip)).toBe("2 feedback items hold the pull request");
   });
 
   test("round 2 says how many commits since the owner last looked, and what it resolved", async () => {
@@ -151,6 +153,16 @@ describe("a task held on Ask me first", () => {
       "Feedback before the pull request: nothing goes to GitHub. GitHub's reviewers and CI see none of it; it stays on the task.");
     expect(container.textContent).toContain("What holds the pull request");
     expect(container.textContent).not.toContain("What holds the merge");
+  });
+
+  test("the fixture world's held states render the panel each names", async () => {
+    for (const [run, state] of [["held", "yours"], ["held-other", "waiting"], ["held-feedback", "sent-back"], ["held-round-2", "yours"]] as const) {
+      localStorage.setItem("dude.fixtures.run", run);
+      const page = await taskPage(new FixtureClient("d"));
+      const card = await until(() => panel(page), `the panel for ${run}`);
+      expect([run, card.getAttribute("data-state")]).toEqual([run, state]);
+      for (const unmount of mounted.splice(0)) await unmount();
+    }
   });
 
   test("a project whose preview is configured but not running offers Start preview", async () => {

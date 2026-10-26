@@ -119,7 +119,7 @@ const TASK_BASE = {
 export function taskFor(scenario: ServerScenario): TaskDetail {
   const inReview = scenario === "d";
   const status: Task["status"] = inReview ? "review" : "running";
-  const task = { ...TASK_BASE, status, runs: inReview ? RUNS_REVIEW : [RUN_IMPLEMENT], escalation: null } as Omit<TaskDetail, "agentMachines">;
+  const task = { ...TASK_BASE, status, runs: inReview ? RUNS_REVIEW : [RUN_IMPLEMENT], escalation: null, pullRequestOpened: inReview } as Omit<TaskDetail, "agentMachines">;
   return { ...task, agentMachines: [] };
 }
 
