@@ -162,19 +162,23 @@ func (g *GitHub) teamCandidates(ctx context.Context, owner, words string) []Cand
 type StaleReviews struct {
 	// The pull request's head as GitHub has it.
 	Head string
-	// Reviewers whose latest review is on another commit and who are not
-	// asked again already, in the order they first reviewed. Never the
+	// The branch that head is on, and the repository it is in ("o/r"): the
+	// pull request's head lags its branch for a moment after a push.
+	Branch, BranchRepo string
+	// Reviewers whose latest review is on another commit than the one
+	// asked about and who are not asked again already, in the order they
+	// first reviewed. Never the
 	// author, and never an App's account ("Bot", "<slug>[bot]"): GitHub
 	// refuses to request a review of either, and a review App such as
 	// CodeRabbit reviews every push without being asked.
 	Logins []string
 }
 
-// StaleReviewers reads whose review of pull request `number` no longer
-// covers its head: GitHub drops a reviewer from requested_reviewers when
-// they submit, so after a push nobody owes the new head a look until they
-// are asked again.
-func (g *GitHub) StaleReviewers(ctx context.Context, slug string, number int) (StaleReviews, error) {
+// StaleReviewers reads whose review of pull request `number` does not
+// cover commit `of` ("" for the pull request's head as GitHub has it):
+// GitHub drops a reviewer from requested_reviewers when they submit, so
+// after a push nobody owes the new head a look until they are asked again.
+func (g *GitHub) StaleReviewers(ctx context.Context, slug string, number int, of string) (StaleReviews, error) {
 	var p ghPull
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
 		return StaleReviews{}, err
@@ -183,10 +187,17 @@ func (g *GitHub) StaleReviewers(ctx context.Context, slug string, number int) (S
 	if err != nil {
 		return StaleReviews{}, err
 	}
-	return StaleReviews{Head: p.Head.SHA, Logins: staleReviewers(p, reviews)}, nil
+	if of == "" {
+		of = p.Head.SHA
+	}
+	out := StaleReviews{Head: p.Head.SHA, Branch: p.Head.Ref, BranchRepo: slug, Logins: staleReviewers(p, reviews, of)}
+	if p.Head.Repo != nil && p.Head.Repo.FullName != "" {
+		out.BranchRepo = p.Head.Repo.FullName
+	}
+	return out, nil
 }
 
-func staleReviewers(p ghPull, reviews []ghReview) []string {
+func staleReviewers(p ghPull, reviews []ghReview, of string) []string {
 	skip := map[string]bool{}
 	if p.User != nil {
 		skip[strings.ToLower(p.User.Login)] = true
@@ -212,7 +223,7 @@ func staleReviewers(p ghPull, reviews []ghReview) []string {
 	}
 	out := []string{}
 	for _, l := range order {
-		if latest[strings.ToLower(l)].CommitID != p.Head.SHA {
+		if latest[strings.ToLower(l)].CommitID != of {
 			out = append(out, l)
 		}
 	}

@@ -96,6 +96,10 @@ type Server struct {
 	Rerequested, JobsRerun []int64
 	// GitHub has not worked out whether it merges yet (after a push).
 	MergeableUnknown map[int]bool
+	// The head a pull request's read shows instead of its branch's commit,
+	// by pull request: GitHub moves a pull request's head a few seconds
+	// after its branch moves.
+	LaggingHead map[int]string
 	// The collaborator permission endpoint refuses (a token without the
 	// scope).
 	PermissionRefused bool
@@ -968,11 +972,15 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	if p.HeadRepo != "" {
 		headRepo = p.HeadRepo
 	}
+	head := s.SHA(p.Head)
+	if lag := s.LaggingHead[p.Number]; lag != "" {
+		head = lag
+	}
 	return map[string]any{
 		"number": p.Number, "node_id": s.NodeID(p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
 		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title, "body": p.Body,
-		"head":      map[string]any{"sha": s.SHA(p.Head), "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
+		"head":      map[string]any{"sha": head, "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
 		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
 		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels),

@@ -254,15 +254,25 @@ func (c *rerequestClaim) take(ctx context.Context) (done bool, err error) {
 // nil when there was nobody to ask.
 func (c *rerequestClaim) ask(ctx context.Context, gh *forge.GitHub, slug string) (map[string]any, error) {
 	payload := map[string]any{"number": c.number, "repo": c.repo, "head": c.head}
-	stale, err := gh.StaleReviewers(ctx, slug, c.number)
-	switch {
-	case err != nil:
+	stale, err := gh.StaleReviewers(ctx, slug, c.number, c.head)
+	if err != nil {
 		payload["error"] = err.Error()
 		return payload, nil
-	case stale.Head != c.head:
-		// Someone pushed on top of dude's commit since: the head is
-		// theirs, and so is asking for a review of it.
-		return nil, nil
+	}
+	if stale.Head != c.head {
+		// GitHub moves a pull request's head a few seconds after its branch:
+		// read just after dude's push, it can still show the commit before.
+		// The branch says which it is. Someone pushed on top of dude's
+		// commit when the branch is past it: the head is theirs, and so is
+		// asking for a review of it.
+		at, err := gh.BranchSHA(ctx, stale.BranchRepo, stale.Branch)
+		if err != nil {
+			payload["error"] = err.Error()
+			return payload, nil
+		}
+		if at != c.head {
+			return nil, nil
+		}
 	}
 	// A lost holder's login GitHub no longer counts as owing a review took
 	// its request (or has reviewed this head since): not asked again.

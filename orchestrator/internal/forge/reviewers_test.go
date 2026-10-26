@@ -197,7 +197,7 @@ func on(login, state, commit string) fakegithub.Review {
 
 func staleOf(t *testing.T, gh *GitHub) StaleReviews {
 	t.Helper()
-	got, err := gh.StaleReviewers(context.Background(), "acme/api", 1)
+	got, err := gh.StaleReviewers(context.Background(), "acme/api", 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +226,26 @@ func TestStaleReviewersReadsEveryPage(t *testing.T) {
 	}
 }
 
+// Asked about a commit the pull request does not show yet (GitHub moves
+// its head a moment after the branch), a review of the head GitHub shows
+// is stale; one of that commit is not. Head is what GitHub shows, and
+// Branch the branch it is on.
+func TestStaleReviewersOfACommitTheHeadLags(t *testing.T) {
+	fake, gh, head, old := stalePull(t)
+	reviewed(fake, on("ana", "COMMENTED", old), on("bo", "APPROVED", head))
+	fake.Set(func(s *fakegithub.Server) { s.LaggingHead = map[int]string{1: old} })
+	got, err := gh.StaleReviewers(context.Background(), "acme/api", 1, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Head != old || got.Branch != fake.Pull(1).Head || got.BranchRepo != "acme/api" || !slices.Equal(got.Logins, []string{"ana"}) {
+		t.Errorf("stale %+v, want ana, on GitHub's head %s and branch %s", got, old, fake.Pull(1).Head)
+	}
+	if got := staleOf(t, gh); !slices.Equal(got.Logins, []string{"bo"}) {
+		t.Errorf("of GitHub's own head: stale %v, want bo", got.Logins)
+	}
+}
+
 func TestStaleReviewersRejectsAnIncompleteReviewList(t *testing.T) {
 	fake, gh, _, old := stalePull(t)
 	for i := range 150 {
@@ -239,7 +259,7 @@ func TestStaleReviewersRejectsAnIncompleteReviewList(t *testing.T) {
 			return 0
 		}
 	})
-	got, err := gh.StaleReviewers(context.Background(), "acme/api", 1)
+	got, err := gh.StaleReviewers(context.Background(), "acme/api", 1, "")
 	var refusal *Error
 	if !errors.As(err, &refusal) || refusal.Status != http.StatusInternalServerError {
 		t.Fatalf("error = %v, want GitHub 500", err)

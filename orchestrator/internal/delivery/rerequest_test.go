@@ -234,6 +234,50 @@ func TestAHeadSomeonePushedOnTopOfIsNotAskedAbout(t *testing.T) {
 	}
 }
 
+// GitHub shows a pull request's new head a few seconds after its branch
+// moves. Read in between, the pull request still has the commit before
+// dude's fix, while the branch is at the fix: GitHub catching up, not a
+// person's push. The fix's reviewers are asked, and asked about the fix,
+// once.
+func TestAPullRequestWhoseHeadLagsDudesPushStillAsksItsReviewers(t *testing.T) {
+	f := newRerequestFixture(t, "target")
+	before := f.gh["target"].SHA("feature")
+	head := f.fix("target")
+	f.gh["target"].Set(func(s *fakegithub.Server) { s.LaggingHead = map[int]string{1: before} })
+	for range 2 {
+		if err := f.rerequest(map[string]string{"target": head}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asks := f.asks("target")
+	if len(asks) != 1 || !slices.Equal(asks[0].Logins, []string{"jerv"}) {
+		t.Fatalf("review requests %v, want jerv once", asks)
+	}
+	if got := names(f.eventFor("target", head)["reviewersRequested"]); !slices.Equal(got, []string{"jerv"}) {
+		t.Errorf("recorded as asked: %v", got)
+	}
+}
+
+// A person's commit on top of dude's fix, while GitHub still shows the
+// pull request at the commit before the fix: the branch is past dude's
+// commit, so the head is theirs, and nobody is asked.
+func TestALaggingPullRequestWhoseBranchMovedPastTheFixIsNotAskedAbout(t *testing.T) {
+	f := newRerequestFixture(t, "target")
+	before := f.gh["target"].SHA("feature")
+	head := f.fix("target")
+	f.gh["target"].CommitOnTop("feature", "a person's commit on top")
+	f.gh["target"].Set(func(s *fakegithub.Server) { s.LaggingHead = map[int]string{1: before} })
+	if err := f.rerequest(map[string]string{"target": head}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.asks("target"); len(got) != 0 {
+		t.Errorf("asked %v", got)
+	}
+	if e := f.events(); len(e) != 0 {
+		t.Errorf("recorded %v", e)
+	}
+}
+
 // One pull request already done for its head does not end the others':
 // two repositories, each with pull request #1. The first call has only
 // a's head; the second has both, and asks b's reviewers, not a's again.
