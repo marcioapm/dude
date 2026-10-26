@@ -55,8 +55,8 @@ type fakeRelease struct {
 	// assetBase replaces the server's own URL in browser_download_url.
 	assetBase string
 	mu        sync.Mutex
-	requests []string
-	auths    []string
+	requests  []string
+	auths     []string
 }
 
 func (f *fakeRelease) serve(t *testing.T) *httptest.Server {
