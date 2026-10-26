@@ -167,3 +167,83 @@ export interface ProjectSecret {
   updatedAt: string;
   updatedBy: { id: string; name: string } | null;
 }
+
+// ---------------------------------------------------------------------------
+// Organisation secrets: project secrets one level up (migration 210). Each
+// reaches the agents it is ticked for in every project; a project secret of
+// the same name takes its place in that project.
+// ---------------------------------------------------------------------------
+
+/** An organisation's secret, as the API shows it: never its value. */
+export type OrgSecret = ProjectSecret;
+
+/** An organisation secret as Organisation settings → Secrets lists it. */
+export interface OrgSecretListing extends OrgSecret {
+  /** Projects holding a secret of the same name, whose agents get that one instead. */
+  overriddenIn: { id: string; name: string }[];
+  /** Automations that pick it; null for a caller who may not see them (not an admin). */
+  pickedBy: { id: string; name: string; projectId: string | null }[] | null;
+}
+
+/** `GET /v1/organizations/:id/secrets` */
+export interface OrgSecretsResponse {
+  organization: { id: string; name: string };
+  secrets: OrgSecretListing[];
+}
+
+/** An organisation secret may be ticked for nobody: automations that pick it still get it. */
+export const orgSecretRecipientsSchema = z.array(z.enum(SECRET_RECIPIENTS))
+  .refine((names) => new Set(names).size === names.length, "Choose each recipient only once.");
+export const changeOrgSecretRecipientsSchema = z.object({ recipients: orgSecretRecipientsSchema }).strict();
+
+/** `POST /v1/organizations/:id/secrets` */
+export const addOrgSecretSchema = z.object({
+  name: secretNameSchema,
+  value: secretValueSchema,
+  recipients: orgSecretRecipientsSchema.default(() => []),
+}).strict();
+
+/** Said in the recipients dialog and the table when an organisation secret is ticked for nobody. */
+export const ORG_SECRET_NOBODY = "Only automations that pick it";
+
+/** Why `name` cannot be added to the organisation's secrets, or null. */
+export function orgSecretNameProblem(name: string, secrets: readonly string[]): { kind: "invalid" | "conflict"; message: string } | null {
+  const shape = secretNameShapeProblem(name);
+  if (shape) return { kind: "invalid", message: shape };
+  if (secrets.includes(name)) return { kind: "conflict", message: duplicateSecretMessage(name) };
+  return null;
+}
+
+export const SECRET_SOURCES = ["organization", "project"] as const;
+export type SecretSource = typeof SECRET_SOURCES[number];
+
+/** An automation's pick of one secret: both levels can hold a name, so the pick names its level. */
+export const secretRefSchema = z.object({
+  source: z.enum(SECRET_SOURCES),
+  name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/),
+}).strict();
+export type SecretRef = z.infer<typeof secretRefSchema>;
+
+export function sameSecretRef(a: SecretRef, b: SecretRef): boolean {
+  return a.source === b.source && a.name === b.name;
+}
+
+export interface ResolvedSecret<T extends { name: string } = ProjectSecret> {
+  source: SecretSource;
+  secret: T;
+  /** An organisation row whose name the project holds: agents there get the project's. */
+  overridden: boolean;
+}
+
+/**
+ * A project's secrets as its agents get them by name: the project's own
+ * first, then the organisation's, each organisation row the project
+ * holds a name of marked overridden.
+ */
+export function resolveSecrets<T extends { name: string }>(org: readonly T[], project: readonly T[]): ResolvedSecret<T>[] {
+  const own = new Set(project.map((s) => s.name));
+  return [
+    ...project.map((secret) => ({ source: "project" as const, secret, overridden: false })),
+    ...org.map((secret) => ({ source: "organization" as const, secret, overridden: own.has(secret.name) })),
+  ];
+}

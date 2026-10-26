@@ -274,7 +274,7 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
         image_id = ${input.imageId}, setup_script = ${input.setupScript}, command = ${input.command},
         server = ${input.server}::jsonb, webhook = ${input.webhook}::jsonb,
         webhook_secret = CASE WHEN ${input.kind} = 'webhook' THEN COALESCE(webhook_secret, ${newSigningSecret()}) ELSE webhook_secret END,
-        secrets = ${scope.sql.array(input.secrets, "text")}::text[], notify_on_failure = ${input.notifyOnFailure},
+        secrets = ${input.secrets}::jsonb, notify_on_failure = ${input.notifyOnFailure},
         next_run_at = CASE WHEN ${triggerChanged} THEN NULL ELSE next_run_at END,
         updated_by = ${ctx.principal.personId}, updated_at = now()
       WHERE id = ${id}`;

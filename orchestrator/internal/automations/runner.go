@@ -187,9 +187,11 @@ type Automation struct {
 	Server                         json.RawMessage
 	Webhook                        json.RawMessage
 	WebhookSecret                  string
-	Secrets                        []string
-	NotifyOnFailure                bool
-	NextRunAt                      *time.Time
+	// [{source: organization|project, name}] (migration 210); runs get
+	// what automation_secrets_given resolves them to.
+	Secrets         json.RawMessage
+	NotifyOnFailure bool
+	NextRunAt       *time.Time
 }
 
 func (a Automation) policy() Policy {
@@ -2062,7 +2064,7 @@ func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payl
 				in.Repos[i].Setup = a.SetupScript
 			}
 		}
-		if in.Secrets, err = projectSecrets(ctx, tx, a); err != nil {
+		if in.Secrets, err = givenSecrets(ctx, tx, a); err != nil {
 			return err
 		}
 		var orgEgress, projectEgress []string
@@ -2194,23 +2196,20 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// projectSecrets are the chosen secrets' values, as env. An organisation
-// automation has none to choose from (secrets are a project's).
-func projectSecrets(ctx context.Context, tx pgx.Tx, a Automation) ([]lux.Secret, error) {
-	if a.ProjectID == "" || len(a.Secrets) == 0 {
-		return nil, nil
-	}
-	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2) ORDER BY name`, a.ProjectID, a.Secrets)
+// givenSecrets are the values a run gets, as env (automation_secrets_given,
+// migration 210): an own agent's, a command's or a server's picks, an
+// organisation pick whose name the project holds resolving to the
+// project's value now; a dude-role preset's, what its role is ticked for
+// at both levels, the project's winning a name.
+func givenSecrets(ctx context.Context, tx pgx.Tx, a Automation) ([]lux.Secret, error) {
+	rows, err := tx.Query(ctx, `SELECT name, value FROM automation_secrets_given($1)`, a.ID)
 	if err != nil {
 		return nil, err
 	}
-	var out []lux.Secret
-	var name, value string
-	_, err = pgx.ForEachRow(rows, []any{&name, &value}, func() error {
-		out = append(out, lux.Secret{Name: name, Value: value, As: "env"})
-		return nil
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (lux.Secret, error) {
+		s := lux.Secret{As: "env"}
+		return s, row.Scan(&s.Name, &s.Value)
 	})
-	return out, err
 }
 
 func slugOf(url string) string { return forge.SlugFromURL(url) }

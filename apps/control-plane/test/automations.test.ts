@@ -437,16 +437,26 @@ describe("delete and duplicate", () => {
 });
 
 describe("secrets scope", () => {
-  test("an organisation automation refuses secret names; a project automation accepts them", async () => {
-    const settings = { name: "Secrets", kind: "command", trigger: { kind: "schedule", cron: "0 3 * * *", tz: "UTC" },
-      command: "run-report", secrets: ["ACME_TOKEN"] };
+  const settings = (secrets: unknown) => ({ name: "Secrets", kind: "command", trigger: { kind: "schedule", cron: "0 3 * * *", tz: "UTC" },
+    command: "run-report", secrets });
+
+  test("an organisation automation picks the organisation's secrets and refuses a project's", async () => {
     const { body: org } = await create("ana", { name: "Secrets", kind: "command", trigger: "schedule" });
-    const denied = await call("ana", "PUT", `/v1/automations/${org.id}`, settings);
+    const denied = await call("ana", "PUT", `/v1/automations/${org.id}`, settings([{ source: "project", name: "ACME_TOKEN" }]));
     expect(denied.status).toBe(400);
-    const { body: project } = await create("ana", { name: "Secrets", kind: "command", trigger: "schedule", projectId: WEB });
-    const saved = await call("ana", "PUT", `/v1/automations/${project.id}`, settings);
+    const saved = await call("ana", "PUT", `/v1/automations/${org.id}`, settings([{ source: "organization", name: "GH_TOKEN" }]));
     expect(saved.status).toBe(200);
-    expect((await body(saved)).secrets).toEqual(["ACME_TOKEN"]);
+    expect((await body(saved)).secrets).toEqual([{ source: "organization", name: "GH_TOKEN" }]);
+  });
+
+  test("a project automation picks both levels' secrets, each by its source", async () => {
+    const picks = [{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }];
+    const { body: project } = await create("ana", { name: "Secrets", kind: "command", trigger: "schedule", projectId: WEB });
+    const saved = await call("ana", "PUT", `/v1/automations/${project.id}`, settings(picks));
+    expect(saved.status).toBe(200);
+    expect((await body(saved)).secrets).toEqual(picks);
+    // A bare name, the old shape, is refused: the pick must say which level.
+    expect((await call("ana", "PUT", `/v1/automations/${project.id}`, settings(["GH_TOKEN"]))).status).toBe(400);
   });
 });
 
