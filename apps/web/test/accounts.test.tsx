@@ -608,7 +608,8 @@ describe("your settings: keys by organisation", () => {
     await click(byTestId(dialog, "key-create")!);
     const shown = await until(() => byTestId(document, "key-usage"), "the key, shown once");
     expect(w.calls.find((c) => c.method === "createMyKey")!.args).toEqual(["Laptop", NORTHWIND.id]);
-    expect(shown.textContent).toBe(`curl -H "authorization: Bearer dude_sk_new2" ${location.origin}/v1/me\n# acts as you in Northwind; its answer names the organisation and your role`);
+    expect(shown.textContent).toBe(`dude login ${location.origin}\n# paste the key when asked: the dude CLI then acts as you in Northwind`);
+    expect(shown.textContent).not.toContain("dude_sk_new2");
     expect(text(shown.parentElement!.querySelector(".ds-label"))).toBe("How to use it");
     expect(text(document.querySelector("[role=dialog]"))).not.toContain("--org");
     expect(text(document.querySelector("[role=dialog] h2"))).toBe("Key “Laptop” for Northwind");

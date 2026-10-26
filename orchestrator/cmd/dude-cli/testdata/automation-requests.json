@@ -1,0 +1,403 @@
+[
+  {
+    "args": [
+      "automations"
+    ],
+    "route": "GET /v1/automations"
+  },
+  {
+    "args": [
+      "automations",
+      "--scope",
+      "project",
+      "--trigger",
+      "github",
+      "--kind",
+      "agent:reviewer",
+      "--enabled",
+      "true",
+      "--mine",
+      "--name",
+      "triage"
+    ],
+    "route": "GET /v1/automations",
+    "query": {
+      "enabled": "true",
+      "kind": "agent:reviewer",
+      "owner": "mine",
+      "q": "triage",
+      "scope": "project",
+      "trigger": "github"
+    }
+  },
+  {
+    "args": [
+      "automations",
+      "ABS"
+    ],
+    "route": "GET /v1/projects/:id/automations"
+  },
+  {
+    "args": [
+      "automation",
+      "aut_1"
+    ],
+    "route": "GET /v1/automations/:id"
+  },
+  {
+    "args": [
+      "automation-create",
+      "--name",
+      "Morning digest",
+      "--kind",
+      "agent",
+      "--trigger",
+      "schedule",
+      "--tz",
+      "Europe/Lisbon"
+    ],
+    "route": "POST /v1/automations",
+    "body": {
+      "kind": "agent",
+      "name": "Morning digest",
+      "trigger": "schedule",
+      "tz": "Europe/Lisbon"
+    }
+  },
+  {
+    "args": [
+      "automation-create",
+      "ABS",
+      "--name",
+      "Review",
+      "--kind",
+      "agent",
+      "--trigger",
+      "github",
+      "--preset",
+      "reviewer"
+    ],
+    "route": "POST /v1/automations",
+    "body": {
+      "kind": "agent",
+      "name": "Review",
+      "preset": "reviewer",
+      "projectId": "prj_1",
+      "trigger": "github"
+    }
+  },
+  {
+    "args": [
+      "automation-create",
+      "--name",
+      "Release hook",
+      "--kind",
+      "webhook",
+      "--trigger",
+      "github"
+    ],
+    "route": "POST /v1/automations",
+    "body": {
+      "kind": "webhook",
+      "name": "Release hook",
+      "trigger": "github"
+    }
+  },
+  {
+    "args": [
+      "automation-update",
+      "aut_1",
+      "testdata/automation-get.json"
+    ],
+    "route": "PUT /v1/automations/:id",
+    "body": {
+      "agent": {
+        "own": {
+          "prompt": "Summarise yesterday's merged pull requests for the team."
+        }
+      },
+      "command": null,
+      "concurrency": "queue",
+      "description": "",
+      "expiryDays": null,
+      "imageId": null,
+      "kind": "agent",
+      "machineSizeId": null,
+      "name": "Morning digest",
+      "notifyOnFailure": true,
+      "parallelMax": 2,
+      "repoFilter": null,
+      "repos": "all",
+      "secrets": [],
+      "server": null,
+      "sessionMode": "ephemeral",
+      "setupScript": null,
+      "trigger": {
+        "cron": "0 9 * * 1-5",
+        "kind": "schedule",
+        "tz": "Europe/Lisbon"
+      },
+      "webhook": null
+    },
+    "scope": "organization"
+  },
+  {
+    "args": [
+      "automation-enable",
+      "aut_1"
+    ],
+    "route": "PUT /v1/automations/:id/enabled",
+    "body": {
+      "enabled": true
+    }
+  },
+  {
+    "args": [
+      "automation-disable",
+      "aut_1"
+    ],
+    "route": "PUT /v1/automations/:id/enabled",
+    "body": {
+      "enabled": false
+    }
+  },
+  {
+    "args": [
+      "automation-delete",
+      "aut_1"
+    ],
+    "route": "DELETE /v1/automations/:id"
+  },
+  {
+    "args": [
+      "automation-duplicate",
+      "aut_1"
+    ],
+    "route": "POST /v1/automations/:id/duplicate"
+  },
+  {
+    "args": [
+      "automation-owner",
+      "aut_1",
+      "per_2"
+    ],
+    "route": "PUT /v1/automations/:id/owner",
+    "body": {
+      "personId": "per_2"
+    }
+  },
+  {
+    "args": [
+      "automation-secret",
+      "aut_1"
+    ],
+    "route": "PUT /v1/automations/:id/webhook-secret",
+    "body": {
+      "secret": "test-signing-secret-0123"
+    }
+  },
+  {
+    "args": [
+      "automation-run",
+      "aut_1"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {}
+  },
+  {
+    "args": [
+      "automation-run",
+      "aut_gh",
+      "--delivery",
+      "dlv_1"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {
+      "deliveryId": "dlv_1"
+    }
+  },
+  {
+    "args": [
+      "automation-run",
+      "aut_gh",
+      "--body",
+      "-",
+      "--action",
+      "opened",
+      "--delivery-id",
+      "test-1"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {
+      "testEvent": {
+        "action": "opened",
+        "body": {
+          "action": "opened",
+          "pull_request": {
+            "number": 7
+          }
+        },
+        "deliveryId": "test-1",
+        "event": "pull_request"
+      }
+    }
+  },
+  {
+    "args": [
+      "automation-run",
+      "aut_gh",
+      "--body",
+      "-",
+      "--action",
+      "opened",
+      "--delivery-id",
+      "test-3"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {
+      "testEvent": {
+        "action": "opened",
+        "body": {
+          "action": "opened",
+          "pull_request": {
+            "number": 7
+          }
+        },
+        "deliveryId": "test-3",
+        "event": "pull_request"
+      }
+    }
+  },
+  {
+    "args": [
+      "automation-run",
+      "aut_gh",
+      "--body",
+      "-",
+      "--event",
+      "issues",
+      "--delivery-id",
+      "test-2"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {
+      "testEvent": {
+        "action": null,
+        "body": {
+          "issue": {
+            "number": 3
+          }
+        },
+        "deliveryId": "test-2",
+        "event": "issues"
+      }
+    }
+  },
+  {
+    "args": [
+      "automation-runs",
+      "aut_1",
+      "--status",
+      "failed",
+      "--limit",
+      "10"
+    ],
+    "route": "GET /v1/automations/:id/runs",
+    "query": {
+      "limit": "10",
+      "status": "failed"
+    }
+  },
+  {
+    "args": [
+      "automation-run-show",
+      "aut_1",
+      "arn_1"
+    ],
+    "route": "GET /v1/automations/:id/runs/:runId"
+  },
+  {
+    "args": [
+      "automation-deliveries",
+      "aut_gh"
+    ],
+    "route": "GET /v1/automations/:id/deliveries"
+  },
+  {
+    "args": [
+      "automation-test",
+      "aut_gh",
+      "-"
+    ],
+    "route": "POST /v1/automations/:id/test-event/evaluate",
+    "body": {
+      "body": {
+        "action": "opened",
+        "pull_request": {
+          "number": 7
+        }
+      }
+    }
+  },
+  {
+    "args": [
+      "automation-start-fresh",
+      "aut_1"
+    ],
+    "route": "POST /v1/automations/:id/start-fresh"
+  },
+  {
+    "args": [
+      "automation-prompts",
+      "aut_1"
+    ],
+    "route": "GET /v1/automations/:id/prompt-history"
+  },
+  {
+    "args": [
+      "automation-prompt-restore",
+      "aut_1",
+      "1"
+    ],
+    "route": "POST /v1/automations/:id/prompt-history/restore",
+    "body": {
+      "versionId": "apv_1"
+    }
+  },
+  {
+    "args": [
+      "automation-prompt-restore",
+      "aut_1",
+      "apv_2"
+    ],
+    "route": "POST /v1/automations/:id/prompt-history/restore",
+    "body": {
+      "versionId": "apv_2"
+    }
+  },
+  {
+    "args": [
+      "automation-repos"
+    ],
+    "route": "GET /v1/automations/repositories"
+  },
+  {
+    "args": [
+      "automation-next",
+      "0 9 * * 1-5",
+      "--tz",
+      "Europe/Lisbon"
+    ],
+    "route": "POST /v1/automations/schedule/next",
+    "body": {
+      "cron": "0 9 * * 1-5",
+      "tz": "Europe/Lisbon"
+    }
+  },
+  {
+    "args": [
+      "automation-subscriptions"
+    ],
+    "route": "GET /v1/automations/subscriptions"
+  }
+]

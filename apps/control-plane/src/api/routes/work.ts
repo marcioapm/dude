@@ -402,9 +402,30 @@ async function listTasks(ctx: RequestContext): Promise<Response> {
   return json({ tasks });
 }
 
+/**
+ * A task's id from its id or its key (WEB-7, web-007), in the caller's
+ * organisation, archived or not; the key match is relations.ts findTask's.
+ */
+async function taskIdOf(scope: OrgScope, ref: string): Promise<string | null> {
+  // Two queries, not one OR: an OR across the join can't use either index.
+  const byId = (await scope.sql`
+    SELECT id FROM tasks WHERE organization_id = ${scope.organizationId} AND id = ${ref}`) as Array<{ id: string }>;
+  if (byId[0]) return byId[0].id;
+  const m = /^([A-Za-z][A-Za-z0-9]*)-0*([0-9]+)$/.exec(ref.trim());
+  if (!m) return null;
+  const byKey = (await scope.sql`
+    SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id
+    WHERE p.organization_id = ${scope.organizationId} AND upper(p.key_prefix) = upper(${m[1]!})
+      AND t.number = ${Number(m[2])}
+    LIMIT 1`) as Array<{ id: string }>;
+  return byKey[0]?.id ?? null;
+}
+
 async function getTask(ctx: RequestContext): Promise<Response> {
-  const id = ctx.params.id!;
+  const ref = ctx.params.id!;
   const task = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const id = await taskIdOf(scope, ref);
+    if (!id) return null;
     const rows = (await scope.sql`
       SELECT ${scope.sql.unsafe(TASK_SELECT)}, ${scope.sql.unsafe(escalationJson())}
       FROM tasks WHERE id = ${id}`) as Array<
@@ -413,12 +434,12 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     if (!rows[0]) return null;
     const runs = await scope.sql`
       SELECT ${runSelect(scope.sql)} FROM runs WHERE task_id = ${id}
-      ORDER BY attempt DESC`;
-    return { ...rows[0], runs };
+      ORDER BY attempt DESC, created_at DESC, id DESC`;
+    return { ...rows[0], id, runs };
   });
 
-  if (!task) throw notFound(`task ${id} not found`);
-  return json({ ...task, agentMachines: await agentMachines(ctx, { taskId: id }) });
+  if (!task) throw notFound(`task ${ref} not found`);
+  return json({ ...task, agentMachines: await agentMachines(ctx, { taskId: task.id as string }) });
 }
 
 // ---------------------------------------------------------------------------

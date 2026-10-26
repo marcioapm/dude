@@ -41,7 +41,7 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */
-const COLUMNS = `a.id, a.project_id AS "projectId", p.name AS "projectName", a.name, a.description, a.kind, a.enabled,
+export const COLUMNS = `a.id, a.project_id AS "projectId", p.name AS "projectName", a.name, a.description, a.kind, a.enabled,
   a.owner_id AS "ownerId", a.owner_left_at AS "ownerLeftAt", a.trigger, a.session_mode AS "sessionMode",
   a.expiry_days AS "expiryDays", a.concurrency, a.parallel_max AS "parallelMax", a.repos, a.repo_filter AS "repoFilter",
   a.agent, a.machine_size_id AS "machineSizeId", a.image_id AS "imageId", a.setup_script AS "setupScript", a.command,
@@ -61,7 +61,8 @@ async function canEdit(ctx: RequestContext, projectId: string | null): Promise<b
   return projectId ? canEditProject(ctx, projectId) : isOrgAdmin(ctx);
 }
 
-async function shape(ctx: RequestContext, row: Row): Promise<Automation> {
+/** A row as every read answers it. No query of its own: access reads ctx.principal. */
+export async function shape(ctx: RequestContext, row: Row): Promise<Automation> {
   const { ownerId, ...rest } = row;
   const admin = await isOrgAdmin(ctx);
   const lastRun = rest.lastRun ? { ...rest.lastRun, at: iso(rest.lastRun.at)! } : null;
@@ -107,7 +108,7 @@ async function record(scope: OrgScope, ctx: RequestContext | null, a: { id: stri
 // Lists
 // ---------------------------------------------------------------------------
 
-const listQuery = z.object({
+export const listQuery = z.object({
   scope: z.enum(["organization", "project"]).optional(),
   project: z.string().min(1).optional(),
   trigger: z.enum(["schedule", "github"]).optional(),
@@ -198,7 +199,7 @@ async function getAutomation(ctx: RequestContext): Promise<Response> {
   return json(await shape(ctx, row));
 }
 
-const createSchema = newAutomationSchema.extend({
+export const createSchema = newAutomationSchema.extend({
   projectId: z.string().min(1).nullable().default(null),
   tz: z.string().max(64).default("UTC"),
 });
@@ -409,7 +410,7 @@ const RUN_COLUMNS = `r.id, r.automation_id AS "automationId", r.status, r.reason
   jsonb_array_length(r.payloads) AS "payloadCount",
   (SELECT json_build_object('id', p.id, 'name', p.name, 'photoUrl', person_ref(p)->>'photoUrl') FROM people p WHERE p.id = r.started_by) AS "startedBy"`;
 
-const runsQuery = z.object({
+export const runsQuery = z.object({
   status: z.enum(["queued", "running", "succeeded", "failed", "skipped", "cancelled"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -556,12 +557,15 @@ function forward(ctx: RequestContext, method: string, path: string, body?: strin
   return orchestrator(ctx.principal.organizationId, method, path, body, ctx.principal);
 }
 
-const runNowBody = z.union([
+export const runNowBody = z.union([
   z.object({}).strict(),
   z.object({ deliveryId: z.string().min(1).max(200) }).strict(),
   z.object({ testEvent: z.object({ event: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), action: z.string().max(64).nullable().optional(),
     deliveryId: z.string().min(1).max(200), body: z.record(z.unknown()) }).strict() }).strict(),
 ]);
+
+export const evaluateBody = z.object({ body: z.record(z.unknown()) }).strict();
+export const scheduleNextBody = z.object({ cron: z.string().min(1).max(200), tz: z.string().min(1).max(64) }).strict();
 
 async function runNow(ctx: RequestContext): Promise<Response> {
   const id = ctx.params.id!;
@@ -571,7 +575,7 @@ async function runNow(ctx: RequestContext): Promise<Response> {
 }
 
 async function evaluateTestEvent(ctx: RequestContext): Promise<Response> {
-  const input = await parseBody(ctx.request, z.object({ body: z.record(z.unknown()) }).strict());
+  const input = await parseBody(ctx.request, evaluateBody);
   return forward(ctx, "POST", `/internal/automations/${encodeURIComponent(ctx.params.id!)}/test-event/evaluate`, JSON.stringify(input));
 }
 
@@ -587,7 +591,7 @@ export function registerAutomationRoutes(router: Router): void {
   router.get("/v1/automations/repositories", orgRepositories);
   // A schedule's next three times: the orchestrator's scheduler computes them.
   router.post("/v1/automations/schedule/next", async (ctx) => {
-    const input = await parseBody(ctx.request, z.object({ cron: z.string().min(1).max(200), tz: z.string().min(1).max(64) }).strict());
+    const input = await parseBody(ctx.request, scheduleNextBody);
     return forward(ctx, "POST", "/internal/automations/schedule/next", JSON.stringify(input));
   });
   // The GitHub events this organisation is subscribed to: the orchestrator reads GitHub.

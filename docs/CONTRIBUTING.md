@@ -1075,7 +1075,7 @@ Each of these cost real time.
 | --- | --- | --- |
 | Go unit | `orchestrator/internal/*` | Workflow runtime, policy, classifier, parsers — against a real Postgres |
 | Go integration | `orchestrator/delivery_test.go` | Whole deliveries through the orchestrator's real code, against a fake lux and a fake GitHub backed by real git |
-| TS unit | `apps/control-plane/test` | The ledger, the live stream, webhook signatures |
+| TS unit | `apps/control-plane/test` | The ledger, the live stream, webhook signatures; `cli-routes.test.ts`: every authenticated `/v1/` route has a dude CLI command or an `apiOnly` reason in `orchestrator/cmd/dude-cli/routes.json`, and `cli-bodies.test.ts`: the CLI's recorded automation request bodies parse with their routes' schemas (neither needs a database) |
 | E2E | `tests/suites` | The deployed processes through the public API and the built UI, with the fake lux and a fake GitHub that delivers signed webhooks |
 | Contract | `tests/suites/test_lux_contract.py` (`--lux`) | The same flows against a real lux |
 | Browser | `tests/suites/test_web_ui.py`, `test_gallery_ui.py` | The web app and the design system, in system Chrome (Playwright's bundled Chromium with `DUDE_TEST_BROWSER_CHANNEL=` empty, where there is no Chrome) |
@@ -1117,6 +1117,7 @@ The `go`, `ts` and `e2e` jobs each have their own
 | `ts` | `bun run typecheck`, `bun run migrate` then `bun test` with `DATABASE_URL` at that Postgres, and `tests/suites/test_shard.py` (the shard split, no environment). |
 | `e2e (n/6)` | `tests/run_tests.py --shard n/6`, with Google Chrome for the browser suites and Docker for the test S3. The log directory is uploaded when a shard fails. |
 | `image-builder` | `scripts/test-image-builder.sh`, after delegating the `cpu` and `memory` cgroup controllers to the runner's user manager, in a scope of that user's systemd. |
+| `cli` (`cli.yml`, only when the CLI, `apps/control-plane/src/api`, `packages/domain/src` or the `cli-*` tests change) | No database: `go vet` (linux and windows) and `go test` of `./cmd/dude-cli/...`, then `cli-routes.test.ts` and `cli-bodies.test.ts`; and `go vet` + `go test` on macOS (`cli-macos`). Windows is built and vetted, not run. 5-minute limit. |
 
 Expected skips in `go`: the podman tests in `internal/images` (they need
 `DUDE_PODMAN_TEST_REGISTRY`, set by `scripts/test-image-builder.sh`) and
@@ -1238,6 +1239,7 @@ In rough priority order.
 
 | Change what an automation matches, when it fires, or how it runs | `orchestrator/internal/automations/` (`match.go`, `cron.go`, `concurrency.go`, `runner.go`); its spec, `orchestrator/internal/phases/automation.go` |
 | Change automations' API or who may change them | `apps/control-plane/src/api/routes/automations.ts`, rules in `packages/domain/src/automations.ts` |
+| Add or change an API route | also `orchestrator/cmd/dude-cli/routes.json`: the CLI command, or `apiOnly` and why (docs/cli.md, "Adding a command") |
 | Change how a chat mention is routed | `orchestrator/internal/chat/route.go`, `decide.go`, `make.go` |
 | Add or change a chat provider | `orchestrator/internal/chat/chat.go` (the interface), `internal/chat/slack`, `internal/fakeslack` |
 | Change the chat settings pages | `apps/web/src/screens/ChatSettings.tsx`, `apps/control-plane/src/api/routes/chat.ts` |

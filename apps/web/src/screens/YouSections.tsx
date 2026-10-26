@@ -1,6 +1,6 @@
 /**
  * Your profile and your keys, in your settings: how teammates see you
- * (name, photo), and the keys that act as you (scripts, the HTTP API).
+ * (name, photo), and the keys that act as you (the dude CLI, scripts, the HTTP API).
  *
  * A photo is resized in the browser and uploaded as an image (FacePicker).
  */
@@ -110,7 +110,7 @@ export interface KeyGroup {
 
 /**
  * Your keys, grouped by the organisation each acts in, each group with New
- * key for it. A key made here is shown once, with a request that uses it.
+ * key for it. A key made here is shown once, with the dude login line to use it.
  */
 export function KeysSection({ client, groups }: {
   /** Reads your keys across organisations: the credential naming none. */
@@ -135,7 +135,7 @@ export function KeysSection({ client, groups }: {
       <CardHeader title="Keys" />
       <CardBody>
         <FormStack>
-          <p className="muted">For scripts and the HTTP API: send a key as a bearer token. A key acts as you in one organisation; make one in each you work in.</p>
+          <p className="muted">For the dude CLI, scripts and the HTTP API (a bearer token). A key acts as you in one organisation; make one in each you work in.</p>
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
           {groups.map((g) => {
             const own = keysOf(g);
@@ -190,7 +190,7 @@ export function KeysSection({ client, groups }: {
       ) : null}
       {made ? (
         <KeyShownOnce title={`Key “${made.name}” for ${made.group.name}`} secret={made.key} onClose={() => setMade(null)}
-          usage={`curl -H "authorization: Bearer ${made.key}" ${window.location.origin}/v1/me\n# acts as you in ${made.group.name}; its answer names the organisation and your role`} />
+          usage={`dude login ${window.location.origin}\n# paste the key when asked: the dude CLI then acts as you in ${made.group.name}`} />
       ) : null}
       {revoking ? (
         <RevokeKeyDialog client={client} apiKey={revoking} onClose={() => setRevoking(null)} onRevoked={load} />
