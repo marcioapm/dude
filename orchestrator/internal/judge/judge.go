@@ -100,7 +100,9 @@ func messages(question, context string) []llm.Message {
 
 // call is the request a question on t is sent as. No temperature: the
 // proxy refuses one for the Claude models ("Bad request", seen live on
-// every tier), and a reasoning model ignores it anyway.
+// every tier). A non-reasoning model then samples at its provider's
+// default, so a repeated question can differ; the answer is parsed
+// tolerantly and a failure falls back, so nothing relies on it.
 func call(t Tier, question, context string) llm.Call {
 	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question, context),
 		MaxTokens: maxTokens}
