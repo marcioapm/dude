@@ -799,7 +799,9 @@ their creator.
   what the role's value is and Reset (back to following it). Each field is
   independent; `spec()` applies `agent.preset.overrides` after the role's settings.
 - **Agent tools.** A run gets exactly `create_task`, `github_search`,
-  `github_issue`, `github_pull_request`, `github_check_log` and `github_comment`.
+  `github_issue`, `github_pull_request`, `github_check_log`, `github_comment`
+  and `post_to_chat`, listed on its page's Agent section as the Tools card
+  (DS `AgentTools`, app `automationTools.tsx`).
   The runner issues a stable per-run tools token (`RunToken`, retried starts
   use the same one) into the MCP service and CLI's `DUDE_TOOLS_AUTH` secret;
   its hash and scope live on `automation_runs`. The tool server's sibling
@@ -812,6 +814,39 @@ their creator.
   repository; with none (for example on a schedule), it refuses clearly.
   The task's `created_by_automation_run_id` and `task.created` event name
   the automation run, automation and owner it acts for.
+- **post_to_chat.** Every automation agent has it (no per-automation switch,
+  no channel allowlist): `{channel, text}` posts Slack mrkdwn as a new message
+  (no thread) through the organisation's Slack installation, as its bot, and
+  answers `{channel, ts, permalink}` (`agenttools/post_to_chat.go`). `channel`
+  is a name (`#engineering` or `engineering`, found with
+  `conversations.list`, `slack.FindChannel`) or an id. `text` is 1–40,000
+  characters (Slack's limit; past a block's 3,000 it goes as the message's
+  plain text, `slack.PostText`); like every tool call's arguments it is
+  redacted with the run's secret values before it leaves dude. **10 posts a
+  run**: the 11th is refused ("post_to_chat is limited to 10 messages per
+  run"), counted from the ledger as `limit(...)` counts, attempts included
+  (`countingAttempts`), so a post Slack refused still spends one. Refusals
+  say how to fix them: an unknown channel or one the bot is not in names
+  `/invite @dude`. Each post is a `chat.message.posted` event (channel, ts,
+  permalink) and each refused post a `chat.message.refused` one (its words),
+  on the run. `chat:write`, already among `slack.BotScopes`, covers posting
+  in a channel the bot is in; no scope changes.
+- **Without Slack.** A run still starts (dude cannot tell from a prompt
+  whether it will post). Its `post_to_chat` is refused with "Slack is not
+  connected for <org>: an organisation admin adds dude's Slack app in
+  Organisation settings → Chat", recorded with code `not_connected`; when the
+  agent's turn ends the run ends **failed** with "post_to_chat failed: Slack
+  is not connected for <org>" (`automations/post_to_chat.go`), and its owner
+  is told as for any failure. The page's Tools card shows the attention
+  callout on post_to_chat's row, linking Organisation settings → Chat.
+- **A run's tool calls.** `GET /v1/automations/:id/runs/:runId` carries
+  `toolCalls`, read from the run's ledger events (`agent.tool.dude`, the
+  attempt before it for its duration, and the post/refusal events above); a
+  post's text is never repeated there. The run detail shows them under Log,
+  each a `ToolCallCard` beside its time (`ToolCallRow`): a post with
+  `icon="slack"` and "Posted to **#channel** · Open the message in Slack", a
+  refused call with its error; a run that failed on post_to_chat says so in a
+  danger callout under Run.
 - **Prompt editor and history.** Own prompt and preset brief both use
   `MarkdownDocument`, `{{ }}` inserting `AUTOMATION_PROMPT_VARIABLES`.
   `automation_prompt_versions` (migration 183, the `prompt_versions` pattern)
@@ -982,7 +1017,10 @@ noted for the installation's health, never retried.
 `https://slack.com/api`; the fake's in tests). The Slack app's Event
 Subscriptions and Interactivity URLs are `<public_url>/v1/webhooks/chat/slack/events`
 and `…/interactions`; its redirect URLs `<public_url>/v1/chat/slack/install/callback`
-and `…/connect/callback`; its bot scopes `slack.BotScopes`.
+and `…/connect/callback`; its bot scopes `slack.BotScopes`. An automation's
+`post_to_chat` uses the same installation and scopes: `chat:write` to post in
+a channel the bot is in, `channels:read`/`groups:read` to find a channel by
+name (`conversations.list`).
 
 ## Decisions already made
 
