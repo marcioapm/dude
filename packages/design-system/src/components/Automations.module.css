@@ -314,7 +314,7 @@
   grid-column: 1 / -1;
   font-size: var(--ds-text-xs);
 }
-@container (max-width: 520px) {
+@container (max-width: 400px) {
   .tools {
     grid-template-columns: minmax(0, 1fr);
     row-gap: var(--ds-space-2);

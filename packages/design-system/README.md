@@ -3039,7 +3039,7 @@ densities. No tone of their own: an automation's state is its runs'
 - **AgentTools** (`tools`, `unavailable?`): the tools an automation's agent
   can call. Each is a wrench glyph, the mono name, an info "New" badge when
   `fresh`, and its one line, in two columns that stack when narrow (the
-  list's own width under 520px, as a container query). An
+  list's own width under 400px, as a container query). An
   unavailable tool keeps its row and gets an attention `Callout` under it
   with the reason and the fix as a link.
 - **Settings rows stack below 720px.** `SettingRow` puts its label over its
