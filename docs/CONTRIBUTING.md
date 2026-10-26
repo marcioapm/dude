@@ -1117,7 +1117,7 @@ The `go`, `ts` and `e2e` jobs each have their own
 | `ts` | `bun run typecheck`, `bun run migrate` then `bun test` with `DATABASE_URL` at that Postgres, and `tests/suites/test_shard.py` (the shard split, no environment). |
 | `e2e (n/6)` | `tests/run_tests.py --shard n/6`, with Google Chrome for the browser suites and Docker for the test S3. The log directory is uploaded when a shard fails. |
 | `image-builder` | `scripts/test-image-builder.sh`, after delegating the `cpu` and `memory` cgroup controllers to the runner's user manager, in a scope of that user's systemd. |
-| `cli` (`cli.yml`, only when the CLI, `apps/control-plane/src/api`, `packages/domain/src` or the `cli-*` tests change) | No database: `go vet` (linux and windows) and `go test` of `./cmd/dude-cli/...`, then `cli-routes.test.ts` and `cli-bodies.test.ts`; 5-minute limit. |
+| `cli` (`cli.yml`, only when the CLI, `apps/control-plane/src/api`, `packages/domain/src` or the `cli-*` tests change) | No database: `go vet` (linux and windows) and `go test` of `./cmd/dude-cli/...`, then `cli-routes.test.ts` and `cli-bodies.test.ts`; and `go vet` + `go test` on macOS (`cli-macos`). Windows is built and vetted, not run. 5-minute limit. |
 
 Expected skips in `go`: the podman tests in `internal/images` (they need
 `DUDE_PODMAN_TEST_REGISTRY`, set by `scripts/test-image-builder.sh`) and

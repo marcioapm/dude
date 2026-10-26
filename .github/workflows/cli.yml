@@ -48,6 +48,7 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # Windows: built and vetted, not run.
       - name: go vet, linux and windows
         working-directory: orchestrator
         run: |
@@ -60,3 +61,21 @@ jobs:
 
       - name: The CLI's routes and bodies against the API
         run: bun test ./apps/control-plane/test/cli-routes.test.ts ./apps/control-plane/test/cli-bodies.test.ts
+
+  # macOS is where people run it, and the keychain adapter's tests only build there.
+  cli-macos:
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+
+      - name: go vet and go test
+        working-directory: orchestrator
+        run: |
+          go vet ./cmd/dude-cli/...
+          go test -count=1 ./cmd/dude-cli/...
