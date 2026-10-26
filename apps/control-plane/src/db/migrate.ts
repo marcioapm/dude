@@ -128,10 +128,9 @@ export function concurrentIndex(contents: string): string | null {
  * A concurrent build that was cancelled or failed leaves its index in the
  * catalog, INVALID, and IF NOT EXISTS would skip it on the next run. Such an
  * index is dropped (concurrently: no lock that blocks writes) before its
- * file runs, and again if the file left it invalid, which is then not
- * recorded: the next migrate builds it afresh, and a later file that drops
- * the index it replaces never runs over an invalid one. Says whether it
- * dropped one.
+ * file runs, and again if the file fails, which is then not recorded: the
+ * next migrate builds it afresh, and a later file that drops the index it
+ * replaces never runs over an invalid one. Says whether it dropped one.
  */
 async function dropIfInvalid(sql: SQL, index: string): Promise<boolean> {
   const [row] = await sql`SELECT NOT i.indisvalid AS invalid FROM pg_index i WHERE i.indexrelid = to_regclass(${index})`;
@@ -178,17 +177,15 @@ export async function migrate(
         const index = concurrentIndex(contents);
         // An earlier interrupted build's leftover, which IF NOT EXISTS would skip.
         if (index) await dropIfInvalid(sql, index);
+        // Postgres reports a cancelled or failed CREATE INDEX CONCURRENTLY
+        // as an error, so an index this statement leaves invalid is dropped
+        // here and the file not recorded. A success never leaves it invalid:
+        // the leftover IF NOT EXISTS could skip was dropped just above.
         try {
           await sql.unsafe(contents);
         } catch (err) {
           if (index) await dropIfInvalid(sql, index);
           throw err;
-        }
-        if (index && (await dropIfInvalid(sql, index))) {
-          throw new Error(
-            `Migration ${file.name} left index ${index} invalid (an interrupted concurrent build); ` +
-              `it was dropped and the migration not recorded: migrate again to build it.`,
-          );
         }
         await sql`INSERT INTO schema_migrations (version, name, checksum)
                   VALUES (${file.version}, ${file.name}, ${sum})`;
