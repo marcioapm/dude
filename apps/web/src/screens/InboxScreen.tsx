@@ -13,7 +13,7 @@ import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, ty
 import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, PageWithRail, PageRail, PageRailBlock, FacetList, SharedMark, WaitingList, WaitingRow } from "@dude/design-system/components";
 import { Button, EmptyState, Tabs, TabList, Tab, TabPanel, useToast } from "@dude/design-system/primitives";
 import { sessionTitle, severalLine, type SessionsList } from "@dude/domain";
-import type { ApiClient } from "../api/client.ts";
+import { READY_FOR_REVIEW_WAITING, type ApiClient } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople } from "../people.tsx";
@@ -159,8 +159,13 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
   const row = (it: AttentionItem, mine: boolean) => {
     const owner = taskOwner(it.task);
     const since = toMs(it.task.statusSince);
-    const ask = it.session ? (it.session.activity ?? "is waiting for you") : waitingWords(it.task);
-    const whose = mine ? (it.session ? "your agent is waiting" : "decide how it goes on") : owner ? `${firstName(owner.name)}'s task` : "nobody's task";
+    // Held before its pull request for its owner's review: the review is what is asked.
+    const held = !it.session && it.task.waitingFor === READY_FOR_REVIEW_WAITING;
+    const ask = it.session ? (it.session.activity ?? "is waiting for you")
+      : held ? <>{it.task.key ?? it.task.title} is ready for {mine ? "your" : owner ? `${firstName(owner.name)}'s` : "its owner's"} review</>
+      : waitingWords(it.task);
+    const whose = held ? "no pull request yet"
+      : mine ? (it.session ? "your agent is waiting" : "decide how it goes on") : owner ? `${firstName(owner.name)}'s task` : "nobody's task";
     return (
       <WaitingRow
         key={it.task.id}
@@ -169,11 +174,11 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
         face={owner ? <PersonAvatar person={people.byId.get(owner.id ?? "") ?? owner} size={40} {...(it.session ? { agent: it.session.role } : {})} ring={!mine} /> : null}
         ask={ask}
         whereTitle={it.epic ? `${it.project.name} · ${it.epic.title}` : it.project.name}
-        where={<><ProjectAvatar project={it.project} size={16} aria-hidden title={undefined} />{[it.task.key, it.task.title, whose].filter(Boolean).join(" · ")}</>}
+        where={<><ProjectAvatar project={it.project} size={16} aria-hidden title={undefined} />{[it.task.key, it.task.title, held ? "Decisions" : null, whose].filter(Boolean).join(" · ")}</>}
         age={since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
         action={mine ? (
           <Button size="sm" variant="primary" onClick={() => open(it)}>
-            {it.session ? "Answer" : "Decide"}
+            {it.session ? "Answer" : held ? "Review" : "Decide"}
           </Button>
         ) : (
           <Button size="sm" variant="quiet" disabled={!people.you || taking === it.task.id} onClick={() => void takeOver(it)}

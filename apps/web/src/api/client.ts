@@ -349,17 +349,21 @@ export interface ChatSent {
   decider?: Decider;
 }
 
+/** What a task held before its pull request waits for, on the board and in the tree. */
+export const READY_FOR_REVIEW_WAITING = "Ready for your review: no pull request yet";
+
 /**
  * The navigation tree gives each task's escalation, when delivery stopped
  * for a person, and who decides it with whether its conductor is live; the
  * design system's NavTask shows them as what the task waits for, in words,
  * and as its driver.
  */
-function withWaitingFor(projects: NavProject[]): NavProject[] {
-  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean }): NavTask => {
-    const { decider, conductorLive, ...rest } = t;
+export function withWaitingFor(projects: NavProject[]): NavProject[] {
+  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean; heldForReview?: boolean }): NavTask => {
+    const { decider, conductorLive, heldForReview, ...rest } = t;
     const driven = decider ? { ...rest, driver: driverMode(decider, conductorLive === true) } : rest;
-    return t.escalation ? { ...driven, waitingFor: escalationWords(t.escalation).short } : driven;
+    if (t.escalation) return { ...driven, waitingFor: escalationWords(t.escalation).short };
+    return heldForReview ? { ...driven, waitingFor: READY_FOR_REVIEW_WAITING } : driven;
   };
   return projects.map((p) => ({
     ...p,

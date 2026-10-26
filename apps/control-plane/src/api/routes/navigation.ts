@@ -61,6 +61,7 @@ interface TaskRow {
   merged: boolean;
   decider: "policy" | "conductor";
   conductorLive: boolean;
+  heldForReview: boolean;
 }
 
 interface RunRow {
@@ -239,8 +240,13 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
              -- the card's driver. Neither alone says it.
              COALESCE((SELECT wf.state->>'decider' FROM workflow_runs wf WHERE wf.task_id = w.id
                ORDER BY wf.created_at DESC LIMIT 1), 'policy') AS decider,
-             EXISTS (SELECT 1 FROM runs c WHERE c.task_id = w.id AND c.role = 'conductor' AND c.phase IS NULL
-               AND c.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')) AS "conductorLive"
+              EXISTS (SELECT 1 FROM runs c WHERE c.task_id = w.id AND c.role = 'conductor' AND c.phase IS NULL
+                AND c.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')) AS "conductorLive",
+              -- Deliver holds its live delivery before the pull request for its owner (work.ts's awaitingDecision, under Deliver).
+              w.status = 'awaiting_input' AND EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = w.id
+                AND wf.workflow_type = 'task.delivery' AND wf.status IN ('running', 'waiting') AND wf.step = 'conductorDecision'
+                AND wf.state->'decision'->>'point' = 'before_pull_request' AND NOT wf.state->'decision' ? 'taken'
+                AND COALESCE(wf.state->>'decider', 'policy') <> 'conductor') AS "heldForReview"
       FROM tasks w JOIN projects p ON p.id = w.project_id
       WHERE w.archived_at IS NULL
       ORDER BY w.created_at DESC LIMIT 500`) as TaskRow[];
@@ -359,6 +365,8 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         // Who decides, and whether a conductor is live: the board's driver mark.
         decider: w.decider,
         conductorLive: w.conductorLive,
+        // Held before its pull request for its owner's review: the card's "Ready for review".
+        ...(w.heldForReview ? { heldForReview: true } : {}),
         blockedBy,
         // What it holds up: not-started dependants, while it has not merged.
         blocks: w.merged ? [] : blocks,
