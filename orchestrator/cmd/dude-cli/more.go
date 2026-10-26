@@ -29,7 +29,7 @@ func init() {
 }
 
 var filterCommands = map[string]command{
-	"findings": {"TASK?", "review findings: a task's, or a run's with --run", func(fs *flag.FlagSet) doer {
+	"finding list": {"TASK?", "review findings: a task's, or a run's with --run", func(fs *flag.FlagSet) doer {
 		status := fs.String("status", "", "e.g. open")
 		run := fs.String("run", "", "a RUN's findings instead")
 		return func(c *cli, a []string) (any, error) {
@@ -40,7 +40,7 @@ var filterCommands = map[string]command{
 			return c.request("GET", "/v1/findings"+query("taskId", taskID, "runId", runID, "status", *status), nil)
 		}
 	}},
-	"questions": {"TASK?", "questions agents asked: a task's, a run's with --run, or every open one",
+	"question list": {"TASK?", "questions agents asked: a task's, a run's with --run, or every open one",
 		func(fs *flag.FlagSet) doer {
 			run := fs.String("run", "", "a RUN's questions instead")
 			return func(c *cli, a []string) (any, error) {
@@ -263,10 +263,10 @@ var moreCommands = map[string]command{
 		org, _ := me["organization"].(obj)
 		return obj{"person": personOf(me), "organization": pick(org, "slug", "name", "id"), "url": c.base}, nil
 	})},
-	"people": {"", "the organisation's people", noFlags(func(c *cli, _ []string) (any, error) {
+	"person list": {"", "the organisation's people", noFlags(func(c *cli, _ []string) (any, error) {
 		return c.request("GET", "/v1/people", nil)
 	})},
-	"invite": {"EMAIL...", "invite people to the organisation (admins)", func(fs *flag.FlagSet) doer {
+	"person invite": {"EMAIL...", "invite people to the organisation (admins)", func(fs *flag.FlagSet) doer {
 		role := fs.String("role", "member", "member or admin")
 		return func(c *cli, a []string) (any, error) {
 			if err := oneOf("--role", *role, "member", "admin"); err != nil {
@@ -281,7 +281,7 @@ var moreCommands = map[string]command{
 	}},
 
 	// Projects
-	"overview": {"PROJECT", "a project's board, by epic", noFlags(func(c *cli, a []string) (any, error) {
+	"project overview": {"PROJECT", "a project's board, by epic", noFlags(func(c *cli, a []string) (any, error) {
 		pid, err := c.projectID(a[0])
 		if err != nil {
 			return nil, err
@@ -290,12 +290,12 @@ var moreCommands = map[string]command{
 	})},
 
 	// Tasks
-	"assign": {"TASK PERSON...", "set who is on a task; the first person is its owner", noFlags(func(c *cli, a []string) (any, error) {
+	"task assign": {"TASK PERSON...", "set who is on a task; the first person is its owner", noFlags(func(c *cli, a []string) (any, error) {
 		return c.onTask("PUT", a[0], "/people", obj{"people": a[1:]})
 	})},
-	"retry": {"TASK", "retry a task whose conductor failed",
+	"task retry": {"TASK", "retry a task whose conductor failed",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("POST", a[0], "/retry", nil) })},
-	"recover": {"TASK ACTION?", "a stopped task: without ACTION, how it can recover; with it (resume, retry, restart), do it",
+	"task recover": {"TASK ACTION?", "a stopped task: without ACTION, how it can recover; with it (resume, retry, restart), do it",
 		func(fs *flag.FlagSet) doer {
 			override := fs.Bool("override", false, "restart even though it is blocked")
 			return withNote(fs, func(c *cli, a []string, note string) (any, error) {
@@ -312,7 +312,7 @@ var moreCommands = map[string]command{
 				return c.onTask("POST", a[0], "/recover", body)
 			})
 		}},
-	"decider": {"TASK WHO", "who takes a task's delivery decisions: policy or conductor", func(fs *flag.FlagSet) doer {
+	"task decider": {"TASK WHO", "who takes a task's delivery decisions: policy or conductor", func(fs *flag.FlagSet) doer {
 		openPR := fs.Bool("open-pr", false, "with conductor: it may open the pull request too")
 		draft := fs.Bool("draft", false, "the pull request opens as a draft")
 		return func(c *cli, a []string) (any, error) {
@@ -329,20 +329,20 @@ var moreCommands = map[string]command{
 			return c.onTask("POST", a[0], "/decider", body)
 		}
 	}},
-	"reset-machine": {"TASK ROLE", "throw away a task's agent machine for ROLE (e.g. implementer); the next one starts fresh",
+	"task reset-machine": {"TASK ROLE", "throw away a task's agent machine for ROLE (e.g. implementer); the next one starts fresh",
 		func(fs *flag.FlagSet) doer {
 			return withNote(fs, func(c *cli, a []string, note string) (any, error) {
 				return c.onTask("DELETE", a[0], "/agent-machines/"+esc(a[1]), setIf(obj{}, "note", note))
 			})
 		}},
-	"artifacts": {"TASK", "files a task's agents published", noFlags(func(c *cli, a []string) (any, error) {
+	"task artifacts": {"TASK", "files a task's agents published", noFlags(func(c *cli, a []string) (any, error) {
 		id, err := c.taskID(a[0])
 		if err != nil {
 			return nil, err
 		}
 		return c.request("GET", "/v1/artifacts"+query("taskId", id), nil)
 	})},
-	"events": {"TASK", "a task's event history; use nextCursor as --after for the next page", func(fs *flag.FlagSet) doer {
+	"task events": {"TASK", "a task's event history; use nextCursor as --after for the next page", func(fs *flag.FlagSet) doer {
 		run := fs.String("run", "", "a RUN's events instead")
 		after := fs.String("after", "", "events after this cursor (nextCursor from the previous page)")
 		limit := fs.String("limit", "", "at most this many events")
@@ -361,10 +361,10 @@ var moreCommands = map[string]command{
 			return c.request("GET", "/v1/events"+query("taskId", id, "after", *after, "limit", *limit), nil)
 		}
 	}},
-	"servers": {"TASK", "a task's dev servers and preview", noFlags(func(c *cli, a []string) (any, error) {
+	"task servers": {"TASK", "a task's dev servers and preview", noFlags(func(c *cli, a []string) (any, error) {
 		return c.onTask("GET", a[0], "/servers", nil)
 	})},
-	"preview": {"TASK", "start a task's preview environment (--stop stops it)", func(fs *flag.FlagSet) doer {
+	"task preview": {"TASK", "start a task's preview environment (--stop stops it)", func(fs *flag.FlagSet) doer {
 		stop := fs.Bool("stop", false, "stop it instead")
 		return func(c *cli, a []string) (any, error) {
 			if *stop {
@@ -375,18 +375,18 @@ var moreCommands = map[string]command{
 	}},
 
 	// Runs and sessions
-	"leave": {"RUN", "leave a stalled run as it is", noFlags(func(c *cli, a []string) (any, error) {
+	"run leave": {"RUN", "leave a stalled run as it is", noFlags(func(c *cli, a []string) (any, error) {
 		return c.onRun("POST", a[0], "/leave", nil)
 	})},
-	"directives": {"RUN", "what people told a run (steers)", noFlags(func(c *cli, a []string) (any, error) {
+	"run directives": {"RUN", "what people told a run (steers)", noFlags(func(c *cli, a []string) (any, error) {
 		return c.onRun("GET", a[0], "/directives", nil)
 	})},
-	"session": {"ID", "one agent session, with its child sessions", noFlags(func(c *cli, a []string) (any, error) {
+	"session show": {"ID", "one agent session, with its child sessions", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/sessions/"+esc(a[0]), nil)
 	})},
 
 	// Findings and pull requests
-	"resolve": {"FINDING STATUS", "a finding's status: resolved, accepted (leave it as it is) or open", func(fs *flag.FlagSet) doer {
+	"finding resolve": {"FINDING STATUS", "a finding's status: resolved, accepted (leave it as it is) or open", func(fs *flag.FlagSet) doer {
 		return withNote(fs, func(c *cli, a []string, note string) (any, error) {
 			if err := oneOf("STATUS", a[1], "resolved", "accepted", "open"); err != nil {
 				return nil, err
@@ -394,24 +394,24 @@ var moreCommands = map[string]command{
 			return c.post("/v1/findings/"+esc(a[0])+"/resolve", setIf(obj{"status": a[1]}, "note", note))
 		})
 	}},
-	"merge": {"PR", "merge a pull request (id from prs)", func(fs *flag.FlagSet) doer {
+	"pr merge": {"PR", "merge a pull request (id from pr list)", func(fs *flag.FlagSet) doer {
 		method := fs.String("method", "", "merge, squash or rebase (default: the organisation's)")
 		return func(c *cli, a []string) (any, error) {
 			return c.post("/v1/pull-requests/"+esc(a[0])+"/merge", setIf(obj{}, "method", *method))
 		}
 	}},
-	"update-branch": {"PR", "bring a pull request's branch up to date with its base", noFlags(func(c *cli, a []string) (any, error) {
+	"pr update-branch": {"PR", "bring a pull request's branch up to date with its base", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/pull-requests/"+esc(a[0])+"/update-branch", nil)
 	})},
-	"rerun-checks": {"PR", "rerun a pull request's failed checks", noFlags(func(c *cli, a []string) (any, error) {
+	"pr rerun-checks": {"PR", "rerun a pull request's failed checks", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/pull-requests/"+esc(a[0])+"/rerun-failed", nil)
 	})},
-	"reviewers": {"PR LOGIN...", "request reviews on a pull request", noFlags(func(c *cli, a []string) (any, error) {
+	"pr reviewers": {"PR LOGIN...", "request reviews on a pull request", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/pull-requests/"+esc(a[0])+"/reviewers", obj{"logins": a[1:]})
 	})},
 
 	// Repository requests
-	"repo-requests": {"TASK?", "agents' requests for another repository: a task's, or every pending one",
+	"repo requests": {"TASK?", "agents' requests for another repository: a task's, or every pending one",
 		noFlags(func(c *cli, a []string) (any, error) {
 			id := ""
 			if a[0] != "" {
@@ -422,7 +422,7 @@ var moreCommands = map[string]command{
 			}
 			return c.request("GET", "/v1/repository-requests"+query("taskId", id), nil)
 		})},
-	"repo-decide": {"REQUEST DECISION", "approve or decline a repository request", func(fs *flag.FlagSet) doer {
+	"repo decide": {"REQUEST DECISION", "approve or decline a repository request", func(fs *flag.FlagSet) doer {
 		return withNote(fs, func(c *cli, a []string, note string) (any, error) {
 			if err := oneOf("DECISION", a[1], "approve", "decline"); err != nil {
 				return nil, err
@@ -432,7 +432,7 @@ var moreCommands = map[string]command{
 	}},
 
 	// Epics
-	"epic-update": {"EPIC", "change an epic", func(fs *flag.FlagSet) doer {
+	"epic update": {"EPIC", "change an epic", func(fs *flag.FlagSet) doer {
 		title := fs.String("title", "", "a new title")
 		desc := fs.String("description", "", "a new description; - reads stdin")
 		state := fs.String("state", "", "planned, active, done, or none")
@@ -460,27 +460,27 @@ var moreCommands = map[string]command{
 				body["position"] = *position
 			}
 			if len(body) == 0 {
-				return nil, errors.New("epic-update: nothing to change")
+				return nil, errors.New("epic update: nothing to change")
 			}
 			return c.request("PATCH", "/v1/epics/"+esc(a[0]), body)
 		}
 	}},
-	"epic-delete": {"EPIC", "delete an epic; its tasks stay in the project", noFlags(func(c *cli, a []string) (any, error) {
+	"epic delete": {"EPIC", "delete an epic; its tasks stay in the project", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("DELETE", "/v1/epics/"+esc(a[0]), nil)
 	})},
-	"epic-metrics": {"EPIC", "an epic's cost and time", noFlags(func(c *cli, a []string) (any, error) {
+	"epic metrics": {"EPIC", "an epic's cost and time", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/epics/"+esc(a[0])+"/metrics", nil)
 	})},
-	"peers": {"EPIC", "what each task on an epic is doing", noFlags(func(c *cli, a []string) (any, error) {
+	"epic peers": {"EPIC", "what each task on an epic is doing", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/epics/"+esc(a[0])+"/peers", nil)
 	})},
-	"threads": {"EPIC", "the conversations between an epic's agents", noFlags(func(c *cli, a []string) (any, error) {
+	"epic threads": {"EPIC", "the conversations between an epic's agents", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/epics/"+esc(a[0])+"/threads", nil)
 	})},
-	"notes": {"EPIC", "the notes pinned on an epic, which every agent on it reads", noFlags(func(c *cli, a []string) (any, error) {
+	"note list": {"EPIC", "the notes pinned on an epic, which every agent on it reads", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/epics/"+esc(a[0])+"/notes", nil)
 	})},
-	"note": {"EPIC TEXT", "pin a note on an epic", func(fs *flag.FlagSet) doer {
+	"note add": {"EPIC TEXT", "pin a note on an epic", func(fs *flag.FlagSet) doer {
 		replaces := fs.Int("replaces", 0, "the number of a note it replaces")
 		return func(c *cli, a []string) (any, error) {
 			t, err := c.text(a[1])
@@ -494,15 +494,15 @@ var moreCommands = map[string]command{
 			return c.post("/v1/epics/"+esc(a[0])+"/notes", body)
 		}
 	}},
-	"note-retire": {"EPIC N", "unpin note N from an epic", noFlags(func(c *cli, a []string) (any, error) {
+	"note retire": {"EPIC N", "unpin note N from an epic", noFlags(func(c *cli, a []string) (any, error) {
 		if n, err := strconv.Atoi(a[1]); err != nil || n <= 0 {
-			return nil, errors.New("note-retire: N is a note's number")
+			return nil, errors.New("note retire: N is a note's number")
 		}
 		return c.post("/v1/epics/"+esc(a[0])+"/notes/"+a[1]+"/retire", nil)
 	})},
 
 	// Memory
-	"memory-search": {"QUERY", "search what agents and people remembered", func(fs *flag.FlagSet) doer {
+	"memory search": {"QUERY", "search what agents and people remembered", func(fs *flag.FlagSet) doer {
 		project := fs.String("project", "", "only a PROJECT's")
 		types := fs.String("type", "", "only these types, comma separated")
 		limit := fs.Int("limit", 0, "at most this many")
@@ -525,7 +525,7 @@ var moreCommands = map[string]command{
 			return c.request("GET", "/v1/memory/search"+query("q", a[0], "project", pid, "types", *types, "limit", l, "mode", mode), nil)
 		}
 	}},
-	"memories": {"", "stored memories", func(fs *flag.FlagSet) doer {
+	"memory list": {"", "stored memories", func(fs *flag.FlagSet) doer {
 		project := fs.String("project", "", "only a PROJECT's")
 		text := fs.String("text", "", "only those mentioning this")
 		archived := fs.Bool("archived", false, "the archived ones")
@@ -544,17 +544,17 @@ var moreCommands = map[string]command{
 			return c.request("GET", "/v1/memory/memories"+query("project", pid, "q", *text, "archived", arch), nil)
 		}
 	}},
-	"memory": {"ID", "one memory in full", noFlags(func(c *cli, a []string) (any, error) {
+	"memory show": {"ID", "one memory in full", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/memory/memories/"+esc(a[0]), nil)
 	})},
-	"memory-add": {"", "remember something for agents to find", func(fs *flag.FlagSet) doer {
+	"memory add": {"", "remember something for agents to find", func(fs *flag.FlagSet) doer {
 		title := fs.String("title", "", "its title (required)")
 		content := fs.String("content", "", "what to remember (required); - reads stdin")
 		kind := fs.String("kind", "fact", "fact, procedure or note")
 		project := fs.String("project", "", "a PROJECT it belongs to (default: the organisation)")
 		return func(c *cli, _ []string) (any, error) {
 			if *title == "" || *content == "" {
-				return nil, errors.New("memory-add: --title and --content are required")
+				return nil, errors.New("memory add: --title and --content are required")
 			}
 			if err := oneOf("--kind", *kind, "fact", "procedure", "note"); err != nil {
 				return nil, err
@@ -574,32 +574,32 @@ var moreCommands = map[string]command{
 			return c.post("/v1/memory/memories", body)
 		}
 	}},
-	"memory-archive": {"ID", "archive a memory (memory-restore brings it back)", noFlags(func(c *cli, a []string) (any, error) {
+	"memory archive": {"ID", "archive a memory (memory unarchive brings it back)", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/memory/memories/"+esc(a[0])+"/archive", nil)
 	})},
-	"memory-restore": {"ID", "restore an archived memory", noFlags(func(c *cli, a []string) (any, error) {
+	"memory unarchive": {"ID", "bring an archived memory back", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/memory/memories/"+esc(a[0])+"/restore", nil)
 	})},
 
 	// Brainstorms
-	"brainstorm-title": {"ID TITLE", "rename a brainstorm", noFlags(func(c *cli, a []string) (any, error) {
+	"brainstorm rename": {"ID TITLE", "rename a brainstorm", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/brainstorms/"+esc(a[0])+"/title", obj{"title": a[1]})
 	})},
-	"brainstorm-retry": {"ID", "retry a brainstorm whose agent failed", noFlags(func(c *cli, a []string) (any, error) {
+	"brainstorm retry": {"ID", "retry a brainstorm whose agent failed", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/brainstorms/"+esc(a[0])+"/retry", nil)
 	})},
-	"brainstorm-archive": {"ID", "archive a brainstorm", noFlags(func(c *cli, a []string) (any, error) {
+	"brainstorm archive": {"ID", "archive a brainstorm", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/brainstorms/"+esc(a[0])+"/archive", nil)
 	})},
-	"brainstorm-unarchive": {"ID", "bring an archived brainstorm back", noFlags(func(c *cli, a []string) (any, error) {
+	"brainstorm unarchive": {"ID", "bring an archived brainstorm back", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/brainstorms/"+esc(a[0])+"/unarchive", nil)
 	})},
-	"brainstorm-answer": {"ID QUESTION TEXT?", "answer a brainstorm agent's question", func(fs *flag.FlagSet) doer {
+	"brainstorm answer": {"ID QUESTION TEXT?", "answer a brainstorm agent's question", func(fs *flag.FlagSet) doer {
 		var choices ints
 		fs.Var(&choices, "choice", "index of a choice; repeatable")
 		return func(c *cli, a []string) (any, error) {
 			if a[2] == "" && len(choices) == 0 {
-				return nil, errors.New("brainstorm-answer: give the text, --choice, or both")
+				return nil, errors.New("brainstorm answer: give the text, --choice, or both")
 			}
 			ans, err := c.itemAnswer(a[2], choices)
 			if err != nil {
@@ -608,19 +608,19 @@ var moreCommands = map[string]command{
 			return c.post("/v1/brainstorms/"+esc(a[0])+"/questions/"+esc(a[1])+"/answer", obj{"answers": []obj{ans}})
 		}
 	}},
-	"brainstorm-file": {"ID PROPOSAL ITEM...", "file items of a brainstorm's proposal as tasks (ITEM: their indexes)",
+	"brainstorm file": {"ID PROPOSAL ITEM...", "file items of a brainstorm's proposal as tasks (ITEM: their indexes)",
 		noFlags(func(c *cli, a []string) (any, error) {
 			items := []int{}
 			for _, s := range a[2:] {
 				n, err := strconv.Atoi(s)
 				if err != nil || n < 0 {
-					return nil, fmt.Errorf("brainstorm-file: ITEM %q is not an index", s)
+					return nil, fmt.Errorf("brainstorm file: ITEM %q is not an index", s)
 				}
 				items = append(items, n)
 			}
 			return c.post("/v1/brainstorms/"+esc(a[0])+"/file", obj{"proposalId": a[1], "items": items})
 		})},
-	"brainstorm-invite": {"ID PERSON...", "invite people to a brainstorm", func(fs *flag.FlagSet) doer {
+	"brainstorm invite": {"ID PERSON...", "invite people to a brainstorm", func(fs *flag.FlagSet) doer {
 		role := fs.String("role", "chat", "chat or read")
 		return func(c *cli, a []string) (any, error) {
 			if err := oneOf("--role", *role, "chat", "read"); err != nil {

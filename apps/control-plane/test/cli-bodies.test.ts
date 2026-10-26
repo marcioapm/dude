@@ -225,7 +225,7 @@ function selectNames(list: string): string[] {
 }
 
 // automation-get.json is the CLI's stand-in for GET /v1/automations/:id; the
-// documented `dude automation ID --settings | dude automation-update ID -`
+// documented `dude automation show ID --settings | dude automation update ID -`
 // holds only while it has the server's fields and the CLI strips the read-only ones.
 describe("the dude CLI's automation fixture", () => {
   test("has the keys the server's GET answers", async () => {

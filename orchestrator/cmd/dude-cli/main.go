@@ -31,114 +31,31 @@ import (
 
 const defaultURL = "https://dude.absmartly.dev"
 
-const usage = `dude — drive a dude server from any shell. Output is JSON.
+const usageHead = `dude — drive a dude server from any shell. Output is JSON.
 
 TASK is a key (ABS-12) or id (wi_…); RUN is a run id (run_…) or a TASK, meaning
 its newest agent run in the latest attempt, not a preview. A text argument of -
-reads stdin. dude COMMAND --help for options.
+reads stdin.
 
 Signing in (a key is made in dude: Your settings → Keys)
-  login URL [--file]            log in to the key's organisation on the dude at URL;
-                                the key is read from stdin, checked, and kept
-  orgs | use ORG | logout [ORG] | whoami
-  people | invite EMAIL... [--role member|admin]
-  --org ORG, before any command, acts in ORG this once
-
-Reading
-  projects | repos P | epics P | overview P | list P [--status S]
-  show TASK | raw TASK | relations TASK | prs TASK | metrics TASK
-  findings [TASK] [--run RUN] [--status open] | questions [TASK] [--run RUN]
-  run RUN | diff RUN | directives RUN | session ID
-  events TASK [--run RUN] [--after N] [--limit N] | artifacts TASK | servers TASK
-  repo-requests [TASK]
-  brainstorms [--archived] | brainstorm-show ID
-
-Projects and epics
-  project-create --name N --slug s [--key K] [--description D] [--repo NAME=URL]...
-  repo-add P --name N --url URL [--branch main]
-  epic-create P --title T [--description D]
-  epic-update EPIC [--title T] [--description D] [--state planned|active|done|none] [--position N]
-  epic-delete EPIC | epic-archive EPIC [--ended-only] | epic-unarchive EPIC
-  epic-metrics EPIC | peers EPIC | threads EPIC
-  notes EPIC | note EPIC TEXT [--replaces N] | note-retire EPIC N
-
-Tasks
-  create P --title T --goal G [--criterion C]... [--repo NAME[:read]]... [--epic ID]
-           [--blocked-by T]... [--blocks T]... [--related T]... [--start | --talk]
-           [--from-pr N | --from-branch B [--base B]] [--mode continue|review]
-  update TASK [--title T] [--goal G] [--criterion C]... [--no-criteria]
-              [--epic ID|none] [--repo R]... [--owner PERSON]
-  start TASK [--override --note N] | talk TASK [--override --note N]
-  auto-start TASK [--how deliver|talk] | no-auto-start TASK
-  relate TASK --blocks T | --blocked-by T | --related T [--why W]
-  unrelate TASK blocks|blocked_by|related T
-  done TASK | stop TASK [--restart [--decider policy|conductor]] [--note N]
-  close TASK wont_do|duplicate|cant_reproduce [--duplicate-of T] [--close-pr] [--remove-relations]
-  reopen TASK | archive TASK [--resolution R] [--duplicate-of T] [--note N] | unarchive TASK
-  assign TASK PERSON...         the first is the owner
-  retry TASK | recover TASK [resume|retry|restart] [--note N] [--override]
-  decider TASK policy|conductor [--open-pr] [--draft]
-  reset-machine TASK ROLE [--note N] | preview TASK [--stop]
-
-Reviews and pull requests
-  resolve FINDING resolved|accepted|open [--note N]
-  merge PR [--method M] | update-branch PR | rerun-checks PR | resolve-conflicts PR
-  reviewers PR LOGIN...
-  repo-decide REQUEST approve|decline [--note N]
-  review-questions TASK | review-answer QUESTION TEXT | review-withdraw QUESTION [--reason R]
-  verification TASK
-
-Feedback on a task's work
-  feedback TASK [--attempt N]
-  feedback-draft TASK TEXT [--path FILE --lines N[-M] [--side new|old] [--run RUN]]
-  feedback-submit TASK [DRAFT,…]     your drafts (default: all of them) to its agents
-  feedback-send TASK TEXT            one general item, drafted and sent
-  feedback-reply ITEM TEXT | feedback-resolve ITEM [--note N] | feedback-reopen ITEM [TEXT]
-  feedback-delete DRAFT
-
-Talking to the agents
-  chat TASK TEXT [--aside]
-  answer QUESTION [TEXT] [--choice N]...
-  decide TASK ACTION [--note N]
-  steer RUN TEXT [--interrupt]
-  pause RUN [--hard] [--reason R] | resume RUN [--reason R] | abort RUN [--reason R]
-  restart RUN NOTE [--tier T] | leave RUN
-
-Brainstorms
-  brainstorm MESSAGE [--title T] [--project P]... [--tier T]
-  brainstorm-chat ID TEXT | brainstorm-answer ID QUESTION [TEXT] [--choice N]...
-  brainstorm-title ID TITLE | brainstorm-retry ID | brainstorm-invite ID PERSON... [--role chat|read]
-  brainstorm-file ID PROPOSAL ITEM... | brainstorm-archive ID | brainstorm-unarchive ID
-
-Memory
-  memory-search QUERY [--project P] [--type T,…] [--limit N] [--words]
-  memories [--project P] [--text T] [--archived] | memory ID
-  memory-add --title T --content C [--kind fact|procedure|note] [--project P]
-  memory-archive ID | memory-restore ID
+  login URL [--file]          log in to the key's organisation on the dude at URL;
+                              the key is read from stdin, checked, and kept
+  orgs | use ORG              the organisations logged in to; act in another one
+  logout [ORG] | whoami       forget a key; the account in use
+  --org ORG                   before any command: act in ORG this once
 
 dude itself
-  upgrade [--version vX.Y.Z] [--check]  replace this binary with a GitHub release of
-                                     the CLI (default: the latest); --check only compares
-  guide [PAGE]                       dude's guide
-  judgements [--asker A] [--limit N] [--before ID] | judgement ID
+  upgrade [--version vX.Y.Z] [--check]
+                              replace this binary with a GitHub release of the CLI
+  guide [PAGE]                dude's guide
+  api METHOD PATH [JSON | -]  any API call
+  version | help
 
-Automations (ID: aut_…, from automations)
-  automations [P] [--scope organization|project] [--trigger schedule|github]
-                  [--kind K|agent:ROLE] [--enabled true|false] [--mine] [--name N]
-  automation ID [--settings]
-  automation-create [P] --name N --kind agent|command|server|webhook --trigger schedule|github
-                    [--preset qa_browser|reviewer|investigator] [--tz TZ]   starts disabled
-  automation-update ID SETTINGS      a JSON file or -: automation ID's output, edited
-  automation-enable ID | automation-disable ID | automation-delete ID | automation-duplicate ID
-  automation-owner ID PERSON | automation-secret ID   (the secret on stdin)
-  automation-run ID [--delivery D | --body FILE [--event E] [--action A] [--delivery-id D]]
-  automation-runs ID [--status S] [--limit N] | automation-run-show ID RUN | automation-deliveries ID
-  automation-test ID BODY            would this event body run it, and if not, why
-  automation-start-fresh ID | automation-prompts ID | automation-prompt-restore ID VERSION
-  automation-repos | automation-next CRON [--tz TZ] | automation-subscriptions
+What the commands act on
+`
 
-Anything else
-  api METHOD PATH [JSON | -]
+const usageTail = `
+dude NOUN for its commands; dude NOUN VERB --help for one's options.
 
 Keys: ` + "`dude login URL`" + ` keeps one per organisation, under its slug, in the
 macOS keychain, the Secret Service keyring (secret-tool, on Linux) or the
@@ -148,6 +65,92 @@ organisations and their URLs. Commands act in the last one logged in to, or in
 --org / DUDE_ORG. DUDE_API_KEY overrides the stored key; DUDE_URL naming
 another server needs DUDE_API_KEY too (default URL ` + defaultURL + `).
 `
+
+// nouns are what the commands keyed "NOUN VERB" act on, in dude --help's order.
+var nouns = []struct{ name, help string }{
+	{"task", "tasks: record, change, start, stop and close them; talk to their conductor"},
+	{"run", "an agent's run: what it changed; steer, pause, resume, abort or restart it"},
+	{"session", "an agent session and its child sessions"},
+	{"question", "the questions agents asked, and answering them"},
+	{"finding", "review findings, and settling them"},
+	{"review-question", "reviewers' questions to a task's owner"},
+	{"pr", "a task's pull requests: merge, update, rerun checks, request reviews"},
+	{"feedback", "your review of a task's work, drafted and sent to its agents"},
+	{"project", "projects and their boards"},
+	{"repo", "a project's repositories, and agents' requests for another"},
+	{"epic", "epics: a project's tasks grouped, with their agents' conversations"},
+	{"note", "notes pinned on an epic, which every agent on it reads"},
+	{"brainstorm", "an agent to think something through with"},
+	{"memory", "what agents and people remembered"},
+	{"automation", "work nobody starts by hand: on a schedule or on GitHub events"},
+	{"person", "the organisation's people, and inviting more"},
+	{"judgement", "the judgement calls dude's models made"},
+}
+
+func usage() string {
+	var b strings.Builder
+	b.WriteString(usageHead)
+	width := 0
+	for _, n := range nouns {
+		width = max(width, len(n.name))
+	}
+	for _, n := range nouns {
+		fmt.Fprintf(&b, "  %-*s  %s\n", width, n.name, n.help)
+	}
+	b.WriteString(usageTail)
+	return b.String()
+}
+
+// verbs are a noun's commands' verbs, sorted; none for a word that is no noun.
+func verbs(noun string) []string {
+	var out []string
+	for name := range commands {
+		if v, ok := strings.CutPrefix(name, noun+" "); ok {
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// nounUsage is `dude NOUN`'s answer: each verb, its arguments and its help.
+func nounUsage(noun string) string {
+	vs := verbs(noun)
+	lines, width := make([]string, len(vs)), 0
+	for i, v := range vs {
+		lines[i] = strings.TrimSpace(v + " " + commands[noun+" "+v].args)
+		width = max(width, len(lines[i]))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "usage: dude %s VERB [arguments]\n\n", noun)
+	for i, v := range vs {
+		fmt.Fprintf(&b, "  %-*s  %s\n", width, lines[i], commands[noun+" "+v].help)
+	}
+	fmt.Fprintf(&b, "\ndude %s VERB --help for one's options.\n", noun)
+	return b.String()
+}
+
+func isHelp(arg string) bool { return arg == "help" || arg == "-h" || arg == "--help" }
+
+// commandName is the command args names, a top-level one or "NOUN VERB", and
+// the arguments after it. It is "" for a noun alone or followed by help.
+func commandName(args []string) (string, []string, error) {
+	if _, ok := commands[args[0]]; ok && !strings.Contains(args[0], " ") {
+		return args[0], args[1:], nil
+	}
+	vs := verbs(args[0])
+	if len(vs) == 0 {
+		return "", nil, fmt.Errorf("unknown command %q; see dude --help", args[0])
+	}
+	if len(args) == 1 || isHelp(args[1]) {
+		return "", nil, nil
+	}
+	name := args[0] + " " + args[1]
+	if _, ok := commands[name]; !ok {
+		return "", nil, fmt.Errorf("dude %s has no %q; its commands: %s", args[0], args[1], strings.Join(vs, ", "))
+	}
+	return name, args[2:], nil
+}
 
 func main() {
 	c := &cli{
@@ -366,7 +369,7 @@ func (c *cli) project(ref string) (obj, error) {
 			return p, nil
 		}
 	}
-	return nil, fmt.Errorf("no project %q; see dude projects", ref)
+	return nil, fmt.Errorf("no project %q; see dude project list", ref)
 }
 
 func (c *cli) projectID(ref string) (string, error) {
@@ -497,7 +500,7 @@ type command struct {
 
 type doer = func(c *cli, args []string) (any, error)
 
-// parse lets flags and positional arguments mix, as `dude show ABS-1 --x`.
+// parse lets flags and positional arguments mix, as `dude task show ABS-1 --x`.
 func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
 	for {
@@ -522,19 +525,31 @@ func (c *cli) run(args []string) error {
 			return errors.New("--org needs an organisation's slug")
 		}
 	}
-	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprint(c.out, usage)
+	if len(args) == 0 || isHelp(args[0]) {
+		if len(args) > 2 {
+			if _, ok := commands[args[1]+" "+args[2]]; ok {
+				return c.run([]string{args[1], args[2], "--help"})
+			}
+		}
+		if len(args) > 1 && len(verbs(args[1])) > 0 {
+			return c.run(args[1:2])
+		}
+		fmt.Fprint(c.out, usage())
 		return nil
 	}
 	if args[0] == "--version" || args[0] == "version" {
 		fmt.Fprintln(c.out, version.Version)
 		return nil
 	}
-	name := args[0]
-	cmd, ok := commands[name]
-	if !ok {
-		return fmt.Errorf("unknown command %q; see dude --help", name)
+	name, rest, err := commandName(args)
+	if err != nil {
+		return err
 	}
+	if name == "" {
+		fmt.Fprint(c.out, nounUsage(args[0]))
+		return nil
+	}
+	cmd := commands[name]
 	fs := flag.NewFlagSet("dude "+name, flag.ContinueOnError)
 	fs.SetOutput(c.out)
 	fs.Usage = func() {
@@ -542,7 +557,7 @@ func (c *cli) run(args []string) error {
 		fs.PrintDefaults()
 	}
 	do := cmd.flags(fs)
-	pos, err := parse(fs, args[1:])
+	pos, err := parse(fs, rest)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -659,14 +674,14 @@ var commands = map[string]command{
 		})},
 
 	// Reading
-	"projects": {"", "the projects you can see", noFlags(func(c *cli, _ []string) (any, error) {
+	"project list": {"", "the projects you can see", noFlags(func(c *cli, _ []string) (any, error) {
 		ps, err := c.projects()
 		if err != nil {
 			return nil, err
 		}
 		return pickAll(ps, "key", "name", "slug", "id"), nil
 	})},
-	"repos": {"PROJECT", "a project's repositories", noFlags(func(c *cli, a []string) (any, error) {
+	"repo list": {"PROJECT", "a project's repositories", noFlags(func(c *cli, a []string) (any, error) {
 		pid, err := c.projectID(a[0])
 		if err != nil {
 			return nil, err
@@ -677,14 +692,14 @@ var commands = map[string]command{
 		}
 		return pickAll(list(p, "repositories"), "name", "url", "defaultBranch"), nil
 	})},
-	"epics": {"PROJECT", "a project's epics", noFlags(func(c *cli, a []string) (any, error) {
+	"epic list": {"PROJECT", "a project's epics", noFlags(func(c *cli, a []string) (any, error) {
 		pid, err := c.projectID(a[0])
 		if err != nil {
 			return nil, err
 		}
 		return c.request("GET", "/v1/projects/"+url.PathEscape(pid)+"/epics", nil)
 	})},
-	"list": {"PROJECT", "a project's tasks", func(fs *flag.FlagSet) doer {
+	"task list": {"PROJECT", "a project's tasks", func(fs *flag.FlagSet) doer {
 		status := fs.String("status", "", "received, queued, running, awaiting_input, review, ready_to_merge, done, …")
 		return func(c *cli, a []string) (any, error) {
 			pid, err := c.projectID(a[0])
@@ -698,21 +713,21 @@ var commands = map[string]command{
 			return pickAll(ts, "key", "title", "status"), nil
 		}
 	}},
-	"show": {"TASK", "one task: status, why it waits, goal, runs", noFlags(func(c *cli, a []string) (any, error) {
+	"task show": {"TASK", "one task: status, why it waits, goal, runs", noFlags(func(c *cli, a []string) (any, error) {
 		t, err := c.task(a[0])
 		if err != nil {
 			return nil, err
 		}
 		return brief(t), nil
 	})},
-	"raw": {"TASK", "one task as the API returns it", noFlags(func(c *cli, a []string) (any, error) {
+	"task raw": {"TASK", "one task as the API returns it", noFlags(func(c *cli, a []string) (any, error) {
 		return c.task(a[0])
 	})},
-	"relations": {"TASK", "what blocks a task, what it blocks, what it relates to",
+	"task relations": {"TASK", "what blocks a task, what it blocks, what it relates to",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("GET", a[0], "/relations", nil) })},
-	"metrics": {"TASK", "a task's cost and time",
+	"task metrics": {"TASK", "a task's cost and time",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("GET", a[0], "/metrics", nil) })},
-	"prs": {"TASK", "a task's pull requests", noFlags(func(c *cli, a []string) (any, error) {
+	"pr list": {"TASK", "a task's pull requests", noFlags(func(c *cli, a []string) (any, error) {
 		id, err := c.taskID(a[0])
 		if err != nil {
 			return nil, err
@@ -723,15 +738,15 @@ var commands = map[string]command{
 		}
 		return o["pullRequests"], nil
 	})},
-	"run": {"RUN", "one run in full", noFlags(func(c *cli, a []string) (any, error) {
+	"run show": {"RUN", "one run in full", noFlags(func(c *cli, a []string) (any, error) {
 		return c.onRun("GET", a[0], "", nil)
 	})},
-	"diff": {"RUN", "what a run changed", noFlags(func(c *cli, a []string) (any, error) {
+	"run diff": {"RUN", "what a run changed", noFlags(func(c *cli, a []string) (any, error) {
 		return c.onRun("GET", a[0], "/diff", nil)
 	})},
 
 	// Projects and epics
-	"project-create": {"", "a new project (organisation admins)", func(fs *flag.FlagSet) doer {
+	"project create": {"", "a new project (organisation admins)", func(fs *flag.FlagSet) doer {
 		name := fs.String("name", "", "its name (required)")
 		slug := fs.String("slug", "", "lowercase-with-dashes (required)")
 		key := fs.String("key", "", "task key prefix, e.g. WEB (default: from the slug)")
@@ -740,7 +755,7 @@ var commands = map[string]command{
 		fs.Var(&repos, "repo", "a repository, NAME=URL; repeatable")
 		return func(c *cli, _ []string) (any, error) {
 			if *name == "" || *slug == "" {
-				return nil, errors.New("project-create: --name and --slug are required")
+				return nil, errors.New("project create: --name and --slug are required")
 			}
 			rs := []obj{}
 			for _, r := range repos {
@@ -762,13 +777,13 @@ var commands = map[string]command{
 			return pick(p, "key", "name", "slug", "id", "repositories"), nil
 		}
 	}},
-	"repo-add": {"PROJECT", "add a repository to a project", func(fs *flag.FlagSet) doer {
+	"repo add": {"PROJECT", "add a repository to a project", func(fs *flag.FlagSet) doer {
 		name := fs.String("name", "", "its name in the project (required)")
 		u := fs.String("url", "", "its clone URL (required)")
 		branch := fs.String("branch", "main", "its default branch")
 		return func(c *cli, a []string) (any, error) {
 			if *name == "" || *u == "" {
-				return nil, errors.New("repo-add: --name and --url are required")
+				return nil, errors.New("repo add: --name and --url are required")
 			}
 			pid, err := c.projectID(a[0])
 			if err != nil {
@@ -778,12 +793,12 @@ var commands = map[string]command{
 				obj{"name": *name, "url": *u, "defaultBranch": *branch})
 		}
 	}},
-	"epic-create": {"PROJECT", "a new epic in a project", func(fs *flag.FlagSet) doer {
+	"epic create": {"PROJECT", "a new epic in a project", func(fs *flag.FlagSet) doer {
 		title := fs.String("title", "", "its title (required)")
 		desc := fs.String("description", "", "- reads stdin")
 		return func(c *cli, a []string) (any, error) {
 			if *title == "" {
-				return nil, errors.New("epic-create: --title is required")
+				return nil, errors.New("epic create: --title is required")
 			}
 			d, err := c.text(*desc)
 			if err != nil {
@@ -798,7 +813,7 @@ var commands = map[string]command{
 	}},
 
 	// Tasks
-	"create": {"PROJECT", "record a task; --start starts delivery, --talk starts its conductor to plan it with you",
+	"task create": {"PROJECT", "record a task; --start starts delivery, --talk starts its conductor to plan it with you",
 		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "what changes, in one line (required)")
 			goal := fs.String("goal", "", "why it matters and what should change, 16+ characters (required); - reads stdin")
@@ -814,10 +829,10 @@ var commands = map[string]command{
 			fs.Var(&related, "related", "a related TASK; repeatable")
 			return func(c *cli, a []string) (any, error) {
 				if *title == "" || *goal == "" {
-					return nil, errors.New("create: --title and --goal are required")
+					return nil, errors.New("task create: --title and --goal are required")
 				}
 				if *start && *talk {
-					return nil, errors.New("create: --start or --talk, not both")
+					return nil, errors.New("task create: --start or --talk, not both")
 				}
 				g, err := c.text(*goal)
 				if err != nil {
@@ -837,7 +852,7 @@ var commands = map[string]command{
 					"acceptanceCriteria": append([]string{}, criteria...), "repositories": rs}
 				if *from.pr != "" || *from.branch != "" {
 					if len(rs) != 1 {
-						return nil, errors.New("create: --from-pr and --from-branch need exactly one --repo, the repository they are in")
+						return nil, errors.New("task create: --from-pr and --from-branch need exactly one --repo, the repository they are in")
 					}
 				}
 				repoID := ""
@@ -883,7 +898,7 @@ var commands = map[string]command{
 				return out, nil
 			}
 		}},
-	"update": {"TASK", "change a task's title, goal, criteria, epic, repositories or owner",
+	"task update": {"TASK", "change a task's title, goal, criteria, epic, repositories or owner",
 		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "a new title")
 			goal := fs.String("goal", "", "a new goal; - reads stdin")
@@ -919,7 +934,7 @@ var commands = map[string]command{
 					body["ownerId"] = *owner
 				}
 				if len(body) == 0 && len(repos) == 0 {
-					return nil, errors.New("update: nothing to change")
+					return nil, errors.New("task update: nothing to change")
 				}
 				t, err := c.task(a[0])
 				if err != nil {
@@ -938,22 +953,22 @@ var commands = map[string]command{
 				return brief(u), nil
 			}
 		}},
-	"start": {"TASK", "start delivery: agents implement, review and open a PR",
+	"task start": {"TASK", "start delivery: agents implement, review and open a PR",
 		func(fs *flag.FlagSet) doer { return startFlags(fs, "/deliver") }},
-	"talk": {"TASK", "start its conductor to plan it with you in Chat; nothing is built until it decides",
+	"task talk": {"TASK", "start its conductor to plan it with you in Chat; nothing is built until it decides",
 		func(fs *flag.FlagSet) doer { return startFlags(fs, "/talk") }},
-	"auto-start": {"TASK", "start it by itself once its blockers merge", func(fs *flag.FlagSet) doer {
+	"task auto-start": {"TASK", "start it by itself once its blockers merge", func(fs *flag.FlagSet) doer {
 		how := fs.String("how", "deliver", "deliver or talk")
 		return func(c *cli, a []string) (any, error) {
 			if *how != "deliver" && *how != "talk" {
-				return nil, errors.New("auto-start: --how is deliver or talk")
+				return nil, errors.New("task auto-start: --how is deliver or talk")
 			}
 			return c.onTask("PUT", a[0], "/auto-start", obj{"how": *how})
 		}
 	}},
-	"no-auto-start": {"TASK", "cancel auto-start",
+	"task no-auto-start": {"TASK", "cancel auto-start",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("DELETE", a[0], "/auto-start", nil) })},
-	"relate": {"TASK", "relate two tasks", func(fs *flag.FlagSet) doer {
+	"task relate": {"TASK", "relate two tasks", func(fs *flag.FlagSet) doer {
 		blocks := fs.String("blocks", "", "a TASK that waits for this one")
 		blockedBy := fs.String("blocked-by", "", "a TASK this one waits for")
 		related := fs.String("related", "", "a related TASK")
@@ -968,7 +983,7 @@ var commands = map[string]command{
 				}
 			}
 			if n != 1 {
-				return nil, errors.New("relate: give exactly one of --blocks, --blocked-by, --related")
+				return nil, errors.New("task relate: give exactly one of --blocks, --blocked-by, --related")
 			}
 			body := obj{"kind": kind, "task": other}
 			if *why != "" {
@@ -977,20 +992,20 @@ var commands = map[string]command{
 			return c.onTask("POST", a[0], "/relations", body)
 		}
 	}},
-	"unrelate": {"TASK KIND OTHER", "remove a relation; KIND is blocks, blocked_by or related",
+	"task unrelate": {"TASK KIND OTHER", "remove a relation; KIND is blocks, blocked_by or related",
 		noFlags(func(c *cli, a []string) (any, error) {
 			switch a[1] {
 			case "blocks", "blocked_by", "related":
 			default:
-				return nil, errors.New("unrelate: KIND is blocks, blocked_by or related")
+				return nil, errors.New("task unrelate: KIND is blocks, blocked_by or related")
 			}
 			return c.onTask("DELETE", a[0], "/relations/"+a[1]+"/"+url.PathEscape(a[2]), nil)
 		})},
-	"done": {"TASK", "mark finished work that has nothing to merge done",
+	"task done": {"TASK", "mark finished work that has nothing to merge done",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("POST", a[0], "/done", obj{}) })},
 
 	// Talking to the agents
-	"chat": {"TASK TEXT", "a message in a task's Chat: starts or tells its conductor",
+	"task chat": {"TASK TEXT", "a message in a task's Chat: starts or tells its conductor",
 		func(fs *flag.FlagSet) doer {
 			aside := fs.Bool("aside", false, "for people only; the conductor does not act on it")
 			return func(c *cli, a []string) (any, error) {
@@ -1005,13 +1020,13 @@ var commands = map[string]command{
 				return c.onTask("POST", a[0], "/chat", body)
 			}
 		}},
-	"answer": {"QUESTION TEXT?", "answer an agent's question (id from questions or show)",
+	"question answer": {"QUESTION TEXT?", "answer an agent's question (id from question list or task show)",
 		func(fs *flag.FlagSet) doer {
 			var choices ints
 			fs.Var(&choices, "choice", "index of a choice; repeatable")
 			return func(c *cli, a []string) (any, error) {
 				if a[1] == "" && len(choices) == 0 {
-					return nil, errors.New("answer: give the text, --choice, or both")
+					return nil, errors.New("question answer: give the text, --choice, or both")
 				}
 				ans, err := c.itemAnswer(a[1], choices)
 				if err != nil {
@@ -1025,7 +1040,7 @@ var commands = map[string]command{
 				return c.request("POST", "/v1/questions/"+url.PathEscape(a[0])+"/answer", body)
 			}
 		}},
-	"decide": {"TASK ACTION", "the owner's decision after delivery stopped for them (see show's escalation)",
+	"task decide": {"TASK ACTION", "the owner's decision after delivery stopped for them (see task show's escalation)",
 		func(fs *flag.FlagSet) doer {
 			note := fs.String("note", "", "a note with the decision")
 			return func(c *cli, a []string) (any, error) {
@@ -1036,7 +1051,7 @@ var commands = map[string]command{
 				return c.onTask("POST", a[0], "/decide", body)
 			}
 		}},
-	"steer": {"RUN TEXT", "tell a running agent something, read at its next step",
+	"run steer": {"RUN TEXT", "tell a running agent something, read at its next step",
 		func(fs *flag.FlagSet) doer {
 			interrupt := fs.Bool("interrupt", false, "stop its current turn: only when that work is wasted")
 			return func(c *cli, a []string) (any, error) {
@@ -1051,7 +1066,7 @@ var commands = map[string]command{
 				return c.onRun("POST", a[0], "/steer", body)
 			}
 		}},
-	"pause": {"RUN", "pause a run", func(fs *flag.FlagSet) doer {
+	"run pause": {"RUN", "pause a run", func(fs *flag.FlagSet) doer {
 		hard := fs.Bool("hard", false, "stop now, not at the next safe point")
 		reason := fs.String("reason", "", "why")
 		return func(c *cli, a []string) (any, error) {
@@ -1065,13 +1080,13 @@ var commands = map[string]command{
 			return c.onRun("POST", a[0], "/pause", body)
 		}
 	}},
-	"resume": {"RUN", "resume a run", func(fs *flag.FlagSet) doer {
+	"run resume": {"RUN", "resume a run", func(fs *flag.FlagSet) doer {
 		return reasonFlags(fs, "/resume")
 	}},
-	"abort": {"RUN", "abort a run", func(fs *flag.FlagSet) doer {
+	"run abort": {"RUN", "abort a run", func(fs *flag.FlagSet) doer {
 		return reasonFlags(fs, "/abort")
 	}},
-	"restart": {"RUN NOTE", "a fresh run in a stalled run's slot; NOTE says what to do differently",
+	"run restart": {"RUN NOTE", "a fresh run in a stalled run's slot; NOTE says what to do differently",
 		func(fs *flag.FlagSet) doer {
 			tier := fs.String("tier", "", "model tier id")
 			return func(c *cli, a []string) (any, error) {
@@ -1084,7 +1099,7 @@ var commands = map[string]command{
 		}},
 
 	// Brainstorms
-	"brainstorms": {"", "your brainstorm sessions", func(fs *flag.FlagSet) doer {
+	"brainstorm list": {"", "your brainstorm sessions", func(fs *flag.FlagSet) doer {
 		archived := fs.Bool("archived", false, "the archived ones")
 		return func(c *cli, _ []string) (any, error) {
 			a := ""
@@ -1094,7 +1109,7 @@ var commands = map[string]command{
 			return c.request("GET", "/v1/brainstorms"+query("archived", a), nil)
 		}
 	}},
-	"brainstorm": {"MESSAGE", "start a brainstorm session: an agent to think something through with",
+	"brainstorm create": {"MESSAGE", "start a brainstorm session: an agent to think something through with",
 		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "its title")
 			tier := fs.String("tier", "", "model tier id")
@@ -1123,10 +1138,10 @@ var commands = map[string]command{
 				return c.request("POST", "/v1/brainstorms", body)
 			}
 		}},
-	"brainstorm-show": {"ID", "one brainstorm session", noFlags(func(c *cli, a []string) (any, error) {
+	"brainstorm show": {"ID", "one brainstorm session", noFlags(func(c *cli, a []string) (any, error) {
 		return c.request("GET", "/v1/brainstorms/"+url.PathEscape(a[0]), nil)
 	})},
-	"brainstorm-chat": {"ID TEXT", "a message in a brainstorm session", noFlags(func(c *cli, a []string) (any, error) {
+	"brainstorm chat": {"ID TEXT", "a message in a brainstorm session", noFlags(func(c *cli, a []string) (any, error) {
 		t, err := c.text(a[1])
 		if err != nil {
 			return nil, err

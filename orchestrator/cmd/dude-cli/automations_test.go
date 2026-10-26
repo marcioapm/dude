@@ -54,48 +54,48 @@ func fixtureSettings(t *testing.T) string {
 func automationCases(t *testing.T) []automationCase {
 	settings := fixtureSettings(t)
 	return []automationCase{
-		{[]string{"automations"}, "", "GET", "/v1/automations", ``, ""},
-		{[]string{"automations", "--scope", "project", "--trigger", "github", "--kind", "agent:reviewer", "--enabled", "true", "--mine", "--name", "triage"}, "",
+		{[]string{"automation", "list"}, "", "GET", "/v1/automations", ``, ""},
+		{[]string{"automation", "list", "--scope", "project", "--trigger", "github", "--kind", "agent:reviewer", "--enabled", "true", "--mine", "--name", "triage"}, "",
 			"GET", "/v1/automations?enabled=true&kind=agent%3Areviewer&owner=mine&q=triage&scope=project&trigger=github", ``, ""},
-		{[]string{"automations", "ABS"}, "", "GET", "/v1/projects/prj_1/automations", ``, ""},
-		{[]string{"automation", "aut_1"}, "", "GET", "/v1/automations/aut_1", ``, ""},
-		{[]string{"automation-create", "--name", "Morning digest", "--kind", "agent", "--trigger", "schedule", "--tz", "Europe/Lisbon"}, "",
+		{[]string{"automation", "list", "ABS"}, "", "GET", "/v1/projects/prj_1/automations", ``, ""},
+		{[]string{"automation", "show", "aut_1"}, "", "GET", "/v1/automations/aut_1", ``, ""},
+		{[]string{"automation", "create", "--name", "Morning digest", "--kind", "agent", "--trigger", "schedule", "--tz", "Europe/Lisbon"}, "",
 			"POST", "/v1/automations", `{"kind":"agent","name":"Morning digest","trigger":"schedule","tz":"Europe/Lisbon"}`, ""},
-		{[]string{"automation-create", "ABS", "--name", "Review", "--kind", "agent", "--trigger", "github", "--preset", "reviewer"}, "",
+		{[]string{"automation", "create", "ABS", "--name", "Review", "--kind", "agent", "--trigger", "github", "--preset", "reviewer"}, "",
 			"POST", "/v1/automations", `{"kind":"agent","name":"Review","preset":"reviewer","projectId":"prj_1","trigger":"github"}`, ""},
-		{[]string{"automation-create", "--name", "Release hook", "--kind", "webhook", "--trigger", "github"}, "",
+		{[]string{"automation", "create", "--name", "Release hook", "--kind", "webhook", "--trigger", "github"}, "",
 			"POST", "/v1/automations", `{"kind":"webhook","name":"Release hook","trigger":"github"}`, ""},
-		{[]string{"automation-update", "aut_1", "testdata/automation-get.json"}, "", "PUT", "/v1/automations/aut_1", settings, "organization"},
-		{[]string{"automation-enable", "aut_1"}, "", "PUT", "/v1/automations/aut_1/enabled", `{"enabled":true}`, ""},
-		{[]string{"automation-disable", "aut_1"}, "", "PUT", "/v1/automations/aut_1/enabled", `{"enabled":false}`, ""},
-		{[]string{"automation-delete", "aut_1"}, "", "DELETE", "/v1/automations/aut_1", ``, ""},
-		{[]string{"automation-duplicate", "aut_1"}, "", "POST", "/v1/automations/aut_1/duplicate", ``, ""},
-		{[]string{"automation-owner", "aut_1", "per_2"}, "", "PUT", "/v1/automations/aut_1/owner", `{"personId":"per_2"}`, ""},
-		{[]string{"automation-secret", "aut_1"}, "test-signing-secret-0123\n", "PUT", "/v1/automations/aut_1/webhook-secret",
+		{[]string{"automation", "update", "aut_1", "testdata/automation-get.json"}, "", "PUT", "/v1/automations/aut_1", settings, "organization"},
+		{[]string{"automation", "enable", "aut_1"}, "", "PUT", "/v1/automations/aut_1/enabled", `{"enabled":true}`, ""},
+		{[]string{"automation", "disable", "aut_1"}, "", "PUT", "/v1/automations/aut_1/enabled", `{"enabled":false}`, ""},
+		{[]string{"automation", "delete", "aut_1"}, "", "DELETE", "/v1/automations/aut_1", ``, ""},
+		{[]string{"automation", "duplicate", "aut_1"}, "", "POST", "/v1/automations/aut_1/duplicate", ``, ""},
+		{[]string{"automation", "owner", "aut_1", "per_2"}, "", "PUT", "/v1/automations/aut_1/owner", `{"personId":"per_2"}`, ""},
+		{[]string{"automation", "secret", "aut_1"}, "test-signing-secret-0123\n", "PUT", "/v1/automations/aut_1/webhook-secret",
 			`{"secret":"test-signing-secret-0123"}`, ""},
-		{[]string{"automation-run", "aut_1"}, "", "POST", "/v1/automations/aut_1/runs", `{}`, ""},
-		{[]string{"automation-run", "aut_gh", "--delivery", "dlv_1"}, "", "POST", "/v1/automations/aut_gh/runs", `{"deliveryId":"dlv_1"}`, ""},
-		{[]string{"automation-run", "aut_gh", "--body", "-", "--action", "opened", "--delivery-id", "test-1"}, prEvent,
+		{[]string{"automation", "run", "aut_1"}, "", "POST", "/v1/automations/aut_1/runs", `{}`, ""},
+		{[]string{"automation", "run", "aut_gh", "--delivery", "dlv_1"}, "", "POST", "/v1/automations/aut_gh/runs", `{"deliveryId":"dlv_1"}`, ""},
+		{[]string{"automation", "run", "aut_gh", "--body", "-", "--action", "opened", "--delivery-id", "test-1"}, prEvent,
 			"POST", "/v1/automations/aut_gh/runs",
 			`{"testEvent":{"action":"opened","body":{"action":"opened","pull_request":{"number":7}},"deliveryId":"test-1","event":"pull_request"}}`, ""},
-		{[]string{"automation-run", "aut_gh", "--body", "-", "--action", "opened", "--delivery-id", "test-3"}, `{"pull_request":{"number":7}}`,
+		{[]string{"automation", "run", "aut_gh", "--body", "-", "--action", "opened", "--delivery-id", "test-3"}, `{"pull_request":{"number":7}}`,
 			"POST", "/v1/automations/aut_gh/runs",
 			`{"testEvent":{"action":"opened","body":{"action":"opened","pull_request":{"number":7}},"deliveryId":"test-3","event":"pull_request"}}`, ""},
-		{[]string{"automation-run", "aut_gh", "--body", "-", "--event", "issues", "--delivery-id", "test-2"}, `{"issue":{"number":3}}`,
+		{[]string{"automation", "run", "aut_gh", "--body", "-", "--event", "issues", "--delivery-id", "test-2"}, `{"issue":{"number":3}}`,
 			"POST", "/v1/automations/aut_gh/runs", `{"testEvent":{"action":null,"body":{"issue":{"number":3}},"deliveryId":"test-2","event":"issues"}}`, ""},
-		{[]string{"automation-runs", "aut_1", "--status", "failed", "--limit", "10"}, "", "GET", "/v1/automations/aut_1/runs?limit=10&status=failed", ``, ""},
-		{[]string{"automation-run-show", "aut_1", "arn_1"}, "", "GET", "/v1/automations/aut_1/runs/arn_1", ``, ""},
-		{[]string{"automation-deliveries", "aut_gh"}, "", "GET", "/v1/automations/aut_gh/deliveries", ``, ""},
-		{[]string{"automation-test", "aut_gh", "-"}, prEvent, "POST", "/v1/automations/aut_gh/test-event/evaluate",
+		{[]string{"automation", "run-list", "aut_1", "--status", "failed", "--limit", "10"}, "", "GET", "/v1/automations/aut_1/runs?limit=10&status=failed", ``, ""},
+		{[]string{"automation", "run-show", "aut_1", "arn_1"}, "", "GET", "/v1/automations/aut_1/runs/arn_1", ``, ""},
+		{[]string{"automation", "deliveries", "aut_gh"}, "", "GET", "/v1/automations/aut_gh/deliveries", ``, ""},
+		{[]string{"automation", "test", "aut_gh", "-"}, prEvent, "POST", "/v1/automations/aut_gh/test-event/evaluate",
 			`{"body":{"action":"opened","pull_request":{"number":7}}}`, ""},
-		{[]string{"automation-start-fresh", "aut_1"}, "", "POST", "/v1/automations/aut_1/start-fresh", ``, ""},
-		{[]string{"automation-prompts", "aut_1"}, "", "GET", "/v1/automations/aut_1/prompt-history", ``, ""},
-		{[]string{"automation-prompt-restore", "aut_1", "1"}, "", "POST", "/v1/automations/aut_1/prompt-history/restore", `{"versionId":"apv_1"}`, ""},
-		{[]string{"automation-prompt-restore", "aut_1", "apv_2"}, "", "POST", "/v1/automations/aut_1/prompt-history/restore", `{"versionId":"apv_2"}`, ""},
-		{[]string{"automation-repos"}, "", "GET", "/v1/automations/repositories", ``, ""},
-		{[]string{"automation-next", "0 9 * * 1-5", "--tz", "Europe/Lisbon"}, "", "POST", "/v1/automations/schedule/next",
+		{[]string{"automation", "start-fresh", "aut_1"}, "", "POST", "/v1/automations/aut_1/start-fresh", ``, ""},
+		{[]string{"automation", "prompts", "aut_1"}, "", "GET", "/v1/automations/aut_1/prompt-history", ``, ""},
+		{[]string{"automation", "prompt-restore", "aut_1", "1"}, "", "POST", "/v1/automations/aut_1/prompt-history/restore", `{"versionId":"apv_1"}`, ""},
+		{[]string{"automation", "prompt-restore", "aut_1", "apv_2"}, "", "POST", "/v1/automations/aut_1/prompt-history/restore", `{"versionId":"apv_2"}`, ""},
+		{[]string{"automation", "repos"}, "", "GET", "/v1/automations/repositories", ``, ""},
+		{[]string{"automation", "next", "0 9 * * 1-5", "--tz", "Europe/Lisbon"}, "", "POST", "/v1/automations/schedule/next",
 			`{"cron":"0 9 * * 1-5","tz":"Europe/Lisbon"}`, ""},
-		{[]string{"automation-subscriptions"}, "", "GET", "/v1/automations/subscriptions", ``, ""},
+		{[]string{"automation", "subscriptions"}, "", "GET", "/v1/automations/subscriptions", ``, ""},
 	}
 }
 
@@ -165,40 +165,40 @@ func TestAutomationCommandsReachTheirRoutes(t *testing.T) {
 	}
 }
 
-// The documented workflow: `dude automation ID --settings`, edited, is
-// automation-update's input; so is the full output, read-only fields and all.
+// The documented workflow: `dude automation show ID --settings`, edited, is
+// automation update's input; so is the full output, read-only fields and all.
 func TestAutomationSettingsRoundTrip(t *testing.T) {
 	srv, calls := fakeDude(t)
-	out, err := runCLI(t, srv, "", "automation", "aut_1", "--settings")
+	out, err := runCLI(t, srv, "", "automation", "show", "aut_1", "--settings")
 	if err != nil {
 		t.Fatal(err)
 	}
 	edited := strings.Replace(out, "Summarise yesterday", "Summarise last week", 1)
-	if _, err := runCLI(t, srv, edited, "automation-update", "aut_1", "-"); err != nil {
+	if _, err := runCLI(t, srv, edited, "automation", "update", "aut_1", "-"); err != nil {
 		t.Fatal(err)
 	}
 	want := strings.Replace(fixtureSettings(t), "Summarise yesterday", "Summarise last week", 1)
 	if b, _ := json.Marshal(last(*calls).body); string(b) != want {
 		t.Fatalf("PUT body\n%s\nwant\n%s", b, want)
 	}
-	full, err := runCLI(t, srv, "", "automation", "aut_1")
+	full, err := runCLI(t, srv, "", "automation", "show", "aut_1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, srv, full, "automation-update", "aut_1", "-"); err != nil {
+	if _, err := runCLI(t, srv, full, "automation", "update", "aut_1", "-"); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := json.Marshal(last(*calls).body); string(b) != fixtureSettings(t) {
 		t.Fatalf("PUT body from the full output\n%s\nwant\n%s", b, fixtureSettings(t))
 	}
-	if _, err := runCLI(t, srv, full, "automation-update", "aut_2", "-"); err == nil || !strings.Contains(err.Error(), "aut_1's, not aut_2's") {
+	if _, err := runCLI(t, srv, full, "automation", "update", "aut_2", "-"); err == nil || !strings.Contains(err.Error(), "aut_1's, not aut_2's") {
 		t.Fatalf("another automation's settings: %v", err)
 	}
 }
 
 // cli-bodies.test.ts strips testdata/automation-readonly.json's fields from
 // automation-get.json and parses the rest with the PUT's schema, so the list
-// there must be the one automation-update strips.
+// there must be the one automation update strips.
 func TestAutomationReadOnlyIsShared(t *testing.T) {
 	raw, err := os.ReadFile("testdata/automation-readonly.json")
 	if err != nil {
@@ -215,7 +215,7 @@ func TestAutomationReadOnlyIsShared(t *testing.T) {
 
 func TestAutomationRunTestEventGetsADeliveryID(t *testing.T) {
 	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, prEvent, "automation-run", "aut_gh", "--body", "-"); err != nil {
+	if _, err := runCLI(t, srv, prEvent, "automation", "run", "aut_gh", "--body", "-"); err != nil {
 		t.Fatal(err)
 	}
 	te, _ := last(*calls).body["testEvent"].(map[string]any)
@@ -228,7 +228,7 @@ func TestAutomationRunTestEventGetsADeliveryID(t *testing.T) {
 // must reach the body; a body naming another action is refused.
 func TestAutomationRunActionIsWrittenIntoTheBody(t *testing.T) {
 	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, `{"pull_request":{"number":7}}`, "automation-run", "aut_gh", "--body", "-", "--action", "opened"); err != nil {
+	if _, err := runCLI(t, srv, `{"pull_request":{"number":7}}`, "automation", "run", "aut_gh", "--body", "-", "--action", "opened"); err != nil {
 		t.Fatal(err)
 	}
 	te, _ := last(*calls).body["testEvent"].(map[string]any)
@@ -237,7 +237,7 @@ func TestAutomationRunActionIsWrittenIntoTheBody(t *testing.T) {
 		t.Fatalf("testEvent %v", te)
 	}
 	n := len(*calls)
-	_, err := runCLI(t, srv, `{"action":"closed"}`, "automation-run", "aut_gh", "--body", "-", "--action", "opened")
+	_, err := runCLI(t, srv, `{"action":"closed"}`, "automation", "run", "aut_gh", "--body", "-", "--action", "opened")
 	if err == nil || !strings.Contains(err.Error(), "opened") || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("a body with another action: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestAutomationSecretStaysOffArgvAndOutput(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	out, err := runCLI(t, srv, secret+"\n", "automation-secret", "aut_1")
+	out, err := runCLI(t, srv, secret+"\n", "automation", "secret", "aut_1")
 	if err != nil || strings.Contains(out, secret) || !strings.Contains(out, `"webhookSecretHint": "6789"`) {
 		t.Fatalf("output %q, %v", out, err)
 	}
@@ -273,21 +273,21 @@ func TestAutomationSecretStaysOffArgvAndOutput(t *testing.T) {
 	}
 
 	refused := secret + "-refuse"
-	out, err = runCLI(t, srv, refused+"\n", "automation-secret", "aut_1")
+	out, err = runCLI(t, srv, refused+"\n", "automation", "secret", "aut_1")
 	var he *httpError
 	if !errors.As(err, &he) || he.status != 422 || strings.Contains(err.Error(), refused) || strings.Contains(out, refused) {
 		t.Fatalf("refusal: %q %v", out, err)
 	}
 
 	seen = nil
-	if _, err := runCLI(t, srv, "", "automation-secret", "aut_1", secret); err == nil || strings.Contains(err.Error(), secret) {
+	if _, err := runCLI(t, srv, "", "automation", "secret", "aut_1", secret); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("a secret on the command line: %v", err)
 	}
 	short := "short-secret"
-	if _, err := runCLI(t, srv, short+"\n", "automation-secret", "aut_1"); err == nil || strings.Contains(err.Error(), short) {
+	if _, err := runCLI(t, srv, short+"\n", "automation", "secret", "aut_1"); err == nil || strings.Contains(err.Error(), short) {
 		t.Errorf("a short secret: %v", err)
 	}
-	if _, err := runCLI(t, srv, "", "automation-secret", "aut_1"); err == nil {
+	if _, err := runCLI(t, srv, "", "automation", "secret", "aut_1"); err == nil {
 		t.Error("no secret on stdin succeeded")
 	}
 	if len(seen) != 0 {
@@ -298,24 +298,24 @@ func TestAutomationSecretStaysOffArgvAndOutput(t *testing.T) {
 func TestAutomationChoicesAreCheckedBeforeAnyRequest(t *testing.T) {
 	srv, calls := fakeDude(t)
 	for _, args := range [][]string{
-		{"automations", "--trigger", "cron"},
-		{"automations", "--kind", "robot"},
-		{"automations", "--kind", "command:own"},
-		{"automations", "--kind", "agent:conductor"},
-		{"automations", "--enabled", "yes"},
-		{"automations", "--scope", "team"},
-		{"automations", "ABS", "--mine"},
-		{"automation-create", "--name", "x", "--kind", "agent"},
-		{"automation-create", "--name", "x", "--kind", "bot", "--trigger", "github"},
-		{"automation-create", "--name", "x", "--kind", "agent", "--trigger", "push"},
-		{"automation-create", "--name", "x", "--kind", "command", "--trigger", "github", "--preset", "reviewer"},
-		{"automation-create", "--name", "x", "--kind", "agent", "--trigger", "github", "--preset", "implementer"},
-		{"automation-runs", "aut_1", "--status", "done"},
-		{"automation-runs", "aut_1", "--limit", "500"},
-		{"automation-run", "aut_1", "--event", "push"},
-		{"automation-run", "aut_1", "--delivery", "d", "--body", "-"},
-		{"automation-update", "aut_1", "testdata/nope.json"},
-		{"automation-test", "aut_1", "-"},
+		{"automation", "list", "--trigger", "cron"},
+		{"automation", "list", "--kind", "robot"},
+		{"automation", "list", "--kind", "command:own"},
+		{"automation", "list", "--kind", "agent:conductor"},
+		{"automation", "list", "--enabled", "yes"},
+		{"automation", "list", "--scope", "team"},
+		{"automation", "list", "ABS", "--mine"},
+		{"automation", "create", "--name", "x", "--kind", "agent"},
+		{"automation", "create", "--name", "x", "--kind", "bot", "--trigger", "github"},
+		{"automation", "create", "--name", "x", "--kind", "agent", "--trigger", "push"},
+		{"automation", "create", "--name", "x", "--kind", "command", "--trigger", "github", "--preset", "reviewer"},
+		{"automation", "create", "--name", "x", "--kind", "agent", "--trigger", "github", "--preset", "implementer"},
+		{"automation", "run-list", "aut_1", "--status", "done"},
+		{"automation", "run-list", "aut_1", "--limit", "500"},
+		{"automation", "run", "aut_1", "--event", "push"},
+		{"automation", "run", "aut_1", "--delivery", "d", "--body", "-"},
+		{"automation", "update", "aut_1", "testdata/nope.json"},
+		{"automation", "test", "aut_1", "-"},
 	} {
 		if _, err := runCLI(t, srv, "not json", args...); err == nil {
 			t.Errorf("%v succeeded", args)

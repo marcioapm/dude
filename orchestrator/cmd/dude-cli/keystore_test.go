@@ -259,7 +259,7 @@ func TestOrgFlagBeforeCommand(t *testing.T) {
 	var asked string
 	c := &cli{http: srv.Client(), stdin: strings.NewReader(""), out: io.Discard,
 		creds: func(org string) (string, string, error) { asked = org; return srv.URL, "k", nil }}
-	if err := c.run([]string{"--org", "northwind", "projects"}); err != nil {
+	if err := c.run([]string{"--org", "northwind", "project", "list"}); err != nil {
 		t.Fatal(err)
 	}
 	if asked != "northwind" {
@@ -340,15 +340,15 @@ func TestUsePersistsAndIdentityOutputHidesKeys(t *testing.T) {
 
 func TestVariadicArguments(t *testing.T) {
 	srv, calls := fakeDude(t)
-	if _, err := runCLI(t, srv, "", "assign", "wi_12", "usr_1", "usr_2"); err != nil {
+	if _, err := runCLI(t, srv, "", "task", "assign", "wi_12", "usr_1", "usr_2"); err != nil {
 		t.Fatal(err)
 	}
 	c := last(*calls)
 	if c.method != "PUT" || c.path != "/v1/tasks/wi_12/people" || len(c.body["people"].([]any)) != 2 {
-		t.Fatalf("assign: %+v", c)
+		t.Fatalf("task assign: %+v", c)
 	}
-	if _, err := runCLI(t, srv, "", "assign", "wi_12"); err == nil {
-		t.Fatal("assign with no person succeeded")
+	if _, err := runCLI(t, srv, "", "task", "assign", "wi_12"); err == nil {
+		t.Fatal("task assign with no person succeeded")
 	}
 }
 
@@ -359,54 +359,54 @@ func TestNewCommandsReachTheirRoutes(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{[]string{"start", "wi_12"}, "POST", "/v1/tasks/wi_12/deliver", `{}`},
-		{[]string{"start", "wi_12", "--override", "--note", "urgent"}, "POST", "/v1/tasks/wi_12/deliver", `{"note":"urgent","override":true}`},
-		{[]string{"talk", "wi_12", "--override", "--note", "plan"}, "POST", "/v1/tasks/wi_12/talk", `{"note":"plan","override":true}`},
-		{[]string{"create", "ABS", "--title", "New", "--goal", "A goal long enough to save.", "--talk"}, "POST", "/v1/tasks/wi_13/talk", `{}`},
-		{[]string{"chat", "wi_12", "hello"}, "POST", "/v1/tasks/wi_12/chat", `{"text":"hello"}`},
-		{[]string{"chat", "wi_12", "hello", "--aside"}, "POST", "/v1/tasks/wi_12/chat", `{"aside":true,"text":"hello"}`},
-		{[]string{"pause", "run_9"}, "POST", "/v1/runs/run_9/pause", `{"mode":"graceful"}`},
-		{[]string{"pause", "run_9", "--hard", "--reason", "wait"}, "POST", "/v1/runs/run_9/pause", `{"mode":"hard","reason":"wait"}`},
-		{[]string{"resume", "run_9", "--reason", "ready"}, "POST", "/v1/runs/run_9/resume", `{"reason":"ready"}`},
-		{[]string{"abort", "run_9", "--reason", "stop"}, "POST", "/v1/runs/run_9/abort", `{"reason":"stop"}`},
-		{[]string{"restart", "run_9", "try again", "--tier", "tier_1"}, "POST", "/v1/runs/run_9/restart", `{"note":"try again","tier":"tier_1"}`},
-		{[]string{"reviewers", "pr_1", "ana", "bob"}, "POST", "/v1/pull-requests/pr_1/reviewers", `{"logins":["ana","bob"]}`},
-		{[]string{"invite", "ana@example.com", "--role", "admin"}, "POST", "/v1/organization/invitations", `{"invitations":[{"email":"ana@example.com"}],"role":"admin"}`},
-		{[]string{"decide", "wi_12", "retry", "--note", "ready"}, "POST", "/v1/tasks/wi_12/decide", `{"action":"retry","note":"ready"}`},
-		{[]string{"memory-add", "--title", "Queue", "--content", "Use it", "--kind", "procedure", "--project", "ABS"}, "POST", "/v1/memory/memories", `{"content":"Use it","kind":"procedure","projectId":"prj_1","title":"Queue"}`},
-		{[]string{"memories", "--project", "ABS", "--text", "queue", "--archived"}, "GET", "/v1/memory/memories?archived=true&project=prj_1&q=queue", ``},
-		{[]string{"epic-create", "ABS", "--title", "Launch", "--description", "Soon"}, "POST", "/v1/projects/prj_1/epics", `{"description":"Soon","title":"Launch"}`},
-		{[]string{"events", "wi_12", "--after", "42", "--limit", "10"}, "GET", "/v1/events?after=42&limit=10&taskId=wi_12", ``},
-		{[]string{"events", "wi_12", "--run", "run_9", "--after", "42", "--limit", "10"}, "GET", "/v1/events?after=42&limit=10&runId=run_9", ``},
-		{[]string{"update-branch", "pr_1"}, "POST", "/v1/pull-requests/pr_1/update-branch", ``},
-		{[]string{"rerun-checks", "pr_1"}, "POST", "/v1/pull-requests/pr_1/rerun-failed", ``},
-		{[]string{"unrelate", "wi_12", "blocks", "ABS-3"}, "DELETE", "/v1/tasks/wi_12/relations/blocks/ABS-3", ``},
-		{[]string{"brainstorm", "Think", "--title", "Queue", "--project", "ABS", "--tier", "tier_1"}, "POST", "/v1/brainstorms", `{"message":"Think","projects":[{"projectId":"prj_1"}],"tier":"tier_1","title":"Queue"}`},
-		{[]string{"brainstorm-answer", "bs_1", "q_1", "because", "--choice", "1"}, "POST", "/v1/brainstorms/bs_1/questions/q_1/answer", `{"answers":[{"choices":[1],"text":"because"}]}`},
-		{[]string{"brainstorm-invite", "bs_1", "per_1", "--role", "read"}, "POST", "/v1/brainstorms/bs_1/people", `{"people":["per_1"],"role":"read"}`},
-		{[]string{"reset-machine", "wi_12", "implementer", "--note", "fresh"}, "DELETE", "/v1/tasks/wi_12/agent-machines/implementer", `{"note":"fresh"}`},
-		{[]string{"preview", "wi_12"}, "POST", "/v1/tasks/wi_12/preview", ``},
-		{[]string{"preview", "wi_12", "--stop"}, "DELETE", "/v1/tasks/wi_12/preview", ``},
-		{[]string{"brainstorm-title", "bs_1", "Queue"}, "POST", "/v1/brainstorms/bs_1/title", `{"title":"Queue"}`},
-		{[]string{"brainstorm-chat", "bs_1", "hello"}, "POST", "/v1/brainstorms/bs_1/chat", `{"text":"hello"}`},
-		{[]string{"brainstorm-retry", "bs_1"}, "POST", "/v1/brainstorms/bs_1/retry", ``},
-		{[]string{"brainstorm-archive", "bs_1"}, "POST", "/v1/brainstorms/bs_1/archive", ``},
-		{[]string{"brainstorm-unarchive", "bs_1"}, "POST", "/v1/brainstorms/bs_1/unarchive", ``},
-		{[]string{"brainstorms", "--archived"}, "GET", "/v1/brainstorms?archived=1", ``},
-		{[]string{"brainstorm-show", "bs_1"}, "GET", "/v1/brainstorms/bs_1", ``},
-		{[]string{"project-create", "--name", "Web", "--slug", "web", "--key", "WEB"}, "POST", "/v1/projects", `{"description":"","key":"WEB","name":"Web","repositories":[],"slug":"web"}`},
-		{[]string{"repo-add", "ABS", "--name", "web", "--url", "https://example.com/web.git", "--branch", "dev"}, "POST", "/v1/projects/prj_1/repositories", `{"defaultBranch":"dev","name":"web","url":"https://example.com/web.git"}`},
-		{[]string{"resolve", "fnd_1", "accepted", "--note", "fine"}, "POST", "/v1/findings/fnd_1/resolve", `{"note":"fine","status":"accepted"}`},
-		{[]string{"recover", "wi_12"}, "GET", "/v1/tasks/wi_12/recover", ``},
-		{[]string{"recover", "wi_12", "restart", "--override"}, "POST", "/v1/tasks/wi_12/recover", `{"action":"restart","override":true}`},
-		{[]string{"repo-decide", "rr_1", "decline"}, "POST", "/v1/repository-requests/rr_1/decide", `{"approve":false}`},
-		{[]string{"note", "ep_1", "-", "--replaces", "2"}, "POST", "/v1/epics/ep_1/notes", `{"replaces":2,"text":"from stdin"}`},
-		{[]string{"epic-update", "ep_1", "--state", "none"}, "PATCH", "/v1/epics/ep_1", `{"state":null}`},
-		{[]string{"merge", "pr_1", "--method", "squash"}, "POST", "/v1/pull-requests/pr_1/merge", `{"method":"squash"}`},
-		{[]string{"findings", "--run", "run_9"}, "GET", "/v1/findings?runId=run_9", ``},
-		{[]string{"memory-search", "retry backoff", "--words"}, "GET", "/v1/memory/search?mode=words&q=retry+backoff", ``},
-		{[]string{"brainstorm-file", "bs_1", "prop_1", "0", "2"}, "POST", "/v1/brainstorms/bs_1/file", `{"items":[0,2],"proposalId":"prop_1"}`},
-		{[]string{"steer", "ABS-12", "x"}, "POST", "/v1/runs/run_new/steer", `{"text":"x"}`},
+		{[]string{"task", "start", "wi_12"}, "POST", "/v1/tasks/wi_12/deliver", `{}`},
+		{[]string{"task", "start", "wi_12", "--override", "--note", "urgent"}, "POST", "/v1/tasks/wi_12/deliver", `{"note":"urgent","override":true}`},
+		{[]string{"task", "talk", "wi_12", "--override", "--note", "plan"}, "POST", "/v1/tasks/wi_12/talk", `{"note":"plan","override":true}`},
+		{[]string{"task", "create", "ABS", "--title", "New", "--goal", "A goal long enough to save.", "--talk"}, "POST", "/v1/tasks/wi_13/talk", `{}`},
+		{[]string{"task", "chat", "wi_12", "hello"}, "POST", "/v1/tasks/wi_12/chat", `{"text":"hello"}`},
+		{[]string{"task", "chat", "wi_12", "hello", "--aside"}, "POST", "/v1/tasks/wi_12/chat", `{"aside":true,"text":"hello"}`},
+		{[]string{"run", "pause", "run_9"}, "POST", "/v1/runs/run_9/pause", `{"mode":"graceful"}`},
+		{[]string{"run", "pause", "run_9", "--hard", "--reason", "wait"}, "POST", "/v1/runs/run_9/pause", `{"mode":"hard","reason":"wait"}`},
+		{[]string{"run", "resume", "run_9", "--reason", "ready"}, "POST", "/v1/runs/run_9/resume", `{"reason":"ready"}`},
+		{[]string{"run", "abort", "run_9", "--reason", "stop"}, "POST", "/v1/runs/run_9/abort", `{"reason":"stop"}`},
+		{[]string{"run", "restart", "run_9", "try again", "--tier", "tier_1"}, "POST", "/v1/runs/run_9/restart", `{"note":"try again","tier":"tier_1"}`},
+		{[]string{"pr", "reviewers", "pr_1", "ana", "bob"}, "POST", "/v1/pull-requests/pr_1/reviewers", `{"logins":["ana","bob"]}`},
+		{[]string{"person", "invite", "ana@example.com", "--role", "admin"}, "POST", "/v1/organization/invitations", `{"invitations":[{"email":"ana@example.com"}],"role":"admin"}`},
+		{[]string{"task", "decide", "wi_12", "retry", "--note", "ready"}, "POST", "/v1/tasks/wi_12/decide", `{"action":"retry","note":"ready"}`},
+		{[]string{"memory", "add", "--title", "Queue", "--content", "Use it", "--kind", "procedure", "--project", "ABS"}, "POST", "/v1/memory/memories", `{"content":"Use it","kind":"procedure","projectId":"prj_1","title":"Queue"}`},
+		{[]string{"memory", "list", "--project", "ABS", "--text", "queue", "--archived"}, "GET", "/v1/memory/memories?archived=true&project=prj_1&q=queue", ``},
+		{[]string{"epic", "create", "ABS", "--title", "Launch", "--description", "Soon"}, "POST", "/v1/projects/prj_1/epics", `{"description":"Soon","title":"Launch"}`},
+		{[]string{"task", "events", "wi_12", "--after", "42", "--limit", "10"}, "GET", "/v1/events?after=42&limit=10&taskId=wi_12", ``},
+		{[]string{"task", "events", "wi_12", "--run", "run_9", "--after", "42", "--limit", "10"}, "GET", "/v1/events?after=42&limit=10&runId=run_9", ``},
+		{[]string{"pr", "update-branch", "pr_1"}, "POST", "/v1/pull-requests/pr_1/update-branch", ``},
+		{[]string{"pr", "rerun-checks", "pr_1"}, "POST", "/v1/pull-requests/pr_1/rerun-failed", ``},
+		{[]string{"task", "unrelate", "wi_12", "blocks", "ABS-3"}, "DELETE", "/v1/tasks/wi_12/relations/blocks/ABS-3", ``},
+		{[]string{"brainstorm", "create", "Think", "--title", "Queue", "--project", "ABS", "--tier", "tier_1"}, "POST", "/v1/brainstorms", `{"message":"Think","projects":[{"projectId":"prj_1"}],"tier":"tier_1","title":"Queue"}`},
+		{[]string{"brainstorm", "answer", "bs_1", "q_1", "because", "--choice", "1"}, "POST", "/v1/brainstorms/bs_1/questions/q_1/answer", `{"answers":[{"choices":[1],"text":"because"}]}`},
+		{[]string{"brainstorm", "invite", "bs_1", "per_1", "--role", "read"}, "POST", "/v1/brainstorms/bs_1/people", `{"people":["per_1"],"role":"read"}`},
+		{[]string{"task", "reset-machine", "wi_12", "implementer", "--note", "fresh"}, "DELETE", "/v1/tasks/wi_12/agent-machines/implementer", `{"note":"fresh"}`},
+		{[]string{"task", "preview", "wi_12"}, "POST", "/v1/tasks/wi_12/preview", ``},
+		{[]string{"task", "preview", "wi_12", "--stop"}, "DELETE", "/v1/tasks/wi_12/preview", ``},
+		{[]string{"brainstorm", "rename", "bs_1", "Queue"}, "POST", "/v1/brainstorms/bs_1/title", `{"title":"Queue"}`},
+		{[]string{"brainstorm", "chat", "bs_1", "hello"}, "POST", "/v1/brainstorms/bs_1/chat", `{"text":"hello"}`},
+		{[]string{"brainstorm", "retry", "bs_1"}, "POST", "/v1/brainstorms/bs_1/retry", ``},
+		{[]string{"brainstorm", "archive", "bs_1"}, "POST", "/v1/brainstorms/bs_1/archive", ``},
+		{[]string{"brainstorm", "unarchive", "bs_1"}, "POST", "/v1/brainstorms/bs_1/unarchive", ``},
+		{[]string{"brainstorm", "list", "--archived"}, "GET", "/v1/brainstorms?archived=1", ``},
+		{[]string{"brainstorm", "show", "bs_1"}, "GET", "/v1/brainstorms/bs_1", ``},
+		{[]string{"project", "create", "--name", "Web", "--slug", "web", "--key", "WEB"}, "POST", "/v1/projects", `{"description":"","key":"WEB","name":"Web","repositories":[],"slug":"web"}`},
+		{[]string{"repo", "add", "ABS", "--name", "web", "--url", "https://example.com/web.git", "--branch", "dev"}, "POST", "/v1/projects/prj_1/repositories", `{"defaultBranch":"dev","name":"web","url":"https://example.com/web.git"}`},
+		{[]string{"finding", "resolve", "fnd_1", "accepted", "--note", "fine"}, "POST", "/v1/findings/fnd_1/resolve", `{"note":"fine","status":"accepted"}`},
+		{[]string{"task", "recover", "wi_12"}, "GET", "/v1/tasks/wi_12/recover", ``},
+		{[]string{"task", "recover", "wi_12", "restart", "--override"}, "POST", "/v1/tasks/wi_12/recover", `{"action":"restart","override":true}`},
+		{[]string{"repo", "decide", "rr_1", "decline"}, "POST", "/v1/repository-requests/rr_1/decide", `{"approve":false}`},
+		{[]string{"note", "add", "ep_1", "-", "--replaces", "2"}, "POST", "/v1/epics/ep_1/notes", `{"replaces":2,"text":"from stdin"}`},
+		{[]string{"epic", "update", "ep_1", "--state", "none"}, "PATCH", "/v1/epics/ep_1", `{"state":null}`},
+		{[]string{"pr", "merge", "pr_1", "--method", "squash"}, "POST", "/v1/pull-requests/pr_1/merge", `{"method":"squash"}`},
+		{[]string{"finding", "list", "--run", "run_9"}, "GET", "/v1/findings?runId=run_9", ``},
+		{[]string{"memory", "search", "retry backoff", "--words"}, "GET", "/v1/memory/search?mode=words&q=retry+backoff", ``},
+		{[]string{"brainstorm", "file", "bs_1", "prop_1", "0", "2"}, "POST", "/v1/brainstorms/bs_1/file", `{"items":[0,2],"proposalId":"prop_1"}`},
+		{[]string{"run", "steer", "ABS-12", "x"}, "POST", "/v1/runs/run_new/steer", `{"text":"x"}`},
 	}
 	for _, tc := range cases {
 		srv, calls := fakeDude(t)
@@ -428,10 +428,10 @@ func TestNewCommandsReachTheirRoutes(t *testing.T) {
 func TestEnumsAreCheckedBeforeAnyRequest(t *testing.T) {
 	srv, calls := fakeDude(t)
 	for _, args := range [][]string{
-		{"resolve", "fnd_1", "dismissed"},
-		{"recover", "wi_12", "reboot"},
-		{"decider", "wi_12", "me"},
-		{"repo-decide", "rr_1", "maybe"},
+		{"finding", "resolve", "fnd_1", "dismissed"},
+		{"task", "recover", "wi_12", "reboot"},
+		{"task", "decider", "wi_12", "me"},
+		{"repo", "decide", "rr_1", "maybe"},
 	} {
 		if _, err := runCLI(t, srv, "", args...); err == nil {
 			t.Errorf("%v succeeded", args)
