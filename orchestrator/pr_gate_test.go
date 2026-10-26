@@ -254,48 +254,67 @@ func TestAnUnresolvedProjectPolicyNeverOpensPastTheChoice(t *testing.T) {
 
 // Under the conductor, a project on Ask me first: the conductor's
 // open_pull_request is refused until the person is asked and answers, and
-// nothing opens; once handed back at the gate Deliver holds it and asks,
-// and only the owner's Open opens. Nobody else's does.
+// nothing opens. Handed back as the conductor enters the gate, Deliver
+// holds it and asks, and only the owner's Open opens. Nobody else's does.
 func TestUnderTheConductorAskMeFirstIsThePersonsQuestion(t *testing.T) {
-	w := conducting(t)
-	ana, bo := w.person("Ana"), w.person("Bo")
-	task := w.task()
-	w.assignOwner(task, ana)
-	w.projectChoice(delivery.PullRequestAsk)
-	w.reachGate(task)
-	w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not been asked")
-	if n := len(w.gh.Pulls()); n != 0 {
-		t.Fatalf("%d pull requests opened before the person was asked", n)
-	}
-	w.must(task, "decide", `{"action":"ask_person"}`)
-	w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not answered")
-	if w.conductorQuestion(task) == "" {
-		t.Fatal("no gate question for the person")
-	}
-	if n := w.count(`SELECT count(*) FROM questions q JOIN workflow_runs wf ON wf.task_id = q.task_id
-		WHERE q.task_id = $1 AND q.status = 'open' AND q.pr_gate_heads = wf.state->'heads'`, task); n != 1 {
-		t.Fatalf("%d open gate questions at the delivery's heads", n)
-	}
-
-	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
-		t.Fatalf("hand-back at the gate: %d %v", status, out)
-	}
-	w.until("Deliver holding the gate, the hand-back's wake taken", func() bool {
-		return w.decider(task) == "policy" && w.decisionAt(task) == delivery.PointBeforePR && w.signalsTaken(task) || len(w.gh.Pulls()) > 0
+	t.Run("the conductor", func(t *testing.T) {
+		w := conducting(t)
+		ana := w.person("Ana")
+		task := w.task()
+		w.assignOwner(task, ana)
+		w.projectChoice(delivery.PullRequestAsk)
+		w.reachGate(task)
+		w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not been asked")
+		w.must(task, "decide", `{"action":"ask_person"}`)
+		w.refused(task, "decide", `{"action":"open_pull_request"}`, "has not answered")
+		if n := len(w.gh.Pulls()); n != 0 {
+			t.Fatalf("%d pull requests opened before the person answered", n)
+		}
+		if n := w.count(`SELECT count(*) FROM questions q JOIN workflow_runs wf ON wf.task_id = q.task_id
+			WHERE q.task_id = $1 AND q.status = 'open' AND q.pr_gate_heads = wf.state->'heads'`, task); n != 1 {
+			t.Fatalf("%d open gate questions at the delivery's heads", n)
+		}
 	})
-	if n := len(w.gh.Pulls()); n != 0 {
-		t.Fatalf("%d pull requests opened after the hand-back, unanswered", n)
-	}
-	if status, out := w.callAs(bo, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 403 {
-		t.Fatalf("someone else's Open: %d %v", status, out)
-	}
-	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
-		t.Fatalf("the owner's Open: %d %v", status, out)
-	}
-	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	if w.gh.Pulls()[0].Draft {
-		t.Error("Open opened a draft")
-	}
+	t.Run("handed back", func(t *testing.T) {
+		w := conducting(t)
+		ana, bo := w.person("Ana"), w.person("Bo")
+		task := w.task()
+		w.assignOwner(task, ana)
+		w.projectChoice(delivery.PullRequestAsk)
+		var once sync.Once
+		armed := w.gated(func(step, next string) {
+			if step != "test" || next == step {
+				return
+			}
+			once.Do(func() {
+				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+					t.Errorf("hand-back while entering the gate: %d %v", status, out)
+				}
+			})
+		})
+		w.talk(task)
+		w.implemented(task)
+		armed.Store(true)
+		w.must(task, "start_phase", `{"phase":"simplify"}`)
+		w.finishSimplifierReview(task)
+		w.until("Deliver holding the gate, asking", func() bool {
+			return w.heldBeforePR(task) && w.conductorQuestion(task) != "" && w.signalsTaken(task) || len(w.gh.Pulls()) > 0
+		})
+		armed.Store(false)
+		if n := len(w.gh.Pulls()); n != 0 {
+			t.Fatalf("%d pull requests opened after the hand-back, unanswered", n)
+		}
+		if status, out := w.callAs(bo, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 403 {
+			t.Fatalf("someone else's Open: %d %v", status, out)
+		}
+		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+			t.Fatalf("the owner's Open: %d %v", status, out)
+		}
+		w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+		if w.gh.Pulls()[0].Draft {
+			t.Error("Open opened a draft")
+		}
+	})
 }
 
 // A task across two repositories, its first pull request open in one: a

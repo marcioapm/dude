@@ -159,7 +159,7 @@ func TestAFixerThatLeavesTheItemOpenEscalatesFromTheHold(t *testing.T) {
 	if code, body := w.callAs(ana, "/internal/feedback/fbi_left/resolve", map[string]any{}); code != 200 {
 		t.Fatalf("the owner settles the item: %d %v", code, body)
 	}
-	if code, body := w.decide(ana, task, "retry", ""); code != 200 {
+	if code, body := w.decide(ana, task, "retry", "The item is settled; go on."); code != 200 {
 		t.Fatalf("try again: %d %v", code, body)
 	}
 	w.until("back at the hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })

@@ -209,6 +209,9 @@ type State struct {
 	// The step handed an integration over: the wait after it takes one
 	// pass first (closeHandedOver). Never persisted.
 	handingOver bool
+	// The task's Open as draft, read by this run of the opening step for
+	// its first pull request alone. Never persisted.
+	draftChoice bool
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
 	// A decision point the policy took in the step committing (next): set
@@ -1585,9 +1588,8 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		}
 		if choice != "" {
 			st.GateRequired, st.ChoiceGate = choice == PullRequestAsk, choice == PullRequestAsk
-			if !st.GateRequired {
-				st.Draft = choice == PullRequestDraft
-			}
+			// Not the latched Draft: a later opening (another repository's) is not this one.
+			st.draftChoice = choice == PullRequestDraft
 		}
 	}
 	if len(st.PullRequestIDs) == 0 && (st.conducted() || st.GateRequired) && !st.gateHeld() {
