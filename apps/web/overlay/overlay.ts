@@ -37,6 +37,9 @@ export const SAVE_WAIT_MS = 15_000;
  */
 export const HEARTBEAT_MS = 2_000;
 
+/** Beats waiting with no answer (10 s at HEARTBEAT_MS) before the panel offers Connect to dude again. */
+const WAITING_BEATS = 5;
+
 export const SAVE_UNANSWERED = "dude didn't answer: its tab may have reloaded or left this task. Copy your words, or try Save again.";
 
 type Connection = "waiting" | "connected" | "none" | "closed";
@@ -226,6 +229,8 @@ export class Overlay {
   #saidHello = false;
   // Beats in a row with nothing from dude while connected.
   #quietBeats = 0;
+  // Beats in a row spent waiting with nothing from dude: at WAITING_BEATS the panel offers Connect again.
+  #waitBeats = 0;
   // The dude tab Connect to dude opened, or the dude window that last answered with a session; and what the click came to.
   #connectWin: Window | null = null;
   #connect: "opened" | "blocked" | null = null;
@@ -291,12 +296,12 @@ export class Overlay {
       }, this.#opts.sessionWaitMs ?? SESSION_WAIT_MS));
     }
     this.#timers.push(this.#win.setInterval(() => {
-      if (this.#connection === "connected" && !this.#dude()) this.#lost("closed");
+      if (this.#dude()) return;
       // The tab Connect to dude opened was closed before it answered: back to the panel's first words.
-      else if (this.#connection === "waiting" && this.#connect === "opened" && !this.#dude()) {
+      if (this.#connection === "waiting" && this.#connect === "opened") {
         this.#connect = null;
         this.#lost("none");
-      }
+      } else if (this.#connection === "connected" || this.#connection === "waiting") this.#lost("closed");
     }, 1_000));
     this.#timers.push(this.#win.setInterval(this.#heartbeat, this.#opts.heartbeatMs ?? HEARTBEAT_MS));
     // Pins follow what the page draws, which may move without a scroll: moved in place, never redrawn.
@@ -399,11 +404,13 @@ export class Overlay {
     if (this.#stopped || !this.#dude()) return;
     const said = this.#saidHello;
     this.#saidHello = false;
+    if (this.#connection === "waiting" && ++this.#waitBeats === WAITING_BEATS) this.#render();
     if (this.#connection === "connected") {
       this.#quietBeats++;
       if (this.#quietBeats < 2) return;
       if (this.#quietBeats >= 3) {
         this.#connection = "waiting";
+        this.#waitBeats = 0;
         this.#picking = false;
         this.#hover = null;
         this.#render();
@@ -428,6 +435,7 @@ export class Overlay {
     const m = e.data as DudeToOverlay;
     if (!m || typeof m !== "object" || m.v !== OVERLAY_PROTOCOL) return;
     this.#quietBeats = 0;
+    this.#waitBeats = 0;
     switch (m.type) {
       case "session":
         if (!validSession(m) || overlayPage(m.url) !== this.#page) return;
@@ -993,6 +1001,7 @@ export class Overlay {
       this.#connectWin = w;
       this.#connect = "opened";
       this.#connection = "waiting";
+      this.#waitBeats = 0;
     }
     this.#render();
   }
@@ -1087,7 +1096,8 @@ export class Overlay {
     if (lineShown && b.picLine.parentNode !== b.section) after?.after(b.picLine);
     else if (!lineShown) b.picLine.remove();
     setText(b.disconnected.lastElementChild!, this.#connection === "closed" ? " dude's tab was closed: this can't be saved from here. Copy your words, then open the task again."
-      : this.#connection === "waiting" ? " Reaching dude again: its tab may be reloading. Save comes back when it answers."
+      : this.#connection === "waiting" ? this.#unheard() ? " dude isn't answering: its tab may have reloaded, been closed, or left this task. Connect to dude to reach it again; your words stay here."
+        : " Reaching dude again: its tab may be reloading. Save comes back when it answers."
       : " This preview wasn't opened from dude: this can't be saved from here. Copy your words.");
     this.#toggle(b.section, b.disconnected, !connected, b.foot);
     setText(b.problem, this.#problem ?? "");
@@ -1159,9 +1169,14 @@ export class Overlay {
     this.#win.addEventListener("pointerup", up);
   }
 
+  // Waiting for WAITING_BEATS with no answer from dude.
+  #unheard(): boolean {
+    return this.#connection === "waiting" && this.#waitBeats >= WAITING_BEATS;
+  }
+
   #panelFor(): HTMLElement | null {
-    // After Connect to dude, until a session: the panel stays, so a dude tab that found no task can be tried again.
-    if (this.#connection === "none" || this.#connection === "closed" || this.#connection === "waiting" && this.#connect !== null) return this.#noOpener();
+    // After Connect to dude, until a session, and once waiting has gone unanswered: the panel, so dude can be tried again.
+    if (this.#connection === "none" || this.#connection === "closed" || this.#connection === "waiting" && (this.#connect !== null || this.#unheard())) return this.#noOpener();
     if (this.#toast && !this.#picking) return this.#toastFor(this.#toast);
     if (this.#panel === "pins") return this.#pinsPanel();
     return null;
@@ -1169,13 +1184,15 @@ export class Overlay {
 
   #noOpener(): HTMLElement {
     const closed = this.#connection === "closed";
+    const unheard = this.#unheard() && this.#connect === null;
     const note = this.#connect === "blocked" ? "The browser blocked dude's tab from opening: allow pop-ups for this site, or press Connect to dude again."
       : this.#connect === "opened" && this.#connection === "waiting" ? "dude opened in a new tab and is looking for this preview's task. This connects once it finds it."
       : null;
     return this.#h("div", { class: "panel", "data-testid": "ov-no-opener" },
-      this.#h("div", { class: "ph" }, this.#h("b", {}, closed ? "dude's tab was closed" : "Connect to dude to comment")),
+      this.#h("div", { class: "ph" }, this.#h("b", {}, closed ? "dude's tab was closed" : unheard ? "dude isn't answering" : "Connect to dude to comment")),
       this.#h("p", { class: "pp" }, closed
         ? "Your saved drafts are kept in dude. Connect to dude to pick more: dude opens and finds this preview's task."
+        : unheard ? "dude's tab may have reloaded, been closed, or left this task. Connect to dude to reach it again: dude opens and finds this preview's task."
         : "Connect to dude to comment: dude opens and finds this preview's task. Comments are made through your dude tab, so dude knows who you are and which task they belong to."),
       note ? this.#h("p", { class: "pp", role: "status", "data-testid": "ov-connect-note", "data-connect": this.#connect ?? "" }, note) : null,
       this.#h("div", { class: "pf" },

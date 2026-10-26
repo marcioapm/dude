@@ -893,6 +893,43 @@ test("dude's tab reloading: after two quiet beats hello again, after three reach
   expect((tid("ov-save") as HTMLButtonElement).disabled).toBe(false);
 });
 
+test("dude's tab closing while the connection waits says it was closed and offers Connect, the words kept", async () => {
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
+  connect();
+  await writeOnPay("Half a thought");
+  for (let i = 0; i < 3; i++) beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  opener!.closed = true;
+  await tick(1_100);
+  expect(tid("ov-conn")!.textContent).toBe("dude's tab closed");
+  expect(tid("ov-disconnected")!.textContent).toContain("dude's tab was closed");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+});
+
+test("a dude tab that stops answering (left the task) offers Connect after five waiting beats, still saying hello, the words kept", async () => {
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
+  connect();
+  await writeOnPay("Half a thought");
+  for (let i = 0; i < 3; i++) beat();
+  for (let i = 0; i < 4; i++) beat();
+  expect(count('[data-testid="ov-connect"]')).toBe(0);
+  beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect(tid("ov-disconnected")!.textContent).toContain("may have reloaded, been closed, or left this task");
+  for (let i = 0; i < 22; i++) beat();
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect(hellos()).toBe(1 + 1 + 28);
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+  // dude answering again connects, and the panel goes.
+  connect();
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-no-opener"]')).toBe(0);
+});
+
 test("not connected, it says hello once a beat and never twice in one: a hello between beats spares the next beat's", async () => {
   page(CART);
   const beat = heartbeatByHand();
