@@ -186,6 +186,21 @@ export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, str
 };
 
 /**
+ * What Deliver does before the pull request (a project's `pullRequest`, and
+ * a task's own over it). "open" is the default.
+ */
+export const PULL_REQUEST_CHOICES = ["open", "draft", "ask"] as const;
+export type PullRequestChoice = (typeof PULL_REQUEST_CHOICES)[number];
+export const DEFAULT_PULL_REQUEST_CHOICE: PullRequestChoice = "open";
+
+/** Each choice's name and its one line, wherever the choice is shown. */
+export const PULL_REQUEST_CHOICE: Record<PullRequestChoice, { label: string; hint: string }> = {
+  open: { label: "Open it", hint: "When review, simplify and the test pass, Deliver opens the pull request." },
+  draft: { label: "Open as draft", hint: "Deliver opens a draft pull request: no reviewers are asked, but CI still runs on most repositories." },
+  ask: { label: "Ask me first", hint: "Deliver stops for your review before the pull request: you open it, send feedback, or finish without one." },
+};
+
+/**
  * How a project's work is delivered, over the factory's defaults. Each field
  * left out keeps the default; a task's own overrides layer on top.
  */
@@ -216,6 +231,12 @@ export const deliveryPolicySchema = z
     conductorEditLines: z.number().int().min(1).max(10_000),
     /** The most changed files a conductor may publish at once. */
     conductorEditFiles: z.number().int().min(1).max(1000),
+    /**
+     * What Deliver does once review, simplify and the test pass and no pull
+     * request is open: open it, open it as a draft, or ask the task's owner
+     * first. A project's setting only: an organisation never sets it.
+     */
+    pullRequest: z.enum(PULL_REQUEST_CHOICES),
   })
   .partial()
   .strict();

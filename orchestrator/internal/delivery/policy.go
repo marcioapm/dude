@@ -85,13 +85,35 @@ type Policy struct {
 	// agent, conversation and workspace (continueOrCreateTx), rather than
 	// starting a fresh one.
 	ResumeRounds bool `json:"resumeRounds"`
+	// What Deliver does once review, simplify and the test pass and no pull
+	// request is open yet: PullRequestOpen, PullRequestDraft or
+	// PullRequestAsk. A project's setting only (ProjectOnlyPolicyKeys), and
+	// a task's own over it.
+	PullRequest string `json:"pullRequest"`
 }
+
+// The values of Policy.PullRequest.
+const (
+	PullRequestOpen  = "open"
+	PullRequestDraft = "draft"
+	PullRequestAsk   = "ask"
+)
+
+// IsPullRequestChoice says whether v is one of Policy.PullRequest's values.
+func IsPullRequestChoice(v string) bool {
+	return v == PullRequestOpen || v == PullRequestDraft || v == PullRequestAsk
+}
+
+// ProjectOnlyPolicyKeys are the keys an organisation's policy never sets:
+// ResolvePolicy passes over them in its organisation layer.
+var ProjectOnlyPolicyKeys = []string{"pullRequest"}
 
 // LivePolicyKeys are the Policy keys dude reads from the project's and
 // organisation's policy as it is now, never from a delivery's frozen
-// State.Policy: the syncer's park, idle and warm limits (phases runFrom)
-// and one conductor publish's bounds (PublishLimitsTx).
-var LivePolicyKeys = []string{"parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes", "conductorEditLines", "conductorEditFiles"}
+// State.Policy: the syncer's park, idle and warm limits (phases runFrom),
+// one conductor publish's bounds (PublishLimitsTx), and what happens before
+// the pull request (PullRequestChoiceTx, read at the gate).
+var LivePolicyKeys = []string{"parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes", "conductorEditLines", "conductorEditFiles", "pullRequest"}
 
 func DefaultPolicy() Policy {
 	return Policy{
@@ -120,6 +142,7 @@ func DefaultPolicy() Policy {
 		ConductorEditLines:   60,
 		ConductorEditFiles:   3,
 		ResumeRounds:         true,
+		PullRequest:          PullRequestOpen,
 	}
 }
 

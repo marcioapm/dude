@@ -96,6 +96,33 @@ func TestDeliveryPolicyIsTheFactorysThenTheOrganizationsThenTheProjects(t *testi
 	}
 }
 
+// What happens before the pull request is a project's setting: Open it by
+// default, the project's value over it, and an organisation's stored value
+// passed over.
+func TestThePullRequestChoiceIsTheProjectsAndNeverTheOrganisations(t *testing.T) {
+	if p, err := ResolvePolicy(nil, nil); err != nil || p.PullRequest != PullRequestOpen {
+		t.Fatalf("default = %q, %v; want open", p.PullRequest, err)
+	}
+	p, err := ResolvePolicy(json.RawMessage(`{"pullRequest":"ask","maxReviewIterations":3}`), nil)
+	if err != nil || p.PullRequest != PullRequestOpen || p.MaxReviewIterations != 3 {
+		t.Fatalf("an organisation's ask = %q (%v), max %d; want open and the rest of its layer kept", p.PullRequest, err, p.MaxReviewIterations)
+	}
+	if p, _ := ResolvePolicy(json.RawMessage(`{"pullRequest":"ask"}`), json.RawMessage(`{"pullRequest":"draft"}`)); p.PullRequest != PullRequestDraft {
+		t.Fatalf("the project's draft = %q", p.PullRequest)
+	}
+	// The task's own layer is over the project's.
+	if p, _ := ResolvePolicy(nil, json.RawMessage(`{"pullRequest":"draft"}`), json.RawMessage(`{"pullRequest":"ask"}`)); p.PullRequest != PullRequestAsk {
+		t.Fatalf("the task's ask = %q", p.PullRequest)
+	}
+	if _, err := ResolvePolicy(nil, json.RawMessage(`{"pullRequest":"later"}`)); err == nil {
+		t.Fatal("pullRequest later was accepted")
+	}
+	_, from, err := PolicySources(json.RawMessage(`{"pullRequest":"ask"}`), json.RawMessage(`{}`))
+	if err != nil || from["pullRequest"] != SetInDefault {
+		t.Fatalf("an organisation's stored value is its source: %q %v", from["pullRequest"], err)
+	}
+}
+
 func TestAnOrganizationsPromptReplacesTheBuiltInOnly(t *testing.T) {
 	in := PromptInput{Title: "Greet people", Context: "Use bun.", Tools: true, CLI: true}
 	builtin := Instructions("implementer", "", in.InstructionsInput())

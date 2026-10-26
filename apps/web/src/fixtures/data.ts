@@ -346,6 +346,7 @@ export const SETTINGS: SettingsResponse = {
     conductorWarmMinutes: { value: 5, source: "organization" },
     conductorEditLines: { value: 60, source: "organization" },
     conductorEditFiles: { value: 3, source: "organization" },
+    pullRequest: { value: "open", source: "default" },
   },
   network: {
     egress: { value: [], source: "organization" }, mode: { value: "add", source: "organization" },
