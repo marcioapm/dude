@@ -128,6 +128,8 @@ While a task waits for your review, its page shows what would be opened, per rep
 
 Anyone else reads that the task waits on its owner, and can still write feedback. Changing the choice while the task waits takes effect at once: **Open it** or **Open as draft** opens the pull request.
 
+With the conductor deciding, the conductor always asks before the pull request opens, and you answer **Open** or **Draft** to its question in Chat. Your answer is what opens: a project on **Open as draft** does not turn an **Open** there into a draft.
+
 ## Other delivery settings
 
 **Settings → Delivery** also holds:

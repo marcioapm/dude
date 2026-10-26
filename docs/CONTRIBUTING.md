@@ -455,7 +455,11 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   (`DoneWithoutPullRequestTx`, owner only, refused once one is on record)
   stops what runs, keeps the branch, records
   `task.done_without_pull_request` and finishes the task `done` with
-  `nothing_to_merge`. Feedback at the hold never reaches GitHub.
+  `nothing_to_merge`. Feedback at the hold never reaches GitHub. Under the
+  conductor the choice is not read: every conducted delivery enters the
+  gate (`GateRequired`, `ChoiceGate` false), the person answers Open or
+  Draft to its gate question, and the project's `draft` is not applied to
+  an Open there; `draft` and `ask` are Deliver's own.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a
