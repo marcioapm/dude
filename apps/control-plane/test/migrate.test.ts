@@ -1384,6 +1384,19 @@ test("210 adds organisation secrets, turns automation picks into project refs, a
     expect([...await sql`SELECT name, value FROM automation_run_secret_values('arn_n')`]).toEqual([{ name: "STATUSPAGE_KEY", value: "org-statuspage_key-value" }]);
     expect(await refusal(async () => await sql`UPDATE automations SET secrets = '{}'::jsonb WHERE id = 'aut_none'`)).toContain("automations_secrets_refs");
 
+    // A Run's recorded names redact by the current values once its copy is
+    // forgotten: an organisation name by the organisation's, a name the
+    // project overrides by both (the organisation's value is redacted too).
+    await sql`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_a', 'org_a', 'prj_a', 1, 'T')`;
+    await sql`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, project_secret_names)
+      VALUES ('run_a', 'org_a', 'prj_a', 'wi_a', 1, '{NPM_TOKEN,GH_TOKEN}')`;
+    expect([...await sql`SELECT count(*)::int AS n FROM run_project_secrets WHERE run_id = 'run_a'`]).toEqual([{ n: 0 }]);
+    expect([...await sql`SELECT name, value FROM run_secret_values('run_a') ORDER BY name, value`]).toEqual([
+      { name: "GH_TOKEN", value: "org-gh_token-value" },
+      { name: "GH_TOKEN", value: "project-gh-value" },
+      { name: "NPM_TOKEN", value: "org-npm_token-value" },
+    ]);
+
     // Tenant isolation, and no sweeper read.
     await sql`INSERT INTO organization_secrets (organization_id, name, value, hint) VALUES ('org_b', 'OTHER', 'other-value', 'alue')`;
     const seen = await sql.begin(async (tx) => {
