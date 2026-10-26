@@ -150,8 +150,17 @@ func TestUpdateReplacesTheBinary(t *testing.T) {
 			f := newFakeRelease(t, "v1.2.0")
 			srv := f.serve(t)
 			c, exe, out, errOut := selfUpdateCLI(t, srv, "v1.1.0")
+			// A hard link keeps the old inode: a rename leaves it alone, an
+			// in-place write would change it.
+			keep := filepath.Join(filepath.Dir(exe), "dude.old")
+			if err := os.Link(exe, keep); err != nil {
+				t.Fatal(err)
+			}
 			if err := c.run(args); err != nil {
 				t.Fatal(err)
+			}
+			if got := readFile(t, keep); got != "old binary" {
+				t.Fatalf("the old binary was written in place: %q", got)
 			}
 			if want := "dude updated from v1.1.0 to v1.2.0 (" + exe + ")\n"; errOut.String() != want {
 				t.Fatalf("stderr %q, want %q", errOut, want)
