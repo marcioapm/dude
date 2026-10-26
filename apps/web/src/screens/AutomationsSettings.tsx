@@ -769,19 +769,19 @@ function AutomationSecrets({ client, a, orgName, preset, ro, project, chosen, on
   project: ProjectSecret[] | null; chosen: SecretRef[]; onChange: (refs: SecretRef[]) => void;
 }) {
   const org = useOrgSecrets(client);
-  const projectName = a.projectName ?? "the project";
+  const own = a.projectId && project ? { name: a.projectName ?? "the project", secrets: project } : undefined;
   return (
     <SettingsSection title="Secrets">
       {org.secrets === null || project === null ? (
         <SettingRow label="Secrets">{org.problem ? <span>{org.problem}</span> : <Spinner label="Loading secrets…" />}</SettingRow>
       ) : preset ? (
         <SettingRow label="Secrets" help={PRESET_SECRETS(PRESET_ROLE_LABEL[preset])} data-testid="preset-secrets">
-          <PresetSecretsLine role={preset} orgName={orgName} org={org.secrets} project={a.projectId ? { name: projectName, secrets: project } : undefined} />
+          <PresetSecretsLine role={preset} orgName={orgName} org={org.secrets} project={own} />
         </SettingRow>
       ) : (
         <SettingRow label="Secrets" block help={ORG_AUTOMATION_PICKS(orgName)} data-testid="automation-secrets">
           <SecretPicker orgName={orgName} org={org.secrets} disabled={ro} value={chosen} data-testid="secret-picker"
-            project={a.projectId ? { name: projectName, secrets: project } : undefined} onChange={onChange} />
+            project={own} onChange={onChange} />
         </SettingRow>
       )}
     </SettingsSection>
