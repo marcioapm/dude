@@ -518,6 +518,20 @@ describe("secrets and webhook wording", () => {
     expect(sent).toEqual([[{ source: "project", name: "SEED_LLM_KEY" }]]);
   });
 
+  test("saving the prompt alone also sends an overridden organisation pick as the project's", async () => {
+    const client = new FixtureClient("a");
+    (client.fixtureAutomation("aut_investigate") as { secrets: unknown }).secrets = [{ source: "organization", name: "SEED_LLM_KEY" }];
+    const c = await page(client, "aut_investigate");
+    await until(() => c.querySelector("[data-testid=secret-picker]"), "the picker");
+    const doc = c.querySelector<HTMLElement>("[data-testid=automation-prompt] [data-testid=automation-prompt-document]")!;
+    await click(doc.querySelector<HTMLElement>("[data-testid=markdown-edit]")!);
+    await typeInto(doc.querySelector<HTMLTextAreaElement>("[data-testid=markdown-source]")!, "Read the logs.");
+    await click(doc.querySelector<HTMLElement>("[data-testid=markdown-save]")!);
+    const own = () => (client.fixtureAutomation("aut_investigate").agent as { own: { prompt: string } }).own.prompt;
+    await until(() => (own() === "Read the logs." ? true : null), "the prompt saved");
+    expect(client.fixtureAutomation("aut_investigate").secrets).toEqual([{ source: "project", name: "SEED_LLM_KEY" }]);
+  });
+
   test("one of dude's agents shows what its role gets, read-only; the Investigator gets none", async () => {
     const client = new FixtureClient("a");
     // A project secret ticked for Tester joins the line, after the organisation's.
