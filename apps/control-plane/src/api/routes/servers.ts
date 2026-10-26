@@ -77,8 +77,8 @@ async function putProjectServer(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, recipeInputSchema);
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await lockProject(scope, projectId); // 404 for another organization's
-    const clash = recipeSecretClash({ name: input.name, env: input.env ?? [] }, await secretNames(scope, projectId))
-      ?? await recipeOrgClash(scope, { name: input.name, env: input.env ?? [] }, projectId);
+    const recipe = { name: input.name, env: input.env ?? [] };
+    const clash = recipeSecretClash(recipe, await secretNames(scope, projectId)) ?? await recipeOrgClash(scope, recipe, projectId);
     if (clash) throw conflict(clash);
     if (input.name !== current) {
       const taken = await scope.sql`SELECT 1 FROM project_servers WHERE project_id = ${projectId} AND name = ${input.name}`;
