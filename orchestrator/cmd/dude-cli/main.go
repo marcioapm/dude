@@ -526,6 +526,10 @@ func (c *cli) run(args []string) error {
 		}
 	}
 	if len(args) == 0 || isHelp(args[0]) {
+		if len(args) > 1 && len(verbs(args[1])) > 0 {
+			fmt.Fprint(c.out, nounUsage(args[1]))
+			return nil
+		}
 		fmt.Fprint(c.out, usage())
 		return nil
 	}

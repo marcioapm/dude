@@ -165,7 +165,7 @@ used while nothing is logged in. `dude login` replaces it.
 - A text argument of `-` reads stdin. Use a heredoc for anything long.
 
 `dude --help` lists the top-level commands and the nouns. `dude NOUN` (or
-`dude NOUN --help`) lists a noun's verbs; `dude NOUN VERB --help` gives one's
+`dude NOUN --help`, or `dude help NOUN`) lists a noun's verbs; `dude NOUN VERB --help` gives one's
 options. `dude --version` gives the version.
 
 ## Commands

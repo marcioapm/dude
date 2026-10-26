@@ -56,7 +56,8 @@ func TestNounsMatchTheCommandTable(t *testing.T) {
 }
 
 func TestNounAloneListsItsVerbs(t *testing.T) {
-	for _, args := range [][]string{{"task"}, {"task", "--help"}, {"task", "help"}, {"--org", "x", "task", "-h"}} {
+	for _, args := range [][]string{{"task"}, {"task", "--help"}, {"task", "help"}, {"--org", "x", "task", "-h"},
+		{"help", "task"}, {"--help", "task"}} {
 		out, err, n := runPlain(t, args...)
 		if err != nil || n != 0 {
 			t.Fatalf("%v: %v, %d requests", args, err, n)
@@ -77,6 +78,19 @@ func TestNounAloneListsItsVerbs(t *testing.T) {
 				t.Errorf("%v: no help for %s", args, v)
 			}
 		}
+	}
+}
+
+// dude help NOUN is dude NOUN help; help with a word that is no noun is dude --help.
+func TestHelpWithANoun(t *testing.T) {
+	want, _, _ := runPlain(t, "review-question", "help")
+	got, err, n := runPlain(t, "help", "review-question")
+	if err != nil || n != 0 || got != want || !strings.HasPrefix(got, "usage: dude review-question VERB") {
+		t.Fatalf("help review-question: %v, %d requests\n%s", err, n, got)
+	}
+	top, err, n := runPlain(t, "help", "frobnicate")
+	if err != nil || n != 0 || top != usage() {
+		t.Fatalf("help frobnicate: %v, %d requests\n%s", err, n, top)
 	}
 }
 
