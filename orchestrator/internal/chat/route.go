@@ -441,7 +441,98 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 	if dec.Route == RouteClarify {
 		return s.clarify(ctx, org, p, inst, r, a, dec, pick)
 	}
+	if dec.Route == RouteChannelProjects {
+		return s.setChannelProjects(ctx, org, p, inst, who, r, dec, pick)
+	}
 	return s.make(ctx, org, p, inst, who, r, h, dec, pick)
+}
+
+// setChannelProjects is the channel_projects route: an admin of the
+// organisation changes what the conversation is usually about, and the
+// reply says what changed. Anyone else is told privately that only an
+// admin may, and nothing changes.
+func (s *Service) setChannelProjects(ctx context.Context, org string, p Provider, inst Installation, who asker, r *request, d Decision,
+	pick *picked) error {
+	m := r.Mention
+	r.Route = RouteChannelProjects
+	return s.commit(ctx, org, p, inst, r, pick, func(tx pgx.Tx) error {
+		var admin bool
+		if err := tx.QueryRow(ctx, `SELECT role = 'admin' FROM people WHERE id = $1`, who.Person).Scan(&admin); err != nil {
+			return err
+		}
+		if !admin {
+			r.Reasoning = strings.TrimSpace(r.Reasoning + " (only an admin may change what a channel is usually about)")
+			r.effects = []effect{ephemeralEffect(Reply{Text: fmt.Sprintf("Only %s's admins can change what %s is usually about.",
+				who.OrgName, conversationWord(r.Kind))}), reactEffect(ReactionCleared)}
+			return nil
+		}
+		var added, removed []string
+		for _, pr := range d.Add {
+			tag, err := tx.Exec(ctx, `INSERT INTO chat_channel_projects (organization_id, provider, external_workspace_id, conversation_id,
+					conversation_name, project_id, set_by)
+				VALUES (current_organization_id(), $1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+				m.Provider, m.WorkspaceID, m.ConversationID, r.ConversationName, pr.ID, who.Person)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 1 {
+				added = append(added, pr.Key)
+			}
+		}
+		for _, pr := range d.Remove {
+			tag, err := tx.Exec(ctx, `DELETE FROM chat_channel_projects WHERE provider = $1 AND external_workspace_id = $2
+				AND conversation_id = $3 AND project_id = $4`, m.Provider, m.WorkspaceID, m.ConversationID, pr.ID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 1 {
+				removed = append(removed, pr.Key)
+			}
+		}
+		rows, err := tx.Query(ctx, `SELECT p.key_prefix FROM chat_channel_projects c JOIN projects p ON p.id = c.project_id
+			WHERE c.provider = $1 AND c.external_workspace_id = $2 AND c.conversation_id = $3 ORDER BY p.key_prefix`,
+			m.Provider, m.WorkspaceID, m.ConversationID)
+		if err != nil {
+			return err
+		}
+		now, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		if len(added)+len(removed) > 0 {
+			if err := chatLedger(ctx, tx, org, EvChatChannelProjects, "person", who.Person, map[string]any{"provider": m.Provider,
+				"conversationId": m.ConversationID, "conversationName": r.ConversationName, "added": db.NonNil(added),
+				"removed": db.NonNil(removed), "via": "chat"}); err != nil {
+				return err
+			}
+		}
+		r.effects = []effect{replyEffect(Reply{Text: channelProjectsReply(r.ConversationName, added, removed, now)}), reactEffect(ReactionDone)}
+		return nil
+	})
+}
+
+// channelProjectsReply says what changed in what a conversation is
+// usually about, and what it is about now.
+func channelProjectsReply(where string, added, removed, now []string) string {
+	if where == "" {
+		where = "This conversation"
+	}
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "added "+strings.Join(added, ", "))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "removed "+strings.Join(removed, ", "))
+	}
+	change := "Nothing changed"
+	if len(parts) > 0 {
+		change = "Done: " + strings.Join(parts, "; ")
+	}
+	state := where + " is now usually about " + strings.Join(now, ", ")
+	if len(now) == 0 {
+		state = where + " is now about no project in particular"
+	}
+	return change + ". " + state + ". dude takes it as a hint; what a message says still decides."
 }
 
 // decision is the routing judgement for the delivery: the one kept on it,

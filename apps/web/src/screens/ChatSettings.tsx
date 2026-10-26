@@ -62,6 +62,8 @@ import {
   CHAT_ROUTES,
   type ChatInstallationView,
   type ChatOverview,
+  type ChatProjectRef,
+  type ChatProjectsView,
   type ChatProvider,
   type ChatRequestRow,
   type ChatRequestsSummary,
@@ -361,6 +363,7 @@ function ProviderPage({ client, provider, orgName, onPage, onChanged }: {
           </SettingRow>
         </SettingsSection>
       ) : null}
+      {view.installed ? <ProjectsSection client={client} provider={provider} orgName={orgName} /> : null}
       {view.installed ? (
         <SettingsSection title="People">
           <SettingRow label="Connected people" fill
@@ -403,8 +406,82 @@ function ProviderPage({ client, provider, orgName, onPage, onChanged }: {
   );
 }
 
+/**
+ * A provider's projects: what each channel is usually about (a hint the
+ * routing model weighs; a message pointing elsewhere still goes elsewhere),
+ * and the projects hidden from everything this provider starts. Admins edit;
+ * members read.
+ */
+function ProjectsSection({ client, provider, orgName }: { client: ApiClient; provider: ChatProvider; orgName: string }) {
+  const [view, setView] = useState<ChatProjectsView | null>(null);
+  const { busy, problem, save } = useSave();
+  useEffect(() => {
+    client.chatProjects(provider.id).then(setView, () => undefined);
+  }, [client, provider.id]);
+  if (!view) return null;
+  const hiddenIds = view.hidden.map((p) => p.id);
+  return (
+    <SettingsSection title="Projects">
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      <SettingRow label="Usually about" fill
+        help={`What a channel is usually about. dude takes it as a hint when it routes a mention there; what the message and the conversation say still decide. People can set it from ${provider.name} too: “@dude this channel is usually about ABS”. Only admins can change it.`}>
+        {view.channels.length === 0 ? <span className="muted">No channel has mentioned @dude yet.</span> : (
+          <ul className="plainRows" role="list" data-testid="chat-channel-projects">
+            {view.channels.map((c) => (
+              <li key={c.conversationId} className="plainRow" data-conversation={c.conversationId}>
+                <ProjectChips label={c.conversationName || c.conversationId} chosen={c.projects} all={view.projects.filter((p) => !hiddenIds.includes(p.id))}
+                  canEdit={view.canEdit} busy={busy} testId="chat-channel"
+                  onChange={(ids) => void save(async () => setView(await client.setChannelProjects(provider.id, c.conversationId, c.conversationName, ids)),
+                    undefined, `${c.conversationName || "Channel"} updated`)} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </SettingRow>
+      <SettingRow label={`Hidden from ${provider.name}`} fill
+        help={`Nothing started from ${provider.name} can see these: they are left out of routing, never linked, and every tool of its sessions and tasks refuses them, their repositories, tasks and memory. Set here only, never from ${provider.name}. A member of ${orgName} can still use them outside ${provider.name}.`}>
+        <ProjectChips label="Hidden" chosen={view.hidden} all={view.projects} canEdit={view.canEdit} busy={busy} testId="chat-hidden"
+          onChange={(ids) => void save(async () => setView(await client.setHiddenProjects(provider.id, ids)), undefined, "Hidden projects saved")} />
+      </SettingRow>
+    </SettingsSection>
+  );
+}
+
+/** A list of projects as chips: removable, and one more added from the rest, for an admin. */
+function ProjectChips({ label, chosen, all, canEdit, busy, testId, onChange }: {
+  label: string;
+  chosen: ChatProjectRef[];
+  all: ChatProjectRef[];
+  canEdit: boolean;
+  busy: boolean;
+  testId: string;
+  onChange: (ids: string[]) => void;
+}) {
+  const ids = chosen.map((p) => p.id);
+  const rest = all.filter((p) => !ids.includes(p.id));
+  return (
+    <span className="chatProjectChips" data-testid={testId}>
+      <b>{label}</b>
+      {chosen.length === 0 ? <span className="muted">{canEdit ? "None" : "None set"}</span> : null}
+      {chosen.map((p) => (
+        <Badge key={p.id} size="sm" emphasis="subtle" data-testid={`${testId}-project`} data-project={p.key}>
+          {p.key}
+          {canEdit ? <IconButton size="sm" icon="close" label={`Remove ${p.key} from ${label}`} disabled={busy}
+            data-testid={`${testId}-remove`} onClick={() => onChange(ids.filter((id) => id !== p.id))} /> : null}
+        </Badge>
+      ))}
+      {canEdit && rest.length ? (
+        <Select size="sm" aria-label={`Add a project to ${label}`} placeholder="Add a project…" value="" disabled={busy}
+          data-testid={`${testId}-add`} options={rest.map((p) => ({ value: p.id, label: `${p.key} · ${p.name}` }))}
+          onValueChange={(id) => id && onChange([...ids, id])} />
+      ) : null}
+    </span>
+  );
+}
+
 const ROUTE_WORD: Record<string, string> = {
   brainstorm: "Brainstorm", task: "Task", epic: "Epic", resume: "Resume", task_link: "Task link", clarify: "Clarify",
+  channel_projects: "Channel projects",
   not_connected: "Refused: not connected", not_member: "Refused: not a member", failed: "Failed → Brainstorm",
 };
 const EVERY = "__every__";

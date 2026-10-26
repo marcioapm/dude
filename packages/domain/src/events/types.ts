@@ -245,6 +245,13 @@ export const EventTypes = {
   ChatIdentityLinked: "chat_identity.linked",
   /** A link went: unlinked by the person, or their sign-in revoked. Payload: `{ provider, personId, reason }`. */
   ChatIdentityUnlinked: "chat_identity.unlinked",
+  /**
+   * The projects a chat conversation is usually about changed, from the settings page or the conversation.
+   * Payload: `{ provider, conversationId, conversationName, added: string[], removed: string[], via }` (project ids; via "settings" or "chat").
+   */
+  ChatChannelProjectsSet: "chat_channel.projects_set",
+  /** An admin changed the projects hidden from a chat provider. Payload: `{ provider, hidden: string[], shown: string[] }` (project ids). */
+  ChatHiddenProjectsSet: "chat_provider.hidden_projects_set",
 
   // Workflow
   WorkflowTransitioned: "workflow.transitioned",

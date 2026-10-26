@@ -847,6 +847,27 @@ export class FixtureClient extends ApiClient {
     this.#slackInstructions = additional;
     return this.providerRoutingInstructions();
   }
+  #chatProjects = [{ id: "prj_bil", key: "BIL", name: "Billing" }, { id: "prj_abs", key: "ABS", name: "Acme Backend" },
+    { id: "prj_sec", key: "SEC", name: "Security" }];
+  #channelProjects: Record<string, { name: string; ids: string[] }> = { C1: { name: "#support", ids: ["prj_bil"] },
+    C2: { name: "#nightly", ids: [] } };
+  #hiddenProjects: string[] = [];
+  override chatProjects(): ReturnType<ApiClient["chatProjects"]> {
+    const refs = (ids: string[]) => this.#chatProjects.filter((p) => ids.includes(p.id));
+    return Promise.resolve({
+      channels: Object.entries(this.#channelProjects).map(([id, c]) => ({ conversationId: id, conversationName: c.name, projects: refs(c.ids) })),
+      hidden: refs(this.#hiddenProjects), projects: [...this.#chatProjects], canEdit: true,
+    });
+  }
+  override async setChannelProjects(_provider: string, conversationId: string, conversationName: string, projectIds: string[]):
+    ReturnType<ApiClient["setChannelProjects"]> {
+    this.#channelProjects[conversationId] = { name: conversationName, ids: [...projectIds] };
+    return this.chatProjects();
+  }
+  override async setHiddenProjects(_provider: string, projectIds: string[]): ReturnType<ApiClient["setHiddenProjects"]> {
+    this.#hiddenProjects = [...projectIds];
+    return this.chatProjects();
+  }
   override chatRequests(filter: Parameters<ApiClient["chatRequests"]>[0] = {}): ReturnType<ApiClient["chatRequests"]> {
     const p = (i: number) => ({ id: PEOPLE[i % PEOPLE.length]!.id, name: PEOPLE[i % PEOPLE.length]!.name, photoUrl: null, online: i === 0 });
     const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString();

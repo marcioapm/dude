@@ -121,6 +121,7 @@ import type {
   ChatConnectStateView,
   ChatInstallationView,
   ChatOverview,
+  ChatProjectsView,
   ChatRequestRow,
   ChatRequestsSummary,
   ProviderRoutingInstructions,
@@ -1496,6 +1497,19 @@ export class ApiClient {
 
   setProviderRoutingInstructions(provider: string, additional: string): Promise<ProviderRoutingInstructions & { installed: boolean }> {
     return this.#request("PUT", `/v1/organization/chat/${encodeURIComponent(provider)}/routing-instructions`, { additional });
+  }
+
+  chatProjects(provider: string): Promise<ChatProjectsView> {
+    return this.#request("GET", `/v1/organization/chat/${encodeURIComponent(provider)}/projects`);
+  }
+
+  setChannelProjects(provider: string, conversationId: string, conversationName: string, projectIds: string[]): Promise<ChatProjectsView> {
+    return this.#request("PUT", `/v1/organization/chat/${encodeURIComponent(provider)}/channels/${encodeURIComponent(conversationId)}/projects`,
+      { conversationName, projectIds });
+  }
+
+  setHiddenProjects(provider: string, projectIds: string[]): Promise<ChatProjectsView> {
+    return this.#request("PUT", `/v1/organization/chat/${encodeURIComponent(provider)}/hidden-projects`, { projectIds });
   }
 
   chatRequests(filter: { provider?: string | undefined; route?: string | undefined; limit?: number | undefined; summary?: boolean | undefined } = {}):

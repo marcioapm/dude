@@ -418,6 +418,41 @@ describe("settings", () => {
     }
   });
 
+  test("a channel's usual projects and the hidden ones: everyone reads, admins write, each change in the ledger", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_abs', ${ORG}, 'Acme Backend', 'abs', 'ABS'),
+      ('prj_sec', ${ORG}, 'Secret', 'sec', 'SEC') ON CONFLICT DO NOTHING`;
+    await owner`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, conversation_kind,
+      conversation_name, external_user_id, route) VALUES ('chr_ch1', ${ORG}, 'slack', 'EvCh1', 'T1', 'C77', 'public', '#nightly', 'U1', 'brainstorm')`;
+    const view = await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json;
+    expect(view.canEdit).toBe(false);
+    expect(view.hidden).toEqual([]);
+    expect(view.channels.find((c: Json) => c.conversationId === "C77")).toEqual({ conversationId: "C77", conversationName: "#nightly", projects: [] });
+    expect(view.projects.map((p: Json) => p.key)).toContain("ABS");
+
+    const usual = (key: string, ids: string[]) => call(key, "PUT", "/v1/organization/chat/slack/channels/C77/projects",
+      { conversationName: "#nightly", projectIds: ids });
+    expect((await usual(memberKey, ["prj_abs"])).status).toBe(403);
+    expect((await usual(adminKey, ["prj_nope"])).status).toBe(404);
+    const set = await (await usual(adminKey, ["prj_abs", "prj_sec"])).json() as Json;
+    expect(set.channels.find((c: Json) => c.conversationId === "C77").projects.map((p: Json) => p.key)).toEqual(["ABS", "SEC"]);
+    await usual(adminKey, ["prj_abs"]);
+    expect([...await owner`SELECT project_id FROM chat_channel_projects WHERE conversation_id = 'C77'`]).toEqual([{ project_id: "prj_abs" }]);
+
+    const hide = (key: string, ids: string[]) => call(key, "PUT", "/v1/organization/chat/slack/hidden-projects", { projectIds: ids });
+    expect((await hide(memberKey, ["prj_sec"])).status).toBe(403);
+    const hidden = await (await hide(adminKey, ["prj_sec"])).json() as Json;
+    expect(hidden.hidden.map((p: Json) => p.key)).toEqual(["SEC"]);
+    expect((await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json).hidden.map((p: Json) => p.key)).toEqual(["SEC"]);
+    expect([...await owner`SELECT event_type, payload FROM events WHERE organization_id = ${ORG}
+      AND event_type IN ('chat_channel.projects_set', 'chat_provider.hidden_projects_set') ORDER BY cursor`].map((e: Json) => [e.event_type, e.payload]))
+      .toEqual([
+        ["chat_channel.projects_set", { provider: "slack", conversationId: "C77", conversationName: "#nightly", added: ["prj_abs", "prj_sec"], removed: [], via: "settings" }],
+        ["chat_channel.projects_set", { provider: "slack", conversationId: "C77", conversationName: "#nightly", added: [], removed: ["prj_sec"], via: "settings" }],
+        ["chat_provider.hidden_projects_set", { provider: "slack", hidden: ["prj_sec"], shown: [] }],
+      ]);
+    await hide(adminKey, []);
+  });
+
   test("disconnect is an admin's, and unlinking one's own", async () => {
     expect((await call(memberKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(403);
     expect((await call(adminKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(204);

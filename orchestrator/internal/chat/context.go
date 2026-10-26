@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
 
@@ -286,9 +287,58 @@ func (s *Service) world(ctx context.Context, org, person string, m Mention, kind
 			return err
 		}
 		w.Sessions, err = pgx.CollectRows(rows, pgx.RowToStructByPos[SessionRef])
-		return err
+		if err != nil {
+			return err
+		}
+		return hints(ctx, tx, m, &w)
 	})
 	return w, err
+}
+
+// learnedOf is how many of a conversation's latest requests that made
+// something the learned hint reads.
+const learnedOf = 20
+
+// hints reads the conversation's hints into w: the projects its last
+// learnedOf requests' results ended up in (a task's or epic's project, a
+// session's linked ones), and the projects it is usually about. A hidden
+// project is in neither.
+func hints(ctx context.Context, tx pgx.Tx, m Mention, w *World) error {
+	// Along chat_requests_conversation_idx: the conversation's newest
+	// requests with a result, then each result's project(s).
+	rows, err := tx.Query(ctx, `WITH r AS (SELECT result_kind, result_id FROM chat_requests
+			WHERE provider = $1 AND external_workspace_id = $2 AND conversation_id = $3 AND result_id IS NOT NULL
+			ORDER BY created_at DESC LIMIT $4),
+		made AS (SELECT r.result_id, t.project_id FROM r JOIN tasks t ON r.result_kind = 'task' AND t.id = r.result_id
+			UNION SELECT r.result_id, e.project_id FROM r JOIN epics e ON r.result_kind = 'epic' AND e.id = r.result_id
+			UNION SELECT r.result_id, sp.project_id FROM r JOIN session_projects sp ON r.result_kind = 'session' AND sp.session_id = r.result_id)
+		SELECT p.key_prefix, count(DISTINCT made.result_id)::int, (SELECT count(*) FROM r)::int
+		FROM made JOIN projects p ON p.id = made.project_id
+		WHERE p.key_prefix IS NOT NULL AND NOT `+delivery.HiddenProjectSQL("p.id", "$1")+`
+		GROUP BY p.key_prefix ORDER BY 2 DESC, 1 LIMIT 5`, m.Provider, m.WorkspaceID, m.ConversationID, learnedOf)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var h LearnedHint
+		if err := rows.Scan(&h.Key, &h.Count, &w.LearnedOf); err != nil {
+			rows.Close()
+			return err
+		}
+		w.Learned = append(w.Learned, h)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows, err = tx.Query(ctx, `SELECT p.key_prefix FROM chat_channel_projects c JOIN projects p ON p.id = c.project_id
+		WHERE c.provider = $1 AND c.external_workspace_id = $2 AND c.conversation_id = $3 AND p.key_prefix IS NOT NULL
+		  AND NOT `+delivery.HiddenProjectSQL("p.id", "$1")+` ORDER BY p.key_prefix`, m.Provider, m.WorkspaceID, m.ConversationID)
+	if err != nil {
+		return err
+	}
+	w.Usual, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	return err
 }
 
 // rounds is how many clarifying questions this thread was asked.
@@ -326,6 +376,15 @@ func RoutingInput(who, where, provider, text string, thread, channel string, w W
 	}
 	if channel != "" {
 		fmt.Fprintf(&in, "\n## The channel before it\n\n%s\n", channel)
+	}
+	if len(w.Usual) > 0 {
+		fmt.Fprintf(&in, "\n## This channel is usually about\n\n%s (a hint, not a rule)\n", strings.Join(w.Usual, ", "))
+	}
+	if len(w.Learned) > 0 {
+		in.WriteString("\n## Where this conversation's earlier requests went\n\n")
+		for _, h := range w.Learned {
+			fmt.Fprintf(&in, "- %s: %d of the last %d\n", h.Key, h.Count, w.LearnedOf)
+		}
 	}
 	budget := contextBudget
 	in.WriteString("\n## Projects they can file in\n\n")
