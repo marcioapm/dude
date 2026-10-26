@@ -50,6 +50,8 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
     const opener = openerOf(win);
     if (!opener) return;
     let done = false;
+    // False once this page is left: a lookup landing later moves nothing and marks nothing.
+    let alive = true;
     const timer = win.setTimeout(() => {
       if (!done) setStep({ kind: "silent" });
     }, waitMs);
@@ -64,15 +66,18 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
       win.clearTimeout(timer);
       setStep({ kind: "looking", origin });
       client.previewServerAt(origin).then((found) => {
+        if (!alive) return;
         markPreviewArrival(win, found.taskId);
         onFoundRef.current(found);
       }, (err: unknown) => {
+        if (!alive) return;
         setStep(err instanceof ApiError && err.status === 404 ? { kind: "none", origin } : { kind: "failed", why: errorText(err) });
       });
     };
     win.addEventListener("message", onMessage);
     return () => {
       done = true;
+      alive = false;
       win.clearTimeout(timer);
       win.removeEventListener("message", onMessage);
     };

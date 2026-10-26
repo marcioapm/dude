@@ -99,3 +99,18 @@ test("an opener that never says hello is said to have not answered", async () =>
   await hello(WEB, `${WEB}/`);
   await until(() => s.found.length > 0 || null, "the task found late");
 });
+
+test("a lookup that lands after the page was left does nothing: no move to the task, no arrival marked", async () => {
+  let land!: (found: PreviewServerAt) => void;
+  const client = new LookupClient(() => new Promise((r) => { land = r; }));
+  const s = await screen(client);
+  await hello(WEB, `${WEB}/`);
+  expect(client.asked).toEqual([WEB]);
+  await unmounts.pop()!();
+  await act(async () => {
+    land(FOUND);
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  expect(s.found).toEqual([]);
+  expect(arrivedFromPreview(window, FOUND.taskId)).toBe(false);
+});
