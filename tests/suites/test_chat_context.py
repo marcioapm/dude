@@ -13,6 +13,13 @@ reads the failed job's log with `github_check_log`.
 
 A project hidden from Slack never reaches routing, a session started there
 cannot link it, and its repository is refused to that session's tools.
+
+Routing here is tests/env.py's judge stub, not a model: for an unspecific
+message it picks the project the routing input's "## This channel is
+usually about" hint names. So this suite proves the plumbing (the channel,
+the app's attachment link and the hint reach the recorded routing input;
+the session's tools read the job log), not a real model's choice; the Go
+tests in internal/chat assert the routing input's sections.
 """
 
 from __future__ import annotations

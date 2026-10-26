@@ -1,10 +1,13 @@
 package chat_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ciReport is a CI bot's nightly report: the run's link only in an
@@ -78,6 +81,77 @@ func TestChatTheChannelIsCutFromItsOldestEnd(t *testing.T) {
 	sent := w.model.last()
 	if !strings.Contains(sent, "earlier messages left out") || strings.Contains(sent, "message 0 ") || !strings.Contains(sent, "message 9 ") {
 		t.Fatalf("not cut from the oldest end: %.600s", sent)
+	}
+}
+
+// The channel is read once, asking for at most 30 messages: of 40 before
+// the mention, the newest 30 are quoted.
+func TestChatTheChannelIsAtMostThirtyMessages(t *testing.T) {
+	w := setup(t)
+	for i := range 40 {
+		w.fake.Post("C1", "", "U2", fmt.Sprintf("note %02d", i))
+	}
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+	w.mention("Márcia", "C1", "", "what's going on?")
+	args := w.fake.Args("conversations.history")
+	if len(args) != 1 || args[0]["limit"] != "30" {
+		t.Fatalf("history reads %v", args)
+	}
+	sent := w.model.last()
+	if strings.Contains(sent, "note 09") || !strings.Contains(sent, "note 10") || !strings.Contains(sent, "note 39") {
+		t.Fatalf("not the newest 30: %s", sent)
+	}
+}
+
+// The context hash covers the channel: the same message in the same
+// conversation hashes apart once the channel before it differs.
+func TestChatTheContextHashCoversTheChannel(t *testing.T) {
+	w := setup(t)
+	w.fake.Post("C1", "", "U2", "the export failed at 02:00")
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+	w.mention("Márcia", "C1", "", "what's going on?")
+	first := w.one(`SELECT context_hash FROM chat_requests WHERE organization_id = $1`, w.org)
+	w.fake.Post("C1", "", "U2", "and the import at 03:00")
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+	w.mention("Márcia", "C1", "", "what's going on?")
+	second := w.one(`SELECT context_hash FROM chat_requests WHERE organization_id = $1 AND context_hash <> $2`, w.org, first)
+	if first == "" || second == "" || first == second {
+		t.Fatalf("hashes %q %q", first, second)
+	}
+}
+
+// A retry acting on a kept decision quotes the channel it was decided
+// from, without reading it again, though the channel changed meanwhile.
+func TestChatARetryReusesTheKeptChannel(t *testing.T) {
+	w := setup(t)
+	w.fake.Post("C1", "", "U2", "the export failed at 02:00")
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "Exports"}))
+	fails := 1
+	w.svc.SetBeforeMake(func(context.Context) error {
+		if fails > 0 {
+			fails--
+			return &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+		}
+		return nil
+	})
+	w.receive("Márcia", "C1", "", "look into it")
+	w.once()
+	if n := w.fake.Calls("conversations.history"); n != 1 {
+		t.Fatalf("%d history reads", n)
+	}
+	w.fake.Post("C1", "", "U2", "written after the decision")
+	w.due()
+	w.once()
+	if n := w.fake.Calls("conversations.history"); n != 1 {
+		t.Fatalf("the retry read the channel again: %d reads", n)
+	}
+	got := w.requests()
+	if len(got) != 1 || got[0].ResultKind != "session" {
+		t.Fatalf("requests %+v", got)
+	}
+	origin := w.one(`SELECT origin::text FROM sessions WHERE id = $1`, got[0].ResultID)
+	if !strings.Contains(origin, "the export failed at 02:00") || strings.Contains(origin, "written after the decision") {
+		t.Fatalf("origin %s", origin)
 	}
 }
 

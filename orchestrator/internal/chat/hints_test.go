@@ -12,6 +12,12 @@ func TestChatAHiddenProjectIsNeverRoutedTo(t *testing.T) {
 	w.exec(`INSERT INTO chat_channel_projects (organization_id, provider, external_workspace_id, conversation_id, project_id)
 		VALUES ($1, 'slack', 'T1', 'C1', $2), ($1, 'slack', 'T1', 'C1', $3)`, w.org, sec, w.project)
 	w.exec(`INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, sec)
+	// An earlier request here made a task in it, and one in BIL.
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_sec_'||$1, $1, $2, 1, 'Old keys'),
+		('wi_bil_'||$1, $1, $3, 90, 'Old export')`, w.org, sec, w.project)
+	w.exec(`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
+		external_user_id, route, result_kind, result_id) VALUES ('chr_sec', $1, 'slack', 'ev_sec', 'T1', 'C1', 'U2', 'task', 'task', 'wi_sec_'||$1),
+		('chr_bil', $1, 'slack', 'ev_bil', 'T1', 'C1', 'U2', 'task', 'task', 'wi_bil_'||$1)`, w.org)
 	// The model names it anyway: refused as an invented project is.
 	w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.95, "reasoning": "the keys", "title": "Rotate keys",
 		"goal": "Rotate the vault keys every month.", "project": "SEC"}))
@@ -20,14 +26,19 @@ func TestChatAHiddenProjectIsNeverRoutedTo(t *testing.T) {
 	if strings.Contains(sent, "SEC (Secret)") || !strings.Contains(sent, "BIL (Billing)") {
 		t.Fatalf("the hidden project is in the routing input: %s", sent)
 	}
-	if strings.Contains(sent, "usually about\\n\\nSEC") || !strings.Contains(sent, "usually about\\n\\nBIL (a hint") {
+	if !strings.Contains(sent, `usually about\n\nBIL (a hint`) || !strings.Contains(sent, `earlier requests went\n\n- BIL: 1 of the last 2\n`) {
 		t.Fatalf("hints: %s", sent)
 	}
+	// SEC is named nowhere but in the message: not a project, not either hint.
+	if strings.Contains(sent, "- SEC:") || strings.Contains(sent, "Secret") {
+		t.Fatalf("the hidden project is in the routing input: %s", sent)
+	}
 	got := w.requests()
-	if len(got) != 1 || got[0].AskedRoute != "task" || !strings.Contains(got[0].Reasoning, `project "SEC" is not one of the person's`) {
+	last := got[len(got)-1]
+	if len(got) != 3 || last.AskedRoute != "task" || !strings.Contains(last.Reasoning, `project "SEC" is not one of the person's`) {
 		t.Fatalf("requests %+v", got)
 	}
-	if n := w.count(`SELECT count(*) FROM tasks WHERE project_id = $1`, sec); n != 0 {
+	if n := w.count(`SELECT count(*) FROM tasks WHERE project_id = $1`, sec); n != 1 {
 		t.Fatal("a task was filed in the hidden project")
 	}
 	if n := w.count(`SELECT count(*) FROM session_projects WHERE project_id = $1`, sec); n != 0 {

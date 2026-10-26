@@ -145,6 +145,35 @@ func TestATaskFromChatWhoseProjectIsHiddenKeepsItsOwnProject(t *testing.T) {
 	}
 }
 
+// A task from Slack reaches no other hidden project's task by key: not
+// through settings' task view (even with a project of its own named), nor
+// as a relation of a task it creates or of its own.
+func TestATaskFromChatCannotNameAnotherHiddenProjectsTask(t *testing.T) {
+	f := setup(t)
+	f.fencedSession(t, "ssn_hide_sec")
+	mustExec(t, f.owner, `UPDATE tasks SET origin = '{"provider":"slack"}' WHERE id = $1`, f.item)
+	conductor := f.conductor(t)
+	for _, args := range []string{`{"task":"SEC-1","project":"TEXT"}`, `{"task":"wi_sec_` + f.org + `","project":"TEXT"}`} {
+		status, out := f.post(t, conductor, "settings", args)
+		refusedSaying(t, status, out, "SEC is hidden from what is started from slack")
+	}
+	status, out := f.post(t, conductor, "create_task", `{"title":"Rotate","goal":"Rotate the keys the export uses.","blockedBy":["SEC-1"]}`)
+	refusedSaying(t, status, out, "SEC is hidden from what is started from slack")
+	if n := f.count(t, `SELECT count(*) FROM tasks WHERE title = 'Rotate'`); n != 0 {
+		t.Errorf("the refused create made %d tasks", n)
+	}
+	status, out = f.post(t, conductor, "update_task", `{"addRelations":[{"kind":"blocked_by","task":"SEC-1"}]}`)
+	refusedSaying(t, status, out, "SEC is hidden from what is started from slack")
+	if n := f.count(t, `SELECT count(*) FROM task_relations WHERE from_task_id = 'wi_sec_'||$1 OR to_task_id = 'wi_sec_'||$1`, f.org); n != 0 {
+		t.Errorf("%d relations to the hidden project's task", n)
+	}
+	// Not from chat, the same calls reach it.
+	mustExec(t, f.owner, `UPDATE tasks SET origin = NULL WHERE id = $1`, f.item)
+	if status, out := f.post(t, conductor, "settings", `{"task":"SEC-1","project":"TEXT"}`); status != 200 {
+		t.Errorf("settings of SEC-1 for a task not from chat: %d %v", status, out)
+	}
+}
+
 // fencedChild is an investigator the fenced session's agent started, with
 // its own token.
 func (f *fixture) fencedChild(t *testing.T, session string) string {

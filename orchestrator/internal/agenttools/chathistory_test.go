@@ -75,6 +75,28 @@ func TestChatHistoryReadsOnlyItsSessionsConversationQuotedAndCounted(t *testing.
 	}
 }
 
+// The conversation read is always the caller's own session's: another
+// session's id in the input is refused, and never read.
+func TestChatHistoryNeverReadsAnotherSessionsConversation(t *testing.T) {
+	reader := &chatReader{}
+	f := setupWith(t, &agenttools.Server{Chat: reader})
+	token := f.session(t, "ssn_mine", "", "")
+	f.session(t, "ssn_theirs", "", "")
+	mustExec(t, f.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id IN ('ssn_mine', 'ssn_theirs')`)
+	for _, field := range []string{"session", "sessionId", "session_id", "conversation", "conversationId"} {
+		status, out := f.post(t, token, "chat_history", `{"`+field+`":"ssn_theirs"}`)
+		if status != 422 || !strings.Contains(out["error"].(string), "unknown field") {
+			t.Errorf("%s naming another session: %d %v", field, status, out)
+		}
+	}
+	if status, out := f.post(t, token, "chat_history", `{}`); status != 200 {
+		t.Fatalf("its own: %d %v", status, out)
+	}
+	if strings.Join(reader.sessions, ",") != "ssn_mine" {
+		t.Fatalf("read for %v, want its own session only", reader.sessions)
+	}
+}
+
 func TestChatHistoryIsBudgetedPerSessionPerHour(t *testing.T) {
 	reader := &chatReader{}
 	f := setupWith(t, &agenttools.Server{Chat: reader})

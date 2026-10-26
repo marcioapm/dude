@@ -81,6 +81,8 @@ type Server struct {
 	installer, signer      string // who authorizes the next install / sign-in
 	seq                    int
 	calls                  map[string]int
+	// The arguments of each conversations.history and .replies call, in order.
+	args map[string][]map[string]string
 	// Methods answered with a Slack error, so many times, for a failure test.
 	failNext map[string]failure
 }
@@ -97,7 +99,7 @@ func New(clientID, clientSecret string) *Server {
 	return &Server{ClientID: clientID, ClientSecret: clientSecret, teams: map[string]string{}, users: map[string]User{},
 		convs: map[string]*Conversation{}, reactions: map[string]map[string]bool{}, tokens: map[string]string{},
 		userTokens: map[string]string{}, codes: map[string]code{}, calls: map[string]int{}, failNext: map[string]failure{},
-		scopes: map[string][]string{}, pendingScopes: map[string][]string{}}
+		scopes: map[string][]string{}, pendingScopes: map[string][]string{}, args: map[string][]map[string]string{}}
 }
 
 // AddTeam adds a workspace with its bot user (B<team>).
@@ -328,6 +330,14 @@ func (s *Server) Calls(method string) int {
 	return s.calls[method]
 }
 
+// Args are the arguments of each call of a conversations.history or
+// conversations.replies, in order.
+func (s *Server) Args(method string) []map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]map[string]string(nil), s.args[method]...)
+}
+
 // ServeHTTP serves /api/<method>, the OAuth pages and, for the E2E suite,
 // /_fake/ controls.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -442,6 +452,13 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls[method]++
+	if method == "conversations.history" || method == "conversations.replies" {
+		got := map[string]string{}
+		for k := range a {
+			got[k] = str(a, k)
+		}
+		s.args[method] = append(s.args[method], got)
+	}
 	if f, ok := s.failNext[method]; ok {
 		if f.left--; f.left <= 0 {
 			delete(s.failNext, method)
