@@ -1214,6 +1214,45 @@ test("once dude answered through the chain, the page stays connected to it after
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
 
+test("a dude window that answered and then stops answering is let go after the waiting beats: the dude up the openers is heard instead", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const first = fakeWin();
+  const second = fakeWin();
+  let up: FakeWin = first;
+  opener = { postMessage: mock(() => {}), closed: false, focus: () => {}, location: { origin: new URL(PAGE).origin }, get opener() { return up; } } as unknown as Opener;
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
+  fromDude(sessionFor(), DUDE, first);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  // The openers now lead to another dude window; the one that answered stays open and says nothing more.
+  up = second;
+  dropToWaiting(beat);
+  for (let i = 0; i < 4; i++) beat();
+  fromDude(sessionFor(), DUDE, second);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  beat();
+  expect(posted(second).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, second);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("a dude window that stops answering, with no other dude up the openers, is kept: still said hello to, and Connect offered", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  win.open = () => dudeTab;
+  boot({ heartbeatMs: HB });
+  tid("ov-connect")!.click();
+  fromDude(sessionFor(), DUDE, dudeTab);
+  dropToWaiting(beat);
+  for (let i = 0; i < 6; i++) beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
 test("the walk up the openers reaches dude at exactly five steps, stops after five same-origin pages, and at an opener that can't be read past", () => {
   page(CART, false);
   const origin = new URL(PAGE).origin;

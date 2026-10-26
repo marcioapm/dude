@@ -373,6 +373,11 @@ export class Overlay {
    */
   #dude(): Window | null {
     if (live(this.#connectWin)) return this.#connectWin;
+    return this.#chain();
+  }
+
+  // The first opener up the chain that is not one of this preview's own pages.
+  #chain(): Window | null {
     let at: Window = this.#win;
     for (let step = 0; step < OVERLAY_OPENER_STEPS; step++) {
       let next: Window | null;
@@ -423,7 +428,12 @@ export class Overlay {
     if (this.#stopped || !this.#dude()) return;
     const said = this.#saidHello;
     this.#saidHello = false;
-    if (this.#connection === "waiting" && ++this.#waitBeats === WAITING_BEATS) this.#render();
+    if (this.#connection === "waiting" && ++this.#waitBeats === WAITING_BEATS) {
+      // The pinned dude window went unanswered this long: the dude up the openers, if there is one, is talked to instead.
+      // With none it stays pinned, so it is still said hello to and not taken for closed.
+      if (this.#chain()) this.#connectWin = null;
+      this.#render();
+    }
     if (this.#connection === "connected") {
       this.#quietBeats++;
       if (this.#quietBeats < 2) return;
