@@ -59,6 +59,14 @@ func (f Fence) Keep(projects []string) []string {
 // a chat-born session, or made by such a task's agent, carries the
 // provider in its own origin (InheritOrigin), so it is fenced the same way.
 func FenceOf(ctx context.Context, tx pgx.Tx, sessionID, taskID string) (Fence, error) {
+	provider, err := originProvider(ctx, tx, sessionID, taskID)
+	if err != nil || provider == "" {
+		return Fence{}, err
+	}
+	return HiddenFrom(ctx, tx, provider)
+}
+
+func originProvider(ctx context.Context, tx pgx.Tx, sessionID, taskID string) (string, error) {
 	var provider *string
 	var err error
 	switch {
@@ -68,18 +76,15 @@ func FenceOf(ctx context.Context, tx pgx.Tx, sessionID, taskID string) (Fence, e
 		err = tx.QueryRow(ctx, `SELECT COALESCE(t.origin->>'provider', e.origin->>'provider') FROM tasks t
 			LEFT JOIN epics e ON e.id = t.epic_id WHERE t.id = $1`, taskID).Scan(&provider)
 	default:
-		return Fence{}, nil
+		return "", nil
 	}
 	if db.IsNotFound(err) {
-		return Fence{}, nil
+		return "", nil
 	}
-	if err != nil {
-		return Fence{}, err
+	if err != nil || provider == nil {
+		return "", err
 	}
-	if provider == nil || *provider == "" {
-		return Fence{}, nil
-	}
-	return HiddenFrom(ctx, tx, *provider)
+	return *provider, nil
 }
 
 // HiddenFrom is the fence of everything provider's chat starts.
@@ -99,30 +104,18 @@ func HiddenFrom(ctx context.Context, tx pgx.Tx, provider string) (Fence, error) 
 // chat itself. Nothing is written when the source has no chat provider, or
 // the row has an origin of its own.
 func InheritOrigin(ctx context.Context, tx pgx.Tx, table, id, fromSession, fromTask string) error {
-	var provider *string
-	var via, from string
-	var err error
-	switch {
-	case fromSession != "":
-		via, from = "session", fromSession
-		err = tx.QueryRow(ctx, `SELECT origin->>'provider' FROM sessions WHERE id = $1`, fromSession).Scan(&provider)
-	case fromTask != "":
-		via, from = "task", fromTask
-		err = tx.QueryRow(ctx, `SELECT COALESCE(t.origin->>'provider', e.origin->>'provider') FROM tasks t
-			LEFT JOIN epics e ON e.id = t.epic_id WHERE t.id = $1`, fromTask).Scan(&provider)
-	default:
-		return nil
-	}
-	if db.IsNotFound(err) {
-		return nil
-	}
-	if err != nil || provider == nil || *provider == "" {
+	provider, err := originProvider(ctx, tx, fromSession, fromTask)
+	if err != nil || provider == "" {
 		return err
+	}
+	via, from := "task", fromTask
+	if fromSession != "" {
+		via, from = "session", fromSession
 	}
 	query := `UPDATE tasks SET origin = jsonb_build_object('provider', $2::text, 'via', $3::text, 'from', $4::text) WHERE id = $1 AND origin IS NULL`
 	if table == "epics" {
 		query = `UPDATE epics SET origin = jsonb_build_object('provider', $2::text, 'via', $3::text, 'from', $4::text) WHERE id = $1 AND origin IS NULL`
 	}
-	_, err = tx.Exec(ctx, query, id, *provider, via, from)
+	_, err = tx.Exec(ctx, query, id, provider, via, from)
 	return err
 }
