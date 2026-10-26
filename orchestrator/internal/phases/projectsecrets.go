@@ -44,9 +44,8 @@ func SecretRecipientFor(phase, role string) string {
 }
 
 // loadProjectSecrets are the current values of the secrets in force for the
-// project (its own, then the organisation's whose name it lacks:
-// secrets_in_force, migration 210) given to recipient, by name; with
-// names, only those (a resume's). tx is the Run's organisation's.
+// project (secrets_in_force) given to recipient, by name; with names, only
+// those (a resume's). tx is the Run's organisation's.
 func loadProjectSecrets(ctx context.Context, tx pgx.Tx, projectID, recipient string, names []string) ([]lux.Secret, error) {
 	if recipient == "" || projectID == "" {
 		return nil, nil

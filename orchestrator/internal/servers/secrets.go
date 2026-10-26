@@ -14,10 +14,10 @@ import (
 
 // A project's secrets granted to previews (project_secrets, migrations 081
 // and 128), and its organisation's whose name it lacks (210), are lux
-// secrets of every preview Run, as: env, so its servers
-// and their setup scripts have them; agent Runs get those granted to their
-// phase (phases/projectsecrets.go). A preview spec's only env secrets are
-// these: GIT_TOKEN and the registry login are declared without as.
+// secrets of every preview Run, as: env, so its servers and their setup
+// scripts have them; agent Runs get those granted to their phase
+// (phases/projectsecrets.go). A preview spec's only env secrets are these:
+// GIT_TOKEN and the registry login are declared without as.
 //
 // lux v0.1.11 requires a value at every resume for each secret the Run
 // declared at submit (422 secrets_required otherwise) and ignores names
@@ -29,9 +29,8 @@ import (
 
 const previewSecretAs = "env"
 
-// loadSecrets are the secrets in force for the project given to previews
-// (its own, then its organisation's whose name it lacks: secrets_in_force,
-// migration 210), by name, as a preview's spec declares them. tx is the
+// loadSecrets are the secrets in force for the project (secrets_in_force)
+// given to previews, by name, as a preview's spec declares them. tx is the
 // preview's organisation's.
 func loadSecrets(ctx context.Context, tx pgx.Tx, projectID string) ([]lux.Secret, error) {
 	rows, err := tx.Query(ctx, `SELECT name, value FROM secrets_in_force(current_organization_id(), $1) WHERE 'previews' = ANY(recipients) ORDER BY name`, projectID)

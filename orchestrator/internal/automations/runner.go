@@ -2200,11 +2200,8 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// givenSecrets are the values a run gets, as env (automation_secrets_given,
-// migration 210): an own agent's, a command's or a server's picks, an
-// organisation pick whose name the project holds resolving to the
-// project's value now; a dude-role preset's, what its role is ticked for
-// at both levels, the project's winning a name.
+// givenSecrets are the values a run gets, as env: its picks or its preset
+// role's, as automation_secrets_given (migration 210) resolves them.
 func givenSecrets(ctx context.Context, tx pgx.Tx, a Automation) ([]lux.Secret, error) {
 	rows, err := tx.Query(ctx, `SELECT name, value FROM automation_secrets_given($1)`, a.ID)
 	if err != nil {
