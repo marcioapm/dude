@@ -16,7 +16,7 @@ import { useAccount } from "../accounts/context.tsx";
 import { errorText } from "../hooks/useSave.tsx";
 import {
   AddSecretDialog, ChangeValueDialog, NO_TALKERS_NOTE, RecipientsDialog, REDACTION_NOTE, RemoveSecretDialog, SECRETS_NOTE,
-  changedWords, recipientsDone, useSecretDialogs, type SecretLevel,
+  changedWords, projectsHaveOwn, recipientsDone, useSecretDialogs, type SecretLevel,
 } from "./ProjectSecrets.tsx";
 
 export const ORG_SECRETS_HELP = (org: string) =>
@@ -61,8 +61,6 @@ export function useOrgSecrets(client: ApiClient, given?: string | undefined) {
   return { secrets, problem: problem ?? (orgId ? null : found.problem), reload, orgId };
 }
 
-const projectsHaveOwn = (names: readonly string[]) => `${names.join(", ")} ${names.length === 1 ? "has" : "have"} its own`;
-
 export function OrgSecretsPage({ client, orgName, admin }: { client: ApiClient; orgName: string; admin: boolean }) {
   const { secrets, problem, reload, orgId } = useOrgSecrets(client);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -72,7 +70,7 @@ export function OrgSecretsPage({ client, orgName, admin }: { client: ApiClient; 
   const addAction = admin ? (
     <Button ref={addButton} variant="secondary" leadingIcon="plus" onClick={() => open({ kind: "add" })} data-testid="add-secret">Add secret</Button>
   ) : undefined;
-  const overriddenIn = (s: OrgSecretListing) => s.overriddenIn.map((p) => p.name);
+  const overriddenIn = (s: OrgSecretListing | undefined) => (s?.overriddenIn ?? []).map((p) => p.name);
   const id = orgId!;
 
   return (
@@ -144,7 +142,7 @@ export function OrgSecretsPage({ client, orgName, admin }: { client: ApiClient; 
       ) : null}
       {editing?.kind === "recipients" ? (
         <RecipientsDialog level={level} secret={editing.secret} busy={busy} problem={saveProblem} onClose={close}
-          overriddenIn={overriddenIn(secrets.find((s) => s.name === editing.secret.name) ?? { ...editing.secret, overriddenIn: [], pickedBy: null })}
+          overriddenIn={overriddenIn(secrets.find((s) => s.name === editing.secret.name))}
           onSubmit={(recipients) => void save(() => client.changeOrganizationSecretRecipients(id, editing.secret.name, recipients),
             recipientsDone(editing.secret.name, recipients))} />
       ) : null}

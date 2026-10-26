@@ -194,6 +194,9 @@ export function ProjectSecretsSection({ client, projectId, secrets, recipes, can
   );
 }
 
+/** The projects holding an organisation secret's name: "platform has its own". */
+export const projectsHaveOwn = (names: readonly string[]) => `${names.join(", ")} ${names.length === 1 ? "has" : "have"} its own`;
+
 export function recipientsDone(name: string, recipients: readonly SecretRecipient[]): string {
   return recipients.length ? `${name} now given to ${recipients.map(secretRecipientLabel).join(", ")}` : `${name} now given to automations that pick it only`;
 }
@@ -299,7 +302,7 @@ export function RecipientsDialog({ level = PROJECT_LEVEL, secret, overriddenIn =
       <Recipients level={level} value={recipients} onChange={setRecipients} disabled={busy} after={overriddenIn.length ? (
         <SettingsNote icon="layers">
           <span data-testid="overridden-in">
-            {overriddenIn.join(", ")} {overriddenIn.length === 1 ? "has" : "have"} its own <span className="ds-mono">{secret.name}</span>: agents there get that one, whatever is ticked here.
+            {projectsHaveOwn(overriddenIn)} <span className="ds-mono">{secret.name}</span>: agents there get that one, whatever is ticked here.
           </span>
         </SettingsNote>
       ) : null} />
