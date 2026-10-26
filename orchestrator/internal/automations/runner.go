@@ -1246,7 +1246,8 @@ const (
 // endIn ends a live run in tx; all names a counter (allPosted, allInputs)
 // that must have reached every payload the run holds, or allAny.
 func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason string, cost *float64, all string) (bool, error) {
-	if status == "succeeded" {
+	// Only an agent's run can call post_to_chat.
+	if status == "succeeded" && a.Kind == "agent" {
 		failed, err := postFailed(ctx, tx, runID)
 		if err != nil {
 			return false, err

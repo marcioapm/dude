@@ -15,7 +15,7 @@ import (
 func postFailed(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
 	var said string
 	err := tx.QueryRow(ctx, `SELECT payload->>'error' FROM events
-		WHERE event_type = $1 AND payload->>'automationRunId' = $2 AND payload->>'code' = $3
+		WHERE run_id = $2 AND event_type = $1 AND payload->>'code' = $3
 		ORDER BY occurred_at LIMIT 1`, agenttools.EvChatPostRefused, runID, agenttools.PostNotConnected).Scan(&said)
 	if db.IsNotFound(err) {
 		return "", nil

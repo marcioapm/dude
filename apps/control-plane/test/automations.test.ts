@@ -349,8 +349,8 @@ describe("runs", () => {
     const { body: a } = await create("ana", { name: "Weekly PR digest" });
     await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_d', ${ORG}, ${a.id}, 'succeeded', 'schedule')`;
     const ev = (id: string, type: string, at: string, payload: Record<string, unknown>) =>
-      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, payload)
-        VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_d', 'orchestrator', ${at}::timestamptz, ${{ ...payload, automationRunId: "arn_d" }})`;
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+        VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_d', 'orchestrator', ${at}::timestamptz, 'arn_d', ${{ ...payload, automationRunId: "arn_d" }})`;
     await ev("evt_d1", "agent.tool.dude", "2026-10-23T15:00:05Z", { tool: "create_task", arguments: { title: "Fix it" }, result: {} });
     await ev("evt_d2", "agent.tool.attempted", "2026-10-23T15:03:12Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" } });
     await ev("evt_d3", "chat.message.posted", "2026-10-23T15:03:12.640Z", { channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p1" });

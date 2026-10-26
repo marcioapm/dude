@@ -19,8 +19,8 @@ func TestAnAgentRunFailsOnAPostWithoutSlack(t *testing.T) {
 	exec(t, h.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES
 		('arn_ok', $1, 'aut_digest', 'running', 'schedule'), ('arn_noslack', $1, 'aut_digest', 'running', 'schedule')`, h.org)
 	refused := func(run, code, msg string) {
-		exec(t, h.owner, `INSERT INTO events (id, organization_id, project_id, event_type, actor_type, actor_id, source, payload)
-			VALUES ($1, $2, $3, $4, 'agent', $5, 'orchestrator', jsonb_build_object('automationRunId', $5::text, 'code', $6::text, 'error', $7::text))`,
+		exec(t, h.owner, `INSERT INTO events (id, organization_id, project_id, event_type, actor_type, actor_id, source, run_id, payload)
+			VALUES ($1, $2, $3, $4, 'agent', $5, 'orchestrator', $5, jsonb_build_object('automationRunId', $5::text, 'code', $6::text, 'error', $7::text))`,
 			"evt_"+run+code, h.org, h.project, agenttools.EvChatPostRefused, run, code, msg)
 	}
 	refused("arn_ok", "", "there is no channel #nowhere that dude's Slack bot can see: check the name")
