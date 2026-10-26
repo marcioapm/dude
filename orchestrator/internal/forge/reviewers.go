@@ -162,21 +162,18 @@ func (g *GitHub) teamCandidates(ctx context.Context, owner, words string) []Cand
 type StaleReviews struct {
 	// The pull request's head as GitHub has it.
 	Head string
-	// The branch that head is on, and the repository it is in ("o/r"): the
-	// pull request's head lags its branch for a moment after a push.
+	// The head branch and its repository ("o/r"), to check for PR head lag.
 	Branch, BranchRepo string
-	// Reviewers whose latest review is on another commit than the one
-	// asked about and who are not asked again already, in the order they
-	// first reviewed. Never the author, and never an App's account ("Bot",
-	// "<slug>[bot]"): GitHub refuses to request a review of either, and a
-	// review App such as CodeRabbit reviews every push without being asked.
+	// Reviewers whose latest review is not on the requested commit and who
+	// are not already asked, in first-review order. Excludes the author and
+	// App accounts ("Bot", "<slug>[bot]"): GitHub refuses both, and review
+	// Apps review every push unasked.
 	Logins []string
 }
 
-// StaleReviewers reads whose review of pull request `number` does not
-// cover commit `of` ("" for the pull request's head as GitHub has it):
-// GitHub drops a reviewer from requested_reviewers when they submit, so
-// after a push nobody owes the new head a look until they are asked again.
+// StaleReviewers finds reviewers whose latest review does not cover of
+// (empty for GitHub's PR head). GitHub drops reviewers from
+// requested_reviewers when they submit, so a new commit needs a new request.
 func (g *GitHub) StaleReviewers(ctx context.Context, slug string, number int, of string) (StaleReviews, error) {
 	var p ghPull
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
@@ -190,9 +187,8 @@ func (g *GitHub) StaleReviewers(ctx context.Context, slug string, number int, of
 		of = p.Head.SHA
 	}
 	out := StaleReviews{Head: p.Head.SHA, Branch: p.Head.Ref, BranchRepo: slug, Logins: staleReviewers(p, reviews, of)}
-	// GitHub says null for a fork since deleted: the base repository is
-	// then read, where a branch of that name is never at a commit dude
-	// pushed to the fork.
+	// A deleted fork has a null head repository; the base repository's
+	// branch will not match dude's commit pushed to the fork.
 	if p.Head.Repo != nil && p.Head.Repo.FullName != "" {
 		out.BranchRepo = p.Head.Repo.FullName
 	}

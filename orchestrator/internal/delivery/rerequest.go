@@ -260,13 +260,11 @@ func (c *rerequestClaim) ask(ctx context.Context, gh *forge.GitHub, slug string)
 		return payload, nil
 	}
 	if stale.Head != c.head {
-		// GitHub moves a pull request's head a few seconds after its branch:
-		// read just after dude's push, it can still show the commit before.
-		// The branch says which it is. Someone pushed on top of dude's
-		// commit when the branch is past it: the head is theirs, and so is
-		// asking for a review of it.
-		// What GitHub showed is kept with what is recorded, so a lagging
-		// read is told from a current one.
+		// GitHub moves a pull request's head a few seconds after its branch,
+		// so a read just after dude's push can show the commit before. The
+		// branch tells that from someone else's push, whose reviews are
+		// theirs to request. Keep the PR head so the event shows a lagging
+		// read.
 		payload["pullRequestHead"] = stale.Head
 		at, err := gh.BranchSHA(ctx, stale.BranchRepo, stale.Branch)
 		if err != nil {
