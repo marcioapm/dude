@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,13 @@ import (
 // installScript runs scripts/install-cli.sh against srv into a temp
 // directory, as on this machine.
 func installScript(t *testing.T, srv string, env ...string) (dir, stderr string, err error) {
+	t.Helper()
+	script, _ := filepath.Abs(filepath.Join("..", "..", "..", "scripts", "install-cli.sh"))
+	return installScriptFrom(t, script, srv, env...)
+}
+
+// installScriptFrom is installScript with another copy of the script.
+func installScriptFrom(t *testing.T, script, srv string, env ...string) (dir, stderr string, err error) {
 	t.Helper()
 	sh, lerr := exec.LookPath("sh")
 	if lerr != nil {
@@ -25,7 +34,6 @@ func installScript(t *testing.T, srv string, env ...string) (dir, stderr string,
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" || runtime.GOARCH != "arm64" && runtime.GOARCH != "amd64" {
 		t.Skip("install-cli.sh is for darwin and linux, arm64 and amd64")
 	}
-	script, _ := filepath.Abs(filepath.Join("..", "..", "..", "scripts", "install-cli.sh"))
 	home := t.TempDir()
 	dir = filepath.Join(home, "bin with space")
 	cmd := exec.Command(sh, script)
@@ -99,5 +107,62 @@ func TestInstallScriptNamesAMissingAsset(t *testing.T) {
 	_, stderr, err := installScript(t, f.serve(t).URL)
 	if err == nil || !strings.Contains(stderr, "release v1.2.0 has no "+name) {
 		t.Fatalf("err %v, stderr:\n%s", err, stderr)
+	}
+}
+
+// A GitHub API refusal, such as the unauthenticated rate limit's 403, is
+// not reported as "no release" only.
+func TestInstallScriptNamesTheRateLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	_, stderr, err := installScript(t, srv.URL)
+	if err == nil || !strings.Contains(stderr, "rate limit") || !strings.Contains(stderr, "DUDE_VERSION") {
+		t.Fatalf("err %v, stderr:\n%s", err, stderr)
+	}
+}
+
+// SHA256SUMS comes first, so a release that does not list the tarball costs
+// no tarball download.
+func TestInstallScriptReadsSHA256SUMSBeforeTheTarball(t *testing.T) {
+	f := newFakeRelease(t, "v1.2.0")
+	f.sums = sha([]byte("x")) + "  dude-cli_v1.2.0_plan9_mips.tar.gz\n"
+	if _, _, err := installScript(t, f.serve(t).URL); err == nil {
+		t.Fatal("installed an unlisted tarball")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.requests {
+		if strings.HasSuffix(p, ".tar.gz") {
+			t.Fatalf("downloaded the tarball: %v", f.requests)
+		}
+	}
+}
+
+// A copy of the script cut off before its last line, as `curl | sh` runs
+// one whose download stopped, does nothing.
+func TestInstallScriptCutShortRunsNothing(t *testing.T) {
+	whole, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "install-cli.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.TrimRight(string(whole), "\n")
+	cut := filepath.Join(t.TempDir(), "install-cli.sh")
+	if err := os.WriteFile(cut, []byte(body[:strings.LastIndex(body, "\n")+1]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeRelease(t, "v1.2.0")
+	dir, stderr, err := installScriptFrom(t, cut, f.serve(t).URL)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "dude")); !os.IsNotExist(serr) {
+		t.Fatalf("installed: %v", serr)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) != 0 || stderr != "" {
+		t.Fatalf("requests %v, stderr %q", f.requests, stderr)
 	}
 }
