@@ -11,8 +11,37 @@ which acts as its Run and has other commands. This one is
 
 ## Install
 
-From a release, unpack `dude-cli_<version>_<os>_<arch>.tar.gz` (darwin or
-linux, arm64 or amd64) and put `bin/dude` on your `PATH`:
+On macOS or Linux (arm64 or amd64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/marcioapm/dude/main/scripts/install-cli.sh | sh
+```
+
+It downloads the latest release's `dude-cli_<version>_<os>_<arch>.tar.gz`
+from GitHub, checks it against the release's `SHA256SUMS`, and installs
+`bin/dude` to `~/.local/bin`, saying what to add to `PATH` when that is not
+on it. `DUDE_VERSION=v1.2.3` installs that release; `DUDE_INSTALL_DIR`
+installs somewhere else. (`DUDE_RELEASES_URL` replaces GitHub's API, for
+tests only.)
+
+Update it later with the CLI itself:
+
+```sh
+dude update --check              # {"current", "latest", "updateAvailable"}; changes nothing
+dude update                      # to the latest release
+dude update --version v1.2.3     # to that release, newer or older
+```
+
+`dude update` downloads and verifies the same way, then writes the new
+binary next to the running one and renames it over it. It refuses when it
+cannot write there (installed by a package manager, or to a system
+directory): update it the way it was installed, or re-run with permission.
+A build from a checkout (`dude --version` says `dev`) is replaced only with
+an explicit `--version`. On Windows it refuses; download the release by
+hand. `dude update TASK …` is still the command that changes a task;
+`dude self-update` is the same as `dude update` with no TASK.
+
+By hand, from a release, unpack the tarball and put `bin/dude` on your `PATH`:
 
 ```sh
 tar -xzf dude-cli_v1.2.3_darwin_arm64.tar.gz -C ~/.local
@@ -289,6 +318,7 @@ A brainstorm is an agent to think something through with; it writes no code.
 
 | Command | Does |
 |---|---|
+| `update [--version vX.Y.Z] [--check]` | Replaces this binary with a GitHub release of the CLI (see [Install](#install)); `--check` only compares versions |
 | `guide [PAGE]` | dude's guide: its pages, or one in full (the same text agents search). `dude --help` is this CLI's help. |
 | `judgements [--asker A] [--limit N] [--before ID]` | The judgement calls dude's models made lately; `--before` pages |
 | `judgement ID` | One in full |

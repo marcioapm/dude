@@ -117,6 +117,9 @@ Memory
   memory-archive ID | memory-restore ID
 
 dude itself
+  update [--version vX.Y.Z] [--check]   replace this binary with a GitHub release of
+                                     the CLI (default: the latest); --check only compares
+                                     (also self-update; update TASK changes a task)
   guide [PAGE]                       dude's guide
   judgements [--asker A] [--limit N] [--before ID] | judgement ID
 
@@ -157,6 +160,8 @@ func main() {
 		out:    os.Stdout,
 		errOut: os.Stderr,
 		term:   osTerminal{int(os.Stdin.Fd())},
+		// DUDE_RELEASES_URL is for tests: a fake GitHub releases API.
+		updater: newUpdater(os.Getenv("DUDE_RELEASES_URL")),
 	}
 	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 		c.prompt = func(s string) { fmt.Fprint(os.Stderr, s) }
@@ -183,8 +188,10 @@ type cli struct {
 	out    io.Writer
 	errOut io.Writer
 	// term, when stdin is a terminal, reads login's key without echo.
-	term   terminal
-	cached string
+	term terminal
+	// updater is self-update's; nil in tests that do not set one.
+	updater *updater
+	cached  string
 	// prompt, when stdin is a terminal, asks for what is read next.
 	prompt func(string)
 }
@@ -522,6 +529,9 @@ func (c *cli) run(args []string) error {
 		return nil
 	}
 	name := args[0]
+	if name == "update" && selfUpdateArgs(args[1:]) {
+		name = "self-update"
+	}
 	cmd, ok := commands[name]
 	if !ok {
 		return fmt.Errorf("unknown command %q; see dude --help", name)

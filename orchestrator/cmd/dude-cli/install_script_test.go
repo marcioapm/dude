@@ -1,0 +1,101 @@
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// installScript runs scripts/install-cli.sh against srv into a temp
+// directory, as on this machine.
+func installScript(t *testing.T, srv string, env ...string) (dir, stderr string, err error) {
+	t.Helper()
+	sh, lerr := exec.LookPath("sh")
+	if lerr != nil {
+		t.Skip("no sh")
+	}
+	for _, tool := range []string{"curl", "tar"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip("no " + tool)
+		}
+	}
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" || runtime.GOARCH != "arm64" && runtime.GOARCH != "amd64" {
+		t.Skip("install-cli.sh is for darwin and linux, arm64 and amd64")
+	}
+	script, _ := filepath.Abs(filepath.Join("..", "..", "..", "scripts", "install-cli.sh"))
+	home := t.TempDir()
+	dir = filepath.Join(home, "bin with space")
+	cmd := exec.Command(sh, script)
+	cmd.Env = append([]string{
+		"PATH=" + os.Getenv("PATH"), "HOME=" + home,
+		"DUDE_RELEASES_URL=" + srv + "/repos/marcioapm/dude/releases",
+		"DUDE_INSTALL_DIR=" + dir,
+	}, env...)
+	var errBuf strings.Builder
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	return dir, errBuf.String(), err
+}
+
+func TestInstallScriptInstallsTheRelease(t *testing.T) {
+	f := newFakeRelease(t, "v1.2.0")
+	dir, stderr, err := installScript(t, f.serve(t).URL)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	exe := filepath.Join(dir, "dude")
+	if got := readFile(t, exe); got != "dude v1.2.0 "+runtime.GOOS+"_"+runtime.GOARCH {
+		t.Fatalf("installed %q", got)
+	}
+	if fi, _ := os.Stat(exe); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+	if !strings.Contains(stderr, "is not on your PATH") || !strings.Contains(stderr, `export PATH="`+dir+`:$PATH"`) {
+		t.Fatalf("no PATH hint:\n%s", stderr)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".dude*")); len(left) != 0 {
+		t.Fatalf("left behind %v", left)
+	}
+}
+
+func TestInstallScriptTakesAVersion(t *testing.T) {
+	f := newFakeRelease(t, "v1.1.0")
+	dir, stderr, err := installScript(t, f.serve(t).URL, "DUDE_VERSION=1.1.0")
+	if err != nil || readFile(t, filepath.Join(dir, "dude")) != "dude v1.1.0 "+runtime.GOOS+"_"+runtime.GOARCH {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	if len(f.requests) == 0 || f.requests[0] != "/repos/marcioapm/dude/releases/tags/v1.1.0" {
+		t.Fatalf("asked %v", f.requests)
+	}
+}
+
+func TestInstallScriptRefusesABadChecksum(t *testing.T) {
+	f := newFakeRelease(t, "v1.2.0")
+	name := "dude-cli_v1.2.0_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+	for sums, want := range map[string]string{
+		strings.Repeat("0", 64) + "  " + name + "\n":               "SHA256SUMS says",
+		sha([]byte("x")) + "  dude-cli_v1.2.0_plan9_mips.tar.gz\n": "no line for " + name,
+	} {
+		f.sums = sums
+		dir, stderr, err := installScript(t, f.serve(t).URL)
+		if err == nil || !strings.Contains(stderr, want) {
+			t.Fatalf("err %v, stderr:\n%s", err, stderr)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "dude")); !os.IsNotExist(err) {
+			t.Fatalf("installed anyway: %v", err)
+		}
+	}
+}
+
+func TestInstallScriptNamesAMissingAsset(t *testing.T) {
+	f := newFakeRelease(t, "v1.2.0")
+	name := "dude-cli_v1.2.0_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+	delete(f.assets, name)
+	_, stderr, err := installScript(t, f.serve(t).URL)
+	if err == nil || !strings.Contains(stderr, "release v1.2.0 has no "+name) {
+		t.Fatalf("err %v, stderr:\n%s", err, stderr)
+	}
+}
