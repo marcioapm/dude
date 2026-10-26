@@ -66,6 +66,23 @@ LANGUAGE sql IMMUTABLE AS $$
     (SELECT jsonb_agg(jsonb_build_object('source', 'project', 'name', n) ORDER BY n) FROM unnest(names) n), '[]'::jsonb) END
 $$;
 
+-- A preset's dropped picks are recorded first, as the API records a change
+-- (routes/automations.ts record(): system actor, names only), so its owner
+-- can see what its runs stop getting and tick the role instead. The id is
+-- newId("event")'s shape, as 106 builds it.
+INSERT INTO events (id, organization_id, project_id, event_type, actor_type, actor_id, source, payload)
+SELECT 'evt_' || lpad(b36.v, 9, '0') || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16),
+       a.organization_id, a.project_id, 'automation.changed', 'system', 'dude', 'control-plane',
+       jsonb_build_object('automationId', a.id, 'name', a.name,
+         'changed', jsonb_build_object('secretsDropped', (SELECT to_jsonb(array_agg(n ORDER BY n)) FROM unnest(a.secrets) n)))
+FROM automations a,
+  LATERAL (WITH RECURSIVE d(ms, s) AS (
+      SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint, ''::text
+      UNION ALL
+      SELECT ms / 36, substr('0123456789abcdefghijklmnopqrstuvwxyz', (ms % 36)::int + 1, 1) || s FROM d WHERE ms > 0)
+    SELECT s AS v FROM d WHERE ms = 0) b36
+WHERE a.agent ? 'preset' AND cardinality(a.secrets) > 0;
+
 ALTER TABLE automations ALTER COLUMN secrets DROP DEFAULT;
 ALTER TABLE automations ALTER COLUMN secrets TYPE jsonb USING pg_temp.secret_refs(secrets, agent ? 'preset');
 ALTER TABLE automations ALTER COLUMN secrets SET DEFAULT '[]'::jsonb;

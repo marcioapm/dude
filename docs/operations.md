@@ -633,6 +633,13 @@ dude's agents picks none; it gets what its role is ticked for (the
 Investigator, none). "Picked by" on the organisation's list, for its
 admins, counts the automations that pick each one.
 
+**Upgrading to migration 210 drops a preset automation's old picks.**
+Before 210 one of dude's agents could pick project secrets; after it, it
+gets what its role is ticked for. Each preset automation that held picks
+gets one `automation.changed` event (system actor) whose
+`changed.secretsDropped` names them, names only. To give the agent those
+secrets again, tick its role (Tester, Reviewer) on each one.
+
 **Delivery, redaction and push.** Exactly as for project secrets: a Run
 records the names it was given and copies the values; dude redacts every
 form of an organisation value in what it stores and serves, and refuses a

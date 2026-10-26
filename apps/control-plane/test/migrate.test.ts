@@ -1334,7 +1334,8 @@ test("210 adds organisation secrets, turns automation picks into project refs, a
     const tester = { preset: { role: "qa_browser", overrides: {} }, brief: "" };
     await sql`INSERT INTO automations (id, organization_id, project_id, name, kind, trigger, agent, secrets) VALUES
       ('aut_own', 'org_a', 'prj_a', 'Own', 'agent', ${schedule}::jsonb, ${{ own: { prompt: "" } }}::jsonb, '{GH_TOKEN,DB_PASS}'),
-      ('aut_qa', 'org_a', 'prj_a', 'QA', 'agent', ${schedule}::jsonb, ${tester}::jsonb, '{DB_PASS}'),
+      ('aut_qa', 'org_a', 'prj_a', 'QA', 'agent', ${schedule}::jsonb, ${tester}::jsonb, '{DB_PASS,GH_TOKEN}'),
+      ('aut_rev', 'org_a', 'prj_a', 'Investigate', 'agent', ${schedule}::jsonb, ${{ preset: { role: "investigator", overrides: {} }, brief: "" }}::jsonb, '{}'),
       ('aut_none', 'org_a', NULL, 'None', 'command', ${schedule}::jsonb, NULL, '{}')`;
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["210_organization_secrets.sql"]);
@@ -1343,6 +1344,13 @@ test("210 adds organisation secrets, turns automation picks into project refs, a
       { id: "aut_none", secrets: [] },
       { id: "aut_own", secrets: [{ source: "project", name: "DB_PASS" }, { source: "project", name: "GH_TOKEN" }] },
       { id: "aut_qa", secrets: [] },
+      { id: "aut_rev", secrets: [] },
+    ]);
+    // Each preset that lost picks has an automation.changed naming them, as the API records a change; one that had none, nothing.
+    expect([...await sql`SELECT organization_id, project_id, actor_type, actor_id, source, payload, id ~ '^evt_[0-9a-z]{9}[0-9a-f]{16}$' AS id_shape
+      FROM events WHERE event_type = 'automation.changed' ORDER BY id`]).toEqual([
+      { organization_id: "org_a", project_id: "prj_a", actor_type: "system", actor_id: "dude", source: "control-plane", id_shape: true,
+        payload: { automationId: "aut_qa", name: "QA", changed: { secretsDropped: ["DB_PASS", "GH_TOKEN"] } } },
     ]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     const add = (name: string, recipients: string[]) => sql`INSERT INTO organization_secrets (organization_id, name, value, hint, recipients)
