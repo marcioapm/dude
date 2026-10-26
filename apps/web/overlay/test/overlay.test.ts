@@ -866,8 +866,11 @@ function heartbeatByHand(): () => void {
   return () => { for (const fn of beats) fn(); };
 }
 const hellos = () => sent().filter((m) => m.type === "hello").length;
+// Quiet beats after which a connected overlay drops to waiting.
+const QUIET_TO_WAITING = 4;
+const dropToWaiting = (beat: () => void) => { for (let i = 0; i < QUIET_TO_WAITING; i++) beat(); };
 
-test("dude's tab reloading: after two quiet beats hello again, after three reaching dude and hello each beat, and the reloaded tab's session reconnects with the box's words kept", async () => {
+test("dude's tab reloading: hello after two quiet beats and again after three, reaching dude after four and hello each beat, and the reloaded tab's session reconnects with the box's words kept", async () => {
   const beat = heartbeatByHand();
   boot({ heartbeatMs: HB });
   expect(beats.length).toBe(1);
@@ -882,13 +885,18 @@ test("dude's tab reloading: after two quiet beats hello again, after three reach
   beat();
   expect(hellos()).toBe(2);
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  // A third quiet beat: dude may only be slow, so hello again, still connected.
+  beat();
+  expect(hellos()).toBe(3);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-comment"]')).toBe(1);
   beat();
   expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
-  expect(hellos()).toBe(3);
+  expect(hellos()).toBe(4);
   expect(count('[data-testid="ov-save"]')).toBe(0);
   expect(tid("ov-disconnected")!.textContent).toContain("Reaching dude again");
   beat();
-  expect(hellos()).toBe(4);
+  expect(hellos()).toBe(5);
   // The reloaded tab is a new document in the same window: the browser gives the same opener as source.
   connect();
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
@@ -905,6 +913,8 @@ test("picking stops when the connection drops to waiting: no hover label, Commen
   hover(pay);
   expect(count('[data-testid="ov-label"]')).toBe(1);
   for (let i = 0; i < 3; i++) beat();
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  beat();
   expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
   expect(count('[data-testid="ov-hint"]')).toBe(0);
   expect(count('[data-testid="ov-label"]')).toBe(0);
@@ -921,7 +931,7 @@ test("dude's tab closing while the connection waits says it was closed and offer
   boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
   connect();
   await writeOnPay("Half a thought");
-  for (let i = 0; i < 3; i++) beat();
+  dropToWaiting(beat);
   expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
   opener!.closed = true;
   await tick(1_100);
@@ -936,7 +946,7 @@ test("a dude tab that stops answering (left the task) offers Connect after five 
   boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
   connect();
   await writeOnPay("Half a thought");
-  for (let i = 0; i < 3; i++) beat();
+  dropToWaiting(beat);
   for (let i = 0; i < 4; i++) beat();
   expect(count('[data-testid="ov-connect"]')).toBe(0);
   beat();
@@ -945,7 +955,8 @@ test("a dude tab that stops answering (left the task) offers Connect after five 
   expect(tid("ov-disconnected")!.textContent).toContain("may have reloaded, been closed, or left this task");
   for (let i = 0; i < 22; i++) beat();
   expect(count('[data-testid="ov-connect"]')).toBe(1);
-  expect(hellos()).toBe(1 + 1 + 28);
+  // The start's hello, three connected-quiet ones, then one for each of the 27 beats waiting.
+  expect(hellos()).toBe(1 + 3 + 27);
   expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
   // dude answering again connects, and the panel goes.
   connect();
@@ -1047,7 +1058,7 @@ test("a dude tab Connect opened that is closed after it connected says dude's ta
   expect(tid("ov-disconnected")!.textContent).toContain("dude's tab was closed");
 });
 
-test("after Connect and a session, three quiet beats say Reaching dude again, not Connect's looking note", async () => {
+test("after Connect and a session, four quiet beats say Reaching dude again, not Connect's looking note", async () => {
   page(CART, false);
   const beat = heartbeatByHand();
   const dudeTab = fakeWin();
@@ -1056,7 +1067,7 @@ test("after Connect and a session, three quiet beats say Reaching dude again, no
   tid("ov-connect")!.click();
   fromDude(sessionFor(), DUDE, dudeTab);
   await writeOnPay("Half a thought");
-  for (let i = 0; i < 3; i++) beat();
+  dropToWaiting(beat);
   expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
   expect(count('[data-testid="ov-no-opener"]')).toBe(0);
   expect(count('[data-testid="ov-connect-note"]')).toBe(0);

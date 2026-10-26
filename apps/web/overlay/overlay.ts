@@ -34,11 +34,12 @@ export const SAVE_WAIT_MS = 15_000;
 /**
  * The heartbeat: while not connected, hello is said again this often, so a
  * dude tab that reloaded (or a preview that did) finds the other again. While
- * connected, hello is said only after two beats with nothing from dude.
+ * connected, hello is said after two beats with nothing from dude and again
+ * after three; after four the connection waits.
  */
 export const HEARTBEAT_MS = 2_000;
 
-/** Beats waiting with no answer (10 s at HEARTBEAT_MS) before the panel offers Connect to dude again. */
+/** Beats waiting with no answer, counted from the drop to waiting (10 s at HEARTBEAT_MS), before the panel offers Connect to dude again. */
 const WAITING_BEATS = 5;
 
 // The dude tab Connect to dude opened, by its window name, in this tab's sessionStorage (outlives a reload).
@@ -412,9 +413,11 @@ export class Overlay {
   /**
    * One beat. Not connected: hello again. Connected: after two quiet beats,
    * hello (dude answers every hello with a session, so a live tab just
-   * answers it, and the toolbar never flickers); a third quiet beat means the
-   * tab is gone or reloading, and the connection waits, still saying hello,
-   * for whichever tab answers next. The box and its words stay throughout.
+   * answers it, and the toolbar never flickers), and hello again after a
+   * third, for a dude slow to answer; a fourth quiet beat means the tab is
+   * gone or reloading, and the connection waits, still saying hello, for
+   * whichever tab answers next. So dude has about two beats (4 s) to answer
+   * before the toolbar says so. The box and its words stay throughout.
    */
   readonly #heartbeat = (): void => {
     if (this.#stopped || !this.#dude()) return;
@@ -424,7 +427,7 @@ export class Overlay {
     if (this.#connection === "connected") {
       this.#quietBeats++;
       if (this.#quietBeats < 2) return;
-      if (this.#quietBeats >= 3) {
+      if (this.#quietBeats >= 4) {
         this.#connection = "waiting";
         this.#waitBeats = 0;
         this.#picking = false;
