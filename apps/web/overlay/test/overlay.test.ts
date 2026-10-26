@@ -957,11 +957,20 @@ test("a dude tab that stops answering (left the task) offers Connect after five 
   expect(count('[data-testid="ov-connect"]')).toBe(1);
   // The start's hello, three connected-quiet ones, then one for each of the 27 beats waiting.
   expect(hellos()).toBe(1 + 3 + 27);
+  // Drawn again now (a route change there and back), it still offers Connect.
+  const back = win.location.pathname;
+  win.history.pushState({}, "", "/other");
+  win.history.pushState({}, "", back);
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
   expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
   // dude answering again connects, and the panel goes.
   connect();
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
   expect(count('[data-testid="ov-no-opener"]')).toBe(0);
+  // The next quiet stretch starts its count over: Reaching dude again, not Connect.
+  dropToWaiting(beat);
+  expect(tid("ov-disconnected")!.textContent).toContain("Reaching dude again");
+  expect(count('[data-testid="ov-connect"]')).toBe(0);
 });
 
 test("not connected, it says hello once a beat and never twice in one: a hello between beats spares the next beat's", async () => {
@@ -1160,6 +1169,7 @@ test("after Connect to dude, ten seconds with no session says dude didn't find t
   expect(note).toContain("dude didn't find this preview's task, or didn't answer");
   expect(note).toContain("press Connect to dude again");
   expect(note).not.toContain("is looking");
+  expect(tid("ov-no-opener")!.textContent).toContain("Connect to dude to comment");
   expect(count('[data-testid="ov-connect"]')).toBe(1);
   // Pressed again, the note starts over.
   tid("ov-connect")!.click();
