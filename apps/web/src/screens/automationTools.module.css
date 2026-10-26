@@ -1,0 +1,50 @@
+/* An automation run's log: each call's time in mono beside its card; the time
+   stacks over the card below 720px. */
+.calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.call {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  column-gap: var(--ds-space-12);
+  align-items: start;
+}
+.at {
+  padding-top: var(--ds-space-6);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ds-color-text-muted);
+}
+.posted {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.posted b {
+  color: var(--ds-color-text-primary);
+}
+.posted a {
+  color: var(--ds-color-accent-text);
+}
+.toolsCard {
+  width: 100%;
+}
+@media (max-width: 719.98px) {
+  .call {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--ds-space-2);
+  }
+  .at {
+    padding-top: 0;
+  }
+}

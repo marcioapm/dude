@@ -455,9 +455,54 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,
         response_excerpt AS "responseExcerpt", at FROM automation_run_requests WHERE run_id = ${r.id as string} ORDER BY at, try`) as Array<Record<string, unknown>>;
     return { ...runOut(r), containerStartedAt: iso(r.containerStartedAt), containerStoppedAt: iso(r.containerStoppedAt),
-      requests: requests.map((q) => ({ ...q, at: iso(q.at) })) };
+      requests: requests.map((q) => ({ ...q, at: iso(q.at) })), toolCalls: await toolCalls(scope, r.id as string) };
   });
   return json(out);
+}
+
+/** The ledger events an automation run's tool calls leave (orchestrator agenttools). */
+const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "chat.message.posted", "chat.message.refused"];
+
+/**
+ * An automation run's calls to dude's tools, oldest first: each finished
+ * call (`agent.tool.dude`), and each refused post_to_chat with its words. A
+ * call that spent an attempt first is timed from it; a post carries its
+ * channel and link. A post's text is left out: its message is in Slack.
+ */
+async function toolCalls(scope: OrgScope, runId: string) {
+  const rows = (await scope.sql`SELECT id, event_type AS type, occurred_at AS at, payload FROM events
+    WHERE event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[]) AND payload->>'automationRunId' = ${runId}
+    ORDER BY occurred_at, cursor`) as Array<{ id: string; type: string; at: Date; payload: Record<string, unknown> }>;
+  const attempts = new Map<string, Date[]>();
+  const posts: Array<{ channel: string; permalink: string }> = [];
+  for (const e of rows) {
+    const tool = String(e.payload.tool ?? "");
+    if (e.type === "agent.tool.attempted" && !e.payload.attempted) attempts.set(tool, [...(attempts.get(tool) ?? []), e.at]);
+    if (e.type === "chat.message.posted") posts.push({ channel: String(e.payload.channel ?? ""), permalink: String(e.payload.permalink ?? "") });
+  }
+  // The attempt a call wrote before its outside work, when it wrote one: the
+  // earliest of its tool's not yet taken that came before the call ended.
+  const startOf = (tool: string, end: Date) => {
+    const queue = attempts.get(tool);
+    return queue && queue[0] && queue[0] <= end ? queue.shift()! : null;
+  };
+  const out = [];
+  for (const e of rows) {
+    if (e.type !== "agent.tool.dude" && e.type !== "chat.message.refused") continue;
+    const tool = String(e.payload.tool ?? "");
+    const raw = (e.payload.arguments ?? {}) as Record<string, unknown>;
+    const { text: _text, body: _body, ...args } = raw;
+    const start = e.type === "agent.tool.dude" && !e.payload.attempted ? null : startOf(tool, e.at);
+    const failed = e.type === "chat.message.refused";
+    out.push({
+      id: e.id, tool, at: iso(start ?? e.at)!, status: failed ? "failed" : "completed",
+      args: failed ? { channel: e.payload.channel ?? null } : args,
+      durationMs: start ? Math.max(0, e.at.getTime() - start.getTime()) : null,
+      error: failed ? String(e.payload.error ?? "") : null,
+      posted: !failed && tool === "post_to_chat" ? posts.shift() ?? null : null,
+    });
+  }
+  return out;
 }
 
 /**

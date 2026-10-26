@@ -67,7 +67,7 @@ describe("the organisation's list", () => {
   test("the count, next run as a day and time / On event / Off, and the filters as words with no labels", async () => {
     const c = await show(<AutomationsList client={new FixtureClient("a")} orgName="Example" projectId={null} canCreate onOpen={() => undefined} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
-    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("6 automations");
+    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("7 automations");
     const next = (id: string) => rows(c).find((r) => r.getAttribute("data-id") === id)!.querySelectorAll("td")[6]!.textContent;
     expect(next("aut_triage")).toBe("On event");
     expect(next("aut_changelog")).toBe("Off");
@@ -83,7 +83,7 @@ describe("the organisation's list", () => {
     const opened: string[] = [];
     const c = await show(<AutomationsList client={client} orgName="Example" projectId={null} canCreate onOpen={(id) => opened.push(id)} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
-    expect(names(c)).toEqual(["PR triage", "Nightly dependency audit", "Weekly cost report", "Release notes to Slack", "Nightly QA pass", "Changelog builder"]);
+    expect(names(c)).toEqual(["PR triage", "Nightly dependency audit", "Weekly cost report", "Release notes to Slack", "Nightly QA pass", "Changelog builder", "Weekly PR digest"]);
     const cost = rows(c).find((r) => r.getAttribute("data-id") === "aut_cost")!;
     expect(cost.querySelector('[data-held="true"]')?.getAttribute("aria-label")).toBe("Example's admins");
     const sw = rows(c)[0]!.querySelector<HTMLElement>("[data-testid=automation-enabled]")!;
@@ -534,5 +534,60 @@ describe("the test event's helpers", () => {
     expect(pr).toMatchObject({ action: "opened", repository: { full_name: "acme/web" }, sender: { login: "you" }, pull_request: { number: 1 } });
     expect(testTemplate("push", null)).toMatchObject({ ref: "refs/heads/main" });
     expect("action" in testTemplate("push", null)).toBe(false);
+  });
+});
+
+describe("post_to_chat", () => {
+  const page = (client: FixtureClient, place: AutomationsPlace) =>
+    show(<AutomationPage client={client} orgName="Acme" people={PEOPLE} place={place} onPlace={() => undefined} onBack={() => undefined} />);
+
+  test("an agent's Tools row lists its tools, post_to_chat first and New, with no callout while Slack is connected", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest" });
+    const row = await until(() => c.querySelector<HTMLElement>("[data-testid=tools-row]"), "the Tools row");
+    expect(row.textContent).toContain("What its agent can call, besides the shell in its machine.");
+    const tools = [...row.querySelectorAll("li[data-tool]")];
+    expect(tools.map((t) => t.getAttribute("data-tool"))).toEqual(["post_to_chat", "create_task", "github_comment", "github_search",
+      "github_pull_request", "github_issue", "github_check_log"]);
+    expect(tools[0]!.textContent).toContain("New");
+    expect(tools[0]!.textContent).toContain("through Acme's Slack installation");
+    await settle(50);
+    expect(row.querySelector("[data-testid=tool-unavailable]")).toBeNull();
+    expect(c.textContent).toContain("It opens no pull requests.");
+  });
+
+  test("without Slack, post_to_chat's row says runs that call it fail, and links Organisation settings → Chat", async () => {
+    const client = new FixtureClient("a");
+    await client.disconnectChat("slack");
+    const c = await page(client, { id: "aut_digest" });
+    const callout = await until(() => c.querySelector<HTMLElement>("li[data-tool=post_to_chat] [data-testid=tool-unavailable]"), "the callout");
+    expect(callout.textContent).toBe("Slack is not connected for Acme. Runs that call it fail on the call. Connect Slack in Organisation settings → Chat");
+    expect(callout.querySelector("a")?.getAttribute("href")).toBe("#/org/settings/chat");
+    expect(c.querySelectorAll("[data-testid=tool-unavailable]").length).toBe(1);
+  });
+
+  test("a run's post is a Slack card on the log with its channel and the link to the message", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d1" });
+    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]"), "the call");
+    expect(call.querySelector("time")?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(call.querySelector('[data-icon="slack"]')).not.toBeNull();
+    expect(call.textContent).toContain("#engineering");
+    const posted = call.querySelector<HTMLElement>("[data-testid=posted-link]")!;
+    expect(posted.textContent).toBe(" Posted to #engineering · Open the message in Slack");
+    const link = posted.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("1 tool call. Open one for its output.");
+    expect(c.querySelector("[data-testid=run-failed]")).toBeNull();
+  });
+
+  test("a run that failed on post_to_chat says so under Run, and the call shows its error", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.getAttribute("data-tone")).toBe("danger");
+    expect(failed.textContent).toBe("Failed. post_to_chat failed: Slack is not connected for Acme. Nothing was posted; Márcio Martins was told.");
+    const call = c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]")!;
+    expect(call.textContent).toContain("Slack is not connected for Acme: an organisation admin adds dude's Slack app in Organisation settings → Chat.");
+    expect(call.querySelector("[data-testid=posted-link]")).toBeNull();
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the last one; its owner was told.");
   });
 });

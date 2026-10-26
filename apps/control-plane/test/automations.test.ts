@@ -345,6 +345,29 @@ describe("runs", () => {
     expect((await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_nope`)).status).toBe(404);
   });
 
+  test("a run's detail lists its agent's tool calls: a post with its channel and link, a refused post with its words, never a post's text", async () => {
+    const { body: a } = await create("ana", { name: "Weekly PR digest" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_d', ${ORG}, ${a.id}, 'succeeded', 'schedule')`;
+    const ev = (id: string, type: string, at: string, payload: Record<string, unknown>) =>
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, payload)
+        VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_d', 'orchestrator', ${at}::timestamptz, ${{ ...payload, automationRunId: "arn_d" }})`;
+    await ev("evt_d1", "agent.tool.dude", "2026-10-23T15:00:05Z", { tool: "create_task", arguments: { title: "Fix it" }, result: {} });
+    await ev("evt_d2", "agent.tool.attempted", "2026-10-23T15:03:12Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" } });
+    await ev("evt_d3", "chat.message.posted", "2026-10-23T15:03:12.640Z", { channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p1" });
+    await ev("evt_d4", "agent.tool.dude", "2026-10-23T15:03:12.640Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" },
+      result: { withheld: true }, attempted: true });
+    await ev("evt_d5", "chat.message.refused", "2026-10-23T15:04:00Z", { tool: "post_to_chat", channel: "#random",
+      error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude" });
+    const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_d`));
+    expect(run.toolCalls).toEqual([
+      { id: "evt_d1", tool: "create_task", at: "2026-10-23T15:00:05.000Z", status: "completed", args: { title: "Fix it" }, durationMs: null, error: null, posted: null },
+      { id: "evt_d4", tool: "post_to_chat", at: "2026-10-23T15:03:12.000Z", status: "completed", args: { channel: "#engineering" }, durationMs: 640,
+        error: null, posted: { channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p1" } },
+      { id: "evt_d5", tool: "post_to_chat", at: "2026-10-23T15:04:00.000Z", status: "failed", args: { channel: "#random" }, durationMs: null,
+        error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude", posted: null },
+    ]);
+  });
+
   test("Run now, test-event evaluation and Start fresh go to the orchestrator as the person; members who neither edit nor own it are refused", async () => {
     const { body: a } = await create("ana", { name: "Runnable" });
     asked.length = 0;
