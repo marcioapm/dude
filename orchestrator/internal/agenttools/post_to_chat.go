@@ -66,8 +66,9 @@ type postToChatIn struct {
 
 type postChecked struct {
 	postToChatIn
-	inst     chat.Installation
-	provider chat.Provider
+	inst         chat.Installation
+	provider     chat.Provider
+	notConnected bool
 }
 
 type postDone struct {
@@ -80,10 +81,18 @@ func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) 
 	if errors.As(err, &refused) && refused.event == nil && c.AutomationID != "" {
 		// Recorded once the call's transaction is gone: the run's log shows
 		// the refused call and why.
-		return out, postRefused(in.Channel, refused.msg)
+		recorded := postRefused(in.Channel, refused.msg).(refusal)
+		if out.notConnected {
+			recorded.event.payload["code"] = PostNotConnected
+		}
+		return out, recorded
 	}
 	return out, err
 }
+
+// PostNotConnected is the code of a post refused because the organisation
+// has no Slack installation: the automation run fails on it.
+const PostNotConnected = "not_connected"
 
 // postRefused is a refusal recorded on the run as EvChatPostRefused.
 func postRefused(channel, msg string) error {
@@ -125,6 +134,7 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (postC
 		if err := tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, c.Org).Scan(&org); err != nil {
 			return out, err
 		}
+		out.notConnected = true
 		return out, refuse(postRefusal("not-connected"), org)
 	}
 	out.inst, out.provider = inst, p

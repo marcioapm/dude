@@ -1246,6 +1246,15 @@ const (
 // endIn ends a live run in tx; all names a counter (allPosted, allInputs)
 // that must have reached every payload the run holds, or allAny.
 func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason string, cost *float64, all string) (bool, error) {
+	if status == "succeeded" {
+		failed, err := postFailed(ctx, tx, runID)
+		if err != nil {
+			return false, err
+		}
+		if failed != "" {
+			status, reason = "failed", failed
+		}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE automation_runs SET status = $2, reason = NULLIF($3, ''), cost_usd = COALESCE($4, cost_usd),
 		ended_at = now(), container_stopped_at = CASE WHEN container_started_at IS NOT NULL THEN COALESCE(container_stopped_at, now()) END
 		WHERE id = $1 AND status IN ('queued', 'running')
