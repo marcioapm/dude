@@ -46,8 +46,8 @@ export function ToolCallRow({ call }: { call: AutomationToolCall }) {
   return (
     <div className={styles["call"]} data-testid="tool-call" data-tool={call.tool}>
       <time className={styles["at"]} dateTime={call.at}>{formatTimestamp(call.at, "time")}</time>
-      <ToolCallCard name={call.tool} status={call.status} args={call.args} durationMs={call.durationMs ?? undefined}
-        {...(post ? { icon: "slack" as const, summary: <span className="ds-mono">{call.posted?.channel ?? channel ?? ""}</span> } : {})}
+      <ToolCallCard name={call.tool} status={call.status} durationMs={call.durationMs ?? undefined}
+        {...(post ? { icon: "slack" as const, summary: <span className="ds-mono">{call.posted?.channel ?? channel ?? ""}</span> } : { args: call.args })}
         {...(call.error ? { error: call.error } : {})}
         note={call.posted ? (
           <p className={styles["posted"]} data-testid="posted-link">
@@ -58,6 +58,9 @@ export function ToolCallRow({ call }: { call: AutomationToolCall }) {
     </div>
   );
 }
+
+/** The class a run's detail lays its sections out with. */
+export const runDetailClass = styles["runDetail"];
 
 /** A run's calls, oldest first. */
 export function ToolCallList({ calls }: { calls: readonly AutomationToolCall[] }) {

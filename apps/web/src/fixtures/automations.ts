@@ -32,7 +32,7 @@ const NO_FILTERS = { branch: [], label: [], paths: [], author: [] };
 // The weekly digest: an organisation agent that runs pr-stats and posts with post_to_chat.
 const DIGEST_AGO = (3 * 24 + 3) * 60 * MIN;
 const DIGEST_PROMPT = [
-  "Write this week's PR digest for Acme and post it to #engineering.",
+  `Write this week's PR digest for ${ORG.name} and post it to #engineering.`,
   "",
   "1. Run `pr-stats --org acme --merged-list --format json` for the facts: what merged, by whom, in which repository, and the numbers against last week.",
   "2. Run `pr-stats --org acme --format text` for the numbers table. Paste it as it prints; don't recompute anything.",
@@ -54,7 +54,7 @@ const DIGEST_CALLS: Record<string, AutomationToolCall[]> = {
   arn_d0: [
     { id: "evt_d0", tool: "post_to_chat", at: at(DIGEST_AGO + 7 * 24 * 60 * MIN, 178_000), status: "failed", args: { channel: "#engineering" },
       durationMs: 40, posted: null,
-      error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app in Organisation settings → Chat. Nothing was posted" },
+      error: `Slack is not connected for ${ORG.name}: an organisation admin adds dude's Slack app in Organisation settings → Chat. Nothing was posted` },
   ],
 };
 
@@ -101,7 +101,7 @@ const RUNS: Record<string, AutomationRun[]> = {
     { id: "arn_d1", automationId: "aut_digest", status: "succeeded", reason: null, source: "schedule", session: "ephemeral", runId: null,
       startedBy: null, costUsd: 0.44, createdAt: iso(DIGEST_AGO), startedAt: iso(DIGEST_AGO), endedAt: iso(DIGEST_AGO - 4 * MIN), event: null,
       action: null, payloadCount: 0 },
-    { id: "arn_d0", automationId: "aut_digest", status: "failed", reason: "post_to_chat failed: Slack is not connected for Acme", source: "schedule",
+    { id: "arn_d0", automationId: "aut_digest", status: "failed", reason: `post_to_chat failed: Slack is not connected for ${ORG.name}`, source: "schedule",
       session: "ephemeral", runId: null, startedBy: null, costUsd: 0.41, createdAt: iso(DIGEST_AGO + 7 * 24 * 60 * MIN),
       startedAt: iso(DIGEST_AGO + 7 * 24 * 60 * MIN), endedAt: iso(DIGEST_AGO + 7 * 24 * 60 * MIN - 3 * MIN), event: null, action: null, payloadCount: 0 },
   ],

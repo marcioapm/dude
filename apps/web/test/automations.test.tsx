@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PEOPLE, PROJECT } from "../src/fixtures/data.ts";
+import { ORG, PEOPLE, PROJECT } from "../src/fixtures/data.ts";
 import { AutomationPage, AutomationsList, NewAutomationDialog, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -584,9 +584,9 @@ describe("post_to_chat", () => {
     const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d0" });
     const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
     expect(failed.getAttribute("data-tone")).toBe("danger");
-    expect(failed.textContent).toBe("Failed. post_to_chat failed: Slack is not connected for Acme. Nothing was posted; Márcio Martins was told.");
+    expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. Nothing was posted; Márcio Martins was told.`);
     const call = c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]")!;
-    expect(call.textContent).toContain("Slack is not connected for Acme: an organisation admin adds dude's Slack app in Organisation settings → Chat.");
+    expect(call.textContent).toContain(`Slack is not connected for ${ORG.name}: an organisation admin adds dude's Slack app in Organisation settings → Chat.`);
     expect(call.querySelector("[data-testid=posted-link]")).toBeNull();
     expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the last one; its owner was told.");
   });
