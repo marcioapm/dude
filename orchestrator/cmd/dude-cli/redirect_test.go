@@ -97,6 +97,12 @@ func TestHTMLAnswerIsAnError(t *testing.T) {
 			t.Fatalf("%v: %q %v", args, out, err)
 		}
 	}
+	// Outside /v1/, dude api prints whatever the server answers.
+	out, err := runCLI(t, srv, "", "api", "GET", "/")
+	var got map[string]any
+	if err != nil || json.Unmarshal([]byte(out), &got) != nil || got["body"] != "<!DOCTYPE html><title>Sign in</title>" {
+		t.Fatalf("GET /: %q %v", out, err)
+	}
 }
 
 func TestJSONAnswerIsUnchanged(t *testing.T) {

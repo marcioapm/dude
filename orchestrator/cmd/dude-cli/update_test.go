@@ -23,17 +23,27 @@ import (
 // cliTarball is a release tarball as dist.sh lays it out, with bin as bin/dude.
 func cliTarball(t *testing.T, bin string) []byte {
 	t.Helper()
+	return tarball(t,
+		tar.Header{Name: "LICENSE", Mode: 0o644, Typeflag: tar.TypeReg}, "MIT",
+		tar.Header{Name: "bin/dude", Mode: 0o755, Typeflag: tar.TypeReg}, bin,
+		tar.Header{Name: "share/dude/third-party/go-toml-LICENSE", Mode: 0o644, Typeflag: tar.TypeReg}, "MIT")
+}
+
+// tarball is a gzipped tar of header, body pairs, in order.
+func tarball(t *testing.T, entries ...any) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
-	for _, f := range []struct {
-		name, body string
-		mode       int64
-	}{{"LICENSE", "MIT", 0o644}, {"bin/dude", bin, 0o755}, {"share/dude/third-party/go-toml-LICENSE", "MIT", 0o644}} {
-		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body)), Typeflag: tar.TypeReg}); err != nil {
+	for i := 0; i < len(entries); i += 2 {
+		h, body := entries[i].(tar.Header), entries[i+1].(string)
+		if h.Typeflag == tar.TypeReg {
+			h.Size = int64(len(body))
+		}
+		if err := tw.WriteHeader(&h); err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(tw, f.body)
+		io.WriteString(tw, body)
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -242,6 +252,31 @@ func TestUpdateRefusesAnAssetURLOutsideGitHub(t *testing.T) {
 	defer other.mu.Unlock()
 	if len(other.requests) != 0 {
 		t.Fatalf("the other host was asked %v", other.requests)
+	}
+}
+
+// Entries ahead of bin/dude that are named dude, or are a link named
+// bin/dude, are skipped: the regular bin/dude is what is installed.
+func TestUpdateInstallsBinDudePastDecoys(t *testing.T) {
+	for name, decoy := range map[string][]any{
+		"share/dude":        {tar.Header{Name: "share/dude", Mode: 0o755, Typeflag: tar.TypeReg}, "decoy"},
+		"dude":              {tar.Header{Name: "dude", Mode: 0o755, Typeflag: tar.TypeReg}, "decoy"},
+		"symlink bin/dude":  {tar.Header{Name: "bin/dude", Linkname: "../decoy", Typeflag: tar.TypeSymlink}, ""},
+		"hardlink bin/dude": {tar.Header{Name: "bin/dude", Linkname: "share/dude", Typeflag: tar.TypeLink}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeRelease(t, "v1.2.0")
+			asset := "dude-cli_v1.2.0_linux_amd64.tar.gz"
+			f.assets[asset] = tarball(t, append(decoy, tar.Header{Name: "bin/dude", Mode: 0o755, Typeflag: tar.TypeReg}, "dude v1.2.0 linux_amd64")...)
+			f.sums = sha(f.assets[asset]) + "  " + asset + "\n"
+			c, exe, _, _ := selfUpdateCLI(t, f.serve(t), "v1.1.0")
+			if err := c.run([]string{"update"}); err != nil {
+				t.Fatal(err)
+			}
+			if got := readFile(t, exe); got != "dude v1.2.0 linux_amd64" {
+				t.Fatalf("installed %q", got)
+			}
+		})
 	}
 }
 
