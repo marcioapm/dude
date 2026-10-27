@@ -141,6 +141,15 @@ const live = (w: Window | null | undefined): w is Window => {
   }
 };
 
+// `w`'s opener; undefined when another origin's window refuses the read.
+const openerOf = (w: Window): Window | null | undefined => {
+  try {
+    return w.opener as Window | null;
+  } catch {
+    return undefined;
+  }
+};
+
 // overlaySessionSchema's rules, by hand: the overlay bundles no zod.
 const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme", "dudeWindow"]);
 const PIN_KEYS = new Set(["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"]);
@@ -265,12 +274,7 @@ export class Overlay {
     this.#root = this.host.attachShadow({ mode: "closed" });
     this.#collapsed = this.#session("hidden") === "1";
     // A page opened from a preview page was given a copy of that page's sessionStorage: the dude tab name in it is the opener's.
-    let opener: Window | null = null;
-    try {
-      opener = win.opener as Window | null;
-    } catch {
-      opener = null;
-    }
+    const opener = openerOf(win);
     if (live(opener) && this.#sameOrigin(opener)) this.#session(CONNECT_NAME_KEY, "");
     const layer = () => this.#h("div", { class: "layer" });
     this.#lay = { pins: layer(), catchers: layer(), hover: layer(), box: layer(), bar: layer() };
@@ -379,12 +383,7 @@ export class Overlay {
   #chain(): Window | null {
     let at: Window = this.#win;
     for (let step = 0; step < OVERLAY_OPENER_STEPS; step++) {
-      let next: Window | null;
-      try {
-        next = at.opener as Window | null;
-      } catch {
-        return null;
-      }
+      const next = openerOf(at);
       if (!live(next)) return null;
       if (!this.#sameOrigin(next)) return next;
       at = next;
