@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from fake_github import FakeGitHub
 from helpers import ApiClient, provision_person, query, wait_until
@@ -140,6 +141,76 @@ def test_a_top_level_mention_under_a_ci_report_opens_a_session_that_reads_the_fa
     reads = [e["payload"] for e in n["eli"].events(sessionId=session, limit=1000) if e["eventType"] == "github.read"]
     assert [r["tool"] for r in reads] == ["github_run_jobs", "github_check_log"], reads
     assert "timed out" not in json.dumps(reads)
+
+
+def _row(message: dict) -> list[dict]:
+    """The buttons of a reply's "Link a project" row."""
+    return [e for b in (message.get("Blocks") or []) if b.get("block_id") == "row" for e in b["elements"]]
+
+
+def test_a_brainstorm_with_no_project_offers_the_learned_one_and_the_askers_click_links_it(
+        client: ApiClient, env, owner_dsn: str, org: dict, fake_github: FakeGitHub):
+    n = _nightly(client, env, org, fake_github)
+    slack, u, team, keys = n["slack"], n["u"], n["team"], n["keys"]
+    channel = f"C{team}"
+    # An earlier request here went to Nightly API: the channel's learned hint.
+    slack.mention(channel, "", u["U2"], f"is {keys['api']} slow today?")
+    [earlier] = _requests(n["marcia"], 1)
+    assert earlier["route"] == "brainstorm" and earlier["result"]["kind"] == "session", earlier
+
+    link = fake_github.add_actions_run(813, "Nightly", [
+        {"id": 9101, "name": "integration", "conclusion": "failure", "failed_steps": ["Run tests"], "log": "FAIL test_import\n"}])
+    _report(n, link)
+    # The stub can't tell this one's project: a session with none linked.
+    root = slack.mention(channel, "", u["U1"], "which project is this about? can you look at the failures above?")
+    req = _requests(n["marcia"], 2)[1]
+    assert req["route"] == "brainstorm" and req["result"]["kind"] == "session", req
+    session = req["result"]["id"]
+    assert query(owner_dsn, "SELECT count(*) AS n FROM session_projects WHERE session_id = %s", (session,)) == [{"n": 0}]
+    reply = wait_until(lambda: next((m for m in slack.bot_messages(channel) if m["ThreadTS"] == root and _row(m)), None),
+                       timeout=30, message="the reply with its row")
+    buttons = _row(reply)
+    assert [b["text"]["text"] for b in buttons] == [f"{keys['api']} · Nightly API", "Choose in dude"], buttons
+    assert buttons[1]["url"].endswith(f"/sessions/{session}"), buttons[1]
+
+    def click(user: str, handle: str) -> None:
+        resp = slack.interact({"type": "block_actions", "team": {"id": team}, "user": {"id": user, "username": handle},
+                               "container": {"type": "message", "channel_id": channel, "message_ts": reply["TS"], "thread_ts": root},
+                               "message": {"ts": reply["TS"], "thread_ts": root},
+                               "actions": [{"action_id": "link_0", "value": buttons[0]["value"], "action_ts": str(time.time())}]})
+        assert resp.status_code == 200, resp.text
+
+    # Eli is a member, not the asker nor an admin: refused privately, nothing linked.
+    click(u["U2"], "eli")
+    wait_until(lambda: [e for e in slack.ephemerals(u["U2"]) if "Only Márcia Costa or an admin can link a project here." in e["Text"]],
+               timeout=30, message="Eli's refusal")
+    assert query(owner_dsn, "SELECT count(*) AS n FROM session_projects WHERE session_id = %s", (session,)) == [{"n": 0}]
+
+    # The asker's click links the project and its repository.
+    click(u["U1"], "marcia")
+    wait_until(lambda: query(owner_dsn, "SELECT project_id FROM session_projects WHERE session_id = %s", (session,)) == [{"project_id": n["api"]["id"]}],
+               timeout=30, message="the project linked")
+    assert query(owner_dsn, "SELECT repository_id FROM session_repositories WHERE session_id = %s", (session,)) == [
+        {"repository_id": n["api"]["repositories"][0]["id"]}]
+    update = wait_until(lambda: next((x for x in slack.state()["updates"] or [] if x["TS"] == reply["TS"]), None),
+                        timeout=30, message="the reply updated")
+    assert f"Márcia Costa linked {keys['api']} · Nightly API" in json.dumps(update["Blocks"], ensure_ascii=False), update
+    linked = _requests(n["marcia"], 2)[1]["linked"]
+    assert linked == [{"key": keys["api"], "name": "Nightly API", "by": "Márcia Costa"}], linked
+
+    # The session's agent reads the run in that repository.
+    wait_until(lambda: _said(n["marcia"], session), timeout=60, message="the session's agent never answered")
+    said = len(_said(n["marcia"], session))
+    lines = ["now read the run", _tool("github_run_jobs", {"runId": link}),
+             'tool: say {"text": "Jobs: {{last.jobs.0.name}} {{last.jobs.0.conclusion}}"}']
+    assert n["marcia"].post(f"/v1/brainstorms/{session}/chat", {"text": "\n".join(lines)}).status_code in (200, 201)
+    answer = wait_until(lambda: "\n".join(_said(n["marcia"], session)[said:]) if "Jobs:" in "\n".join(_said(n["marcia"], session)[said:]) else None,
+                        timeout=60, message="the agent never said what it read")
+    assert "dude github_" not in answer, answer
+    jobs = next(line for line in answer.splitlines() if line.startswith("Jobs:"))
+    assert "integration" in jobs and "failure" in jobs, jobs
+    # Its agent was told of the checkout as a member's link in dude tells it (the syncer's resume).
+    assert f"A member linked {keys['api']}/{fake_github.repo}; it is checked out at" in answer, answer
 
 
 def test_a_project_hidden_from_slack_is_never_routed_to_linked_or_read(

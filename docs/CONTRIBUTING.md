@@ -1093,7 +1093,7 @@ a `Mention`, `Event`, `Interaction`, conversation kinds (`public`,
 `Provider` interface (verify and parse webhooks; read a thread, a page of a
 thread or channel, the channel before a message, a
 conversation's kind and members, a user; post replies, ephemerals,
-questions; update a question; react; OAuth install and identity URLs and
+questions; update a question or a reply; react; OAuth install and identity URLs and
 exchanges; revoke). Routing, the checks, binding, session access and
 Requests (`route.go`, `make.go`, `decide.go`) use only those. The Slack
 adapter is `internal/chat/slack`; `internal/fakeslack` fakes its Web API and
@@ -1155,6 +1155,38 @@ An admin sets the usual projects on the provider's settings page
 (`PUT /v1/organization/chat/:provider/channels/:conversation/projects`) or
 from chat (`@dude this channel is usually about Acme`, the `channel_projects`
 route; anyone else is refused privately and nothing changes).
+
+**Link a project (`chat/link.go`, migration 203).** A mention routed to a
+brainstorm that ends up with no project linked gets a row under its reply:
+a choice per candidate (at most 3, labelled `KEY · Name`) and a link to
+the session page ("Choose in dude"). Candidates, in order and once each:
+the conversation's usual projects, its learned hint (most first), then the
+routing answer's `maybe_projects` (read for a brainstorm with no project
+only, checked against the routing world like `project`, at most 3). The
+world holds no hidden project, so none is ever offered. The provider-neutral
+shape is `Reply.Row` (`Choice`s, a link, and `Linked` lines); Slack renders
+it as buttons (`blocks` in `chat/slack`) and replaces it with
+`UpdateReply` (`chat.update`). What was offered is kept on the request
+(`chat_requests.link_offer`) and the reply's message id with it
+(`question_message_id`). A click comes back as an `Interaction` whose value
+is `link:<request id>:<index>`: the index is resolved against the request's
+offer server-side (the request must be the click's conversation's), so a
+forged value links nothing that was not offered. Only the person who asked
+or an admin of the organisation may link; anyone else, a non-member or an
+unconnected user, is told so privately and nothing changes. The link goes
+through `delivery.AddSessionProject` (the project with all its
+repositories, beside the session's links, through `SetSessionLinks`, the
+same rules as the web's link: fenced, organisation-scoped), so a project
+hidden after the row was posted is refused at the click. It records
+`session.linked` (payload `linked`, `via`, `viaName`: the session's Chat
+reads "Márcia linked ABS from Slack.") and a `chat_request_links` row, once
+per request and project (a second click or a retry links and posts
+nothing twice; the click's own retry still posts the update once), which
+Requests shows as "Márcia linked ABS from Slack". The session's agent gets
+the repositories as the web's link gives them: a Run not yet submitted
+checks them out, and a live or parked one is resumed by the syncer with
+them added (`sessionRepoMissing`, `sessionResume`), told where each is.
+The 👀/✅ marks are unchanged.
 
 **Hidden projects (`chat_hidden_projects`, migration 196).** An admin hides
 projects from a provider on its settings page only (`PUT

@@ -271,6 +271,20 @@ func TestChatAnotherMembersClickChangesNothing(t *testing.T) {
 	}
 }
 
+func TestChatAnAskerWhoLeftCannotLink(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, session := w.brainstorm("Eli")
+	w.exec(`UPDATE people SET removed_at = now() WHERE id = $1`, w.people["Eli"][0])
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
+	if l := w.linked(session); l != "" || len(w.fake.Updates()) != 0 {
+		t.Fatalf("linked %q by someone no longer in Acme", l)
+	}
+	if eph := w.fake.Ephemerals(); len(eph) != 1 || eph[0].User != "U2" {
+		t.Fatalf("ephemerals %+v", eph)
+	}
+}
+
 func TestChatASecondClickOrARetryLinksAndPostsOnce(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
