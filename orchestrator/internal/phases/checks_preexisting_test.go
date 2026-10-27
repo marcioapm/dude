@@ -548,6 +548,30 @@ func TestTheTaskBaseIsMeasuredFromTheRecordedStart(t *testing.T) {
 	}
 }
 
+// A task whose delivery targets another branch than the repository's
+// default is measured against that branch's commit it builds on.
+func TestTheTaskBaseIsOnTheTasksTargetBranch(t *testing.T) {
+	w := newHarnessWorld(t)
+	h := startedFrom(w)
+	// release forks from main with a commit of its own; the task builds on it.
+	git(t, h.acc.work, "checkout", "-q", "-b", "release", h.Main)
+	release := h.acc.commit(map[string]string{"release.txt": "release fix\n"}, "Release fix")
+	git(t, h.acc.work, "push", "-q", h.acc.origin, "release")
+	start := h.acc.commit(map[string]string{"task.txt": "the task's work\n"}, "Task work")
+	git(t, h.acc.work, "push", "-q", "-f", h.acc.origin, "HEAD:refs/heads/"+delivery.BranchFor(w.run.TaskID, 1))
+	mustOwner(t, w, `UPDATE runs SET base_shas = jsonb_build_object('target', $2::text) WHERE id = $1`, w.run.ID, start)
+	state, _ := json.Marshal(map[string]any{"taskId": w.run.TaskID, "attempt": 1, "bases": map[string]string{"target": "release"}})
+	mustOwner(t, w, `INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+		VALUES ('wf_'||$1, $1, $2, 'task.delivery', 'k_'||$1, 'waiting', 'implement', $3::jsonb)`, w.run.Org, w.run.TaskID, state)
+	got, err := w.s.taskBases(context.Background(), w.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "target: release at " + release; joinBases(got) != want {
+		t.Fatalf("bases %q, want %q (main at %s)", joinBases(got), want, h.Main)
+	}
+}
+
 // A browser check not run passes as deferred when the attempt's policy
 // runs a test phase after it; with none, it is rejected.
 func TestANotRunBrowserCheckIsDeferredOnlyToATestPhase(t *testing.T) {
