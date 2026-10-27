@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { EventTypes, type PersistedEvent, type Run } from "@dude/domain";
+import { EventTypes, runDoer, type PersistedEvent, type Run } from "@dude/domain";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { activityLines } from "../src/screens/TaskScreen.tsx";
 import { dudeName } from "../src/DudeMark.tsx";
@@ -123,9 +123,10 @@ describe("checks judgements in the task's Activity", () => {
       payload: { fromRunId: test1.id, paths: ["api/lib/other.go"], why: "merged target branch touched none of the task's files",
         criteria: [{ criterion: 1, status: "pass", decision: "" }] } } as PersistedEvent;
     const lines = activityLines([skipped], people, [test1], [], 1);
-    const [line] = lines.map((l) => [textOf(l.text), l.quote, l.open?.runId]);
-    expect(line?.[0]).toStartWith(`${dudeName(TASK_ID)} did not run the tester again: the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. The 1 verdict of `);
-    expect(line?.[0]).toEndWith(" stand.");
-    expect(line?.slice(1)).toEqual(["api/lib/other.go", test1.id]);
+    expect(lines.map((l) => [textOf(l.text), l.quote, l.open?.runId])).toEqual([[
+      `${dudeName(TASK_ID)} did not run the tester again: the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. The 1 verdict of ${runDoer(test1)} stand.`,
+      "api/lib/other.go", test1.id]]);
+    // The round is named by its doer, not as an anonymous agent.
+    expect(runDoer(test1)).not.toBe("agent");
   });
 });
