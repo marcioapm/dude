@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/image/draw"
 )
 
 // shimCalls stands in for lux-shim and keeps each call: its arguments
@@ -96,13 +98,13 @@ func noisy(w, h int) *image.RGBA {
 	return img
 }
 
+func fill(img *image.RGBA, r image.Rectangle, c color.Color) {
+	draw.Draw(img, r, image.NewUniform(c), image.Point{}, draw.Src)
+}
+
 func filled(w, h int, c color.Color) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := range h {
-		for x := range w {
-			img.Set(x, y, c)
-		}
-	}
+	fill(img, img.Bounds(), c)
 	return img
 }
 
@@ -122,7 +124,7 @@ func writePNG(t *testing.T, path string, img image.Image) []byte {
 
 func decodeJPEG(t *testing.T, b []byte) image.Image {
 	t.Helper()
-	img, err := jpeg.Decode(strings.NewReader(string(b)))
+	img, err := jpeg.Decode(bytes.NewReader(b))
 	if err != nil {
 		t.Fatalf("the thumbnail is not a JPEG: %v", err)
 	}
@@ -208,11 +210,7 @@ func TestATransparentImageIsFlattenedOnWhite(t *testing.T) {
 	shim := recordingShim(t, 0)
 	src := filepath.Join(t.TempDir(), "clear.png")
 	img := noisy(1400, 1400)
-	for y := range 200 {
-		for x := range 200 {
-			img.Set(x, y, color.RGBA{})
-		}
-	}
+	fill(img, image.Rect(0, 0, 200, 200), color.RGBA{})
 	writePNG(t, src, img)
 	if _, _, err := publishing(t, src); err != nil || shim.count() != 2 {
 		t.Fatalf("publish: %v, %d calls", err, shim.count())
@@ -601,11 +599,7 @@ func TestTheLongestStretchsBlankFrameGivesWayToTheNext(t *testing.T) {
 	writePNG(t, blank, filled(320, 240, color.White))
 	page := filepath.Join(dir, "page.png")
 	pageImg := filled(320, 240, color.RGBA{0, 0, 255, 255})
-	for y := 60; y < 120; y++ {
-		for x := 80; x < 240; x++ {
-			pageImg.Set(x, y, color.White)
-		}
-	}
+	fill(pageImg, image.Rect(80, 60, 240, 120), color.White)
 	writePNG(t, page, pageImg)
 	video := filepath.Join(dir, "abc.webm")
 	os.WriteFile(video, []byte("\x1a\x45\xdf\xa3 a video"), 0o644)
