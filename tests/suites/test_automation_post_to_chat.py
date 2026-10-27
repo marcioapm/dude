@@ -17,8 +17,9 @@ import json
 import os
 
 import requests
+from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, execute, provision_person, wait_until
+from helpers import ApiClient, execute, provision_person, sign_in, wait_until
 
 ENDED = ("succeeded", "failed", "cancelled", "skipped")
 
@@ -92,7 +93,7 @@ def _post_line(channel: str, text: str) -> str:
     return "tool: post_to_chat " + json.dumps({"channel": channel, "text": text})
 
 
-def test_a_post_reaches_the_channel_and_the_run_shows_it_with_its_link(client: ApiClient, env, org: dict):
+def test_a_post_reaches_the_channel_and_the_run_shows_it_with_its_link(client: ApiClient, env, org: dict, page: Page, web_url: str, console_errors: list):
     team = "T" + os.urandom(3).hex().upper()
     slack = _Slack(env, team)
     slack.user(f"U1{team}", "marcia")
@@ -123,6 +124,26 @@ def test_a_post_reaches_the_channel_and_the_run_shows_it_with_its_link(client: A
     assert link.startswith("https://") and f"/archives/C{team}/p{sent[0]['TS'].replace('.', '')}" in link, link
     assert "text" not in done["args"], done
     assert refused["error"].startswith("dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude"), refused
+
+    # The same calls, not a second log of dude's tools: harness call and completion in the run's activity.
+    activity = client.get(f"/v1/events?automationRunId={run['id']}")
+    assert activity.status_code == 200, activity.text
+    events = activity.json()["events"]
+    calls = [e for e in events if e["eventType"] == "agent.tool.called"]
+    completions = [e for e in events if e["eventType"] == "agent.tool.completed"]
+    assert len(calls) >= 2 and len(completions) >= 2, events
+    posted = next(e for e in completions if e["payload"].get("dude", {}).get("posted"))
+    assert posted["payload"]["callId"] in [e["payload"]["callId"] for e in calls]
+    assert posted["payload"]["dude"]["posted"]["permalink"] == link
+    assert all(e.get("automationRunId") == run["id"] and e["runId"] is None for e in events)
+
+    sign_in(page, web_url, client.api_key, board=False)
+    page.goto(f"{web_url}/#/org/settings/automations/{a['id']}/runs/{run['id']}")
+    feed = page.get_by_test_id("run-feed")
+    expect(feed).to_be_visible(timeout=30_000)
+    expect(feed.locator('[data-tool="post_to_chat"]')).to_have_count(2)
+    expect(feed.get_by_role("link", name="Open the message in Slack")).to_have_attribute("href", link)
+    expect(page.get_by_test_id("run-tools")).to_have_count(0)
 
 
 def test_without_slack_the_run_fails_on_the_call_and_says_so(client: ApiClient, env, org: dict):

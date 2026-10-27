@@ -2088,7 +2088,25 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		s.localCall(run, tool, args)
 		return http.StatusOK
 	}
+	var activityID string
+	var spec lux.Spec
+	_ = json.Unmarshal(run.Spec, &spec)
+	if spec.Labels["dude.kind"] == "automation" {
+		activityID = fmt.Sprintf("automation-tool-%d", len(run.records))
+		var input any
+		_ = json.Unmarshal([]byte(args), &input)
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": activityID, "title": tool,
+			"kind": "other", "status": "in_progress", "rawInput": input})
+	}
 	status, body, err := s.toolRequest(run, tool, args)
+	if activityID != "" {
+		outcome := "completed"
+		if err != nil || status >= 400 {
+			outcome = "failed"
+		}
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": activityID, "title": tool,
+			"status": outcome, "rawOutput": map[string]any{"output": string(body)}})
+	}
 	if tool == "sync_base" {
 		// As an agent following sync_base's answers, it calls again while
 		// dude has not yet recorded its Run as running (refused), and while
