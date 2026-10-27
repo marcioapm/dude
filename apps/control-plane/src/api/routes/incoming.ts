@@ -122,11 +122,20 @@ export async function refusedNotStored(scope: OrgScope, automationId: string): P
   return n;
 }
 
+/** Whether a parsed body has a NUL in a string or key: JSON allows `\u0000`, jsonb refuses it. */
+function holdsNul(v: unknown): boolean {
+  if (typeof v === "string") return v.includes("\u0000");
+  if (Array.isArray(v)) return v.some(holdsNul);
+  if (v !== null && typeof v === "object") return Object.entries(v).some(([k, x]) => k.includes("\u0000") || holdsNul(x));
+  return false;
+}
+
 async function receiveHook(ctx: PublicContext): Promise<Response> {
   const [hook] = (await withoutTenant(({ sql }) => sql`SELECT * FROM incoming_hook(${ctx.params.hookId!})`)) as Hook[];
   if (!hook) throw notFound("no incoming webhook here");
   const id = newId("incomingDelivery");
-  const declared = Number(ctx.request.headers.get("content-length") ?? "0");
+  // The declared length is the sender's word: a stored size is at most one past the cap.
+  const declared = Math.min(Number(ctx.request.headers.get("content-length") ?? "0"), INCOMING_MAX_BYTES + 1);
   let body: Uint8Array | null = null;
   let bytes = 0;
   const refuse = async (code: RefusalCode) => {
@@ -163,7 +172,7 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
   } catch {
     return refuse("not_json");
   }
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return refuse("not_json");
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload) || holdsNul(payload)) return refuse("not_json");
   if (!hook.enabled) return refuse("disabled");
   const accepted = await withOrg(hook.organization_id, async (scope) => {
     // One delivery at a time per automation counts the hour: two together never both take the last place.

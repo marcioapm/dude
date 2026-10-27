@@ -170,6 +170,19 @@ describe("the public endpoint", () => {
     expect(stored[1].headers["X-Token"]).toBe("••••");
   });
 
+  test("a body JSON allows but Postgres refuses, or invalid UTF-8, is 415 with a bodyless row; a huge declared size is clamped", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
+    const nul = await post(hook, `{"a":"\\u0000"}`, { authorization: secret });
+    expect(nul.status).toBe(415);
+    expect(await nul.json()).toMatchObject({ error: { code: "not_json" } });
+    const latin = await post(hook, Uint8Array.of(0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d), { authorization: secret });
+    expect(latin.status).toBe(415);
+    const huge = await post(hook, "{}", { authorization: "wrong", "content-length": "3000000000" });
+    expect(huge.status).toBe(401);
+    expect((await rows(id)).map((r) => [r.verdict, r.reason, r.payload, r.bytes])).toEqual([
+      ["refused", "not_json", null, 14], ["refused", "not_json", null, 9], ["refused", "bad_signature", null, 1_048_577]]);
+  });
+
   test("the rate limit counts deliveries not matched yet and those sent to a run, and refuses the next with 429", async () => {
     const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
     // Five an hour (hookWith). Three still waiting for the loop and two sent to a run fill it.
