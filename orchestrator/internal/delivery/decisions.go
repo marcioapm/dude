@@ -536,8 +536,6 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 			base = b
 		}
 		held := HeldRepo{Name: repo.Name, Head: st.Branch, Base: base}
-		var listedNow []forge.ComparedCommit
-		listed := false
 		if gh != nil {
 			cmp, err := gh.CompareCommits(ctx, forge.SlugFromURL(repo.URL), base, to)
 			if err == nil && !cmp.Truncated() {
@@ -547,17 +545,16 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 				}
 				held.Additions, held.Deletions = &add, &del
 			}
-			listedNow, listed = cmp.Commits, err == nil && len(cmp.Commits) >= cmp.TotalCommits
+			if from := prev[repo.Name]; counted && from != "" && from != to {
+				before, beforeErr := gh.CompareCommits(ctx, forge.SlugFromURL(repo.URL), base, from)
+				if err != nil || len(cmp.Commits) < cmp.TotalCommits || beforeErr != nil || len(before.Commits) < before.TotalCommits {
+					counted = false
+				} else {
+					n += tasksOwnSince(cmp.Commits, before.Commits)
+				}
+			}
 		}
 		st.Hold.Repos = append(st.Hold.Repos, held)
-		if from := prev[repo.Name]; counted && from != "" && from != to {
-			before, err := gh.CompareCommits(ctx, forge.SlugFromURL(repo.URL), base, from)
-			if !listed || err != nil || len(before.Commits) < before.TotalCommits {
-				counted = false
-				continue
-			}
-			n += tasksOwnSince(listedNow, before.Commits)
-		}
 	}
 	if counted {
 		st.Hold.CommitsSince = &n
