@@ -569,8 +569,11 @@ export interface AutomationRunDetail extends AutomationRun {
   scheduledFor?: string | null;
   /** What each delivery sent to the run while it ran gave its agent, by delivery id; null once its body is gone. */
   sentBodies?: Record<string, unknown>;
-  /** A running agent's reply not yet ended and its calls' output so far, by call id, as the orchestrator holds them; null once it ends. */
-  live?: { message: string; output: Record<string, Record<string, unknown>> } | null;
+  /**
+   * A running agent's reply not yet ended and its calls' output so far, by call id, as the orchestrator holds them; null once it ends.
+   * `cursor` is the run's newest event when they were read: an `agent.message` after it supersedes `message`.
+   */
+  live?: { message: string; output: Record<string, Record<string, unknown>>; cursor?: number } | null;
 }
 
 /** One call an automation run's agent made to a dude tool, as the run's ledger has it. */

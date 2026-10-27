@@ -143,6 +143,10 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
     };
   }), [events, run.sentBodies, onDelivery]);
   const speaker: Speaker = { name, roleLabel: "Automation", avatar: <AutomationFace live={live} /> };
+  // The unfinished reply read with the run is stale once a finished message arrived after that read.
+  const liveCursor = run.live?.cursor;
+  const streaming = live && run.live?.message && !(liveCursor !== undefined
+    && events.some((e) => e.eventType === "agent.message" && e.cursor > liveCursor)) ? run.live.message : "";
   const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !live, people, "dude",
     undefined, undefined, undefined, undefined, feedNote, undefined, undefined, undefined, speaker);
   return (
@@ -152,8 +156,8 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
       {interleaved(groups, sent).map((item) => "node" in item
         ? <Fragment key={item.id}>{item.node}</Fragment>
         : Array.isArray(item.group) ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside> : render(item.group))}
-      {live && run.live?.message ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
-        content={run.live.message} streaming data-testid="automation-streaming" /> : live && conversation.activity ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
+      {streaming ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
+        content={streaming} streaming data-testid="automation-streaming" /> : live && conversation.activity ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
         activity={conversation.activity} data-testid="automation-activity"
         activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} /> : null}
     </ChatTranscript>

@@ -852,6 +852,22 @@ describe("a run's activity", () => {
     expect(reads - before).toBe(0);
   });
 
+  test("a finished reply replaces the unfinished one read with the run: its words occur once and the stream bubble goes", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    // Read when the run's newest event was the backfill's: the buffer predates anything the stream sends after.
+    client.automationRun = async (id, runId) => ({ ...(await real(id, runId)), live: { message: "Twelve merged this week; three", output: {}, cursor: 999_999 } });
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const feed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed]"), "the feed");
+    await until(() => c.querySelector("[data-testid=automation-streaming]"), "the streaming reply");
+    await act(async () => emit({ eventType: "agent.message", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_d3", actor: { type: "agent", id: "arn_d3" }, source: "runner",
+      correlationId: null, causationId: null, payload: { text: "Twelve merged this week; three wait on review." } }));
+    await until(() => (feed.textContent?.includes("three wait on review.") ? true : null), "the finished reply");
+    expect(c.querySelector("[data-testid=automation-streaming]")).toBeNull();
+    expect(feed.textContent!.split("Twelve merged this week; three").length - 1).toBe(1);
+  });
+
   test("log events do not refetch the full run", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);

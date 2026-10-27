@@ -458,8 +458,9 @@ describe("runs", () => {
     expect(await now()).toEqual({ tool: "read", args: { filePath: "go.mod" } });
     await owner`UPDATE automation_runs SET feed_state = ${{ open: ["c1"], message: "Grouping by",
       harness: { partialTools: { c1: { output: { head: "{\"merged\": 12" } } } } }} WHERE id = 'arn_now'`;
+    const [{ newest }] = await owner`SELECT max(cursor)::int AS newest FROM events WHERE automation_run_id = 'arn_now'`;
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_now`))).live)
-      .toEqual({ message: "Grouping by", output: { c1: { output: { head: "{\"merged\": 12" } } } });
+      .toEqual({ message: "Grouping by", output: { c1: { output: { head: "{\"merged\": 12" } } }, cursor: newest });
     await owner`UPDATE automation_runs SET status='succeeded' WHERE id='arn_now'`;
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_now`))).live).toBeNull();
     await open(["c1"]);
