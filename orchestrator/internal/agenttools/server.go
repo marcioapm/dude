@@ -678,12 +678,15 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	// A refusal that wrote its own event (slack.message.refused) is named by
 	// refusalEventId, so a reader lists that call once.
 	var refusalID string
+	// The call's attempt is on the ledger and counted (callsMade): its
+	// failure's record is marked afterAttempt and not counted again.
+	var attemptCounted bool
 	defer func() {
 		if c.AutomationID == "" || callErr == nil {
 			return
 		}
-		// A call refused for the run's call budget writes nothing: the
-		// budget would not bound those writes, as attempted records are not counted.
+		// A call refused for the run's call budget writes nothing: past
+		// the budget, records would not be bounded by it.
 		var refused refusal
 		isRefusal := errors.As(callErr, &refused)
 		if isRefusal && refused.limited {
@@ -702,6 +705,9 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 			payload := map[string]any{"tool": t.name, "arguments": input, "error": said, "attempted": true}
 			if refusalID != "" {
 				payload["refusalEventId"] = refusalID
+			}
+			if attemptCounted {
+				payload["afterAttempt"] = true
 			}
 			_, err := ledger.Append(ctx, tx, c.event(EventType, payload))
 			return err
@@ -828,6 +834,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return out, err
 	}
+	attemptCounted = t.attempts
 	done, err := t.outside(ctx, c, checked)
 	if errors.As(err, &refused) && refused.event != nil {
 		refusalID = s.recordRefusal(ctx, c, t, refused)
@@ -915,13 +922,16 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 }
 
 // callsMade are the Run's tool calls in the last minute, and its calls of
-// tool in its lifetime: counted from the ledger, where every call is, once
-// (its attempt, or its result).
+// tool in its lifetime, each call counted once: by its attempt, or its
+// result. The minute also counts a refused call by its error record (which
+// a post's slack.message.refused accompanies), so a loop of refused calls
+// spends it; a failure after a counted attempt is marked afterAttempt.
 func callsMade(ctx context.Context, tx pgx.Tx, c Caller, tool string) (recent, sameTool int, err error) {
 	err = tx.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
-			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
-		FROM events WHERE `+c.runColumn()+` = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
+			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute' AND (payload->>'attempted' IS NULL
+				OR event_type = $2 AND payload ? 'error' AND payload->>'afterAttempt' IS NULL)),
+			count(*) FILTER (WHERE payload->>'attempted' IS NULL AND (payload->>'tool' = $3 OR payload->>'tool' = $4))
+		FROM events WHERE `+c.runColumn()+` = $1 AND event_type IN ($2, $5)`,
 		c.RunID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
 	return recent, sameTool, err
 }

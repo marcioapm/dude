@@ -523,6 +523,45 @@ func TestPostToChatCountsAPostSlackRefusedOnceTowardTheMinute(t *testing.T) {
 	}
 }
 
+// Calls past the run's ten posts are refused, and recorded, until they have
+// spent the run's 60 calls a minute; past those they write nothing.
+func TestPostToChatRefusedPastTenPostsSpendTheMinutesCalls(t *testing.T) {
+	c := setupChat(t, true)
+	for i := range 10 {
+		if status, out := c.postToChat(t, "#engineering", fmt.Sprintf("post %d", i+1)); status != 200 {
+			t.Fatalf("post %d: %d %v", i+1, status, out)
+		}
+	}
+	perRun, limited := 0, 0
+	for i := range 120 {
+		status, out := c.postToChat(t, "#engineering", fmt.Sprintf("more %d", i))
+		said := fmt.Sprint(out["error"])
+		switch {
+		case status == 422 && strings.HasPrefix(said, "post_to_chat is limited to 10 messages per run"):
+			perRun++
+		case status == 422 && strings.HasPrefix(said, "too many calls: at most 60 a minute"):
+			limited++
+		default:
+			t.Fatalf("call %d past the ten: %d %v", i, status, out)
+		}
+	}
+	var refusals, records int
+	if err := c.owner.QueryRow(context.Background(), `SELECT
+		count(*) FILTER (WHERE event_type = $1),
+		count(*) FILTER (WHERE event_type = $2 AND payload->>'attempted' = 'true' AND payload ? 'error')
+		FROM events WHERE automation_run_id = 'arn_digest' AND occurred_at > now() - interval '1 minute'`,
+		agenttools.EvSlackPostRefused, agenttools.EventType).Scan(&refusals, &records); err != nil {
+		t.Fatal(err)
+	}
+	if perRun+10 > 60 || limited != 120-perRun || refusals != perRun || records != perRun {
+		t.Fatalf("120 calls past the ten: %d refused per run, %d for the budget; %d refusals and %d records written",
+			perRun, limited, refusals, records)
+	}
+	if n := len(c.fake.BotMessages()); n != 10 {
+		t.Errorf("%d messages reached Slack, want 10", n)
+	}
+}
+
 // Only an automation's agent has the tool.
 func TestPostToChatIsAnAutomationsTool(t *testing.T) {
 	c := setupChat(t, true)

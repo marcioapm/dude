@@ -184,3 +184,27 @@ func TestAnAutomationCallPastTheMinutesLimitWritesNothing(t *testing.T) {
 		t.Fatalf("records of refused calls: %d %v", records, err)
 	}
 }
+
+// A loop of refused calls spends the run's 60 calls a minute: past them the
+// calls are refused for the budget and write nothing.
+func TestAnAutomationsRefusedCallsSpendTheMinutesCalls(t *testing.T) {
+	f, token := automationRun(t, &agenttools.Server{})
+	limited := 0
+	for i := range 300 {
+		status, out := f.post(t, token, "create_task", `{"title":"","goal":"A task with no title."}`)
+		if status != 422 {
+			t.Fatalf("call %d: %d %v", i, status, out)
+		}
+		if strings.HasPrefix(fmt.Sprint(out["error"]), "too many calls: at most 60 a minute") {
+			limited++
+		}
+	}
+	var records int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE automation_run_id = 'arn_rec'
+		AND occurred_at > now() - interval '1 minute'`).Scan(&records); err != nil {
+		t.Fatal(err)
+	}
+	if records > 60 || limited != 300-records {
+		t.Fatalf("300 refused calls: %d records, %d refused for the budget", records, limited)
+	}
+}
