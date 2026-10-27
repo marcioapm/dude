@@ -1,6 +1,6 @@
 /**
  * Incoming webhooks through the public API: the endpoint's verification
- * (each mode, constant-time), its refusals (stored with no body, answered
+ * (each mode; only the whole secret or digest proves a sender), its refusals (stored with no body, answered
  * with their status), the rate limit, header redaction, and the routes an
  * automation's page reads (create's one-time secret, rotate, deliveries,
  * the organisation automation's projects, group-by with Send).
@@ -132,6 +132,21 @@ describe("the public endpoint", () => {
     expect(stored.slice(1).every((r) => r.payload === null && r.reason === "bad_signature")).toBe(true);
     // The signature header is kept as ••••, never its value.
     expect(stored[0].headers["X-Signature"]).toBe("••••");
+  });
+
+  // Whether the compare is constant-time cannot be observed by a functional
+  // test (timingSafeEqual over equal-length digests is read in the code).
+  // What can be: only the whole digest is accepted, never a part of it.
+  test("a signature must be the whole digest: a truncated, a 2-character or a last-byte-flipped one is refused", async () => {
+    const { hook, secret } = await hookWith({ mode: "signature", header: "X-Signature", prefix: "sha256=" });
+    const body = `{"status":"firing"}`;
+    const sig = sign(secret, body);
+    const flipped = sig.slice(0, -1) + (sig.at(-1) === "0" ? "1" : "0");
+    for (const given of [sig.slice(0, -2), sig.slice(0, 2), flipped]) {
+      const res = await post(hook, body, { "x-signature": `sha256=${given}` });
+      expect(res.status).toBe(401);
+    }
+    expect((await post(hook, body, { "x-signature": `sha256=${sig}` })).status).toBe(202);
   });
 
   test("a header token: the secret, bare or as Bearer, is taken; another is refused", async () => {
