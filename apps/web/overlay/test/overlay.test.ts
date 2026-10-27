@@ -1010,13 +1010,18 @@ type FakeWin = { postMessage: ReturnType<typeof mock>; closed: boolean; focus: (
 const fakeWin = (extra: Partial<FakeWin> = {}): FakeWin => ({ postMessage: mock(() => {}), closed: false, focus: () => {}, ...extra });
 const posted = (w: FakeWin) => w.postMessage.mock.calls.map((c) => [(c[0] as OverlayToDude).type, c[1]]);
 const sessionFor = (): DudeToOverlay => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true });
+// window.open replaced: each call's arguments recorded, answered by `open` (a new fake window by default).
+function recordOpens(open: () => FakeWin = fakeWin): unknown[][] {
+  const opens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { opens.push(args); return open(); };
+  return opens;
+}
 
 test("Connect to dude opens dude's preview-connect page with an opener, says hello to that tab each beat, and only its session connects", () => {
   page(CART, false);
   const beat = heartbeatByHand();
   const dudeTab = fakeWin();
-  const opens: unknown[][] = [];
-  win.open = (...args: unknown[]) => { opens.push(args); return dudeTab; };
+  const opens = recordOpens(() => dudeTab);
   boot({ heartbeatMs: HB });
   beat();
   expect(opens).toEqual([]);
@@ -1086,8 +1091,7 @@ test("after Connect and a session, four quiet beats say Reaching dude again, not
 test("reloaded after Connect to dude, Connect opens preview-connect in the dude tab it opened before, by the window name that tab's session gave", () => {
   page(CART, false);
   const dudeTab = fakeWin();
-  const opens: unknown[][] = [];
-  win.open = (...args: unknown[]) => { opens.push(args); return dudeTab; };
+  const opens = recordOpens(() => dudeTab);
   boot();
   tid("ov-connect")!.click();
   fromDude({ ...sessionFor(), dudeWindow: "dude-tab-abc123" } as DudeToOverlay, DUDE, dudeTab);
@@ -1097,8 +1101,7 @@ test("reloaded after Connect to dude, Connect opens preview-connect in the dude 
   overlay.stop();
   page(CART, false);
   if (kept !== null) win.sessionStorage.setItem("dude-overlay-dudeWindow", kept);
-  const reopens: unknown[][] = [];
-  win.open = (...args: unknown[]) => { reopens.push(args); return dudeTab; };
+  const reopens = recordOpens(() => dudeTab);
   boot();
   tid("ov-connect")!.click();
   expect(reopens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"]]);
@@ -1109,8 +1112,7 @@ test("reloaded after Connect to dude, Connect opens preview-connect in the dude 
 test("the stored dude tab name is used once: Connect pressed again with no session between opens a new tab", () => {
   page(CART, false);
   win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
-  const opens: unknown[][] = [];
-  win.open = (...args: unknown[]) => { opens.push(args); return fakeWin(); };
+  const opens = recordOpens();
   boot();
   tid("ov-connect")!.click();
   tid("ov-connect")!.click();
@@ -1122,8 +1124,7 @@ test("a page opened from a preview page drops the dude tab name its storage inhe
   win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
   // The preview page that opened this one: same origin, and itself opened by no one, so Connect is offered.
   opener = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: null }) as unknown as Opener;
-  const opens: unknown[][] = [];
-  win.open = (...args: unknown[]) => { opens.push(args); return fakeWin(); };
+  const opens = recordOpens();
   boot();
   tid("ov-connect")!.click();
   expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
@@ -1131,8 +1132,7 @@ test("a page opened from a preview page drops the dude tab name its storage inhe
   overlay.stop();
   page(CART);
   win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
-  const reopens: unknown[][] = [];
-  win.open = (...args: unknown[]) => { reopens.push(args); return fakeWin(); };
+  const reopens = recordOpens();
   boot();
   await tick(80);
   tid("ov-connect")!.click();
@@ -1142,8 +1142,7 @@ test("a page opened from a preview page drops the dude tab name its storage inhe
 test("Connect to dude opens a new tab when the stored name is not one dude gives, or came from a dude tab this page didn't open", () => {
   page(CART, false);
   win.sessionStorage.setItem("dude-overlay-dudeWindow", "_self");
-  const opens: unknown[][] = [];
-  win.open = (...args: unknown[]) => { opens.push(args); return fakeWin(); };
+  const opens = recordOpens();
   boot();
   tid("ov-connect")!.click();
   expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
