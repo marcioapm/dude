@@ -137,7 +137,7 @@
 /* Below 720px a row stacks path and operator over its value. */
 @media (max-width: 720px) {
   .row {
-    grid-template-columns: 28px minmax(0, 1fr) minmax(88px, auto) auto;
+    grid-template-columns: 36px minmax(0, 1fr) minmax(88px, auto) auto;
   }
   .value {
     grid-column: 2 / 4;

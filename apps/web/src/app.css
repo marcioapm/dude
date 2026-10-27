@@ -665,6 +665,11 @@ body {
 }
 
 /* An incoming webhook's rows, Deliveries and test dialog (screens/automationIncoming.tsx). */
+.incomingSections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-24);
+}
 .incomingMuted {
   color: var(--ds-color-text-muted);
 }

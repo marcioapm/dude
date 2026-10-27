@@ -317,7 +317,7 @@ export function DeliveryDetail({ client, a, id, onRun, onRunWith }: {
   const trigger = a.trigger.kind === "incoming" ? a.trigger : null;
   const json = d.body ? JSON.stringify(d.body, null, 2) : "";
   return (
-    <div data-testid="delivery-detail">
+    <div data-testid="delivery-detail" className="incomingSections">
       <SettingsSection title="Delivery"
         actions={d.body && (a.canEdit || a.canTransfer) ? <Button size="sm" variant="secondary" leadingIcon="play" onClick={onRunWith} data-testid="run-with-delivery">Run with this delivery</Button> : undefined}>
         <KeyValueList items={[

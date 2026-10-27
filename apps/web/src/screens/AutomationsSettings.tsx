@@ -1207,7 +1207,7 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
   useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
   if (!run) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
   return (
-    <div data-testid="run-detail">
+    <div data-testid="run-detail" className="incomingSections">
       <SettingsSection title="Run">
         <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span>
           {run.costUsd !== null ? <span className="incomingMuted"> · ${run.costUsd.toFixed(2)}</span> : null}</p>
@@ -1233,6 +1233,10 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
       <RunTrigger a={a} run={run} onDelivery={onDelivery} />
       <SettingsSection title="Trigger payload">
         {run.payloadsPurged ? <SettingsNote>Payloads are kept 30 days.</SettingsNote>
+          : a.trigger.kind === "incoming" && run.payloads.length > 0 ? (
+            <CodeEditor aria-label="Trigger payload" language="plain" readOnly minLines={6} maxLines={18}
+              value={JSON.stringify(run.payloads[0]!.body, null, 2)} header={<span className="ds-mono">json · {run.payloads[0]!.deliveryId}</span>} />
+          )
           : <pre className="automationPayload">{JSON.stringify(run.payloads.length === 1 ? run.payloads[0]!.body : run.payloads, null, 2)}</pre>}
       </SettingsSection>
       {run.logTail ? <SettingsSection title="Log"><pre className="automationPayload">{run.logTail}</pre></SettingsSection> : null}
