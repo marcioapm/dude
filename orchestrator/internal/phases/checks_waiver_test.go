@@ -14,20 +14,19 @@ import (
 )
 
 // waiverFake answers the waiver question with waived (or err), the
-// pre-existing question with preexisting ("" is no), Backed with yes and
-// Missing with no, counting the questions it was asked.
+// pre-existing question with preexisting ("" is no; or preexistingErr),
+// Backed with yes and Missing with no, recording the questions it was asked.
 type waiverFake struct {
 	waived     string
 	err        error
 	unrecorded bool
 	// missing answers Missing; "" is no.
-	missing     string
-	preexisting string
-	// offAfterWaiver: every question but the waiver's finds no tier.
-	offAfterWaiver bool
-	// offPreexisting: the pre-existing question finds no tier;
-	// offAfterPreexisting: every question after it does.
-	offPreexisting, offAfterPreexisting bool
+	missing        string
+	preexisting    string
+	preexistingErr error
+	// offAfterWaiver: every question but the waiver's finds no tier;
+	// offAfterPreexisting: every question after the pre-existing one.
+	offAfterWaiver, offAfterPreexisting bool
 	asked                               []judge.Ask
 }
 
@@ -45,8 +44,8 @@ func (f *waiverFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judg
 		return judge.Judgement{Decision: f.waived, CallID: id, Reasoning: "the same TestClock failure"}, nil
 	case f.offAfterWaiver:
 		return judge.Judgement{}, judge.ErrOff
-	case isPreexistingQuestion(a) && f.offPreexisting:
-		return judge.Judgement{}, judge.ErrOff
+	case isPreexistingQuestion(a) && f.preexistingErr != nil:
+		return judge.Judgement{Decision: judge.Yes, CallID: id}, f.preexistingErr
 	case isPreexistingQuestion(a):
 		return judge.Judgement{Decision: cmp.Or(f.preexisting, judge.No), CallID: id, Reasoning: "no run at the starting commit"}, nil
 	case f.offAfterPreexisting:
