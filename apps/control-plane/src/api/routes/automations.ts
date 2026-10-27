@@ -239,8 +239,12 @@ async function createAutomation(ctx: RequestContext): Promise<Response> {
     await record(scope, ctx, { id, name: settings.name, projectId: input.projectId }, { created: true });
     return { row: await readOne(scope, id), incoming };
   });
-  // An incoming webhook's secret is answered this once (SecretOnce), never again.
-  return json({ ...(await shape(ctx, row.row)), ...(row.incoming ? { incomingSecret: row.incoming } : {}) }, 201);
+  return json(await withSecret(ctx, row.row, row.incoming), 201);
+}
+
+/** An automation as answered, with an incoming webhook's just-made secret: answered this once (SecretOnce), never again. */
+async function withSecret(ctx: RequestContext, row: Row, incomingSecret: string | null) {
+  return { ...(await shape(ctx, row)), ...(incomingSecret ? { incomingSecret } : {}) };
 }
 
 function newSigningSecret(): string {
@@ -319,7 +323,7 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
     await record(scope, ctx, { id, name: input.name, projectId: current.projectId }, { settings: true });
     return { row: await readOne(scope, id), fresh };
   });
-  return json({ ...(await shape(ctx, row.row)), ...(row.fresh ? { incomingSecret: row.fresh } : {}) });
+  return json(await withSecret(ctx, row.row, row.fresh));
 }
 
 /**
@@ -371,7 +375,7 @@ async function duplicateAutomation(ctx: RequestContext): Promise<Response> {
     await record(scope, ctx, { id: copy, name, projectId: a.projectId }, { created: true, duplicateOf: id });
     return { row: await readOne(scope, copy), incoming };
   });
-  return json({ ...(await shape(ctx, row.row)), ...(row.incoming ? { incomingSecret: row.incoming } : {}) }, 201);
+  return json(await withSecret(ctx, row.row, row.incoming), 201);
 }
 
 async function setEnabled(ctx: RequestContext): Promise<Response> {
@@ -597,7 +601,7 @@ async function rotateIncomingSecret(ctx: RequestContext): Promise<Response> {
     await record(scope, ctx, current, { incomingSecret: "rotated" });
     return readOne(scope, id);
   });
-  return json({ ...(await shape(ctx, row)), incomingSecret: secret });
+  return json(await withSecret(ctx, row, secret));
 }
 
 // ---------------------------------------------------------------------------

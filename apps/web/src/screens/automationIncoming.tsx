@@ -32,6 +32,7 @@ import {
   conditionMiss,
   DEFAULT_VERIFY_OF,
   describeCondition,
+  INCOMING_MAX_BYTES,
   INCOMING_RATE_DEFAULT,
   INCOMING_RATE_MAX,
   INCOMING_VERIFY_LABEL,
@@ -345,7 +346,7 @@ export function DeliveryDetail({ client, a, id, onRun, onRunWith }: {
           { label: "Id", value: d.id, mono: true },
           ...(d.groupKey ? [{ label: "Group key", value: <span className="incomingBreak ds-mono">{d.groupKey}</span> }] : []),
           ...(d.event !== "incoming" ? [{ label: "Event", value: [d.event, d.action, d.repository].filter(Boolean).join(" · "), mono: true }] : []),
-          { label: "Size", value: `${d.bytes.toLocaleString("en-GB")} bytes${d.bytes > 1_048_576 ? " (over 1 MiB)" : ""}` },
+          { label: "Size", value: `${d.bytes.toLocaleString("en-GB")} bytes${d.bytes > INCOMING_MAX_BYTES ? " (over 1 MiB)" : ""}` },
         ]} />
       </SettingsSection>
       {trigger && d.body ? (
