@@ -573,7 +573,10 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 				return err
 			}
 			cancelled = append(cancelled, fired.Cancelled...)
-			verdict, reason := firedVerdict(ctx, tx, fired)
+			verdict, reason, err := firedVerdict(ctx, tx, fired)
+			if err != nil {
+				return err
+			}
 			if err := recordGitHubVerdict(ctx, tx, a, d.ID, verdict, reason, fired.Run); err != nil {
 				return err
 			}

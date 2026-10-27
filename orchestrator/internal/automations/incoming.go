@@ -412,25 +412,28 @@ func ArriveIncoming(ctx context.Context, tx pgx.Tx, automationID, deliveryID str
 	if err != nil {
 		return nil, err
 	}
-	v, reason := firedVerdict(ctx, tx, fired)
+	v, reason, err := firedVerdict(ctx, tx, fired)
+	if err != nil {
+		return nil, err
+	}
 	return fired.Cancelled, verdict(v, reason, nil, group, fired.Run)
 }
 
 // firedVerdict says what a firing did, as a delivery's verdict: a run of
 // its own (started, queued included), added to another run (merged or
 // sent), or skipped by the concurrency, with its reason.
-func firedVerdict(ctx context.Context, tx pgx.Tx, fired Fired) (string, string) {
+func firedVerdict(ctx context.Context, tx pgx.Tx, fired Fired) (string, string, error) {
 	var status, reason string
-	var first string
-	_ = tx.QueryRow(ctx, `SELECT status, COALESCE(reason, ''), COALESCE(payloads->0->>'deliveryId', '') FROM automation_runs WHERE id = $1`,
-		fired.Run).Scan(&status, &reason, &first)
+	if err := tx.QueryRow(ctx, `SELECT status, COALESCE(reason, '') FROM automation_runs WHERE id = $1`, fired.Run).Scan(&status, &reason); err != nil {
+		return "", "", err
+	}
 	switch {
 	case status == "skipped":
-		return VerdictSkipped, reason
+		return VerdictSkipped, reason, nil
 	case fired.Action == MergeInto || fired.Action == SendInto:
-		return VerdictSentToRun, ""
+		return VerdictSentToRun, "", nil
 	}
-	return VerdictStarted, ""
+	return VerdictStarted, "", nil
 }
 
 // FollowUpCap is how many deliveries one live run holds; a later one of

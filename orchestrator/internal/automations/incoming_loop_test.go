@@ -31,13 +31,16 @@ func (h *harness) receive(automation, id string, body map[string]any) {
 		id, h.org, automation, len(b), string(b))
 }
 
-type deliveryRow struct{ Verdict, Reason, Group, Run string }
+type deliveryRow struct {
+	Verdict, Reason, Group, Run string
+	Index                       int // reason_index; -1 for none
+}
 
 func (h *harness) delivery(id string) deliveryRow {
 	h.t.Helper()
 	var d deliveryRow
 	if err := h.owner.QueryRow(context.Background(), `SELECT COALESCE(verdict, ''), COALESCE(reason, ''), COALESCE(group_key, ''),
-		COALESCE(run_id, '') FROM incoming_deliveries WHERE id = $1`, id).Scan(&d.Verdict, &d.Reason, &d.Group, &d.Run); err != nil {
+		COALESCE(run_id, ''), COALESCE(reason_index, -1) FROM incoming_deliveries WHERE id = $1`, id).Scan(&d.Verdict, &d.Reason, &d.Group, &d.Run, &d.Index); err != nil {
 		h.t.Fatal(err)
 	}
 	return d
@@ -67,7 +70,8 @@ func TestIncomingGroupFollowUpsReachTheLiveRun(t *testing.T) {
 	h.receive("aut_alert", "dlv_2", alert("resolved", "g-api", "critical"))
 	h.receive("aut_alert", "dlv_3", alert("firing", "g-db", "high"))
 	h.receive("aut_alert", "dlv_4", alert("firing", "g-web", "warning"))
-	h.until("the three are read", func() bool { return h.delivery("dlv_4").Verdict != "" })
+	h.receive("aut_alert", "dlv_5", alert("resolved", "g-new", "critical"))
+	h.until("the four are read", func() bool { return h.delivery("dlv_5").Verdict != "" })
 
 	if d := h.delivery("dlv_2"); d.Verdict != VerdictSentToRun || d.Run != first.Run {
 		t.Errorf("resolved of the live group: %+v, want sent to %s", d, first.Run)
@@ -75,14 +79,19 @@ func TestIncomingGroupFollowUpsReachTheLiveRun(t *testing.T) {
 	if d := h.delivery("dlv_3"); d.Verdict != VerdictStarted || d.Run == first.Run || d.Run == "" {
 		t.Errorf("another group: %+v, want a run of its own", d)
 	}
-	if d := h.delivery("dlv_4"); d.Verdict != VerdictSkipped || d.Reason != "commonLabels.severity is warning, not one of critical, high" || d.Run != "" {
-		t.Errorf("a missed condition: %+v", d)
+	if d := h.delivery("dlv_4"); d.Verdict != VerdictSkipped || d.Reason != "commonLabels.severity is warning, not one of critical, high" ||
+		d.Index != 1 || d.Run != "" {
+		t.Errorf("a missed second condition: %+v", d)
+	}
+	// A group with no live run that misses the first condition.
+	if d := h.delivery("dlv_5"); d.Verdict != VerdictSkipped || d.Reason != "status is resolved, not firing" || d.Index != 0 || d.Run != "" {
+		t.Errorf("a missed first condition: %+v", d)
 	}
 	var payloads []Payload
 	if err := h.owner.QueryRow(context.Background(), `SELECT payloads FROM automation_runs WHERE id = $1`, first.Run).Scan(&payloads); err != nil {
 		t.Fatal(err)
 	}
-	if got := []string{payloads[0].DeliveryID, payloads[1].DeliveryID}; len(payloads) != 2 || !slices.Equal(got, []string{"dlv_1", "dlv_2"}) {
+	if len(payloads) != 2 || payloads[0].DeliveryID != "dlv_1" || payloads[1].DeliveryID != "dlv_2" {
 		t.Errorf("the live run holds %+v", payloads)
 	}
 }
@@ -267,6 +276,53 @@ func TestIncomingSkippedWhenOffOrWithNoProject(t *testing.T) {
 	}
 	if r := append(h.runs("aut_off"), h.runs("aut_noproj")...); len(r) != 0 {
 		t.Errorf("runs %+v", r)
+	}
+}
+
+// A test run is not a live run for real deliveries: a real delivery of a
+// test run's group starts a run of its own, and the test run is sent nothing.
+func TestIncomingRealDeliveryIsNotSentToATestRun(t *testing.T) {
+	h := newHarness(t)
+	h.incoming("aut_tst", nil, "groupKey",
+		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "x"}}})
+	test, _, err := h.runner.RunNow(context.Background(), h.org, "aut_tst", h.person, "", &Payload{Body: json.RawMessage(`{"groupKey":"g"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.until("the test run runs", func() bool { return h.run("aut_tst", test).Status == "running" })
+	h.receive("aut_tst", "dlv_real", alert("firing", "g", "high"))
+	h.until("read", func() bool { return h.delivery("dlv_real").Verdict != "" })
+	if d := h.delivery("dlv_real"); d.Verdict != VerdictStarted || d.Run == test || d.Run == "" {
+		t.Errorf("a real delivery of a test run's group: %+v (test run %s)", d, test)
+	}
+	if r := h.run("aut_tst", test); r.Payloads != 1 {
+		t.Errorf("the test run was sent the delivery: %+v", r)
+	}
+}
+
+// What a firing did is the delivery's verdict: skipped by the concurrency
+// (Skip) with the run that says so, and sent to another group's run (Send),
+// which is not "started".
+func TestIncomingVerdictSaysWhatTheConcurrencyDid(t *testing.T) {
+	h := newHarness(t)
+	agent := map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "x"}}
+	h.incoming("aut_skip", nil, "groupKey", map[string]any{"agent": agent, "concurrency": "skip"})
+	h.incoming("aut_sendc", nil, "groupKey", map[string]any{"agent": agent, "concurrency": "send", "session_mode": "resumable", "expiry_days": 7})
+	for _, a := range []string{"aut_skip", "aut_sendc"} {
+		h.receive(a, a+"_A", alert("firing", "A", "high"))
+		h.until(a+" A starts", func() bool { return h.delivery(a+"_A").Verdict == VerdictStarted })
+		h.until(a+" A runs", func() bool { r := h.runs(a); return len(r) == 1 && r[0].Status == "running" })
+		h.receive(a, a+"_B", alert("firing", "B", "high"))
+		h.until(a+" B read", func() bool { return h.delivery(a+"_B").Verdict != "" })
+	}
+	skipped := h.delivery("aut_skip_B")
+	runs := h.runs("aut_skip")
+	if skipped.Verdict != VerdictSkipped || skipped.Reason == "" || len(runs) != 2 || skipped.Run != runs[1].ID || runs[1].Status != "skipped" ||
+		skipped.Reason != runs[1].Reason {
+		t.Errorf("concurrency skip: %+v, runs %+v", skipped, runs)
+	}
+	if d := h.delivery("aut_sendc_B"); d.Verdict != VerdictSentToRun || d.Run != h.delivery("aut_sendc_A").Run {
+		t.Errorf("concurrency send to another group's run: %+v", d)
 	}
 }
 
