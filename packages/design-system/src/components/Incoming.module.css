@@ -41,6 +41,7 @@
   flex-direction: column;
   gap: var(--ds-space-8);
   min-width: 0;
+  container: conditions / inline-size;
 }
 .conditions > p {
   margin: 0;
@@ -134,8 +135,8 @@
   outline-offset: 2px;
 }
 
-/* Below 720px a row stacks path and operator over its value. */
-@media (max-width: 720px) {
+/* Below 560px of its own width a row stacks path and operator over its value. */
+@container conditions (max-width: 560px) {
   .row {
     grid-template-columns: 36px minmax(0, 1fr) minmax(88px, auto) auto;
   }

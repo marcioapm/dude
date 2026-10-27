@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { CONDITION_OP_LABEL, CONDITION_OPS, describeCondition, type ConditionOp } from "@dude/domain";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { Input } from "../primitives/Input.tsx";
@@ -9,10 +10,11 @@ import styles from "./Incoming.module.css";
 
 /*
  * Incoming webhooks' pieces: the conditions on a delivery's JSON body, what
- * dude did with one delivery, and the trigger's one-line summary.
+ * dude did with one delivery, and the trigger's one-line summary. The
+ * operators and their words are the domain's (packages/domain/src/incoming.ts).
  */
 
-export type ConditionOpName = "is" | "is_not" | "one_of" | "contains" | "exists";
+export type ConditionOpName = ConditionOp;
 
 export interface TriggerCondition {
   readonly path: string;
@@ -20,12 +22,9 @@ export interface TriggerCondition {
   readonly values: readonly string[];
 }
 
-const OP_WORDS: Record<ConditionOpName, string> = { is: "is", is_not: "is not", one_of: "one of", contains: "contains", exists: "exists" };
-const OPS = Object.keys(OP_WORDS) as ConditionOpName[];
-
 /** A condition in words: "status is firing", "commonLabels.severity one of critical, high". */
 export function conditionWords(c: TriggerCondition): string {
-  return c.op === "exists" ? `${c.path} exists` : `${c.path} ${OP_WORDS[c.op]} ${c.values.join(", ")}`;
+  return describeCondition({ ...c, values: [...c.values] });
 }
 
 /** "Incoming", then its first condition and "+N" for the rest, or "any JSON", in muted mono. */
@@ -82,7 +81,7 @@ export function ConditionRows({ value, onChange, disabled, results, paths }: {
                 <Input aria-label={`Condition ${n}: path`} mono size="sm" value={c.path} disabled={off} placeholder="status"
                   list={paths ? listId : undefined} className={styles["path"]} onChange={(e) => set(i, { ...c, path: e.target.value })} />
                 <Select<ConditionOpName> aria-label={`Condition ${n}: operator`} size="sm" value={c.op} disabled={off}
-                  options={OPS.map((o) => ({ value: o, label: OP_WORDS[o] }))}
+                  options={CONDITION_OPS.map((o) => ({ value: o, label: CONDITION_OP_LABEL[o] }))}
                   onValueChange={(op) => set(i, { ...c, op, values: op === "exists" ? [] : op === "one_of" ? c.values : c.values.slice(0, 1) })} />
                 <span className={styles["value"]}>
                   {c.op === "exists" ? <span className={styles["muted"]}>any value</span>

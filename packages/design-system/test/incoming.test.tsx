@@ -8,7 +8,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConditionRows, DeliveryVerdict, type TriggerCondition } from "../src/components/Incoming.tsx";
+import { describeCondition } from "@dude/domain";
+import { ConditionRows, conditionWords, DeliveryVerdict, type TriggerCondition } from "../src/components/Incoming.tsx";
 import { TriggerSummary } from "../src/components/Automations.tsx";
 import { KeyShownOnce } from "../src/components/KeyShownOnce.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
@@ -68,6 +69,12 @@ describe("ConditionRows", () => {
 
   test("exists takes no value", () => {
     expect(renderToStaticMarkup(<ConditionRows value={[{ path: "x", op: "exists", values: [] }]} />)).toContain("any value");
+  });
+
+  test("a condition reads in the domain's words, the summary's and the run's alike", () => {
+    for (const c of [...two, { path: "labels", op: "is_not", values: ["x"] }, { path: "x", op: "exists", values: [] }] as TriggerCondition[]) {
+      expect(conditionWords(c)).toBe(describeCondition({ ...c, values: [...c.values] }));
+    }
   });
 });
 
