@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -193,6 +194,49 @@ func TestAMergeOverAPushThatLandedMeanwhileIsTested(t *testing.T) {
 	}
 	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != 0 {
 		t.Fatalf("skip %v (%v): a merge over a push must be tested", skip, err)
+	}
+}
+
+// The skip tells a live conductor, in a line the table admits however long
+// the target branch's name; a task with no live conductor gets no line.
+func TestACleanMergeSkipTellsOnlyALiveConductorInOneLine(t *testing.T) {
+	for _, live := range []bool{true, false} {
+		t.Run(map[bool]string{true: "live conductor", false: "no conductor"}[live], func(t *testing.T) {
+			f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+			f.merged(st, sc)
+			// The base names only the line and the record; the compare
+			// stands on the merge's commits.
+			st.Integration.Base = "release/" + strings.Repeat("payments-hotfix-", 6)
+			if live {
+				f.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+					VALUES ('run_cond', $1, 'prj_c', 'wi_c', 1, 'running', 'conductor', 'agent')`)
+			}
+			if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+				t.Fatalf("skip %v (%v)", skip, err)
+			}
+			var lines []string
+			rows, err := f.owner.Query(f.ctx, `SELECT line FROM conductor_wakes WHERE task_id = 'wi_c'`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var l string
+				if err := rows.Scan(&l); err != nil {
+					t.Fatal(err)
+				}
+				lines = append(lines, l)
+			}
+			if !live {
+				if len(lines) != 0 {
+					t.Fatalf("lines %q for a task with no conductor", lines)
+				}
+				return
+			}
+			if len(lines) != 1 || utf8.RuneCountInString(lines[0]) != 300 || !strings.HasPrefix(lines[0], "GitHub merged "+st.Integration.Base+" into") ||
+				!strings.HasSuffix(lines[0], "…") {
+				t.Fatalf("lines %q, want one clipped to 300 characters naming the base", lines)
+			}
+		})
 	}
 }
 

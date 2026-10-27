@@ -20,7 +20,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
-	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -212,10 +211,8 @@ func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st 
 		}
 		// News for a live conductor, held for its next note (heldWakePrefix):
 		// it never starts or resumes one.
-		if _, err := tx.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
-			SELECT $1, $2, $3, 'checkout', $4, $5 WHERE EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $3 AND `+LiveConductor+`)
-			ON CONFLICT (task_id, key) DO NOTHING`, ids.New("cwk"), sc.OrganizationID, st.TaskID,
-			heldWakePrefix+"merge:"+i.pair(), mergeNotRetestedLine(i.Repo, i.Base, prev.ID, len(m.Merged))); err != nil {
+		if err := wakeLiveConductorTx(ctx, tx, sc.OrganizationID, st.TaskID, "checkout", heldWakePrefix+"merge:"+i.pair(),
+			mergeNotRetestedLine(i.Repo, i.Base, prev.ID, len(m.Merged))); err != nil {
 			return err
 		}
 		return emitTx(ctx, tx, sc.OrganizationID, st, EvTestSkipped, map[string]any{"fromRunId": prev.ID,
@@ -226,6 +223,17 @@ func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st 
 	}
 	st.TestRunID = prev.ID
 	return true, nil
+}
+
+// wakeLiveConductorTx is RecordWakeTx for a task whose conductor is live;
+// a task with none gets no row, since a wake would start one.
+func wakeLiveConductorTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line string) error {
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`)`, taskID).Scan(&live); err != nil || !live {
+		return err
+	}
+	_, err := RecordWakeTx(ctx, tx, org, taskID, kind, key, line)
+	return err
 }
 
 // carryGateOverMergeTx moves a person's Open or Draft given at the heads
