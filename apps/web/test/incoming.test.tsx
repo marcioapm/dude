@@ -101,6 +101,14 @@ describe("the trigger rows", () => {
     expect(c.querySelector<HTMLInputElement>("input[aria-label='Query parameter']")!.value).toBe("token");
   });
 
+  test("an incoming agent automation's page has its trigger rows and the Tools card", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_alert" });
+    await until(() => c.querySelector("[data-testid=incoming-endpoint]"), "the endpoint");
+    const tools = await until(() => c.querySelector<HTMLElement>("[data-testid=tools-row]"), "the Tools card");
+    expect(tools.textContent).toContain("post_to_chat");
+    expect(c.querySelector("[data-testid=incoming-conditions]")).not.toBeNull();
+  });
+
   test("curl signs the body for a signature, sends the token for a header, puts it in the URL for a query", () => {
     const url = "https://dude.example.com/v1/hooks/hk_x";
     expect(curlFor(url, { mode: "signature", header: "X-Sig", prefix: "" })).toContain(`openssl dgst -sha256 -hmac "$SECRET"`);
@@ -207,5 +215,16 @@ describe("a run an alert started", () => {
     expect([...sent.querySelectorAll("li")].map((li) => li.querySelector(".ds-mono")?.textContent)).toEqual(["dlv_7c5m", "dlv_9k2h"]);
     await click(button(sent, "dlv_9k2h")!);
     expect(delivered).toEqual(["dlv_9k2h"]);
+  });
+
+  test("shows its trigger block and its agent's tool calls on one page", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_alert", tab: "runs", runId: "arn_alert1" }, () => undefined);
+    const detail = await until(() => c.querySelector<HTMLElement>("[data-testid=run-detail]"), "the run");
+    const trigger = detail.querySelector<HTMLElement>("[data-testid=run-trigger]")!;
+    const tools = detail.querySelector<HTMLElement>("[data-testid=run-tools]")!;
+    expect(tools.textContent).toContain("1 tool call.");
+    expect(tools.textContent).toContain("create_task");
+    expect(trigger.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(detail.querySelector("[data-testid=run-failed]")).toBeNull();
   });
 });

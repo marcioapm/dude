@@ -5,7 +5,7 @@
  * token, no project yet), and what PR triage's GitHub deliveries came to.
  */
 
-import type { Automation, AutomationRun, AutomationRunDetail, IncomingTrigger, IncomingVerdict } from "@dude/domain";
+import type { Automation, AutomationRun, AutomationRunDetail, AutomationToolCall, IncomingTrigger, IncomingVerdict } from "@dude/domain";
 import { conditionHolds, groupKeyOf } from "@dude/domain";
 import type { ListedDelivery } from "../api/client.ts";
 
@@ -123,12 +123,19 @@ const LOG = [
   "13:41 delivery dlv_9k2h: status resolved — added the recovery time to PLAT-212",
 ].join("\n");
 
+// The live run's create_task call: the PLAT-212 its log names.
+const ALERT_CALLS: AutomationToolCall[] = [
+  { id: "evt_alert_task", tool: "create_task", at: iso(66 * MIN - 8 * MIN), status: "completed", durationMs: 310, error: null, posted: null,
+    args: { project: "platform", title: "HighErrorRate on api: idle timeout below pgbouncer's" } },
+];
+
 export function alertRunDetail(run: AutomationRun): AutomationRunDetail {
   const mine = ALERT_DELIVERIES.filter((d) => d.runId === run.id).reverse();
   const first = mine[0];
   return { ...run, payloads: first ? [{ deliveryId: first.id, event: "incoming", action: null, body: first.body }] : [], payloadsPurged: false,
     logTail: run.id === "arn_alert1" ? LOG : "Filed PLAT-201.", exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-    stopReason: null, requests: [], deliveries: mine.map(({ body: _b, headers: _h, ...d }) => d) };
+    stopReason: null, requests: [], deliveries: mine.map(({ body: _b, headers: _h, ...d }) => d),
+    toolCalls: run.id === "arn_alert1" ? ALERT_CALLS : [], failedCallId: null };
 }
 
 /** A body against an incoming trigger, as the orchestrator answers the test dialog. */
