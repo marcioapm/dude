@@ -1505,8 +1505,9 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
       case EventTypes.TestSkipped: {
         const paths = Array.isArray(p.paths) ? p.paths.map(String) : [];
         const n = Array.isArray(p.criteria) ? p.criteria.length : 0;
+        const ofRound = <>of {doer(typeof p.fromRunId === "string" ? p.fromRunId : null)}</>;
         const why = p.why === "merged target branch touched none of the task's files"
-          ? <>the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. The {plural(n, "verdict")} of {doer(typeof p.fromRunId === "string" ? p.fromRunId : null)} stand.</>
+          ? <>the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. {n === 1 ? <>The verdict {ofRound} stands.</> : <>The {plural(n, "verdict")} {ofRound} stand.</>}</>
           : <>the change since the last test touches only paths no criterion depends on. Its {plural(n, "verdict")} stand.</>;
         out.push({ ...base, kind: "work", who: <DudeMark size={32} />,
           text: <><b>{dude}</b> did not run the tester again: {why}</>,

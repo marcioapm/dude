@@ -124,9 +124,12 @@ describe("checks judgements in the task's Activity", () => {
         criteria: [{ criterion: 1, status: "pass", decision: "" }] } } as PersistedEvent;
     const lines = activityLines([skipped], people, [test1], [], 1);
     expect(lines.map((l) => [textOf(l.text), l.quote, l.open?.runId])).toEqual([[
-      `${dudeName(TASK_ID)} did not run the tester again: the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. The 1 verdict of ${runDoer(test1)} stand.`,
+      `${dudeName(TASK_ID)} did not run the tester again: the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. The verdict of ${runDoer(test1)} stands.`,
       "api/lib/other.go", test1.id]]);
     // The round is named by its doer, not as an anonymous agent.
     expect(runDoer(test1)).not.toBe("agent");
+    const two = { ...skipped, payload: { ...skipped.payload,
+      criteria: [{ criterion: 1, status: "pass", decision: "" }, { criterion: 2, status: "pass", decision: "" }] } } as PersistedEvent;
+    expect(textOf(activityLines([two], people, [test1], [], 1)[0]!.text)).toEndWith(`The 2 verdicts of ${runDoer(test1)} stand.`);
   });
 });
