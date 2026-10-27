@@ -2171,7 +2171,8 @@ body {
 }
 /* A live run's activity is its own scroller filling the window under it. */
 .automationFeed[data-live] {
-  height: calc(100dvh - 160px);
+  flex: none;
+  height: calc(100dvh - 360px);
   min-height: 420px;
 }
 .automationStoppedNote {

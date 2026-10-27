@@ -87,6 +87,7 @@ export function digestLater(run: string, t0: number): PersistedEvent[] {
   return [
     called(run, t0 + 45 * SEC, "c3", "bash", { command: "pr-stats --org acme --since 7d --format text" }),
     completed(run, t0 + 46.9 * SEC, "c3", "bash", { output: out(NUMBERS), exitCode: 0 }),
+    message(run, t0 + 47 * SEC, "The numbers are ready. Writing the digest for #engineering."),
   ];
 }
 
@@ -197,7 +198,12 @@ function step(): "running" | "done" | "posted" | "scrolled" {
 /** Every automation run's activity, by run. */
 export function automationActivity(runId: string): PersistedEvent[] {
   switch (runId) {
-    case "arn_d3": return digest(runId, DIGEST_LIVE, step());
+    case "arn_d3": {
+      if (step() !== "scrolled") return digest(runId, DIGEST_LIVE, step());
+      const history = Array.from({ length: 16 }, (_, i) => message(runId, DIGEST_LIVE - (16 - i) * 5 * SEC,
+        `Repository ${i + 1}: read the merged pull requests and checked their release notes.\n\nThe digest groups them by theme and keeps the numbers from pr-stats unchanged.`));
+      return [...history, ...digest(runId, DIGEST_LIVE, "scrolled")];
+    }
     case "arn_d2": return digest(runId, now - 7 * 24 * 60 * MIN, "finished");
     case "arn_d1": return digest(runId, now - DIGEST_D1_AGO, "finished");
     case "arn_d0": return refusedDigest(runId, now - DIGEST_D1_AGO - 7 * 24 * 60 * MIN);

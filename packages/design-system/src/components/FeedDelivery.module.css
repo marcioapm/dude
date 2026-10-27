@@ -5,7 +5,7 @@
 
 .delivery {
   container-type: inline-size;
-  background: var(--ds-tint-highlight);
+  background: var(--ds-tone-info-bg);
   border-inline-start: 2px solid var(--ds-tone-info-solid);
   border-radius: 0;
 }
