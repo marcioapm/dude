@@ -3,6 +3,7 @@ package automations
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -692,6 +693,34 @@ func TestAutomationCommandLinesArriveInOrderWithTheExitCode(t *testing.T) {
 	}
 	if !strings.Contains(run.Log, "one") || !strings.Contains(run.Log, "three") {
 		t.Errorf("log_tail %q", run.Log)
+	}
+}
+
+func TestAutomationFeedReadsSecretsOncePerTransaction(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_redact", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"}, map[string]any{"command": "true"})
+	exec(t, h.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_redact', $1, 'aut_redact', 'running', 'schedule')`, h.org)
+	exec(t, h.owner, `CREATE TABLE secret_lookups (n int)`)
+	exec(t, h.owner, `GRANT INSERT ON secret_lookups TO PUBLIC`)
+	exec(t, h.owner, `ALTER FUNCTION automation_run_secret_values(text) RENAME TO automation_run_secret_values_real`)
+	exec(t, h.owner, `CREATE FUNCTION automation_run_secret_values(rid text) RETURNS TABLE (name text, value text) LANGUAGE plpgsql VOLATILE AS $$
+		BEGIN INSERT INTO secret_lookups VALUES (1); RETURN QUERY SELECT * FROM automation_run_secret_values_real(rid); END $$`)
+	a := Automation{ID: "aut_redact", Org: h.org, ProjectID: h.project, Kind: "command"}
+	var frames []lux.Frame
+	for i := range 20 {
+		frames = append(frames, lux.Frame{Kind: "record", Channel: "stdout", Data: fmt.Sprintf("line %d\n", i)})
+	}
+	if err := h.app.InOrg(context.Background(), h.org, func(tx pgx.Tx) error {
+		return feedFrames(context.Background(), tx, a, "arn_redact", frames, false, "", nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var lookups int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM secret_lookups`).Scan(&lookups); err != nil {
+		t.Fatal(err)
+	}
+	if lookups != 1 {
+		t.Fatalf("secret lookups: %d", lookups)
 	}
 }
 

@@ -370,7 +370,7 @@ func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE automation_runs SET feed_state = $2::jsonb WHERE id = $1`, t.run.ID, red.JSON(raw))
+	_, err = tx.Exec(ctx, `UPDATE automation_runs SET feed_state = $2::jsonb WHERE id = $1 AND feed_state IS DISTINCT FROM $2::jsonb`, t.run.ID, red.JSON(raw))
 	return err
 }
 

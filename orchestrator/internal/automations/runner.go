@@ -325,8 +325,9 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 		if err != nil {
 			return fired, err
 		}
+		followCtx := ledger.WithRedactors(ctx, ledger.Redactors{})
 		for _, p := range payloads {
-			if err := followUpArrived(ctx, tx, d.Into, p); err != nil {
+			if err := followUpArrived(followCtx, tx, d.Into, p); err != nil {
 				return fired, err
 			}
 		}
@@ -1206,6 +1207,8 @@ func feedFrames(ctx context.Context, tx pgx.Tx, a Automation, runID string, fram
 	if a.Kind == "webhook" || (len(frames) == 0 && !ended) {
 		return nil
 	}
+	// One redactor lookup for the whole transaction, as phase Runs do.
+	ctx = ledger.WithRedactors(ctx, ledger.Redactors{})
 	f, err := phases.LoadAutomationFeed(ctx, tx, phases.AutomationRunRef{ID: runID, Org: a.Org, ProjectID: a.ProjectID, Lines: a.Kind != "agent"})
 	if err != nil {
 		return err
@@ -1547,6 +1550,7 @@ func (r *Runner) serverLog(ctx context.Context, a Automation, runID, luxRunID st
 	if json.Unmarshal(raw, &out) != nil || len(out.Lines) == 0 {
 		return
 	}
+	ctx = ledger.WithRedactors(ctx, ledger.Redactors{})
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
 		f, err := phases.LoadAutomationFeed(ctx, tx, phases.AutomationRunRef{ID: runID, Org: a.Org, ProjectID: a.ProjectID, Lines: true})
 		if err != nil {

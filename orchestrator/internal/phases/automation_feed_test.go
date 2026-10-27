@@ -242,6 +242,24 @@ func TestAutomationCommandExitIsRecordedOnceBeforeTerminalState(t *testing.T) {
 	}
 }
 
+func TestAutomationFeedDoesNotRewriteUnchangedState(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	ctx := context.Background()
+	a.feed(feedCases[0].records[2])
+	var before, after string
+	if err := w.owner.QueryRow(ctx, `SELECT xmin::text FROM automation_runs WHERE id=$1`, a.ref.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	a.feed()
+	if err := w.owner.QueryRow(ctx, `SELECT xmin::text FROM automation_runs WHERE id=$1`, a.ref.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("unchanged state rewritten: %s -> %s", before, after)
+	}
+}
+
 func TestAutomationCommandLogIsBoundedAcrossBatches(t *testing.T) {
 	w := newHarnessWorld(t)
 	a := newAutomationWorld(t, w)
