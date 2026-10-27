@@ -298,12 +298,20 @@ func (f *AutomationFeed) line(ctx context.Context, tx pgx.Tx, stream, line strin
 	if allowed, err := f.allowLogLine(ctx, tx); err != nil || !allowed {
 		return err
 	}
-	line = strings.TrimSuffix(line, "\r")
-	p := map[string]any{"stream": stream, "text": line}
-	if len(line) > logLineMax {
-		p["text"], p["cut"] = cutRunes(line[:logLineMax], false), len(line)
+	return f.s.event(ctx, tx, f.t.run, EvLogLine, ledger.ActorAgent, logLine(stream, strings.TrimSuffix(line, "\r")))
+}
+
+// logLine is an EvLogLine's payload: stdout unless stream is stderr, its
+// text cut at logLineMax bytes with the full length said.
+func logLine(stream, text string) map[string]any {
+	if stream != "stderr" {
+		stream = "stdout"
 	}
-	return f.s.event(ctx, tx, f.t.run, EvLogLine, ledger.ActorAgent, p)
+	p := map[string]any{"stream": stream, "text": text}
+	if len(text) > logLineMax {
+		p["text"], p["cut"] = cutRunes(text[:logLineMax], false), len(text)
+	}
+	return p
 }
 
 // End records what the run's output left unfinished when it ended: a
@@ -394,20 +402,14 @@ func (f *AutomationFeed) ServerLines(ctx context.Context, tx pgx.Tx, lines []Ser
 		if len(f.serverTail) > serverTailKeys {
 			f.serverTail = f.serverTail[len(f.serverTail)-serverTailKeys:]
 		}
-		stream := l.Stream
-		if stream != "stderr" {
-			stream = "stdout"
-		}
 		for _, text := range strings.Split(strings.TrimRight(l.Text, "\n"), "\n") {
 			if allowed, err := f.allowLogLine(ctx, tx); err != nil {
 				return err
 			} else if !allowed {
 				continue
 			}
-			p := map[string]any{"stream": stream, "text": text, "server": true}
-			if len(text) > logLineMax {
-				p["text"], p["cut"] = cutRunes(text[:logLineMax], false), len(text)
-			}
+			p := logLine(l.Stream, text)
+			p["server"] = true
 			if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvLogLine, OrganizationID: f.t.run.Org, ProjectID: f.t.run.ProjectID,
 				AutomationRunID: f.t.run.ID, OccurredAt: time.UnixMilli(l.T), ActorType: ledger.ActorAgent, ActorID: f.t.run.ID,
 				Source: ledger.SourceRunner, Payload: p}); err != nil {
