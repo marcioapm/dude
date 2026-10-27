@@ -1106,14 +1106,13 @@ func TestAutomationConcurrencyCancel(t *testing.T) {
 // that agent as input, with the automation's prompt for that event, once.
 func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {
 	h := newHarness(t)
-	h.automation("aut_send", "agent", map[string]any{"kind": "github", "event": "push"},
+	h.automation("aut_send", "agent", map[string]any{"kind": "github", "event": "pull_request"},
 		map[string]any{"concurrency": "send", "session_mode": "resumable", "expiry_days": 7,
 			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
-	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
-	h.deliver("s-1", "push", push)
+	h.deliver("s-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("running", func() bool { r := h.runs("aut_send"); return len(r) == 1 && r[0].Status == "running" })
 	run := h.runs("aut_send")[0]
-	h.deliver("s-2", "push", push)
+	h.deliver("s-2", "pull_request", prBody("synchronize", "acme/web", "ana"))
 	requestID := "automation-" + run.ID + "-1"
 	h.until("the second event reaches the agent", func() bool { return len(h.fake.InputBodies(run.LuxRunID, requestID)) > 0 })
 	for range 3 {
@@ -1128,6 +1127,13 @@ func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {
 	}
 	if r := h.runs("aut_send"); len(r) != 1 || r[0].Payloads != 2 {
 		t.Errorf("runs %+v", r)
+	}
+	var arrivals int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE automation_run_id=$1 AND event_type='automation.delivery.sent' AND payload->>'source'='github' AND payload->>'summary'='pull_request synchronize'`, run.ID).Scan(&arrivals); err != nil {
+		t.Fatal(err)
+	}
+	if arrivals != 1 {
+		t.Fatalf("GitHub follow-up arrivals: %d", arrivals)
 	}
 	var sent int
 	if err := h.owner.QueryRow(context.Background(), `SELECT inputs_sent FROM automation_runs WHERE id = $1`, run.ID).Scan(&sent); err != nil || sent != 2 {
