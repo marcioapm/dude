@@ -36,11 +36,19 @@ Escalated to a person: stuck. Its actions: retry, accept, stop. Only the person 
 
 ## escalated-test-failed
 
-Escalated to a person: test failed criteria. Its actions: retry, accept. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.
+Escalated to a person: test failed criteria. Its actions: retry, accept, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason. Criteria: 2 (fail): Paying sends a receipt.
 
 ## escalated-test-blocked
 
-Escalated to a person: test blocked. Its actions: retry, waive. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason.
+Escalated to a person: test blocked. Its actions: retry, waive, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs the person's reason. Criteria: 1 (blocked): The export downloads.
+
+## escalated-checks
+
+Escalated to a person: checks unverified. Its actions: retry, waive, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The checks not verified: npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no); missing checks: the legacy Vue jest run covers the changed component (judgement: yes).
+
+## escalated-checks-many
+
+Escalated to a person: checks unverified. Its actions: retry, waive, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. The checks not verified: make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; and 3 more.
 
 ## escalation-answered
 

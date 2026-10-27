@@ -45,9 +45,17 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"decision-waiting-pr-feedback", decisionWaitingNote(PointPRFeedback, "")},
 		{"decision-waiting-unknown", decisionWaitingNote("somewhere", "")},
 		{"run-failed", runFailedLine("review · security", "run_rev", "lux: the host\nwent away "+strings.Repeat("x", 130))},
-		{"escalated-stuck", escalatedLine("stuck", []string{"retry", "accept", "stop"})},
-		{"escalated-test-failed", escalatedLine(ReasonTestFailedCriteria, []string{"retry", "accept"})},
-		{"escalated-test-blocked", escalatedLine(ReasonTestBlocked, []string{"retry", ActionWaive})},
+		{"escalated-stuck", escalatedLine(&Escalation{Reason: "stuck", Step: "fix"})},
+		{"escalated-test-failed", escalatedLine(&Escalation{Reason: ReasonTestFailedCriteria, Step: "fix", Detail: map[string]any{
+			"criteria": []map[string]any{{"criterion": 2, "status": "fail", "text": "Paying sends\na receipt"}}}})},
+		{"escalated-test-blocked", escalatedLine(&Escalation{Reason: ReasonTestBlocked, Step: "test", Detail: map[string]any{
+			"criteria": []map[string]any{{"criterion": 1, "status": "blocked", "text": "The export downloads"}}}})},
+		{"escalated-checks", escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: map[string]any{"runId": "run_impl",
+			"message": "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
+				"- npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no)\n" +
+				"- missing checks: the legacy Vue jest run covers the changed component (judgement: yes)\n\nRun the missing or unsuccessful checks."}})},
+		{"escalated-checks-many", escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: map[string]any{"runId": "run_impl",
+			"message": strings.Repeat("- make check: exit 1\n", escalatedItemsMax+3)}})},
 		{"escalation-answered", escalationAnsweredLine("qst_1", "retry")},
 		{"escalation-on-banner", escalationOnBannerLine("accept", "qst_2", false)},
 		{"escalation-checks-finished", escalationOnBannerLine("wait", "qst_2", true)},

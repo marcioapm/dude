@@ -2949,7 +2949,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
 		st.Escalations++
-		line := escalatedLine(reason, st.Escalation.Actions(), st.Escalation.findingIDs()...)
+		line := escalatedLine(st.Escalation)
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
 				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
@@ -3261,16 +3261,64 @@ func humanFeedback(sc workflow.StepContext) bool {
 	return slices.ContainsFunc(sc.Signals, func(s workflow.Signal) bool { return s.Name == SignalHumanFeedback })
 }
 
-// escalatedLine tells the conductor the delivery escalated to a person for
-// reason, with the actions the person has.
-func escalatedLine(reason string, actions []string, findingIDs ...string) string {
+// escalatedLine tells the conductor the delivery stopped for a person at e:
+// its reason, actions and the specifics its detail records — the findings
+// a review loop is held by, the test's criteria, a checks report's
+// unverified checks — so the conductor need not guess what stopped it.
+func escalatedLine(e *Escalation) string {
+	var d struct {
+		Criteria []struct {
+			Criterion    int
+			Text, Status string
+		} `json:"criteria"`
+		Message string `json:"message"`
+	}
+	e.decode(&d)
+	var criteria []string
+	for _, c := range d.Criteria {
+		criteria = append(criteria, fmt.Sprintf("%d (%s): %s", c.Criterion, c.Status, clip(oneLine(c.Text), escalatedItemMax)))
+	}
+	var unverified []string
+	if e.Reason == ReasonChecksUnverified {
+		unverified = unverifiedChecks(d.Message)
+	}
+	shown := func(items []string) ([]string, int) {
+		if len(items) > escalatedItemsMax {
+			return items[:escalatedItemsMax], len(items) - escalatedItemsMax
+		}
+		return items, 0
+	}
+	criteria, criteriaLeft := shown(criteria)
+	unverified, uncheckedLeft := shown(unverified)
+	reason := e.Reason
 	return render(escalatedTmpl, struct {
 		Reason                        string
 		Actions, FindingIDs           []string
 		Verdict, Stuck, NotConverging bool
-	}{strings.ReplaceAll(reason, "_", " "), actions, findingIDs,
+		Criteria, Unverified          []string
+		CriteriaLeft, UnverifiedLeft  int
+	}{strings.ReplaceAll(reason, "_", " "), e.Actions(), e.findingIDs(),
 		reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked,
-		reason == "stuck", reason == ReasonNotConverging})
+		reason == "stuck", reason == ReasonNotConverging, criteria, unverified, criteriaLeft, uncheckedLeft})
+}
+
+// The escalated wake lists at most escalatedItemsMax criteria or checks,
+// each clipped to escalatedItemMax, saying how many it left out.
+const (
+	escalatedItemsMax = 10
+	escalatedItemMax  = 300
+)
+
+// unverifiedChecks are the checks a held checks send-back names, one
+// "- command: reason" line each, as notices/checks renders them.
+func unverifiedChecks(message string) []string {
+	var out []string
+	for _, line := range strings.Split(message, "\n") {
+		if item, ok := strings.CutPrefix(line, "- "); ok {
+			out = append(out, clip(item, escalatedItemMax))
+		}
+	}
+	return out
 }
 
 // integrationReviewBrief is what a reviewer of an integration merge (sha)

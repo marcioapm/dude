@@ -4,5 +4,5 @@ Escalated to a person: not converging. Its actions: retry, accept, amend, stop. 
 
 ## stuck
 
-Escalated to a person: stuck. Its actions: retry, accept, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. Retry needs the person's direction for the next fix, not a bare choice.
+Escalated to a person: stuck. Its actions: retry, accept, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person; offer only actions that need no note as choices. A free answer of the owner lets you decide_escalation. Retry needs the person's direction for the next fix, not a bare choice. Findings: fnd_3.
 
