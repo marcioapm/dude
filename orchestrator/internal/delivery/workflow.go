@@ -3280,15 +3280,14 @@ func escalatedLine(e *Escalation) string {
 		criteria = append(criteria, fmt.Sprintf("%d (%s): %s", c.Criterion, c.Status, clip(oneLine(c.Text), escalatedItemMax)))
 	}
 	var unverified []string
-	switch {
-	case e.Reason != ReasonChecksUnverified:
-	case len(d.Unverified) > 0:
+	if e.Reason == ReasonChecksUnverified {
 		for _, c := range d.Unverified {
 			unverified = append(unverified, clip(oneLine(c.Command)+": "+oneLine(c.Reason), escalatedItemMax))
 		}
-	default:
-		// An escalation recorded before the detail kept its checks.
-		unverified = unverifiedChecks(d.Message)
+		if len(d.Unverified) == 0 {
+			// An escalation recorded before the detail kept its checks.
+			unverified = unverifiedChecks(d.Message)
+		}
 	}
 	shown := func(items []string) ([]string, int) {
 		if len(items) > escalatedItemsMax {
@@ -3297,7 +3296,7 @@ func escalatedLine(e *Escalation) string {
 		return items, 0
 	}
 	criteria, criteriaLeft := shown(criteria)
-	unverified, uncheckedLeft := shown(unverified)
+	unverified, unverifiedLeft := shown(unverified)
 	reason := e.Reason
 	return render(escalatedTmpl, struct {
 		Reason                        string
@@ -3307,7 +3306,7 @@ func escalatedLine(e *Escalation) string {
 		CriteriaLeft, UnverifiedLeft  int
 	}{strings.ReplaceAll(reason, "_", " "), e.Actions(), e.findingIDs(),
 		reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked,
-		reason == "stuck", reason == ReasonNotConverging, criteria, unverified, criteriaLeft, uncheckedLeft})
+		reason == "stuck", reason == ReasonNotConverging, criteria, unverified, criteriaLeft, unverifiedLeft})
 }
 
 // The escalated wake lists at most escalatedItemsMax criteria or checks,
