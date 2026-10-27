@@ -158,6 +158,10 @@ type request struct {
 	// The session's last event cursor once the mention went in: its mark
 	// waits on the agent's first output past it (reactions.go).
 	AwaitsAfter *int64
+	// Why a failed request failed, as Requests shows it apart from the
+	// model's reasoning: the routing call's error, the refusal of what it
+	// tried to make, or giving up.
+	Failure string
 	// What is posted once the request commits.
 	effects []effect
 	// A brainstorm with no project: what may be offered to link (before
@@ -200,14 +204,15 @@ func record(ctx context.Context, tx pgx.Tx, r *request) (bool, error) {
 	tag, err := tx.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
 			conversation_kind, conversation_name, thread_id, external_user_id, external_user_name, person_id, text, permalink, context_hash,
 			route, asked_route, confidence, reasoning, rounds, result_kind, result_id, shared_added, shared_skipped, model_call_id,
-			mention, question, effects, awaits_session_after, link_offer)
+			mention, question, effects, awaits_session_after, link_offer, failure)
 		VALUES ($1, current_organization_id(), $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10, NULLIF($11, ''), $12, $13, NULLIF($14, ''),
-			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27, $28, $29)
+			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27, $28, $29,
+			NULLIF($30, ''))
 		ON CONFLICT (provider, event_id) DO NOTHING`,
 		r.ID, r.Mention.Provider, r.EventID, r.Mention.WorkspaceID, r.Mention.ConversationID, r.Kind, r.ConversationName,
 		r.Mention.ThreadID, r.Mention.UserID, r.UserName, r.Person, clip(r.Mention.Text, 4000), r.Permalink, r.ContextHash,
 		r.Route, r.AskedRoute, r.Confidence, clip(r.Reasoning, 2000), r.Rounds, r.ResultKind, r.ResultID, db.NonNil(r.Added),
-		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects, r.AwaitsAfter, offer)
+		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects, r.AwaitsAfter, offer, clip(r.Failure, 2000))
 	if err != nil {
 		return false, err
 	}
@@ -438,6 +443,7 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 		if got.Answer == nil {
 			// No answer, a proxy error or invalid JSON: a brainstorm.
 			r.Route, r.Reasoning = RouteFailed, "the routing call failed: "+got.Failed
+			r.Failure = r.Reasoning
 			r.candidates = linkCandidates(world, nil)
 			return s.make(ctx, org, p, inst, who, r, h, Decision{Route: RouteBrainstorm, Title: clip(trimmed(m.Text), 80)}, nil)
 		}
@@ -1032,6 +1038,7 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 		err = tx.QueryRow(ctx, `UPDATE chat_requests SET route = 'failed', replied_at = now(),
 				asked_route = CASE WHEN route = 'failed' THEN asked_route ELSE COALESCE(asked_route, route) END,
 				reasoning = left(btrim(reasoning || ' (' || $3 || ')'), 2000),
+				failure = left(btrim(COALESCE(failure || '; ', '') || $3), 2000),
 				mark_settled = COALESCE(mark_settled, 'failed'), mark_settled_at = COALESCE(mark_settled_at, now())
 			WHERE provider = $1 AND event_id = $2 AND replied_at IS NULL RETURNING mention, effects`,
 			d.Provider, d.ID, "its reply was not posted: "+reason).Scan(&mRaw, &eRaw)
@@ -1066,7 +1073,7 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 		s.react(ctx, d.Org, p, inst, m, ReactionFailed)
 		return
 	}
-	r := &request{EventID: d.ID, Mention: m, Route: RouteFailed, Person: who.Person, UserName: who.Display, Reasoning: reason,
+	r := &request{EventID: d.ID, Mention: m, Route: RouteFailed, Person: who.Person, UserName: who.Display, Reasoning: reason, Failure: reason,
 		effects: []effect{ephemeralEffect(note), reactEffect(ReactionFailed)}}
 	// A routing call already made and kept is the model asked, whatever
 	// failed after it; a click's choice asked nothing.

@@ -79,7 +79,10 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 			return err
 		}
 	}
-	r.Route, r.Reasoning = RouteFailed, strings.TrimSpace(r.Reasoning+" ("+clip(err.Error(), 300)+")")
+	cause := clip(err.Error(), 300)
+	r.Route, r.Reasoning = RouteFailed, strings.TrimSpace(r.Reasoning+" ("+cause+")")
+	// A failed routing call's error stays first: the brainstorm made instead was refused after it.
+	r.Failure = strings.TrimPrefix(r.Failure+"; "+cause, "; ")
 	r.effects = []effect{ephemeralEffect(Reply{Text: "Sorry, dude couldn't act on this."}), reactEffect(ReactionFailed)}
 	return s.commit(ctx, org, p, inst, r, pick, nil)
 }

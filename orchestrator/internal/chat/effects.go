@@ -167,6 +167,7 @@ func (s *Service) deliver(ctx context.Context, org string, p Provider, inst Inst
 			_, err := tx.Exec(ctx, `UPDATE chat_requests SET replied_at = now(), route = 'failed',
 					asked_route = CASE WHEN route = 'failed' THEN asked_route ELSE COALESCE(asked_route, route) END,
 					reasoning = left(btrim(reasoning || ' (its reply was not posted: ' || $2 || ')'), 2000),
+					failure = left(btrim(COALESCE(failure || '; ', '') || 'its reply was not posted: ' || $2), 2000),
 					mark_settled = COALESCE(mark_settled, 'failed'), mark_settled_at = COALESCE(mark_settled_at, now())
 				WHERE id = $1`, id, failure)
 			return err

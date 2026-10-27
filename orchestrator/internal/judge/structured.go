@@ -89,8 +89,31 @@ func (s Service) Structured(ctx context.Context, org string, ask StructuredAsk) 
 		return Structured{}, fmt.Errorf("record the judgement: %w", err)
 	}
 	if askErr != nil {
-		return Structured{CallID: out.CallID}, askErr
+		return Structured{CallID: out.CallID}, redactedErr(red, askErr)
 	}
 	out.Summary.CallID = out.CallID
 	return out, nil
+}
+
+// redactedError is an error whose text had the tier's secrets replaced; it
+// still unwraps to the original, so errors.Is(err, ErrUnparseable) holds.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
+// redactedErr is err with the proxy key and the tier's header values
+// redacted from its text: a proxy's answer may echo them, and the caller
+// stores the error (chat's Requests shows it).
+func redactedErr(red *redact.Redactor, err error) error {
+	if red.Empty() {
+		return err
+	}
+	if msg := red.String(err.Error()); msg != err.Error() {
+		return &redactedError{msg: msg, err: err}
+	}
+	return err
 }

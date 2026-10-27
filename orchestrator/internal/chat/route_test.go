@@ -36,6 +36,16 @@ type model struct {
 	sent    []map[string]any
 	// How long each call waits before it answers (or the caller gives up).
 	delay time.Duration
+	// The next call's refusal: its status and body, once.
+	refuseStatus int
+	refuseBody   string
+}
+
+// refuseNext makes the next call answer status with body, as a proxy refusing it.
+func (m *model) refuseNext(status int, body string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refuseStatus, m.refuseBody = status, body
 }
 
 func (m *model) queue(answers ...string) {
@@ -63,6 +73,13 @@ func (m *model) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(raw, &body)
 	m.mu.Lock()
 	m.sent = append(m.sent, body)
+	if status, refusal := m.refuseStatus, m.refuseBody; status != 0 {
+		m.refuseStatus, m.refuseBody = 0, ""
+		m.mu.Unlock()
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(refusal))
+		return
+	}
 	var answer string
 	ok := len(m.answers) > 0
 	if ok {
@@ -251,12 +268,14 @@ type req struct {
 	Route, AskedRoute, ResultKind, ResultID, Kind, Person, Reasoning string
 	Added, Skipped                                                   []string
 	ModelCall                                                        string
+	Failure                                                          string
 }
 
 func (w *world) requests() []req {
 	w.t.Helper()
 	rows, err := w.owner.Query(w.ctx, `SELECT route, COALESCE(asked_route, ''), COALESCE(result_kind, ''), COALESCE(result_id, ''),
-			COALESCE(conversation_kind, ''), COALESCE(person_id, ''), reasoning, shared_added, shared_skipped, COALESCE(model_call_id, '')
+			COALESCE(conversation_kind, ''), COALESCE(person_id, ''), reasoning, shared_added, shared_skipped, COALESCE(model_call_id, ''),
+			COALESCE(failure, '')
 		FROM chat_requests WHERE organization_id = $1 ORDER BY created_at, id`, w.org)
 	if err != nil {
 		w.t.Fatal(err)
