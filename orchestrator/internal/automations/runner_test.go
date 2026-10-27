@@ -1584,31 +1584,38 @@ func TestAutomationCancelEndsACallAFollowerOpened(t *testing.T) {
 
 // A run's list learns of a run it has not read from the ledger: Fire
 // records the queued run, and its start records it started, each naming
-// the automation.
+// the automation: a command's start when its lux Run is claimed, a
+// webhook's when its run is claimed for its POST.
 func TestAutomationRunQueuedAndStartedAreRecorded(t *testing.T) {
 	h := newHarness(t)
 	g := newGate(t)
 	t.Cleanup(func() { g.release(t) })
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+	t.Cleanup(hook.Close)
 	h.automation("aut_seen", "command", map[string]any{"kind": "github", "event": "push"},
 		map[string]any{"command": g.hold("echo done"), "concurrency": "queue"})
+	h.automation("aut_seen_hook", "webhook", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"webhook": map[string]any{"url": hook.URL}})
 	h.deliver("se-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
-	h.until("running", func() bool {
-		r := h.runs("aut_seen")
-		return len(r) == 1 && r[0].Status == "running" && r[0].LuxRunID != ""
+	h.until("the command runs and the webhook is sent", func() bool {
+		c, w := h.runs("aut_seen"), h.runs("aut_seen_hook")
+		return len(c) == 1 && c[0].Status == "running" && c[0].LuxRunID != "" && len(w) == 1 && w[0].Status == "succeeded"
 	})
-	run := h.runs("aut_seen")[0]
-	rows, err := h.owner.Query(context.Background(), `SELECT event_type || ' ' || (payload->>'automationId') || ' ' || (payload->>'automationRunId')
-		FROM events WHERE automation_run_id = $1 AND event_type IN ('automation.run.queued', 'automation.run.started') ORDER BY cursor`, run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"automation.run.queued aut_seen " + run.ID, "automation.run.started aut_seen " + run.ID}
-	if !slices.Equal(got, want) {
-		t.Fatalf("run events %q, want %q", got, want)
+	for _, id := range []string{"aut_seen", "aut_seen_hook"} {
+		run := h.runs(id)[0]
+		rows, err := h.owner.Query(context.Background(), `SELECT event_type || ' ' || (payload->>'automationId') || ' ' || (payload->>'automationRunId')
+			FROM events WHERE automation_run_id = $1 AND event_type IN ('automation.run.queued', 'automation.run.started') ORDER BY cursor`, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"automation.run.queued " + id + " " + run.ID, "automation.run.started " + id + " " + run.ID}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s run events %q, want %q", id, got, want)
+		}
 	}
 }
 
