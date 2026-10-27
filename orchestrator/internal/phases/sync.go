@@ -165,6 +165,9 @@ const stopPause = "pause"
 // conductor's (Phase "", Role conductor), which the syncer drives the same
 // way except where conductor() says otherwise.
 type phaseRun struct {
+	// An automation run translated by AutomationFeed: no runs row; its
+	// events are keyed by automation_run_id alone.
+	AutomationRunID                                    string
 	SourceKind                                         string
 	ID, Org, ProjectID, TaskID, Phase, Status, Control string
 	// A session's agent: no task, no project.
@@ -3896,6 +3899,12 @@ func (s *Syncer) event(ctx context.Context, tx pgx.Tx, r phaseRun, typ, actor st
 	var at time.Time
 	if s.Now != nil {
 		at = s.Now()
+	}
+	if r.AutomationRunID != "" {
+		_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID,
+			AutomationRunID: r.AutomationRunID, OccurredAt: at, ActorType: actor, ActorID: r.AutomationRunID,
+			Source: ledger.SourceRunner, Payload: payload})
+		return err
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: typ, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID, SessionID: r.SessionID, OccurredAt: at,

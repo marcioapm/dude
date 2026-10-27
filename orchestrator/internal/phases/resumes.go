@@ -296,7 +296,7 @@ func (t *translator) resumeBusy(ctx context.Context, tx pgx.Tx, s *Syncer, epoch
 // first if lux had not reported all of them. Looked for once per settled
 // epoch, at most once a batch before.
 func (t *translator) resumeOutput(ctx context.Context, tx pgx.Tx, s *Syncer, epoch int) {
-	if epoch == t.outputEpoch || t.unsettled[unsettledKey{"output", epoch}] {
+	if t.run.AutomationRunID != "" || epoch == t.outputEpoch || t.unsettled[unsettledKey{"output", epoch}] {
 		return
 	}
 	e, missing, settled := t.stamp(ctx, tx, s, "first_output_at", epoch)

@@ -9,6 +9,12 @@
 -- table; the rows it would judge are the ones moved just below.
 ALTER TABLE events ADD COLUMN automation_run_id text;
 
+-- What phases.AutomationFeed keeps between batches of an agent's output (the
+-- reply and thought being streamed, the calls still open, a harness's turn
+-- state), as runs keeps a Run's; and a command's or server's output line
+-- not yet ended by a newline.
+ALTER TABLE automation_runs ADD COLUMN feed_state jsonb NOT NULL DEFAULT '{}'::jsonb;
+
 -- Until now the tool server wrote an automation run's calls with its id in
 -- run_id. Those move: a call's record (run_id only) to automation_run_id;
 -- create_task's task.created (on its new task) keeps only the task. One

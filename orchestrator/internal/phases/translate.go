@@ -1099,6 +1099,9 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	clear(t.openCalls)
 	clear(t.waitsOn)
 	t.facts = childFacts{clear: true}
+	if t.run.AutomationRunID != "" {
+		return nil
+	}
 	// A turn's end is when an agent's edits settle.
 	s.pokeDiff(t.run.ID)
 	// A failed turn's idle: the turn is over, not done (turnFailed).
@@ -1348,6 +1351,11 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 // The failure and stream cursor commit together, before a following idle or
 // queued input can turn a failed prompt into completed work.
 func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agentErr string) error {
+	// An automation run's failed turn is the automations loop's to end
+	// (its readOutput sees the same turn end).
+	if t.run.AutomationRunID != "" {
+		return nil
+	}
 	var model, tier string
 	var produced bool
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), EXISTS (SELECT 1 FROM events

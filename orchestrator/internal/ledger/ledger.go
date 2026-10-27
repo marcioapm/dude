@@ -7,6 +7,7 @@
 package ledger
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"strings"
@@ -43,18 +44,20 @@ type Event struct {
 	RunID          string
 	SessionID      string
 	WorkflowRunID  string
-	ActorType      string
-	ActorID        string
-	Source         string
-	CorrelationID  string
-	CausationID    string
-	OccurredAt     time.Time
-	Payload        map[string]any
+	// An automation run (automation_runs): set alone, never with a Run, session or task.
+	AutomationRunID string
+	ActorType       string
+	ActorID         string
+	Source          string
+	CorrelationID   string
+	CausationID     string
+	OccurredAt      time.Time
+	Payload         map[string]any
 }
 
 const insertColumns = `INSERT INTO events (id, organization_id, event_type, occurred_at,
 		                    project_id, task_id, run_id, session_id, workflow_run_id,
-		                    actor_type, actor_id, source, correlation_id, causation_id, payload)`
+		                    actor_type, actor_id, source, correlation_id, causation_id, payload, automation_run_id)`
 
 // Append writes one event in the caller's transaction, so it commits or
 // rolls back with the state change that produced it. An event of a Run is
@@ -68,7 +71,7 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 		return "", err
 	}
 	_, err = tx.Exec(ctx, insertColumns+`
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)`, args...)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)`, args...)
 	return id, err
 }
 
@@ -127,10 +130,11 @@ func (c Redactors) None(runID string) { c[runID] = nil }
 // redactRun redacts e's payload with its Run's values, through its JSON:
 // a payload may carry structs as well as maps and strings.
 func redactRun(ctx context.Context, tx pgx.Tx, e *Event) error {
-	if e.RunID == "" || e.Payload == nil {
+	runID := cmp.Or(e.RunID, e.AutomationRunID)
+	if runID == "" || e.Payload == nil {
 		return nil
 	}
-	r, err := Redactor(ctx, tx, e.RunID)
+	r, err := Redactor(ctx, tx, runID)
 	if err != nil || r.Empty() {
 		return err
 	}
@@ -163,13 +167,13 @@ func AppendOncePerEpoch(ctx context.Context, tx pgx.Tx, e Event, epoch int) (boo
 		return false, err
 	}
 	tag, err := tx.Exec(ctx, insertColumns+`
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb
-		WHERE NOT EXISTS (SELECT 1 FROM events WHERE run_id = $7 AND event_type = $3 AND (payload->>'epoch')::int = $16)`,
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16
+		WHERE NOT EXISTS (SELECT 1 FROM events WHERE run_id = $7 AND event_type = $3 AND (payload->>'epoch')::int = $17)`,
 		append(args, epoch)...)
 	return tag.RowsAffected() == 1, err
 }
 
-// row is e's new id and the 15 values of insertColumns, in order.
+// row is e's new id and the 16 values of insertColumns, in order.
 func row(e Event) (string, []any, error) {
 	id := ids.New(ids.Event)
 	payload := []byte("{}")
@@ -185,5 +189,5 @@ func row(e Event) (string, []any, error) {
 	}
 	return id, []any{id, e.OrganizationID, e.Type, occurred,
 		db.Nullable(e.ProjectID), db.Nullable(e.TaskID), db.Nullable(e.RunID), db.Nullable(e.SessionID), db.Nullable(e.WorkflowRunID),
-		e.ActorType, e.ActorID, e.Source, db.Nullable(e.CorrelationID), db.Nullable(e.CausationID), payload}, nil
+		e.ActorType, e.ActorID, e.Source, db.Nullable(e.CorrelationID), db.Nullable(e.CausationID), payload, db.Nullable(e.AutomationRunID)}, nil
 }

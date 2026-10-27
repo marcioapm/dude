@@ -1,0 +1,176 @@
+package phases
+
+import (
+	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+)
+
+// feedCases are harness records of one turn — a message, a thought, a
+// tool call and its end — as each harness sends them. A task's Run and an
+// automation run fed the same records write the same activity.
+var feedCases = []struct {
+	name    string
+	records []map[string]any
+}{
+	{"acp", []map[string]any{
+		{"type": "acp.agent_thought_chunk", "data": map[string]any{"content": map[string]any{"type": "text", "text": "Numbers first."}}},
+		{"type": "acp.agent_message_chunk", "data": map[string]any{"content": map[string]any{"type": "text", "text": "Getting this week's numbers."}}},
+		{"type": "acp.tool_call", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "title": "bash", "kind": "execute",
+			"rawInput": map[string]any{"command": "pr-stats --org acme --since 7d"}}},
+		{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "completed", "title": "bash", "kind": "execute",
+			"rawOutput": map[string]any{"output": strings.Repeat("x", 9000), "metadata": map[string]any{"exit": 0.0}}}},
+		{"type": "acp.agent_message_chunk", "data": map[string]any{"content": map[string]any{"type": "text", "text": "Posted."}}},
+		{"type": "acp.turn_end", "data": map[string]any{}},
+	}},
+	{"claude", []map[string]any{
+		{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{"content": []any{
+			map[string]any{"type": "thinking", "thinking": "Numbers first."},
+			map[string]any{"type": "text", "text": "Getting this week's numbers."},
+			map[string]any{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": map[string]any{"command": "kubectl logs api"}}}}}},
+		{"type": "claude.user", "data": map[string]any{"message": map[string]any{"content": []any{
+			map[string]any{"type": "tool_result", "tool_use_id": "toolu_1", "content": "error", "is_error": true}}},
+			"tool_use_result": map[string]any{"stdout": "", "stderr": "error: You must be logged in"}}},
+		{"type": "claude.assistant", "data": map[string]any{"message": map[string]any{"content": []any{
+			map[string]any{"type": "tool_use", "id": "toolu_2", "name": "mcp__dude__post_to_chat", "input": map[string]any{"channel": "#engineering", "text": "Digest"}}}}}},
+		{"type": "claude.user", "data": map[string]any{"message": map[string]any{"content": []any{
+			map[string]any{"type": "tool_result", "tool_use_id": "toolu_2", "content": `{"channel":"#engineering"}`}}}}},
+	}},
+	{"codex", []map[string]any{
+		{"type": "codex.item/completed", "data": map[string]any{"item": map[string]any{"type": "reasoning", "id": "r1", "summary": []any{"Numbers first."}}}},
+		{"type": "codex.item/started", "data": map[string]any{"item": map[string]any{"type": "commandExecution", "id": "x1",
+			"command": "/bin/zsh -lc 'govulncheck ./...'", "status": "inProgress"}}},
+		{"type": "codex.item/completed", "data": map[string]any{"item": map[string]any{"type": "commandExecution", "id": "x1",
+			"command": "/bin/zsh -lc 'govulncheck ./...'", "status": "failed", "aggregatedOutput": "3 vulnerabilities", "exitCode": 3}}},
+		{"type": "codex.item/completed", "data": map[string]any{"item": map[string]any{"type": "agentMessage", "id": "m1", "text": "Three found."}}},
+	}},
+}
+
+// feedTypes are the activity both callers write.
+var feedTypes = map[string]bool{evAgentMessage: true, evAgentThought: true, evToolCalled: true, evToolCompleted: true}
+
+func TestAnAutomationRunsActivityIsTheRunsTranslation(t *testing.T) {
+	for _, tc := range feedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			w.feed(tc.records...)
+			var want []harnessEvent
+			for _, e := range w.events() {
+				if feedTypes[e.Type] {
+					want = append(want, e)
+				}
+			}
+			if len(want) < 3 {
+				t.Fatalf("the Run's translation wrote too little to compare: %v", want)
+			}
+
+			a := newAutomationWorld(t, w)
+			a.feed(tc.records...)
+			got := a.events()
+			if !reflect.DeepEqual(got, want) {
+				g, _ := json.Marshal(got)
+				wj, _ := json.Marshal(want)
+				t.Fatalf("automation run's activity:\n%s\nthe Run's:\n%s", g, wj)
+			}
+		})
+	}
+}
+
+// A call still open when its run is stopped ends aborted, with the reason.
+func TestAnAutomationRunStoppedMidCallAbortsTheCall(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	a.feed(feedCases[0].records[2])
+	ctx := context.Background()
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		return f.End(ctx, tx, "Stopped by the time limit")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := a.events()
+	last := got[len(got)-1]
+	if last.Type != evToolCompleted || last.Payload["callId"] != "c1" || last.Payload["status"] != "aborted" ||
+		last.Payload["note"] != "Stopped by the time limit" {
+		t.Fatalf("events: %v", got)
+	}
+}
+
+type automationWorld struct {
+	t    *testing.T
+	w    *harnessWorld
+	ref  AutomationRunRef
+	seen int64
+}
+
+// newAutomationWorld adds an automation run to w's organisation.
+func newAutomationWorld(t *testing.T, w *harnessWorld) *automationWorld {
+	ctx := context.Background()
+	org := w.run.Org
+	for _, q := range []string{
+		`INSERT INTO automations (id, organization_id, project_id, name, kind, trigger, agent)
+			VALUES ('aut_'||$1, $1, 'prj_'||$1, 'Digest', 'agent', '{"kind":"schedule","cron":"0 15 * * 5","tz":"Europe/Lisbon"}', '{"own":{"prompt":""}}')`,
+		`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_'||$1, $1, 'aut_'||$1, 'running', 'schedule')`,
+	} {
+		if _, err := w.owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &automationWorld{t: t, w: w, ref: AutomationRunRef{ID: "arn_" + org, Org: org, ProjectID: "prj_" + org}}
+}
+
+// feed translates records in one batch, as the automations loop does: loaded, applied, saved.
+func (a *automationWorld) feed(records ...map[string]any) {
+	a.t.Helper()
+	ctx := context.Background()
+	if err := a.w.s.DB.InOrg(ctx, a.ref.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		for _, r := range records {
+			data, _ := json.Marshal(r["data"])
+			if err := f.Apply(ctx, tx, lux.Frame{Kind: "record", Epoch: 1, Event: &lux.RecordEvent{Type: r["type"].(string), Data: data}}); err != nil {
+				return err
+			}
+		}
+		return f.Save(ctx, tx)
+	}); err != nil {
+		a.t.Fatal(err)
+	}
+}
+
+// events are the automation run's activity written since the last call; none names a Run.
+func (a *automationWorld) events() []harnessEvent {
+	a.t.Helper()
+	rows, err := a.w.owner.Query(context.Background(), `SELECT cursor, event_type, payload, run_id IS NULL AND task_id IS NULL
+		FROM events WHERE automation_run_id = $1 AND cursor > $2 ORDER BY cursor`, a.ref.ID, a.seen)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []harnessEvent
+	for rows.Next() {
+		var e harnessEvent
+		var alone bool
+		if err := rows.Scan(&a.seen, &e.Type, &e.Payload, &alone); err != nil {
+			a.t.Fatal(err)
+		}
+		if !alone {
+			a.t.Fatalf("%s names a Run or task", e.Type)
+		}
+		if feedTypes[e.Type] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
