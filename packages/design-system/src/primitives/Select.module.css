@@ -1,4 +1,6 @@
+/* Positioned: inside a form Radix adds an absolute hidden <select>, which would otherwise lengthen the document. */
 .field {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-4);

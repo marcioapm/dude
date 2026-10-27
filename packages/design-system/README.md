@@ -117,7 +117,11 @@ colour table) can import the typed values from `@dude/design-system/tokens`.
 
 Behavioural primitives (Select, Dialog, Tabs, Tooltip, Toast, Checkbox,
 ScrollArea, RowMenu) sit on Radix, which is unstyled and does keyboard/ARIA
-correctly. Everything else is hand-rolled.
+correctly. Everything else is hand-rolled. Inside a `<form>`, Radix's
+Checkbox and Select add a hidden, absolutely positioned native control, so
+each of their roots is `position: relative` to keep it in the primitive's
+box; unpositioned, it lands at the control's document offset and makes the
+whole page scroll under a fixed app shell (a test enforces this).
 
 Shared keyframes live in `styles/base.css`; a CSS module must reference
 them as `animation: global(ds-name) …` or the name is hashed to nothing and
