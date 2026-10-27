@@ -981,8 +981,11 @@ their creator.
     rolling hour → 429. Each refusal stores a row (`incoming_deliveries`,
     verdict `refused`, its code) with no body and answers one line of JSON;
     an accepted request stores its body and answers 202 `{delivery}`. The
-    rate counts every accepted delivery, those later sent to a live run
-    included, under a per-automation lock. Headers are kept with the values of
+    rate counts the hour's deliveries that started a run or were sent to a
+    live one, and those the loop has not matched yet (each holds a place
+    until it is decided, so a burst is limited before matching); skipped and
+    refused deliveries take no place. One delivery counts at a time, under a
+    per-automation lock. Headers are kept with the values of
     `Authorization`, cookies, the signature header and any name holding
     `token`, `secret` or `signature` replaced by `••••`.
   - **Matching** (`ArriveIncoming`, a step of the automations loop): a

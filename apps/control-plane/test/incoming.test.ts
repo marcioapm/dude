@@ -170,9 +170,9 @@ describe("the public endpoint", () => {
     expect(stored[1].headers["X-Token"]).toBe("••••");
   });
 
-  test("the rate limit counts every accepted delivery in the hour and refuses the next with 429", async () => {
+  test("the rate limit counts deliveries not matched yet and those sent to a run, and refuses the next with 429", async () => {
     const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
-    // Five an hour (hookWith). Two already sent to a run count as well: the delivery row is what counts.
+    // Five an hour (hookWith). Three still waiting for the loop and two sent to a run fill it.
     for (let i = 0; i < 5; i++) expect((await post(hook, `{"i":${i}}`, { authorization: secret })).status).toBe(202);
     await owner`UPDATE incoming_deliveries SET verdict = 'sent_to_run' WHERE automation_id = ${id} AND payload->>'i' IN ('0', '1')`;
     const over = await post(hook, `{"i":5}`, { authorization: secret });
@@ -183,6 +183,22 @@ describe("the public endpoint", () => {
     expect((await post(hook, `{"i":6}`, { authorization: secret })).status).toBe(202);
     const stored = await rows(id);
     expect(stored.filter((r) => r.verdict === "refused").map((r) => [r.reason, r.payload])).toEqual([["rate_limited", null]]);
+  });
+
+  test("skipped deliveries leave the hour's places free; started and sent-to-run ones use them up (429)", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
+    // Five an hour (hookWith). Five that matched no condition take no place.
+    for (let i = 0; i < 5; i++) expect((await post(hook, `{"i":${i}}`, { authorization: secret })).status).toBe(202);
+    await owner`UPDATE incoming_deliveries SET verdict = 'skipped', reason = 'status is resolved, not firing' WHERE automation_id = ${id}`;
+    for (let i = 5; i < 10; i++) expect((await post(hook, `{"i":${i}}`, { authorization: secret })).status).toBe(202);
+    // Those five started a run or were sent to it: the hour is full.
+    await owner`UPDATE incoming_deliveries SET verdict = CASE WHEN (payload->>'i')::int < 8 THEN 'started' ELSE 'sent_to_run' END
+      WHERE automation_id = ${id} AND verdict IS NULL`;
+    const over = await post(hook, `{"i":10}`, { authorization: secret });
+    expect(over.status).toBe(429);
+    expect(await over.json()).toMatchObject({ error: { code: "rate_limited" } });
+    expect((await rows(id)).map((r) => r.verdict)).toEqual([...Array(5).fill("skipped"), "started", "started", "started",
+      "sent_to_run", "sent_to_run", "refused"]);
   });
 
   test("an automation that is off refuses, keeping no body", async () => {

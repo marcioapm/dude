@@ -7,7 +7,8 @@
  * the orchestrator's automations loop matches what it stored. In order: the
  * hook is looked up (unknown: 404, nothing stored), its secret checked in
  * constant time, the body's size (1 MiB), JSON, the automation being on and
- * its hourly rate (every accepted delivery counts, follow-ups included). A
+ * its hourly rate (deliveries that started a run or were sent to one, and
+ * those not matched yet; skipped and refused ones take no place). A
  * refusal stores a row with its code and no body.
  */
 
@@ -132,8 +133,10 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
   const accepted = await withOrg(hook.organization_id, async (scope) => {
     // One delivery at a time per automation counts the hour: two together never both take the last place.
     await scope.sql`SELECT pg_advisory_xact_lock(hashtextextended(${"incoming:" + hook.automation_id}, 0))`;
+    // The hour's places go to deliveries that started a run or were sent to one. One not matched yet
+    // (verdict NULL) holds a place until the loop decides, so a burst is limited before matching.
     const [{ n }] = (await scope.sql`SELECT count(*)::int AS n FROM incoming_deliveries WHERE automation_id = ${hook.automation_id}
-      AND received_at > now() - interval '1 hour' AND verdict IS DISTINCT FROM 'refused'`) as [{ n: number }];
+      AND received_at > now() - interval '1 hour' AND (verdict IS NULL OR verdict IN ('started', 'sent_to_run'))`) as [{ n: number }];
     if (n >= hook.rate_per_hour) {
       await store(scope, hook, { id, bytes, headers, refused: "rate_limited" });
       return false;

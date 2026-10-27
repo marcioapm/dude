@@ -662,8 +662,10 @@ Rotate, then only its last four characters.
 **What it answers.** 202 once stored; 404 for an unknown hook (nothing
 stored); 401 a wrong or missing secret; 413 a body over 1 MiB; 415 a body
 that is not a JSON object; 403 the automation is off; 429 over its
-deliveries an hour (1–600, default 30, counting every accepted delivery,
-including those sent to a run already going). It answers before any agent
+deliveries an hour (1–600, default 30). Only deliveries that started a run
+or were sent to a run already going count, plus those not matched yet,
+which hold a place until the loop decides; deliveries skipped because a
+condition did not hold, and refused ones, do not. It answers before any agent
 starts: the orchestrator's automations loop matches stored deliveries.
 
 **What is stored, and for how long** (`incoming_deliveries`, migration

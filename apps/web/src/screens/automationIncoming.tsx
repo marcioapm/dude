@@ -178,7 +178,7 @@ export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, pat
         <Input aria-label="Group by path" mono value={trigger.groupBy} placeholder="groupKey" disabled={ro} error={groupError}
           onChange={(e) => onChange({ ...trigger, groupBy: e.target.value.trim() })} />
       </SettingRow>
-      <SettingRow label="Rate limit" help="Deliveries over it are refused with 429 and listed as refused." data-testid="incoming-rate">
+      <SettingRow label="Rate limit" help="Counts deliveries that started a run or were sent to one; skipped and refused ones do not. Deliveries over it are refused with 429 and listed as refused." data-testid="incoming-rate">
         <span className="incomingInline">
           <NumberInput step={1} aria-label="Deliveries per hour" min={1} max={INCOMING_RATE_MAX} value={trigger.ratePerHour} disabled={ro}
             onValueChange={(n) => onChange({ ...trigger, ratePerHour: n ?? INCOMING_RATE_DEFAULT })} />
