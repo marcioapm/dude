@@ -516,14 +516,15 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 		// carries the conductor's proposed note, in its label, which the
 		// owner's pick makes theirs; no other pick carries one.
 		c := &item.Choices[i]
+		needs := NeedsNote(reason, a)
 		switch {
-		case NeedsNote(reason, a) && c.Note == "":
+		case needs && c.Note == "":
 			format := rNotChoiceShippingPastNeedsPerson
 			if givesDirection(a) {
 				format = rNotChoiceNeedsPersonDirection
 			}
 			return "", nil, refusef(format, a, strings.ReplaceAll(reason, "_", " "), a)
-		case !NeedsNote(reason, a) && c.Note != "":
+		case !needs && c.Note != "":
 			return "", nil, refusef(rChoiceNoteOnlyWhereNeeded, a, strings.ReplaceAll(reason, "_", " "))
 		case c.Note != "" && c.Label != "":
 			return "", nil, refusef(rChoiceNoteTakesNoLabel, a)
