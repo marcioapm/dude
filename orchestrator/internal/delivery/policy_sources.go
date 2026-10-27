@@ -25,7 +25,7 @@ func PolicySources(org, project json.RawMessage) (Policy, map[string]string, err
 		return p, nil, err
 	}
 	var named [2]map[string]json.RawMessage
-	_ = json.Unmarshal(org, &named[0])
+	_ = json.Unmarshal(withoutProjectOnlyKeys(org), &named[0])
 	_ = json.Unmarshal(project, &named[1])
 	out := map[string]string{}
 	for _, k := range PolicyKeys() {

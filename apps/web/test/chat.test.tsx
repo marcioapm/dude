@@ -12,6 +12,7 @@ import { act, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import type { SentAnswer } from "../src/api/client.ts";
 import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID, YOU } from "../src/fixtures/data.ts";
+import { ToastProvider } from "@dude/design-system/primitives";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { RunScreen } from "../src/screens/RunScreen.tsx";
@@ -285,9 +286,9 @@ async function write(page: HTMLElement, text: string): Promise<HTMLTextAreaEleme
 
 async function chatPage(client: ChatClient, props: Partial<Parameters<typeof TaskScreen>[0]> = {}) {
   const { container, unmount } = await mount(
-    <PeopleProvider client={client}>
+    <ToastProvider><PeopleProvider client={client}>
       <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} {...props} />
-    </PeopleProvider>,
+    </PeopleProvider></ToastProvider>,
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");

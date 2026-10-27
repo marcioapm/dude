@@ -309,6 +309,30 @@ body {
 .escalationProblem {
   color: var(--ds-tone-danger-fg);
 }
+/* Done without a pull request's confirmation: what stays, what does not happen, where the task goes. */
+.confirmList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+}
+.confirmList li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--ds-space-8);
+}
+.confirmList li > svg {
+  color: var(--ds-color-text-muted);
+  align-self: center;
+}
+.confirmList code {
+  overflow-wrap: anywhere;
+  color: var(--ds-color-text-primary);
+}
 .escalationCriteria {
   margin: 0;
   padding-left: var(--ds-space-16);
@@ -1854,6 +1878,19 @@ body {
   gap: var(--ds-space-8) var(--ds-space-12);
 }
 /* General feedback's way in: a quiet line that opens the same editor a line comment uses. */
+/* The Feedback tab while a delivery is held before its pull request: where its words go (nowhere on GitHub). */
+.feedbackBeforePR {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+.feedbackBeforePR > svg {
+  flex: none;
+  color: var(--ds-color-text-muted);
+  align-self: center;
+}
 .feedbackGeneral {
   display: flex;
   flex-wrap: wrap;

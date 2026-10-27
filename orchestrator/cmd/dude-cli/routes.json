@@ -254,6 +254,7 @@
   "POST /v1/tasks/:id/decider": "task decider",
   "POST /v1/tasks/:id/deliver": ["task create", "task start"],
   "POST /v1/tasks/:id/done": "task done",
+  "POST /v1/tasks/:id/done-without-pull-request": "task done-without-pr",
   "POST /v1/tasks/:id/feedback/drafts": ["feedback draft", "feedback send"],
   "POST /v1/tasks/:id/feedback/submit": ["feedback send", "feedback submit"],
   "POST /v1/tasks/:id/preview": "task preview",
@@ -288,5 +289,6 @@
   "PUT /v1/projects/:id/secrets/:name/recipients": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "PUT /v1/projects/:id/servers/:name": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "PUT /v1/tasks/:id/auto-start": "task auto-start",
-  "PUT /v1/tasks/:id/people": "task assign"
+  "PUT /v1/tasks/:id/people": "task assign",
+  "PUT /v1/tasks/:id/pull-request-choice": "task before-pr"
 }

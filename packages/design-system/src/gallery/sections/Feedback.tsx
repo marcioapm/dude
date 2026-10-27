@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { FeedbackCodeAnchor, RunDiffFile } from "@dude/domain";
+import { PULL_REQUEST_CHOICE, PULL_REQUEST_CHOICES, type FeedbackCodeAnchor, type RunDiffFile } from "@dude/domain";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { LiveDiff, type DiffRange } from "../../components/LiveDiff.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
@@ -8,6 +8,8 @@ import {
   CommentEditor, DraftsTray, FeedbackCard, SubmitFeedbackDialog, type FeedbackCardItem, type FeedbackThreadEntry,
 } from "../../components/FeedbackCard.tsx";
 import { Icon } from "../../icons/index.tsx";
+import { ReadyForReview, ReviewEvidence, type EvidenceChip } from "../../components/ReadyForReview.tsx";
+import { BeforePullRequestFact } from "../../components/BeforePullRequestFact.tsx";
 
 const ana = { id: "p_ana", name: "Ana Ribeiro" };
 const marcio = { id: "p_marcio", name: "Márcio Martins" };
@@ -45,6 +47,20 @@ const item = (over: Partial<FeedbackCardItem>): FeedbackCardItem => ({
   body: "A map keyed by tool call id is right, but nothing removes an entry for a call that **never** gets an update.", routed: "to the fixer at work", ...over,
 });
 const ok = async () => true;
+
+const HELD_LINE = "Review, simplify and the browser test passed. No pull request is open yet.";
+const WEB = { name: "web", head: "dude/web-142-saved-filters", base: "main", additions: 412, deletions: 38 };
+const API = { name: "api", head: "dude/web-142-saved-filters", base: "main", additions: 96, deletions: 4 };
+const CHIPS: EvidenceChip[] = [
+  { id: "reviewers", icon: "check", ok: true, label: <><b>3 reviewers</b> passed</>, name: "Reviewers passed: correctness, security, design", onOpen: () => {} },
+  { id: "findings", icon: "list-check", label: <><b>2 low findings</b> left for you</>, name: "2 low findings left for you, on Findings", onOpen: () => {} },
+  { id: "tester", icon: "play", ok: true, label: <><b>Browser test</b> passed · video 1:42</>, name: "Browser test passed, video 1:42, on Files", onOpen: () => {} },
+  { id: "preview", icon: "globe", label: <><b>Preview</b> · open with commenting</>, name: "Open the preview with commenting", href: "https://web-142.preview.example.com/" },
+];
+const FACT_OPTIONS = [
+  { value: "project", label: `Project default (${PULL_REQUEST_CHOICE.open.label})`, description: PULL_REQUEST_CHOICE.open.hint },
+  ...PULL_REQUEST_CHOICES.map((value) => ({ value, label: PULL_REQUEST_CHOICE[value].label, description: PULL_REQUEST_CHOICE[value].hint })),
+];
 
 /** A picture as the overlay draws one: the element alone on white, outlined. */
 const BUTTON_SHOT = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="212" height="76" viewBox="0 0 212 76">
@@ -129,6 +145,68 @@ export function FeedbackSection({ mode }: { readonly mode: PaneMode }) {
               imageUrl={BUTTON_SHOT} onSaveDraft={ok} onDelete={ok} onJump={() => {}} />
             <Label>An earlier attempt's: to read</Label>
             <FeedbackCard item={item({ status: "open" })} readOnly />
+            <Label>Open while a delivery is held before its pull request: it holds the pull request's opening (its status tooltip)</Label>
+            <FeedbackCard item={item({ status: "open", anchor: { kind: "general" } })} holds="pull request" onReply={ok} onResolve={ok} />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="fb-held" title="ReadyForReview and ReviewEvidence" note="A delivery held before its pull request, in the task's notices: one row per repository, what was checked, and the owner's answers. Attention while the owner can act, info while a fixer works on their feedback, neutral for anyone else. The evidence chips are buttons to a tab, a link out to the preview, or plain words.">
+        <Panes mode={mode}>
+          <Col>
+            <Label>Yours, one repository</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} evidence={<ReviewEvidence chips={CHIPS} />} state={{ kind: "yours" }} heldMs={22 * 60_000}
+              onChanges={() => {}} onOpen={() => {}} onDraft={() => {}} onFeedback={() => {}} onDoneWithout={() => {}} />
+            <Label>Yours, two repositories</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB, API]} evidence={<ReviewEvidence chips={CHIPS} />} state={{ kind: "yours" }} heldMs={22 * 60_000}
+              onChanges={() => {}} onOpen={() => {}} onDraft={() => {}} onFeedback={() => {}} onDoneWithout={() => {}} />
+            <Label>Yours, round 2</Label>
+            <ReadyForReview line="Your 2 items are resolved; review, simplify and the browser test passed again. No pull request is open yet."
+              repositories={[WEB, API]} evidence={<ReviewEvidence chips={CHIPS} />} state={{ kind: "yours" }} heldMs={3 * 60_000}
+              round={{ n: 2, commitsSince: 3, onRange: () => {}, settled: [
+                { id: "s1", text: "General: Saved filters should be per project, not global.", commit: "9a1c07e" },
+                { id: "s2", text: <><code>SavedFilters.tsx</code>: Don't write to localStorage as well as the API.</>, commit: "e42b9d0" }] }}
+              onChanges={() => {}} onOpen={() => {}} onDraft={() => {}} onFeedback={() => {}} onDoneWithout={() => {}} />
+            <Label>Someone else's, with Write feedback</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} evidence={<ReviewEvidence chips={CHIPS} />} state={{ kind: "waiting", on: "Sam" }} heldMs={22 * 60_000}
+              onFeedback={() => {}} />
+            <Label>Someone else's, nothing to write</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} state={{ kind: "waiting", on: "Sam" }} />
+            <Label>Sent back, one item</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} evidence={<ReviewEvidence chips={CHIPS} />}
+              state={{ kind: "sent-back", items: 1, openRefused: "1 feedback item still open" }} onFeedback={() => {}} />
+            <Label>Sent back, two items</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB, API]} evidence={<ReviewEvidence chips={CHIPS} />}
+              state={{ kind: "sent-back", items: 2, openRefused: "2 feedback items still open" }} onFeedback={() => {}} />
+            <Label>Sent back, every item handled: the round is reviewed and tested again</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} evidence={<ReviewEvidence chips={CHIPS} />}
+              state={{ kind: "sent-back", items: 0, openRefused: "Being reviewed and tested again" }} onFeedback={() => {}} />
+            <Label>Someone else's, while the owner's feedback is with a fixer</Label>
+            <ReadyForReview line={HELD_LINE} repositories={[WEB]} state={{ kind: "waiting", on: "Sam", sentBack: true }} onFeedback={() => {}} />
+            <Label>An adopted branch: its own head name, no evidence</Label>
+            <ReadyForReview line={<>Review is done on <span className="ds-mono">stack/top</span>. No pull request is open yet.</>}
+              repositories={[{ name: "web-console", head: "stack/top", base: "stack/base", additions: 31, deletions: 4 }]} state={{ kind: "yours" }}
+              onOpen={() => {}} onDraft={() => {}} onFeedback={() => {}} onDoneWithout={() => {}} />
+            <Label>A long branch name, as at 390px</Label>
+            <div style={{ maxWidth: 360 }}>
+              <ReadyForReview line={HELD_LINE} repositories={[{ ...WEB, head: "dude/web-142-saved-filters-on-the-board-with-sharing-by-link" }]}
+                evidence={<ReviewEvidence chips={CHIPS} />} state={{ kind: "yours" }} onOpen={() => {}} onDraft={() => {}} onFeedback={() => {}} onDoneWithout={() => {}} />
+            </div>
+            <Label>ReviewEvidence alone: buttons, a link out, and plain words</Label>
+            <ReviewEvidence chips={[...CHIPS, { id: "static", icon: "info", label: "Simplified · 4 files" }]} />
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="fb-fact" title="BeforePullRequestFact" note="Under a task's facts in the Overview rail: a compact Select for its owner with when it is read; disabled with the reason once a pull request is open; read as text, with whose it is, for anyone else.">
+        <Panes mode={mode}>
+          <Col style={{ maxWidth: 320 }}>
+            <Label>Editable, the project's default</Label>
+            <BeforePullRequestFact value="project" options={FACT_OPTIONS} state={{ kind: "editable" }} hint="Read when Deliver reaches the pull request." onValueChange={() => {}} />
+            <Label>Editable, Ask me first</Label>
+            <BeforePullRequestFact value="ask" options={FACT_OPTIONS} state={{ kind: "editable" }} hint="Read when Deliver reaches the pull request." onValueChange={() => {}} />
+            <Label>Locked: a pull request is open</Label>
+            <BeforePullRequestFact value="ask" options={FACT_OPTIONS} state={{ kind: "locked", reason: "The pull request is already open." }} />
+            <Label>Read-only, someone else's</Label>
+            <BeforePullRequestFact value="draft" options={FACT_OPTIONS} state={{ kind: "read-only", owner: "Sam" }} />
           </Col>
         </Panes>
       </Block>

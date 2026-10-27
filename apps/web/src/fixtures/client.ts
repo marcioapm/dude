@@ -27,7 +27,7 @@ import type { OpenSessionsList } from "@dude/domain";
 import type { ChatProvider, ChatRequestRow } from "@dude/domain";
 import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, type Artifact, type AttachmentLimits, type DeliveryFilter, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type StopRequest, type StopResult, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
+import { ApiClient, ApiError, READY_FOR_REVIEW_WAITING, type Artifact, type AttachmentLimits, type DeliveryFilter, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type StopRequest, type StopResult, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
@@ -95,6 +95,8 @@ const later = (fn: () => void, ms: number) => void setTimeout(fn, ms);
 
 /** The `dude.fixtures.run` states of agents' machine moves. */
 const MACHINE_RUNS: readonly string[] = ["raised", "refused-platform", "refused-largest", "refused-moves", "conductor", "session", "start-over"];
+/** The `dude.fixtures.run` states of a delivery held before its pull request. */
+const HELD_RUNS: readonly string[] = ["held", "held-other", "held-feedback", "held-round-2"];
 
 export class FixtureClient extends ApiClient {
   #scenario: ServerScenario;
@@ -137,8 +139,11 @@ export class FixtureClient extends ApiClient {
     if (as !== null && MACHINE_RUNS.includes(as)) this.#raise(as);
     if (as === "peers") this.#coordinate();
     if (as === "comment" || as === "comment-restart" || as === "comment-off") this.#commentable(as);
+    if (as !== null && HELD_RUNS.includes(as)) this.#hold(as);
     this.#nav = navigationFor(scenario);
     if (as === "asks") this.#nav = withViewerAsks(this.#nav);
+    if (this.#held) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e,
+      tasks: e.tasks.map((t) => (t.id === TASK_ID ? { ...t, heldForReview: true, waitingFor: READY_FOR_REVIEW_WAITING } : t)) })) }));
     // Waiting on a peer, the implementer's row says on whom, as the tree's read does.
     if (this.#peers) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e, tasks: e.tasks.map((t) => (t.id !== TASK_ID ? t : {
       ...t, runs: t.runs?.map((a) => ({ ...a, sessions: a.sessions.map((s) => (s.id === RUN_ID ? { ...s, activity: "Waiting on WC-212" } : s)) })) })) })) }));
@@ -333,6 +338,34 @@ export class FixtureClient extends ApiClient {
     this.#events = [...this.#events, { ...this.#events[0]!, cursor: 10_000, eventId: "evt_stalled", eventType: "run.stalled",
       occurredAt: at, runId: RUN_ID, actor: { type: "system", id: "dude" }, payload: { conducted: false, text: STALLED_TEXT } }];
   }
+
+  /**
+   * `dude.fixtures.run` = held | held-other | held-feedback | held-round-2:
+   * Deliver held before the pull request on Ask me first, for you, for
+   * another owner, sent back with your feedback, and back after it.
+   */
+  #hold(as: string) {
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    const head = "dude/wc-214-checkout-steps";
+    const hold = { round: as === "held-round-2" ? 2 : 1, commitsSince: as === "held-round-2" ? 3 : null, since: ago(22 * 60_000),
+      sentBack: as === "held-feedback",
+      repos: [{ name: "web", head, base: "main", additions: 412, deletions: 38 }, { name: "api", head, base: "main", additions: 96, deletions: 4 }] };
+    const feedback = (id: string, body: string, status: FeedbackItem["status"], resolvedCommit: string | null): FeedbackItem => ({
+      id, taskId: TASK_ID, attempt: 1, batchId: "fb_held", author: { id: YOU, name: PEOPLE[0]!.name }, body, anchor: { kind: "general" },
+      status, deliveredRunId: null, resolvedCommit, resolutionPending: false, outdated: false, routedTo: "workflow",
+      submittedAt: ago(15 * 60_000), createdAt: ago(16 * 60_000), updatedAt: ago(5 * 60_000), history: [] });
+    this.#held = true;
+    this.#task = { ...this.#task, status: as === "held-feedback" ? "running" : "awaiting_input", decider: "policy", source: null,
+      awaitingDecision: as === "held-feedback" ? null : { point: "before_pull_request" } as TaskDetail["awaitingDecision"],
+      pullRequestChoice: "ask", pullRequestOpened: false, hold,
+      ...(as === "held-other" ? { owner: { id: "u_ana", name: "Ana Ribeiro", photoUrl: null, online: true } } : {}) } as TaskDetail;
+    if (as === "held-feedback") this.feedbackItems.push(
+      feedback("fbk_h1", "Keep Invoice for annual plans only.", "delivered", null),
+      feedback("fbk_h2", "The step labels should match the funnel event names.", "delivered", null));
+    if (as === "held-round-2") this.feedbackItems.push(feedback("fbk_h1", "Keep Invoice for annual plans only.", "resolved", "9a1c07e55"));
+  }
+
+  #held = false;
 
   /**
    * `dude.fixtures.run` = refused: the implementer's `uv sync` failed on a
@@ -562,7 +595,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ blockedBy: [], blocks: [], related: [], duplicateOf: [], duplicatedBy: [], autoStart: null, owner: null });
   }
   override recentPullRequests() {
-    return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" ? [PULL_REQUEST] : [] });
+    return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" && !this.#held ? [PULL_REQUEST] : [] });
   }
   // No workflow waits in the mockups' world: the request is accepted and nothing changes.
   override resolvePullRequestConflicts(id: string): ReturnType<ApiClient["resolvePullRequestConflicts"]> {
@@ -586,7 +619,7 @@ export class FixtureClient extends ApiClient {
   }
   override listPullRequests(taskId: string) {
     if (this.#restarted) return Promise.resolve({ pullRequests: taskId === TASK_ID ? RESTARTED_PULL_REQUESTS : [] });
-    return Promise.resolve({ pullRequests: this.#scenario === "d" && taskId === TASK_ID ? [PULL_REQUEST] : [] });
+    return Promise.resolve({ pullRequests: this.#scenario === "d" && taskId === TASK_ID && !this.#held ? [PULL_REQUEST] : [] });
   }
   override getTask(id: string): Promise<TaskDetail> {
     return id === TASK_ID ? Promise.resolve(this.#task) : Promise.reject(new ApiError(404, "not_found", "No such task."));

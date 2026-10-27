@@ -451,6 +451,32 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   `requiredReviewers` run, else the first round's (`steps.gateReviewers`).
   The choice is kept in the Owned `reviewChoice` with the round's creation
   key and heads, so a replayed step at those heads creates the same round.
+- **Before the pull request** is the project's `pullRequest` policy (`open`,
+  the default; `draft`; `ask`), never the organisation's
+  (`ProjectOnlyPolicyKeys`: layer 0 drops it, the API refuses it), and a
+  task may override it (`tasks.pull_request_choice`, migration 203; NULL
+  is the project's). Only the task's owner changes it
+  (`SetPullRequestChoiceTx`, `task.pull_request_choice_changed`), and only
+  until a pull request of the attempt is on record. `openPullRequest` reads
+  it for the first pull request alone (`PullRequestChoiceAtOpening`; once
+  one is on record a retried opening follows its draft and never holds):
+  `draft` opens a draft; `ask` holds the delivery at the gate
+  the adopted branch uses (`ChoiceGate`, `parkAtGate`, task
+  `awaiting_input` "Ready for your review", `State.Hold` with round, heads,
+  commits since the owner last looked and per-repository +/- from GitHub's
+  compares). The hold takes `human.feedback`: open items start a fix round
+  (`feedbackAtGate`) that comes back to the hold at the new heads, and Open
+  or Draft is refused while any is open (`feedback_open`). Changing the
+  choice while held releases or re-reads it (`HeldByChoice`); heads that
+  moved under the hold ask again. **Done without a pull request**
+  (`DoneWithoutPullRequestTx`, owner only, refused once one is on record)
+  stops what runs, keeps the branch, records
+  `task.done_without_pull_request` and finishes the task `done` with
+  `nothing_to_merge`. Feedback at the hold never reaches GitHub. Under the
+  conductor the choice is not read: every conducted delivery enters the
+  gate (`GateRequired`, `ChoiceGate` false), the person answers Open or
+  Draft to its gate question, and the project's `draft` is not applied to
+  an Open there; `draft` and `ask` are Deliver's own.
 - **The PR loop** (`internal/prs`, `forge/classify.go`): a webhook says which
   PR changed; the orchestrator reads that PR, records what changed, and
   signals the workflow only for what the classifier deems actionable — a

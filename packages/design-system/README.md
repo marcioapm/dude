@@ -516,13 +516,27 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   A person's message read on the same resume stays their own turn.
 - **A decision with no agent to ask it** sits in the task's notices, in the
   escalation's grammar, not as a `QuestionCard`: a `QuestionCard` is a turn
-  and needs a transcript. An adopted branch reviewed under Deliver waits on
-  its owner before dude publishes it: an attention `Callout`, "**Open the
-  pull request?** Review is done on `stack/top`. dude opens its pull request
-  into `stack/base` once you say how.", branch and base in mono, then
-  **Open** (primary) and **Draft** (secondary). Only the owner is offered
-  them; anyone else reads "Waiting for Ana to decide.". With a conductor
-  deciding, the same question is its gate question in Chat.
+  and needs a transcript.
+- **A delivery held before its pull request** is `ReadyForReview`, in the
+  task's notices where an escalation would be, in its grammar. A project or
+  task on **Ask me first**, and every adopted branch, stops there once
+  review, simplify and the test pass: "**Ready for your review.** Review,
+  simplify and the browser test passed. No pull request is open yet." Then
+  one row per repository it would open (name, `head → base` in mono,
+  `DiffStat`, Changes), a `ReviewEvidence` row, and **Open pull request**
+  (primary), **Open as draft** (secondary), **Send feedback** (quiet) and,
+  at the row's end, **Done without a pull request** (quiet; it confirms
+  first). Only the owner is offered them. Anyone else reads "Waiting for
+  Sam…" on the neutral tone, with **Write feedback**. Feedback sent from the
+  hold turns it info: "**Sent back:** a fixer is working on your 2 items…".
+  The Open buttons stay drawn and refused with "2 feedback items still
+  open"; once every item is handled it says the round is being reviewed and
+  tested again, never "0 items". Anyone else, meanwhile, reads "**Sam's
+  feedback is with a fixer.**" on the neutral tone, with **Write feedback**
+  and no Open. Findings left for a person never refuse them. When the fix's round
+  passes, the panel is back: "Round 2 · after your feedback", "+3 commits
+  since you last looked", and each item it resolved with its commit. With a
+  conductor deciding, the same question is its gate question in Chat.
 
 ### A task's Chat (the conductor)
 
@@ -929,7 +943,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   named "Ways to pick it back up", each button beside one muted sentence
   saying what it does (its `aria-describedby`, `calloutActionLineId`); the
   pairs stack, button over sentence, on the callout's own width (a
-  container query), so a narrow main pane stacks them too. Each opens one `Dialog` whose
+  container query), so a narrow main pane stacks them too. A `Callout`'s
+  body is otherwise as wide as its words; with `CalloutActions` in it, or
+  with `fill` (a notice whose rows span it and whose last action sits at
+  the row's end, as `ReadyForReview`), it takes the callout's width. Each opens one `Dialog` whose
   `ChoiceList` holds all three, so the choice is made with what each keeps
   and throws away in view: under it, one line per thing the task has —
   conversation, workspace, branch, agent session (labelled "Session") —
@@ -1602,7 +1619,10 @@ here.
 - A page's own note: a settings page with its own audience (Memory: who
   may add, who may change) renders its own `SettingsNote`; the frame's
   default is for the rest. "From <organisation>" is `SettingSource`
-  wherever it appears, a table cell too.
+  wherever it appears, a table cell too. A setting with no organisation
+  value (a project's Before the pull request) is `SettingSource
+  source="default"`: "Default · Open it", with Reset once changed. It never
+  says "From" anything.
 - **ArtifactPreview** renders by kind: Markdown as `Markdown
   variant="document"`, text and JSON in mono (JSON pretty-printed when it
   parses, as typed when it does not — a half-written result is still worth
@@ -2537,6 +2557,36 @@ MarkdownCheatsheet.
   *People's feedback*).
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
+- **ReviewEvidence**: what was checked before a person decides, one chip
+  each on the active wash: "3 reviewers passed", "2 low findings left for
+  you", "Browser test passed · video 1:42", "Preview · open with
+  commenting". Each chip leads to where it is read: a tab (a button) or the
+  preview (a link, new tab). A passed check's glyph is in success ink, and
+  the words always say so. It is never a status: a failed check is not
+  drawn here, it is an escalation. Findings shown here are information and
+  never hold the pull request.
+- **ReadyForReview** — a delivery held before its pull request (see *Human
+  intervention*): `line`, `repositories` (one row each, a list named "What
+  would be opened", `→` read "into", each Changes named "Changes in web"),
+  `evidence`, `state` (`yours` on the attention tone, `sent-back` on info
+  with both Open buttons `RefusedButton`s whose reason is also a visible
+  line hidden from the accessibility tree; `items: 0` says the round is
+  being reviewed and tested again, `waiting` on neutral with no
+  Open or Done, and with `sentBack` "Sam's feedback is with a fixer"),
+  `round` (round 2 on: commits since `GateAt`, and what it resolved),
+  `heldMs`, and the owner's `onOpen`, `onDraft`, `onFeedback` and
+  `onDoneWithout` (only while `yours`; the app confirms first). Its
+  `Callout` is `fill`: the rows span the notice and Done without sits at
+  the row's end. Under 560px each repository's refs and Done without take
+  their own lines.
+- **BeforePullRequestFact**: a task's delivery choice that can still
+  change, under the task's facts in the Overview rail. The owner gets a
+  compact `Select` with when it is read ("Read when Deliver reaches the
+  pull request."). Once a pull request is open it is disabled, with the
+  reason under it: "The pull request is already open." Anyone else reads
+  the value as text, with "Only Sam can change it." A change is
+  acknowledged with a toast that says what Deliver will now do, never with
+  a banner.
 - **SessionHeader** — the transcript's header on its own, for an agent
   session whose views sit under it. `titleSelector` optionally wraps only the
   title, leaving owner/model/machine tips independent; standalone and
@@ -2919,6 +2969,8 @@ comments when opened there, never on the standalone Run page.
   both its sides.
 - **`FeedbackCard`** is one item: author, when, where its batch went, its
   status (`feedbackStatusSpec`: tone, glyph and words — never hue alone),
+  and what it holds (`holds`: the merge, or, while a delivery is held
+  before its pull request, its opening),
   what it is on (`FeedbackAnchorLine`), its words, its thread
   (`FeedbackThread`, on the thread's 2px bar) and the actions its status
   allows: Reply and Resolve while it needs handling; Reopen once answered

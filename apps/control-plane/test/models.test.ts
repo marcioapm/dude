@@ -65,7 +65,7 @@ beforeAll(async () => {
       ? Object.fromEntries(promptRoleSchema.options.map((role) => [role, "Built-in prompt"])) : {
       requiredReviewers: ["correctness"], alwaysReviewers: ["correctness"], nonProductPaths: [".github/**"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
       maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: true,
-      parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5,
+      parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5, pullRequest: "open",
     });
   } });
   process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${server.port}`;
