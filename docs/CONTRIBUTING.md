@@ -1134,25 +1134,30 @@ delivery handled twice makes nothing twice (`chat_requests` is unique per
 delivery). An install or a link is begun by a signed-in browser (an HttpOnly
 cookie whose hash the state holds) and finished only in that browser.
 
-**Why a request failed (`chat_requests.failure`, migration 214).** A failed
-request keeps its cause apart from the model's `reasoning`: the routing
-call's error (`the routing call failed: the LLM proxy answered 400: …`,
-the proxy key and the tier's header values redacted by
-`judge.Service.Structured`), the refusal of what it tried to make, the
+**Why a request failed (`chat_requests.failure` and `made_route`, migrations
+214 and 215).** A failed request keeps its cause apart from the model's
+`reasoning`: the routing call's error (`the routing call failed: the LLM
+proxy answered 400: …`), the refusal of what it tried to make, the
 provider's refusal of its reply (`its reply was not posted: slack
-chat.postMessage: invalid_arguments`, the bot token redacted by the Slack
-adapter's `scrub`), or giving up (`dude could not act on it: …`, `Slack did
-not answer after 6 tries`). Causes accumulate with `; ` in that order.
-`GET /v1/organization/chat/requests` (admins only) returns it as `failure`,
-redacted again against the installations' bot tokens and token shapes
-(`redactChatFailure`); a request that did not fail has `null`. Requests
-shows it as a muted danger line under the route, clipped past 140
-characters with the whole text in a tooltip and behind Show all, on the
-Requests page and a provider's recent requests. The route reads from the
-row's result: **Failed** when nothing was made, **Failed → Brainstorm**
-(the fallback session, or a refused reply after a brainstorm), **Failed →
-Task**, **→ Epic**, **→ Resume** or **→ Task link** when a refused reply or
-giving up kept what was made. The route filter's Failed lists them all.
+chat.postMessage: invalid_arguments`), or giving up (`dude could not act on
+it: …`, `Slack did not answer after 6 tries`). Causes accumulate with `; `
+in that order. The orchestrator is the one redactor: `judge.Service.Structured`
+redacts the proxy key and the tier's header values, the Slack adapter's
+`scrub` the bot token and app secrets, before anything is stored; `GET
+/v1/organization/chat/requests` (admins only) returns `failure` as stored,
+`null` when the request did not fail. A delivery retried across the deploy
+has its kept routing error redacted again before it is used. `made_route`
+is the route a failed request still made something as, set where it fails.
+Requests shows the cause as a muted danger line under the route, clipped
+past 140 characters with the whole text in a tooltip and behind Show all.
+The label is **Failed → <made>** only when a result exists, with **was X**
+whenever the asked route differs: a model resume that fell back to a
+brainstorm reads Failed → Brainstorm, was Resume; a bound thread's reply
+refused reads Failed → Task link. 215 backfills the last 30 days only from
+causes whose writer scrubbed them; a row whose routing call failed before
+214 shows Failed with no inline cause (its reasoning stays behind ⓘ), and a
+legacy row's `made_route` is set only where its result says it alone, else
+read from the result.
 
 **What routing reads (`chat/context.go`).** Thread mentions use `FetchThread`;
 top-level mentions use `FetchHistory`: at most 30 messages from the preceding
