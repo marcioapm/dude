@@ -133,6 +133,8 @@ export { AgentTools, ChipsInput, DayToggles, KindMark, ListSwitch, NextRuns, Own
   cityOf, cronOf, describeCron, repoFilterCount, repoGlob, scheduleOf } from "./Automations.tsx";
 export type { AgentTool, AgentToolUnavailable, AutomationKindName, RepoFilterValue, ScheduleMode } from "./Automations.tsx";
 export { ConditionRows, DeliveryVerdict, IncomingSummary, IncomingVerdictPanel, conditionWords } from "./Incoming.tsx";
+export { FeedDelivery } from "./FeedDelivery.tsx";
+export type { FeedDeliveryProps } from "./FeedDelivery.tsx";
 export type { ConditionOpName, ConditionResultMark, DeliveryVerdictValue, TriggerCondition } from "./Incoming.tsx";
 export { CodeWell } from "./CodeWell.tsx";
 export { PromptHistory } from "./PromptHistory.tsx";

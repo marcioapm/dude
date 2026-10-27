@@ -76,6 +76,7 @@ const ALLOWED: Record<string, Record<string, string>> = {
   "packages/design-system/src/components/EventRow.module.css": { ".row": "the event's tone", ".detail": "the event's tone" },
   "packages/design-system/src/components/ThinkingBlock.module.css": { ".body": "the thinking rail" },
   "packages/design-system/src/components/ToolCallCard.module.css": { ".preStderr": "stderr's tone", ".badExit .preStderr": "stderr's tone" },
+  "packages/design-system/src/components/FeedDelivery.module.css": { ".delivery": "the info rail: a delivery sent to the run" },
   "packages/design-system/src/primitives/Toast.module.css": { ".root": "the toast's tone" },
   "packages/design-system/src/components/Lifecycle.module.css": {
     ".live": "what a close stops, set apart from the decision on the sunken band",
