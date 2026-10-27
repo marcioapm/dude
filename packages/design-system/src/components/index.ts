@@ -235,6 +235,6 @@ export {
   RouteBadge, RoutingLine, providerGlyph,
 } from "./Chat.tsx";
 export type {
-  ChatProvider, ChatRoute, ConnectionCardProps, ExternalMessage, ExternalThreadProps, FactListProps, IdentityPairProps, InstructionLayer,
+  ChatMadeRoute, ChatProvider, ChatRoute, ConnectionCardProps, ExternalMessage, ExternalThreadProps, FactListProps, IdentityPairProps, InstructionLayer,
   InstructionStackProps, OriginFactProps, PromptTextProps, ProviderGlyphProps, ProviderListProps, RouteBadgeProps, RoutingLineProps,
 } from "./Chat.tsx";

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -75,5 +76,21 @@ func TestStructuredFailsClosedAndStillRecords(t *testing.T) {
 	down := setup(t, func(w http.ResponseWriter) { w.WriteHeader(http.StatusBadGateway) }, true)
 	if _, err := down.svc.Structured(context.Background(), down.org, routing); err == nil || len(down.calls(t)) != 1 {
 		t.Fatalf("a proxy error: %v", err)
+	}
+}
+
+// An unparseable answer echoing the proxy key: the error returned has the
+// key redacted from its text and is still ErrUnparseable.
+func TestStructuredRedactsItsErrorAndStillUnwraps(t *testing.T) {
+	const key = "sk-structured-key-0123456789"
+	w := setup(t, answering(`{"route":"`+key+`"}`), true)
+	w.svc.LLM.Key = key
+	ask := routing
+	ask.Parse = func(obj []byte) (any, Judgement, error) {
+		return nil, Judgement{}, fmt.Errorf("no such route in %s", obj)
+	}
+	_, err := w.svc.Structured(context.Background(), w.org, ask)
+	if !errors.Is(err, ErrUnparseable) || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "[REDACTED:DUDE_LLM_KEY]") {
+		t.Fatalf("err %v", err)
 	}
 }
