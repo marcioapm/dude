@@ -482,9 +482,44 @@ function ProjectChips({ label, chosen, all, canEdit, busy, testId, onChange }: {
 const ROUTE_WORD: Record<string, string> = {
   brainstorm: "Brainstorm", task: "Task", epic: "Epic", resume: "Resume", task_link: "Task link", clarify: "Clarify",
   channel_projects: "Channel projects",
-  not_connected: "Refused: not connected", not_member: "Refused: not a member", failed: "Failed → Brainstorm",
+  not_connected: "Refused: not connected", not_member: "Refused: not a member", failed: "Failed",
 };
 const EVERY = "__every__";
+
+/**
+ * What a failed request still made, from its result: a session is the
+ * brainstorm made instead (or the bound session it resumed), a task the one
+ * filed (or linked), an epic the one filed. Null when nothing was made.
+ */
+export function failedMade(r: Pick<ChatRequestRow, "route" | "askedRoute" | "result">): RouteView | null {
+  if (r.route !== "failed" || !r.result) return null;
+  switch (r.result.kind) {
+    case "session": return r.askedRoute === "resume" ? "resume" : "brainstorm";
+    case "task": return r.askedRoute === "task_link" ? "task_link" : "task";
+    case "epic": return "epic";
+  }
+}
+
+/** A failure's text past which the line is clipped, with the rest behind "Show all". */
+export const FAILURE_CLIP = 140;
+
+/** Why a failed request failed: one muted danger line under its route, the whole text on hover or on Show all. */
+function FailureLine({ failure }: { failure: string }) {
+  const [open, setOpen] = useState(false);
+  const long = failure.length > FAILURE_CLIP;
+  const shown = open || !long ? failure : `${failure.slice(0, FAILURE_CLIP - 1).trimEnd()}…`;
+  return (
+    <span className="chatRequestFailure" data-testid="chat-request-failure" data-open={open || !long}>
+      <Tooltip content={failure} disabled={!long || open}>
+        <span data-testid="chat-request-failure-text" tabIndex={long && !open ? 0 : undefined}>{shown}</span>
+      </Tooltip>
+      {long ? (
+        <TextButton onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="chat-request-failure-more">
+          {open ? "Show less" : "Show all"}</TextButton>
+      ) : null}
+    </span>
+  );
+}
 
 /** Every routed mention, from every provider. */
 function RequestsPage({ client, providers, onPage }: { client: ApiClient; providers: ChatProvider[]; onPage: (page: string) => void }) {
@@ -561,7 +596,8 @@ function RequestsTable({ client, providers, provider, route, limit, summary }: {
                 </Td>
                 <Td wrap>
                   <span className="chatRequestRoute">
-                    <RouteBadge route={routeView(r.route)} fallback={r.askedRoute ? routeView(r.askedRoute) : null} />
+                    <RouteBadge route={routeView(r.route)} fallback={r.askedRoute ? routeView(r.askedRoute) : null} made={failedMade(r)} />
+                    {r.route === "failed" && r.failure ? <FailureLine failure={r.failure} /> : null}
                     {r.route === "task_link" || (r.route === "resume" && r.confidence === null) ? <span className="muted">Bound thread · no model</span> : null}
                     {r.sharedAdded.length || r.sharedSkipped.length ? <span className="muted">Shared with {r.sharedAdded.length}{r.sharedSkipped.length ? ` · ${r.sharedSkipped.length} not connected` : ""}</span> : null}
                     {r.route === "clarify" ? <span className="muted">{r.rounds} {r.rounds === 1 ? "round" : "rounds"} asked</span> : null}

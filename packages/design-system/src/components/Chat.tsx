@@ -60,23 +60,26 @@ export const ROUTE_SPEC: Record<ChatRoute, { readonly tone: ToneName; readonly i
   channel_projects: { tone: "neutral", icon: "pin", label: "Channel projects", subtle: false },
   not_connected: { tone: "neutral", icon: "link", label: "Refused: not connected", subtle: true },
   not_member: { tone: "danger", icon: "lock", label: "Refused: not a member", subtle: true },
-  failed: { tone: "danger", icon: "alert", label: "Failed → Brainstorm", subtle: true },
+  failed: { tone: "danger", icon: "alert", label: "Failed", subtle: true },
 };
 
 export interface RouteBadgeProps {
   readonly route: ChatRoute;
   /** What the model answered when dude went another way: "was Task". */
   readonly fallback?: ChatRoute | null | undefined;
+  /** A failed request's: what dude made instead, as "Failed → Brainstorm"; none when nothing was made. */
+  readonly made?: ChatRoute | null | undefined;
   readonly size?: "sm" | "md" | undefined;
 }
 
 /** Where a mention went: a Badge with the route's glyph and word, and what it was asked as when dude overrode it. */
-export function RouteBadge({ route, fallback, size = "sm" }: RouteBadgeProps) {
+export function RouteBadge({ route, fallback, made, size = "sm" }: RouteBadgeProps) {
   const spec = ROUTE_SPEC[route];
+  const label = route === "failed" && made && made !== route ? `${spec.label} → ${ROUTE_SPEC[made].label}` : spec.label;
   return (
     <span className={styles["route"]} data-route={route}>
-      <Badge tone={spec.tone} emphasis={spec.subtle ? "subtle" : "tinted"} icon={spec.icon} size={size}>{spec.label}</Badge>
-      {fallback && fallback !== route ? <span className={styles["was"]}>was {ROUTE_SPEC[fallback].label}</span> : null}
+      <Badge tone={spec.tone} emphasis={spec.subtle ? "subtle" : "tinted"} icon={spec.icon} size={size}>{label}</Badge>
+      {fallback && fallback !== route && fallback !== made ? <span className={styles["was"]}>was {ROUTE_SPEC[fallback].label}</span> : null}
     </span>
   );
 }
