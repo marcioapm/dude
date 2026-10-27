@@ -45,6 +45,8 @@ func TestTheOwnersPickOfANotedWaiverDecidesItWithTheNote(t *testing.T) {
 	w.must(task, "ask_person", notedWaiver)
 	q := w.conductorQuestion(task)
 	label := "Waive: " + waiverNote
+	// The decision keeps what was asked beside the note the owner picked.
+	note := "The conductor proposed: The checks report holds a failure I believe predates the change. Waive it, or send it back?\nThe owner answered: " + label
 	if got := w.str(`SELECT items->0->'choices'->0->>'label' FROM questions WHERE id = $1`, q); got != label {
 		t.Fatalf("the choice reads %q, want %q", got, label)
 	}
@@ -52,11 +54,11 @@ func TestTheOwnersPickOfANotedWaiverDecidesItWithTheNote(t *testing.T) {
 		t.Fatalf("the answer: %d %v", status, out)
 	}
 	d := w.decided(task)
-	if d == nil || d["action"] != delivery.ActionWaive || d["note"] != waiverNote || d["questionId"] != q {
+	if d == nil || d["action"] != delivery.ActionWaive || d["note"] != note || d["questionId"] != q {
 		t.Fatalf("decided %v", d)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'action' = 'waive'
-		AND payload->>'note' = $3`, task, delivery.EvRunChecksDecided, waiverNote); n != 1 {
+		AND payload->>'note' = $3`, task, delivery.EvRunChecksDecided, note); n != 1 {
 		t.Errorf("%d checks decisions waiving with the note", n)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided' AND payload->>'action' = 'waive'
@@ -65,6 +67,38 @@ func TestTheOwnersPickOfANotedWaiverDecidesItWithTheNote(t *testing.T) {
 		t.Errorf("%d task.decided events attributed to the owner's pick", n)
 	}
 	w.until("the implementer's work published", func() bool { return w.implementerPushes(task) == 1 })
+}
+
+// The owner's pick of the conductor's noted retry of a stuck review starts
+// the next fix with that note as the person's direction, recorded with what
+// the conductor asked.
+func TestTheOwnersPickOfANotedStuckRetryDirectsTheNextFix(t *testing.T) {
+	w, task := stuck(t)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	const direction = "change only the greeting's wording, not its structure"
+	// A model the scripted agent does not play: its prompt is dude's.
+	w.onModel("fixer", "llm-fix")
+	fixes := w.phaseRuns(task, "fix")
+	w.must(task, "ask_person", `{"questions":[{"question":"Stuck on the finding. Retry with a narrower fix?",
+		"choices":[{"note":"`+direction+`"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+	if status, out := w.answerAs(ana, task, "Retry: "+direction); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	d := w.decided(task)
+	if note, _ := d["note"].(string); d == nil || d["action"] != "retry" ||
+		!strings.Contains(note, "The conductor proposed: Stuck on the finding. Retry with a narrower fix?") || !strings.Contains(note, direction) {
+		t.Fatalf("decided %v", d)
+	}
+	w.until("the next fix round", func() bool { return w.phaseRuns(task, "fix") == fixes+1 })
+	// The newest fixer's prompt, or the round's message when it goes on
+	// from the last fixer.
+	fixer := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' ORDER BY created_at DESC, id DESC LIMIT 1`, task)
+	w.until("the fixer submitted", func() bool { return w.specOfRun(fixer).Workload.Prompt != "" })
+	told := w.specOfRun(fixer).Workload.Prompt + strings.Join(w.lux.Inputs(w.str(`SELECT COALESCE(lux_run_id, '') FROM runs WHERE id = $1`, fixer)), "\n")
+	if !strings.Contains(told, direction) {
+		t.Fatalf("the next fixer %s is not told the direction:\n%s", fixer, told)
+	}
 }
 
 // A waiver offered with no note, or a note on an action that needs none,
@@ -116,7 +150,7 @@ func TestOnAnOwnerlessTaskOnlyAnAdminsPickOfANotedWaiverDecides(t *testing.T) {
 	if status, out := w.answerAs(cy, task, "Waive: "+waiverNote); status != 200 {
 		t.Fatalf("the admin's answer: %d %v", status, out)
 	}
-	if d := w.decided(task); d == nil || d["action"] != delivery.ActionWaive || d["note"] != waiverNote {
+	if d := w.decided(task); d == nil || d["action"] != delivery.ActionWaive || !strings.HasSuffix(d["note"].(string), "The owner answered: Waive: "+waiverNote) {
 		t.Fatalf("the admin's pick decided %v", d)
 	}
 }

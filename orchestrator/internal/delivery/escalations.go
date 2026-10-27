@@ -385,11 +385,15 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	note := escalationNote(prompt, answer, "")
 	if reason := d.State.Escalation.Reason; NeedsNote(reason, actions[i]) {
 		// Only the conductor's proposed note, shown in the label the owner
-		// picked, is a reason or direction a pick carries.
+		// picked, is a reason or direction a pick carries. The decision
+		// records it with what was asked; an amend's note is the criteria
+		// text that replaces the named ones, so it is the note alone.
 		if len(items) != 1 || i >= len(items[0].Choices) || items[0].Choices[i].Note == "" {
 			return nil
 		}
-		note = items[0].Choices[i].Note
+		if actions[i] == "amend" {
+			note = items[0].Choices[i].Note
+		}
 		ok, err := mayDecideNoted(ctx, tx, taskID, reason, actions[i], person)
 		if err != nil || !ok {
 			return err
@@ -608,8 +612,9 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	}
 	decisionNote := escalationNote(prompt, answer, note)
 	if NeedsNote(d.State.Escalation.Reason, action) {
-		// Required direction comes from the owner's text, never a choice
-		// label or the conductor's proposal.
+		// decide_escalation takes required direction from the owner's own
+		// text, never a choice's label or the conductor's proposal: a pick
+		// of a noted choice is decided at the answer (EscalationAnswerTx).
 		var options []string
 		_ = json.Unmarshal(rawOpts, &options)
 		var items []ItemAnswer
