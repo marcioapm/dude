@@ -447,7 +447,8 @@ func (c Cancelled) readsLast() bool {
 // readCancelled reads an agent's or command's lux output past the run's
 // cursor into its activity and log_tail, and moves the cursor past it: a
 // resumed session's next run starts reading there. Fire already ended the
-// feed; ending it again flushes and aborts only what these frames opened.
+// feed; ending it again, even with no frames, flushes and aborts what these
+// frames or a follow pass in flight at the cancel opened.
 func (r *Runner) readCancelled(ctx context.Context, c Cancelled) error {
 	a := c.automation
 	var cursor, prior string
@@ -459,7 +460,7 @@ func (r *Runner) readCancelled(ctx context.Context, c Cancelled) error {
 		return err
 	}
 	_, log, newCursor, _, frames, err := r.readOutput(ctx, a.Kind, c.LuxRunID, cursor, busy, prior)
-	if err != nil || len(frames.list) == 0 {
+	if err != nil {
 		return err
 	}
 	return r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {

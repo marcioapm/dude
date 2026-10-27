@@ -1521,6 +1521,67 @@ func TestAutomationConcurrencyCancelReadsAnAgentsLastFrames(t *testing.T) {
 	}
 }
 
+// A follow pass in flight when its run is cancelled opens a call the
+// cancel's own end never saw; the cancel's final read, finding no frames
+// past that pass, still ends it as aborted.
+func TestAutomationCancelEndsACallAFollowerOpened(t *testing.T) {
+	h := newHarness(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_follower_call", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "cancel", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
+	h.deliver("fc-1", "push", push)
+	h.until("the agent's busy is read", func() bool {
+		r := h.runs("aut_follower_call")
+		if len(r) != 1 || r[0].Status != "running" || r[0].LuxRunID == "" {
+			return false
+		}
+		var c string
+		_ = h.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_cursor, '') FROM automation_runs WHERE id = $1`, r[0].ID).Scan(&c)
+		return c != ""
+	})
+	first := h.runs("aut_follower_call")[0]
+	h.runner.Wait()
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Working on it."}})
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "follower-call", "title": "bash", "kind": "execute",
+		"status": "in_progress", "rawInput": map[string]any{"command": "make"}})
+
+	// The follow pass waits at its first lifecycle event, after the records.
+	var holding atomic.Bool
+	held, release := make(chan struct{}), make(chan struct{})
+	h.fake.BeforeEvent(func(runID string, _ int64, _ string) {
+		if runID == first.LuxRunID && holding.CompareAndSwap(false, true) {
+			close(held)
+			<-release
+		}
+	})
+	defer h.fake.BeforeEvent(nil)
+	ctx := context.Background()
+	if _, err := h.runner.followRunning(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-held
+	h.runner.EndCancelled(ctx, h.fireNow("aut_follower_call", "fc-2").Cancelled)
+	close(release)
+	h.runner.Wait()
+
+	var called, aborted, completed int
+	var open string
+	if err := h.owner.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE event_type = 'agent.tool.called' AND payload->>'callId' = 'follower-call'),
+		count(*) FILTER (WHERE event_type = 'agent.tool.completed' AND payload->>'callId' = 'follower-call' AND payload->>'status' = 'aborted'),
+		count(*) FILTER (WHERE event_type = 'agent.tool.completed' AND payload->>'callId' = 'follower-call')
+		FROM events WHERE automation_run_id = $1`, first.ID).Scan(&called, &aborted, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.owner.QueryRow(ctx, `SELECT COALESCE(feed_state->'open', '[]'::jsonb)::text FROM automation_runs WHERE id = $1`, first.ID).Scan(&open); err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 || completed != 1 || aborted != 1 || open != "[]" {
+		t.Fatalf("cancelled run's follower call: called=%d completed=%d aborted=%d open=%s", called, completed, aborted, open)
+	}
+}
+
 // A run's list learns of a run it has not read from the ledger: Fire
 // records the queued run, and its start records it started, each naming
 // the automation.
