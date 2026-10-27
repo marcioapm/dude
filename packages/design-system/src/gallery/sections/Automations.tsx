@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Block, Col, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import {
+  AgentTools,
   ChipsInput,
   DayToggles,
   KindMark,
@@ -29,6 +30,16 @@ const GROUPS = [
 const ANA = { id: "per_ana", name: "Ana Ribeiro" };
 const ZONES = ["UTC", "Europe/Lisbon", "Europe/Berlin", "America/New_York"];
 const NEXT = [new Date("2026-10-24T02:00:00Z"), new Date("2026-10-25T03:00:00Z"), new Date("2026-10-26T03:00:00Z")];
+const TOOLS = [
+  { name: "post_to_chat", fresh: true, what: "Posts a message (Slack mrkdwn) to a channel through Acme's Slack installation: a channel the dude bot is in; invite it with /invite @dude." },
+  { name: "create_task", what: "Files a task in a project it works in; a person decides when it starts." },
+  { name: "github_comment", what: "Comments on an issue or pull request as the dude App, 20 a run at most." },
+  { name: "github_search", what: "Searches issues and pull requests, 30 results at most." },
+  { name: "github_pull_request", what: "Reads one pull request: description, files, reviews." },
+  { name: "github_issue", what: "Reads one issue and its comments." },
+  { name: "github_check_log", what: "Reads a failed check's log." },
+];
+const NO_SLACK = { post_to_chat: { why: "Slack is not connected for Acme", fix: { label: "Connect Slack in Organisation settings → Chat", href: "#chat" } } };
 
 function RepoFilterDemo({ initial, disabled }: { readonly initial: RepoFilterValue; readonly disabled?: boolean }) {
   const [v, setV] = useState(initial);
@@ -141,6 +152,20 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <Label>390px</Label>
             <div style={{ width: 390 }}>
               <RepoFilterDemo initial={{ mode: "except", repos: ["acme/sandbox-*"] }} />
+            </div>
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="au-tools" title="AgentTools" note="What an automation's agent can call: wrench, mono name, New when fresh, its one line; an unavailable tool keeps its row and says why and the fix.">
+        <Panes mode={mode}>
+          <Col>
+            <Label>The automation tool set</Label>
+            <AgentTools tools={TOOLS} />
+            <Label>post_to_chat unavailable: Slack is not connected</Label>
+            <AgentTools tools={TOOLS} unavailable={NO_SLACK} />
+            <Label>390px</Label>
+            <div style={{ width: 390 }}>
+              <AgentTools tools={TOOLS} unavailable={NO_SLACK} />
             </div>
           </Col>
         </Panes>

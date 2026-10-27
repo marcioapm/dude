@@ -7,6 +7,8 @@ import { Segmented } from "./ScreenHeader.tsx";
 import { Input } from "../primitives/Input.tsx";
 import { NumberInput } from "../primitives/NumberInput.tsx";
 import { Select } from "../primitives/Select.tsx";
+import { Badge } from "../primitives/Badge.tsx";
+import { Callout } from "../primitives/Layout.tsx";
 import type { Person } from "../util/viewTypes.ts";
 import styles from "./Automations.module.css";
 // ListSwitch is the settings Switch without its label row: one look, one stylesheet.
@@ -447,6 +449,56 @@ export function SchedulePicker({ cron, tz, onChange, zones, next, problem, disab
       )}
       {problem ? <span className={styles["problem"]} role="alert">{problem}</span> : null}
       {next}
+    </div>
+  );
+}
+
+/** One tool an automation's agent can call: its name, its one line, and whether it is new. */
+export interface AgentTool {
+  readonly name: string;
+  readonly what: ReactNode;
+  readonly fresh?: boolean | undefined;
+}
+
+/** Why a tool cannot work here, and the link that fixes it. */
+export interface AgentToolUnavailable {
+  readonly why: ReactNode;
+  readonly fix: { readonly label: string; readonly href: string };
+}
+
+/**
+ * The tools an automation's agent can call: a wrench, the mono name, an
+ * info "New" badge when `fresh`, and its one line, in two columns that
+ * stack under 400px of the list's own width. An unavailable tool keeps its
+ * row, with an attention Callout under it saying why, that runs calling it
+ * fail on the call, and the fix as a link.
+ */
+export function AgentTools({ tools, unavailable }: {
+  readonly tools: readonly AgentTool[];
+  readonly unavailable?: Readonly<Record<string, AgentToolUnavailable>> | undefined;
+}) {
+  return (
+    <div className={styles["toolsBox"]}>
+      <ul className={styles["tools"]} aria-label="The agent's tools" data-testid="agent-tools">
+        {tools.map((t) => {
+          const off = unavailable?.[t.name];
+          return (
+            <li key={t.name} className={styles["tool"]} data-tool={t.name} data-unavailable={off ? "true" : undefined}>
+              <span className={styles["toolName"]}>
+                <Icon name="wrench" size={12} className={styles["kindIcon"]} />
+                <code className="ds-mono">{t.name}</code>
+                {t.fresh ? <Badge size="sm" tone="info">New</Badge> : null}
+              </span>
+              <span className={styles["toolWhat"]}>{t.what}</span>
+              {off ? (
+                <Callout tone="attention" className={styles["toolOff"]} data-testid="tool-unavailable">
+                  <b>{off.why}.</b> Runs that call it fail on the call. <a href={off.fix.href}>{off.fix.label}</a>
+                </Callout>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

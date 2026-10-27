@@ -516,6 +516,24 @@ export interface AutomationRunDetail extends AutomationRun {
   containerStoppedAt: string | null;
   stopReason: "idle" | "error" | "aborted" | null;
   requests: AutomationRunRequest[];
+  /** The calls its agent made to dude's tools, oldest first. */
+  toolCalls: AutomationToolCall[];
+  /** The post_to_chat refusal the orchestrator failed the run on (its event id); null for a run that did not fail on one. */
+  failedCallId: string | null;
+}
+
+/** One call an automation run's agent made to a dude tool, as the run's ledger has it. */
+export interface AutomationToolCall {
+  id: string;
+  tool: string;
+  at: string;
+  status: "completed" | "failed";
+  /** Its arguments, redacted; a post's text is not repeated here. */
+  args: Record<string, unknown>;
+  durationMs: number | null;
+  error: string | null;
+  /** A post_to_chat that went: the channel as people read it ("#engineering"), its id, the message's ts and link. */
+  posted: { channel: string; channelId: string; ts: string; permalink: string } | null;
 }
 
 /** Run now: nothing on a schedule; a past delivery or a written test event on GitHub events. */

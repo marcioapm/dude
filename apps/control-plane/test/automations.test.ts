@@ -345,6 +345,73 @@ describe("runs", () => {
     expect((await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_nope`)).status).toBe(404);
   });
 
+  test("a run's detail lists its agent's tool calls: a post with its channel and link, a refused post with its words, never a post's text", async () => {
+    const { body: a } = await create("ana", { name: "Weekly PR digest" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_d', ${ORG}, ${a.id}, 'succeeded', 'schedule')`;
+    const ev = (id: string, type: string, at: string, payload: Record<string, unknown>) =>
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+        VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_d', 'orchestrator', ${at}::timestamptz, 'arn_d', ${{ ...payload, automationRunId: "arn_d" }})`;
+    await ev("evt_d1", "agent.tool.dude", "2026-10-23T15:00:05Z", { tool: "github_comment", arguments: { issue: 12, body: "Looks good" }, result: {} });
+    await ev("evt_d2", "agent.tool.attempted", "2026-10-23T15:03:12Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" } });
+    await ev("evt_d3", "slack.message.posted", "2026-10-23T15:03:12.640Z", { channel: "#engineering", channelId: "C1", ts: "1.000100", permalink: "https://acme.slack.com/archives/C1/p1" });
+    await ev("evt_d4", "agent.tool.dude", "2026-10-23T15:03:12.640Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" },
+      result: { withheld: true }, attempted: true });
+    // A post Slack refused spent its attempt first: timed from it.
+    await ev("evt_d4a", "agent.tool.attempted", "2026-10-23T15:03:59.700Z", { tool: "post_to_chat", arguments: { channel: "#random", text: "x" } });
+    await ev("evt_d5", "slack.message.refused", "2026-10-23T15:04:00Z", { tool: "post_to_chat", channel: "#random",
+      error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude" });
+    // Another run's event is not this run's, whatever its payload says: calls are read by run_id.
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      VALUES ('evt_x1', ${ORG}, 'agent.tool.dude', 'agent', 'arn_x', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_x',
+        ${{ tool: "github_search", arguments: {}, result: {}, automationRunId: "arn_d" }})`;
+    const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_d`));
+    expect(run.toolCalls).toEqual([
+      { id: "evt_d1", tool: "github_comment", at: "2026-10-23T15:00:05.000Z", status: "completed", args: { issue: 12 }, durationMs: null, error: null, posted: null },
+      { id: "evt_d4", tool: "post_to_chat", at: "2026-10-23T15:03:12.000Z", status: "completed", args: { channel: "#engineering" }, durationMs: 640,
+        error: null, posted: { channel: "#engineering", channelId: "C1", ts: "1.000100", permalink: "https://acme.slack.com/archives/C1/p1" } },
+      { id: "evt_d5", tool: "post_to_chat", at: "2026-10-23T15:03:59.700Z", status: "failed", args: { channel: "#random" }, durationMs: 300,
+        error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude", posted: null },
+    ]);
+    expect(run.failedCallId).toBeNull();
+  });
+
+  test("a run failed on a post without Slack names the call it failed on; a refusal the agent could fix names none", async () => {
+    const { body: a } = await create("ana", { name: "Digest without Slack" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
+      ('arn_ns', ${ORG}, ${a.id}, 'failed', 'post_to_chat failed: Slack is not connected for Acme', 'schedule'),
+      ('arn_fx', ${ORG}, ${a.id}, 'failed', 'the agent gave up', 'schedule')`;
+    const ev = (id: string, run: string, at: string, payload: Record<string, unknown>) =>
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+        VALUES (${id}, ${ORG}, 'slack.message.refused', 'agent', ${run}, 'orchestrator', ${at}::timestamptz, ${run}, ${{ ...payload, automationRunId: run }})`;
+    await ev("evt_ns1", "arn_ns", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
+      reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app" });
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      VALUES ('evt_ns2', ${ORG}, 'agent.tool.dude', 'agent', 'arn_ns', 'orchestrator', '2026-10-23T15:04:00Z', 'arn_ns',
+        ${{ tool: "github_search", arguments: { q: "is:pr" }, result: {}, automationRunId: "arn_ns" }})`;
+    await ev("evt_fx1", "arn_fx", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#nowhere", error: "there is no channel #nowhere" });
+    // Refused for want of Slack, then posted once it was connected: the run did not fail on the refusal.
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
+      ('arn_lt', ${ORG}, ${a.id}, 'failed', 'the agent gave up', 'schedule')`;
+    await ev("evt_lt1", "arn_lt", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
+      reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme" });
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      VALUES ('evt_lt2', ${ORG}, 'slack.message.posted', 'agent', 'arn_lt', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_lt',
+        ${{ channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p2", automationRunId: "arn_lt" }})`;
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_lt`))).failedCallId).toBeNull();
+    // The orchestrator records the refusal it failed the run on; the page names that one.
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      VALUES ('evt_ns3', ${ORG}, 'automation.run.failed_on_post', 'system', 'dude', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_ns',
+        ${{ automationId: a.id, automationRunId: "arn_ns", eventId: "evt_ns1" }})`;
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_ns`))).failedCallId).toBe("evt_ns1");
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_fx`))).failedCallId).toBeNull();
+    // Failed for its own reason (timed out), with a not-connected refusal and no post: it did not fail on the refusal.
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
+      ('arn_to', ${ORG}, ${a.id}, 'failed', 'timed out after 30 minutes', 'schedule')`;
+    await ev("evt_to1", "arn_to", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
+      reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme" });
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_to`))).failedCallId).toBeNull();
+  });
+
   test("Run now, test-event evaluation and Start fresh go to the orchestrator as the person; members who neither edit nor own it are refused", async () => {
     const { body: a } = await create("ana", { name: "Runnable" });
     asked.length = 0;

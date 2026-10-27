@@ -2032,3 +2032,49 @@ body {
   flex-direction: column;
   gap: var(--ds-space-12);
 }
+/* An automation run's detail: its sections spaced as a settings page's. */
+.automationRunDetail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-24);
+}
+.automationRunCost {
+  color: var(--ds-color-text-muted);
+}
+.automationToolsCard {
+  width: 100%;
+}
+/* A run's log: each call's time beside its card; the time stacks over the card below 720px. */
+.automationToolCalls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.automationToolCall {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  column-gap: var(--ds-space-12);
+  align-items: start;
+}
+.automationToolCallAt {
+  padding-top: var(--ds-space-6);
+}
+.automationToolCallPosted {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin: 0;
+}
+@media (max-width: 719.98px) {
+  .automationToolCall {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--ds-space-2);
+  }
+  .automationToolCallAt {
+    padding-top: 0;
+  }
+}

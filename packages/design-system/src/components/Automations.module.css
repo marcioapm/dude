@@ -275,3 +275,51 @@
 .day:disabled {
   cursor: not-allowed;
 }
+
+/* AgentTools: name and line in two columns, stacked when the list's own
+   width is narrow (a card beside two sidebars, a phone); an unavailable
+   tool's callout spans both. */
+.toolsBox {
+  container-type: inline-size;
+  min-width: 0;
+}
+.tools {
+  list-style: none;
+  margin: 0;
+  padding: var(--ds-space-8) var(--ds-space-12);
+  display: grid;
+  grid-template-columns: minmax(12rem, 2fr) 3fr;
+  column-gap: var(--ds-space-16);
+  row-gap: var(--ds-space-6);
+  font-size: var(--ds-text-sm);
+}
+.tool {
+  display: contents;
+}
+.toolName {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  color: var(--ds-color-text-primary);
+  overflow-wrap: anywhere;
+}
+.toolWhat {
+  min-width: 0;
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-xs);
+  line-height: var(--ds-leading-snug);
+}
+.toolOff {
+  grid-column: 1 / -1;
+  font-size: var(--ds-text-xs);
+}
+@container (max-width: 400px) {
+  .tools {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--ds-space-2);
+  }
+  .toolWhat {
+    margin-bottom: var(--ds-space-6);
+  }
+}

@@ -3023,10 +3023,10 @@ Settings → *Project secrets* (`#s-secrets`), *OverriddenBy / SecretName*
 
 `src/components/Automations.tsx`: `KindMark`, `ScopeChip`, `OwnerMark`,
 `TriggerSummary`, `SessionMark`, `ListSwitch`, `NextRuns`, `DayToggles`,
-`SchedulePicker`, `ChipsInput`, `RepoFilterField`, and the helpers
+`SchedulePicker`, `ChipsInput`, `RepoFilterField`, `AgentTools`, and the helpers
 `describeCron`, `scheduleOf`, `cronOf`, `repoGlob`, `repoFilterCount`,
 `cityOf`. Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
-`#au-schedule`, `#au-chips`, `#au-repo-filter`), in both themes and
+`#au-schedule`, `#au-chips`, `#au-repo-filter`, `#au-tools`), in both themes and
 densities. No tone of their own: an automation's state is its runs'
 (`StatusMark`), so `paletteDistance` is untouched.
 
@@ -3077,6 +3077,11 @@ densities. No tone of their own: an automation's state is its runs'
   globs (`acme/svc-*`), suggested from the projects' repositories grouped by
   project. Under it a status line: "Matches N of M repositories" (", and
   any added later" on All).
+- **AgentTools** (`tools`, `unavailable?`): the tools an automation's agent
+  can call. Each is a wrench glyph, the mono name, an info "New" badge when
+  `fresh`, and its one line, in two columns that stack when it is under
+  400px of its own width. An unavailable tool keeps its row and gets an
+  attention `Callout` under it with the reason and the fix as a link.
 - **Settings rows stack below 720px.** `SettingRow` puts its label over its
   control and `SettingsHeader`'s actions wrap under the title, so a page's
   Run now and switch never squeeze its title on a phone.
