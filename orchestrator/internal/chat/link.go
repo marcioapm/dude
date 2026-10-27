@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -43,31 +44,38 @@ type linkCandidate struct {
 
 func (c linkCandidate) label() string { return clip(c.Key+" · "+c.Name, 75) }
 
-// linkCandidates are the projects offered to a brainstorm with none linked,
-// in order and once each: what the conversation is usually about, where its
-// earlier requests went (most first), then the routing answer's
-// maybe_projects. Only projects of w, which never holds a hidden one.
+// linkCandidates are the projects offered to a brainstorm with none linked:
+// the routing answer's maybe_projects, in its order, as Decide kept them.
+// The conversation's hints are the model's context, never offered by code.
 func linkCandidates(w World, maybe []Project) []linkCandidate {
+	var keys []string
+	for _, p := range maybe {
+		keys = append(keys, p.ID)
+	}
+	return candidatesOf(w, keys)
+}
+
+// hintCandidates stand in for the model's judgement when the routing call
+// gave no answer: what the conversation is usually about, then where its
+// earlier requests went (most first).
+func hintCandidates(w World) []linkCandidate {
+	keys := slices.Clone(w.Usual)
+	for _, h := range w.Learned {
+		keys = append(keys, h.Key)
+	}
+	return candidatesOf(w, keys)
+}
+
+// candidatesOf are the projects of w named by keys (a key or an id), in
+// order, once each, at most linkCandidatesMax. w never holds a hidden one.
+func candidatesOf(w World, keys []string) []linkCandidate {
 	var out []linkCandidate
-	add := func(p Project, ok bool) {
-		if !ok || len(out) == linkCandidatesMax {
-			return
-		}
-		for _, c := range out {
-			if c.ID == p.ID {
-				return
-			}
+	for _, key := range keys {
+		p, ok := w.project(key)
+		if !ok || len(out) == linkCandidatesMax || slices.ContainsFunc(out, func(c linkCandidate) bool { return c.ID == p.ID }) {
+			continue
 		}
 		out = append(out, linkCandidate{ID: p.ID, Key: p.Key, Name: p.Name})
-	}
-	for _, key := range w.Usual {
-		add(w.project(key))
-	}
-	for _, h := range w.Learned {
-		add(w.project(h.Key))
-	}
-	for _, p := range maybe {
-		add(w.project(p.ID))
 	}
 	return out
 }

@@ -448,7 +448,9 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 			// No answer, a proxy error or invalid JSON: a brainstorm.
 			r.Route, r.Reasoning = RouteFailed, "the routing call failed: "+got.Failed
 			r.Failure = r.Reasoning
-			r.candidates = linkCandidates(world, nil)
+			// With no model judgement to follow, the conversation's hints
+			// are the best guess at what to offer.
+			r.candidates = hintCandidates(world)
 			return s.make(ctx, org, p, inst, who, r, h, Decision{Route: RouteBrainstorm, Title: clip(trimmed(m.Text), 80)}, nil)
 		}
 		a = *got.Answer
