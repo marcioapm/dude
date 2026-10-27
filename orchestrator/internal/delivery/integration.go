@@ -115,6 +115,7 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		}
 		st.Heads[repo.Name] = merged
 		st.Integration = serverMerged(head, merged)
+		st.Integration.ServerMerge = true
 		err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, e := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID, ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: map[string]any{"action": "merge-base", "repo": repo.Name, "base": base, "head": merged}})
 			return e
@@ -145,6 +146,10 @@ type Integration struct {
 	// Before the pull request opened (syncBeforePR): a person's wait goes
 	// on to open it, not back to waiting on it.
 	BeforePR bool `json:"beforePr,omitempty"`
+	// GitHub answered the merge of BaseHead into Head it made before the
+	// pull request (MergeBase): the head is that clean merge and nothing
+	// else. A head found moved (adopted) is not one.
+	ServerMerge bool `json:"serverMerge,omitempty"`
 	// Reads of the pull request after the integration published that
 	// found GitHub had not worked its mergeability out yet.
 	Polls int `json:"polls,omitempty"`
