@@ -827,3 +827,40 @@ describe("the sessions list in a background tab", () => {
     }
   });
 });
+
+describe("navigation and an automation run's activity", () => {
+  test("a run's log lines, cut marker, exit, deliveries and end do not reload the tree; a task's change does", async () => {
+    class Counting extends FixtureClient {
+      reads = 0;
+      override navigation() {
+        this.reads++;
+        return super.navigation();
+      }
+    }
+    const client = new Counting("a");
+    const page = await app(`#/project/${PROJECT.id}`, client);
+    await until(() => page.querySelector("[aria-label$=' board']"), "the board");
+    // The first read and any the mount's own events caused have landed.
+    await settle(600);
+    const first = client.reads;
+    expect(first).toBeGreaterThan(0);
+    const { ORG } = await import("../src/fixtures/data.ts");
+    const { emit } = await import("../src/fixtures/client.ts");
+    const automation = (eventType: string, payload: Record<string, unknown>) => emit({ eventType, occurredAt: new Date().toISOString(),
+      organizationId: ORG.id, projectId: PROJECT.id, taskId: null, runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_quiet",
+      actor: { type: "system", id: "arn_quiet" }, source: "runner", correlationId: null, causationId: null, payload });
+    await act(async () => {
+      for (let i = 0; i < 20; i++) automation("automation.log.line", { stream: "stdout", text: `line ${i}` });
+      automation("automation.log.cut", { lines: 2000 });
+      automation("automation.log.exited", { exitCode: 1 });
+      automation("automation.delivery.sent", { deliveryId: "dlv_q", source: "incoming", summary: "resolved" });
+      automation("automation.run.ended", { status: "failed", reason: "exit 1" });
+    });
+    // Past the 400 ms reload delay.
+    await settle(900);
+    expect(client.reads).toBe(first);
+    await emitForTest(EventTypes.TaskUpdated, { changed: { title: "x" } });
+    await settle(900);
+    expect(client.reads).toBe(first + 1);
+  });
+});
