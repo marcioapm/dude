@@ -35,7 +35,7 @@ type AutomationFeed struct {
 	s *Syncer
 	// A command's or server's output line not yet ended by a newline, per stream.
 	partial map[string]string
-	// Per dude tool, the cursor of the last of its records joined to a completion.
+	// Consumed dude record ids; values are sentinels retained in feed_state.
 	joined map[string]int64
 	logs   bool
 	// A server's log: the newest line time recorded, and how many lines at it.
@@ -92,26 +92,38 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 var dudeTools = map[string]bool{"create_task": true, "github_search": true, "github_issue": true, "github_pull_request": true,
 	"github_check_log": true, "github_comment": true, "post_to_chat": true}
 
-// joinDudeRecord puts dude's record of one of its tools on the harness's
-// completion of the call, as payload.dude {eventId, result, posted, error}.
-// The tool server knows a call by its MCP request, not by the harness's
-// call id, so a completion takes the oldest record of its tool not yet
-// taken: the server answers before the harness reports the call done, so
-// the record is in by then, and calls of one tool end in the order the
-// server answered them.
+// joinDudeRecord matches the tool and exact JSON arguments; MCP request ids
+// are not harness call ids. Consumed record ids survive out-of-order completions.
 func (f *AutomationFeed) joinDudeRecord(ctx context.Context, tx pgx.Tx, payload map[string]any) error {
 	name, _ := payload["tool"].(string)
 	tool := strings.TrimPrefix(name, "dude_")
 	if !dudeTools[tool] || payload["status"] == "aborted" {
 		return nil
 	}
-	var id, typ string
-	var cursor int64
+	var input json.RawMessage
+	if err := tx.QueryRow(ctx, `SELECT payload->'input' FROM events
+		WHERE automation_run_id=$1 AND event_type='agent.tool.called' AND payload->>'callId'=$2
+		ORDER BY cursor DESC LIMIT 1`, f.t.run.ID, payload["callId"]).Scan(&input); err != nil {
+		if db.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	// Some harnesses encode their input as a JSON string.
+	var encoded string
+	if json.Unmarshal(input, &encoded) == nil {
+		input = json.RawMessage(encoded)
+	}
+	if !json.Valid(input) {
+		return nil
+	}
+	used := append([]string{}, slices.Collect(maps.Keys(f.joined))...)
+	var id string
 	var p map[string]any
-	err := tx.QueryRow(ctx, `SELECT id, event_type, cursor, payload FROM events
-		WHERE automation_run_id = $1 AND cursor > $2 AND payload->>'tool' = $3
-		  AND (event_type = 'agent.tool.dude' OR event_type = 'slack.message.refused')
-		ORDER BY cursor LIMIT 1`, f.t.run.ID, f.joined[tool], tool).Scan(&id, &typ, &cursor, &p)
+	err := tx.QueryRow(ctx, `SELECT id, payload FROM events
+		WHERE automation_run_id=$1 AND event_type='agent.tool.dude'
+		AND payload->>'tool'=$2 AND payload->'arguments'=$3::jsonb
+		AND NOT (id = ANY($4::text[])) ORDER BY cursor LIMIT 1`, f.t.run.ID, tool, input, used).Scan(&id, &p)
 	if db.IsNotFound(err) {
 		return nil
 	}
@@ -119,28 +131,21 @@ func (f *AutomationFeed) joinDudeRecord(ctx context.Context, tx pgx.Tx, payload 
 		return err
 	}
 	dude := map[string]any{"eventId": id}
-	if typ == "slack.message.refused" {
-		dude["error"] = p["error"]
-		payload["status"] = "error"
-	} else if r, ok := p["result"]; ok {
-		dude["result"] = r
-	}
-	if tool == "post_to_chat" && typ == "agent.tool.dude" {
-		var posted map[string]any
-		err := tx.QueryRow(ctx, `SELECT payload FROM events WHERE automation_run_id = $1 AND event_type = 'slack.message.posted'
-			AND cursor > $2 AND cursor < $3 ORDER BY cursor DESC LIMIT 1`, f.t.run.ID, f.joined[tool], cursor).Scan(&posted)
-		if err != nil && !db.IsNotFound(err) {
-			return err
-		}
-		if posted != nil {
-			dude["posted"] = map[string]any{"channel": posted["channel"], "channelId": posted["channelId"], "ts": posted["ts"],
-				"permalink": posted["permalink"]}
+	if failure, _ := p["error"].(string); failure != "" {
+		dude["error"], payload["status"] = failure, "error"
+	} else {
+		dude["result"] = p["result"]
+		if tool == "post_to_chat" {
+			dude["posted"] = p["result"]
+			if p["posted"] != nil {
+				dude["posted"] = p["posted"]
+			}
 		}
 	}
 	if f.joined == nil {
 		f.joined = map[string]int64{}
 	}
-	f.joined[tool] = cursor
+	f.joined[id] = 1
 	payload["dude"] = dude
 	return nil
 }

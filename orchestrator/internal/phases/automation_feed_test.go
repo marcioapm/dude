@@ -115,7 +115,7 @@ func TestPostToChatsCompletionCarriesThePermalink(t *testing.T) {
 			('evt_p_'||$1, $1, 'slack.message.posted', 'arn_'||$1, 'agent', 'a', 'control-plane',
 			 '{"tool":"post_to_chat","channel":"#engineering","channelId":"C1","ts":"1.2","permalink":"https://acme.slack.com/archives/C1/p12"}')`,
 		`INSERT INTO events (id, organization_id, event_type, automation_run_id, actor_type, actor_id, source, payload) VALUES
-			('evt_d_'||$1, $1, 'agent.tool.dude', 'arn_'||$1, 'agent', 'a', 'control-plane', '{"tool":"post_to_chat","result":{"channel":"#engineering"}}')`,
+			('evt_d_'||$1, $1, 'agent.tool.dude', 'arn_'||$1, 'agent', 'a', 'control-plane', '{"tool":"post_to_chat","arguments":{"channel":"#engineering","text":"Digest"},"result":{"channel":"#engineering","permalink":"https://acme.slack.com/archives/C1/p12"}}')`,
 	} {
 		if _, err := w.owner.Exec(context.Background(), q, w.run.Org); err != nil {
 			t.Fatal(err)
@@ -136,6 +136,59 @@ func TestPostToChatsCompletionCarriesThePermalink(t *testing.T) {
 	posted, _ := dude["posted"].(map[string]any)
 	if posted["permalink"] != "https://acme.slack.com/archives/C1/p12" || posted["channel"] != "#engineering" || dude["eventId"] != "evt_d_"+w.run.Org {
 		t.Fatalf("completion: %v", done)
+	}
+}
+
+func TestDudeRecordsJoinArgumentsNotCompletionOrder(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	ctx := context.Background()
+	for _, v := range []struct{ id, text, failure string }{{"refused", "bad", "Name a channel"}, {"first", "one", ""}, {"second", "two", ""}} {
+		p, _ := json.Marshal(map[string]any{"tool": "post_to_chat", "arguments": map[string]any{"text": v.text}, "error": v.failure, "posted": map[string]any{"permalink": "https://example.com/" + v.id}})
+		if _, err := w.owner.Exec(ctx, `INSERT INTO events (id, organization_id, event_type, automation_run_id, actor_type, actor_id, source, payload) VALUES ($1,$2,'agent.tool.dude',$3,'agent','a','agent',$4)`, "evt_"+v.id+w.run.Org, w.run.Org, a.ref.ID, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := func(id, text string) map[string]any {
+		return map[string]any{"type": "acp.tool_call", "data": map[string]any{"toolCallId": id, "status": "in_progress", "title": "post_to_chat", "rawInput": map[string]any{"text": text}}}
+	}
+	end := func(id string) map[string]any {
+		return map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": id, "status": "completed", "title": "post_to_chat"}}
+	}
+	a.feed(start("aborted", "one"))
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		if err := f.End(ctx, tx, "Stopped: the run was cancelled."); err != nil {
+			return err
+		}
+		return f.Save(ctx, tx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.feed(start("missing", "no record"), end("missing"), start("r", "bad"), end("r"), start("a", "one"), start("b", "two"), end("b"), end("a"))
+	got := map[string]map[string]any{}
+	for _, e := range a.events() {
+		if e.Type == evToolCompleted {
+			got[e.Payload["callId"].(string)] = e.Payload
+		}
+	}
+	if got["aborted"]["dude"] != nil || got["aborted"]["status"] != "aborted" {
+		t.Fatalf("aborted call: %v", got["aborted"])
+	}
+	if got["missing"]["dude"] != nil {
+		t.Fatalf("missing call consumed a record: %v", got["missing"])
+	}
+	for call, record := range map[string]string{"r": "refused", "a": "first", "b": "second"} {
+		d, _ := got[call]["dude"].(map[string]any)
+		if d["eventId"] != "evt_"+record+w.run.Org {
+			t.Fatalf("%s: %v", call, got[call])
+		}
+		if call == "r" && (got[call]["status"] != "error" || d["error"] != "Name a channel") {
+			t.Fatalf("refusal: %v", got[call])
+		}
 	}
 }
 

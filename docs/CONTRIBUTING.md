@@ -926,9 +926,11 @@ their creator.
   turn state, resume timing, failing a turn — are the automations loop's.
   What it holds between batches is `automation_runs.feed_state`. A
   completion of one of dude's tools carries the tool server's record as
-  `dude {eventId, result, posted, error}` (each completion takes the oldest
-  record of its tool not yet taken: the server answers before the harness
-  reports the call done); a refused post's completion is `error`. When the
+  `dude {eventId, result, posted, error}`. Records match the tool and exact
+  normalized JSON arguments, with consumed record ids kept independently
+  of completion order. MCP request ids are not harness call ids; calls
+  without matching arguments never consume a record. Refusals carry their
+  arguments too; a refused post's completion is `error`. When the
   lux Run ends, a call still open is completed `aborted` with a `note`
   ("Stopped by the time limit."). A command's stdout and stderr become
   `automation.log.line {stream, text}` (one a line, cut at 4 KB) and its

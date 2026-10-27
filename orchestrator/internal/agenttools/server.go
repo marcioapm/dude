@@ -672,7 +672,26 @@ const (
 // call runs a tool and records the call in the ledger, in the same
 // transaction as what the tool did (for a tool split by outside, the
 // transaction recording what it did outside).
-func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
+func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (outcome json.RawMessage, callErr error) {
+	// Refusals roll back the tool transaction; automation feeds still need
+	// an argument-bearing record for that call, including early refusals.
+	defer func() {
+		if c.AutomationID == "" || callErr == nil {
+			return
+		}
+		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			input := args
+			if len(input) == 0 {
+				input = json.RawMessage("{}")
+			}
+			_, err := ledger.Append(ctx, tx, c.event(EventType, map[string]any{
+				"tool": t.name, "arguments": input, "error": callErr.Error(), "attempted": true,
+			}))
+			return err
+		}); err != nil {
+			s.Log.Error("recording automation tool error", "error", err)
+		}
+	}()
 	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if c.AutomationID != "" {
 			var live bool
