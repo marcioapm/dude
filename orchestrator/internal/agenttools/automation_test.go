@@ -3,6 +3,8 @@ package agenttools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -120,5 +122,65 @@ func TestAutomationToolsScopeAndLifecycle(t *testing.T) {
 		if code, _ := f.post(t, token, "github_comment", `{"body":"Ended"}`); code != 401 {
 			t.Fatalf("ended %s: %d", status, code)
 		}
+	}
+}
+
+// failingForges fails as the database would, with text that is not the agent's to see.
+type failingForges struct{}
+
+func (failingForges) For(context.Context, string) (*forge.GitHub, error) {
+	return nil, errors.New(`ERROR: relation "forge_secret_canary" does not exist (SQLSTATE 42P01)`)
+}
+
+// automationRun is a running automation run with its tool token, on srv.
+func automationRun(t *testing.T, srv *agenttools.Server) (*fixture, string) {
+	t.Helper()
+	f := setupWith(t, srv)
+	token, hash := agenttools.NewToken()
+	person := "person_" + f.org
+	mustExec(t, f.owner, `INSERT INTO people (id, organization_id, name, role) VALUES ($1,$2,'Ana','admin')`, person, f.org)
+	mustExec(t, f.owner, `INSERT INTO automations (id, organization_id, project_id, name, kind, owner_id, trigger) VALUES ('aut_rec',$1,$2,'Rec','agent',$3,'{"kind":"schedule","cron":"0 * * * *","tz":"UTC"}')`, f.org, f.project, person)
+	scope := agenttools.AutomationScope{ProjectID: f.project, OwnerID: person, Repos: []string{"acme/web"}, EventRepo: "acme/web", EventNumber: 7}
+	mustExec(t, f.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source, mcp_token_hash, tools_scope) VALUES ('arn_rec',$1,'aut_rec','running','schedule',$2,$3)`, f.org, hash, scope)
+	return f, token
+}
+
+// A call that failed for a reason other than a refusal is recorded on the
+// run's activity as "internal error": the failure's own text stays in the log.
+func TestAnAutomationCallsInternalErrorKeepsItsTextOffTheRun(t *testing.T) {
+	f, token := automationRun(t, &agenttools.Server{Forges: failingForges{}})
+	if status, _ := f.post(t, token, "github_comment", `{"body":"Findings"}`); status != 500 {
+		t.Fatalf("comment: %d", status)
+	}
+	var said string
+	var leaked int
+	if err := f.owner.QueryRow(context.Background(), `SELECT
+		(SELECT payload->>'error' FROM events WHERE automation_run_id = 'arn_rec' AND event_type = $1 AND payload->>'tool' = 'github_comment'),
+		(SELECT count(*) FROM events WHERE organization_id = $2 AND payload::text LIKE '%forge_secret_canary%')`,
+		agenttools.EventType, f.org).Scan(&said, &leaked); err != nil {
+		t.Fatal(err)
+	}
+	if said != "internal error" || leaked != 0 {
+		t.Fatalf("recorded error %q, events carrying the database's text %d", said, leaked)
+	}
+}
+
+// A call refused for the run's 60 calls a minute writes no record of
+// itself: those records are not counted, so the limit would not bound them.
+func TestAnAutomationCallPastTheMinutesLimitWritesNothing(t *testing.T) {
+	f, token := automationRun(t, &agenttools.Server{})
+	mustExec(t, f.owner, `INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, automation_run_id, payload)
+		SELECT 'evt_busy' || i, $1, $2, 'agent', 'arn_rec', 'orchestrator', 'arn_rec', '{"tool":"github_search"}' FROM generate_series(1, 60) i`,
+		f.org, agenttools.EventType)
+	for range 3 {
+		if status, out := f.post(t, token, "create_task", `{"title":"Too fast","goal":"The 61st call this minute."}`); status != 422 ||
+			!strings.HasPrefix(fmt.Sprint(out["error"]), "too many calls: at most 60 a minute") {
+			t.Fatalf("the 61st: %d %v", status, out)
+		}
+	}
+	var records int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE automation_run_id = 'arn_rec' AND event_type = $1
+		AND payload->>'attempted' = 'true'`, agenttools.EventType).Scan(&records); err != nil || records != 0 {
+		t.Fatalf("records of refused calls: %d %v", records, err)
 	}
 }

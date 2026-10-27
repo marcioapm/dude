@@ -682,12 +682,24 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		if c.AutomationID == "" || callErr == nil {
 			return
 		}
+		// A call refused for the run's call budget writes nothing: the
+		// budget would not bound those writes, as attempted records are not counted.
+		var refused refusal
+		isRefusal := errors.As(callErr, &refused)
+		if isRefusal && refused.limited {
+			return
+		}
+		// Only a refusal's own words reach the run's page; other errors carry database and internal text.
+		said := "internal error"
+		if isRefusal {
+			said = callErr.Error()
+		}
 		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 			input := args
 			if len(input) == 0 {
 				input = json.RawMessage("{}")
 			}
-			payload := map[string]any{"tool": t.name, "arguments": input, "error": callErr.Error(), "attempted": true}
+			payload := map[string]any{"tool": t.name, "arguments": input, "error": said, "attempted": true}
 			if refusalID != "" {
 				payload["refusalEventId"] = refusalID
 			}
@@ -895,9 +907,9 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	limit := t.perRun
 	switch {
 	case recent >= callsPerMinute:
-		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
+		return refuseLimited(rTooManyCallsAtMostMinute, callsPerMinute)
 	case limit > 0 && sameTool >= limit:
-		return refuse(rLimitedCallsInRunThisRun, tool, limit)
+		return refuseLimited(rLimitedCallsInRunThisRun, tool, limit)
 	}
 	return nil
 }
@@ -922,6 +934,8 @@ type refusal struct {
 	blocked *delivery.BlockedError
 	// A start refused as archived or closed: its reason.
 	lifecycle string
+	// Refused for the run's call budget (withinLimits and post_to_chat's own counts).
+	limited bool
 }
 
 type refusedEvent struct {
@@ -932,6 +946,11 @@ type refusedEvent struct {
 func (r refusal) Error() string { return r.msg }
 
 func refuse(format string, a ...any) error { return refusal{msg: fmt.Sprintf(format, a...)} }
+
+// refuseLimited is refuse for a call past the run's budget.
+func refuseLimited(format string, a ...any) error {
+	return refusal{msg: fmt.Sprintf(format, a...), limited: true}
+}
 
 // refuseRecorded is refuse with the event that records the refusal.
 func refuseRecorded(typ string, payload map[string]any, msg string) error {

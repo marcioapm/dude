@@ -137,7 +137,7 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		// checkPost refuses it, under the run's lock.
 		return textChecked{}
 	case recent >= callsPerMinute:
-		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
+		return refuseLimited(rTooManyCallsAtMostMinute, callsPerMinute)
 	}
 	shown := "#" + strings.TrimPrefix(channel, "#")
 	target := postTarget{inst: inst, provider: p, channelID: channel, channelName: shown}
@@ -187,6 +187,7 @@ func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) 
 		if unconnectedOrg != "" {
 			recorded = notConnected(in.Channel, unconnectedOrg)
 		}
+		recorded.limited = refused.limited
 		return out, recorded
 	}
 	return out, err
@@ -252,7 +253,7 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 		return out, "", err
 	}
 	if made >= postsPerRun {
-		return out, "", refuse(rPostPerRun, postsPerRun)
+		return out, "", refuseLimited(rPostPerRun, postsPerRun)
 	}
 	switch target := c.env.prepared.(type) {
 	case error:
