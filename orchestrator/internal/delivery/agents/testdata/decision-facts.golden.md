@@ -14,6 +14,10 @@ test run_t failed: criteria [1 3], 2 blocking findings of the tester's; test fix
 
 test run_t: every criterion passed or was settled by a person.
 
+## merge-not-retested
+
+GitHub merged main into the task branch in api before the pull request; the merge was not tested again because it touched none of the task's files (3 paths), and test run_t's verdicts stand. The pull request's CI checks the merge.
+
 ## nothing-to-add
 
  Nothing to add: the work it continues is reviewed as it is.

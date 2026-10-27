@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -200,6 +201,14 @@ func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st 
 	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		if err := carryGateOverMergeTx(ctx, tx, sc.WorkflowRunID, st, pre); err != nil {
+			return err
+		}
+		// News for a live conductor, held for its next note (heldWakePrefix):
+		// it never starts or resumes one.
+		if _, err := tx.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
+			SELECT $1, $2, $3, 'checkout', $4, $5 WHERE EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $3 AND `+LiveConductor+`)
+			ON CONFLICT (task_id, key) DO NOTHING`, ids.New("cwk"), sc.OrganizationID, st.TaskID,
+			heldWakePrefix+"merge:"+i.pair(), mergeNotRetestedLine(i.Repo, i.Base, prev.ID, len(m.Merged))); err != nil {
 			return err
 		}
 		return emitTx(ctx, tx, sc.OrganizationID, st, EvTestSkipped, map[string]any{"fromRunId": prev.ID,

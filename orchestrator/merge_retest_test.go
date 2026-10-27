@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -70,6 +71,21 @@ func TestADraftOpensAtTheMergedHeadWithoutAnotherTestWhenMainTouchedNoneOfTheTas
 		AND payload->'paths' = '["target/OTHER.md"]'::jsonb AND payload->'heads'->>'target' = $4`,
 		task, delivery.EvTestSkipped, delivery.MergeUntouchedWhy, head); n != 1 {
 		t.Errorf("%d skips naming the merge's path at the merged head, want 1", n)
+	}
+	test := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'test'`, task)
+	body := w.gh.Pulls()[0].Body
+	for _, want := range []string{"Not tested again after the merge of the target branch: it touched none of the task's files; these verdicts are test " + test + "'s.", "- **pass** — it greets"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the pull request's description lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Stale") {
+		t.Errorf("the description calls the verdict the merge carried stale:\n%s", body)
+	}
+	// The conductor hears it with its next note.
+	if line := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'base-moved:merge:%'`, task); !strings.Contains(line,
+		"not tested again because it touched none of the task's files (1 paths), and test "+test+"'s verdicts stand") {
+		t.Errorf("the conductor's line: %q", line)
 	}
 }
 
