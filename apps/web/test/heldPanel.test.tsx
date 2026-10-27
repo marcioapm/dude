@@ -170,6 +170,19 @@ describe("a task held on Ask me first", () => {
     expect(header).toBe("Needs you");
   });
 
+  test("under the conductor, its gate is the conductor's: no held panel, no ready-for-review or fixing mark", async () => {
+    for (const extra of [{ decider: "conductor" as const },
+      { decider: "conductor" as const, status: "running" as const, awaitingDecision: null, hold: { ...HOLD, sentBack: true } }]) {
+      const page = await taskPage(new Held(atHold(extra)));
+      await act(async () => settle());
+      expect(page.querySelectorAll("[data-testid=ready-for-review]").length).toBe(0);
+      const header = text(page.querySelector("[data-testid=header-status]"));
+      expect(header).not.toContain("Ready for your review");
+      expect(header).not.toContain("Fixing your feedback");
+      for (const unmount of mounted.splice(0)) await unmount();
+    }
+  });
+
   test("anyone else, while the owner's feedback is with a fixer, waits with Write feedback and no Open", async () => {
     const client = new Held(atHold({ status: "running", awaitingDecision: null, hold: { ...HOLD, sentBack: true },
       owner: { id: "u_sam", name: "Sam Lee", photoUrl: null, online: false } }));
