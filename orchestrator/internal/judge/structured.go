@@ -117,3 +117,25 @@ func redactedErr(red *redact.Redactor, err error) error {
 	}
 	return err
 }
+
+// Redact is text with the proxy key and the organisation's judgement tier's
+// header values redacted, as Structured redacts its error: for an error
+// text stored before Structured did. With no tier readable, only the key.
+func (s Service) Redact(ctx context.Context, org, text string) string {
+	var headers map[string]string
+	var red *redact.Redactor
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		if tier, err := orgTier(ctx, tx); err == nil {
+			headers = tier.Headers
+		}
+		var err error
+		red, err = redactor(ctx, tx, s.LLM.Key, nil, headers)
+		return err
+	}); err != nil && s.LLM.Key != "" {
+		red = redact.FromList([]redact.Secret{{Name: "DUDE_LLM_KEY", Value: s.LLM.Key}})
+	}
+	if red.Empty() {
+		return text
+	}
+	return red.String(text)
+}

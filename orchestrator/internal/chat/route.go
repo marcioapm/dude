@@ -566,6 +566,10 @@ func (s *Service) decision(ctx context.Context, d claimed, org string, p Provide
 	members []string, h heard, w World) (storedDecision, error) {
 	var kept storedDecision
 	if len(d.Decision) > 0 && json.Unmarshal(d.Decision, &kept) == nil {
+		// A routing error kept before judge.Structured redacted it.
+		if kept.Failed != "" && s.Judge != nil {
+			kept.Failed = s.Judge.Redact(ctx, org, kept.Failed)
+		}
 		return kept, nil
 	}
 	rounds, err := s.rounds(ctx, org, m)

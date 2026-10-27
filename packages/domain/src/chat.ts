@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { PersonRef } from "./hierarchy.ts";
-import { SECRET_REDACT_MIN_BYTES } from "./secrets.ts";
 
 /**
  * Chat providers (Slack first): an organisation's admin installs a
@@ -171,7 +170,8 @@ export interface ChatRequestRow {
   reasoning: string;
   /**
    * Why a failed request failed (the model or proxy error, the provider's
-   * refusal, or giving up), redacted; null when it did not fail.
+   * refusal, or giving up), as the orchestrator stored it, redacted; null
+   * when it did not fail.
    */
   failure: string | null;
   rounds: number;
@@ -193,23 +193,6 @@ export const chatRequestsQuerySchema = z.object({
 });
 /** The last 7 days of the filtered Requests: mentions, and those that asked the model. */
 export interface ChatRequestsSummary { mentions: number; asked: number }
-
-// Token shapes a provider or proxy error may echo: Slack tokens, bearer and
-// basic credentials, and sk-/pk-/rk- prefixed API keys.
-const TOKEN_SHAPES = /\bxox[a-z]-[A-Za-z0-9-]+|\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}|\b(sk|pk|rk)-[A-Za-z0-9_-]{6,}/g;
-
-/**
- * A failure's text as Requests shows it: each known secret value (at least
- * SECRET_REDACT_MIN_BYTES long) replaced with [REDACTED:name], as the
- * orchestrator stores them, then any token-shaped string with [REDACTED:token].
- */
-export function redactChatFailure(text: string, known: ReadonlyArray<{ name: string; value: string }>): string {
-  let out = text;
-  for (const { name, value } of known) {
-    if (value.length >= SECRET_REDACT_MIN_BYTES) out = out.split(value).join(`[REDACTED:${name}]`);
-  }
-  return out.replace(TOKEN_SHAPES, "[REDACTED:token]");
-}
 
 /** Where a member's connect callback lands (`?chat=<provider>&outcome=<o>`). */
 export const CHAT_CONNECT_OUTCOMES = ["connected", "authorization_denied", "invalid_or_expired", "workspace_not_installed",

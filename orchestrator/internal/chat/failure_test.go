@@ -30,6 +30,26 @@ func TestChatAFailedRequestKeepsItsCauseForRequests(t *testing.T) {
 			t.Fatalf("the proxy key is not redacted: failure %q, reasoning %q", f, got[0].Reasoning)
 		}
 	})
+	t.Run("a routing error kept unredacted before a deploy is redacted on its retry", func(t *testing.T) {
+		w := setup(t)
+		const key = "sk-proxy-test-key-0123456789"
+		w.svc.Judge.LLM.Key = key
+		_, ev := w.receive("Eli", "C1", "", "why are exports slow?")
+		w.exec(`UPDATE chat_events SET decision = $3 WHERE organization_id = $1 AND event_id = $2`, w.org, ev,
+			`{"failed":"the LLM proxy answered 400: bad credentials `+key+`","rounds":0}`)
+		w.once()
+		got := w.requests()
+		if len(got) != 1 || got[0].Route != "failed" || got[0].ResultKind != "session" {
+			t.Fatalf("requests %+v", got)
+		}
+		if f := got[0].Failure; f != "the routing call failed: the LLM proxy answered 400: bad credentials [REDACTED:DUDE_LLM_KEY]" ||
+			strings.Contains(got[0].Reasoning, key) {
+			t.Fatalf("failure %q, reasoning %q", f, got[0].Reasoning)
+		}
+		if w.model.calls() != 0 {
+			t.Fatalf("the model was asked %d times", w.model.calls())
+		}
+	})
 	t.Run("Slack refused the reply", func(t *testing.T) {
 		w := setup(t)
 		token := w.one(`SELECT bot_token FROM chat_installations WHERE organization_id = $1`, w.org)
