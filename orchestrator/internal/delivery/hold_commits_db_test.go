@@ -76,9 +76,10 @@ func TestAHoldCountsTheTasksOwnCommitsSinceThePreviousHold(t *testing.T) {
 	}
 }
 
-// A merge of main made with main as its first parent (a person's
-// `git checkout main && git merge feature`, pushed to feature) is main's,
-// not the task's.
+// Merges counted between two holds: one of main made with main as its first
+// parent (a person's `git checkout main && git merge feature`, pushed to
+// feature) is main's; one of a side branch of the task's work, made without
+// fast-forward, is the task's, as is the side branch's commit.
 func TestAHoldCountsAMergeByWhetherItBringsInTheBase(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -95,6 +96,16 @@ func TestAHoldCountsAMergeByWhetherItBringsInTheBase(t *testing.T) {
 			gitOn(t, f.gh, "update-ref", "refs/heads/feature", merge)
 			st.Heads["repo"] = merge
 		}, 1},
+		{"a side branch merged without fast-forward", func(f *verdictFixture, st *State, sc workflow.StepContext) {
+			if f.gh.Branch("side", "feature", "Side work") == "" {
+				t.Fatal("side branch")
+			}
+			st.Heads["repo"] = f.gh.MergeLocally("feature", "side", nil)
+			if st.Heads["repo"] == "" || len(f.gh.Parents(st.Heads["repo"])) != 2 {
+				t.Fatalf("merge %q of side into feature", st.Heads["repo"])
+			}
+			f.merged(st, sc, "repo")
+		}, 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, second := heldAround(t, nil, c.between, nil)
