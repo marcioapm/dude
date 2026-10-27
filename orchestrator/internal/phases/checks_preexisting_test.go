@@ -568,6 +568,28 @@ func TestANotRunBrowserCheckIsDeferredOnlyToATestPhase(t *testing.T) {
 	}
 }
 
+// A report whose only non-pass is a check not run asks GitHub for no task
+// base: nothing is measured against one.
+func TestANotRunOnlyReportComparesNothing(t *testing.T) {
+	w := newHarnessWorld(t)
+	h := startedFrom(w)
+	compares := h.compares(w, 0)
+	delivering(w, true)
+	checksReply(w, notRunInUI)
+	endTurn(w)
+	w.s.Judge = &deferringFake{}
+	got, err := w.s.judgeChecks(context.Background(), w.run)
+	if err != nil || !got.Verified || *compares != 0 {
+		t.Fatalf("%+v %v; %d compares", got, err, *compares)
+	}
+	// A failure beside it is measured, with one compare.
+	checksReply(w, failingTsc+strings.TrimPrefix(notRunInUI, "checks:\n"))
+	endTurn(w)
+	if _, err := w.s.judgeChecks(context.Background(), w.run); err != nil || *compares != 1 {
+		t.Fatalf("%v; %d compares", err, *compares)
+	}
+}
+
 // deferringFake answers the not-run question by what it says of the
 // delivery's test phase, as a judge reading it would; Missing no.
 type deferringFake struct{}

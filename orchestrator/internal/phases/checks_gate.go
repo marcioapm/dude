@@ -278,6 +278,9 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		}); err != nil {
 			return d, err
 		}
+	}
+	// Only a reported failure is measured against the task base.
+	if slices.ContainsFunc(nonPass, func(h held) bool { return h.check.Result == delivery.CheckFail }) {
 		var err error
 		if d.bases, err = s.taskBases(ctx, r); err != nil {
 			return d, err
