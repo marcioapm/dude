@@ -819,6 +819,7 @@ describe("a run's activity", () => {
     expect(last.textContent).toContain("TestRotateUnderLoad");
     // A non-zero exit is failed, never ✓.
     expect(card(c, "bash", 1)!.getAttribute("data-exit-code")).toBe("3");
+    expect(card(c, "bash", 1)!.getAttribute("data-status")).toBe("failed");
   });
 
   test("the runs list's running row says what its agent is doing now; a finished row says nothing", async () => {

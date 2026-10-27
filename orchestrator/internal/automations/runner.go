@@ -1386,6 +1386,14 @@ func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason s
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
 	}
+	if err := feedFrames(ctx, tx, a, runID, nil, true, cmp.Or(reason, status), nil); err != nil {
+		return false, err
+	}
+	if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "automation.run.ended", OrganizationID: a.Org, ProjectID: a.ProjectID,
+		AutomationRunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner,
+		Payload: map[string]any{"status": status, "reason": reason}}); err != nil {
+		return false, err
+	}
 	if failedOn != "" {
 		if err := recordFailedOnPost(ctx, tx, a, runID, failedOn); err != nil {
 			return false, err

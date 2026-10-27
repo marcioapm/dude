@@ -25,7 +25,7 @@ export const EV_LOG_EXITED = "automation.log.exited";
 
 /** The run's activity as it arrives: its backfill, then live. */
 export function useRunActivity(client: ApiClient, runId: string) {
-  return useEventStream({ client, automationRunId: runId });
+  return useEventStream({ client, automationRunId: runId, limit: Number.POSITIVE_INFINITY });
 }
 
 /** Now, ticking each second while `on` (a live run's duration); still otherwise. */
@@ -116,15 +116,20 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
   const people = usePeople();
   const status = live ? "running" : run.status === "succeeded" ? "completed" : run.status === "cancelled" ? "aborted" : "failed";
   const conversation = useMemo(() => project(events, status), [events, status]);
-  const groups = useMemo(() => asides(conversation.turns.filter((t) => t.kind !== "usage")), [conversation]);
+  // A call that exited non-zero is failed — opened, in danger — whatever the harness called it.
+  const turns = useMemo(() => conversation.turns.filter((t) => t.kind !== "usage").map((t) =>
+    t.kind === "tool" && t.status === "completed" && (t.result?.exitCode ?? 0) !== 0 ? { ...t, status: "failed" as const } : t), [conversation]);
+  const groups = useMemo(() => asides(turns), [turns]);
   const sent = useMemo(() => events.filter((e) => e.eventType === EV_FOLLOW_UP).map((e) => {
     const id = String(e.payload.deliveryId ?? "");
     return {
       id: e.eventId, at: e.occurredAt,
       node: (
-        <FeedDelivery key={e.eventId} at={e.occurredAt} deliveryId={id} summary={String(e.payload.summary ?? e.payload.event ?? "")}
-          body={run.sentBodies?.[id] ?? undefined} source={e.payload.source === "github" ? "github" : "incoming"}
-          onOpen={e.payload.source === "github" ? undefined : () => onDelivery(id)} />
+        <ChatAside key={e.eventId}>
+          <FeedDelivery at={e.occurredAt} deliveryId={id} summary={String(e.payload.summary ?? e.payload.event ?? "")}
+            body={run.sentBodies?.[id] ?? undefined} source={e.payload.source === "github" ? "github" : "incoming"}
+            onOpen={e.payload.source === "github" ? undefined : () => onDelivery(id)} />
+        </ChatAside>
       ),
     };
   }), [events, run.sentBodies, onDelivery]);
@@ -132,7 +137,7 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
   const render = (turn: Turn) => renderTurn(turn, role, conversation.contextWindow, !live, people, "dude",
     undefined, undefined, undefined, undefined, feedNote, undefined, undefined, undefined, speaker);
   return (
-    <ChatTranscript className="automationFeed" fill={live} live={live} revision={events.length} turns={conversation.turns.length + sent.length}
+    <ChatTranscript className="automationFeed" fill={live} maxHeight="none" live={live} revision={events.length} turns={conversation.turns.length + sent.length}
       data-testid="run-feed" data-live={live || undefined}
       emptyMessage={live ? "Starting…" : "This run recorded no activity."}>
       {interleaved(groups, sent).map((item) => "node" in item

@@ -677,7 +677,7 @@ func TestAutomationCommandLinesArriveInOrderWithTheExitCode(t *testing.T) {
 	h.until("the run fails", func() bool { r := h.runs("aut_lines"); return len(r) == 1 && r[0].Status == "failed" })
 	run := h.runs("aut_lines")[0]
 	rows, err := h.owner.Query(context.Background(), `SELECT event_type, COALESCE(payload->>'stream', ''), COALESCE(payload->>'text', payload->>'exitCode')
-		FROM events WHERE automation_run_id = $1 ORDER BY cursor`, run.ID)
+		FROM events WHERE automation_run_id = $1 AND event_type IN ('automation.log.line', 'automation.log.exited') ORDER BY cursor`, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

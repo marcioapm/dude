@@ -124,6 +124,8 @@ import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { AutomationToolList } from "./automationTools.tsx";
 import { AutomationFeed, CommandLog, ContainerLog, EV_LOG_EXITED, EV_LOG_LINE, LiveMark, RunNowLine, activityCount, useNow, useRunActivity } from "./automationFeed.tsx";
+import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
+import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { project } from "../api/conversation.ts";
 import { useOrgSecrets } from "./OrgSecrets.tsx";
 import { DeliveriesTab, DeliveryDetail, holdSecret, IncomingTriggerLine, IncomingTriggerRows, ProjectsRow, RotateDialog, RunNowIncomingDialog,
@@ -1178,6 +1180,7 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
     client.automationRuns(a.id, status === "all" ? undefined : status).then(setData, (e: unknown) => setProblem(errorText(e)));
   }, [client, a.id, status]);
   useEffect(load, [load]);
+  useReloadOnEvents({ client, all: true }, load, 1000);
   return (
     <div data-testid="automation-runs">
       {data?.session ? (
@@ -1223,6 +1226,12 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
   // The run's facts (status, cost, requests) are read again whenever its activity moves.
   const moved = events.length > 0 ? events[events.length - 1]!.cursor : 0;
   useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId, moved]);
+  // Cost and server requests can change without an agent event. Stop polling once the run ends.
+  useVisibleInterval(() => {
+    if (run?.status === "running" || run?.status === "queued") {
+      void client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e)));
+    }
+  }, 4000);
   const tick = useNow(run?.status === "running");
   if (!run) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
   const live = run.status === "running";
