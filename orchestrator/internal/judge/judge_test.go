@@ -115,6 +115,25 @@ func (w world) calls(t *testing.T) []recorded {
 
 var ask = Ask{Asker: "delivery.comment", About: "ACME-28 · acme#5477", Question: "Should the fixer act on this comment?", Context: "> Looks good to me."}
 
+// The system message states the rules a parseable answer needs: the reply
+// is the object alone, first character { and last }, and its reasoning is
+// bounded in words with no braces, so it ends before maxTokens.
+func TestTheSystemMessageStatesTheFormatRules(t *testing.T) {
+	system := messages("Is it done?", "")[0].Content
+	for _, rule := range []string{
+		"Your whole reply is one JSON object and nothing else.",
+		"Its first character is { and its last character is }.",
+		"No prose, heading, code fence or thinking out loud before or after it.",
+		"counted against the work you are judging",
+		"under 60 words",
+		"no { or } characters in it",
+	} {
+		if !strings.Contains(system, rule) {
+			t.Errorf("the system message does not say %q:\n%s", rule, system)
+		}
+	}
+}
+
 func TestOffSendsAndRecordsNothing(t *testing.T) {
 	w := setup(t, answering(`{"decision":"yes","confidence":1,"reasoning":"x"}`), false)
 	j, err := w.svc.Judge(context.Background(), w.org, ask)
