@@ -198,7 +198,7 @@ func (p *Provider) ParseEvent(body []byte) (chat.Event, error) {
 	}
 	out.Kind = chat.EventMention
 	out.Mention = &chat.Mention{Provider: "slack", WorkspaceID: e.TeamID, EventID: e.EventID, ConversationID: ev.Channel,
-		ThreadID: thread, MessageID: ev.TS, UserID: ev.User, Text: StripMentions(ev.Text), Direct: ev.ChannelType == "im"}
+		ThreadID: thread, MessageID: ev.TS, UserID: ev.User, Text: plainText(StripMentions(ev.Text)), Direct: ev.ChannelType == "im"}
 	return out, nil
 }
 
@@ -206,6 +206,46 @@ func (p *Provider) ParseEvent(body []byte) (chat.Event, error) {
 // among them), spaces collapsed.
 func StripMentions(text string) string {
 	return strings.Join(strings.Fields(mentionRE.ReplaceAllString(text, " ")), " ")
+}
+
+var markupRE = regexp.MustCompile(`<([^<>|]*)(?:\|([^<>]*))?>`)
+
+// mrkdwnUnescape decodes the three entities Slack escapes in message text.
+// The replacer makes one pass and never rescans its output, so "&amp;lt;"
+// becomes "&lt;", not "<".
+var mrkdwnUnescape = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace
+
+// plainText is Slack message text as the words it shows: its <…> markup
+// in plain form (a link as "label (url)" or its url, a channel as
+// "#name", a mention as "@name" or "@U…", a broadcast as "@here"), then
+// its entities decoded. The markup goes first: once decoded, a typed "<"
+// cannot be told from Slack's own.
+func plainText(s string) string {
+	return mrkdwnUnescape(markupRE.ReplaceAllStringFunc(s, func(tag string) string {
+		m := markupRE.FindStringSubmatch(tag)
+		target, label := m[1], m[2]
+		switch {
+		case strings.HasPrefix(target, "@"), strings.HasPrefix(target, "#"):
+			if label != "" {
+				return target[:1] + strings.TrimPrefix(label, target[:1])
+			}
+			return target
+		case strings.HasPrefix(target, "!"):
+			if label != "" {
+				return label
+			}
+			if name, _, _ := strings.Cut(target[1:], "^"); name == "here" || name == "channel" || name == "everyone" {
+				return "@" + name
+			}
+			return target[1:]
+		case strings.Contains(target, "://"), strings.HasPrefix(target, "mailto:"), strings.HasPrefix(target, "tel:"):
+			if label == "" || label == target {
+				return target
+			}
+			return label + " (" + target + ")"
+		}
+		return tag
+	}))
 }
 
 // ParseInteraction reads an interactivity delivery (form field payload): a
@@ -691,15 +731,51 @@ func (p *Provider) Permalink(inst chat.Installation, conversation, message, thre
 	return link
 }
 
-// blocks is a reply as Block Kit: its words, and its link as a button.
+// mrkdwnEscape makes text dude passes as plain words (names, titles,
+// questions) literal in mrkdwn: Slack reads <…> as a link, mention or
+// broadcast, and & as the start of an entity. Links dude means are
+// LinkURL buttons, never markup in the text, so nothing it says is lost.
+var mrkdwnEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+
+// blocks is a reply as Block Kit: its words, its link as a button, and its
+// row: a line per choice made from it, then a button per choice left and
+// the row's link.
 func blocks(r chat.Reply) []any {
-	out := []any{map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": r.Text}}}
+	section := func(text string) any {
+		return map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": mrkdwnEscape(text)}}
+	}
+	link := func(id, label, to string) any {
+		return map[string]any{"type": "button", "action_id": id, "text": map[string]any{"type": "plain_text", "text": label}, "url": to}
+	}
+	out := []any{section(r.Text)}
 	if r.LinkURL != "" {
-		label := firstOf(r.LinkLabel, "Open in dude")
-		out = append(out, map[string]any{"type": "actions", "elements": []any{map[string]any{"type": "button",
-			"action_id": "open_link", "text": map[string]any{"type": "plain_text", "text": label}, "url": r.LinkURL}}})
+		out = append(out, map[string]any{"type": "actions", "elements": []any{link("open_link", firstOf(r.LinkLabel, "Open in dude"), r.LinkURL)}})
+	}
+	if row := r.Row; row != nil {
+		for _, line := range row.Linked {
+			out = append(out, map[string]any{"type": "context", "elements": []any{map[string]any{"type": "mrkdwn", "text": mrkdwnEscape(line)}}})
+		}
+		var buttons []any
+		for i, c := range row.Choices {
+			buttons = append(buttons, map[string]any{"type": "button", "action_id": fmt.Sprintf("link_%d", i),
+				"text": map[string]any{"type": "plain_text", "text": c.Label}, "value": c.Value})
+		}
+		if row.Heading != "" {
+			out = append(out, section(row.Heading))
+		}
+		if row.LinkURL != "" {
+			buttons = append(buttons, link("row_link", firstOf(row.LinkLabel, "Open in dude"), row.LinkURL))
+		}
+		if len(buttons) > 0 {
+			out = append(out, map[string]any{"type": "actions", "block_id": "row", "elements": buttons})
+		}
 	}
 	return out
+}
+
+// UpdateReply replaces a reply dude posted with r (chat.update).
+func (p *Provider) UpdateReply(ctx context.Context, inst chat.Installation, conversation, message string, r chat.Reply) error {
+	return p.call(ctx, inst.Token, "chat.update", map[string]any{"channel": conversation, "ts": message, "text": mrkdwnEscape(r.Text), "blocks": blocks(r)}, nil)
 }
 
 // PostReply posts r in the thread, and returns its message id.
@@ -707,7 +783,7 @@ func (p *Provider) PostReply(ctx context.Context, inst chat.Installation, conver
 	var out struct {
 		TS string `json:"ts"`
 	}
-	args := map[string]any{"channel": conversation, "text": r.Text, "blocks": blocks(r), "unfurl_links": false}
+	args := map[string]any{"channel": conversation, "text": mrkdwnEscape(r.Text), "blocks": blocks(r), "unfurl_links": false}
 	if thread != "" {
 		args["thread_ts"] = thread
 	}
@@ -717,7 +793,7 @@ func (p *Provider) PostReply(ctx context.Context, inst chat.Installation, conver
 
 // PostEphemeral shows r to user alone, in the thread.
 func (p *Provider) PostEphemeral(ctx context.Context, inst chat.Installation, conversation, thread, user string, r chat.Reply) error {
-	args := map[string]any{"channel": conversation, "user": user, "text": r.Text, "blocks": blocks(r)}
+	args := map[string]any{"channel": conversation, "user": user, "text": mrkdwnEscape(r.Text), "blocks": blocks(r)}
 	if thread != "" {
 		args["thread_ts"] = thread
 	}
@@ -731,8 +807,9 @@ func (p *Provider) PostQuestion(ctx context.Context, inst chat.Installation, con
 		buttons = append(buttons, map[string]any{"type": "button", "action_id": fmt.Sprintf("choice_%d", i),
 			"text": map[string]any{"type": "plain_text", "text": c.Label}, "value": c.Value})
 	}
-	args := map[string]any{"channel": conversation, "text": q.Text, "blocks": []any{
-		map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": q.Text}},
+	text := mrkdwnEscape(q.Text)
+	args := map[string]any{"channel": conversation, "text": text, "blocks": []any{
+		map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}},
 		map[string]any{"type": "actions", "elements": buttons}}}
 	if thread != "" {
 		args["thread_ts"] = thread
@@ -746,7 +823,7 @@ func (p *Provider) PostQuestion(ctx context.Context, inst chat.Installation, con
 
 // UpdateQuestion replaces a question's buttons with who chose what.
 func (p *Provider) UpdateQuestion(ctx context.Context, inst chat.Installation, conversation, message string, by chat.ExternalUser, label string) error {
-	text := fmt.Sprintf("%s chose %s", by.Name(), label)
+	text := mrkdwnEscape(fmt.Sprintf("%s chose %s", by.Name(), label))
 	return p.call(ctx, inst.Token, "chat.update", map[string]any{"channel": conversation, "ts": message, "text": text,
 		"blocks": []any{map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}}}, nil)
 }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -170,10 +169,7 @@ func (p principal) writer() delivery.Writer {
 	return w
 }
 
-type linkInput struct {
-	ProjectID     string   `json:"projectId"`
-	RepositoryIDs []string `json:"repositoryIds"`
-}
+type linkInput = delivery.Link
 
 // createSession starts a session owned by the caller: private until they
 // share it. Given a first message, the same transaction starts its agent
@@ -281,105 +277,29 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request, org strin
 	return nil
 }
 
-// linksMax is the most projects a session links.
-const linksMax = 50
-
-// setLinks makes the session's linked projects and repositories exactly
-// those given: projects the caller's organisation has, and only their own
-// repositories.
-func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []linkInput) error {
-	if len(projects) > linksMax {
-		return fail(http.StatusBadRequest, "bad_request", "at most %d projects", linksMax)
-	}
-	var projectIDs, repoIDs []string
-	// A session started from chat can never see a project hidden from its
-	// provider, whoever links it: a member's new link by hand is refused
-	// too. One linked before it was hidden may stay in the set (every read
-	// leaves it out).
-	fence, err := delivery.FenceOf(ctx, tx, sessionID, "")
-	if err != nil {
+// linkFailed is a delivery.LinkRefusal as the API answers it.
+func linkFailed(err error) error {
+	var refused delivery.LinkRefusal
+	if !errors.As(err, &refused) {
 		return err
 	}
-	for _, l := range projects {
-		if slices.Contains(projectIDs, l.ProjectID) {
-			return fail(http.StatusBadRequest, "bad_request", "project %s is named twice", l.ProjectID)
-		}
-		if fence.Hides(l.ProjectID) {
-			var linked bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_projects WHERE session_id = $1 AND project_id = $2)`,
-				sessionID, l.ProjectID).Scan(&linked); err != nil {
-				return err
-			}
-			if !linked {
-				return fail(http.StatusConflict, "hidden_from_chat",
-					"this session was started from %s, and an admin hid project %s from it: it can't be linked here", fence.Provider, l.ProjectID)
-			}
-		}
-		var n int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM projects WHERE id = $1`, l.ProjectID).Scan(&n); err != nil {
-			return err
-		}
-		if n == 0 {
-			return fail(http.StatusNotFound, "not_found", "project %s not found", l.ProjectID)
-		}
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM repositories WHERE project_id = $1 AND id = ANY($2)`,
-			l.ProjectID, l.RepositoryIDs).Scan(&n); err != nil {
-			return err
-		}
-		if n != len(slices.Compact(slices.Sorted(slices.Values(l.RepositoryIDs)))) {
-			return fail(http.StatusNotFound, "not_found", "a repository given is not one of project %s's", l.ProjectID)
-		}
-		projectIDs = append(projectIDs, l.ProjectID)
-		repoIDs = append(repoIDs, l.RepositoryIDs...)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM session_projects WHERE session_id = $1 AND NOT (project_id = ANY($2))`,
-		sessionID, db.NonNil(projectIDs)); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM session_repositories WHERE session_id = $1 AND NOT (repository_id = ANY($2))`,
-		sessionID, db.NonNil(repoIDs)); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO session_projects (session_id, project_id, organization_id)
-		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(projectIDs), org); err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO session_repositories (session_id, repository_id, organization_id)
-		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(repoIDs), org)
-	return err
+	status := map[string]int{"bad_request": http.StatusBadRequest, "not_found": http.StatusNotFound,
+		"hidden_from_chat": http.StatusConflict}[refused.Code]
+	return fail(status, refused.Code, "%s", refused.Msg)
 }
 
-// addLink links one more project, with every repository of it, to the
-// session through setLinks, beside what it links now, recorded as
-// linkSession records a link (session.linked with the session's whole set).
+// setLinks is delivery.SetSessionLinks, its refusals as HTTP errors.
+func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []linkInput) error {
+	return linkFailed(delivery.SetSessionLinks(ctx, tx, org, sessionID, projects))
+}
+
+// addLink links one more project, with every repository of it, beside what
+// the session links now, recorded as linkSession records a link
+// (session.linked with the session's whole set).
 func addLink(ctx context.Context, tx pgx.Tx, org, sessionID, projectID string, f delivery.Filer) error {
-	rows, err := tx.Query(ctx, `SELECT sp.project_id, COALESCE(array_agg(sr.repository_id ORDER BY sr.repository_id)
-			FILTER (WHERE sr.repository_id IS NOT NULL), '{}')
-		FROM session_projects sp LEFT JOIN repositories r ON r.project_id = sp.project_id
-		LEFT JOIN session_repositories sr ON sr.session_id = sp.session_id AND sr.repository_id = r.id
-		WHERE sp.session_id = $1 GROUP BY sp.project_id ORDER BY sp.project_id`, sessionID)
+	links, err := delivery.AddSessionProject(ctx, tx, org, sessionID, projectID)
 	if err != nil {
-		return err
-	}
-	links, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (linkInput, error) {
-		var l linkInput
-		err := row.Scan(&l.ProjectID, &l.RepositoryIDs)
-		return l, err
-	})
-	if err != nil {
-		return err
-	}
-	rows, err = tx.Query(ctx, `SELECT id FROM repositories WHERE project_id = $1 ORDER BY id`, projectID)
-	if err != nil {
-		return err
-	}
-	repoIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return err
-	}
-	links = append(links, linkInput{ProjectID: projectID, RepositoryIDs: db.NonNil(repoIDs)})
-	if err := setLinks(ctx, tx, org, sessionID, links); err != nil {
-		return err
+		return linkFailed(err)
 	}
 	return delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, sessionID), delivery.EvSessionLinked, f.ActorType, f.ActorID,
 		map[string]any{"projects": links})
@@ -862,8 +782,8 @@ func (f fileFacts) cannotFile(item delivery.ProposalItem, person, role string) f
 			return fileBlock{why: fmt.Sprintf("no project %s in this organisation", item.Project), by: "unknown"}
 		}
 		// setLinks would refuse the whole filing; only this item is refused.
-		if len(f.projects) >= linksMax {
-			return fileBlock{why: fmt.Sprintf("the session links %d projects already, the most it can", linksMax), by: "limit"}
+		if len(f.projects) >= delivery.LinksMax {
+			return fileBlock{why: fmt.Sprintf("the session links %d projects already, the most it can", delivery.LinksMax), by: "limit"}
 		}
 	default:
 		return fileBlock{why: "unknown item", by: "unknown"}

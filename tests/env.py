@@ -258,6 +258,11 @@ def _chat_route(messages: list) -> str | None:
                            "channel_projects": {"add": keys, "remove": []}})
     if named:
         project = named
+    if "which project" in said and not named:
+        # It can't tell: a brainstorm with no project, guessing at none
+        # itself, so what is offered to link comes from the hints alone.
+        return json.dumps({"route": "brainstorm", "confidence": 0.6, "reasoning": "scripted: no project named", "project": None,
+                           "title": "Which project?", "maybe_projects": []})
     if "file a task" in said and project:
         return json.dumps({"route": "task", "confidence": 0.95, "reasoning": "scripted: one clear change", "project": project,
                            "title": "Tidy the export page", "goal": "Tidy the export page.", "criteria": ["It is tidy"]})

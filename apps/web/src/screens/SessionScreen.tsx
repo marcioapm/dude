@@ -625,6 +625,7 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
       return `${from} made ${to} the owner, ${keep}.`;
     }
     case EventTypes.BrainstormLinked:
+      if (typeof p.linked === "string" && typeof p.viaName === "string") return `${by} linked ${p.linked} from ${p.viaName}.`;
       return `${by} changed what the session reads.`;
     case EventTypes.BrainstormCheckoutRequested: {
       const repos = Array.isArray(p.repositories) ? p.repositories as Array<{ name?: unknown }> : [];

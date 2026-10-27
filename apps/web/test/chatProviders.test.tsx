@@ -233,6 +233,8 @@ describe("Requests", () => {
     expect(rows.map((r) => r.getAttribute("data-route"))).toEqual(["epic", "brainstorm", "brainstorm", "not_connected"]);
     expect(text(rows[1])).toContain("Shared with 2 · 2 not connected");
     expect(text(rows[2])).toContain("was Task");
+    expect([...rows[2]!.querySelectorAll("[data-testid=chat-request-linked]")].map(text)).toEqual(["Ana Ribeiro linked BIL from Slack"]);
+    expect(rows[0]!.querySelector("[data-testid=chat-request-linked]")).toBeNull();
     expect(text(rows[3])).toContain("Asked to connect");
     // The face is there; that its ring is not clipped is a layout fact happy-dom cannot measure (checked in the browser shots).
     expect(rows[0]!.querySelector(".chatRequestWho [role=img]")).not.toBeNull();

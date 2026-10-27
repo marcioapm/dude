@@ -244,6 +244,8 @@ type serviceState struct {
 	// Runs after the routing decision is kept and before it is acted on;
 	// tests fail or change the world there.
 	beforeMake func(ctx context.Context) error
+	// Runs before a link click reads its request; tests fail it there.
+	beforeLinkRead func(ctx context.Context) error
 	// DeliveryTimeout, shortened by tests.
 	deliveryTimeout time.Duration
 	// Where SettleMarks reads its next page; only its loop calls it.

@@ -172,6 +172,8 @@ export interface ChatRequestRow {
   result: { kind: "session" | "task" | "epic"; id: string; label: string | null } | null;
   sharedAdded: PersonRef[];
   sharedSkipped: string[];
+  /** Projects linked from the reply's "Link a project" row, by whom (their chat name). */
+  linked: { key: string; name: string; by: string }[];
   createdAt: string;
 }
 export const CHAT_REQUESTS_MAX = 200;

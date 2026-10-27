@@ -2096,6 +2096,10 @@ body {
   display: inline-block;
   min-width: 140px;
 }
+.chatRequestLinked {
+  display: block;
+  font-size: var(--ds-text-xs);
+}
 .chatRequestWhen {
   display: inline-flex;
   align-items: center;

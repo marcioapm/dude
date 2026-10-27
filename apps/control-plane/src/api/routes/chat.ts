@@ -305,7 +305,10 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
           WHEN 'epic' THEN (SELECT p.key_prefix || ' › ' || e.title FROM epics e JOIN projects p ON p.id = e.project_id WHERE e.id = r.result_id)
         END) END AS result,
       (SELECT COALESCE(json_agg(person_ref(p)), '[]') FROM people p WHERE p.id = ANY(r.shared_added)) AS "sharedAdded",
-      r.shared_skipped AS "sharedSkipped", r.created_at AS "createdAt"
+      r.shared_skipped AS "sharedSkipped", r.created_at AS "createdAt",
+      -- The projects linked from the request's reply ("Link a project"), oldest first.
+      (SELECT COALESCE(json_agg(json_build_object('key', l.project_key, 'name', l.project_name, 'by', l.linked_by_name)
+        ORDER BY l.created_at, l.project_key), '[]') FROM chat_request_links l WHERE l.request_id = r.id) AS linked
     FROM chat_requests r WHERE r.id = ANY(${sql.array(ids, "TEXT")})
     ORDER BY r.created_at DESC, r.id DESC`;
     return { rows, week };

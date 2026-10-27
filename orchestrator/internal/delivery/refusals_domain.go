@@ -76,4 +76,10 @@ const (
 	mReviewQuestionNotOpen                = "reviewer question %s is %s already: only an open one is answered or withdrawn"
 	mReviewQuestionAnswerRequired         = "say the answer: the fact the reviewer asked for"
 	mReviewQuestionReasonRequired         = "a withdrawal needs its reason: why the question no longer matters"
+	MChatLinkNotOffered                   = "That isn't a project dude offered to link here."
+	MChatLinkOnlyAskerOrAdmin             = "Only %s or an admin can link a project here."
+	MChatLinkHidden                       = "An admin hid %s from %s: it can't be linked to this session."
+	MChatLinkGone                         = "%s is no longer a project in dude."
+	MChatLinkLinkedAlready                = "%s is linked to this session already."
+	MChatLinkRefused                      = "dude couldn't link %s: %s"
 )

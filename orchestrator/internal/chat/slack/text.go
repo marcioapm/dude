@@ -50,6 +50,7 @@ func (m message) threadMessage() chat.ThreadMessage {
 // each attachment's pretext, title (with its link), text, fields and
 // footer, and each block's text and link URLs. A part already said (Slack
 // repeats text as a block) is left out. Unknown block types are skipped.
+// Parts are compared in Slack's markup; the result is plainText.
 func messageText(m message) string {
 	var parts textParts
 	parts.add(m.Text)
@@ -57,7 +58,7 @@ func messageText(m message) string {
 		parts.add(a.Pretext)
 		title := a.Title
 		if a.TitleLink != "" {
-			title = strings.TrimSpace(title + " " + a.TitleLink)
+			title = strings.TrimSpace(title + " " + mrkdwnEscape(a.TitleLink))
 		}
 		parts.add(title)
 		parts.add(a.Text)
@@ -69,7 +70,7 @@ func messageText(m message) string {
 	for _, raw := range m.Blocks {
 		parts.add(blockText(raw))
 	}
-	return strings.Join(parts.kept, "\n")
+	return plainText(strings.Join(parts.kept, "\n"))
 }
 
 type textParts struct {
@@ -103,9 +104,19 @@ type textObject struct {
 	Text string `json:"text"`
 }
 
+// mrkdwn is t's text in mrkdwn: plain_text is escaped as Slack escapes a
+// message, so every part decodes alike in plainText.
+func (t textObject) mrkdwn() string {
+	if t.Type == "plain_text" {
+		return mrkdwnEscape(t.Text)
+	}
+	return t.Text
+}
+
 // blockText is a Block Kit block's text: a section's text and fields, a
 // header's text, a context's text elements, a rich_text's elements, and
-// the URLs of buttons and images; "" for any other block.
+// the URLs of buttons and images; "" for any other block. A block is JSON,
+// not mrkdwn: its plain_text and URLs are escaped to join the message's text.
 func blockText(raw json.RawMessage) string {
 	var b struct {
 		Type      string            `json:"type"`
@@ -123,19 +134,19 @@ func blockText(raw json.RawMessage) string {
 	switch b.Type {
 	case "section", "header":
 		if b.Text != nil {
-			out = append(out, b.Text.Text)
+			out = append(out, b.Text.mrkdwn())
 		}
 		for _, f := range b.Fields {
-			out = append(out, f.Text)
+			out = append(out, f.mrkdwn())
 		}
 		if b.Accessory != nil && b.Accessory.URL != "" {
-			out = append(out, b.Accessory.URL)
+			out = append(out, mrkdwnEscape(b.Accessory.URL))
 		}
 	case "context":
 		for _, e := range b.Elements {
 			var t textObject
 			if json.Unmarshal(e, &t) == nil && (t.Type == "mrkdwn" || t.Type == "plain_text") {
-				out = append(out, t.Text)
+				out = append(out, t.mrkdwn())
 			}
 		}
 	case "actions":
@@ -147,9 +158,9 @@ func blockText(raw json.RawMessage) string {
 			if json.Unmarshal(e, &btn) == nil && btn.URL != "" {
 				label := ""
 				if btn.Text != nil {
-					label = btn.Text.Text
+					label = btn.Text.mrkdwn()
 				}
-				out = append(out, strings.TrimSpace(label+" "+btn.URL))
+				out = append(out, strings.TrimSpace(label+" "+mrkdwnEscape(btn.URL)))
 			}
 		}
 	case "rich_text":
@@ -163,8 +174,9 @@ func blockText(raw json.RawMessage) string {
 }
 
 // richText writes a rich_text element (a section, list, quote or
-// preformatted run, or one of their leaves) as mrkdwn: a link as <url|text>,
-// so it compares equal to the message's own text.
+// preformatted run, or one of their leaves) as mrkdwn: its text escaped as
+// Slack escapes a message's text and a link as <url|text>, so it compares
+// equal to the message's own text.
 func richText(b *strings.Builder, raw json.RawMessage) {
 	var e struct {
 		Type     string            `json:"type"`
@@ -180,12 +192,12 @@ func richText(b *strings.Builder, raw json.RawMessage) {
 	}
 	switch e.Type {
 	case "text":
-		b.WriteString(e.Text)
+		b.WriteString(mrkdwnEscape(e.Text))
 	case "link":
 		if e.Text != "" {
-			b.WriteString("<" + e.URL + "|" + e.Text + ">")
+			b.WriteString("<" + mrkdwnEscape(e.URL) + "|" + mrkdwnEscape(e.Text) + ">")
 		} else {
-			b.WriteString("<" + e.URL + ">")
+			b.WriteString("<" + mrkdwnEscape(e.URL) + ">")
 		}
 	case "user":
 		b.WriteString("<@" + e.UserID + ">")

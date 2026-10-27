@@ -1093,7 +1093,7 @@ a `Mention`, `Event`, `Interaction`, conversation kinds (`public`,
 `Provider` interface (verify and parse webhooks; read a thread, a page of a
 thread or channel, the channel before a message, a
 conversation's kind and members, a user; post replies, ephemerals,
-questions; update a question; react; OAuth install and identity URLs and
+questions; update a question or a reply; react; OAuth install and identity URLs and
 exchanges; revoke). Routing, the checks, binding, session access and
 Requests (`route.go`, `make.go`, `decide.go`) use only those. The Slack
 adapter is `internal/chat/slack`; `internal/fakeslack` fakes its Web API and
@@ -1155,6 +1155,31 @@ An admin sets the usual projects on the provider's settings page
 (`PUT /v1/organization/chat/:provider/channels/:conversation/projects`) or
 from chat (`@dude this channel is usually about Acme`, the `channel_projects`
 route; anyone else is refused privately and nothing changes).
+
+**Link a project (`chat/link.go`, migration 203).** A mention routed to a
+brainstorm with no linked project offers up to 3 deduplicated candidates:
+the conversation's usual projects, learned hints (most first), then routing's
+`maybe_projects`. All are checked against the routing world, which excludes
+hidden projects. `Reply.Row` holds the choices (`KEY · Name`), linked lines,
+and "Choose in dude", a link to the session page. Slack renders the row as
+buttons and replaces it through `UpdateReply` (`chat.update`).
+
+The request keeps `link_offer` and the reply's `question_message_id`.
+An `Interaction` value, `link:<request id>:<index>`, resolves against that
+stored offer in the click's workspace and conversation. Only the asker,
+while still the session's owner, or an organisation admin may link; others
+get a private refusal. `delivery.AddSessionProject` adds all the project's
+repositories through `SetSessionLinks`, sharing the web's organisation and
+fence checks, including projects hidden since the offer.
+
+The transaction records `session.linked` (`projects`, `linked`, `via`,
+`viaName`) and one `chat_request_links` row per request and project, shown
+in Requests. Duplicate clicks do nothing; the original click's retry can
+finish its reply update. Once committed, the link succeeds even if that
+best-effort update exhausts its retries. A thread reply refused by the
+provider falls back privately without buttons. New repositories reach the
+agent at submission or through the syncer's resume (`sessionRepoMissing`,
+`sessionResume`), as with a web link. Reaction marks are unchanged.
 
 **Hidden projects (`chat_hidden_projects`, migration 196).** An admin hides
 projects from a provider on its settings page only (`PUT

@@ -58,7 +58,13 @@ Answer with only a JSON object, nothing before or after it:
  "new_epic":{"title":"…","description":"<markdown>","tasks":[{"ref":"t1","title":"…","goal":"…","criteria":["…"],"blocked_by":[]}, …]}|null,
  "session":"<session id, resume route only>"|null,
  "question":{"text":"…","choices":[{"id":"…","label":"…","route":"task","project":"<key>"}, …]}|null,
- "channel_projects":{"add":["<project key>", …],"remove":["<project key>", …]}|null}`
+ "channel_projects":{"add":["<project key>", …],"remove":["<project key>", …]}|null,
+ "maybe_projects":["<project key>", …]|null}
+
+maybe_projects is for a brainstorm without a project only: at most 3 listed project keys you considered but could not choose between, most likely first. The person is offered them to link.`
+
+// maybeProjectsMax is how many of an answer's maybe_projects are read.
+const maybeProjectsMax = 3
 
 // Answer is the routing judgement's JSON answer.
 type Answer struct {
@@ -74,6 +80,8 @@ type Answer struct {
 	Session         string           `json:"session"`
 	Question        *Asked           `json:"question"`
 	ChannelProjects *ChannelProjects `json:"channel_projects"`
+	// Projects a brainstorm without one might be about, by key.
+	MaybeProjects []string `json:"maybe_projects"`
 }
 
 // ChannelProjects is the channel_projects route's change: projects the
@@ -257,6 +265,9 @@ type Decision struct {
 	Question   *Asked
 	// The channel_projects route's change, resolved to the projects.
 	Add, Remove []Project
+	// A brainstorm without a project: the answer's maybe_projects that are
+	// the person's, in its order, at most maybeProjectsMax.
+	Maybe []Project
 	// Why dude went another way; "" when it took the answer.
 	Problem string
 }
@@ -393,6 +404,29 @@ func EpicTasksProblem(tasks []NewTask) string {
 // under ConfidenceBar, a clarifying question while rounds are left and
 // choices can be built, else a brainstorm.
 func Decide(a Answer, w World, rounds int, chosen bool, text string) Decision {
+	d := decide(a, w, rounds, chosen, text)
+	if d.Route == RouteBrainstorm && d.Project == nil && a.Route == RouteBrainstorm {
+		d.Maybe = maybe(a, w)
+	}
+	return d
+}
+
+// maybe are the answer's maybe_projects that name a project of w, deduped,
+// at most maybeProjectsMax: an unknown or hidden key is dropped.
+func maybe(a Answer, w World) []Project {
+	var out []Project
+	for _, key := range a.MaybeProjects {
+		if len(out) == maybeProjectsMax {
+			break
+		}
+		if p, ok := w.project(key); ok && !slices.ContainsFunc(out, func(o Project) bool { return o.ID == p.ID }) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func decide(a Answer, w World, rounds int, chosen bool, text string) Decision {
 	problem := a.problem(w)
 	if problem == "" && a.Route == RouteClarify && rounds >= ClarifyRounds {
 		problem = fmt.Sprintf("the thread was asked %d clarifying questions already", rounds)

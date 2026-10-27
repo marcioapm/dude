@@ -2,6 +2,7 @@ package slack_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -216,6 +217,162 @@ func TestConversationKindMembersAndThreads(t *testing.T) {
 	if got := p.Permalink(inst, "C1", "1700000000.000002", "1700000000.000001"); got !=
 		"https://acme.slack.com/archives/C1/p1700000000000002?thread_ts=1700000000.000001&cid=C1" {
 		t.Fatalf("permalink %s", got)
+	}
+}
+
+func TestAReplysRowIsButtonsAndItsUpdateReplacesThem(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	root := fake.Post("C1", "", "U1", "@dude hi")
+	row := &chat.Row{Heading: "Link one:", Choices: []chat.Choice{{Label: "ABS · Acme", Value: "link:chr_1:0"}},
+		LinkURL: "https://dude.example.com/s/1", LinkLabel: "Choose in dude"}
+	ts, err := p.PostReply(ctx, inst, "C1", root, chat.Reply{Text: "Started", LinkURL: "https://dude.example.com/s/1", Row: row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocks []map[string]any
+	_ = json.Unmarshal(fake.BotMessages()[0].Blocks, &blocks)
+	if len(blocks) != 4 || blocks[2]["text"].(map[string]any)["text"] != "Link one:" || blocks[3]["block_id"] != "row" {
+		t.Fatalf("blocks %v", blocks)
+	}
+	buttons := blocks[3]["elements"].([]any)
+	if len(buttons) != 2 || buttons[0].(map[string]any)["value"] != "link:chr_1:0" || buttons[1].(map[string]any)["url"] != "https://dude.example.com/s/1" {
+		t.Fatalf("buttons %v", buttons)
+	}
+	row.Choices, row.Heading, row.Linked = nil, "", []string{"Márcia linked ABS · Acme", "Eli linked SDK · Client SDK"}
+	if err := p.UpdateReply(ctx, inst, "C1", ts, chat.Reply{Text: "Started", Row: row}); err != nil {
+		t.Fatal(err)
+	}
+	u := fake.Updates()
+	if len(u) != 1 || u[0].TS != ts || strings.Contains(string(u[0].Blocks), "link:chr_1:0") {
+		t.Fatalf("updates %+v", u)
+	}
+	var context []string
+	var after []map[string]any
+	_ = json.Unmarshal(u[0].Blocks, &after)
+	for _, b := range after {
+		if b["type"] == "context" {
+			context = append(context, b["elements"].([]any)[0].(map[string]any)["text"].(string))
+		}
+	}
+	if strings.Join(context, "\n") != "Márcia linked ABS · Acme\nEli linked SDK · Client SDK" {
+		t.Fatalf("context blocks %q", context)
+	}
+}
+
+func TestNamesAndTitlesRenderLiterallyAndDudesLinkStaysALink(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	root := fake.Post("C1", "", "U1", "@dude hi")
+	const session = "https://dude.example.com/#/o/acme/sessions/ssn_1?a=1&b=2"
+	row := &chat.Row{Heading: "Link one:", Choices: []chat.Choice{{Label: "<!channel> · x", Value: "link:chr_1:0"}},
+		LinkURL: session, LinkLabel: "Choose in dude",
+		Linked: []string{"a & <b> linked <!channel> · <!channel>", "a & <b> linked EVL · <https://evil.example|Open in dude>"}}
+	reply := chat.Reply{Text: "Started a session “<!channel>”, open to everyone in Acme & <b>", LinkURL: session, Row: row}
+	ts, err := p.PostReply(ctx, inst, "C1", root, reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateReply(ctx, inst, "C1", ts, reply); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PostEphemeral(ctx, inst, "C1", root, "U2", chat.Reply{Text: "Only a & <b> or an admin can link a project here.", Row: row}); err != nil {
+		t.Fatal(err)
+	}
+	q, err := p.PostQuestion(ctx, inst, "C1", root, chat.Question{Text: "Should I file “<!here>” in <https://evil.example|X>?",
+		Choices: []chat.Choice{{Label: "BIL", Value: "chr_1:0"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := fake.BotMessages()[1].Blocks
+	if err := p.UpdateQuestion(ctx, inst, "C1", q, chat.ExternalUser{DisplayName: "a & <b>"}, "<!channel>"); err != nil {
+		t.Fatal(err)
+	}
+	type block struct {
+		Type     string `json:"type"`
+		Text     struct{ Type, Text string }
+		Elements []struct {
+			Type string `json:"type"`
+			Text any    `json:"text"`
+			URL  string `json:"url"`
+		} `json:"elements"`
+	}
+	mrkdwn := func(raw json.RawMessage) (texts []string, urls []string) {
+		var bs []block
+		if err := json.Unmarshal(raw, &bs); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range bs {
+			if b.Text.Type == "mrkdwn" {
+				texts = append(texts, b.Text.Text)
+			}
+			for _, e := range b.Elements {
+				if s, ok := e.Text.(string); ok && e.Type == "mrkdwn" {
+					texts = append(texts, s)
+				}
+				if e.URL != "" {
+					urls = append(urls, e.URL)
+				}
+			}
+		}
+		return texts, urls
+	}
+	wantReply := []string{"Started a session “&lt;!channel&gt;”, open to everyone in Acme &amp; &lt;b&gt;",
+		"a &amp; &lt;b&gt; linked &lt;!channel&gt; · &lt;!channel&gt;",
+		"a &amp; &lt;b&gt; linked EVL · &lt;https://evil.example|Open in dude&gt;", "Link one:"}
+	posted := []json.RawMessage{fake.BotMessages()[0].Blocks, fake.Updates()[0].Blocks}
+	for _, raw := range posted {
+		texts, urls := mrkdwn(raw)
+		if strings.Join(texts, "\n") != strings.Join(wantReply, "\n") {
+			t.Fatalf("mrkdwn %q", texts)
+		}
+		// dude's own links are buttons, their URL as is.
+		if len(urls) != 2 || urls[0] != session || urls[1] != session {
+			t.Fatalf("urls %q", urls)
+		}
+	}
+	if m := fake.BotMessages()[0]; m.Text != wantReply[0] {
+		t.Fatalf("text %q", m.Text)
+	}
+	eph := fake.Ephemerals()
+	if texts, _ := mrkdwn(eph[0].Blocks); len(eph) != 1 || eph[0].Text != "Only a &amp; &lt;b&gt; or an admin can link a project here." ||
+		texts[0] != eph[0].Text || texts[1] != wantReply[1] {
+		t.Fatalf("ephemeral %+v", eph)
+	}
+	if texts, _ := mrkdwn(question); texts[0] != "Should I file “&lt;!here&gt;” in &lt;https://evil.example|X&gt;?" {
+		t.Fatalf("question %q", texts)
+	}
+	if u := fake.Updates(); len(u) != 2 || u[1].Text != "a &amp; &lt;b&gt; chose &lt;!channel&gt;" {
+		t.Fatalf("updates %+v", u)
+	}
+	// A button's label is plain_text: shown as typed.
+	var bs []block
+	_ = json.Unmarshal(fake.BotMessages()[0].Blocks, &bs)
+	if label := bs[len(bs)-1].Elements[0].Text.(map[string]any)["text"]; label != "<!channel> · x" {
+		t.Fatalf("label %v", label)
+	}
+}
+
+// Slack sends a message's text mrkdwn-escaped: it is read as the words
+// typed, and a reply quoting them escapes them once.
+func TestEscapedTextIsReadPlainAndRepliedEscapedOnce(t *testing.T) {
+	fake, p, inst := world(t)
+	raw, _ := jsonMarshal(fakeslack.Mention("T1", "Ev1", "C1", "", "1.1", "U1", "R&amp;D &lt;3 &amp;lt;"))
+	ev, err := p.ParseEvent(raw)
+	if err != nil || ev.Mention == nil || ev.Mention.Text != "R&D <3 &lt;" {
+		t.Fatalf("mention %+v, %v", ev.Mention, err)
+	}
+	root := fake.Post("C1", "", "U1", "@dude hi")
+	if _, err := p.PostReply(context.Background(), inst, "C1", root, chat.Reply{Text: "Started a session “" + ev.Mention.Text + "”"}); err != nil {
+		t.Fatal(err)
+	}
+	var blocks []struct {
+		Text struct{ Type, Text string } `json:"text"`
+	}
+	_ = json.Unmarshal(fake.BotMessages()[0].Blocks, &blocks)
+	const want = "Started a session “R&amp;D &lt;3 &amp;lt;”"
+	if len(blocks) != 1 || blocks[0].Text.Type != "mrkdwn" || blocks[0].Text.Text != want || fake.BotMessages()[0].Text != want {
+		t.Fatalf("reply %+v, text %q", blocks, fake.BotMessages()[0].Text)
 	}
 }
 
