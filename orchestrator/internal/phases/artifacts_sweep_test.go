@@ -48,6 +48,7 @@ func TestTheSweepRecordsEveryVersionOnceAndTheLatestFinalDiff(t *testing.T) {
 	fake := &sweepLux{listed: []lux.Artifact{
 		{ID: "art_aaaaaaaaaaaaaaaa", Epoch: 2, Path: notes, Version: 1, Description: "Why the export streams rows", Size: 12, SHA256: "ab12", Available: true},
 		{ID: "art_bbbbbbbbbbbbbbbb", Epoch: 2, Path: notes, Version: 2, Description: "With the numbers", Size: 20, SHA256: "cd34", Available: true},
+		{ID: "art_tttttttttttttttt", Epoch: 2, Path: lux.PublishedPrefix + ThumbnailsPrefix + "cd34.jpg", Version: 1, Size: 5, SHA256: "ef56", Available: true},
 		{ID: "art_pppppppppppppp01", Epoch: 2, Path: patch, Version: 1, Available: true},
 		{ID: "art_pppppppppppppp02", Epoch: 2, Path: patch, Version: 2, Available: true},
 	}, bodies: map[string]string{
@@ -65,10 +66,11 @@ func TestTheSweepRecordsEveryVersionOnceAndTheLatestFinalDiff(t *testing.T) {
 	}
 
 	got := w.artifacts()
-	if len(got) != 2 || got[0].StorageKey != "art_aaaaaaaaaaaaaaaa" || got[1].StorageKey != "art_bbbbbbbbbbbbbbbb" ||
-		got[1].Description != "With the numbers" || got[1].Name != "notes.md" {
-		t.Errorf("recorded %+v; want both versions of notes.md, nothing of the diff", got)
+	if len(got) != 3 || got[0].StorageKey != "art_aaaaaaaaaaaaaaaa" || got[1].StorageKey != "art_bbbbbbbbbbbbbbbb" ||
+		got[1].Description != "With the numbers" || got[1].Name != "notes.md" || got[2].Name != ThumbnailsPrefix+"cd34.jpg" {
+		t.Errorf("recorded %+v; want both versions of notes.md and the thumbnail, nothing of the diff", got)
 	}
+	// The thumbnail says nothing in Activity.
 	if n := w.events(ArtifactEventType); n != 2 {
 		t.Errorf("%d artifact.created events, want 2", n)
 	}
