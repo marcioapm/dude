@@ -218,6 +218,35 @@ func TestAKeptReviewerOnAnotherModelIsReplayed(t *testing.T) {
 	}
 }
 
+// A kept predecessor given an organisation secret (migration 210) runs on
+// the same spec while its role is still given those names, and is taken
+// over; an organisation secret ticked for its role since is not in its lux
+// spec, so it is let go and replayed.
+func TestAKeptReviewerGivenAnOrganisationSecretIsTakenOverWhileItsNamesHold(t *testing.T) {
+	for _, tc := range []struct{ added, how string }{{"", "resume"}, {"SENTRY_TOKEN", "replay"}} {
+		t.Run(tc.how, func(t *testing.T) {
+			w := newRoundWorld(t)
+			w.exec(t, `INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('tier_rv_'||$1, $1, 'Reviewing', 'fake/scripted')`, w.org)
+			w.exec(t, `UPDATE projects SET agent_models = jsonb_build_object('reviewer', jsonb_build_object('tier', 'tier_rv_'||$2::text)) WHERE id = $1`,
+				w.project, w.org)
+			w.exec(t, `UPDATE runs SET keep = true, kept_until = now() + interval '1 day', lux_run_id = 'lrun_k',
+				model = 'fake/scripted', model_tier = 'Reviewing', harness = 'opencode', project_secret_names = '{GH_TOKEN}' WHERE id = $1`, w.first)
+			// Its last exit's files are collected.
+			w.exec(t, `UPDATE runs SET artifacts_due_at = NULL WHERE id = $1`, w.first)
+			w.exec(t, `INSERT INTO organization_secrets (organization_id, name, value, hint, recipients) VALUES ($1, 'GH_TOKEN', 'org-gh', 'o-gh', '{reviewer}')`, w.org)
+			if tc.added != "" {
+				w.exec(t, `INSERT INTO organization_secrets (organization_id, name, value, hint, recipients) VALUES ($1, $2, 'org-x', 'or-x', '{reviewer}')`, w.org, tc.added)
+			}
+			w.exec(t, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+				VALUES ('ev_spec', $1, 'agent.message', $2, $3, 'agent', $2, 'test', '{"text":"Earlier review"}')`, w.org, w.first, w.task)
+			id := w.next(t, "k1")
+			if got := w.str(t, `SELECT COALESCE(continues_how, '') FROM runs WHERE id = $1`, id); got != tc.how {
+				t.Fatalf("continues how = %q, want %q", got, tc.how)
+			}
+		})
+	}
+}
+
 // A kept predecessor is let go when the task ends, and by a new attempt
 // or a decision past a stop (ReleaseKeptTx): RetireCompleted takes it up.
 func TestAKeptReviewerIsLetGoWhenItsTaskEnds(t *testing.T) {

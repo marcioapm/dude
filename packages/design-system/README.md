@@ -2938,9 +2938,11 @@ comments when opened there, never on the standalone Run page.
 
 ## Project secrets
 
-`src/components/Secrets.tsx`: `GivenTo`, `GivenToFieldset`, `SecretsChip`.
-Gallery: Settings → *Project secrets* (`#s-secrets`), in both themes and
-densities.
+`src/components/Secrets.tsx`: `GivenTo`, `GivenToFieldset`, `SecretsChip`,
+`OverriddenBy`, `SecretName`, `SecretPicker`, `PresetSecrets`. Gallery:
+Settings → *Project secrets* (`#s-secrets`), *OverriddenBy / SecretName*
+(`#secrets-overridden`) and *SecretPicker / PresetSecrets*
+(`#secrets-picker`), in both themes and densities and at 390.
 
 - **Project secrets have their own SettingsSection.** Its title is
   "Secrets" and its note says who gets values, as environment variables.
@@ -2952,6 +2954,10 @@ densities.
   cannot edit sees names and recipients, a note saying who can change
   them, and no menu or Add. Branch previews keeps one row: how many reach
   previews, and a Manage link to the section.
+- **GivenTo** (`given`, `none?`): a secret's recipients in a table cell:
+  neutral badges, or, when none, `none` in muted words ("Nobody" by
+  default; an organisation secret's table says "Only automations that
+  pick it").
 - **Who gets a secret is separate from its value.** Add asks for Name,
   Value, then the "Given to" `GivenToFieldset`: one `Checkbox` per
   recipient (Previews, Tester, Implementer, Fixer, Simplifier, Reviewer)
@@ -2965,15 +2971,50 @@ densities.
   with the network allowlist; the hint says sessions and previews that
   start after saving get it. A value shorter than dude redacts says so in
   its hint; it is not refused.
+- **Organisation secrets are the same section one level up**
+  (Organisation settings → Secrets). The table adds **Picked by** (how
+  many automations pick it, `hideWhenNarrow`) and, after the name, a muted
+  aside naming the projects that have their own. An organisation secret
+  may be ticked for nobody; its Given to then reads "Only automations that
+  pick it". A project's table lists the organisation's after its own, each
+  marked `SettingSource` "From Acme" with no menu (a screen-reader line
+  says it is read-only here) and a note linking to where they change.
+- **OverriddenBy** (`name`, `by?`): on a secret that a more specific one
+  replaces, the layers glyph and "Overridden by this project's `GH_TOKEN`"
+  in muted xs text, the name in mono. It takes the place of the row's
+  Given to (or a checkbox's description); the row's own name is struck
+  through in muted ink. Glyph and words, never colour alone.
+- **SecretName** (`name`, `struck?`, `from?`, `aside?`): a secret's name
+  in a table cell, mono. `struck` strikes it through in muted ink (the row
+  `OverriddenBy` explains); `from` follows it with `SettingSource` "From
+  Acme" on an inherited row; `aside` follows it with muted xs words, such
+  as "platform has its own". The marker and aside wrap under a long name.
+  The app styles no secret name itself.
+- **SecretPicker** (`orgName`, `org`, `project?`, `value`, `onChange`,
+  `disabled?`): an automation's secrets, as checkbox groups "Acme's" and,
+  for a project automation, "platform's", side by side and stacked when
+  narrow. Each checkbox is the mono name, with `…last4` as its
+  description, and is named "GH_TOKEN (Acme)" so the two GH_TOKENs differ.
+  A name the project also holds cannot be ticked under the organisation:
+  it is disabled, struck through and described by `OverriddenBy`. An
+  organisation pick of such a name shows as the project's row ticked and
+  is passed back as the project's (`@dude/domain`'s `secretPicksInForce`): that is the
+  value its runs get, and unticking it removes the name. The value records
+  the source as well as the name.
+- **PresetSecrets** (`role`, `given`, `none?`): one of dude's agents has
+  no picker; in its place, read-only, the `lock` glyph and "Tester gets
+  `NPM_TOKEN`, `SENTRY_TOKEN` from Acme · `DATABASE_SEED_URL` from
+  platform", the owners muted, each name mono. With none, "<role> gets"
+  and `none` ("no secrets" by default; the Investigator says why).
 - **The secrets an agent session got are a `SecretsChip`** beside
   `MachineChip` in its header: the `lock` glyph and "N secrets" on the
   raised shade, at the chip height. Its tooltip lists the names only and
-  says "Given by project settings; values are never shown". It opens on
-  focus and hover and stays open on a press; it acts on nothing. Names
-  come from what the session recorded when it started, never today's
-  settings. A session given none — a conductor, a brainstorm — shows no
-  chip. Its accessible name is "Project secrets: N secrets, " and the
-  names.
+  says "Given by project and organisation settings; values are never
+  shown". It opens on focus and hover and stays open on a press; it acts
+  on nothing. Names come from what the session recorded when it started,
+  never today's settings. A session given none — a conductor, a
+  brainstorm — shows no chip. Its accessible name is "Secrets: N
+  secrets, " and the names.
 - **Redaction shows as `[REDACTED:NAME]`** in the transcript, tool output
   and diffs, as dude stored it; nothing styles it. The redaction note says
   it is defence in depth, not a guarantee.

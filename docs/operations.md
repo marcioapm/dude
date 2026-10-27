@@ -603,6 +603,48 @@ dude waits for it up to 2 minutes from the turn's end, pushing nothing
 meanwhile; if it has not come by then, or lux reports the Run over first,
 the Run fails kept with "lux never reported where the checkout started".
 
+## Organisation secrets
+
+An organisation's secrets (Organisation settings → Secrets) are project
+secrets entered once for every project: a CLI's token, a package
+registry's key. Each ticks who gets it, as a project secret does
+(**Previews**, **Tester**, **Implementer**, **Fixer**, **Simplifier**,
+**Reviewer**), and the ticks apply to every project's agents and previews.
+One may be ticked for **nobody**: then only automations that pick it get
+it. The conductor and brainstorm never get one. The organisation's admins
+change them; every member reads their names, recipients and hints, on
+Organisation settings → Secrets and on a project's Secrets, after its own,
+read-only ("From Acme"). Stored as project secrets are
+(`organization_secrets`, migration 210: plain text under row-level
+security, never answered to a client, the last 4 characters shown; no
+sweeper grant).
+
+**A project secret of the same name wins** in that project: its agents,
+previews and automations get the project's value, and the organisation's
+row shows struck through on the project's list ("Overridden by this
+project's GH_TOKEN"). The organisation's list says which projects have
+their own.
+
+**Automations.** An automation whose agent is its own, a command or a
+server picks secrets on its Secrets: an organisation automation from the
+organisation's, a project automation from both. An organisation pick whose
+name the project also holds is the project's value at run start. One of
+dude's agents picks none; it gets what its role is ticked for (the
+Investigator, none). "Picked by" on the organisation's list, for its
+admins, counts the automations that pick each one.
+
+**Upgrading to migration 210 drops a preset automation's old picks.**
+Before 210 one of dude's agents could pick project secrets; after it, it
+gets what its role is ticked for. Each preset automation that held picks
+gets one `automation.changed` event (system actor) whose
+`changed.secretsDropped` names them, names only. To give the agent those
+secrets again, tick its role (Tester, Reviewer) on each one.
+
+**Delivery, redaction and push.** Exactly as for project secrets: a Run
+records the names it was given and copies the values; dude redacts every
+form of an organisation value in what it stores and serves, and refuses a
+push holding one. A change reaches Runs that start after it.
+
 ## Postgres
 
 Postgres 17 with the pgvector extension is what the tests run against

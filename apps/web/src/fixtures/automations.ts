@@ -64,7 +64,13 @@ export const AUTOMATIONS: Automation[] = [
     trigger: { kind: "github", event: "pull_request", actions: ["opened", "reopened"], filters: { ...NO_FILTERS, author: ["!dependabot[bot]"] } },
     repoFilter: { mode: "except", repos: ["example/sandbox-*", "example/notebooks"] },
     agent: { own: { prompt: "Read {{pr.title}} in {{repository}} and label it." } },
+    secrets: [{ source: "organization", name: "STATUSPAGE_KEY" }],
     lastRun: { id: "arn_t1", status: "succeeded", at: iso(12 * MIN) } }),
+  automation({ id: "aut_digest", name: "Weekly PR digest", kind: "agent", repos: "none",
+    trigger: { kind: "schedule", cron: "0 15 * * 5", tz: "Europe/Lisbon" },
+    agent: { own: { prompt: DIGEST_PROMPT, timeLimitMinutes: 30 } },
+    secrets: [{ source: "organization", name: "GH_TOKEN" }],
+    nextRunAt: iso(-4 * 24 * 60 * MIN), lastRun: { id: "arn_d1", status: "succeeded", at: iso(DIGEST_AGO) } }),
   automation({ id: "aut_audit", name: "Nightly dependency audit", kind: "agent", sessionMode: "resumable", expiryDays: 7,
     trigger: { kind: "schedule", cron: "0 3 * * *", tz: "Europe/Lisbon" }, repoFilter: { mode: "only", repos: ["example/svc-*"] },
     agent: { preset: { role: "investigator", overrides: {} }, brief: "Audit dependencies and file a task for each upgrade that matters." },
@@ -81,9 +87,10 @@ export const AUTOMATIONS: Automation[] = [
   automation({ id: "aut_changelog", name: "Changelog builder", kind: "server", projectId: PROJECT.id, projectName: PROJECT.name, enabled: false,
     trigger: { kind: "github", event: "pull_request", actions: ["closed"], filters: NO_FILTERS },
     server: { command: "bun run changelog:serve", port: 8080, path: "/events", health: "/healthz" } }),
-  automation({ id: "aut_digest", name: "Weekly PR digest", kind: "agent", trigger: { kind: "schedule", cron: "0 15 * * 5", tz: "Europe/Lisbon" },
-    agent: { own: { prompt: DIGEST_PROMPT, timeLimitMinutes: 30 } },
-    nextRunAt: iso(-4 * 24 * 60 * MIN), lastRun: { id: "arn_d1", status: "succeeded", at: iso(DIGEST_AGO) } }),
+  automation({ id: "aut_investigate", name: "Investigate a failed deploy", kind: "agent", projectId: PROJECT.id, projectName: PROJECT.name,
+    trigger: { kind: "github", event: "workflow_run", actions: ["completed"], filters: NO_FILTERS },
+    agent: { own: { prompt: "Read the failed run's logs in {{repository}} and file one task with the evidence." } },
+    secrets: [{ source: "organization", name: "SENTRY_TOKEN" }, { source: "project", name: "SEED_LLM_KEY" }] }),
 ];
 
 const RUNS: Record<string, AutomationRun[]> = {

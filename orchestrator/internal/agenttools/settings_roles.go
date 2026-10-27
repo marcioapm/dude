@@ -334,9 +334,10 @@ func networkOf(w wrapper, l settingsLayers, grants map[string]capabilities.Grant
 
 // ---- secrets --------------------------------------------------------------
 
-// secretOut is a project secret as its Secrets page lists it to members:
-// its name and which of the project's Runs and previews receive it, never
-// its value or hint.
+// secretOut is a project's own secret as its Secrets page lists it to
+// members: its name and which of the project's Runs and previews receive
+// it, never its value or hint. The organisation's secrets the page lists
+// after them are not here (the tool's doc says so).
 type secretOut struct {
 	Name       string   `json:"name"`
 	Recipients []string `json:"recipients"`

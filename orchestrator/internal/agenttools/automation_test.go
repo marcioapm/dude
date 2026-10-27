@@ -85,7 +85,7 @@ func TestAutomationToolsScopeAndLifecycle(t *testing.T) {
 	// A project secret the automation gives its runs, pasted into a tool
 	// call, reaches neither GitHub nor the ledger.
 	mustExec(t, f.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'DEPLOY_KEY', 'acme-deploy-s3cr3t-value', 'alue')`, f.org, f.project)
-	mustExec(t, f.owner, `UPDATE automations SET secrets = '{DEPLOY_KEY}' WHERE id = 'aut_tools'`)
+	mustExec(t, f.owner, `UPDATE automations SET secrets = '[{"source":"project","name":"DEPLOY_KEY"}]' WHERE id = 'aut_tools'`)
 	if status, out := f.post(t, token, "github_comment", `{"body":"Using acme-deploy-s3cr3t-value to deploy"}`); status != 200 {
 		t.Fatalf("comment with a secret: %d %v", status, out)
 	}
@@ -95,6 +95,18 @@ func TestAutomationToolsScopeAndLifecycle(t *testing.T) {
 	var leaked int
 	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE organization_id = $1 AND payload::text LIKE '%acme-deploy-s3cr3t-value%'`, f.org).Scan(&leaked); err != nil || leaked != 0 {
 		t.Errorf("ledger events carrying the secret: %d %v", leaked, err)
+	}
+	// An organisation secret it picks is redacted the same way.
+	mustExec(t, f.owner, `INSERT INTO organization_secrets (organization_id, name, value, hint) VALUES ($1, 'ORG_DEPLOY', 'acme-org-s3cr3t-value', 'alue')`, f.org)
+	mustExec(t, f.owner, `UPDATE automations SET secrets = '[{"source":"organization","name":"ORG_DEPLOY"}]' WHERE id = 'aut_tools'`)
+	if status, out := f.post(t, token, "github_comment", `{"body":"Using acme-org-s3cr3t-value to deploy"}`); status != 200 {
+		t.Fatalf("comment with an organisation secret: %d %v", status, out)
+	}
+	if strings.Contains(lastBody, "acme-org-s3cr3t-value") || !strings.Contains(lastBody, "[REDACTED:ORG_DEPLOY]") {
+		t.Errorf("GitHub got %q", lastBody)
+	}
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE organization_id = $1 AND payload::text LIKE '%acme-org-s3cr3t-value%'`, f.org).Scan(&leaked); err != nil || leaked != 0 {
+		t.Errorf("ledger events carrying the organisation secret: %d %v", leaked, err)
 	}
 	if status, _ := f.post(t, token, "publish", `{}`); status != 404 {
 		t.Fatalf("publish: %d", status)

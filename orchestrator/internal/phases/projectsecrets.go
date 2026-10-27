@@ -14,13 +14,15 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// A project's secrets reach the agent Runs of the phases each one names
-// (project_secrets.recipients, migration 128) as lux env secrets, beside
-// dude's own. The conductor and a session's brainstorm never get one: they
-// read text anyone can write, such as pull request comments. A Run records
-// the names it was given (runs.project_secret_names) and keeps a copy of
-// the exact values (run_project_secrets, 129), which dude redacts its
-// output with and scans its push for, until its output is collected.
+// A project's secrets, and its organisation's (organization_secrets,
+// migration 210) whose name the project does not hold, reach the agent Runs
+// of the phases each one names (recipients, migration 128) as lux env
+// secrets, beside dude's own. The conductor and a session's brainstorm
+// never get one: they read text anyone can write, such as pull request
+// comments. A Run records the names it was given (runs.project_secret_names)
+// and keeps a copy of the exact values (run_project_secrets, 129), which
+// dude redacts its output with and scans its push for, until its output is
+// collected.
 
 // EvSecretsGiven names the project secrets a Run was given, never their
 // values. Once per Run. Payload: {names}.
@@ -41,14 +43,15 @@ func SecretRecipientFor(phase, role string) string {
 	return secretRecipient[delivery.PromptRoleFor(phase, role)]
 }
 
-// loadProjectSecrets are the current values of the project's secrets given
-// to recipient, by name; with names, only those (a resume's).
+// loadProjectSecrets are the current values of the secrets in force for the
+// project (secrets_in_force) given to recipient, by name; with names, only
+// those (a resume's). tx is the Run's organisation's.
 func loadProjectSecrets(ctx context.Context, tx pgx.Tx, projectID, recipient string, names []string) ([]lux.Secret, error) {
 	if recipient == "" || projectID == "" {
 		return nil, nil
 	}
-	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets
-		WHERE project_id = $1 AND $2 = ANY(recipients) AND ($3::text[] IS NULL OR name = ANY($3))
+	rows, err := tx.Query(ctx, `SELECT name, value FROM secrets_in_force(current_organization_id(), $1)
+		WHERE $2 = ANY(recipients) AND ($3::text[] IS NULL OR name = ANY($3))
 		ORDER BY name`, projectID, recipient, names)
 	if err != nil {
 		return nil, err

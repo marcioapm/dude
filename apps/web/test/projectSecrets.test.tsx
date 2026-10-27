@@ -450,3 +450,32 @@ describe("Change value and Remove", () => {
     expect(changed()).toBe(0);
   });
 });
+
+describe("the organisation's secrets on a project", () => {
+  const ORG_ROWS: ProjectSecret[] = [
+    { name: "SEED_LLM_KEY", recipients: ["tester"], hint: "Kq7w", updatedAt: SECRETS[0]!.updatedAt, updatedBy: null },
+    { name: "STATUSPAGE_KEY", recipients: [], hint: "kk42", updatedAt: SECRETS[0]!.updatedAt, updatedBy: null },
+  ];
+  test("follow the project's own, marked From Example, read-only; one the project holds is struck and says the project's wins", async () => {
+    const client = new Recording("a");
+    let managed = 0;
+    const { container, unmount } = await mount(
+      <TooltipProvider><ToastProvider>
+        <ProjectSecretsSection client={client} projectId="prj" secrets={SECRETS} recipes={RECIPES} canEdit onChanged={() => undefined}
+          inherited={{ orgName: "Example", secrets: ORG_ROWS, onManage: () => managed++ }} />
+      </ToastProvider></TooltipProvider>,
+    );
+    mounted.push(unmount);
+    expect(tableRows(container)).toEqual([
+      ["SEED_LLM_KEY", "Previews", "…3f9a"], ["SNOWFLAKE_PASSWORD", "PreviewsTester", "…7Q2a"], ["STRIPE_TEST_KEY", "Previews", "…x7Qb"],
+      ["SEED_LLM_KEYFrom Example", "Overridden by this project's SEED_LLM_KEY", "…Kq7w"],
+      ["STATUSPAGE_KEYFrom Example", "Only automations that pick it", "…kk42"]]);
+    // No menu on an inherited row: a screen-reader line says why.
+    expect(allByRole(container, "button", "Actions for STATUSPAGE_KEY")).toHaveLength(0);
+    expect(container.textContent).toContain("Read-only here: Example’s secret");
+    expect(container.querySelector("[data-testid=inherited-note]")!.textContent)
+      .toBe("Example’s secrets are changed in Organisation settings → Secrets. A secret added here with the same name takes the place of Example’s in this project.");
+    await click(byRole(container, "button", "Organisation settings → Secrets"));
+    expect(managed).toBe(1);
+  });
+});
