@@ -122,11 +122,28 @@ export async function refusedNotStored(scope: OrgScope, automationId: string): P
   return n;
 }
 
-/** Whether a parsed body has a NUL in a string or key: JSON allows `\u0000`, jsonb refuses it. */
-function holdsNul(v: unknown): boolean {
-  if (typeof v === "string") return v.includes("\u0000");
-  if (Array.isArray(v)) return v.some(holdsNul);
-  if (v !== null && typeof v === "object") return Object.entries(v).some(([k, x]) => k.includes("\u0000") || holdsNul(x));
+/** How deep a body may nest: the jsonb insert serialises and parses it recursively. */
+export const INCOMING_MAX_DEPTH = 512;
+
+/**
+ * Whether a parsed body cannot be stored as jsonb: a NUL in a string or key
+ * (JSON allows `\u0000`, jsonb refuses it), or nesting past INCOMING_MAX_DEPTH.
+ * Walked with a stack, so the check itself never overflows.
+ */
+function unstorable(body: unknown): boolean {
+  const stack: [unknown, number][] = [[body, 1]];
+  while (stack.length > 0) {
+    const [v, depth] = stack.pop()!;
+    if (typeof v === "string") {
+      if (v.includes("\u0000")) return true;
+    } else if (v !== null && typeof v === "object") {
+      if (depth > INCOMING_MAX_DEPTH) return true;
+      for (const [k, x] of Object.entries(v)) {
+        if (k.includes("\u0000")) return true;
+        stack.push([x, depth + 1]);
+      }
+    }
+  }
   return false;
 }
 
@@ -172,7 +189,7 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
   } catch {
     return refuse("not_json");
   }
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload) || holdsNul(payload)) return refuse("not_json");
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload) || unstorable(payload)) return refuse("not_json");
   if (!hook.enabled) return refuse("disabled");
   const accepted = await withOrg(hook.organization_id, async (scope) => {
     // One delivery at a time per automation counts the hour: two together never both take the last place.

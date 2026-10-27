@@ -661,7 +661,8 @@ Rotate, then only its last four characters.
 
 **What it answers.** 202 once stored; 404 for an unknown hook (nothing
 stored); 401 a wrong or missing secret; 413 a body over 1 MiB; 415 a body
-that is not a JSON object; 403 the automation is off; 429 over its
+that is not a JSON object (or one Postgres cannot store: a NUL character,
+or nested more than 512 levels); 403 the automation is off; 429 over its
 deliveries an hour (1–600, default 30). Only deliveries that started a run
 or were sent to a run already going count, plus those not matched yet,
 which hold a place until the loop decides; deliveries skipped because a

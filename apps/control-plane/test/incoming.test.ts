@@ -224,8 +224,21 @@ describe("the public endpoint", () => {
     expect(latin.status).toBe(415);
     const huge = await post(hook, "{}", { authorization: "wrong", "content-length": "3000000000" });
     expect(huge.status).toBe(401);
+    const key = await post(hook, `{"\\u0000":1}`, { authorization: secret });
+    expect(key.status).toBe(415);
     expect((await rows(id)).map((r) => [r.verdict, r.reason, r.payload, r.bytes])).toEqual([
-      ["refused", "not_json", null, 14], ["refused", "not_json", null, 9], ["refused", "bad_signature", null, 1_048_577]]);
+      ["refused", "not_json", null, 14], ["refused", "not_json", null, 9], ["refused", "bad_signature", null, 1_048_577],
+      ["refused", "not_json", null, 12]]);
+  });
+
+  test("a body nested past 512 levels is 415 with a bodyless row, however deep; 512 levels are taken", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
+    const nested = (depth: number) => `{"a":${"[".repeat(depth - 1)}${"]".repeat(depth - 1)}}`;
+    expect((await post(hook, nested(512), { authorization: secret })).status).toBe(202);
+    expect((await post(hook, nested(513), { authorization: secret })).status).toBe(415);
+    expect((await post(hook, nested(300_000), { authorization: secret })).status).toBe(415);
+    expect((await rows(id)).map((r) => [r.verdict, r.reason, r.payload === null])).toEqual([
+      [null, null, false], ["refused", "not_json", true], ["refused", "not_json", true]]);
   });
 
   test("the rate limit counts deliveries not matched yet and those sent to a run, and refuses the next with 429", async () => {
@@ -304,6 +317,19 @@ describe("the public endpoint", () => {
     expect((await rows(id)).length).toBe(101);
     const listed = await (await call("GET", `/v1/automations/${id}/deliveries`)).json() as Json;
     expect(listed.refusedNotStored).toBe(3);
+  });
+
+  test("the refused-row cap and the uncounted refusals are the clock hour's: the hour before counts for neither", async () => {
+    const { id, hook } = await hookWith({ mode: "header", header: "Authorization" });
+    await owner`INSERT INTO incoming_deliveries (id, organization_id, automation_id, verdict, reason, bytes, received_at)
+      SELECT 'dlv_before' || n, ${ORG}, ${id}, 'refused', 'bad_signature', 2, date_trunc('hour', now()) - interval '1 second'
+      FROM generate_series(1, 100) n`;
+    await owner`INSERT INTO incoming_refusals (organization_id, automation_id, hour, code, n)
+      VALUES (${ORG}, ${id}, date_trunc('hour', now()) - interval '1 hour', 'bad_signature', 50)`;
+    expect((await post(hook, "{}", { authorization: "wrong" })).status).toBe(401);
+    expect((await rows(id)).length).toBe(101);
+    const listed = await (await call("GET", `/v1/automations/${id}/deliveries`)).json() as Json;
+    expect(listed.refusedNotStored).toBe(0);
   });
 });
 
