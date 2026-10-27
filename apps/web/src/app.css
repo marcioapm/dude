@@ -2148,7 +2148,7 @@ body {
   width: 100%;
   height: 100%;
   background: var(--ds-color-sunken);
-  border: 1px solid var(--ds-color-border-subtle);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
   border-radius: var(--ds-radius-face-agent);
   color: var(--ds-color-text-secondary);
 }
@@ -2193,6 +2193,14 @@ body {
 }
 .runNowTool {
   color: var(--ds-color-text-primary);
+}
+/* A log's title: its glyph and command on one line (every svg is display:block). */
+.logTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  white-space: nowrap;
 }
 .logToolbar {
   display: inline-flex;

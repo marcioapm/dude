@@ -1184,6 +1184,7 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
   }, [client, a.id, status]);
   useEffect(load, [load]);
   useReloadOnEvents({ client, all: true }, load, 1000, (event) => {
+    // Only this automation's run events and its runs' calls change the list; anything else needs no re-read.
     const ours = event.payload.automationId === a.id || data?.runs.some((r) => r.id === event.automationRunId);
     return !ours || !(event.eventType.startsWith("automation.run.") || event.eventType === "agent.tool.called" || event.eventType === "agent.tool.completed");
   });
@@ -1243,13 +1244,16 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
     }
   }, 4000);
   const tick = useNow(run?.status === "running");
+  // Projected once for the hint; the feed projects its own with the run's status.
+  const hint = useMemo(() => a.kind === "agent" && run && run.status !== "running"
+    && events.some((e) => e.eventType !== EV_LOG_LINE && e.eventType !== EV_LOG_EXITED) ? activityCount(project(events).turns) : "",
+  [a.kind, run?.status, events]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!run) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
   const live = run.status === "running";
   // The call the run failed on (a post_to_chat without Slack), as the API names it.
   const failedCall = run.failedCallId ? run.toolCalls.find((c) => c.id === run.failedCallId) ?? null : null;
   const started = run.startedAt ?? run.createdAt;
   const elapsed = (run.endedAt ? Date.parse(run.endedAt) : tick) - Date.parse(started);
-  const activity = events.some((e) => e.eventType !== EV_LOG_LINE && e.eventType !== EV_LOG_EXITED);
   const fallback = run.logTail && events.length === 0 ? <pre className="automationPayload" data-testid="run-log-tail">{run.logTail}</pre> : null;
   return (
     <div data-testid="run-detail" className="automationRunDetail" data-kind={a.kind}>
@@ -1295,7 +1299,7 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
       )}
       {a.kind === "agent" ? (
         <SettingsSection title="Activity" data-testid="run-activity"
-          actions={<span className="ds-hint">{live ? "Follows the latest · scroll up to stop" : activity ? activityCount(project(events).turns) : ""}</span>}>
+          actions={<span className="ds-hint">{live ? "Follows the latest · scroll up to stop" : hint}</span>}>
           {fallback ?? <AutomationFeed run={run} events={events} name={a.name}
             role={a.agent && "preset" in a.agent ? a.agent.preset.role as AgentRole : "investigator"} live={live} onDelivery={onDelivery} />}
         </SettingsSection>

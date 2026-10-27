@@ -61,8 +61,10 @@ export function LiveMark({ children = "Live" }: { children?: ReactNode }) {
 /** The runs list's second line for a running row: the newest call not finished. */
 export function RunNowLine({ tool, args }: { tool: string; args: unknown }) {
   const summary = summarizeToolArgs(args);
+  // Generic elements take no accessible name: the full summary is screen-reader text, the visible line is hidden from it.
   return (
-    <span className="runNowLine" data-testid="run-now-line" aria-label={`Now: ${tool}${summary ? `, ${summary}` : ""}`}>
+    <span className="runNowLine" data-testid="run-now-line">
+      <span className="ds-sr-only">{`Now: ${tool}${summary ? `, ${summary}` : ""}`}</span>
       <span aria-hidden>now:</span> <span className="ds-mono runNowTool" aria-hidden>{tool}</span>
       {summary ? <span className="ds-mono runNowArgs" aria-hidden> · {summary}</span> : null}
     </span>
@@ -135,7 +137,7 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
         <ChatAside key={e.eventId}>
           <FeedDelivery at={e.occurredAt} deliveryId={id} summary={String(e.payload.summary ?? e.payload.event ?? "")}
             body={run.sentBodies?.[id] ?? undefined} source={e.payload.source === "github" ? "github" : "incoming"}
-            onOpen={e.payload.source === "github" ? undefined : () => onDelivery(id)} />
+            onOpen={() => onDelivery(id)} />
         </ChatAside>
       ),
     };
@@ -181,7 +183,7 @@ export function CommandLog({ command, events, live }: { command: string; events:
   const { lines, exitCode } = useMemo(() => logLines(events, false), [events]);
   return (
     <LogStream data-testid="command-log" lines={lines} lineNumbers live={live} maxHeight={480}
-      title={<span className="ds-mono"><Icon name="terminal" size={12} /> {command}</span>}
+      title={<span className="ds-mono logTitle"><Icon name="terminal" size={12} /> {command}</span>}
       toolbar={<span className="logToolbar">{live ? <LiveMark>Running</LiveMark> : exitCode !== null
         ? <span className={exitCode === 0 ? "logExit" : "logExit logExitBad"} data-testid="command-exit">exit {exitCode}</span> : null}</span>}
       emptyMessage={live ? "Waiting for output…" : "It printed nothing."} />
@@ -193,7 +195,7 @@ export function ContainerLog({ image, events, live }: { image: string; events: r
   const { lines } = useMemo(() => logLines(events, true), [events]);
   return (
     <LogStream data-testid="container-log" lines={lines} timestamps lineNumbers={false} live={live} maxHeight={480}
-      title={<span className="ds-mono"><Icon name="layers" size={12} /> {image}</span>}
+      title={<span className="ds-mono logTitle"><Icon name="layers" size={12} /> {image}</span>}
       toolbar={live ? <LiveMark /> : undefined}
       emptyMessage={live ? "Waiting for the container's output…" : "Its container printed nothing."} />
   );
