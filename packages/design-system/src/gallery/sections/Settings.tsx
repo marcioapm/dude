@@ -24,7 +24,7 @@ import { Select } from "../../primitives/Select.tsx";
 import { Table, TBody, Td, Th, THead, Tr } from "../../primitives/Table.tsx";
 import { NumberInput } from "../../primitives/NumberInput.tsx";
 import { FitBar, MachineChip, MachineRaises, MachineTip, ProportionBar, ReservedSwatch } from "../../components/Machines.tsx";
-import { GivenTo, GivenToFieldset, SecretsChip } from "../../components/Secrets.tsx";
+import { GivenTo, GivenToFieldset, OverriddenBy, PresetSecrets, SecretName, SecretPicker, SecretsChip, type SecretPick } from "../../components/Secrets.tsx";
 import { FlowSteps, NameChips, TierChip, TierLine, TierTip } from "../../components/Tiers.tsx";
 import { HostChips } from "../../components/HostChips.tsx";
 import { HostPresets, NetworkRefusedNote, RefusedHosts, type HostPreset } from "../../components/Network.tsx";
@@ -190,6 +190,7 @@ function SecretsDemo() {
           <Tr><Td mono>STRIPE_TEST_KEY</Td><Td><GivenTo given={["Previews"]} /></Td><Td mono muted hideWhenNarrow>…91aF</Td></Tr>
           <Tr><Td mono>ALL_ROLES_KEY</Td><Td><GivenTo given={SECRET_RECIPIENTS.map((r) => r.label)} /></Td><Td mono muted hideWhenNarrow>…k3y9</Td></Tr>
           <Tr><Td mono>SUSPENDED_KEY</Td><Td><GivenTo given={[]} /></Td><Td mono muted hideWhenNarrow>…zz01</Td></Tr>
+          <Tr><Td mono>STATUSPAGE_KEY</Td><Td><GivenTo given={[]} none="Only automations that pick it" /></Td><Td mono muted hideWhenNarrow>…kk42</Td></Tr>
         </TBody>
       </Table>
       <Label>GivenToFieldset (untick every box for its error)</Label>
@@ -207,6 +208,72 @@ function SecretsDemo() {
       </span>
       <Label>What redaction leaves in tool output</Label>
       <code className="ds-mono">SNOWFLAKE_PASSWORD=[REDACTED:SNOWFLAKE_PASSWORD]</code>
+    </Col>
+  );
+}
+
+const ORG_SECRETS = [{ name: "GH_TOKEN", hint: "Q8e2" }, { name: "NPM_TOKEN", hint: "x0Lm" }, { name: "SENTRY_TOKEN", hint: "7c1d" }];
+const PLATFORM_SECRETS = [{ name: "GH_TOKEN", hint: "pf91" }, { name: "METRICS_READ_TOKEN", hint: "3a0b" }];
+
+function OverriddenTable() {
+  return (
+    <Table density="compact" aria-label="Secrets">
+      <THead><Tr><Th width="40%">Name</Th><Th>Given to</Th><Th hideWhenNarrow>Value</Th></Tr></THead>
+      <TBody>
+        <Tr><Td wrap><SecretName name="GH_TOKEN" /></Td><Td><GivenTo given={["Implementer", "Fixer"]} /></Td><Td mono muted hideWhenNarrow>…pf91</Td></Tr>
+        <Tr>
+          <Td wrap><SecretName name="GH_TOKEN" struck from="Acme" /></Td>
+          <Td wrap><OverriddenBy name="GH_TOKEN" /></Td><Td mono muted hideWhenNarrow>…Q8e2</Td>
+        </Tr>
+        <Tr>
+          <Td wrap><SecretName name="NPM_TOKEN" from="Acme" /></Td>
+          <Td wrap><GivenTo given={["Tester"]} /></Td><Td mono muted hideWhenNarrow>…x0Lm</Td>
+        </Tr>
+        <Tr>
+          <Td wrap><SecretName name="SENTRY_TOKEN" aside="platform has its own" /></Td>
+          <Td wrap><GivenTo given={[]} none="Only automations that pick it" /></Td><Td mono muted hideWhenNarrow>…7c1d</Td>
+        </Tr>
+      </TBody>
+    </Table>
+  );
+}
+
+function OverriddenDemo() {
+  return (
+    <Col>
+      <Label>A project&apos;s Secrets: its own, then Acme&apos;s; Acme&apos;s GH_TOKEN overridden; an organisation row&apos;s aside</Label>
+      <OverriddenTable />
+      <Label>A picker row disabled by it</Label>
+      <SecretPicker orgName="Acme" org={ORG_SECRETS.slice(0, 1)} project={{ name: "platform", secrets: PLATFORM_SECRETS.slice(0, 1) }}
+        value={[{ source: "project", name: "GH_TOKEN" }]} onChange={() => {}} />
+      <Label>390px</Label>
+      <div style={{ width: 390, maxWidth: "100%" }}>
+        <OverriddenTable />
+      </div>
+    </Col>
+  );
+}
+
+function PickerDemo() {
+  const [orgOnly, setOrgOnly] = useState<SecretPick[]>([{ source: "organization", name: "GH_TOKEN" }]);
+  const [both, setBoth] = useState<SecretPick[]>([{ source: "organization", name: "SENTRY_TOKEN" }, { source: "project", name: "GH_TOKEN" }]);
+  return (
+    <Col>
+      <Label>An organisation automation: Acme&apos;s only</Label>
+      <SecretPicker orgName="Acme" org={ORG_SECRETS} value={orgOnly} onChange={setOrgOnly} />
+      <Label>A project automation: both lists, Acme&apos;s GH_TOKEN overridden by platform&apos;s</Label>
+      <SecretPicker orgName="Acme" org={ORG_SECRETS} project={{ name: "platform", secrets: PLATFORM_SECRETS }} value={both} onChange={setBoth} />
+      <Label>None yet</Label>
+      <SecretPicker orgName="Acme" org={[]} project={{ name: "platform", secrets: [] }} value={[]} onChange={() => {}} />
+      <Label>Disabled (a reader)</Label>
+      <SecretPicker orgName="Acme" org={ORG_SECRETS} value={orgOnly} onChange={() => {}} disabled />
+      <Label>One of dude&apos;s agents: no picker, what its role is ticked for</Label>
+      <PresetSecrets role="Tester" given={[{ from: "Acme", names: ["NPM_TOKEN", "SENTRY_TOKEN"] }, { from: "platform", names: ["DATABASE_SEED_URL"] }]} />
+      <PresetSecrets role="Investigator" given={[]} none="no secrets: it is not one of the agents a secret is given to" />
+      <Label>390px</Label>
+      <div style={{ width: 390, maxWidth: "100%" }}>
+        <SecretPicker orgName="Acme" org={ORG_SECRETS} project={{ name: "platform", secrets: PLATFORM_SECRETS }} value={both} onChange={setBoth} />
+      </div>
     </Col>
   );
 }
@@ -404,6 +471,16 @@ export function SettingsGallerySection({ mode }: { readonly mode: PaneMode }) {
       <Block id="s-secrets" title="Project secrets: GivenTo / GivenToFieldset / SecretsChip" note="A project secret reaches only who it is given to. GivenTo is a secret's recipients in a table cell, neutral badges, Nobody in muted words. GivenToFieldset is the dialogs' choice of recipients, each with its line; with none ticked it says why in place of its hint. SecretsChip is an agent session's secrets beside its MachineChip: a count, and in its tip the names only, never a value or hint. A session given none, a conductor or a brainstorm, shows no chip.">
         <Panes mode={mode}>
           <SecretsDemo />
+        </Panes>
+      </Block>
+      <Block id="secrets-overridden" title="OverriddenBy / SecretName" note="On a secret a more specific one replaces: the layers glyph and “Overridden by this project’s GH_TOKEN” in muted xs text, in place of Given to or a checkbox’s description; SecretName strikes the row’s own name through in muted ink and marks an inherited row “From Acme”, or ends it with a muted aside. Glyph and words, never colour alone. At 390 too.">
+        <Panes mode={mode} stackNarrow>
+          <OverriddenDemo />
+        </Panes>
+      </Block>
+      <Block id="secrets-picker" title="SecretPicker / PresetSecrets" note="An automation’s secrets: checkbox groups “Acme’s” and, for a project automation, “platform’s”, side by side and stacked when narrow. Each box is the mono name with its …last4, named “GH_TOKEN (Acme)” so the two GH_TOKENs differ. A name the project also holds cannot be ticked under the organisation: disabled, struck through, described by OverriddenBy. The value records the source as well as the name. One of dude’s agents shows PresetSecrets in its place: what its role is ticked for, read-only.">
+        <Panes mode={mode} stackNarrow>
+          <PickerDemo />
         </Panes>
       </Block>
       <Block id="s-tiers" title="TierLine / FlowSteps / NameChips / TierChip" note="A model tier in the pieces that show it. TierLine is a tier in a table or picker: its mark, name and what it is for. FlowSteps explains how something works once, in steps side by side. NameChips are suggestions under a field that takes any name. TierChip is the session header's model: the tier and the model it requested, what dude asked for and no more.">

@@ -167,3 +167,114 @@ export interface ProjectSecret {
   updatedAt: string;
   updatedBy: { id: string; name: string } | null;
 }
+
+// ---------------------------------------------------------------------------
+// Organisation secrets: project secrets one level up (migration 210). Each
+// reaches the agents it is ticked for in every project; a project secret of
+// the same name takes its place in that project.
+// ---------------------------------------------------------------------------
+
+/** An organisation's secret, as the API shows it: never its value. */
+export type OrgSecret = ProjectSecret;
+
+/** An organisation secret as Organisation settings → Secrets lists it. */
+export interface OrgSecretListing extends OrgSecret {
+  /** Projects holding a secret of the same name, whose agents get that one instead. */
+  overriddenIn: { id: string; name: string }[];
+  /** Automations that pick it; null for a caller who may not see them (not an admin). */
+  pickedBy: { id: string; name: string; projectId: string | null }[] | null;
+}
+
+/** `GET /v1/organizations/:id/secrets` */
+export interface OrgSecretsResponse {
+  organization: { id: string; name: string };
+  secrets: OrgSecretListing[];
+}
+
+/** An organisation secret may be ticked for nobody: automations that pick it still get it. */
+export const orgSecretRecipientsSchema = z.array(z.enum(SECRET_RECIPIENTS))
+  .refine((names) => new Set(names).size === names.length, "Choose each recipient only once.");
+export const changeOrgSecretRecipientsSchema = z.object({ recipients: orgSecretRecipientsSchema }).strict();
+
+/** `POST /v1/organizations/:id/secrets` */
+export const addOrgSecretSchema = z.object({
+  name: secretNameSchema,
+  value: secretValueSchema,
+  recipients: orgSecretRecipientsSchema.default(() => []),
+}).strict();
+
+/** Said in the recipients dialog and the table when an organisation secret is ticked for nobody. */
+export const ORG_SECRET_NOBODY = "Only automations that pick it";
+
+/** Why `name` cannot be added to the organisation's secrets, or null. */
+export function orgSecretNameProblem(name: string, secrets: readonly string[]): { kind: "invalid" | "conflict"; message: string } | null {
+  const shape = secretNameShapeProblem(name);
+  if (shape) return { kind: "invalid", message: shape };
+  if (secrets.includes(name)) return { kind: "conflict", message: duplicateSecretMessage(name) };
+  return null;
+}
+
+/** An organisation secret ticked for previews that a project's recipe sets: the project's server env would win there. */
+export function orgSecretClashMessage(server: string, project: string, name: string): string {
+  return `Server ${server} in ${project} sets ${name} in its own environment, which would override this in that project's previews. Rename one of them.`;
+}
+
+/**
+ * Why a recipe's env cannot be saved beside the organisation's secrets in
+ * force for its project and ticked for previews: the first variable it
+ * sets that is one; null if none is.
+ */
+export function recipeOrgSecretClash(recipe: RecipeEnvNames, orgName: string, previewSecrets: readonly string[]): string | null {
+  const e = recipe.env.find((v) => previewSecrets.includes(v.name));
+  if (!e) return null;
+  return `${e.name} is a preview secret of ${orgName}, and server ${recipe.name} setting it would override it in previews. Rename one of them.`;
+}
+
+export const SECRET_SOURCES = ["organization", "project"] as const;
+export type SecretSource = typeof SECRET_SOURCES[number];
+
+/** An automation's pick of one secret: both levels can hold a name, so the pick names its level. */
+export const secretRefSchema = z.object({
+  source: z.enum(SECRET_SOURCES),
+  name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/),
+}).strict();
+export type SecretRef = z.infer<typeof secretRefSchema>;
+
+export function sameSecretRef(a: SecretRef, b: SecretRef): boolean {
+  return a.source === b.source && a.name === b.name;
+}
+
+/**
+ * `refs` as runs resolve them (automation_secrets_given): an organisation
+ * pick whose name the project holds becomes the project's pick, since its
+ * value is what the run gets; each pick once.
+ */
+export function secretPicksInForce(refs: readonly SecretRef[], projectNames: readonly string[]): SecretRef[] {
+  const own = new Set(projectNames);
+  const out: SecretRef[] = [];
+  for (const r of refs) {
+    const pick: SecretRef = { source: r.source === "organization" && own.has(r.name) ? "project" : r.source, name: r.name };
+    if (!out.some((o) => sameSecretRef(o, pick))) out.push(pick);
+  }
+  return out;
+}
+
+export interface ResolvedSecret<T extends { name: string } = ProjectSecret> {
+  source: SecretSource;
+  secret: T;
+  /** An organisation row whose name the project holds: agents there get the project's. */
+  overridden: boolean;
+}
+
+/**
+ * A project's secrets as its agents get them by name: the project's own
+ * first, then the organisation's, each organisation row the project
+ * holds a name of marked overridden.
+ */
+export function resolveSecrets<T extends { name: string }>(org: readonly T[], project: readonly T[]): ResolvedSecret<T>[] {
+  const own = new Set(project.map((s) => s.name));
+  return [
+    ...project.map((secret) => ({ source: "project" as const, secret, overridden: false })),
+    ...org.map((secret) => ({ source: "organization" as const, secret, overridden: own.has(secret.name) })),
+  ];
+}

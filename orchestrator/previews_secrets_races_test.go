@@ -29,7 +29,7 @@ type secretsReadGate struct {
 }
 
 func (g *secretsReadGate) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "FROM project_secrets") && strings.Contains(data.SQL, "ANY(") {
+	if (strings.Contains(data.SQL, "FROM project_secrets") || strings.Contains(data.SQL, "FROM secrets_in_force(")) && strings.Contains(data.SQL, "ANY(") {
 		return context.WithValue(ctx, secretsReadGate{}, true)
 	}
 	return ctx

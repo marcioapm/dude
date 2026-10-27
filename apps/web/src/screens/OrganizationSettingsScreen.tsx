@@ -41,11 +41,12 @@ import { ImagesPage, queueCount, useImages } from "./ImagesSettings.tsx";
 import { useImageChoices } from "../images.tsx";
 import { NetworkPage } from "./NetworkSettings.tsx";
 import { AutomationPage, AutomationsList, automationsPlace, automationsSub } from "./AutomationsSettings.tsx";
+import { OrgSecretsPage } from "./OrgSecrets.tsx";
 import { ChatPages, chatNav, isChatPage, useChatOverview } from "./ChatSettings.tsx";
 
 // The first is where the screen opens: who is in the organization, then
 // GitHub, what a new organization sets up first.
-const PAGES = ["members", "invitations", "github", "general", ...SETTINGS_ROLES, "automations", "network", "models", "judgements", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
+const PAGES = ["members", "invitations", "github", "general", ...SETTINGS_ROLES, "automations", "secrets", "network", "models", "judgements", "machines", "images", "delivery", ...MEMORY_PAGES] as const;
 
 export interface OrganizationSettingsScreenProps {
   client: ApiClient;
@@ -119,6 +120,7 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         chatNav(chat.overview, admin),
         agentsNav(settings),
         { id: "automations", label: "Automations", icon: "zap" },
+        { id: "secrets", label: "Secrets", icon: "lock" },
         { id: "network", label: "Network", icon: "globe" },
         { id: "models", label: "Models", icon: "sparkle", note: models.tiers?.tiers.length || undefined },
         { id: "judgements", label: "Judgements", icon: "list-check", note: judgementTier && !judgementTier.model ? "no model" : undefined },
@@ -159,6 +161,9 @@ export function OrganizationSettingsScreen({ client, me, people, onPeopleChanged
         ) : (
           <AutomationsList client={client} orgName={orgName} projectId={null} canCreate={admin} onOpen={(id) => onPage("automations", id)} />
         )
+      ) : page === "secrets" ? (
+        // Secrets says who may change them itself.
+        <OrgSecretsPage client={client} orgName={orgName} admin={admin} />
       ) : page === "machines" ? (
         // Machines says who may change sizes itself.
         <MachinesPage client={client} orgName={settings?.organization.name ?? "the organisation"}

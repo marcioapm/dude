@@ -37,6 +37,7 @@ import { registerSettingsRoutes } from "./api/routes/settings.ts";
 import { registerProjectPageRoutes } from "./api/routes/projectPage.ts";
 import { registerLiveRoutes } from "./api/routes/live.ts";
 import { registerServerRoutes } from "./api/routes/servers.ts";
+import { registerOrgSecretRoutes } from "./api/routes/orgSecrets.ts";
 import { registerMemoryRoutes } from "./api/routes/memory.ts";
 import { registerHelpRoutes } from "./api/routes/help.ts";
 import { registerMachineRoutes } from "./api/routes/machines.ts";
@@ -95,6 +96,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerProjectPageRoutes(router);
   registerLiveRoutes(router);
   registerServerRoutes(router);
+  registerOrgSecretRoutes(router);
   registerAttachmentRoutes(router);
   registerSessionRoutes(router);
   registerAutomationRoutes(router);

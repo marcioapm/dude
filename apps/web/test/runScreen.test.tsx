@@ -51,9 +51,9 @@ describe("the session's bar", () => {
 });
 
 describe("the session's project secrets", () => {
-  const NAME = "Project secrets: 2 secrets, SNOWFLAKE_ACCOUNT, SNOWFLAKE_PASSWORD";
+  const NAME = "Secrets: 2 secrets, SNOWFLAKE_ACCOUNT, SNOWFLAKE_PASSWORD";
   /** Buttons whose accessible name starts as the secrets chip's does. */
-  const secretsChips = (page: HTMLElement) => allByRole(page, "button").filter((b) => accessibleName(b).startsWith("Project secrets"));
+  const secretsChips = (page: HTMLElement) => allByRole(page, "button").filter((b) => accessibleName(b).startsWith("Secrets: "));
 
   test("the header names how many it was given, after the machine; the tip lists names and no value", async () => {
     const page = await session({ client: new RunClient({ projectSecretNames: ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_PASSWORD"] }) });
@@ -61,7 +61,7 @@ describe("the session's project secrets", () => {
     expect(shown.textContent).toBe("2 secrets");
     const machine = machineChip(page)!;
     expect(machine.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(await tipOf(shown)).toBe("SNOWFLAKE_ACCOUNTSNOWFLAKE_PASSWORDGiven by project settings; values are never shown");
+    expect(await tipOf(shown)).toBe("SNOWFLAKE_ACCOUNTSNOWFLAKE_PASSWORDGiven by project and organisation settings; values are never shown");
   });
 
   test("a Run given none has no chip", async () => {

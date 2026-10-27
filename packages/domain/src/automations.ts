@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { harnessSchema } from "./harnesses.ts";
 import { timeLimitMinutesSchema } from "./hierarchy.ts";
+import { secretRefSchema, type SecretRecipient } from "./secrets.ts";
 import { SETTINGS_ROLE_LABEL } from "./settings.ts";
 
 export const AUTOMATION_KINDS = ["agent", "command", "server", "webhook"] as const;
@@ -341,15 +342,29 @@ const baseSchema = z.object({
   command: commandText.nullable().default(null),
   server: automationServerSchema.nullable().default(null),
   webhook: automationWebhookSchema.nullable().default(null),
-  secrets: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)).max(100).default([]),
+  secrets: z.array(secretRefSchema).max(100).default([]),
   notifyOnFailure: z.boolean().default(true),
 }).strict();
 
 export type AutomationInput = z.infer<typeof baseSchema>;
 
-/** Why an organisation automation names no secrets: they are each project's own. */
-export const ORG_AUTOMATION_SECRETS =
-  "Secrets belong to a project, so an organisation automation is given none. Make it a project's automation to use that project's secrets.";
+/** The Secrets row's help on an automation that picks its own: an own agent, a command, a server. */
+export const ORG_AUTOMATION_PICKS = (org: string) =>
+  `Only those ticked are given to each run, as environment variables. An organisation automation picks ${org}'s secrets; a project's automation picks the project's too.`;
+
+/** The Secrets row's help on a dude-role preset, which picks none. */
+export const PRESET_SECRETS = (role: string) =>
+  `It gets what ${role} is given: the organisation's and the project's secrets ticked for ${role}. Change who gets a secret in Secrets settings.`;
+
+/** The secret recipient a preset role's runs are, as a task's Run of that role is; the Investigator is none. */
+export const PRESET_SECRET_RECIPIENT: Record<PresetRole, SecretRecipient | null> = {
+  qa_browser: "tester",
+  reviewer: "reviewer",
+  investigator: null,
+};
+
+export const ORG_AUTOMATION_PROJECT_SECRET = "an organisation automation picks the organisation's secrets; a project's belong to its own automations";
+export const PRESET_PICKS_NO_SECRETS = "one of dude's agents gets what its role is given; it picks no secrets";
 
 /** What a Webhook or Server automation does when a POST gets a 5xx or no answer. */
 export const AUTOMATION_POST_RETRY = "A 5xx or no answer within 30 s is retried once; then the run fails and its owner is told.";
@@ -361,7 +376,9 @@ export const AUTOMATION_POST_RETRY = "A 5xx or no answer within 30 s is retried 
  */
 export function automationProblem(a: AutomationInput, scope: AutomationScope): { path: string; message: string } | null {
   if (scope === "project" && a.repoFilter) return { path: "repoFilter", message: "a project automation covers the project's repositories; only an organisation automation filters them" };
-  if (scope === "organization" && a.secrets.length > 0) return { path: "secrets", message: ORG_AUTOMATION_SECRETS };
+  if (scope === "organization" && a.secrets.some((s) => s.source === "project")) return { path: "secrets", message: ORG_AUTOMATION_PROJECT_SECRET };
+  if (a.agent && "preset" in a.agent && a.secrets.length > 0) return { path: "secrets", message: PRESET_PICKS_NO_SECRETS };
+  if (new Set(a.secrets.map((s) => `${s.source}:${s.name}`)).size !== a.secrets.length) return { path: "secrets", message: "each secret is picked once" };
   if (a.sessionMode === "resumable" && a.expiryDays === null) return { path: "expiryDays", message: "a resumable session expires after 1 to 30 days without a run" };
   if (a.sessionMode === "ephemeral" && a.expiryDays !== null) return { path: "expiryDays", message: "only a resumable session expires" };
   if (a.kind === "webhook" && a.sessionMode !== "ephemeral") return { path: "sessionMode", message: "a webhook keeps no session" };
