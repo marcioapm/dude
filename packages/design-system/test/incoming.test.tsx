@@ -52,14 +52,18 @@ describe("ConditionRows", () => {
     expect(value.at(-1)).toEqual({ path: "", op: "is", values: [] });
   });
 
-  test("with results, each row is marked Holds or Does not hold and a miss says what the body had", () => {
-    const html = renderToStaticMarkup(<ConditionRows value={two} results={[{ ok: true, actual: "firing" }, { ok: false, actual: "warning" }]} />);
-    expect(html).toContain('aria-label="Holds"');
-    expect(html).toContain('aria-label="Does not hold"');
-    expect(html).toContain("the body has <code class=\"ds-mono\">warning</code>");
+  test("with results, each row is marked Holds or Does not hold and a miss says what the body had", async () => {
+    const el = await mount(<ConditionRows value={two} results={[{ ok: true, actual: "firing" }, { ok: false, actual: "warning" }]} />);
+    const rows = [...el.querySelectorAll("li")];
+    const mark = (li: Element) => li.querySelector("[role=img]")!;
+    expect(rows.map((li) => [mark(li).getAttribute("aria-label"), mark(li).getAttribute("data-ok"), mark(li).querySelector("svg")?.getAttribute("data-icon")]))
+      .toEqual([["Holds", "true", "check"], ["Does not hold", "false", "cross"]]);
+    expect(rows[0]!.textContent).not.toContain("the body has");
+    expect(rows[1]!.querySelector("code")?.textContent).toBe("warning");
+    expect(rows[1]!.textContent).toContain("the body has warning");
     // Read-only: no remove, no add.
-    expect(html).not.toContain("Remove condition");
-    expect(html).not.toContain("add-condition");
+    expect(el.querySelector("button[aria-label^='Remove condition']")).toBeNull();
+    expect(el.querySelector("[data-testid=add-condition]")).toBeNull();
   });
 
   test("exists takes no value", () => {
@@ -68,15 +72,28 @@ describe("ConditionRows", () => {
 });
 
 describe("DeliveryVerdict", () => {
-  test("every verdict reads its words", () => {
-    const words = (v: Parameters<typeof DeliveryVerdict>[0]["verdict"]) => renderToStaticMarkup(<DeliveryVerdict verdict={v} />);
-    expect(words({ kind: "started", runId: "arn_1" })).toContain("Started run");
-    expect(words({ kind: "sent", runId: "arn_1" })).toContain("Sent to running agent");
-    expect(words({ kind: "skipped", because: "status is resolved, not firing" })).toContain("status is resolved, not firing");
-    for (const [reason, text] of [["signature", "Bad signature"], ["not_json", "Not JSON"], ["too_large", "Too large"], ["rate_limited", "Rate limited"]] as const) {
-      expect(words({ kind: "refused", reason })).toContain(`Refused · ${text}`);
-    }
+  test("every verdict reads its words, tone and glyph", async () => {
+    const all: Array<[Parameters<typeof DeliveryVerdict>[0]["verdict"], string, string, string]> = [
+      [{ kind: "started", runId: "arn_1" }, "Started run", "success", "play"],
+      [{ kind: "sent", runId: "arn_1" }, "Sent to running agent", "info", "send"],
+      [{ kind: "sent", runId: null }, "Sent to running agent", "info", "send"],
+      [{ kind: "skipped", because: "status is resolved, not firing" }, "Skipped", "neutral", "circle-dotted"],
+      [{ kind: "refused", reason: "signature" }, "Refused · Bad signature", "danger", "circle-x"],
+      [{ kind: "refused", reason: "not_json" }, "Refused · Not JSON", "danger", "circle-x"],
+      [{ kind: "refused", reason: "too_large" }, "Refused · Too large", "danger", "circle-x"],
+      [{ kind: "refused", reason: "rate_limited" }, "Refused · Rate limited", "danger", "circle-x"],
+      [{ kind: "refused", reason: "disabled" }, "Refused · Turned off", "danger", "circle-x"],
+      [{ kind: "pending" }, "Waiting", "neutral", "clock"],
+    ];
+    const el = await mount(<>{all.map(([v], i) => <DeliveryVerdict key={i} verdict={v} detail={false} />)}</>);
+    const chips = [...el.querySelectorAll("[data-verdict]")];
+    expect(chips.map((c) => [c.textContent, c.getAttribute("data-tone"), c.querySelector("svg")?.getAttribute("data-icon")]))
+      .toEqual(all.map(([, word, tone, icon]) => [word, tone, icon]));
+    expect(renderToStaticMarkup(<DeliveryVerdict verdict={{ kind: "skipped", because: "status is resolved, not firing" }} />))
+      .toContain("status is resolved, not firing");
     expect(renderToStaticMarkup(<DeliveryVerdict verdict={{ kind: "skipped", because: "x missed" }} detail={false} />)).not.toContain("x missed");
+    // A sent verdict with no run is no button.
+    expect(renderToStaticMarkup(<DeliveryVerdict verdict={{ kind: "sent", runId: null }} onRun={() => undefined} />)).not.toContain("<button");
   });
 
   test("a verdict with a run is a button that opens it, without opening the row", async () => {
@@ -107,5 +124,7 @@ describe("KeyShownOnce", () => {
     expect(document.querySelector('[data-testid="key-done"]')!.textContent).toBe("I've stored it");
     expect(document.body.textContent).toContain("Secret");
     expect(el).toBeTruthy();
+    await act(async () => root!.render(<TooltipProvider><KeyShownOnce title="New key" secret="k_x" onClose={() => undefined} /></TooltipProvider>));
+    expect(document.querySelector('[data-testid="key-done"]')!.textContent).toBe("Done");
   });
 });

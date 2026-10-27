@@ -91,6 +91,13 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <div style={{ width: 128 }}>
               <TriggerSummary wrap trigger={{ kind: "github", event: "pull_request", actions: ["opened", "synchronize", "reopened"] }} />
             </div>
+            <Label>Incoming triggers: none, one, three conditions; wrapped at 128</Label>
+            <TriggerSummary trigger={{ kind: "incoming", conditions: [] }} />
+            <TriggerSummary trigger={{ kind: "incoming", conditions: ALERT_CONDITIONS.slice(0, 1) }} />
+            <TriggerSummary trigger={{ kind: "incoming", conditions: [...ALERT_CONDITIONS, { path: "receiver", op: "exists", values: [] }] }} />
+            <div style={{ width: 128 }}>
+              <TriggerSummary wrap trigger={{ kind: "incoming", conditions: ALERT_CONDITIONS }} />
+            </div>
             <Label>Session</Label>
             <SessionMark mode="ephemeral" />
             <SessionMark mode="resumable" expiryDays={7} />
@@ -175,7 +182,7 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
           </Col>
         </Panes>
       </Block>
-      <Block id="au-delivery-verdict" title="DeliveryVerdict" note="What dude did with one delivery; the two with a run open it.">
+      <Block id="au-delivery-verdict" title="DeliveryVerdict" note="What dude did with one delivery; the two with a run open it. Waiting until dude has read it.">
         <Panes mode={mode}>
           <Col>
             <Label>Linked</Label>
@@ -183,21 +190,18 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <DeliveryVerdict verdict={{ kind: "sent", runId: "arn_1" }} onRun={() => undefined} />
             <Label>Not linked</Label>
             <DeliveryVerdict verdict={{ kind: "started", runId: "arn_1" }} />
+            <DeliveryVerdict verdict={{ kind: "sent", runId: null }} />
             <DeliveryVerdict verdict={{ kind: "skipped", because: "status is resolved, not firing" }} />
             <DeliveryVerdict verdict={{ kind: "refused", reason: "signature" }} />
             <DeliveryVerdict verdict={{ kind: "refused", reason: "not_json" }} />
             <DeliveryVerdict verdict={{ kind: "refused", reason: "too_large" }} />
             <DeliveryVerdict verdict={{ kind: "refused", reason: "rate_limited" }} />
+            <DeliveryVerdict verdict={{ kind: "refused", reason: "disabled" }} />
+            <Label>Not read yet</Label>
+            <DeliveryVerdict verdict={{ kind: "pending" }} />
             <Label>Skipped with a long reason, in a 390 cell</Label>
             <div style={{ width: 390 }}>
               <DeliveryVerdict verdict={{ kind: "skipped", because: "commonLabels.severity is warning, not one of critical, high" }} />
-            </div>
-            <Label>Incoming triggers: none, one, three conditions; wrapped at 128</Label>
-            <TriggerSummary trigger={{ kind: "incoming", conditions: [] }} />
-            <TriggerSummary trigger={{ kind: "incoming", conditions: ALERT_CONDITIONS.slice(0, 1) }} />
-            <TriggerSummary trigger={{ kind: "incoming", conditions: [...ALERT_CONDITIONS, { path: "receiver", op: "exists", values: [] }] }} />
-            <div style={{ width: 128 }}>
-              <TriggerSummary wrap trigger={{ kind: "incoming", conditions: ALERT_CONDITIONS }} />
             </div>
           </Col>
         </Panes>
