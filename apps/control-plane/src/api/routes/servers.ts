@@ -316,6 +316,52 @@ async function startPreview(ctx: RequestContext): Promise<Response> {
   return forward(ctx, "POST", taskPath(ctx, "preview"));
 }
 
+/** `origin` from the query: an https origin exactly as a browser writes one (no path, no trailing slash), or 400. */
+function previewOrigin(ctx: RequestContext): string {
+  const given = ctx.url.searchParams.get("origin") ?? "";
+  let origin: string | null = null;
+  try {
+    const u = new URL(given);
+    origin = u.protocol === "https:" ? u.origin : null;
+  } catch {
+    origin = null;
+  }
+  if (given.length > 300 || origin === null || origin !== given) throw badRequest("origin must be an https origin, such as https://web-shop-1.preview.example.test");
+  return origin;
+}
+
+/**
+ * Which task's live preview is served at an origin: the preview page's
+ * Connect to dude asks, through the dude tab it opened, so that tab can go to
+ * the task and adopt the page. Looked up in the caller's organisations only,
+ * each under its own row-level security as /v1/locate does; a server is
+ * found by the URL lux gave it, never by parsing its hostname.
+ */
+async function lookupPreviewServer(ctx: RequestContext): Promise<Response> {
+  const origin = previewOrigin(ctx);
+  const memberships = ctx.principal.access?.memberships ??
+    [{ organization_id: ctx.principal.organizationId, person_id: ctx.principal.personId }];
+  for (const m of memberships) {
+    const found = await withOrg(m.organization_id, async ({ sql }) => {
+      const rows = (await sql`
+        SELECT o.slug AS "organizationSlug", t.id AS "taskId", p.key_prefix || '-' || t.number AS "taskKey", s.name AS server, s.url
+        FROM preview_servers s
+        JOIN runs r ON r.id = s.run_id
+        JOIN tasks t ON t.id = r.task_id
+        JOIN projects p ON p.id = t.project_id
+        JOIN organizations o ON o.id = s.organization_id
+        WHERE s.deleted_at IS NULL AND r.kind = 'preview' AND (s.url = ${origin} OR starts_with(s.url, ${`${origin}/`}))
+        ORDER BY s.created_at DESC`) as Array<{ organizationSlug: string; taskId: string; taskKey: string; server: string; url: string }>;
+      return rows.find((r) => URL.canParse(r.url) && new URL(r.url).origin === origin) ?? null;
+    });
+    if (found) {
+      const { url: _url, ...out } = found;
+      return json(out);
+    }
+  }
+  throw notFound(`no task of yours has a preview at ${origin}`);
+}
+
 export function registerServerRoutes(router: Router): void {
   router.get("/v1/projects/:id/servers", listProjectServers);
   router.put("/v1/projects/:id/servers/:name", putProjectServer);
@@ -330,6 +376,7 @@ export function registerServerRoutes(router: Router): void {
   router.get("/v1/tasks/:id/servers", (ctx) => forward(ctx, "GET", taskPath(ctx, "servers")));
   router.post("/v1/tasks/:id/preview", startPreview);
   router.delete("/v1/tasks/:id/preview", (ctx) => forward(ctx, "DELETE", taskPath(ctx, "preview")));
+  router.get("/v1/preview-servers/lookup", lookupPreviewServer);
 
   router.get("/v1/runs/:runId/servers", (ctx) => forward(ctx, "GET", runPath(ctx)));
   router.post("/v1/runs/:runId/servers", addRunServer);
