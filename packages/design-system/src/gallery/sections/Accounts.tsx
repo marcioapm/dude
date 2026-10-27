@@ -64,12 +64,18 @@ function OpenSwitcher({ variant }: { readonly variant: "band" | "rail" | "key" }
 }
 
 function KeyDemo() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<"key" | "hook" | null>(null);
   return (
     <>
-      <Button onClick={() => setOpen(true)}>Show a new key</Button>
-      {open ? <KeyShownOnce title="Key “Laptop” for Acme" secret="dude_sk_N7wq2c4ZkLr0sYb1pFhT8eXuAm5dJgVo" onClose={() => setOpen(false)}
+      <Button onClick={() => setOpen("key")}>Show a new key</Button>
+      <Button onClick={() => setOpen("hook")}>Show an incoming webhook's secret</Button>
+      {open === "key" ? <KeyShownOnce title="Key “Laptop” for Acme" secret="dude_sk_N7wq2c4ZkLr0sYb1pFhT8eXuAm5dJgVo" onClose={() => setOpen(null)}
         usage={"dude login https://dude.acme.dev\n# paste the key when asked: the dude CLI then acts as you in Acme"} /> : null}
+      {open === "hook" ? <KeyShownOnce title="New verification secret" label="Secret" doneLabel="I've stored it"
+        description="The old secret stops working now. Copy this one: it is not shown again."
+        secret="whsec_4f8Qk2NnZ0tB7cVx1RjL9mPa91c" onClose={() => setOpen(null)} usageHeading="The sender sets · Header token"
+        usage={"curl -X POST https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18 \\\n  -H 'Content-Type: application/json' \\\n  -H \"Authorization: whsec_…\" \\\n  --data '{\"status\":\"firing\"}'"}
+        usageNote="dude keeps only its last 4 characters to show. Rotate makes a new one." /> : null}
     </>
   );
 }

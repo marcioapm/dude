@@ -2687,6 +2687,7 @@ are in `docs/design/accounts.md`):
   set in a square sunken well) under `usageHeading` ("How to use it"),
   with a muted `usageNote`. Done closes it;
   nothing shows it again. `copy` replaces the clipboard write in tests.
+  `doneLabel?` (default "Done") names the closing button, e.g. "I've stored it" for an incoming webhook's secret; `label?` (default "Key") names the field.
 - **FrontDoor / FrontDoorMessage / FrontDoorLink / HowList** — a page that
   is one centred column: the app's `mark`, a heading (the page's `h1`) and
   its `line`, cards, and fine print (`footer`) with an inline
@@ -3025,10 +3026,15 @@ Settings → *Project secrets* (`#s-secrets`), *OverriddenBy / SecretName*
 `TriggerSummary`, `SessionMark`, `ListSwitch`, `NextRuns`, `DayToggles`,
 `SchedulePicker`, `ChipsInput`, `RepoFilterField`, and the helpers
 `describeCron`, `scheduleOf`, `cronOf`, `repoGlob`, `repoFilterCount`,
-`cityOf`. Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
-`#au-schedule`, `#au-chips`, `#au-repo-filter`), in both themes and
+`cityOf`; `src/components/Incoming.tsx`: `ConditionRows`, `DeliveryVerdict`.
+Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
+`#au-schedule`, `#au-chips`, `#au-repo-filter`, `#au-conditions`,
+`#au-delivery-verdict`), in both themes and
 densities. No tone of their own: an automation's state is its runs'
 (`StatusMark`), so `paletteDistance` is untouched.
+
+- **ConditionRows** (`value`, `onChange?`, `results?`, `paths?`): an incoming webhook's conditions on its JSON body, AND'd. Each row is a mono path `Input`, an operator `Select` (is, is not, one of, contains, exists) and its value: an `Input`, a `ChipsInput` for one of (values OR'd), nothing for exists. Rows lead with "When"/"and"; with `results` the lead is a ✓ (success tone) or ✗ (danger tone) mark named "Holds"/"Does not hold", and a missed row says what the body had. "+ Condition" adds a row; each row's remove button is named "Remove condition N". Below 720px a row stacks path and operator over its value.
+- **DeliveryVerdict** (`verdict`, `onRun?`, `detail?`): what dude did with one delivery, as a chip at the chip height: Started run (success, play glyph), Sent to running agent (info, send), Skipped (neutral, dotted circle) and the condition that missed, Refused · Bad signature / Not JSON / Too large / Rate limited (danger, circle-x). With `onRun` the first two are buttons named "<verdict>: open the run". Tones are the existing five.
 
 - **KindMark** (`kind`, `role?`): the kind as glyph and word (Agent,
   Command, Server, Send a webhook); an agent that is one of dude's roles adds
@@ -3044,7 +3050,7 @@ densities. No tone of their own: an automation's state is its runs'
   that wrap in a narrow cell, the glyph staying beside the first word; a long event name breaks under the glyph rather than being cut off, and a line never ends on the "·" alone. A schedule in words when it is a
   preset ("Daily at 03:00", "Weekdays at 09:30", "Every 15 minutes") else
   the cron line, then the zone's city muted; an event in mono and its
-  actions, or "any action".
+  actions, or "any action"; an incoming webhook as "Incoming" and, muted in mono, its first condition and "+N" for the rest, or "any JSON".
 - **SessionMark** (`mode`, `expiryDays?`): Ephemeral, or Resumable and its
   expiry in days.
 - **ListSwitch** (`checked`, `onCheckedChange`, `label`): the settings

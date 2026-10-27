@@ -9,6 +9,7 @@ import { NumberInput } from "../primitives/NumberInput.tsx";
 import { Select } from "../primitives/Select.tsx";
 import type { Person } from "../util/viewTypes.ts";
 import styles from "./Automations.module.css";
+import { IncomingSummary, type TriggerCondition } from "./Incoming.tsx";
 // ListSwitch is the settings Switch without its label row: one look, one stylesheet.
 import settingsStyles from "./Settings.module.css";
 
@@ -97,9 +98,11 @@ export function OwnerMark({ owner, avatarOnly, left, org }: {
  */
 export function TriggerSummary({ trigger, wrap }: {
   readonly trigger: { readonly kind: "schedule"; readonly cron: string; readonly tz: string }
-    | { readonly kind: "github"; readonly event: string; readonly actions?: readonly string[] | undefined };
+    | { readonly kind: "github"; readonly event: string; readonly actions?: readonly string[] | undefined }
+    | { readonly kind: "incoming"; readonly conditions: readonly TriggerCondition[] };
   readonly wrap?: boolean | undefined;
 }) {
+  if (trigger.kind === "incoming") return <IncomingSummary conditions={trigger.conditions} wrap={wrap} />;
   const schedule = trigger.kind === "schedule";
   const glyph = <Icon name={schedule ? "clock" : "github"} size={14} className={styles["kindIcon"]} />;
   const words = schedule ? describeCron(trigger.cron) : trigger.event;

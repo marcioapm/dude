@@ -132,6 +132,8 @@ export type { SettingsLayoutProps, SettingsNavItem, SettingRowProps, SettingSour
 export { ChipsInput, DayToggles, KindMark, ListSwitch, NextRuns, OwnerMark, RepoFilterField, SchedulePicker, ScopeChip, SessionMark, TriggerSummary,
   cityOf, cronOf, describeCron, repoFilterCount, repoGlob, scheduleOf } from "./Automations.tsx";
 export type { AutomationKindName, RepoFilterValue, ScheduleMode } from "./Automations.tsx";
+export { ConditionRows, DeliveryVerdict, IncomingSummary, conditionWords } from "./Incoming.tsx";
+export type { ConditionOpName, ConditionResultMark, DeliveryVerdictValue, TriggerCondition } from "./Incoming.tsx";
 export { PromptHistory } from "./PromptHistory.tsx";
 export type { PromptHistoryProps, PromptHistoryVersion } from "./PromptHistory.tsx";
 export { EpicCard, EpicRow, EpicProgress, EpicPullRequests } from "./EpicCard.tsx";
