@@ -38,14 +38,16 @@ export interface GalleryFile {
 /** Media shows as a picture; everything else as a row. */
 const isMedia = (k: ArtifactKind) => k === "image" || k === "video";
 
+const byName = new Intl.Collator(undefined, { numeric: true });
+
 const mediaFirst = (f: GalleryFile) => (isMedia(artifactKind(f.versions[0]!.contentType, f.name)) ? 0 : 1);
 
 /**
- * Files in the order the gallery shows them — pictures, then documents —
- * which is the order the viewer walks them.
+ * Files in the order the gallery shows them — pictures, then documents, each
+ * by name (01-…, 02-… read in order) — which is the order the viewer walks them.
  */
 export function galleryOrder(files: ReadonlyArray<GalleryFile>): GalleryFile[] {
-  return [...files].sort((a, b) => mediaFirst(a) - mediaFirst(b));
+  return [...files].sort((a, b) => mediaFirst(a) - mediaFirst(b) || byName.compare(a.name, b.name));
 }
 
 type Filter = "all" | "documents" | "media";

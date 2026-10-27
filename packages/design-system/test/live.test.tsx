@@ -8,7 +8,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LiveDiff, splitRows, type LiveDiffFile } from "../src/components/LiveDiff.tsx";
-import type { GalleryFile } from "../src/components/FileGallery.tsx";
+import { galleryOrder, type GalleryFile } from "../src/components/FileGallery.tsx";
 import { artifactKind } from "../src/components/ArtifactRow.tsx";
 import { cssModuleAsWritten } from "./cssModule.ts";
 
@@ -148,6 +148,12 @@ describe("FileGallery", () => {
     expect(html).toContain(">v2<");
     expect(html).toContain("Download all");
     expect(html).toContain("3 KB");
+  });
+
+  test("pictures, then documents, each by name as a person counts: 2 before 10, the case ignored", () => {
+    const named = (...names: string[]) => names.map((n) => ({ name: n, versions: [v(n, n.endsWith(".md") ? "text/markdown" : "image/png")] }));
+    const order = galleryOrder(named("b.md", "10-done.png", "02-cleared.png", "A.md", "2-saved.png", "walkthrough.png")).map((f) => f.name);
+    expect(order).toEqual(["02-cleared.png", "2-saved.png", "10-done.png", "walkthrough.png", "A.md", "b.md"]);
   });
 
   test("a video with a picture shows it under a play glyph, still a button; without one, the dark card", () => {
