@@ -1283,11 +1283,168 @@ func TestAutomationConcurrencyCancelReadsTheLastOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.runner.EndCancelled(ctx, fired.Cancelled)
+	h.runner.Wait()
 	if got := lines(first.ID); !slices.Equal(got, []string{"early", "late"}) {
 		t.Fatalf("cancelled run's lines %q", got)
 	}
 	if !lux.Terminated(h.luxState(first.LuxRunID)) {
 		t.Errorf("the cancelled command's lux Run is %s", h.luxState(first.LuxRunID))
+	}
+}
+
+// logLines is a run's recorded command lines, in order.
+func (h *harness) logLines(runID string) []string {
+	h.t.Helper()
+	rows, err := h.owner.Query(context.Background(), `SELECT payload->>'text' FROM events
+		WHERE automation_run_id = $1 AND event_type = $2 ORDER BY cursor`, runID, phases.EvLogLine)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return got
+}
+
+// luxWrote waits until the lux Run's output holds text.
+func (h *harness) luxWrote(luxRunID, text string) {
+	h.t.Helper()
+	wrote := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		seen := false
+		_ = h.lux.Output(ctx, luxRunID, "", 0, func(f lux.Frame) error {
+			seen = seen || strings.Contains(f.Data, text)
+			return nil
+		})
+		return seen
+	}
+	for deadline := time.Now().Add(10 * time.Second); !wrote(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("lux never recorded %q", text)
+		}
+	}
+}
+
+// fireNow fires automation id for one push delivery, as a sweep would.
+func (h *harness) fireNow(id, delivery string) Fired {
+	h.t.Helper()
+	ctx := context.Background()
+	body, _ := json.Marshal(map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	var fired Fired
+	if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+		a, err := Load(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		fired, err = Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: delivery, Event: "push", Body: body}}, "", nil)
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return fired
+}
+
+// A follow pass in flight when its run is cancelled, holding the run's
+// old cursor inside lux's output stream, and the cancel's final read
+// record each line once: whether that pass was dispatched by the sweep
+// (the final read waits for it) or not (the cursor's compare-and-set
+// turns the later writer away).
+func TestAutomationConcurrencyCancelReadRacesNoFollower(t *testing.T) {
+	for _, dispatched := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dispatched=%v", dispatched), func(t *testing.T) {
+			h := newHarness(t)
+			g := newGate(t)
+			push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+			h.automation("aut_race", "command", map[string]any{"kind": "github", "event": "push"},
+				map[string]any{"command": "echo early; " + g.hold("echo late; sleep 60"), "concurrency": "cancel"})
+			h.deliver("r-1", "push", push)
+			h.until("the first line is in the feed", func() bool {
+				r := h.runs("aut_race")
+				return len(r) == 1 && r[0].Status == "running" && slices.Contains(h.logLines(r[0].ID), "early")
+			})
+			first := h.runs("aut_race")[0]
+			h.runner.Wait()
+			g.release(t)
+			h.luxWrote(first.LuxRunID, "late")
+
+			// The first stream of the run's output to reach a lifecycle
+			// event, after its records, waits there until released.
+			var holding atomic.Bool
+			held, release := make(chan struct{}), make(chan struct{})
+			h.fake.BeforeEvent(func(runID string, _ int64, _ string) {
+				if runID == first.LuxRunID && holding.CompareAndSwap(false, true) {
+					close(held)
+					<-release
+				}
+			})
+			defer h.fake.BeforeEvent(nil)
+			ctx := context.Background()
+			followed := make(chan struct{})
+			if dispatched {
+				if _, err := h.runner.followRunning(ctx); err != nil {
+					t.Fatal(err)
+				}
+				close(followed)
+			} else {
+				go func() {
+					defer close(followed)
+					if err := h.runner.followOne(ctx, first.ID, h.org, "aut_race", first.LuxRunID, SourceEvent); err != nil {
+						t.Error(err)
+					}
+				}()
+			}
+			<-held
+			h.runner.EndCancelled(ctx, h.fireNow("aut_race", "r-2").Cancelled)
+			if !dispatched {
+				h.runner.Wait()
+			}
+			close(release)
+			<-followed
+			h.runner.Wait()
+			if got := h.logLines(first.ID); !slices.Equal(got, []string{"early", "late"}) {
+				t.Fatalf("cancelled run's lines %q", got)
+			}
+		})
+	}
+}
+
+// Each cancelled run's final read takes up to readOutput's 2 s; a sweep
+// that cancels several runs returns without waiting for any of them.
+func TestAutomationConcurrencyCancelsDoNotStallTheSweep(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	ids := []string{"aut_stall_a", "aut_stall_b", "aut_stall_c"}
+	for _, id := range ids {
+		h.automation(id, "command", map[string]any{"kind": "github", "event": "push"},
+			map[string]any{"command": g.hold("echo done"), "concurrency": "cancel"})
+	}
+	h.deliver("st-1", "push", push)
+	h.until("every first run is running", func() bool {
+		for _, id := range ids {
+			if r := h.runs(id); len(r) != 1 || r[0].Status != "running" || r[0].LuxRunID == "" {
+				return false
+			}
+		}
+		return true
+	})
+	h.runner.Wait()
+	h.deliver("st-2", "push", push)
+	start := time.Now()
+	if _, err := h.runner.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	for _, id := range ids {
+		if r := h.runs(id); len(r) != 2 || r[0].Status != "cancelled" {
+			t.Fatalf("%s: %+v", id, r)
+		}
+	}
+	if took >= 2*time.Second {
+		t.Fatalf("a sweep cancelling %d runs took %s", len(ids), took)
 	}
 }
 

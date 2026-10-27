@@ -193,6 +193,50 @@ func TestDudeRecordsJoinArgumentsNotCompletionOrder(t *testing.T) {
 	}
 }
 
+// A call its run's end aborted stays aborted: its completion read after
+// that end (a cancelled run's final read) records nothing more.
+func TestAutomationAbortedCallIsNeverCompletedAfter(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	a.feed(feedCases[0].records[2])
+	ctx := context.Background()
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		if err := f.End(ctx, tx, "Stopped: the run was cancelled."); err != nil {
+			return err
+		}
+		return f.Save(ctx, tx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.feed(map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "title": "bash", "rawOutput": map[string]any{"output": "more"}}},
+		feedCases[0].records[3])
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		if open := f.OpenCalls(); len(open) != 0 {
+			return fmt.Errorf("open after its abort: %v", open)
+		}
+		return f.End(ctx, tx, "Stopped: the run was cancelled.")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var statuses []string
+	for _, e := range a.events() {
+		if e.Type == evToolCompleted && e.Payload["callId"] == "c1" {
+			statuses = append(statuses, e.Payload["status"].(string))
+		}
+	}
+	if !reflect.DeepEqual(statuses, []string{"aborted"}) {
+		t.Fatalf("c1's completions: %v", statuses)
+	}
+}
+
 func TestAutomationRunningOutputSurvivesAnAbortedEnd(t *testing.T) {
 	w := newHarnessWorld(t)
 	a := newAutomationWorld(t, w)

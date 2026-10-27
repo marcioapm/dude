@@ -2817,6 +2817,17 @@ func (s *Server) ReleasePushes() {
 	}
 }
 
+// AgentSays records one ACP session update of a Run's agent (its
+// sessionUpdate names the kind), in the Run's harness dialect, as if the
+// agent had sent it now.
+func (s *Server) AgentSays(id string, update map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.agent(run, update)
+	}
+}
+
 // AddEvents records n lifecycle events of typ on a Run, as a long-lived
 // Run's history.
 func (s *Server) AddEvents(id, typ string, n int) {

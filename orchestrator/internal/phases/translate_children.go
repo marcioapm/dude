@@ -218,6 +218,9 @@ func (t *translator) callStarted(ctx context.Context, tx pgx.Tx, s *Syncer, c *c
 	id, _ := payload["callId"].(string)
 	name, _ := payload["tool"].(string)
 	if c == nil {
+		if t.closed[id] {
+			return nil
+		}
 		if _, seen := t.seenCalls[id]; seen {
 			return nil
 		}
@@ -248,6 +251,9 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 	id, _ := payload["callId"].(string)
 	name, _ := payload["tool"].(string)
 	if c == nil {
+		if t.closed[id] {
+			return nil
+		}
 		// The pending announcement's name is lost when dude restarts between
 		// it and the completion; what survives the restart is the result's
 		// note, which capOutput withholds whatever the call is named.

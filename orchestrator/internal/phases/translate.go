@@ -118,6 +118,9 @@ type translator struct {
 	// Adds to a completion of the Run's own call before it is recorded
 	// (AutomationFeed: dude's record of the call); nil for a Run.
 	completing func(ctx context.Context, tx pgx.Tx, payload map[string]any) error
+	// An automation run's calls its end already aborted: a later start or
+	// completion of one (a final read after a cancel) records nothing.
+	closed map[string]bool
 }
 
 // harnessState is runs.harness_state: Claude Code's running cost for its

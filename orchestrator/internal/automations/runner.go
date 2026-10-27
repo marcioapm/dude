@@ -151,6 +151,23 @@ func (r *Runner) dispatch(ctx context.Context, pool, key string, fn func(context
 	return true
 }
 
+// dispatchWhenFree is dispatch for work that must not be dropped: off the
+// caller, it waits until key is no longer in flight and pool has a worker,
+// then runs fn; it gives up only when ctx ends.
+func (r *Runner) dispatchWhenFree(ctx context.Context, pool, key string, fn func(context.Context)) {
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		for !r.dispatch(ctx, pool, key, fn) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}()
+}
+
 // Wait returns when the background work dispatch started has ended.
 func (r *Runner) Wait() { r.wg.Wait() }
 
@@ -385,26 +402,36 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 
 // EndCancelled ends the lux Runs of runs a firing cancelled: a kept
 // session's is stopped, so the new run resumes it; any other's is ended.
-// What each wrote since its last follow pass is read first, once.
+// An agent's or command's output since its last follow pass is read first,
+// once, in the background under the run's follow key: after a follow pass
+// still in flight, never on the caller's sweep.
 func (r *Runner) EndCancelled(ctx context.Context, cancelled []Cancelled) {
 	for _, c := range cancelled {
-		if err := r.readCancelled(ctx, c); err != nil {
-			r.Log.Warn("reading a cancelled automation run's last output failed", "run", c.RunID, "error", err)
+		if !c.readsLast() {
+			r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
+			continue
 		}
-		r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
+		r.dispatchWhenFree(ctx, poolFollow, "follow:"+c.RunID, func(ctx context.Context) {
+			if err := r.readCancelled(ctx, c); err != nil {
+				r.Log.Warn("reading a cancelled automation run's last output failed", "run", c.RunID, "error", err)
+			}
+			r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
+		})
 	}
+}
+
+// readsLast says the cancelled run's lux output is read once more. A
+// server's log is read by followServer, not from this stream.
+func (c Cancelled) readsLast() bool {
+	return c.RunID != "" && (c.automation.Kind == "agent" || c.automation.Kind == "command")
 }
 
 // readCancelled reads an agent's or command's lux output past the run's
 // cursor into its activity and log_tail, and moves the cursor past it: a
 // resumed session's next run starts reading there. Fire already ended the
 // feed; ending it again flushes and aborts only what these frames opened.
-// A server's log is read by followServer, not from this stream.
 func (r *Runner) readCancelled(ctx context.Context, c Cancelled) error {
 	a := c.automation
-	if c.RunID == "" || (a.Kind != "agent" && a.Kind != "command") {
-		return nil
-	}
 	var cursor, prior string
 	var busy bool
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
@@ -418,8 +445,10 @@ func (r *Runner) readCancelled(ctx context.Context, c Cancelled) error {
 		return err
 	}
 	return r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, log_tail = right(COALESCE(log_tail, '') || $3, 16000)
-			WHERE id = $1`, c.RunID, newCursor, log); err != nil {
+		// Another reader that moved the cursor since has these frames.
+		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, log_tail = right(COALESCE(log_tail, '') || $3, 16000)
+			WHERE id = $1 AND COALESCE(lux_cursor, '') = $4`, c.RunID, newCursor, log, cursor)
+		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		return feedFrames(ctx, tx, a, c.RunID, frames.list, true, "cancelled", nil)
@@ -1123,12 +1152,17 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 			return false, err
 		}
 	}
+	moved := true
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, busy_seen = busy_seen OR $3,
-			inputs_sent = inputs_sent + $5, log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1`,
-			runID, newCursor, turnDone.busy, log, sent)
+		// A cancel's final read that moved the cursor since has these frames.
+		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, busy_seen = busy_seen OR $3,
+			inputs_sent = inputs_sent + $5, log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1 AND COALESCE(lux_cursor, '') = $6`,
+			runID, newCursor, turnDone.busy, log, sent, cursor)
 		if err != nil {
 			return err
+		}
+		if moved = tag.RowsAffected() > 0; !moved {
+			return nil
 		}
 		// The activity feed, with the cursor past the frames it came from.
 		var exit *int
@@ -1142,6 +1176,9 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 		return feedFrames(ctx, tx, a, runID, frames.list, ended, cmp.Or(got.StateReason, got.State), exit)
 	}); err != nil {
 		return false, err
+	}
+	if !moved {
+		return false, nil
 	}
 	if sent > 0 {
 		return true, nil

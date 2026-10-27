@@ -75,6 +75,8 @@ type automationFeedState struct {
 	Joined       map[string]int64 `json:"joined,omitempty"`
 	ServerAt     int64            `json:"serverAt,omitempty"`
 	ServerTail   []string         `json:"serverTail,omitempty"`
+	// Calls End aborted (translator.closed).
+	Closed []string `json:"closed,omitempty"`
 }
 
 // LoadAutomationFeed restores the feed of run as its last batch saved it.
@@ -98,6 +100,12 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 	maps.Copy(t.seenCalls, st.Calls)
 	for _, id := range st.Open {
 		t.openCalls[id] = true
+	}
+	for _, id := range st.Closed {
+		if t.closed == nil {
+			t.closed = map[string]bool{}
+		}
+		t.closed[id] = true
 	}
 	return f, nil
 }
@@ -209,7 +217,16 @@ func (f *AutomationFeed) Apply(ctx context.Context, tx pgx.Tx, fr lux.Frame) err
 	if strings.HasPrefix(fr.Event.Type, "lux.") {
 		return nil
 	}
-	return f.t.agentEvent(ctx, tx, f.s, fr)
+	if err := f.t.agentEvent(ctx, tx, f.s, fr); err != nil {
+		return err
+	}
+	// An update of an aborted call reopens nothing.
+	for id := range f.t.closed {
+		delete(f.t.openCalls, id)
+		delete(f.t.PartialTools, id)
+		delete(f.t.announced, id)
+	}
+	return nil
 }
 
 // EvLogLine is one line a command or server printed: {stream, text}.
@@ -313,6 +330,10 @@ func (f *AutomationFeed) End(ctx context.Context, tx pgx.Tx, note string, exitCo
 		if err := f.t.callEnded(ctx, tx, f.s, nil, p); err != nil {
 			return err
 		}
+		if f.t.closed == nil {
+			f.t.closed = map[string]bool{}
+		}
+		f.t.closed[id] = true
 	}
 	if len(exitCode) > 0 {
 		return f.recordExit(ctx, tx, exitCode[0])
@@ -429,7 +450,7 @@ func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 	}
 	st := automationFeedState{Message: t.message.String(), Thought: t.thought.String(), Open: slices.Sorted(maps.Keys(t.openCalls)),
 		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch, Joined: f.joined,
-		ServerAt: f.serverAt, ServerTail: f.serverTail, LogCount: f.logCount, LogCut: f.logCut, Exited: f.exited}
+		ServerAt: f.serverAt, ServerTail: f.serverTail, LogCount: f.logCount, LogCut: f.logCut, Exited: f.exited, Closed: slices.Sorted(maps.Keys(t.closed))}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
