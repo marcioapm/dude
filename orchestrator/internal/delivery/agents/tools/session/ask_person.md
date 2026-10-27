@@ -25,7 +25,7 @@ with question: answers to offer
 {{- end}}
 
 {{- define "tools/session/ask_person/questions.choices.label" -}}
-{{template "tools/ask_person/questions.choices.label"}}
+the answer, short (at most 120 characters)
 {{- end}}
 
 {{- define "tools/session/ask_person/questions.choices.description" -}}
@@ -34,6 +34,10 @@ with question: answers to offer
 
 {{- define "tools/session/ask_person/questions.choices.recommended" -}}
 {{template "tools/ask_person/questions.choices.recommended"}}
+{{- end}}
+
+{{- define "tools/session/ask_person/questions.choices.note" -}}
+not used here: a note is a task conductor's, on its question about an escalation
 {{- end}}
 
 {{- define "tools/session/ask_person/questions.multiple" -}}

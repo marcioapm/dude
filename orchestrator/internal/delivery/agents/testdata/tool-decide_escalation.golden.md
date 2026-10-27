@@ -1,6 +1,6 @@
 # decide_escalation
 
-Decide the escalation the delivery is stopped at (retry, accept, amend, waive, resume, done, wait or stop, as it offers), only after the owner answered your question about this escalation in their own words. Otherwise the person decides on the banner. Actions requiring a note cannot be offered as choices: stuck retry; not_converging retry, accept or amend; accepting a failed test; waiving a check. Use the person's own direction or reason, not permission to choose for them. Allowed once per escalation.
+Decide the escalation the delivery is stopped at (retry, accept, amend, waive, resume, done, wait or stop, as it offers), only after the owner answered your question about this escalation in their own words. Otherwise the person decides on the banner, or by picking a choice. Actions requiring a note are offered as choices only with the note you propose (ask_person): stuck retry; not_converging retry, accept or amend; accepting a failed test; waiving a check. Here, use the person's own direction or reason, not permission to choose for them. Allowed once per escalation.
 
 ```json
 {

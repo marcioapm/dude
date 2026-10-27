@@ -568,6 +568,9 @@ func TestAskPersonRefusesBothShapesNeitherAndOverTheLimits(t *testing.T) {
 		{`{"questions":[{"header":"H","question":"Q?","choices":[{"label":"a","recommended":true},{"label":"b","recommended":true}]}]}`, "at most one"},
 		{`{"questions":[{"header":"H","question":"Q?"}],"choices":["a"]}`, "own choices"},
 		{`{"questions":[{"header":"A","question":"Q?"},{"header":"B","question":"Q?"}],"actions":["retry"]}`, "actions go with one question"},
+		// A choice's note is a conductor's, on an escalation's question.
+		{`{"questions":[{"header":"H","question":"Q?","choices":[{"note":"it predates the change"},{"label":"b"}]}]}`, "a choice's note is a conductor's"},
+		{`{"questions":[{"header":"H","question":"Q?","choices":[{"description":"no label"}]}]}`, "has no label"},
 	} {
 		status, out := f.post(t, token, "ask_person", c.body)
 		if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, c.want) {

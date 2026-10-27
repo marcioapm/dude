@@ -62,6 +62,9 @@ rTaskEscalationWaitsOnPersonThis        refusals/delivery/escalations/task-escal
 rNotOneThisEscalationActions            refusals/delivery/escalations/not-one-this-escalation-actions
 rNotChoiceShippingPastNeedsPerson       refusals/delivery/escalations/not-choice-shipping-past-needs-person
 rNotChoiceNeedsPersonDirection          refusals/delivery/escalations/not-choice-needs-person-direction
+rChoiceNoteOnlyWhereNeeded              refusals/delivery/escalations/choice-note-only-where-needed
+rChoiceNoteTooLong                      refusals/delivery/escalations/choice-note-too-long
+rChoiceNoteIsForEscalationQuestion      refusals/delivery/escalations/choice-note-is-for-escalation-question
 rChoicesAndReadAsSameAnswer             refusals/delivery/escalations/choices-and-read-as-same-answer
 rNoEscalationWaitsOnDecisionNow         refusals/delivery/escalations/no-escalation-waits-on-decision-now
 rOwnerHasNotAnsweredYourQuestion        refusals/delivery/escalations/owner-has-not-answered-your-question

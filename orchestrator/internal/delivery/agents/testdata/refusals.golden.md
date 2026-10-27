@@ -566,6 +566,10 @@ that message is too far back or ahead to page to from here: use a nearer message
 
 the chat is rate limiting reads: try again later, or work with what you have
 
+## refusals/tools/tools/choice-note-is-conductor-for-question-about
+
+a choice's note is a conductor's, for a question about an escalation: put what you mean in the choice's label or description
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
@@ -792,7 +796,7 @@ the task's escalation waits on a person: ask its one question first (question, c
 
 ## refusals/delivery/escalations/task-escalation-waits-on-person-this
 
-the task's escalation waits on a person: this question is its question. Offer choices, and actions naming what each stands for, one per choice, each one of %s; the owner picking one decides the escalation, as the banner does, except a waiver or an acceptance of a failed test, which needs the person's own words
+the task's escalation waits on a person: this question is its question. Offer choices, and actions naming what each stands for, one per choice, each one of %s; the owner picking one decides the escalation, as the banner does; a choice whose action needs the person's reason or direction (a waiver, an acceptance of a failed test, a stuck or non-converging retry, an amend) carries the one you propose as its note
 
 ## refusals/delivery/escalations/not-one-this-escalation-actions
 
@@ -800,7 +804,7 @@ the task's escalation waits on a person: this question is its question. Offer ch
 
 ## refusals/delivery/escalations/not-choice-shipping-past-needs-person
 
-%q is not a choice: shipping past %s needs the person's own reason. They %s from the banner, or answer your question in their own words
+%q is not a choice without a note: shipping past %s needs a reason. Give the choice the reason you propose as its note, which the owner's pick makes theirs; or they %s from the banner, or answer your question in their own words
 
 ## refusals/delivery/escalations/choices-and-read-as-same-answer
 
@@ -1252,9 +1256,21 @@ the review loop is not converging: blocking criteria remain unmet or fixes keep 
 
 ## refusals/delivery/escalations/not-choice-needs-person-direction
 
-%q is not a choice: on %s it needs the person's own direction. They %s from the banner, or answer your question in their own words
+%q is not a choice without a note: on %s it needs a direction. Give the choice the direction you propose as its note, which the owner's pick makes theirs; or they %s from the banner, or answer your question in their own words
 
 ## refusals/delivery/escalations/owner-answer-is-choice-not-direction
 
 the owner's answer to your question %s is one of its choices, not their direction: to %s, they say how in their own words, or decide on the banner
+
+## refusals/delivery/escalations/choice-note-is-for-escalation-question
+
+a choice's note is for the conductor's question about an escalation waiting on a person; there is none: put it in the choice's label or description
+
+## refusals/delivery/escalations/choice-note-only-where-needed
+
+%q takes no note on %s: a note is only for an action that needs the person's reason or direction. Leave it out and put what it means in the choice's label or description
+
+## refusals/delivery/escalations/choice-note-too-long
+
+the note on the %q choice is too long: its label is the action and the note, so keep the note to %d characters and put the rest in the choice's description or the question
 

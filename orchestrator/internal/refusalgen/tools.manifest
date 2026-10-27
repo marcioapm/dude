@@ -111,6 +111,7 @@ rWithQuestionsEachQuestionHasIts       refusals/tools/tools/with-questions-each-
 rQuestionRequiredQuestionOrQuestions1  refusals/tools/tools/question-required-question-or-questions-1
 rActionsGoWithOneQuestionQuestion      refusals/tools/tools/actions-go-with-one-question-question
 rActionsAreConductorForQuestionAbout   refusals/tools/tools/actions-are-conductor-for-question-about
+rChoiceNoteIsConductorForQuestionAbout refusals/tools/tools/choice-note-is-conductor-for-question-about
 rTypeLowercaseWordsJoinedByDots        refusals/tools/tools/type-lowercase-words-joined-by-dots
 rDataTooLargeAtMost16                  refusals/tools/tools/data-too-large-at-most-16
 rNameRepositoryAndSayWhyYou            refusals/tools/tools/name-repository-and-say-why-you
