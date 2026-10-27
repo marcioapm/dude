@@ -225,22 +225,34 @@ func TestADecidedChecksEscalationResumesTheWaitItStopped(t *testing.T) {
 			[]string{SignalConductorDecision, SignalHumanFeedback}, "awaiting_input"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			w := newDecisionWait(t, c.step, c.awaiting, nil)
-			if run, _ := w.row(); run.Step == "conductorDecision" {
-				// Held by the task's Ask me first, with no conductor.
-				w.exec(`UPDATE tasks SET pull_request_choice = 'ask' WHERE id = 'wi_w'`)
-				w.exec(`UPDATE runs SET status = 'completed' WHERE id = 'run_cond'`)
-			}
-			_, st := w.row()
-			c.state(&st)
-			raw, _ := json.Marshal(st)
-			w.exec(`UPDATE workflow_runs SET state = $1 WHERE id = 'wf_w'`, raw)
-			w.escalateFixer()
-			w.decideEscalation("retry", "")
-			w.settle()
-			w.waits(c.step, c.want...)
-			if s := w.taskStatus(); s != c.status {
-				t.Errorf("task %s, want %s", s, c.status)
+			for _, legacy := range []bool{false, true} {
+				name := "saved signals"
+				if legacy {
+					name = "legacy row"
+				}
+				t.Run(name, func(t *testing.T) {
+					w := newDecisionWait(t, c.step, c.awaiting, nil)
+					if c.step == "conductorDecision" {
+						// Held by the task's Ask me first, with no conductor.
+						w.exec(`UPDATE tasks SET pull_request_choice = 'ask' WHERE id = 'wi_w'`)
+						w.exec(`UPDATE runs SET status = 'completed' WHERE id = 'run_cond'`)
+					}
+					_, st := w.row()
+					c.state(&st)
+					raw, _ := json.Marshal(st)
+					w.exec(`UPDATE workflow_runs SET state = $1 WHERE id = 'wf_w'`, raw)
+					w.escalateFixer()
+					if legacy {
+						w.exec(`UPDATE workflow_runs SET state = state #- '{escalation,atSignals}' WHERE id = 'wf_w'`)
+					}
+					w.decideEscalation("retry", "")
+					w.settle()
+					// awaitEnded adds pr.ended to waitForPR's three signals when a PR exists.
+					w.waits(c.step, c.want...)
+					if s := w.taskStatus(); s != c.status {
+						t.Errorf("task %s, want %s", s, c.status)
+					}
+				})
 			}
 		})
 	}
