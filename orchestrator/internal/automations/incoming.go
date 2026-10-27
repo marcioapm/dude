@@ -145,7 +145,6 @@ func EvaluateConditions(conditions []Condition, body json.RawMessage) []Conditio
 	return out
 }
 
-
 // missActualRunes is how much of the body's value a skip reason quotes.
 const missActualRunes = 200
 

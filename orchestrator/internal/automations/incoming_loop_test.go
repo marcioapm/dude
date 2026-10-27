@@ -204,6 +204,48 @@ func TestIncomingFollowUpsByReferenceUpToTheCap(t *testing.T) {
 	}
 }
 
+// A follow-up that arrives while its group's run is still queued does not
+// replace the delivery that started it: the run's prompt is built from the
+// first delivery, and the follow-up reaches the agent as its first input.
+func TestIncomingRunStartsFromItsFirstDelivery(t *testing.T) {
+	h := newHarness(t)
+	// A tool line: the scripted agent's spec keeps it, so the prompt's substituted value shows there.
+	h.incoming("aut_first", nil, "groupKey",
+		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "tool: note {{payload.status}}"}}})
+	// Hold the run queued: its automation has a running run of its own.
+	exec(t, h.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source, payloads, session, started_at)
+		VALUES ('arn_busy', $1, 'aut_first', 'running', 'event', '[]', 'ephemeral', now())`, h.org)
+	h.receive("aut_first", "dlv_f1", alert("firing", "g", "high"))
+	h.until("the first is read", func() bool { return h.delivery("dlv_f1").Verdict == VerdictStarted })
+	h.receive("aut_first", "dlv_f2", alert("resolved", "g", "high"))
+	h.until("the follow-up is read", func() bool { return h.delivery("dlv_f2").Verdict != "" })
+	run := h.delivery("dlv_f1").Run
+	if d := h.delivery("dlv_f2"); d.Verdict != VerdictSentToRun || d.Run != run {
+		t.Fatalf("follow-up of a queued run: %+v", d)
+	}
+	exec(t, h.owner, `UPDATE automation_runs SET status = 'succeeded', ended_at = now() WHERE id = 'arn_busy'`)
+	var lr string
+	h.until("the run starts", func() bool {
+		for _, r := range h.runs("aut_first") {
+			if r.ID == run && r.LuxRunID != "" {
+				lr = r.LuxRunID
+			}
+		}
+		return lr != ""
+	})
+	requestID := "automation-" + run + "-1"
+	h.until("the follow-up reaches the agent", func() bool { return len(h.fake.InputBodies(lr, requestID)) > 0 })
+	spec := string(h.fake.SpecOf(lr))
+	var input struct{ Text string }
+	_ = json.Unmarshal([]byte(h.fake.InputBodies(lr, requestID)[0]), &input)
+	if !strings.Contains(spec, "⟧firing⟦/external ") || strings.Contains(spec, "resolved") {
+		t.Errorf("the run's spec: %s", spec)
+	}
+	if !strings.Contains(input.Text, "⟧resolved⟦/external ") {
+		t.Errorf("the first input: %q", input.Text)
+	}
+}
+
 // Once the group's run has ended, the next delivery of that group is
 // checked and fires afresh.
 func TestIncomingAfterTheRunEndedStartsAgain(t *testing.T) {

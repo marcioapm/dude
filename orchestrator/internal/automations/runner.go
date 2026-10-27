@@ -768,6 +768,11 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 // submit resumes the kept session or submits a new lux Run for a claimed
 // run; false, nil leaves it for the next pass.
 func (r *Runner) submit(ctx context.Context, a Automation, runID, source string, payloads []Payload, at *time.Time, kept string) (bool, error) {
+	// An incoming run starts from the delivery that started it; follow-ups
+	// held while it was queued reach it afterwards as inputs (sendInputs).
+	if a.Trigger.Kind == "incoming" && len(payloads) > 1 {
+		payloads = payloads[:1]
+	}
 	// A test run's session is its own: fresh and ephemeral, the kept one untouched (Q21).
 	resumable := a.SessionMode == "resumable" && source != SourceTest
 	var luxRunID, session, startReason string
