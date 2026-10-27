@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +240,36 @@ func TestAMessageIsReadAsTheWordsItShows(t *testing.T) {
 		"Ops & <Dev>\na < b & c x&y (https://example.com/r)"
 	if got[0].Text != want {
 		t.Fatalf("text %q,\nwant %q", got[0].Text, want)
+	}
+}
+
+// Text that only looks like markup or an entity is the words typed: a
+// typed <url|label> is not a link, a typed "&lt;" stays "&lt;", in the
+// message text and in every JSON part of its blocks and attachments. A
+// person's link with & in it, repeated by its rich_text block, is read once.
+func TestTypedMarkupAndEntitiesStayAsTyped(t *testing.T) {
+	fake, p, inst := world(t)
+	root := fake.PostApp("C1", "", "BCI", "CI Bot", "&lt;https://e.x|y&gt;", nil, nil)
+	fake.PostApp("C1", root, "BCI", "CI Bot", "", nil,
+		[]any{map[string]any{"type": "header", "text": map[string]any{"type": "plain_text", "text": "a &lt; b"}}})
+	fake.PostApp("C1", root, "BCI", "CI Bot", "", nil,
+		[]any{map[string]any{"type": "rich_text", "elements": []any{map[string]any{"type": "rich_text_section", "elements": []any{
+			map[string]any{"type": "text", "text": "x &amp; y"}}}}}})
+	fake.PostApp("C1", root, "BCI", "CI Bot", "", []any{map[string]any{"title": "T", "title_link": "https://e.x/t?q=a&amp;b"}}, nil)
+	fake.PostApp("C1", root, "BCI", "CI Bot", "see <https://e.x/a?x=1&amp;y=2>", nil,
+		[]any{map[string]any{"type": "rich_text", "elements": []any{map[string]any{"type": "rich_text_section", "elements": []any{
+			map[string]any{"type": "text", "text": "see "}, map[string]any{"type": "link", "url": "https://e.x/a?x=1&y=2"}}}}}})
+	got, err := p.FetchThread(context.Background(), inst, "C1", root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"<https://e.x|y>", "a &lt; b", "x &amp; y", "T https://e.x/t?q=a&amp;b", "see https://e.x/a?x=1&y=2"}
+	var texts []string
+	for _, m := range got {
+		texts = append(texts, m.Text)
+	}
+	if !slices.Equal(texts, want) {
+		t.Fatalf("texts %q,\nwant %q", texts, want)
 	}
 }
 

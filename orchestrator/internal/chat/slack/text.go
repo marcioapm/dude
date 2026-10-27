@@ -195,9 +195,9 @@ func richText(b *strings.Builder, raw json.RawMessage) {
 		b.WriteString(mrkdwnEscape(e.Text))
 	case "link":
 		if e.Text != "" {
-			b.WriteString("<" + e.URL + "|" + mrkdwnEscape(e.Text) + ">")
+			b.WriteString("<" + mrkdwnEscape(e.URL) + "|" + mrkdwnEscape(e.Text) + ">")
 		} else {
-			b.WriteString("<" + e.URL + ">")
+			b.WriteString("<" + mrkdwnEscape(e.URL) + ">")
 		}
 	case "user":
 		b.WriteString("<@" + e.UserID + ">")
