@@ -404,7 +404,11 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   Draft at the pre-merge heads moves to the merged heads
   (`carryGateOverMergeTx`), and the pull request opens; its CI checks the
   merge. Overlap, a refused or truncated compare: tested again; a transient
-  GitHub failure waits. A head found moved (adopted) is always tested. A
+  GitHub failure waits. A merged dependency manifest or lockfile, migration
+  or `.github/**` file counts as touching the task (`affectsEveryChange`).
+  A merge whose first parent is not the head dude read (a push landed
+  meanwhile), or a head moved since the merge, is tested. A head found
+  moved (adopted) is always tested. A
   conflict, there or on an open
   pull request, starts one integration Run per head/base pair
   (`State.IntegrationPairs`): a fixer told to `git merge lux/<base>` and

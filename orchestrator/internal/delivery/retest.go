@@ -198,7 +198,7 @@ func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st 
 		return false, err
 	}
 	m, err := w.mergeChange(ctx, sc, st)
-	if err != nil || !m.Measured || len(m.Merged) == 0 || intersects(m.Merged, m.Task) {
+	if err != nil || !m.Measured || len(m.Merged) == 0 || intersects(m.Merged, m.Task) || affectsEveryChange(m.Merged) {
 		return false, err
 	}
 	verdicts, ok, err := w.passedAsCriteriaRead(ctx, sc, st, prev.ID)
@@ -360,6 +360,23 @@ func (w *steps) mergeChange(ctx context.Context, sc workflow.StepContext, st *St
 
 func intersects(a, b []string) bool {
 	return slices.ContainsFunc(a, func(p string) bool { return slices.Contains(b, p) })
+}
+
+// everyChangeGlobs are paths whose change reaches every change of their
+// repository without sharing a path with it: dependency manifests and
+// lockfiles, database migrations, CI configuration.
+var everyChangeGlobs = []string{
+	"**/go.mod", "**/go.sum", "**/package.json", "**/bun.lock", "**/bun.lockb", "**/package-lock.json",
+	"**/yarn.lock", "**/pnpm-lock.yaml", "**/*.lock", "**/migrations/**", ".github/**",
+}
+
+// affectsEveryChange says one of paths, each <repo>/<path in repo>, is
+// among everyChangeGlobs: a merge bringing it in touches the task.
+func affectsEveryChange(paths []string) bool {
+	return slices.ContainsFunc(paths, func(path string) bool {
+		_, inRepo, _ := strings.Cut(path, "/")
+		return slices.ContainsFunc(everyChangeGlobs, func(g string) bool { return MatchesGlob(g, inRepo) })
+	})
 }
 
 // carryFrom is the run a resumed round's message names for carried

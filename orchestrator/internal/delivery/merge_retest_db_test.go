@@ -15,6 +15,27 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
+// A merged path every change of its repository depends on (a dependency
+// manifest or lockfile, a migration, CI) touches the task, at any depth;
+// a near name does not.
+func TestAMergedManifestMigrationOrCIConfigTouchesEveryChange(t *testing.T) {
+	for path, want := range map[string]bool{
+		"r/go.mod": true, "r/svc/go.sum": true, "r/package.json": true, "r/apps/web/bun.lock": true,
+		"r/bun.lockb": true, "r/package-lock.json": true, "r/yarn.lock": true, "r/pnpm-lock.yaml": true,
+		"r/Cargo.lock": true, "r/migrations/190_x.sql": true, "r/db/migrations/1.sql": true,
+		"r/.github/workflows/ci.yml": true,
+		"r/lib/other.go": false, "r/docs/go.mod.md": false, "r/src/package.jsonc": false,
+		"r/lock/x.go": false, "r/migration.go": false, "r/sub/.github/x.yml": false, "github/.x": false,
+	} {
+		if got := affectsEveryChange([]string{"r/lib/a.go", path}); got != want {
+			t.Errorf("%s: %v, want %v", path, got, want)
+		}
+	}
+	if affectsEveryChange(nil) {
+		t.Error("no paths touch every change")
+	}
+}
+
 // skips counts the task's test.skipped events.
 func (f *verdictFixture) skips() int {
 	f.t.Helper()
@@ -303,6 +324,8 @@ func TestACleanMergeOfOtherFilesBeforeThePullRequestIsNotTestedAgain(t *testing.
 		{"other files", map[string]string{"lib/other.go": "package lib"}, true},
 		// The same content: git merges it cleanly, and the path is the task's.
 		{"the task's file", map[string]string{"app/greet.go": "package app"}, false},
+		// A file every change of the repository depends on.
+		{"a lockfile", map[string]string{"lib/other.go": "package lib", "web/bun.lock": "{}"}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, st, sc := mergeFixture(t, c.files)
