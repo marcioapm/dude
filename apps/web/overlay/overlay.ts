@@ -229,10 +229,9 @@ export class Overlay {
   #timers: number[] = [];
   // A hello went out since the last beat: the beat says none, so there is never more than one a beat.
   #saidHello = false;
-  // Beats in a row with nothing from dude while connected.
+  // Beats in a row with nothing from dude, since the last message or the drop to waiting:
+  // connected, 4 drop to waiting; waiting, WAITING_BEATS offer Connect again.
   #quietBeats = 0;
-  // Beats in a row spent waiting with nothing from dude: at WAITING_BEATS the panel offers Connect again.
-  #waitBeats = 0;
   // The dude tab Connect to dude opened, or the dude window that last answered with a session; and what the click came to.
   #connectWin: Window | null = null;
   #connect: "opened" | "blocked" | null = null;
@@ -428,7 +427,7 @@ export class Overlay {
     if (this.#stopped || !this.#dude()) return;
     const said = this.#saidHello;
     this.#saidHello = false;
-    if (this.#connection === "waiting" && ++this.#waitBeats === WAITING_BEATS) {
+    if (this.#connection === "waiting" && ++this.#quietBeats === WAITING_BEATS) {
       // The pinned dude window went unanswered this long: the window up the openers, if there is one, is talked to instead.
       // The tab this page's Connect opened stays pinned: it is proven to be dude, and the chain's window is not.
       // With no chain the pin stays too, so it is still said hello to and not taken for closed.
@@ -440,7 +439,7 @@ export class Overlay {
       if (this.#quietBeats < 2) return;
       if (this.#quietBeats >= 4) {
         this.#connection = "waiting";
-        this.#waitBeats = 0;
+        this.#quietBeats = 0;
         this.#picking = false;
         this.#hover = null;
         this.#render();
@@ -462,7 +461,6 @@ export class Overlay {
     const m = e.data as DudeToOverlay;
     if (!m || typeof m !== "object" || m.v !== OVERLAY_PROTOCOL) return;
     this.#quietBeats = 0;
-    this.#waitBeats = 0;
     switch (m.type) {
       case "session":
         if (!validSession(m) || overlayPage(m.url) !== this.#page) return;
@@ -1038,7 +1036,7 @@ export class Overlay {
       this.#connectOpened = w;
       this.#connect = "opened";
       this.#connection = "waiting";
-      this.#waitBeats = 0;
+      this.#quietBeats = 0;
     }
     this.#render();
   }
@@ -1208,7 +1206,7 @@ export class Overlay {
 
   // Waiting for WAITING_BEATS with no answer from dude.
   #unheard(): boolean {
-    return this.#connection === "waiting" && this.#waitBeats >= WAITING_BEATS;
+    return this.#connection === "waiting" && this.#quietBeats >= WAITING_BEATS;
   }
 
   #panelFor(): HTMLElement | null {
