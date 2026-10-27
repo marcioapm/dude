@@ -634,6 +634,35 @@ describe("Run now on an event", () => {
     await until(() => (checks().includes("must be a JSON object") ? true : null), "not an object");
     expect(checks()).toContain("× The body must be a JSON object.");
   });
+
+  test("Run on a picked past delivery starts its run and opens that run", async () => {
+    const client = new FixtureClient("a");
+    const asked: unknown[] = [];
+    const started: string[] = [];
+    const run = client.runAutomation.bind(client);
+    client.runAutomation = async (id, body) => {
+      asked.push(body);
+      const out = await run(id, body);
+      started.push(out.runId);
+      return out;
+    };
+    const places: AutomationsPlace[] = [];
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={(p) => places.push(p)} onBack={() => undefined} />);
+    await click(await until(() => c.querySelector("[data-testid=run-now]"), "Run now"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+    const row = await until(() => dialog.querySelector<HTMLElement>("[data-testid=test-delivery] tbody tr"), "a past delivery");
+    await click(row);
+    const go = dialog.querySelector<HTMLButtonElement>("[data-testid=test-run]")!;
+    expect(go.textContent).toBe("Run on this delivery");
+    expect(go.disabled).toBe(false);
+    await click(go);
+    await until(() => (started.length ? started : null), "the run");
+    expect(asked).toEqual([{ deliveryId: expect.any(String) }]);
+    const opened = await until(() => places.find((p) => p.runId) ?? null, "the new run opens");
+    expect(opened).toEqual({ id: "aut_triage", tab: "runs", runId: started[0] });
+    await until(() => (document.querySelector("[role=dialog]") ? null : true), "the dialog closes");
+  });
 });
 
 describe("the test event's helpers", () => {
