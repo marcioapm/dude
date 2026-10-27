@@ -118,7 +118,7 @@ The conductor can have a commit's tests checked without changing it, with `verif
 - **Open as draft** — dude opens it as a draft. Nobody is asked.
 - **Ask me first** — nothing goes to GitHub yet. The task waits for its owner, marked **Ready for your review** on the task page, in Waiting and in the Inbox.
 
-This is a project setting; the organisation has none. A task can override it in its dialog or under **This task** on its Overview. Only the task's owner can change it, and only until its first pull request opens. It applies to the first pull request alone: a later fix round never waits.
+This is a project setting; the organisation has none. A task can override it in its dialog or under **This task** on its Overview. Only the task's owner can change it, and only until its first pull request opens. It applies to the first pull requests alone: a later fix round never waits, and a pull request a later fix opens in another repository is ready for review, whether the first ones opened as drafts by **Open as draft** or by your **Open as draft** at the hold.
 
 While a task waits for your review, its page shows what would be opened, per repository, and what was checked. You can:
 

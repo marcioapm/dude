@@ -384,7 +384,10 @@ func authorizeAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext
 	if err := AuthorizeGateTx(ctx, tx, sc.WorkflowRunID, st, draft); err != nil {
 		return err
 	}
-	st.Draft, st.GateOpened = draft, true
+	st.GateOpened = true
+	if !st.ChoiceGate {
+		st.Draft = draft
+	}
 	return nil
 }
 

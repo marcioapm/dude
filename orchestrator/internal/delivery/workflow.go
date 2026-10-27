@@ -1611,7 +1611,14 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		}
 	}
 	if st.GateRequired && st.GateAt != nil {
-		st.Draft = st.GateAt.Draft
+		// The owner's Draft at the hold of the task's Ask me first drafts
+		// this opening's pull requests only, as the choice's Open as draft
+		// does; the conductor's gate and an adopted branch's latch it.
+		if st.ChoiceGate {
+			st.draftChoice = st.draftChoice || st.GateAt.Draft && len(st.PullRequestIDs) == 0
+		} else {
+			st.Draft = st.GateAt.Draft
+		}
 	}
 	if res, diverted, err := w.syncBeforePR(ctx, sc, st); diverted || err != nil {
 		return res, err

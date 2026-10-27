@@ -397,9 +397,12 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 				return err
 			}
 			draft = err == nil && draft || isRefusal && body.Draft
+			// A Draft at the hold of the task's Ask me first drafts that
+			// opening alone (gateAt carries it); elsewhere it is latched.
+			latch := draft && !d.State.ChoiceGate
 			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = state || jsonb_build_object('gateOpened', true)
 					|| CASE WHEN $2 THEN '{"draft": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
-				d.WorkflowID, draft); err != nil {
+				d.WorkflowID, latch); err != nil {
 				return err
 			}
 			if err := delivery.AuthorizeGateTx(r.Context(), tx, d.WorkflowID, &d.State, draft); err != nil {

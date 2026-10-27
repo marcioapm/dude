@@ -139,6 +139,20 @@ func TestAskMeFirstHoldsTheFirstPullRequestForItsOwner(t *testing.T) {
 	}
 }
 
+// The owner's Open as draft at the hold of Ask me first opens a draft.
+func TestOpenAsDraftAtTheHoldOpensADraft(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	task := w.atTheHold(ana)
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true, "draft": true}); status != 200 {
+		t.Fatalf("the owner's Open as draft: %d %v", status, out)
+	}
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if !w.gh.Pulls()[0].Draft {
+		t.Error("Open as draft at the hold opened a pull request ready for review")
+	}
+}
+
 // Open as draft, the task's own over the project's Open it, opens a draft
 // with nobody asked.
 func TestOpenAsDraftOpensADraftWithNobodyAsked(t *testing.T) {
@@ -322,10 +336,20 @@ func TestUnderTheConductorAskMeFirstIsThePersonsQuestion(t *testing.T) {
 // A task across two repositories, its first pull request open in one: a
 // fix of that pull request's feedback that changes the other opens the
 // second one with nobody asked, under Ask me first, and not as a draft
-// under Open as draft. Only the first opening reads the choice.
+// under Open as draft or after the owner's Open as draft at the hold.
+// Only the first opening reads the choice.
 func TestOnlyTheFirstOpeningReadsTheChoice(t *testing.T) {
-	for _, choice := range []string{delivery.PullRequestAsk, delivery.PullRequestDraft} {
-		t.Run(choice, func(t *testing.T) {
+	for _, c := range []struct {
+		name, choice string
+		answerDraft  bool
+	}{
+		{"ask", delivery.PullRequestAsk, false},
+		{"ask answered draft", delivery.PullRequestAsk, true},
+		{"draft", delivery.PullRequestDraft, false},
+	} {
+		choice := c.choice
+		firstDraft := choice == delivery.PullRequestDraft || c.answerDraft
+		t.Run(c.name, func(t *testing.T) {
 			w := newWorld(t)
 			ana := w.person("Ana")
 			var prOpen atomic.Bool
@@ -349,13 +373,13 @@ func TestOnlyTheFirstOpeningReadsTheChoice(t *testing.T) {
 			w.deliver(task)
 			if choice == delivery.PullRequestAsk {
 				w.until("the hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
-				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true, "draft": c.answerDraft}); status != 200 {
 					t.Fatalf("the owner's Open: %d %v", status, out)
 				}
 			}
 			w.until("the target pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
-			if got := w.gh.Pulls()[0].Draft; got != (choice == delivery.PullRequestDraft) {
-				t.Fatalf("the first pull request's draft %v under %s", got, choice)
+			if got := w.gh.Pulls()[0].Draft; got != firstDraft {
+				t.Fatalf("the first pull request's draft %v, want %v", got, firstDraft)
 			}
 			prOpen.Store(true)
 			w.gh.ReviewSaying(1, "alice", "CHANGES_REQUESTED", "Please rename the helper.")
