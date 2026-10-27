@@ -84,7 +84,9 @@ func HiddenFrom(ctx context.Context, tx pgx.Tx, provider string) (Fence, error) 
 }
 
 // InheritOrigin copies a session or task's chat provider to a task or epic
-// without an origin. It records {provider, via, from}, not a conversation.
+// without an origin. It records {provider, via, from}, not a conversation:
+// a task filed from a chat-born session reaches that session's thread
+// through from (chat_notices.go).
 func InheritOrigin(ctx context.Context, tx pgx.Tx, table, id, fromSession, fromTask string) error {
 	provider, err := originProvider(ctx, tx, fromSession, fromTask)
 	if err != nil || provider == "" {

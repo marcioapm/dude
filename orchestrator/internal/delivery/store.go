@@ -749,13 +749,17 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 
 // RecordStatusTx records that a task's status changed, and why: what time
 // and cost count from. A move to done releases what the task blocked, if
-// it merged (releaseDependantsTx).
+// it merged (releaseDependantsTx). A move a chat thread hears of (started,
+// done, failed or stopped) records its notice (chat_notices.go).
 func RecordStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, status, reason string) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvTaskStatusChanged, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: map[string]any{"status": status, "reason": reason},
 	})
+	if err == nil {
+		err = statusNoticeTx(ctx, tx, taskID, status, reason)
+	}
 	if err != nil || status != "done" {
 		return err
 	}
@@ -1427,7 +1431,10 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 				"headBranch": st.Branch, "baseBranch": base, "draft": ref.State == forge.StateDraft,
 				"reviewersRequested": db.NonNil(asked)},
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID, ref.URL)
 	})
 	return id, err
 }
