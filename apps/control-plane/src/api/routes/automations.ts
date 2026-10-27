@@ -543,7 +543,7 @@ const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "slack.message.p
  * channel and link. A post's text is left out: its message is in Slack.
  */
 async function toolCalls(scope: OrgScope, runId: string) {
-  // automation_run_id keys every event its agent's calls write (migration 214, events_automation_run_cursor_idx).
+  // automation_run_id keys every event its agent's calls write (migration 216, events_automation_run_cursor_idx).
   const rows = (await scope.sql`SELECT id, event_type AS type, occurred_at AS at, payload FROM events
     WHERE automation_run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
     ORDER BY occurred_at, cursor`) as Array<{ id: string; type: string; at: Date; payload: Record<string, unknown> }>;

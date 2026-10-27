@@ -59,13 +59,13 @@ export function ChatProvidersSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block id="cp-route" title="RouteBadge"
-        note="Where a mention went, in a word and a glyph. Refusals and failures are subtle; what made or linked something is tinted. `fallback` says what the model answered when dude went another way.">
+        note="Where a mention went, in a word and a glyph. Refusals and failures are subtle; what made or linked something is tinted. `fallback` says what the model answered when dude went another way; `made` says what a failure still made (Failed → Brainstorm), and a failure that made nothing is just Failed.">
         <Panes mode={mode}>
           <Col style={{ gap: 8 }}>
             {(["sm", "md"] as const).map((size) => (
               <Row key={size}>{(Object.keys(ROUTE_SPEC) as ChatRoute[]).map((r) => <RouteBadge key={r} route={r} size={size} />)}</Row>
             ))}
-            <Row><RouteBadge route="brainstorm" fallback="task" /></Row>
+            <Row><RouteBadge route="brainstorm" fallback="task" /><RouteBadge route="failed" made="brainstorm" /><RouteBadge route="failed" made="task" fallback="task" /></Row>
           </Col>
         </Panes>
       </Block>

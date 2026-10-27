@@ -416,6 +416,41 @@ describe("settings", () => {
     expect(page.requests.find((r: Json) => r.id === "chr_c1").confidence).toBe(1);
   });
 
+  test("a failed request's cause is its own field, an admin's alone, as the orchestrator stored it; a request that did not fail has none", async () => {
+    // The orchestrator redacts before it stores; the route returns the text as it is.
+    const insert = (id: string, route: string, reasoning: string, failure: string | null, result: string | null) => owner`
+      INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id,
+        route, asked_route, reasoning, failure, result_kind, result_id, made_route, created_at)
+      VALUES (${id}, ${ORG}, 'slack', ${id}, 'T1', 'C1', 'U2', ${route}, ${route === "failed" ? "task" : null}, ${reasoning}, ${failure},
+        ${result ? "session" : null}, ${result}, ${result && route === "failed" ? "brainstorm" : null}, now() - interval '3 hours')`;
+    await owner`INSERT INTO sessions (id, organization_id, title) VALUES ('ses_fb', ${ORG}, 'Exports')`;
+    await insert("chr_f1", "failed", "A clear task. (its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token])",
+      "its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token]", null);
+    await insert("chr_f2", "failed", "the routing call failed: the LLM proxy answered 400: Basic question about exports",
+      "the routing call failed: the LLM proxy answered 400: Basic question about exports", "ses_fb");
+    await insert("chr_f3", "task", "A clear task.", null, null);
+    try {
+      expect((await call(memberKey, "GET", "/v1/organization/chat/requests?route=failed")).status).toBe(403);
+      const res = await call(adminKey, "GET", "/v1/organization/chat/requests?provider=slack");
+      const byId = new Map(((await res.json() as Json).requests as Json[]).map((r) => [r.id, r]));
+      expect(byId.get("chr_f1").failure).toBe("its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token]");
+      expect(byId.get("chr_f1").reasoning).toBe("A clear task. (its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token])");
+      expect(byId.get("chr_f1").result).toBeNull();
+      expect(byId.get("chr_f2").failure).toBe("the routing call failed: the LLM proxy answered 400: Basic question about exports");
+      expect(byId.get("chr_f2").result).toEqual({ kind: "session", id: "ses_fb", label: "Exports" });
+      expect(byId.get("chr_f2").madeRoute).toBe("brainstorm");
+      expect(byId.get("chr_f1").madeRoute).toBeNull();
+      expect(byId.get("chr_f3").failure).toBeNull();
+      expect(byId.get("chr_f3").reasoning).toBe("A clear task.");
+      // The route filter's Failed finds both failures, with or without a fallback.
+      const failed = (await (await call(adminKey, "GET", "/v1/organization/chat/requests?route=failed")).json() as Json).requests as Json[];
+      expect(failed.map((r) => r.id).filter((id: string) => id.startsWith("chr_f")).sort()).toEqual(["chr_f1", "chr_f2"]);
+    } finally {
+      await owner`DELETE FROM chat_requests WHERE id IN ('chr_f1', 'chr_f2', 'chr_f3')`;
+      await owner`DELETE FROM sessions WHERE id = 'ses_fb'`;
+    }
+  });
+
   test("Requests list at most 200, newest first", async () => {
     await owner`
       INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id, route, created_at)

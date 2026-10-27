@@ -17,7 +17,7 @@ import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { ChatInstallationView, ChatRequestRow, SessionChatOrigin } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { ChatPages, chatNav, useChatOverview } from "../src/screens/ChatSettings.tsx";
+import { ChatPages, FAILURE_CLIP, chatNav, useChatOverview } from "../src/screens/ChatSettings.tsx";
 import { ChatConnections } from "../src/screens/ChatConnections.tsx";
 import { ConnectScreen } from "../src/screens/ConnectScreen.tsx";
 import { SessionOrigin, TaskOrigin } from "../src/chatOrigin.tsx";
@@ -279,6 +279,136 @@ describe("Requests", () => {
     mounted.push(unmount);
     await until(() => (container.textContent?.includes("Only Acme’s admins see Requests") ? container : null), "the refusal");
     expect(container.querySelectorAll("[data-testid=chat-requests]").length).toBe(0);
+  });
+});
+
+describe("Requests' failed rows", () => {
+  const base: ChatRequestRow = {
+    id: "chr_x", provider: "slack", conversationKind: "public", conversationName: "#support", externalUserName: "Eli Park", person: null,
+    text: "file it", permalink: "", route: "failed", askedRoute: "task", confidence: 0.9, reasoning: "A clear task.", failure: null, madeRoute: null, rounds: 0,
+    result: null, sharedAdded: [], sharedSkipped: [], linked: [], createdAt: new Date(Date.now() - 60_000).toISOString(),
+  };
+  /** Requests showing these rows alone, on the full page or a provider's. */
+  const showing = (rows: ChatRequestRow[]) => {
+    const client = new Chatting("a");
+    client.chatRequests = async (f = {}) => ({ requests: f.limit ? rows.slice(0, f.limit) : rows });
+    return client;
+  };
+  const row = async (r: ChatRequestRow, page = "chat/requests") => {
+    const c = await show(<Pages client={showing([r])} page={page} />, page === "chat/requests" ? "chat-requests" : "chat-provider-slack");
+    return until(() => c.querySelector<HTMLElement>("[data-testid=chat-request]"), "the row");
+  };
+
+  test("nothing made: the route says Failed, and the reason is on the row without hovering", async () => {
+    const r = await row({ ...base, failure: "dude could not act on it: slack conversations.info: invalid_arguments" });
+    expect(text(r.querySelector("[data-route=failed] [data-icon=alert]")?.parentElement)).toBe("Failed");
+    expect(text(r.querySelector("[data-testid=chat-request-failure]"))).toBe("dude could not act on it: slack conversations.info: invalid_arguments");
+    expect(r.querySelector("[data-testid=chat-request-failure-more]")).toBeNull();
+    expect(r.querySelector("[data-testid=chat-request-result]")).toBeNull();
+    expect(text(r)).not.toContain("Brainstorm");
+  });
+
+  test("a fallback session made: the route says Failed → Brainstorm, with the session's link", async () => {
+    const r = await row({ ...base, askedRoute: null, confidence: null,
+      failure: "the routing call failed: the LLM proxy answered 400: invalid model", reasoning: "the routing call failed: the LLM proxy answered 400: invalid model",
+      result: { kind: "session", id: "ssn_fb", label: "Why are exports slow" } });
+    expect(text(r.querySelector("[data-route=failed] [data-icon=alert]")?.parentElement)).toBe("Failed → Brainstorm");
+    expect(r.querySelector("[data-testid=chat-request-result]")!.getAttribute("href")).toBe("#/sessions/ssn_fb");
+    expect(text(r.querySelector("[data-testid=chat-request-failure]"))).toBe("the routing call failed: the LLM proxy answered 400: invalid model");
+  });
+
+  test("a task made whose reply Slack refused: Failed → Task, its link, and Slack's error", async () => {
+    const r = await row({ ...base, failure: "its reply was not posted: slack chat.postMessage: msg_too_long",
+      result: { kind: "task", id: "wi_1", label: "BIL-7 Stream it" } });
+    expect(text(r.querySelector("[data-route=failed]"))).toBe("Failed → Task");
+    expect(r.querySelector("[data-testid=chat-request-result]")!.getAttribute("href")).toBe("#/task/wi_1");
+    expect(text(r.querySelector("[data-testid=chat-request-failure]"))).toBe("its reply was not posted: slack chat.postMessage: msg_too_long");
+  });
+
+  test("a successful row has no failure line", async () => {
+    const r = await row({ ...base, route: "task", askedRoute: null, failure: null, result: { kind: "task", id: "wi_1", label: "BIL-7 Stream it" } });
+    expect(r.querySelector("[data-testid=chat-request-failure]")).toBeNull();
+    expect(text(r.querySelector("[data-route=task]"))).toBe("Task");
+  });
+
+  test("a long reason is clipped on the row; the whole of it is on hover and behind Show all", async () => {
+    const long = `the routing call failed: the LLM proxy answered 400: ${"the request body is not valid for this model; ".repeat(6)}end`;
+    const r = await row({ ...base, failure: long });
+    const line = r.querySelector<HTMLElement>("[data-testid=chat-request-failure-text]")!;
+    expect(text(line).length).toBe(FAILURE_CLIP);
+    expect(text(line).endsWith("…")).toBe(true);
+    expect(long.startsWith(text(line).slice(0, -1))).toBe(true);
+    // Focusing (or hovering) the clipped line shows the whole text in a tooltip.
+    await act(async () => line.focus());
+    const tip = await until(() => document.querySelector<HTMLElement>("[role=tooltip]"), "the failure's tooltip");
+    expect(text(tip)).toBe(long.replace(/\s+/g, " ").trim());
+    const more = r.querySelector<HTMLButtonElement>("[data-testid=chat-request-failure-more]")!;
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    await click(more);
+    expect(text(r.querySelector("[data-testid=chat-request-failure-text]"))).toBe(long.replace(/\s+/g, " ").trim());
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    // Show less clips it again.
+    await click(more);
+    const clipped = text(r.querySelector("[data-testid=chat-request-failure-text]"));
+    expect(clipped.length).toBe(FAILURE_CLIP);
+    expect(clipped.endsWith("…")).toBe(true);
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  // Every shape a failed row is written in, with made_route set (recorded
+  // when it failed) and NULL (a row older than 214, read from its result).
+  const session = { kind: "session", id: "ssn_1", label: "S" } as const;
+  const task = { kind: "task", id: "wi_1", label: "BIL-7 T" } as const;
+  const epic = { kind: "epic", id: "epc_1", label: "BIL › E" } as const;
+  const shapes: Array<[string, Partial<ChatRequestRow>, string]> = [
+    ["a failed routing call's brainstorm", { askedRoute: null, result: session, madeRoute: "brainstorm" }, "Failed → Brainstorm"],
+    ["a failed routing call's brainstorm, legacy", { askedRoute: null, result: session, madeRoute: null }, "Failed → Brainstorm"],
+    ["a model resume that fell back to a brainstorm", { askedRoute: "resume", result: session, madeRoute: "brainstorm" }, "Failed → Brainstorm was Resume"],
+    ["a bound session resumed", { askedRoute: "resume", result: session, madeRoute: "resume" }, "Failed → Resume"],
+    ["a bound session resumed, legacy", { askedRoute: "resume", result: session, madeRoute: null }, "Failed → Resume"],
+    ["a task filed", { askedRoute: "task", result: task, madeRoute: "task" }, "Failed → Task"],
+    ["a task filed, legacy", { askedRoute: "task", result: task, madeRoute: null }, "Failed → Task"],
+    ["a thread bound to a task", { askedRoute: "task_link", result: task, madeRoute: "task_link" }, "Failed → Task link"],
+    ["a thread bound to a task, legacy", { askedRoute: "task_link", result: task, madeRoute: null }, "Failed → Task link"],
+    ["a thread bound to an epic", { askedRoute: "task_link", result: epic, madeRoute: "task_link" }, "Failed → Task link"],
+    ["a thread bound to an epic, legacy", { askedRoute: "task_link", result: epic, madeRoute: null }, "Failed → Task link"],
+    ["an epic filed", { askedRoute: "epic", result: epic, madeRoute: "epic" }, "Failed → Epic"],
+    ["an epic filed, legacy", { askedRoute: "epic", result: epic, madeRoute: null }, "Failed → Epic"],
+    ["a task refused, its brainstorm too", { askedRoute: "task", result: null, madeRoute: null }, "Failed was Task"],
+    ["refused before anything was made", { askedRoute: null, result: null, madeRoute: null }, "Failed"],
+  ];
+  for (const [what, shape, label] of shapes) {
+    test(`${what}: ${label}`, async () => {
+      const r = await row({ ...base, failure: "x", ...shape });
+      // The badge, then its "was X" when shown, each its own element.
+      const parts = [...r.querySelector("[data-route=failed]")!.children].map((e) => text(e as HTMLElement));
+      expect(parts.join(" ")).toBe(label);
+    });
+  }
+
+  test("a provider's recent requests show the same failure line and label", async () => {
+    const r = await row({ ...base, failure: "dude could not act on it: slack conversations.info: missing_scope" }, "chat/slack");
+    expect(text(r.querySelector("[data-route=failed] [data-icon=alert]")?.parentElement)).toBe("Failed");
+    expect(r.querySelector("[data-testid=chat-request-result]")).toBeNull();
+    expect(text(r.querySelector("[data-testid=chat-request-failure]"))).toBe("dude could not act on it: slack conversations.info: missing_scope");
+  });
+
+  test("the route filter's Failed asks for every failure, whatever it made", async () => {
+    const client = showing([]);
+    const asked: Array<Parameters<typeof client.chatRequests>[0]> = [];
+    const original = client.chatRequests.bind(client);
+    client.chatRequests = (f = {}) => (asked.push(f), original(f));
+    const c = await show(<Pages client={client} page="chat/requests" />, "chat-requests");
+    await act(async () => void c.querySelector("[data-testid=chat-requests-route]")!.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const options = await until(() => {
+      const o = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+      return o.length ? o : null;
+    }, "the routes");
+    const failed = options.find((o) => o.textContent === "Failed")!;
+    expect(options.filter((o) => o.textContent?.startsWith("Failed")).length).toBe(1);
+    await click(failed);
+    await until(() => (asked.some((f) => f?.route === "failed") ? asked : null), "the failed filter");
   });
 });
 

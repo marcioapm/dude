@@ -2100,6 +2100,20 @@ body {
   display: block;
   font-size: var(--ds-text-xs);
 }
+/* A failed request's cause under its route: muted danger, wrapping within the route column. */
+.chatRequestFailure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ds-space-4);
+  color: var(--ds-tone-danger-fg);
+  font-size: var(--ds-text-xs);
+  overflow-wrap: anywhere;
+}
+.chatRequestFailure button {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-xs);
+}
 .chatRequestWhen {
   display: inline-flex;
   align-items: center;

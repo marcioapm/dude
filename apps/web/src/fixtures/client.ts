@@ -929,19 +929,19 @@ export class FixtureClient extends ApiClient {
     const rows: ChatRequestRow[] = [
       { id: "chr_1", provider: "slack", conversationKind: "public", conversationName: "#eng-exports", externalUserName: p(1).name, person: p(1),
         text: "open an epic in billing so CSV exports stop timing out, with the tasks it needs", permalink: "", route: "epic", askedRoute: null,
-        confidence: 0.86, reasoning: "Several pieces of work in BIL.", rounds: 0, result: { kind: "epic", id: "epc_csv", label: "BIL › CSV exports" },
+        confidence: 0.86, reasoning: "Several pieces of work in BIL.", rounds: 0, result: { kind: "epic", id: "epc_csv", label: "BIL › CSV exports" }, failure: null, madeRoute: null,
         sharedAdded: [], sharedSkipped: [], linked: [], createdAt: ago(8) },
       { id: "chr_2", provider: "slack", conversationKind: "private", conversationName: "#design-private", externalUserName: p(0).name, person: p(0),
         text: "let's think through the export settings screen together", permalink: "", route: "brainstorm", askedRoute: null, confidence: 0.79,
-        reasoning: "A discussion.", rounds: 0, result: { kind: "session", id: "ssn_9d2p", label: "Export settings screen" },
+        reasoning: "A discussion.", rounds: 0, result: { kind: "session", id: "ssn_9d2p", label: "Export settings screen" }, failure: null, madeRoute: null,
         sharedAdded: [p(1), p(2)], sharedSkipped: ["U9", "U8"], linked: [], createdAt: ago(16) },
       { id: "chr_3", provider: "slack", conversationKind: "public", conversationName: "#eng-exports", externalUserName: p(1).name, person: p(1),
         text: "hmm thoughts?", permalink: "", route: "brainstorm", askedRoute: "task", confidence: 0.41,
-        reasoning: "Might be a task; under the 75% bar.", rounds: 2, result: { kind: "session", id: "ssn_4hq1", label: "Nightly failures" }, sharedAdded: [], sharedSkipped: [],
+        reasoning: "Might be a task; under the 75% bar.", rounds: 2, result: { kind: "session", id: "ssn_4hq1", label: "Nightly failures" }, failure: null, madeRoute: null, sharedAdded: [], sharedSkipped: [],
         linked: [{ key: "BIL", name: "Billing", by: p(1).name }], createdAt: ago(180) },
       { id: "chr_4", provider: "slack", conversationKind: "public", conversationName: "#support", externalUserName: "Jon Kowalski", person: null,
         text: "@dude summarise this thread into a bug", permalink: "", route: "not_connected", askedRoute: null, confidence: null,
-        reasoning: "Their account is not connected.", rounds: 0, result: null, sharedAdded: [], sharedSkipped: [], linked: [], createdAt: ago(420) },
+        reasoning: "Their account is not connected.", rounds: 0, result: null, failure: null, madeRoute: null, sharedAdded: [], sharedSkipped: [], linked: [], createdAt: ago(420) },
     ];
     const matched = rows.filter((r) => (!filter.provider || r.provider === filter.provider) && (!filter.route || r.route === filter.route));
     const week = matched.filter((r) => Date.parse(r.createdAt) > Date.now() - 7 * 86_400_000);

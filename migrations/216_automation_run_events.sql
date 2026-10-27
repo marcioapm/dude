@@ -1,4 +1,4 @@
--- 214_automation_run_events.sql — an automation run's activity in the ledger.
+-- 216_automation_run_events.sql — an automation run's activity in the ledger.
 --
 -- An automation run (automation_runs, ids "arn_…") is not a Run (runs): its
 -- agent's messages, thoughts and tool calls, a command's or server's output

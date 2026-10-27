@@ -87,7 +87,7 @@ export type EventInput = Pick<EventEnvelope, "eventType" | "organizationId" | "a
  */
 export interface PersistedEvent extends EventEnvelope {
   cursor: number;
-  /** The automation run whose activity it is (migration 214); absent on every other event. */
+  /** The automation run whose activity it is (migration 216); absent on every other event. */
   automationRunId?: string;
   /**
    * In API output, human and person actors resolve to a `PersonRef`.
