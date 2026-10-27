@@ -442,8 +442,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   is the project's). Only the task's owner changes it
   (`SetPullRequestChoiceTx`, `task.pull_request_choice_changed`), and only
   until a pull request of the attempt is on record. `openPullRequest` reads
-  it for the first pull request alone (`FirstPullRequestChoice`, empty once
-  one exists): `draft` opens a draft; `ask` holds the delivery at the gate
+  it for the first pull request alone (`PullRequestChoiceAtOpening`; once
+  one is on record a retried opening follows its draft and never holds):
+  `draft` opens a draft; `ask` holds the delivery at the gate
   the adopted branch uses (`ChoiceGate`, `parkAtGate`, task
   `awaiting_input` "Ready for your review", `State.Hold` with round, heads,
   commits since the owner last looked and per-repository +/- from GitHub's

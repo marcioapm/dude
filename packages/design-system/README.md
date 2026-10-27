@@ -2567,12 +2567,13 @@ MarkdownCheatsheet.
   with both Open buttons `RefusedButton`s whose reason is also a visible
   line hidden from the accessibility tree; `items: 0` says the round is
   being reviewed and tested again, `waiting` on neutral with no
-  Open or Done, and with `sentBack` "Sam's feedback is with a fixer"), `round` (round 2 on: commits since `GateAt`, and what it
-  resolved), `heldMs`, and the owner's `onOpen`, `onDraft`, `onFeedback`
-  and   `onDoneWithout` (only while `yours`; the app confirms first). Its
+  Open or Done, and with `sentBack` "Sam's feedback is with a fixer"),
+  `round` (round 2 on: commits since `GateAt`, and what it resolved),
+  `heldMs`, and the owner's `onOpen`, `onDraft`, `onFeedback` and
+  `onDoneWithout` (only while `yours`; the app confirms first). Its
   `Callout` is `fill`: the rows span the notice and Done without sits at
-  the row's end. Under
-  560px each repository's refs and Done without take their own lines.
+  the row's end. Under 560px each repository's refs and Done without take
+  their own lines.
 - **BeforePullRequestFact**: a task's delivery choice that can still
   change, under the task's facts in the Overview rail. The owner gets a
   compact `Select` with when it is read ("Read when Deliver reaches the
