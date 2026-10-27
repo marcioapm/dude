@@ -111,7 +111,7 @@ func runDiff(ctx context.Context, tx pgx.Tx, c Caller, in runDiffIn) (any, error
 		if runID != "" {
 			return nil, refuseText(rNameRunOrTaskNotBoth)
 		}
-		peer, ok, err := delivery.PeerByKey(ctx, tx, c.TaskID, key)
+		peer, ok, err := peerInReach(ctx, tx, c, key)
 		if err != nil {
 			return nil, err
 		}

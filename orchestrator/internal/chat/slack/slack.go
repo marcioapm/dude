@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -266,6 +267,32 @@ type APIError struct{ Method, Code string }
 
 func (e *APIError) Error() string { return fmt.Sprintf("slack %s: %s", e.Method, e.Code) }
 
+// statusError is a Web API call answered with an HTTP status worth trying
+// again (429, 5xx).
+type statusError struct {
+	Method string
+	Status int
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("slack %s answered %d", e.Method, e.Status) }
+
+// rateLimited says err is Slack rate-limiting a call: HTTP 429, or the
+// API's ratelimited error.
+func rateLimited(err error) bool {
+	var s *statusError
+	var a *APIError
+	return errors.As(err, &s) && s.Status == http.StatusTooManyRequests || errors.As(err, &a) && a.Code == "ratelimited"
+}
+
+// pageCallFailed is a FetchPage call's err as the read reports it: a rate
+// limit is chat.ErrRateLimited, not a failure of the installation.
+func pageCallFailed(err error) error {
+	if rateLimited(err) {
+		return fmt.Errorf("%w: %w", chat.ErrRateLimited, err)
+	}
+	return err
+}
+
 // jsonMethods send blocks as JSON; other methods use form encoding
 // because Slack reads reject JSON with invalid_arguments.
 var jsonMethods = map[string]bool{"chat.postMessage": true, "chat.postEphemeral": true, "chat.update": true}
@@ -338,7 +365,7 @@ func (p *Provider) send(ctx context.Context, token, method string, args map[stri
 		return chat.Transient(fmt.Errorf("slack %s: %w", method, err), 0)
 	}
 	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode/100 == 5 {
-		return chat.Transient(fmt.Errorf("slack %s answered %d", method, res.StatusCode), retryAfter(res.Header))
+		return chat.Transient(&statusError{Method: method, Status: res.StatusCode}, retryAfter(res.Header))
 	}
 	if res.StatusCode/100 != 2 {
 		return fmt.Errorf("slack %s answered %d", method, res.StatusCode)
@@ -387,13 +414,8 @@ func (p *Provider) FetchThread(ctx context.Context, inst chat.Installation, conv
 			args["oldest"], args["inclusive"] = since, false
 		}
 		var page struct {
-			Messages []struct {
-				TS    string `json:"ts"`
-				User  string `json:"user"`
-				Text  string `json:"text"`
-				BotID string `json:"bot_id"`
-			} `json:"messages"`
-			Meta struct {
+			Messages []message `json:"messages"`
+			Meta     struct {
 				NextCursor string `json:"next_cursor"`
 			} `json:"response_metadata"`
 		}
@@ -404,7 +426,7 @@ func (p *Provider) FetchThread(ctx context.Context, inst chat.Installation, conv
 			if since != "" && !tsAfter(m.TS, since) {
 				continue
 			}
-			out = append(out, chat.ThreadMessage{ID: m.TS, UserID: m.User, Text: m.Text, Bot: m.BotID != ""})
+			out = append(out, m.threadMessage())
 		}
 		if cursor = page.Meta.NextCursor; cursor == "" {
 			break
@@ -418,6 +440,165 @@ func tsAfter(a, b string) bool {
 	x, _ := strconv.ParseFloat(a, 64)
 	y, _ := strconv.ParseFloat(b, 64)
 	return x > y
+}
+
+// pageScan bounds how many messages FetchPage reads to find a page whose
+// bound is at the far end of Slack's order (pageCall a call).
+const (
+	pageScan = 1000
+	pageCall = 200
+)
+
+// FetchPage reads the Limit messages of a thread (conversations.replies)
+// or of a channel's top level (conversations.history) nearest the page's
+// bound, oldest first. Slack lists a channel newest first and a thread
+// oldest first: where its order starts at the bound (the latest page and
+// before on a channel; after in a thread) a call of Limit+1 decides the
+// page and whether there is more, and a second call fills a page Slack
+// answered short. The other way it follows Slack's cursor
+// from the far end, up to pageScan messages, and says chat.ErrPageTooFar
+// when the bound is not reached by then rather than give a page that is
+// not next to it.
+func (p *Provider) FetchPage(ctx context.Context, inst chat.Installation, conversation, thread string, page chat.Page) ([]chat.ThreadMessage, bool, error) {
+	method, args := "conversations.history", map[string]any{"channel": conversation, "inclusive": false}
+	if thread != "" {
+		method, args["ts"] = "conversations.replies", thread
+	}
+	if page.Before != "" {
+		args["latest"] = page.Before
+	}
+	if page.After != "" {
+		args["oldest"] = page.After
+	}
+	// Slack's order runs away from the bound: newest first on a channel
+	// (the bound is its latest end, or before), oldest first in a thread
+	// read after a message.
+	fromBound := (thread == "" && page.After == "") || (thread != "" && page.After != "")
+	inPage := func(m message) bool {
+		return (page.Before == "" || tsAfter(page.Before, m.TS)) && (page.After == "" || tsAfter(m.TS, page.After))
+	}
+	var all []message
+	more := false
+	if fromBound {
+		// A thread's replies start with its root on the first call, which
+		// is not in the page.
+		args["limit"] = page.Limit + 1
+		if thread != "" {
+			args["limit"] = page.Limit + 2
+		}
+		// Slack may return fewer than limit while more remain (its cursor
+		// or has_more says so): one more call fills the page, and a
+		// transient failure of that one leaves the page short, with more.
+		for call := 0; call < 2 && len(all) <= page.Limit; call++ {
+			var out struct {
+				Messages []message `json:"messages"`
+				HasMore  bool      `json:"has_more"`
+				Meta     struct {
+					NextCursor string `json:"next_cursor"`
+				} `json:"response_metadata"`
+			}
+			if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
+				if t := (*chat.TransientError)(nil); call > 0 && errors.As(err, &t) {
+					break
+				}
+				return nil, false, pageCallFailed(err)
+			}
+			for _, m := range out.Messages {
+				if inPage(m) {
+					all = append(all, m)
+				}
+			}
+			more = out.HasMore || out.Meta.NextCursor != ""
+			if out.Meta.NextCursor == "" {
+				break
+			}
+			args["cursor"] = out.Meta.NextCursor
+		}
+		// Nearest the bound first: a channel's newest, a thread's oldest.
+		if len(all) > page.Limit {
+			all, more = all[:page.Limit], true
+		}
+	} else {
+		args["limit"] = pageCall
+		cursor, reached := "", false
+		for len(all) < pageScan {
+			if cursor != "" {
+				args["cursor"] = cursor
+			}
+			var out struct {
+				Messages []message `json:"messages"`
+				Meta     struct {
+					NextCursor string `json:"next_cursor"`
+				} `json:"response_metadata"`
+			}
+			if err := p.call(ctx, inst.Token, method, args, &out); err != nil {
+				return nil, false, pageCallFailed(err)
+			}
+			for _, m := range out.Messages {
+				if inPage(m) {
+					all = append(all, m)
+				}
+			}
+			if cursor = out.Meta.NextCursor; cursor == "" {
+				reached = true
+				break
+			}
+		}
+		if !reached {
+			return nil, false, chat.ErrPageTooFar
+		}
+	}
+	slices.SortFunc(all, func(a, b message) int {
+		switch {
+		case tsAfter(b.TS, a.TS):
+			return -1
+		case tsAfter(a.TS, b.TS):
+			return 1
+		}
+		return 0
+	})
+	if len(all) > page.Limit {
+		more = true
+		// After a message: the first Limit after it; otherwise the latest.
+		if page.After == "" {
+			all = all[len(all)-page.Limit:]
+		} else {
+			all = all[:page.Limit]
+		}
+	}
+	out := make([]chat.ThreadMessage, 0, len(all))
+	for _, m := range all {
+		out = append(out, m.threadMessage())
+	}
+	return out, more, nil
+}
+
+// FetchHistory reads conversations.history: the messages before before
+// (latest, exclusive), back to within before it (oldest), newest first, at
+// most limit, in one page.
+func (p *Provider) FetchHistory(ctx context.Context, inst chat.Installation, conversation, before string, within time.Duration,
+	limit int) ([]chat.ThreadMessage, error) {
+	secs, frac, _ := strings.Cut(before, ".")
+	at, err := strconv.ParseInt(secs, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("slack conversations.history: %q is not a message timestamp", before)
+	}
+	oldest := strconv.FormatInt(at-int64(within/time.Second), 10)
+	if frac != "" {
+		oldest += "." + frac
+	}
+	args := map[string]any{"channel": conversation, "latest": before, "inclusive": false, "oldest": oldest, "limit": limit}
+	var page struct {
+		Messages []message `json:"messages"`
+	}
+	if err := p.call(ctx, inst.Token, "conversations.history", args, &page); err != nil {
+		return nil, err
+	}
+	out := make([]chat.ThreadMessage, 0, len(page.Messages))
+	for _, m := range page.Messages[:min(len(page.Messages), limit)] {
+		out = append(out, m.threadMessage())
+	}
+	return out, nil
 }
 
 // Conversation reads conversations.info: a public channel, a private one,

@@ -35,6 +35,7 @@ const (
 	SessionName     Key = "session.name"
 	SessionAgents   Key = "session.agents"
 	SessionCheckout Key = "session.checkout"
+	ChatRead        Key = "chat.read"
 	RunsRead        Key = "runs.read"
 	PRRefresh       Key = "pr.refresh"
 	LimitsRead      Key = "limits.read"
@@ -88,8 +89,8 @@ var All = []Capability{
 		Tools: []string{"reply_on_pull_request", "resolve_thread"}},
 	{Key: BaseSync, Description: "Bring the base branch into the checkout.",
 		Tools: []string{"sync_base"}},
-	{Key: GitHubRead, Description: "Search and read GitHub issues, pull requests and check logs.",
-		Tools: []string{"github_search", "github_issue", "github_pull_request", "github_check_log"}},
+	{Key: GitHubRead, Description: "Search and read GitHub issues, pull requests, Actions runs' jobs and check logs.",
+		Tools: []string{"github_search", "github_issue", "github_pull_request", "github_check_log", "github_run_jobs"}},
 	{Key: DeliveryRead, Description: "Read review findings and the task's pull requests.",
 		Tools: []string{"findings", "pull_requests"}},
 	{Key: Conduct, Description: "Drive the task's delivery: start phases and agents, steer and restart Runs, decide, update the task, publish, and act on its pull requests.",
@@ -103,6 +104,8 @@ var All = []Capability{
 		Tools: []string{"start_agent"}},
 	{Key: SessionCheckout, Description: "Ask again for a linked repository whose checkout failed, and be told why it failed last; at most 3 a Run.",
 		Tools: []string{"refresh_checkout"}},
+	{Key: ChatRead, Description: "Read more of the chat conversation a session was started from: its thread, or the channel; at most 30 reads an hour.",
+		Tools: []string{"chat_history"}},
 	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
 		Tools: []string{"run_chat"}},
 	{Key: PRRefresh, Description: "Read the task's pull requests from GitHub now, rather than dude's last poll; counts against the hourly GitHub reads.",
@@ -126,7 +129,7 @@ var All = []Capability{
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
 		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, RunsRead,
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},

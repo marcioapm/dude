@@ -1960,6 +1960,12 @@ body {
   gap: var(--ds-space-8);
   margin-block: var(--ds-space-12);
 }
+.chatProjectChips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
 /* Block padding larger than the face's online ring, so the cell's clip never cuts it. */
 .chatRequestWho {
   display: flex;

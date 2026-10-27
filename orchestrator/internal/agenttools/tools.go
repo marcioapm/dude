@@ -231,7 +231,11 @@ func projectTasks(ctx context.Context, tx pgx.Tx, c Caller, in listTasksIn) (lis
 	for i, t := range all {
 		ids[i] = t.ID
 	}
-	rels, err := delivery.RelationsOf(ctx, tx, ids)
+	f, err := fenceOf(ctx, tx, c)
+	if err != nil {
+		return out, err
+	}
+	rels, err := delivery.RelationsOf(ctx, tx, ids, f.Hidden)
 	if err != nil {
 		return out, err
 	}
@@ -364,6 +368,10 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 		id, c.Org, c.ProjectID, number, epicID, title, strings.TrimSpace(in.Goal), criteria, byRun, byAutomation); err != nil {
 		return createTaskOut{}, err
 	}
+	// Made by the agent of a task (or session) that came from chat: fenced as it is.
+	if err := delivery.InheritOrigin(ctx, tx, "tasks", id, c.SessionID, c.TaskID); err != nil {
+		return createTaskOut{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO task_people (task_id, person_id, organization_id, position)
 		SELECT $1, p.id, $2, 0 FROM task_people tp JOIN people p ON p.id = tp.person_id
 		WHERE tp.task_id = $3 AND p.removed_at IS NULL
@@ -398,6 +406,9 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 			}
 			if !ok {
 				return createTaskOut{}, refuse(rNoTaskInThisOrganisationNothing, side.name, k)
+			}
+			if err := fenced(ctx, tx, c, other.ProjectID, ""); err != nil {
+				return createTaskOut{}, err
 			}
 			if err := delivery.AddRelationTx(ctx, tx, c.Org, delivery.Edge{Here: here, Other: other, Side: side.name, RunID: c.RunID}); err != nil {
 				if r, ok := err.(delivery.RelationRefusal); ok {

@@ -1,1 +1,1 @@
-"automation": create_task github_search github_issue github_pull_request github_check_log github_comment post_to_chat
+"automation": create_task github_search github_issue github_pull_request github_check_log github_run_jobs github_comment post_to_chat

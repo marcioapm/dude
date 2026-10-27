@@ -2930,6 +2930,11 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 	if errors.As(err, &cannot) {
 		return unresumable(cannot.Error())
 	}
+	var fencedOut errCheckoutFenced
+	if errors.As(err, &fencedOut) {
+		refused()
+		return true, s.retireFenced(ctx, r, fencedOut)
+	}
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusConflict {
 		// Already resuming (an earlier attempt got through and its answer
 		// was lost: lux's stream reports how it went) — or not resumable at

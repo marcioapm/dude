@@ -184,12 +184,12 @@ const SessionSpecNameSQL = `lux_name(p.key_prefix || '-' || repo.name)`
 func SessionRepoPath(key, name string) string { return "/workspace/repos/" + key + "/" + name }
 
 // SessionRepositories are the repositories linked to a session, in project
-// key and name order.
+// key and name order: none of a project fenced off from it (SessionHidesSQL).
 func SessionRepositories(ctx context.Context, tx pgx.Tx, sessionID string) ([]SessionRepo, error) {
 	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, p.key_prefix, r.name, r.url, r.default_branch, COALESCE(r.setup_script, '')
 		FROM session_repositories sr JOIN repositories r ON r.id = sr.repository_id JOIN projects p ON p.id = r.project_id
 		JOIN session_projects sp ON sp.session_id = sr.session_id AND sp.project_id = r.project_id
-		WHERE sr.session_id = $1 ORDER BY p.key_prefix, r.name`, sessionID)
+		WHERE sr.session_id = $1 AND NOT `+SessionHidesSQL("sr.session_id", "r.project_id")+` ORDER BY p.key_prefix, r.name`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -199,10 +199,11 @@ func SessionRepositories(ctx context.Context, tx pgx.Tx, sessionID string) ([]Se
 // LinkedProject is a project linked to a session.
 type LinkedProject struct{ ID, Key, Name string }
 
-// SessionProjects are the projects linked to a session, by key.
+// SessionProjects are the projects linked to a session, by key: none
+// fenced off from it (SessionHidesSQL), whoever linked it.
 func SessionProjects(ctx context.Context, tx pgx.Tx, sessionID string) ([]LinkedProject, error) {
 	rows, err := tx.Query(ctx, `SELECT p.id, p.key_prefix, p.name FROM session_projects sp JOIN projects p ON p.id = sp.project_id
-		WHERE sp.session_id = $1 ORDER BY p.key_prefix, p.name`, sessionID)
+		WHERE sp.session_id = $1 AND NOT `+SessionHidesSQL("sp.session_id", "p.id")+` ORDER BY p.key_prefix, p.name`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -662,11 +663,12 @@ type OrgProject struct {
 }
 
 // OrgProjects are the projects of the organisation tx is scoped to (row
-// security), by key, each saying whether sessionID links it.
+// security), by key, each saying whether sessionID links it; none fenced
+// off from the session (SessionHidesSQL).
 func OrgProjects(ctx context.Context, tx pgx.Tx, sessionID string) ([]OrgProject, error) {
 	rows, err := tx.Query(ctx, `SELECT p.id, p.key_prefix, p.name,
 			EXISTS (SELECT 1 FROM session_projects sp WHERE sp.session_id = $1 AND sp.project_id = p.id)
-		FROM projects p ORDER BY p.key_prefix`, sessionID)
+		FROM projects p WHERE NOT `+SessionHidesSQL("$1", "p.id")+` ORDER BY p.key_prefix`, sessionID)
 	if err != nil {
 		return nil, err
 	}

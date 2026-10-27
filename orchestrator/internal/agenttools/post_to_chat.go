@@ -110,7 +110,7 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 	if c.AutomationID == "" || json.Unmarshal(args, &in) != nil || c.env.db == nil {
 		return nil
 	}
-	p, registered := c.env.chat.Get(chatProvider)
+	p, registered := c.env.chatProviders.Get(chatProvider)
 	var inst chat.Installation
 	var installed bool
 	var made, recent int

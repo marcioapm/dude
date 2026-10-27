@@ -47,7 +47,7 @@ export function ProviderGlyph({ provider, size = 14, label, inline, className }:
 }
 
 /** Where a mention went. */
-export type ChatRoute = "brainstorm" | "task" | "epic" | "resume" | "task_link" | "clarify" | "not_connected" | "not_member" | "failed";
+export type ChatRoute = "brainstorm" | "task" | "epic" | "resume" | "task_link" | "clarify" | "channel_projects" | "not_connected" | "not_member" | "failed";
 
 /** Each route's tone, glyph and word: it reads without colour. Refusals and failures are subtle. */
 export const ROUTE_SPEC: Record<ChatRoute, { readonly tone: ToneName; readonly icon: IconName; readonly label: string; readonly subtle: boolean }> = {
@@ -57,6 +57,7 @@ export const ROUTE_SPEC: Record<ChatRoute, { readonly tone: ToneName; readonly i
   resume: { tone: "neutral", icon: "retry", label: "Resume", subtle: false },
   task_link: { tone: "neutral", icon: "link", label: "Task link", subtle: false },
   clarify: { tone: "attention", icon: "question", label: "Clarify", subtle: false },
+  channel_projects: { tone: "neutral", icon: "pin", label: "Channel projects", subtle: false },
   not_connected: { tone: "neutral", icon: "link", label: "Refused: not connected", subtle: true },
   not_member: { tone: "danger", icon: "lock", label: "Refused: not a member", subtle: true },
   failed: { tone: "danger", icon: "alert", label: "Failed → Brainstorm", subtle: true },

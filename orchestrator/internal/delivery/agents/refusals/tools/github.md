@@ -21,3 +21,7 @@
 {{- define "refusals/tools/github/files-at-most-paths-at-once"}}files: at most %d paths at once{{end}}
 
 {{- define "refusals/tools/github/check-id-check-run-from-1"}}checkId is the check run's id, from 1{{end}}
+
+{{- define "refusals/tools/github/run-id-run-from-1-or-its-link"}}runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>){{end}}
+
+{{- define "refusals/tools/github/run-link-is-another-repository"}}%s is a run of another repository than %s: leave repo out, or name the link's{{end}}

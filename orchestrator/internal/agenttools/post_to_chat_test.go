@@ -51,7 +51,7 @@ func setupChatWith(t *testing.T, installed bool, o chatOptions) chatFixture {
 	srv := httptest.NewServer(fake.WithChannelPages(o.pageSize))
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
-	f := setupWith(t, &agenttools.Server{Chat: chat.Registry{"slack": p}, BeforeCall: o.beforeCall})
+	f := setupWith(t, &agenttools.Server{ChatProviders: chat.Registry{"slack": p}, BeforeCall: o.beforeCall})
 	mustExec(t, f.owner, `UPDATE organizations SET name = 'Acme' WHERE id = $1`, f.org)
 	if installed {
 		mustExec(t, f.owner, `INSERT INTO chat_installations (id, organization_id, provider, external_workspace_id, workspace_name,

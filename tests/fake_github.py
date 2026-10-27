@@ -177,6 +177,9 @@ class FakeGitHub:
         self.state_changes: list[tuple[int, str]] = []
         # Issues by number (open_issue), apart from pull requests.
         self.issues: dict[int, Issue] = {}
+        # GitHub Actions runs by id (add_actions_run), and their jobs' logs by job id.
+        self.actions_runs: dict[int, dict] = {}
+        self.job_logs: dict[int, str] = {}
 
     def _conflicting(self, pr: PullRequest) -> bool:
         if pr.conflicting:
@@ -208,6 +211,13 @@ class FakeGitHub:
 
     def _for_repo(self, repo: str) -> "FakeGitHub":
         return self.siblings.get(repo, self)
+
+    def _for_any_log(self, job: int) -> str:
+        """A job's log, whichever repository of the owner it is in; "" for none."""
+        for gh in [self, *self.siblings.values()]:
+            if job in gh.job_logs:
+                return gh.job_logs[job]
+        return ""
 
     # -- GraphQL review threads ----------------------------------------------
 
@@ -556,6 +566,17 @@ class FakeGitHub:
     # -- what an agent reads: issues, search, files, threads' words ---------
     # Issues are numbered from 101, apart from pull requests (from 1), so a
     # test's numbers do not depend on the order it opens them in.
+
+    def add_actions_run(self, run_id: int, name: str, jobs: list[dict], branch: str = "main", event: str = "schedule") -> str:
+        """A GitHub Actions run: each job {id, name, conclusion, failed_steps?, log?}; a job's
+        id is its check run's. Returns the run's link, as a report carries it."""
+        with self._lock:
+            self.actions_runs[run_id] = {"name": name, "branch": branch, "event": event, "jobs": jobs,
+                                         "conclusion": "failure" if any(j["conclusion"] == "failure" for j in jobs) else "success"}
+            for j in jobs:
+                if j.get("log"):
+                    self.job_logs[j["id"]] = j["log"]
+        return f"https://github.com/{self.owner}/{self.repo}/actions/runs/{run_id}"
 
     def open_issue(self, title: str, body: str = "", author: str = "ana", labels: list[str] | None = None) -> int:
         """A person opens an issue; its number. No webhook: dude does not watch issues."""
@@ -1213,10 +1234,48 @@ class FakeGitHub:
                     states = {st["state"] for st in statuses}
                     combined = next((x for x in ("failure", "error", "pending") if x in states), "success" if states else "pending")
                     return self._send(200, {"state": combined, "total_count": len(statuses), "statuses": statuses})
+                if m := re.fullmatch(rf"{prefix}/actions/runs/(\d+)", path):
+                    run = self.github.actions_runs.get(int(m[1]))
+                    if run is None:
+                        return self._send(404, {"message": "Not Found"})
+                    return self._send(200, {"id": int(m[1]), "name": run["name"], "head_branch": run["branch"], "event": run["event"],
+                                            "head_sha": self.github.branch_sha(run["branch"]) or "", "status": "completed",
+                                            "conclusion": run["conclusion"],
+                                            "html_url": f"https://github.com/{self.github.owner}/{self.github.repo}/actions/runs/{m[1]}"})
+                if m := re.fullmatch(rf"{prefix}/actions/runs/(\d+)/jobs", path):
+                    run = self.github.actions_runs.get(int(m[1]))
+                    if run is None:
+                        return self._send(404, {"message": "Not Found"})
+                    jobs = [{"id": j["id"], "name": j["name"], "status": "completed", "conclusion": j["conclusion"],
+                             "html_url": f"https://github.com/{self.github.owner}/{self.github.repo}/actions/runs/{m[1]}/job/{j['id']}",
+                             "steps": [{"name": "Set up job", "conclusion": "success"}] +
+                                      [{"name": s, "conclusion": "failure"} for s in j.get("failed_steps", [])]}
+                            for j in run["jobs"]]
+                    return self._send(200, {"total_count": len(jobs), "jobs": jobs})
+                if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)/logs", path):
+                    if int(m[1]) not in self.github.job_logs:
+                        return self._send(404, {"message": "Not Found"})
+                    # As GitHub: a redirect to a short-lived download URL.
+                    self.send_response(302)
+                    self.send_header("location", f"http://{self.headers.get('host', '')}/_downloads/jobs/{m[1]}?sig=short-lived")
+                    self.send_header("content-length", "0")
+                    return self.end_headers()
+                if m := re.fullmatch(r"/_downloads/jobs/(\d+)", path):
+                    data = self.github._for_any_log(int(m[1])).encode()
+                    self.send_response(200)
+                    self.send_header("content-type", "text/plain")
+                    self.send_header("content-length", str(len(data)))
+                    self.end_headers()
+                    return self.wfile.write(data)
                 if m := re.fullmatch(rf"{prefix}/check-runs/(\d+)", path):
+                    if int(m[1]) in self.github.job_logs:
+                        return self._send(200, {"id": int(m[1]), "app": {"slug": "github-actions"}, "output": None})
                     return self._send(200, {"id": int(m[1]), "output": {
                         "title": "1 test failed", "summary": "test_greeting: expected hello, got hi", "text": ""}})
                 if m := re.fullmatch(rf"{prefix}/check-runs/(\d+)/annotations", path):
+                    if int(m[1]) in self.github.job_logs:
+                        return self._send(200, [{"path": ".github", "start_line": 1, "annotation_level": "failure",
+                                                 "message": "Process completed with exit code 1."}])
                     return self._send(200, [{"path": "greet.py", "start_line": 12, "annotation_level": "failure",
                                              "message": "expected hello"}])
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", path):
