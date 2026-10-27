@@ -340,18 +340,31 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	case CancelAndStart:
 		rows, err := tx.Query(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
 			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'
-			RETURNING COALESCE(lux_run_id, ''), COALESCE(session, '') IN ('new', 'resumed')`, a.ID)
+			RETURNING id, COALESCE(lux_run_id, ''), COALESCE(session, '') IN ('new', 'resumed')`, a.ID)
 		if err != nil {
 			return Fired{}, err
 		}
 		var c Cancelled
-		if _, err := pgx.ForEachRow(rows, []any{&c.LuxRunID, &c.Keep}, func() error {
+		var cancelledID string
+		var cancelledIDs []string
+		if _, err := pgx.ForEachRow(rows, []any{&cancelledID, &c.LuxRunID, &c.Keep}, func() error {
+			cancelledIDs = append(cancelledIDs, cancelledID)
 			if c.LuxRunID != "" {
 				fired.Cancelled = append(fired.Cancelled, c)
 			}
 			return nil
 		}); err != nil {
 			return Fired{}, err
+		}
+		for _, id := range cancelledIDs {
+			if err := feedFrames(ctx, tx, a, id, nil, true, "cancelled", nil); err != nil {
+				return Fired{}, err
+			}
+			if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "automation.run.ended", OrganizationID: a.Org, ProjectID: a.ProjectID,
+				AutomationRunID: id, ActorType: ledger.ActorSystem, ActorID: id, Source: ledger.SourceRunner,
+				Payload: map[string]any{"status": "cancelled", "reason": "a newer event restarted it (Concurrency: cancel)"}}); err != nil {
+				return Fired{}, err
+			}
 		}
 	}
 	fired.Run = ids.New(ids.AutomationRun)

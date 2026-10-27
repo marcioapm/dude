@@ -1075,6 +1075,7 @@ func TestAutomationConcurrencyCancel(t *testing.T) {
 		return len(a) == 1 && a[0].Status == "running" && len(b) == 1 && b[0].Status == "running"
 	})
 	firstCmd, firstAgent := h.runs("aut_cancel")[0], h.runs("aut_cancel_kept")[0]
+	exec(t, h.owner, `UPDATE automation_runs SET feed_state='{"message":"buffered reply","open":["cancel-call"],"calls":{"cancel-call":"bash"}}' WHERE id=$1`, firstAgent.ID)
 	h.deliver("c-2", "push", push)
 	h.until("the second runs are running", func() bool {
 		a, b := h.runs("aut_cancel"), h.runs("aut_cancel_kept")
@@ -1090,6 +1091,13 @@ func TestAutomationConcurrencyCancel(t *testing.T) {
 	}
 	if in := h.fake.ResumeInputs(firstAgent.LuxRunID); len(in) != 1 || !strings.Contains(in[0], "Look at c-2") {
 		t.Errorf("resume inputs %q", in)
+	}
+	var aborted, ended, messages int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE event_type='agent.tool.completed' AND payload->>'status'='aborted' AND payload->>'note'='Stopped: the run was cancelled.'), count(*) FILTER (WHERE event_type='automation.run.ended'), count(*) FILTER (WHERE event_type='agent.message' AND payload->>'text'='buffered reply') FROM events WHERE automation_run_id=$1`, firstAgent.ID).Scan(&aborted, &ended, &messages); err != nil {
+		t.Fatal(err)
+	}
+	if aborted != 1 || ended != 1 || messages != 1 {
+		t.Fatalf("cancel feed: aborted=%d ended=%d messages=%d", aborted, ended, messages)
 	}
 	g.release(t)
 }
