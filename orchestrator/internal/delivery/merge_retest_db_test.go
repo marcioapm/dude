@@ -113,6 +113,38 @@ func TestACleanMergeIsTestedWhenAnyOtherConditionFails(t *testing.T) {
 	}
 }
 
+// A person's Open or Draft given at the heads before the merge moves, as
+// given, to the merged heads with the skip; one given at other heads is
+// theirs to give again at the merged code, and stays where it was.
+func TestACleanMergeSkipMovesOnlyAGateGivenAtThePreMergeHeads(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		pre   bool
+		draft bool
+	}{{"Open at the pre-merge heads", true, false}, {"Draft at the pre-merge heads", true, true}, {"Draft at other heads", false, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+			f.merged(st, sc)
+			given := map[string]string{"repo": st.Integration.Head}
+			if !c.pre {
+				given = map[string]string{"repo": "0000000000000000000000000000000000000000"}
+			}
+			f.setGate(given, c.draft)
+			st.GateAt = &GateAt{Heads: given, Draft: c.draft}
+			if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+				t.Fatalf("skip %v (%v)", skip, err)
+			}
+			want := &GateAt{Heads: given, Draft: c.draft}
+			if c.pre {
+				want.Heads = map[string]string{"repo": f.gh.SHA("feature")}
+			}
+			if got := f.gate(); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(st.GateAt, want) {
+				t.Fatalf("gate in the row %+v, in the state %+v; want %+v", got, st.GateAt, want)
+			}
+		})
+	}
+}
+
 // setGate records the person's Open or Draft at heads in the delivery's row.
 func (f *verdictFixture) setGate(heads map[string]string, draft bool) {
 	f.t.Helper()
