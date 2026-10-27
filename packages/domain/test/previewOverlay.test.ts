@@ -59,8 +59,8 @@ test("overSize counts a message's strings and stops once past the cap", () => {
 
 test("overSize refuses a typed array or buffer outright, and stops counting after a message's worth of entries", () => {
   const typed = new Uint8Array(10_000_000);
-  // Only the prototype may be read: any key listing or element read throws, so a walk of the 10 MB fails the test.
-  const untouchable = <T extends object>(target: T): T =>
+  // Allow prototype checks, but reject property reads and key enumeration.
+  const untouchable = (target: object) =>
     new Proxy(target, {
       get: () => { throw new Error("an element was read"); },
       has: () => { throw new Error("a key was tested"); },
@@ -71,7 +71,7 @@ test("overSize refuses a typed array or buffer outright, and stops counting afte
   expect(overSize({ type: "draft", x: untouchable(typed.buffer) }, OVERLAY_LIMITS.message)).toBe(true);
   expect(overSize({ type: "draft", x: typed }, OVERLAY_LIMITS.message)).toBe(true);
   expect(overSize({ type: "draft", x: typed.buffer }, OVERLAY_LIMITS.message)).toBe(true);
-  // Refused for what it is, not for its size: a one-byte typed array or buffer is over even under a huge cap.
+  // Even one byte is refused under a huge cap: type, not size, decides.
   expect(overSize({ x: new Uint8Array(1) }, 1e9)).toBe(true);
   expect(overSize({ x: new ArrayBuffer(1) }, 1e9)).toBe(true);
   expect(overSize(new Map([["a", 1]]), OVERLAY_LIMITS.message)).toBe(true);
@@ -80,7 +80,7 @@ test("overSize refuses a typed array or buffer outright, and stops counting afte
   for (let i = 0; i < 3_000; i++) many[`k${i}`] = i;
   expect(overSize(many, 1e9)).toBe(true);
   expect(overSize(Array.from({ length: 3_000 }, () => 0), 1e9)).toBe(true);
-  // A million keys: the engine lists them, but no more than a message's worth of values is read.
+  // A million keys may be listed, but at most 2,000 values may be read.
   const keys: Record<string, number> = {};
   for (let i = 0; i < 1_000_000; i++) keys[`k${i}`] = i;
   let reads = 0;
