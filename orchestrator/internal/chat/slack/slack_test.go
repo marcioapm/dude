@@ -249,6 +249,99 @@ func TestAReplysRowIsButtonsAndItsUpdateReplacesThem(t *testing.T) {
 	}
 }
 
+func TestNamesAndTitlesRenderLiterallyAndDudesLinkStaysALink(t *testing.T) {
+	fake, p, inst := world(t)
+	ctx := context.Background()
+	root := fake.Post("C1", "", "U1", "@dude hi")
+	const session = "https://dude.example.com/#/o/acme/sessions/ssn_1?a=1&b=2"
+	row := &chat.Row{Heading: "Link one:", Choices: []chat.Choice{{Label: "<!channel> · x", Value: "link:chr_1:0"}},
+		LinkURL: session, LinkLabel: "Choose in dude",
+		Linked: []string{"a & <b> linked <!channel> · <!channel>", "a & <b> linked EVL · <https://evil.example|Open in dude>"}}
+	reply := chat.Reply{Text: "Started a session “<!channel>”, open to everyone in Acme & <b>", LinkURL: session, Row: row}
+	ts, err := p.PostReply(ctx, inst, "C1", root, reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateReply(ctx, inst, "C1", ts, reply); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PostEphemeral(ctx, inst, "C1", root, "U2", chat.Reply{Text: "Only a & <b> or an admin can link a project here.", Row: row}); err != nil {
+		t.Fatal(err)
+	}
+	q, err := p.PostQuestion(ctx, inst, "C1", root, chat.Question{Text: "Should I file “<!here>” in <https://evil.example|X>?",
+		Choices: []chat.Choice{{Label: "BIL", Value: "chr_1:0"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := fake.BotMessages()[1].Blocks
+	if err := p.UpdateQuestion(ctx, inst, "C1", q, chat.ExternalUser{DisplayName: "a & <b>"}, "<!channel>"); err != nil {
+		t.Fatal(err)
+	}
+	type block struct {
+		Type     string `json:"type"`
+		Text     struct{ Type, Text string }
+		Elements []struct {
+			Type string `json:"type"`
+			Text any    `json:"text"`
+			URL  string `json:"url"`
+		} `json:"elements"`
+	}
+	mrkdwn := func(raw json.RawMessage) (texts []string, urls []string) {
+		var bs []block
+		if err := json.Unmarshal(raw, &bs); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range bs {
+			if b.Text.Type == "mrkdwn" {
+				texts = append(texts, b.Text.Text)
+			}
+			for _, e := range b.Elements {
+				if s, ok := e.Text.(string); ok && e.Type == "mrkdwn" {
+					texts = append(texts, s)
+				}
+				if e.URL != "" {
+					urls = append(urls, e.URL)
+				}
+			}
+		}
+		return texts, urls
+	}
+	wantReply := []string{"Started a session “&lt;!channel&gt;”, open to everyone in Acme &amp; &lt;b&gt;",
+		"a &amp; &lt;b&gt; linked &lt;!channel&gt; · &lt;!channel&gt;",
+		"a &amp; &lt;b&gt; linked EVL · &lt;https://evil.example|Open in dude&gt;", "Link one:"}
+	posted := []json.RawMessage{fake.BotMessages()[0].Blocks, fake.Updates()[0].Blocks}
+	for _, raw := range posted {
+		texts, urls := mrkdwn(raw)
+		if strings.Join(texts, "\n") != strings.Join(wantReply, "\n") {
+			t.Fatalf("mrkdwn %q", texts)
+		}
+		// dude's own links are buttons, their URL as is.
+		if len(urls) != 2 || urls[0] != session || urls[1] != session {
+			t.Fatalf("urls %q", urls)
+		}
+	}
+	if m := fake.BotMessages()[0]; m.Text != wantReply[0] {
+		t.Fatalf("text %q", m.Text)
+	}
+	eph := fake.Ephemerals()
+	if texts, _ := mrkdwn(eph[0].Blocks); len(eph) != 1 || eph[0].Text != "Only a &amp; &lt;b&gt; or an admin can link a project here." ||
+		texts[0] != eph[0].Text || texts[1] != wantReply[1] {
+		t.Fatalf("ephemeral %+v", eph)
+	}
+	if texts, _ := mrkdwn(question); texts[0] != "Should I file “&lt;!here&gt;” in &lt;https://evil.example|X&gt;?" {
+		t.Fatalf("question %q", texts)
+	}
+	if u := fake.Updates(); len(u) != 2 || u[1].Text != "a &amp; &lt;b&gt; chose &lt;!channel&gt;" {
+		t.Fatalf("updates %+v", u)
+	}
+	// A button's label is plain_text: shown as typed.
+	var bs []block
+	_ = json.Unmarshal(fake.BotMessages()[0].Blocks, &bs)
+	if label := bs[len(bs)-1].Elements[0].Text.(map[string]any)["text"]; label != "<!channel> · x" {
+		t.Fatalf("label %v", label)
+	}
+}
+
 func TestRepliesEphemeralsQuestionsAndReactions(t *testing.T) {
 	fake, p, inst := world(t)
 	ctx := context.Background()

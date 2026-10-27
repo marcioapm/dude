@@ -691,12 +691,18 @@ func (p *Provider) Permalink(inst chat.Installation, conversation, message, thre
 	return link
 }
 
+// mrkdwnEscape makes text dude passes as plain words (names, titles,
+// questions) literal in mrkdwn: Slack reads <…> as a link, mention or
+// broadcast, and & as the start of an entity. Links dude means are
+// LinkURL buttons, never markup in the text, so nothing it says is lost.
+var mrkdwnEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+
 // blocks is a reply as Block Kit: its words, its link as a button, and its
 // row: a line per choice made from it, then a button per choice left and
 // the row's link.
 func blocks(r chat.Reply) []any {
 	section := func(text string) any {
-		return map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}
+		return map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": mrkdwnEscape(text)}}
 	}
 	link := func(id, label, to string) any {
 		return map[string]any{"type": "button", "action_id": id, "text": map[string]any{"type": "plain_text", "text": label}, "url": to}
@@ -707,7 +713,7 @@ func blocks(r chat.Reply) []any {
 	}
 	if row := r.Row; row != nil {
 		for _, line := range row.Linked {
-			out = append(out, map[string]any{"type": "context", "elements": []any{map[string]any{"type": "mrkdwn", "text": line}}})
+			out = append(out, map[string]any{"type": "context", "elements": []any{map[string]any{"type": "mrkdwn", "text": mrkdwnEscape(line)}}})
 		}
 		var buttons []any
 		for i, c := range row.Choices {
@@ -729,7 +735,7 @@ func blocks(r chat.Reply) []any {
 
 // UpdateReply replaces a reply dude posted with r (chat.update).
 func (p *Provider) UpdateReply(ctx context.Context, inst chat.Installation, conversation, message string, r chat.Reply) error {
-	return p.call(ctx, inst.Token, "chat.update", map[string]any{"channel": conversation, "ts": message, "text": r.Text, "blocks": blocks(r)}, nil)
+	return p.call(ctx, inst.Token, "chat.update", map[string]any{"channel": conversation, "ts": message, "text": mrkdwnEscape(r.Text), "blocks": blocks(r)}, nil)
 }
 
 // PostReply posts r in the thread, and returns its message id.
@@ -737,7 +743,7 @@ func (p *Provider) PostReply(ctx context.Context, inst chat.Installation, conver
 	var out struct {
 		TS string `json:"ts"`
 	}
-	args := map[string]any{"channel": conversation, "text": r.Text, "blocks": blocks(r), "unfurl_links": false}
+	args := map[string]any{"channel": conversation, "text": mrkdwnEscape(r.Text), "blocks": blocks(r), "unfurl_links": false}
 	if thread != "" {
 		args["thread_ts"] = thread
 	}
@@ -747,7 +753,7 @@ func (p *Provider) PostReply(ctx context.Context, inst chat.Installation, conver
 
 // PostEphemeral shows r to user alone, in the thread.
 func (p *Provider) PostEphemeral(ctx context.Context, inst chat.Installation, conversation, thread, user string, r chat.Reply) error {
-	args := map[string]any{"channel": conversation, "user": user, "text": r.Text, "blocks": blocks(r)}
+	args := map[string]any{"channel": conversation, "user": user, "text": mrkdwnEscape(r.Text), "blocks": blocks(r)}
 	if thread != "" {
 		args["thread_ts"] = thread
 	}
@@ -761,8 +767,9 @@ func (p *Provider) PostQuestion(ctx context.Context, inst chat.Installation, con
 		buttons = append(buttons, map[string]any{"type": "button", "action_id": fmt.Sprintf("choice_%d", i),
 			"text": map[string]any{"type": "plain_text", "text": c.Label}, "value": c.Value})
 	}
-	args := map[string]any{"channel": conversation, "text": q.Text, "blocks": []any{
-		map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": q.Text}},
+	text := mrkdwnEscape(q.Text)
+	args := map[string]any{"channel": conversation, "text": text, "blocks": []any{
+		map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}},
 		map[string]any{"type": "actions", "elements": buttons}}}
 	if thread != "" {
 		args["thread_ts"] = thread
@@ -776,7 +783,7 @@ func (p *Provider) PostQuestion(ctx context.Context, inst chat.Installation, con
 
 // UpdateQuestion replaces a question's buttons with who chose what.
 func (p *Provider) UpdateQuestion(ctx context.Context, inst chat.Installation, conversation, message string, by chat.ExternalUser, label string) error {
-	text := fmt.Sprintf("%s chose %s", by.Name(), label)
+	text := mrkdwnEscape(fmt.Sprintf("%s chose %s", by.Name(), label))
 	return p.call(ctx, inst.Token, "chat.update", map[string]any{"channel": conversation, "ts": message, "text": text,
 		"blocks": []any{map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}}}, nil)
 }
