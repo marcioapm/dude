@@ -154,10 +154,24 @@ func releaseChoiceGate(st *State) {
 // hold its Ask me first makes commits (recheck): a change saved while the
 // step entered the hold found no hold to signal (HeldByChoice), so the park
 // becomes the opening here, in the transition's transaction.
+//
+// Locks, in the order the delivery's writers take them (delivery, then
+// task): the delivery's row FOR UPDATE, then the task's FOR SHARE, which
+// conflicts with SetPullRequestChoiceTx's FOR NO KEY UPDATE. A change that
+// locked the task first is committed before the read below, which sees it;
+// one that locks it after waits for this park to commit, and its
+// ReadDelivery then finds the hold to signal. The change reads the delivery
+// unlocked, so the two never wait on each other in a cycle.
 func choiceReleasedAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, res workflow.Result) (workflow.Result, bool, error) {
 	d := st.Decision
 	if res.Next != "conductorDecision" || !st.ChoiceGate || st.conducted() || d == nil || d.Point != PointBeforePR || d.Taken != nil {
 		return res, false, nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM workflow_runs WHERE id = $1 FOR UPDATE`, sc.WorkflowRunID); err != nil {
+		return res, false, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR SHARE`, st.TaskID); err != nil {
+		return res, false, err
 	}
 	choice, err := firstPullRequestChoiceTx(ctx, tx, st.TaskID)
 	if errors.As(err, new(ChoiceUnresolved)) {

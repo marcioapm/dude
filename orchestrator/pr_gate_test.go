@@ -6,12 +6,16 @@ package orchestrator_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -230,6 +234,53 @@ func TestAChoiceChangedWhileEnteringTheHoldOpensThePullRequest(t *testing.T) {
 	}
 	if s := w.taskStatus(task); s == "awaiting_input" {
 		t.Errorf("task %s once its pull request opened", s)
+	}
+}
+
+// The owner's change of Ask me first holds the task's row, uncommitted, as
+// Deliver's park at the hold commits: a plain read there sees the old Ask me
+// first, and the change's own read of the delivery finds no hold to wake.
+// The park waits for the change instead, reads Open it, and opens.
+func TestAChoiceChangeCommittingAsTheHoldParksOpensThePullRequest(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	task := w.task()
+	w.assignOwner(task, ana)
+	person := w.str(`SELECT person_id FROM api_keys WHERE id = $1`, ana)
+	var once sync.Once
+	committed := make(chan error, 1)
+	armed := w.gated(func(step, next string) {
+		if step != "openPullRequest" || next != "conductorDecision" {
+			return
+		}
+		once.Do(func() {
+			locked := make(chan struct{})
+			go func() {
+				var unlock sync.Once
+				defer unlock.Do(func() { close(locked) })
+				committed <- w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+					if _, err := delivery.SetPullRequestChoiceTx(context.Background(), tx, w.org, task, delivery.PullRequestOpen,
+						delivery.Actor{ActorType: "human", ActorID: ana, Person: person}); err != nil {
+						return err
+					}
+					unlock.Do(func() { close(locked) })
+					// Long enough for the park's transition to reach its read before this commits.
+					time.Sleep(500 * time.Millisecond)
+					return nil
+				})
+			}()
+			<-locked
+		})
+	})
+	armed.Store(true)
+	w.deliver(task)
+	w.projectChoice(delivery.PullRequestAsk)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 || w.heldBeforePR(task) && w.signalsTaken(task) })
+	if err := <-committed; err != nil {
+		t.Fatalf("the change: %v", err)
+	}
+	if n := len(w.gh.Pulls()); n != 1 {
+		t.Fatalf("%d pull requests: the park missed the change committing with it", n)
 	}
 }
 
