@@ -1,8 +1,10 @@
 package delivery
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -50,6 +52,17 @@ func TestACleanMergeIsTestedWhenAnyOtherConditionFails(t *testing.T) {
 		// a delivery's state from before ServerMerge was recorded.
 		{"a merge not answered by MergeBase", func(_ *verdictFixture, st *State) { st.Integration.ServerMerge = false }, nil, false},
 		{"an agent's integration", func(_ *verdictFixture, st *State) { st.Integration.RunID = "run_integration" }, nil, false},
+		// Each of the merge's other marks, alone: one after the pull request,
+		// one not published (a prFix's), one on an open pull request.
+		{"an integration not before the pull request", func(_ *verdictFixture, st *State) { st.Integration.BeforePR = false }, nil, false},
+		{"an integration not published", func(_ *verdictFixture, st *State) { st.Integration.Published = false }, nil, false},
+		{"an integration on pull request 7", func(_ *verdictFixture, st *State) { st.Integration.Number = 7 }, nil, false},
+		// The person's Draft at the heads before the merge; then a commit
+		// lands on the merged branch (a publish while the step waited).
+		{"the merged repo's head moved since the merge", func(f *verdictFixture, st *State) {
+			f.setGate(map[string]string{"repo": st.Integration.Head}, true)
+			st.Heads["repo"] = f.gh.CommitFiles("feature", "A fix", map[string]string{"app/greet.go": "package app // fixed"})
+		}, nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, st, sc := mergeFixture(t, other)
@@ -57,13 +70,42 @@ func TestACleanMergeIsTestedWhenAnyOtherConditionFails(t *testing.T) {
 			if c.set != nil {
 				c.set(f, st)
 			}
+			gate := f.gate()
 			skip, err := f.steps.carryForward(f.ctx, sc, st, c.judge, c.directed)
 			want := strings.HasPrefix(c.name, "none")
 			if err != nil || skip != want || (f.skips() == 1) != want {
 				t.Fatalf("skip %v (%v), %d skips; want skip %v", skip, err, f.skips(), want)
 			}
+			if after := f.gate(); !want && !reflect.DeepEqual(after, gate) {
+				t.Fatalf("gate moved from %+v to %+v without a skip", gate, after)
+			}
 		})
 	}
+}
+
+// setGate records the person's Open or Draft at heads in the delivery's row.
+func (f *verdictFixture) setGate(heads map[string]string, draft bool) {
+	f.t.Helper()
+	raw, _ := json.Marshal(GateAt{Heads: heads, Draft: draft})
+	if _, err := f.owner.Exec(f.ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{gateAt}', $1::jsonb) WHERE id = 'wf_c'`, raw); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// gate is the row's gateAt, nil when none is given.
+func (f *verdictFixture) gate() *GateAt {
+	f.t.Helper()
+	var raw []byte
+	if err := f.owner.QueryRow(f.ctx, `SELECT state->'gateAt' FROM workflow_runs WHERE id = 'wf_c'`).Scan(&raw); err != nil {
+		f.t.Fatal(err)
+	}
+	var at *GateAt
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &at); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	return at
 }
 
 func (f *verdictFixture) exec(sql string) {

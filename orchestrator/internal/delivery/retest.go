@@ -184,6 +184,11 @@ func (i *Integration) cleanServerMerge() bool {
 // pull request's CI checks the merge itself. Unmeasured: tested.
 func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
 	i := st.Integration
+	// The measurement and the gate stand for the merge GitHub made; a head
+	// moved since (a publish while the step waited) is untested work.
+	if st.Heads[i.Repo] != strings.TrimPrefix(i.RunID, "server-") {
+		return false, nil
+	}
 	pre := maps.Clone(st.Heads)
 	pre[i.Repo] = i.Head
 	prev, err := w.s.PreviousRound(ctx, sc.OrganizationID, st.TaskID, st.Attempt, PhaseTest, "")
