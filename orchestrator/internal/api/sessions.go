@@ -863,28 +863,18 @@ func (f fileFacts) cannotFileIn(items []delivery.ProposalItem, n int, filed func
 	return fileBlock{}
 }
 
-// refusedBlocker is the first unfiled item that item n waits on, directly
-// or through other unfiled items, that this request refused, with its
-// reason; -1 when there is none. Filing n without it would lose the edge.
+// refusedBlocker checks direct blockers: withBlockers processes each blocker
+// first, so its recorded refusal already includes any refused dependency.
 func refusedBlocker(items []delivery.ProposalItem, n int, filed func(int) bool, refused map[int]string) (int, string) {
-	seen := map[int]bool{n: true}
-	var walk func(i int) (int, string)
-	walk = func(i int) (int, string) {
-		for _, b := range delivery.ItemBlockers(items, i) {
-			if b < 0 || b >= len(items) || seen[b] || filed(b) {
-				continue
-			}
-			seen[b] = true
-			if why, ok := refused[b]; ok {
-				return b, why
-			}
-			if at, why := walk(b); at >= 0 {
-				return at, why
-			}
+	for _, b := range delivery.ItemBlockers(items, n) {
+		if b < 0 || b >= len(items) || b == n || filed(b) {
+			continue
 		}
-		return -1, ""
+		if why, ok := refused[b]; ok {
+			return b, why
+		}
 	}
-	return walk(n)
+	return -1, ""
 }
 
 // withBlockers is the items to file, each with the card's unfiled items it
