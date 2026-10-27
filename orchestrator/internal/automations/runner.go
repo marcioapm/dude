@@ -1255,6 +1255,7 @@ func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, 
 	failed := ""
 	err := r.Lux.Output(ctx, luxRunID, cursor, 0, func(f lux.Frame) error {
 		if f.Kind == "lux" && f.EventType == "exited" {
+			frames.list = append(frames.list, f)
 			var d struct {
 				ExitCode *int `json:"exitCode"`
 			}

@@ -44,10 +44,12 @@ type AutomationFeed struct {
 	logCount   int
 	logCut     bool
 	batchLines int
+	exited     bool
 }
 
 // automationFeedState is automation_runs.feed_state.
 type automationFeedState struct {
+	Exited    bool              `json:"exited,omitempty"`
 	LogCount  int               `json:"logCount,omitempty"`
 	LogCut    bool              `json:"logCut,omitempty"`
 	Message   string            `json:"message,omitempty"`
@@ -81,7 +83,7 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 	}
 	t.message.WriteString(st.Message)
 	t.sessionEpoch = max(st.SessionEpoch, 1)
-	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines, serverAt: st.ServerAt, serverSeen: st.ServerSeen, logCount: st.LogCount, logCut: st.LogCut}
+	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines, serverAt: st.ServerAt, serverSeen: st.ServerSeen, logCount: st.LogCount, logCut: st.LogCut, exited: st.Exited}
 	t.completing = f.joinDudeRecord
 	t.thought.WriteString(st.Thought)
 	maps.Copy(t.seenCalls, st.Calls)
@@ -159,6 +161,14 @@ func (f *AutomationFeed) joinDudeRecord(ctx context.Context, tx pgx.Tx, payload 
 // goes through the Run's translator; a command's or server's plain output
 // is recorded line by line (automation.log.line); the rest is the loop's.
 func (f *AutomationFeed) Apply(ctx context.Context, tx pgx.Tx, fr lux.Frame) error {
+	if fr.Kind == "lux" && fr.EventType == "exited" && f.logs {
+		var d struct {
+			ExitCode *int `json:"exitCode"`
+		}
+		if json.Unmarshal(fr.EventData, &d) == nil && d.ExitCode != nil {
+			return f.End(ctx, tx, "", *d.ExitCode)
+		}
+	}
 	if fr.Kind != "record" {
 		return nil
 	}
@@ -276,9 +286,17 @@ func (f *AutomationFeed) End(ctx context.Context, tx pgx.Tx, note string, exitCo
 		}
 	}
 	if len(exitCode) > 0 {
-		return f.s.event(ctx, tx, f.t.run, EvLogExited, ledger.ActorSystem, map[string]any{"exitCode": exitCode[0]})
+		return f.recordExit(ctx, tx, exitCode[0])
 	}
 	return nil
+}
+
+func (f *AutomationFeed) recordExit(ctx context.Context, tx pgx.Tx, code int) error {
+	if f.exited {
+		return nil
+	}
+	f.exited = true
+	return f.s.event(ctx, tx, f.t.run, EvLogExited, ledger.ActorSystem, map[string]any{"exitCode": code})
 }
 
 // ServerLine is one line of a server's container log as lux keeps it.
@@ -343,7 +361,7 @@ func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 	}
 	st := automationFeedState{Message: t.message.String(), Thought: t.thought.String(), Open: slices.Sorted(maps.Keys(t.openCalls)),
 		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch, Joined: f.joined,
-		ServerAt: f.serverAt, ServerSeen: f.serverSeen, LogCount: f.logCount, LogCut: f.logCut}
+		ServerAt: f.serverAt, ServerSeen: f.serverSeen, LogCount: f.logCount, LogCut: f.logCut, Exited: f.exited}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err

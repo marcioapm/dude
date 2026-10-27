@@ -214,6 +214,34 @@ func TestAutomationRunningOutputSurvivesAnAbortedEnd(t *testing.T) {
 	}
 }
 
+func TestAutomationCommandExitIsRecordedOnceBeforeTerminalState(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	a.ref.Lines = true
+	ctx := context.Background()
+	for range 2 {
+		if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+			f, err := LoadAutomationFeed(ctx, tx, a.ref)
+			if err != nil {
+				return err
+			}
+			if err := f.Apply(ctx, tx, lux.Frame{Kind: "lux", EventType: "exited", EventData: json.RawMessage(`{"exitCode":3}`)}); err != nil {
+				return err
+			}
+			return f.Save(ctx, tx)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n, code int
+	if err := w.owner.QueryRow(ctx, `SELECT count(*), COALESCE(max((payload->>'exitCode')::int),-1) FROM events WHERE automation_run_id=$1 AND event_type='automation.log.exited'`, a.ref.ID).Scan(&n, &code); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || code != 3 {
+		t.Fatalf("exit events=%d code=%d", n, code)
+	}
+}
+
 func TestAutomationCommandLogIsBoundedAcrossBatches(t *testing.T) {
 	w := newHarnessWorld(t)
 	a := newAutomationWorld(t, w)
