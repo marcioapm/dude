@@ -465,7 +465,7 @@ const RUN_COLUMNS = `r.id, r.automation_id AS "automationId", r.status, r.reason
  * keeps the open calls in feed_state; their call events are read on
  * events_automation_run_cursor_idx, newest first.
  */
-const NOW_CALL = `CASE WHEN r.status = 'running' THEN (SELECT json_build_object('tool', e.payload->>'tool', 'args', e.payload->'input')
+const NOW_CALL = `CASE WHEN r.status = 'running' AND jsonb_array_length(COALESCE(r.feed_state->'open', '[]'::jsonb)) > 0 THEN (SELECT json_build_object('tool', e.payload->>'tool', 'args', e.payload->'input')
     FROM events e WHERE e.automation_run_id = r.id AND e.event_type = 'agent.tool.called'
       AND r.feed_state->'open' ? (e.payload->>'callId')
     ORDER BY e.cursor DESC LIMIT 1) END AS "now"`;
@@ -486,6 +486,7 @@ async function listRuns(ctx: RequestContext): Promise<Response> {
   if (!parsed.success) throw badRequest("unknown run filter", parsed.error.flatten());
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const a = await readOne(scope, ctx.params.id!);
+    await scope.sql`SET LOCAL jit = off`;
     const runs = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS}, ${NOW_CALL} FROM automation_runs r
       WHERE r.automation_id = $1 AND ($2::text IS NULL OR r.status = $2) ORDER BY r.created_at DESC, r.id DESC LIMIT $3`,
     [a.id, parsed.data.status ?? null, parsed.data.limit])) as Array<Record<string, unknown>>;

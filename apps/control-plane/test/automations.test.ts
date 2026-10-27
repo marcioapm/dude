@@ -430,6 +430,9 @@ describe("runs", () => {
     await ev("evt_n3", "agent.tool.completed", { tool: "bash", callId: "c2", status: "completed" });
     await open(["c1"]);
     expect(await now()).toEqual({ tool: "read", args: { filePath: "go.mod" } });
+    await owner`UPDATE automation_runs SET status='succeeded' WHERE id='arn_now'`;
+    await open(["c1"]);
+    expect(await now()).toBeNull();
     await open([]);
     expect(await now()).toBeNull();
   });
