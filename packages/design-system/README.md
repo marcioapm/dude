@@ -3031,7 +3031,7 @@ densities. No tone of their own: an automation's state is its runs'
 (`StatusMark`), so `paletteDistance` is untouched.
 
 - **KindMark** (`kind`, `role?`): the kind as glyph and word (Agent,
-  Command, Server, Webhook only); an agent that is one of dude's roles adds
+  Command, Server, Send a webhook); an agent that is one of dude's roles adds
   "· Tester" in muted text.
 - **ScopeChip** (`org`, `project?`, `projectId?`): where an automation lives:
   "Organisation" with a building glyph on the info tint, or the project's

@@ -24,7 +24,7 @@ const KIND: Record<AutomationKindName, { icon: IconName; label: string }> = {
   agent: { icon: "agent", label: "Agent" },
   command: { icon: "terminal", label: "Command" },
   server: { icon: "globe", label: "Server" },
-  webhook: { icon: "send", label: "Webhook only" },
+  webhook: { icon: "send", label: "Send a webhook" },
 };
 
 /** The kind as glyph and word; an agent that is one of dude's roles adds "· Tester" in muted text. */

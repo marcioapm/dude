@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AUTOMATION_KIND_LABEL,
+  AUTOMATION_KINDS,
   automationDefaults,
   automationInputSchema,
   conditionHolds,
@@ -27,6 +29,13 @@ const alert = {
   agent: { own: { prompt: "An alert fired: {{payload.commonLabels.alertname}}" } },
   trigger: { kind: "incoming", hookId, conditions: [{ path: "status", op: "is", values: ["firing"] }], groupBy: "groupKey" },
 };
+
+describe("the outbound kind", () => {
+  test("is called Send a webhook, and there are still four kinds", () => {
+    expect(AUTOMATION_KIND_LABEL.webhook).toBe("Send a webhook");
+    expect([...AUTOMATION_KINDS]).toEqual(["agent", "command", "server", "webhook"]);
+  });
+});
 
 describe("the incoming trigger", () => {
   test("defaults to a signature in X-Signature after sha256=, no conditions, no group and 30 an hour", () => {

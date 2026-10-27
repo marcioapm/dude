@@ -932,7 +932,7 @@ func TestAutomationPreviewThatNeverSignsInBacksOff(t *testing.T) {
 	}
 }
 
-// Webhook only: one signed POST per firing, never queued or merged (Q13).
+// Send a webhook: one signed POST per firing, never queued or merged (Q13).
 func TestAutomationWebhookSignsEachPost(t *testing.T) {
 	h := newHarness(t)
 	var mu sync.Mutex

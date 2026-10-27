@@ -127,7 +127,7 @@ describe("the New automation dialog", () => {
     await show(<NewAutomationDialog client={client} projectId={null} onClose={() => undefined} onCreated={() => undefined} />);
     const kinds = await until(() => document.body.querySelector<HTMLElement>("[role=radiogroup][aria-label='What runs']"), "the kinds");
     const radios = [...kinds.querySelectorAll<HTMLElement>("[role=radio]")];
-    expect(radios.map((r) => r.querySelector("span > span")?.textContent)).toEqual(["Agent", "Command", "Server", "Webhook only"]);
+    expect(radios.map((r) => r.querySelector("span > span")?.textContent)).toEqual(["Agent", "Command", "Server", "Send a webhook"]);
     expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false", "false"]);
     const triggers = document.body.querySelector<HTMLElement>("[role=group][aria-label='When it runs']")!;
     const triggerButtons = () => [...triggers.querySelectorAll<HTMLButtonElement>("button")];

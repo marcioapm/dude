@@ -73,6 +73,7 @@ import {
   type ChoiceOption,
 } from "@dude/design-system/primitives";
 import {
+  AUTOMATION_KIND_LABEL,
   AUTOMATION_PROMPT_VARIABLES,
   AUTOMATION_POST_RETRY,
   COMMAND_MAX_BYTES,
@@ -226,7 +227,7 @@ export function AutomationsList({ client, orgName, projectId, canCreate, onOpen,
     { label: "Runs a program", options: [
       { value: "command", label: "Command" },
       { value: "server", label: "Server" },
-      { value: "webhook", label: "Webhook only" },
+      { value: "webhook", label: AUTOMATION_KIND_LABEL.webhook },
     ] },
   ], []);
   return (
@@ -328,7 +329,7 @@ const NEW_KINDS: ReadonlyArray<ChoiceOption<AutomationKind>> = [
   { value: "agent", label: "Agent", icon: "agent", description: "A coding agent with a prompt." },
   { value: "command", label: "Command", icon: "terminal", description: "A command that runs in a container and exits." },
   { value: "server", label: "Server", icon: "globe", description: "A server that answers GitHub events." },
-  { value: "webhook", label: "Webhook only", icon: "send", description: "No machine: a signed POST to a URL you give." },
+  { value: "webhook", label: AUTOMATION_KIND_LABEL.webhook, icon: "send", description: "No machine: dude sends a signed POST to a URL you give." },
 ];
 
 export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {

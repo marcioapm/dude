@@ -24,7 +24,7 @@ export const AUTOMATION_KIND_LABEL: Record<AutomationKind, string> = {
   agent: "Agent",
   command: "Command",
   server: "Server",
-  webhook: "Webhook only",
+  webhook: "Send a webhook",
 };
 
 export type AutomationScope = "organization" | "project";
