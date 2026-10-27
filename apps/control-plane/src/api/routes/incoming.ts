@@ -128,19 +128,30 @@ export const INCOMING_MAX_DEPTH = 512;
 /**
  * Whether a parsed body cannot be stored as jsonb: a NUL in a string or key
  * (JSON allows `\u0000`, jsonb refuses it), or nesting past INCOMING_MAX_DEPTH.
- * Walked with a stack, so the check itself never overflows.
+ * Walked with two parallel stacks (value, depth) rather than recursion, so the check
+ * never overflows, and allocates no tuple per element: a 1 MiB array is ~520k of them.
  */
-function unstorable(body: unknown): boolean {
-  const stack: [unknown, number][] = [[body, 1]];
-  while (stack.length > 0) {
-    const [v, depth] = stack.pop()!;
+export function unstorable(body: unknown): boolean {
+  const values: unknown[] = [body];
+  const depths: number[] = [1];
+  while (values.length > 0) {
+    const v = values.pop();
+    const depth = depths.pop()!;
     if (typeof v === "string") {
       if (v.includes("\u0000")) return true;
     } else if (v !== null && typeof v === "object") {
       if (depth > INCOMING_MAX_DEPTH) return true;
-      for (const [k, x] of Object.entries(v)) {
-        if (k.includes("\u0000")) return true;
-        stack.push([x, depth + 1]);
+      if (Array.isArray(v)) {
+        for (const x of v) {
+          values.push(x);
+          depths.push(depth + 1);
+        }
+      } else {
+        for (const k in v) {
+          if (k.includes("\u0000")) return true;
+          values.push((v as Record<string, unknown>)[k]);
+          depths.push(depth + 1);
+        }
       }
     }
   }

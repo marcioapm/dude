@@ -18,6 +18,7 @@ import { buildRouter } from "../src/index.ts";
 import { Config, useConfig } from "../src/config.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
+import { unstorable } from "../src/api/routes/incoming.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const ROOT = join(import.meta.dir, "../../..");
@@ -239,6 +240,18 @@ describe("the public endpoint", () => {
     expect((await post(hook, nested(300_000), { authorization: secret })).status).toBe(415);
     expect((await rows(id)).map((r) => [r.verdict, r.reason, r.payload === null])).toEqual([
       [null, null, false], ["refused", "not_json", true], ["refused", "not_json", true]]);
+  });
+
+  test("a body of a ~520k-element array just under 1 MiB is taken, and checking it takes under 60 ms", async () => {
+    const { hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
+    const body = `{"a":[${"0,".repeat(519_999)}0]}`;
+    expect(body.length).toBeLessThan(1_048_576);
+    expect((await post(hook, body, { authorization: secret })).status).toBe(202);
+    const parsed = JSON.parse(body);
+    unstorable(parsed);
+    const started = performance.now();
+    expect(unstorable(parsed)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(60);
   });
 
   test("the rate limit counts deliveries not matched yet and those sent to a run, and refuses the next with 429", async () => {
