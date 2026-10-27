@@ -134,12 +134,12 @@ async function listArtifacts(ctx: RequestContext): Promise<Response> {
 }
 
 /** An artifact's row, in the caller's organization; a session's Run's, for its members only. */
-async function artifactNamed(organizationId: string, personId: string, id: string): Promise<{ name: string; contentType: string } | undefined> {
+async function artifactNamed(organizationId: string, personId: string, id: string): Promise<{ name: string; contentType: string; inSession: boolean } | undefined> {
   return withOrg(organizationId, async ({ sql }) => {
-    const [row] = (await sql`SELECT a.name, a.content_type AS "contentType" FROM artifacts a
+    const [row] = (await sql`SELECT a.name, a.content_type AS "contentType", r.session_id IS NOT NULL AS "inSession" FROM artifacts a
       LEFT JOIN runs r ON r.id = a.run_id
       WHERE a.id = ${id} AND (r.session_id IS NULL OR session_role(r.session_id, ${personId}) IS NOT NULL)`) as Array<{
-      name: string; contentType: string }>;
+      name: string; contentType: string; inSession: boolean }>;
     return row;
   });
 }
@@ -186,8 +186,9 @@ async function artifactContent(ctx: RequestContext): Promise<Response> {
     body = rest;
   }
   headers.set("content-type", type);
-  // An artifact id names one upload: its bytes never change.
-  headers.set("cache-control", "private, max-age=31536000, immutable");
+  // An artifact id names one upload: its bytes never change. A session's
+  // membership does, and a cached copy would outlive a member's removal.
+  headers.set("cache-control", artifact.inSession ? "private, no-store" : "private, max-age=31536000, immutable");
   if (isActive(type) && ctx.url.searchParams.get("inline") !== "1") {
     headers.set("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(name.split("/").pop() || "file")}`);
   }

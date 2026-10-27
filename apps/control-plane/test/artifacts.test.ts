@@ -174,11 +174,16 @@ test("thumbnails are neither listed nor in either zip", async () => {
   }
 });
 
-test("an artifact's bytes are cached for good; a refusal is not cached", async () => {
+test("a task's artifact's bytes are cached for good; a session's are not stored; a refusal is not cached", async () => {
   const res = await get("/v1/artifacts/art_thumb/content");
   expect(res.status).toBe(200);
   expect(await res.text()).toBe("bytes of art_thumb");
   expect(res.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+
+  const session = await get("/v1/artifacts/art_ssn_thumb/content");
+  expect(session.status).toBe(200);
+  expect(await session.text()).toBe("bytes of art_ssn_thumb");
+  expect(session.headers.get("cache-control")).toBe("private, no-store");
 
   await owner`INSERT INTO artifacts (id, organization_id, run_id, kind, name, content_type, size_bytes, storage_key, sha256, description)
     VALUES ('art_gone', ${ORG}, 'run_one_a', 'published', 'gone.md', 'text/markdown', 1, 'k/gone', 'x', '')`;
