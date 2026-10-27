@@ -30,11 +30,20 @@ const (
 	EvRunChecksDecided = "run.checks.decided"
 )
 
+// UnverifiedCheck is one check a held report did not pass, as the
+// escalation's detail keeps it ("unverified"): its command and why, each
+// one clipped line.
+type UnverifiedCheck struct {
+	Command string `json:"command"`
+	Reason  string `json:"reason"`
+}
+
 // EscalateChecksTx stops the delivery for a person at the step waiting on
 // runID, whose report the gate will not pass: the Run keeps its session
 // and its unpushed work, and the workflow resumes that wait once decided.
-// A delivery already waiting on another escalation keeps it.
-func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, message string, rounds int) error {
+// A delivery already waiting on another escalation keeps it. unverified
+// are the checks the held send-back names.
+func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, message string, rounds int, unverified []UnverifiedCheck) error {
 	d, err := LoadDelivery(ctx, tx, taskID)
 	if err != nil {
 		return err
@@ -52,6 +61,13 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 		return nil
 	}
 	detail := map[string]any{"runId": runID, "message": message, "rounds": rounds}
+	if len(unverified) > 0 {
+		clipped := make([]UnverifiedCheck, len(unverified))
+		for i, c := range unverified {
+			clipped[i] = UnverifiedCheck{clip(oneLine(c.Command), escalatedItemMax), clip(oneLine(c.Reason), escalatedItemMax)}
+		}
+		detail["unverified"] = clipped
+	}
 	// The reported failures an attempt waiver could carry (settleChecksTx),
 	// for a person to be offered that scope only when there are some.
 	turn, err := LatestTurnTx(ctx, tx, runID)

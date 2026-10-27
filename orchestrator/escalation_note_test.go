@@ -124,7 +124,7 @@ func TestOnAnOwnerlessTaskOnlyAnAdminsPickOfANotedWaiverDecides(t *testing.T) {
 func TestTheChecksEscalationsWakeNamesTheUnverifiedChecks(t *testing.T) {
 	w, task := checksHeld(t)
 	note := w.wokenWith(task, "Escalated to a person: checks unverified")
-	if want := "The checks not verified: " + fakeagent.FailingCommand + ": TestClock needs a hardware clock — not passed by the judge: the recorded call says so (judgement: no)."; !strings.Contains(note, want) {
+	if want := "The checks not verified: " + fakeagent.FailingCommand + ": TestClock needs a hardware clock — not passed by the judge: the recorded call says so."; !strings.Contains(note, want) {
 		t.Errorf("the wake lacks %q:\n%s", want, note)
 	}
 }

@@ -423,6 +423,23 @@ func TestWithNoTierTheSendBackSaysOnlyAPersonCanPassAFailure(t *testing.T) {
 	}
 }
 
+// A reason that spans lines is one line of the send-back, and the held
+// report's escalation keeps each check it did not pass with why.
+func TestAMultiLineReasonIsOneCheckOfTheSendBack(t *testing.T) {
+	d := checksDecision{Verdicts: []checksVerdict{
+		{Command: "npx tsc --noEmit", Result: delivery.CheckFail, Reason: "94 errors",
+			JudgeReason: "not passed by the judge: the calls show\n- base: 95 errors\n- head: 96 errors"},
+		{Command: "make lint", Result: delivery.CheckPass},
+	}}
+	msg := d.sendBack()
+	if n := strings.Count(msg, "\n- "); n != 1 || !strings.Contains(msg, "the calls show - base: 95 errors - head: 96 errors") {
+		t.Fatalf("%d check lines:\n%s", n, msg)
+	}
+	if got := d.unverified(); len(got) != 1 || got[0].Command != "npx tsc --noEmit" || !strings.HasPrefix(got[0].Reason, "94 errors — not passed by the judge") {
+		t.Fatalf("unverified %+v", got)
+	}
+}
+
 // The first failure the judge does not pass rejects the report there, and
 // the send-back names it and every failure not yet asked about.
 func TestTheSendBackNamesTheFailuresAfterTheFirstRejected(t *testing.T) {

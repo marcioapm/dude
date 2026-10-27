@@ -55,7 +55,7 @@ func TestGoldenWakeLines(t *testing.T) {
 				"- npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no)\n" +
 				"- missing checks: the legacy Vue jest run covers the changed component (judgement: yes)\n\nRun the missing or unsuccessful checks."}})},
 		{"escalated-checks-many", escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: map[string]any{"runId": "run_impl",
-			"message": strings.Repeat("- make check: exit 1\n", escalatedItemsMax+3)}})},
+			"message": "held", "unverified": slices.Repeat([]map[string]any{{"command": "make check", "reason": "exit 1"}}, escalatedItemsMax+3)}})},
 		{"escalation-answered", escalationAnsweredLine("qst_1", "retry")},
 		{"escalation-on-banner", escalationOnBannerLine("accept", "qst_2", false)},
 		{"escalation-checks-finished", escalationOnBannerLine("wait", "qst_2", true)},

@@ -3271,7 +3271,8 @@ func escalatedLine(e *Escalation) string {
 			Criterion    int
 			Text, Status string
 		} `json:"criteria"`
-		Message string `json:"message"`
+		Message    string            `json:"message"`
+		Unverified []UnverifiedCheck `json:"unverified"`
 	}
 	e.decode(&d)
 	var criteria []string
@@ -3279,7 +3280,14 @@ func escalatedLine(e *Escalation) string {
 		criteria = append(criteria, fmt.Sprintf("%d (%s): %s", c.Criterion, c.Status, clip(oneLine(c.Text), escalatedItemMax)))
 	}
 	var unverified []string
-	if e.Reason == ReasonChecksUnverified {
+	switch {
+	case e.Reason != ReasonChecksUnverified:
+	case len(d.Unverified) > 0:
+		for _, c := range d.Unverified {
+			unverified = append(unverified, clip(oneLine(c.Command)+": "+oneLine(c.Reason), escalatedItemMax))
+		}
+	default:
+		// An escalation recorded before the detail kept its checks.
 		unverified = unverifiedChecks(d.Message)
 	}
 	shown := func(items []string) ([]string, int) {

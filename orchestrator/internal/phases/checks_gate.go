@@ -204,7 +204,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 			return err
 		}
 		if escalate {
-			return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds)
+			return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds, d.unverified())
 		}
 		return nil
 	})
@@ -444,12 +444,34 @@ func untiered(d checksDecision) checksDecision {
 // answered, how a failure that predates the task passes, naming the commit
 // of each target branch the task builds on.
 func (d checksDecision) sendBack() string {
-	failed := slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return v.Result == delivery.CheckPass || v.passedUnbacked() })
+	failed := d.unpassed()
+	// Each field one line: evidence and reasons are free text, and the
+	// send-back's lines are one per check.
+	for i, v := range failed {
+		failed[i].Command, failed[i].Reason = oneLine(v.Command), oneLine(v.Reason)
+		failed[i].WaiverReason, failed[i].JudgeReason = oneLine(v.WaiverReason), oneLine(v.JudgeReason)
+	}
 	return checksText.Render(struct {
 		Checks []checksVerdict
 		Failed bool
 		Bases  string
 	}{failed, !d.untiered && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases)})
+}
+
+// unpassed are the verdicts that did not pass.
+func (d checksDecision) unpassed() []checksVerdict {
+	return slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return v.Result == delivery.CheckPass || v.passedUnbacked() })
+}
+
+// unverified is what the escalation of a held report keeps of each check
+// it did not pass: its command, and its reason with why it was not passed.
+func (d checksDecision) unverified() []delivery.UnverifiedCheck {
+	var out []delivery.UnverifiedCheck
+	for _, v := range d.unpassed() {
+		why := slices.DeleteFunc([]string{v.Reason, v.WaiverReason, v.JudgeReason}, func(s string) bool { return s == "" })
+		out = append(out, delivery.UnverifiedCheck{Command: v.Command, Reason: strings.Join(why, " — ")})
+	}
+	return out
 }
 
 // taskBase is the commit of a repository's target branch the task builds
