@@ -82,13 +82,19 @@ func (w decisionWait) decideEscalation(action, note string) {
 	}
 }
 
-// settle advances the workflow until no step is runnable.
+// settle advances the workflow until no step is runnable. After each step
+// the delivery is never waiting at the conductor's decision on anything
+// but its decision: there a conductor's take() signal would wait unread.
 func (w decisionWait) settle() {
 	w.t.Helper()
 	for range 10 {
 		n, err := w.rt.Tick(w.ctx, 1)
 		if err != nil {
 			w.t.Fatal(err)
+		}
+		if run, _ := w.row(); run.Step == "conductorDecision" && run.Status == "waiting" &&
+			!slices.Contains(run.AwaitingSignals, SignalConductorDecision) {
+			w.t.Fatalf("the delivery waits at the conductor's decision on %v", run.AwaitingSignals)
 		}
 		if n == 0 {
 			return
