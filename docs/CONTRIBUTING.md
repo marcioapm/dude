@@ -1010,9 +1010,11 @@ their creator.
     more `projectIds` (save refused otherwise): `create_task` files in the
     first; its runs check out those projects' repositories (all, none or
     some).
-  - **Variables.** `{{payload.<path>}}`, `{{event.payload}}` (quoted as
-    external text, the prompt saying so first), `{{event.delivery_id}}`,
-    `{{event.group_key}}`.
+  - **Variables.** `{{payload.<path>}}`, `{{event.payload}}` and
+    `{{event.group_key}}` are the sender's words: quoted as external text
+    (the prompt saying so first), each cut at 8 KiB with "… (truncated, N
+    bytes)" inside its quote, all of them together at 64 KiB.
+    `{{event.delivery_id}}` is dude's and is not quoted.
   - **Deliveries tab** (incoming and GitHub automations): every delivery of
     the last 30 days, its `DeliveryVerdict`, group key (or event) and size;
     a delivery's detail shows each condition's ✓/✗ (`ConditionRows` with

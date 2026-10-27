@@ -195,17 +195,35 @@ func GroupKey(groupBy string, body json.RawMessage) string {
 	return valueText(raw)
 }
 
+// Bounds on what a delivery's body adds to a prompt or input: each
+// substituted value, and all of them together.
+const (
+	SubstituteValueMax   = 8 << 10
+	SubstitutePayloadMax = 64 << 10
+)
+
 // IncomingSubstitute replaces an incoming automation's {{…}} names in text:
-// payload.<path> and event.payload are the sender's words, quoted as
-// external text; event.delivery_id and event.group_key are dude's. The
-// last payload is the one a prompt or input is for.
+// payload.<path>, event.payload and event.group_key are the sender's words,
+// quoted as external text, each cut at SubstituteValueMax bytes ("…
+// (truncated, N bytes)" inside the quote) and all together at
+// SubstitutePayloadMax; event.delivery_id is dude's. The last payload is
+// the one a prompt or input is for.
 func IncomingSubstitute(text string, payloads []Payload) string {
 	if len(payloads) == 0 {
 		return text
 	}
 	p := payloads[len(payloads)-1]
+	left := SubstitutePayloadMax
 	quote := func(name, s string) string {
 		sum := sha256.Sum256([]byte(p.DeliveryID + "\x00" + name))
+		if left <= 0 && s != "" {
+			s = fmt.Sprintf("(left out: the prompt's payload is over %d bytes)", SubstitutePayloadMax)
+		} else if n := min(SubstituteValueMax, left); len(s) > n {
+			s = strings.ToValidUTF8(s[:n], "") + fmt.Sprintf("… (truncated, %d bytes)", len(s))
+			left -= n
+		} else {
+			left -= len(s)
+		}
 		return delivery.ExternalText(hex.EncodeToString(sum[:4]), s)
 	}
 	return substituteWith(text, func(name string) (string, bool) {
@@ -213,7 +231,7 @@ func IncomingSubstitute(text string, payloads []Payload) string {
 		case name == "event.delivery_id":
 			return p.DeliveryID, true
 		case name == "event.group_key":
-			return p.GroupKey, true
+			return quote(name, p.GroupKey), true
 		case name == "event.payload":
 			return quote(name, valueText(p.Body)), true
 		case strings.HasPrefix(name, "payload."):
