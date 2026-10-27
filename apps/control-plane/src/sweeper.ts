@@ -53,14 +53,13 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
   while (Date.now() < deadline) {
     const keys = await withoutTenant(async ({ sql }) => {
       await sql`SET LOCAL ROLE dude_sweeper`;
-      // A key another row still names (a brainstorm's image filed onto a task shares its objects) is not deleted
-      // but dropped from the queue, in the same snapshot as the batch is chosen. A row is only ever copied from a
-      // live one naming the key, so once none does, none can later.
-      return (await sql`WITH named AS (SELECT object_key FROM attachments UNION SELECT original_key FROM attachments),
-          kept AS (DELETE FROM attachment_object_deletions WHERE object_key IN (SELECT object_key FROM named))
-        SELECT object_key FROM attachment_object_deletions WHERE NOT (object_key = ANY(${sql.array(skip, "TEXT")}))
-          AND object_key NOT IN (SELECT object_key FROM named)
-        ORDER BY queued_at LIMIT ${SWEEP_BATCH}`) as Array<{ object_key: string }>;
+      // Retain referenced keys: the last reference's delete trigger may already
+      // have found this queue entry. Filter before LIMIT so retained keys cannot starve later ones.
+      return (await sql`SELECT q.object_key FROM attachment_object_deletions q
+        WHERE NOT (q.object_key = ANY(${sql.array(skip, "TEXT")}))
+          AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.object_key = q.object_key)
+          AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.original_key = q.object_key)
+        ORDER BY q.queued_at LIMIT ${SWEEP_BATCH}`) as Array<{ object_key: string }>;
     });
     if (keys.length === 0) break;
     const done: string[] = [];
