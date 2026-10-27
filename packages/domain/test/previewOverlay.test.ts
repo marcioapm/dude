@@ -59,11 +59,19 @@ test("overSize counts a message's strings and stops once past the cap", () => {
 
 test("overSize refuses a typed array or buffer outright, and stops counting after a message's worth of entries", () => {
   const typed = new Uint8Array(10_000_000);
-  let t = performance.now();
+  // Only the prototype may be read: any key listing or element read throws, so a walk of the 10 MB fails the test.
+  const untouchable = <T extends object>(target: T): T =>
+    new Proxy(target, {
+      get: () => { throw new Error("an element was read"); },
+      has: () => { throw new Error("a key was tested"); },
+      ownKeys: () => { throw new Error("the keys were listed"); },
+      getOwnPropertyDescriptor: () => { throw new Error("a property was described"); },
+    });
+  expect(overSize({ type: "draft", x: untouchable(typed) }, OVERLAY_LIMITS.message)).toBe(true);
+  expect(overSize({ type: "draft", x: untouchable(typed.buffer) }, OVERLAY_LIMITS.message)).toBe(true);
   expect(overSize({ type: "draft", x: typed }, OVERLAY_LIMITS.message)).toBe(true);
   expect(overSize({ type: "draft", x: typed.buffer }, OVERLAY_LIMITS.message)).toBe(true);
   expect(overSize(new Map([["a", 1]]), OVERLAY_LIMITS.message)).toBe(true);
-  expect(performance.now() - t).toBeLessThan(5);
   // 3,000 tiny entries are far under the cap in size, and still over: no overlay message has that many.
   const many: Record<string, number> = {};
   for (let i = 0; i < 3_000; i++) many[`k${i}`] = i;
@@ -72,7 +80,7 @@ test("overSize refuses a typed array or buffer outright, and stops counting afte
   // A million keys: the engine lists them (about 20 ms here), nothing more is walked.
   const keys: Record<string, number> = {};
   for (let i = 0; i < 1_000_000; i++) keys[`k${i}`] = i;
-  t = performance.now();
+  const t = performance.now();
   expect(overSize({ type: "draft", x: keys }, OVERLAY_LIMITS.message)).toBe(true);
   expect(performance.now() - t).toBeLessThan(200);
   // A plain message under the cap is not over.
