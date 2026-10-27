@@ -193,8 +193,8 @@ func TestDudeRecordsJoinArgumentsNotCompletionOrder(t *testing.T) {
 	}
 }
 
-// A call its run's end aborted stays aborted: its completion read after
-// that end (a cancelled run's final read) records nothing more.
+// A call its run's end aborted stays aborted: its start or completion read
+// after that end (a cancelled run's final read) records nothing more.
 func TestAutomationAbortedCallIsNeverCompletedAfter(t *testing.T) {
 	w := newHarnessWorld(t)
 	a := newAutomationWorld(t, w)
@@ -212,7 +212,8 @@ func TestAutomationAbortedCallIsNeverCompletedAfter(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.feed(map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "title": "bash", "rawOutput": map[string]any{"output": "more"}}},
+	a.feed(feedCases[0].records[2],
+		map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "title": "bash", "rawOutput": map[string]any{"output": "more"}}},
 		feedCases[0].records[3])
 	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
 		f, err := LoadAutomationFeed(ctx, tx, a.ref)
@@ -227,10 +228,17 @@ func TestAutomationAbortedCallIsNeverCompletedAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 	var statuses []string
+	called := 0
 	for _, e := range a.events() {
 		if e.Type == evToolCompleted && e.Payload["callId"] == "c1" {
 			statuses = append(statuses, e.Payload["status"].(string))
 		}
+		if e.Type == evToolCalled && e.Payload["callId"] == "c1" {
+			called++
+		}
+	}
+	if called != 1 {
+		t.Fatalf("c1 called %d times", called)
 	}
 	if !reflect.DeepEqual(statuses, []string{"aborted"}) {
 		t.Fatalf("c1's completions: %v", statuses)
