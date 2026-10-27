@@ -158,11 +158,11 @@ describe("FileGallery", () => {
 
   test("the gallery shows its cards and rows in that order, whatever order it was given", () => {
     const given: GalleryFile[] = [
-      { name: "acceptance.md", versions: [v("acceptance.md", "text/markdown")] },
+      { name: "NOTES.md", versions: [v("NOTES.md", "text/markdown")] },
       { name: "02-cleared.png", versions: [v("02-cleared.png", "image/png")] },
       { name: "01-saved.png", versions: [v("01-saved.png", "image/png")] },
       { name: "walkthrough.webm", versions: [v("walkthrough.webm", "video/webm")] },
-      { name: "NOTES.md", versions: [v("NOTES.md", "text/markdown")] },
+      { name: "acceptance.md", versions: [v("acceptance.md", "text/markdown")] },
     ];
     const doc = new DOMParser().parseFromString(renderToStaticMarkup(<FileGallery files={given} onOpen={() => {}} onDownload={() => {}} />), "text/html");
     const names = (id: string) => [...doc.querySelectorAll(`[data-testid="${id}"]`)].map((e) => e.getAttribute("data-name"));
