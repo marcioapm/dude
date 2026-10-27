@@ -1157,36 +1157,29 @@ from chat (`@dude this channel is usually about Acme`, the `channel_projects`
 route; anyone else is refused privately and nothing changes).
 
 **Link a project (`chat/link.go`, migration 203).** A mention routed to a
-brainstorm that ends up with no project linked gets a row under its reply:
-a choice per candidate (at most 3, labelled `KEY · Name`) and a link to
-the session page ("Choose in dude"). Candidates, in order and once each:
-the conversation's usual projects, its learned hint (most first), then the
-routing answer's `maybe_projects` (read for a brainstorm with no project
-only, checked against the routing world like `project`, at most 3). The
-world holds no hidden project, so none is ever offered. The provider-neutral
-shape is `Reply.Row` (`Choice`s, a link, and `Linked` lines); Slack renders
-it as buttons (`blocks` in `chat/slack`) and replaces it with
-`UpdateReply` (`chat.update`). What was offered is kept on the request
-(`chat_requests.link_offer`) and the reply's message id with it
-(`question_message_id`). A click comes back as an `Interaction` whose value
-is `link:<request id>:<index>`: the index is resolved against the request's
-offer server-side (the request must be the click's conversation's), so a
-forged value links nothing that was not offered. Only the person who asked
-or an admin of the organisation may link; anyone else, a non-member or an
-unconnected user, is told so privately and nothing changes. The link goes
-through `delivery.AddSessionProject` (the project with all its
-repositories, beside the session's links, through `SetSessionLinks`, the
-same rules as the web's link: fenced, organisation-scoped), so a project
-hidden after the row was posted is refused at the click. It records
-`session.linked` (payload `linked`, `via`, `viaName`: the session's Chat
-reads "Márcia linked ABS from Slack.") and a `chat_request_links` row, once
-per request and project (a second click or a retry links and posts
-nothing twice; the click's own retry still posts the update once), which
-Requests shows as "Márcia linked ABS from Slack". The session's agent gets
-the repositories as the web's link gives them: a Run not yet submitted
-checks them out, and a live or parked one is resumed by the syncer with
-them added (`sessionRepoMissing`, `sessionResume`), told where each is.
-The 👀/✅ marks are unchanged.
+brainstorm with no linked project offers up to 3 deduplicated candidates:
+the conversation's usual projects, learned hints (most first), then routing's
+`maybe_projects`. All are checked against the routing world, which excludes
+hidden projects. `Reply.Row` holds the choices (`KEY · Name`), linked lines,
+and "Choose in dude", a link to the session page. Slack renders the row as
+buttons and replaces it through `UpdateReply` (`chat.update`).
+
+The request keeps `link_offer` and the reply's `question_message_id`.
+An `Interaction` value, `link:<request id>:<index>`, resolves against that
+stored offer in the click's workspace and conversation. Only the asker,
+while still the session's owner, or an organisation admin may link; others
+get a private refusal. `delivery.AddSessionProject` adds all the project's
+repositories through `SetSessionLinks`, sharing the web's organisation and
+fence checks, including projects hidden since the offer.
+
+The transaction records `session.linked` (`projects`, `linked`, `via`,
+`viaName`) and one `chat_request_links` row per request and project, shown
+in Requests. Duplicate clicks do nothing; the original click's retry can
+finish its reply update. Once committed, the link succeeds even if that
+best-effort update exhausts its retries. A thread reply refused by the
+provider falls back privately without buttons. New repositories reach the
+agent at submission or through the syncer's resume (`sessionRepoMissing`,
+`sessionResume`), as with a web link. Reaction marks are unchanged.
 
 **Hidden projects (`chat_hidden_projects`, migration 196).** An admin hides
 projects from a provider on its settings page only (`PUT

@@ -105,14 +105,9 @@ func (o linkOffer) row(request string, linked []linkedLine) *Row {
 // errLinkRefused rolls a click's transaction back once its refusal is known.
 var errLinkRefused = errors.New("the link was refused")
 
-// linkProject is a click on a "Link a project" choice: the person who
-// asked, or an admin of the organisation, adds that candidate (with every
-// repository of it) to the request's session, through the session's link
-// rules; the reply then says who linked what. The value names the request
-// and the candidate's index: what it links is read from the request, so a
-// forged value links nothing that was not offered. Once per request and
-// project: a second click, or the delivery tried again, links nothing twice
-// and posts at most the one update.
+// linkProject resolves a click against its stored offer and links through
+// the session's rules. Only the asker (still an owner) or an admin may link.
+// The request/project record deduplicates clicks; its event owns update retries.
 func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Interaction) error {
 	reqID, idx, ok := strings.Cut(strings.TrimPrefix(in.Value, linkValuePrefix), ":")
 	i, err := strconv.Atoi(idx)
@@ -244,9 +239,7 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 	if !post {
 		return nil
 	}
-	// The link is made: the update is owed to the reply, never the click's
-	// outcome. Tried again while attempts are left, then dropped with a log,
-	// so the click never ends as a failed request or a "Sorry".
+	// A committed link succeeds even if its reply update exhausts retries.
 	err = s.postLinks(ctx, d.Org, p, inst, reqID, in.ConversationID, message, replied, offer)
 	if err == nil {
 		return nil

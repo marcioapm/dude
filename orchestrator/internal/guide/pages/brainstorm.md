@@ -22,7 +22,7 @@ A session works across the projects linked to it. Each linked project's reposito
 
 Only the session's owner links projects. The agent can propose linking another of the organisation's projects; the owner confirms, and its repositories are checked out at the agent's next turn.
 
-When a chat mention starts a session and dude cannot tell which project it is about, the reply in the chat offers up to 3 projects to link — those the channel is usually about, then where its earlier requests went, then the routing's own guesses — and **Choose in dude**, which opens the session. The person who asked, or an admin, links one with a click: the project and all its repositories, as a link in dude would, and the reply says who linked what. A project hidden from that chat is never offered and cannot be linked, even from a button posted before it was hidden.
+When a chat mention starts a session without a project, its reply offers up to 3 projects: the channel's usual projects, then earlier requests' projects, then routing's guesses. **Choose in dude** opens the session. The asker, while still its owner, or an organisation admin can click to link a project with all its repositories. The reply says who linked what. Hidden projects are never offered and cannot be linked, even from an older button.
 
 If a checkout failed, the agent can ask for it again with `refresh_checkout` and see why it failed last — at most 3 times a Run.
 
