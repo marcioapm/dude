@@ -74,8 +74,9 @@ export interface FileGalleryProps extends Omit<HTMLAttributes<HTMLDivElement>, "
 export function FileGallery({ files, controls = true, thumbnail, onOpen, onDownload, onDownloadAll, note, className, ...rest }: FileGalleryProps) {
   const [filter, setFilter] = useState<Filter>("all");
   const kinds = useMemo(() => new Map(files.map((f) => [f.name, artifactKind(f.versions[0]!.contentType, f.name)])), [files]);
-  const media = files.filter((f) => isMedia(kinds.get(f.name)!));
-  const documents = files.filter((f) => !isMedia(kinds.get(f.name)!));
+  const ordered = useMemo(() => galleryOrder(files), [files]);
+  const media = ordered.filter((f) => isMedia(kinds.get(f.name)!));
+  const documents = ordered.filter((f) => !isMedia(kinds.get(f.name)!));
   const total = files.reduce((n, f) => n + f.versions[0]!.sizeBytes, 0);
   const segments: Array<[Filter, string, number]> = [
     ["all", "All", files.length],

@@ -156,6 +156,20 @@ describe("FileGallery", () => {
     expect(order).toEqual(["02-cleared.png", "2-saved.png", "10-done.png", "walkthrough.png", "A.md", "b.md"]);
   });
 
+  test("the gallery shows its cards and rows in that order, whatever order it was given", () => {
+    const given: GalleryFile[] = [
+      { name: "acceptance.md", versions: [v("acceptance.md", "text/markdown")] },
+      { name: "02-cleared.png", versions: [v("02-cleared.png", "image/png")] },
+      { name: "01-saved.png", versions: [v("01-saved.png", "image/png")] },
+      { name: "walkthrough.webm", versions: [v("walkthrough.webm", "video/webm")] },
+      { name: "NOTES.md", versions: [v("NOTES.md", "text/markdown")] },
+    ];
+    const doc = new DOMParser().parseFromString(renderToStaticMarkup(<FileGallery files={given} onOpen={() => {}} onDownload={() => {}} />), "text/html");
+    const names = (id: string) => [...doc.querySelectorAll(`[data-testid="${id}"]`)].map((e) => e.getAttribute("data-name"));
+    expect(names("file-card")).toEqual(["01-saved.png", "02-cleared.png", "walkthrough.webm"]);
+    expect(names("file-row")).toEqual(["acceptance.md", "NOTES.md"]);
+  });
+
   test("a video with a picture shows it under a play glyph, still a button; without one, the dark card", () => {
     const html = (thumbnail?: string) => renderToStaticMarkup(<FileGallery files={[files[1]!]} thumbnail={() => thumbnail} onOpen={() => {}} onDownload={() => {}} />);
     const card = new DOMParser().parseFromString(html("blob:poster"), "text/html").querySelector("[data-testid='file-card']")!;
