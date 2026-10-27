@@ -914,7 +914,7 @@ their creator.
   that failed for another reason (timed out, crashed, cancelled) has none.
   The page's Tools card shows the attention callout on post_to_chat's row,
   linking Organisation settings → Chat.
-- **A run's activity** (migrations 216–217; `phases/automation_feed.go`,
+- **A run's activity** (migrations 217–218; `phases/automation_feed.go`,
   `screens/automationFeed.tsx`). An automation run's ledger rows are keyed
   by `events.automation_run_id`, never with a `run_id`, `session_id` or
   `task_id` beside it (`events_automation_run_scope`), indexed

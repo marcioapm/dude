@@ -3410,6 +3410,10 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 			if reason != "" {
 				return true, s.failDirective(ctx, r, d.ID, reason)
 			}
+			if r.SessionID != "" {
+				// A session's agent may put what it was shown on a task it proposes, by id.
+				text = delivery.WithSharedImageIDs(text, sent)
+			}
 		}
 		// Claimed just before the send, against its state now, not the
 		// batch's: a wake note's retry withdrawn since is not sent, and one

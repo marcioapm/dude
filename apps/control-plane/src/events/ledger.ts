@@ -80,7 +80,7 @@ function toPersisted(row: EventRow): PersistedEvent {
     runId: row.runId,
     sessionId: row.sessionId,
     workflowRunId: row.workflowRunId,
-    // Only an automation run's activity carries it (migration 216).
+    // Only an automation run's activity carries it (migration 217).
     ...(row.automationRunId ? { automationRunId: row.automationRunId } : {}),
     actor: row.actorPerson
       ? { type: row.actorType, ...row.actorPerson, ...(row.actorType === "human" ? { keyId: row.actorId } : {}) }

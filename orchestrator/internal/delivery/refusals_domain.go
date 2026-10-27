@@ -30,6 +30,7 @@ const (
 	mImageWasSentWithMessageUpload        = "image %s was sent with a message; upload it again to use it here"
 	mTaskTextShowsAtMostImages            = "a task's text shows at most %d images"
 	mTaskImagesAreAtMostMib               = "a task's images are at most %d MiB together"
+	mImageNotSharedInThisSession          = "image %s is not one a member shared in this session"
 	mTaskNotFound                         = "task %s not found"
 	mDeliveryTaskNotWaitingForDecision    = "delivery of task %s is not waiting for a decision"
 	mNotWayGoOnAfterOne                   = "%q is not a way to go on after %s; one of %s"

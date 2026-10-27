@@ -610,6 +610,14 @@ there is no channel %s that dude's Slack bot can see: check the name, or for a p
 
 a choice's note is a conductor's, for a question about an escalation: put what you mean in the choice's label or description
 
+## refusals/tools/brainstorm/item-goal-too-long-with-images
+
+item %d: too long with its images: a goal of at most %d characters
+
+## refusals/tools/brainstorm/item-only-task-item-has-images
+
+item %d: only a task item has images
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

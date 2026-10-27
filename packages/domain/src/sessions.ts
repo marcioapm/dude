@@ -9,6 +9,7 @@ import type { PersonRef } from "./hierarchy.ts";
 import type { AskItem } from "./questions.ts";
 import type { AgentMachine } from "./machines.ts";
 import type { SessionChatOrigin } from "./chat.ts";
+import type { AttachmentInfo } from "./attachments.ts";
 
 /** What a member may do: the owner (exactly one), write and file, or read. */
 export type SessionRole = "owner" | "chat" | "read";
@@ -200,6 +201,8 @@ export interface ProposalItem {
   /** A link_project item: why the session should read the project, and the project's name. */
   reason?: string;
   projectName?: string;
+  /** A task item: images a member shared in the session, by attachment id; filed, each becomes the task's own. */
+  images?: string[];
 }
 
 /** An item's state for the person looking. */
@@ -230,6 +233,8 @@ export interface Proposal {
   createdAt: string;
   items: ProposalItem[];
   status: ProposalItemStatus[];
+  /** The images its task items name, by id; one the session no longer has is absent. */
+  attachments?: Record<string, AttachmentInfo>;
 }
 
 export interface SessionDetail {

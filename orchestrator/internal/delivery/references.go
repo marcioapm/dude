@@ -185,6 +185,9 @@ var (
 	imageGivenTmpl       = mustTemplate("contracts/images/given")
 	imageUnavailableTmpl = mustTemplate("contracts/images/unavailable")
 	imageNamedTmpl       = mustTemplate("contracts/images/named")
+	// The section a task filed from a brainstorm shows its images in.
+	sessionImagesSectionTmpl = mustTemplate("contracts/images/from-session")
+	sharedImageIDsTmpl       = mustTemplate("contracts/images/shared-ids")
 )
 
 // name is what a reader is told the image is: its alt, else its id.

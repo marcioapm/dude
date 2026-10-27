@@ -42,7 +42,11 @@ func TestStructuredIsRecordedAsAJudgementWithItsOwnInstructions(t *testing.T) {
 		t.Errorf("temperature sent: %v", body)
 	}
 	msgs := body["messages"].([]any)
-	if body["model"] != "gpt-6-sol-mini" || msgs[0].(map[string]any)["content"] != "Route it." || msgs[0].(map[string]any)["role"] != "system" {
+	system, _ := msgs[0].(map[string]any)["content"].(string)
+	// The caller's own instructions first, then the format rule every judgement is told.
+	if body["model"] != "gpt-6-sol-mini" || msgs[0].(map[string]any)["role"] != "system" || !strings.HasPrefix(system, "Route it.\n\n") ||
+		!strings.Contains(system, "Its first character is { and its last character is }.") ||
+		!strings.Contains(system, "before or after it") {
 		t.Fatalf("sent %v", body)
 	}
 	calls := w.calls(t)

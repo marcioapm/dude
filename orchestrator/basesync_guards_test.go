@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -342,5 +343,63 @@ func TestAParkedConductorIsNotWokenForABaseThatMoved(t *testing.T) {
 	}
 	if woken != "" || w.count(`SELECT count(*) FROM directives WHERE run_id=$1`, "run_c_"+held) != 0 {
 		t.Fatalf("the parked conductor was woken (%q) for a base that moved", woken)
+	}
+}
+
+// A conductor running between turns holding only a riding reason (a
+// checkout off the task branch) is neither selected to wake nor woken; held
+// news alone still is, and a real reason takes the riding line with it.
+func TestARidingReasonAloneWakesNoRunningConductor(t *testing.T) {
+	w := newWorld(t)
+	ride, held, real := w.task(), w.task(), w.task()
+	for _, id := range []string{ride, held, real} {
+		mustExec(t, w.owner, `INSERT INTO runs(id, organization_id, project_id, task_id, attempt, status, role, kind, turn_done_at)
+			VALUES($1,$2,$3,$4,1,'running','conductor','agent', now())`, "run_c_"+id, w.org, w.project, id)
+	}
+	for _, id := range []string{ride, real} {
+		mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+			VALUES($1,$2,$3,'checkout',$4,'target: off the task branch.', now() - interval '1 hour')`,
+			"cwk_ride_"+id, w.org, id, delivery.RideWakeKey("checkout:sync-1:target"))
+	}
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES('cwk_held',$1,$2,'checkout','base-moved:pr_x','main moved.', now() - interval '1 hour')`, w.org, held)
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES('cwk_real',$1,$2,'decision','decision:next','A decision waits.', now() - interval '1 hour')`, w.org, real)
+	var selected []string
+	if err := w.app.InSystem(context.Background(), "test", func(tx pgx.Tx) error {
+		rows, err := tx.Query(context.Background(), `SELECT DISTINCT c.task_id FROM conductor_wakes c WHERE `+delivery.Wakeable+` ORDER BY 1`, 0.0)
+		if err != nil {
+			return err
+		}
+		selected, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{held, real}; !slices.Contains(selected, held) || !slices.Contains(selected, real) || slices.Contains(selected, ride) {
+		t.Fatalf("selected to wake %v, want %v", selected, want)
+	}
+	wake := func(task string) string {
+		var woken string
+		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+			if err = delivery.LockChat(context.Background(), tx, task); err != nil {
+				return err
+			}
+			woken, err = delivery.WakeConductorTx(context.Background(), tx, w.org, task, 0)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return woken
+	}
+	if woken := wake(ride); woken != "" || w.count(`SELECT count(*) FROM directives WHERE run_id=$1`, "run_c_"+ride) != 0 {
+		t.Fatalf("the conductor was woken (%q) for a riding line alone", woken)
+	}
+	if woken := wake(real); woken != "run_c_"+real {
+		t.Fatalf("a real reason woke %q", woken)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND strpos(text, 'off the task branch') > 0
+		AND strpos(text, 'A decision waits') > 0`, "run_c_"+real); n != 1 {
+		t.Errorf("the real reason's note does not carry the riding line")
 	}
 }

@@ -211,16 +211,30 @@ func (t *translator) checkoutSynced(ctx context.Context, tx pgx.Tx, raw json.Raw
 	if err != nil {
 		return err
 	}
+	// This sync is what the repository's checkout is now: an off-branch
+	// line still waiting for a note from an earlier one is out of date.
+	if _, err := tx.Exec(ctx, `DELETE FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL
+		AND starts_with(key, $2) AND right(key, char_length($3)) = $3`, t.run.TaskID, delivery.RideWakeKey("checkout:"),
+		":"+res.Repo); err != nil {
+		return err
+	}
 	line := delivery.CheckoutLine(res)
 	if line == "" {
 		return nil
 	}
-	return tellConductor(ctx, tx, t.run, "checkout:"+syncID+":"+res.Repo, line)
+	key := "checkout:" + syncID + ":" + res.Repo
+	if delivery.CheckoutOffBranch(res) {
+		// Nothing of its own in the way: told with the next note, never
+		// a turn by itself.
+		key = delivery.RideWakeKey(key)
+	}
+	return tellConductor(ctx, tx, t.run, key, line)
 }
 
 // tellConductor gives the conductor a line about its checkout with what it
 // hears next: added to a wake note queued for it and not yet sent, else a
-// reason that wakes it (recorded as heard when it rode on the note).
+// reason that wakes it (recorded as heard when it rode on the note); a
+// riding key (delivery.RideWakeKey) waits for the next note instead.
 func tellConductor(ctx context.Context, tx pgx.Tx, r phaseRun, key, line string) error {
 	// The note to ride on, read unlocked: wakes are locked before
 	// directives.
@@ -242,7 +256,9 @@ func tellConductor(ctx context.Context, tx pgx.Tx, r phaseRun, key, line string)
 	if err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE directives SET text = text || E'\n\n' || $2
+	// A line the note carries already (an off-branch line that waited for
+	// it) is not said twice.
+	tag, err := tx.Exec(ctx, `UPDATE directives SET text = CASE WHEN strpos(text, $2) > 0 THEN text ELSE text || E'\n\n' || $2 END
 		WHERE id = $1 AND sent_at IS NULL AND claimed_at IS NULL AND failed_at IS NULL`, note, line)
 	if err != nil {
 		return err

@@ -27,6 +27,7 @@ mImageAnotherTaskUploadThisOne        refusals/domain/attachments/image-another-
 mImageWasSentWithMessageUpload        refusals/domain/attachments/image-was-sent-with-message-upload
 mTaskTextShowsAtMostImages            refusals/domain/attachments/task-text-shows-at-most-images
 mTaskImagesAreAtMostMib               refusals/domain/attachments/task-images-are-at-most-mib
+mImageNotSharedInThisSession          refusals/domain/attachments/image-not-shared-in-this-session
 mTaskNotFound                         refusals/domain/escalations/task-not-found
 mDeliveryTaskNotWaitingForDecision    refusals/domain/escalations/delivery-task-not-waiting-for-decision
 mNotWayGoOnAfterOne                   refusals/domain/escalations/not-way-go-on-after-one

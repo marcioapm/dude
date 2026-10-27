@@ -11,6 +11,7 @@ var (
 	findingsSettled         = delivery.MustText("results/findings-settled")
 	machineMoved            = delivery.MustText("results/machine-moved")
 	syncBaseResult          = delivery.MustText("results/sync-base")
+	relationsPresent        = delivery.MustText("results/update-task-present")
 
 	replyCameNext        = delivery.MustText("results/wait-for-reply-came").Render(nil)
 	steerNext            = delivery.MustText("results/steer").Render(nil)

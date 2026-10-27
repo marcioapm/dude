@@ -539,8 +539,8 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 	}
 
 	// Filing reads and locks what it decides on once, for all the items
-	// pressed, not once each: beyond what each item writes (its comment's
-	// event and its filing record), 50 comments cost what 1 does.
+	// pressed, not once each: beyond each item's event, filing record and
+	// savepoint/release pair, 50 comments cost what 1 does.
 	file := func(n int) int64 {
 		items := make([]delivery.ProposalItem, n)
 		picked := make([]int, n)
@@ -568,7 +568,7 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 		return counter.n.Load() - before
 	}
 	one, fifty := file(1), file(50)
-	const writesPerComment = 2 // its task.comment event, its session_filings row
+	const writesPerComment = 4 // task.comment, session_filings, savepoint and release
 	t.Logf("filing: %d queries for 1 comment, %d for 50", one, fifty)
 	if fifty-one > 49*writesPerComment {
 		t.Errorf("filing 50 comments ran %d queries, 1 ran %d: %d more than each comment's %d writes", fifty, one,

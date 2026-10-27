@@ -392,6 +392,29 @@ describe("a brainstorm session's images", () => {
     expect((await owner`SELECT 1 FROM attachments WHERE id = ${id}`).length).toBe(0);
     expect((await owner`SELECT 1 FROM attachment_object_deletions WHERE object_key = ${row.object_key}`).length).toBe(1);
   });
+
+  test("an image filed onto a task keeps its objects when the session goes, until the task's copy goes too", async () => {
+    await owner`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_att_filed', ${ORG}, 'Filed')`;
+    await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      VALUES ('ssn_att_filed', ${anaPerson}, ${ORG}, 'owner', now())`;
+    const id = ((await (await upload(anaKey, "ssn_att_filed", form(png(5, 5), "image/png", png(5, 5), "image/png"), "brainstorms")).json()) as Json).id;
+    const [row] = await owner`SELECT object_key, original_key FROM attachments WHERE id = ${id}`;
+    // Filing copies the row onto the task, on the same objects (delivery.CreateTaskWithSessionImagesTx).
+    await owner`INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes, sha256, object_key,
+        original_content_type, original_width, original_height, original_bytes, original_key, for_prompt, attached_at)
+      SELECT 'att_filedcopy', organization_id, ${taskId}, name, content_type, width, height, bytes, sha256, object_key,
+        original_content_type, original_width, original_height, original_bytes, original_key, true, now()
+      FROM attachments WHERE id = ${id}`;
+    await owner`DELETE FROM sessions WHERE id = 'ssn_att_filed'`;
+    await sweepAttachments();
+    expect(objects.has(row.object_key)).toBe(true);
+    expect(objects.has(row.original_key)).toBe(true);
+    expect(await owner`SELECT 1 FROM attachment_object_deletions WHERE object_key IN (${row.object_key}, ${row.original_key})`).toHaveLength(2);
+    await owner`DELETE FROM attachments WHERE id = 'att_filedcopy'`;
+    await sweepAttachments();
+    expect(objects.has(row.object_key)).toBe(false);
+    expect(objects.has(row.original_key)).toBe(false);
+  });
 });
 
 describe("removing an unsent one", () => {
@@ -417,6 +440,59 @@ describe("the sweeper", () => {
   const stillQueued = async (keys: string[]) =>
     ((await owner`SELECT object_key FROM attachment_object_deletions WHERE object_key IN ${owner(keys)}`) as Array<{ object_key: string }>)
       .map((r) => r.object_key).sort();
+
+  test("referenced keys older than a batch do not starve a later unreferenced key", async () => {
+    const a: Json = await (await upload(anaKey, taskId, form(png(5, 5), "image/png", png(5, 5), "image/png"))).json();
+    const keys = Array.from({ length: SWEEP_BATCH + 1 }, (_, i) => `attachments/starvation/${i}`);
+    await owner`INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes, sha256, object_key,
+        original_content_type, original_width, original_height, original_bytes, original_key, attached_at, for_prompt)
+      SELECT 'att_starve_' || n, organization_id, task_id, name, content_type, width, height, bytes, sha256,
+        'attachments/starvation/' || n, original_content_type, original_width, original_height, original_bytes,
+        'attachments/starvation/original/' || n, now(), true
+      FROM attachments CROSS JOIN generate_series(0, ${SWEEP_BATCH}) n WHERE id = ${a.id}`;
+    await owner`INSERT INTO attachment_object_deletions ${owner(keys.map((object_key) => ({ object_key, organization_id: ORG, queued_at: new Date(0) })))}`;
+    const later = "attachments/starvation/later";
+    objects.set(later, { bytes: new Uint8Array([1]), type: null });
+    await owner`INSERT INTO attachment_object_deletions (object_key, organization_id) VALUES (${later}, ${ORG})`;
+    await sweepAttachments();
+    expect(await stillQueued(keys)).toEqual(keys.sort());
+    expect(await stillQueued([later])).toEqual([]);
+    expect(objects.has(later)).toBe(false);
+    await owner`DELETE FROM attachments WHERE id LIKE 'att_starve_%'`;
+    await sweepAttachments();
+    expect(await stillQueued(keys)).toEqual([]);
+  });
+
+  test("selection during final-reference deletion retains both requests", async () => {
+    const a: Json = await (await upload(anaKey, taskId, form(png(5, 5), "image/png", png(5, 5), "image/png"))).json();
+    const [row] = await owner`SELECT object_key, original_key FROM attachments WHERE id = ${a.id}`;
+    const keys = [row.object_key, row.original_key].sort();
+    await owner`UPDATE attachments SET attached_at = now(), for_prompt = true WHERE id = ${a.id}`;
+    await owner`INSERT INTO attachment_object_deletions ${owner(keys.map((object_key) => ({ object_key, organization_id: ORG })))}`;
+    let unlock!: () => void;
+    let locked!: () => void;
+    const gate = new Promise<void>((resolve) => { unlock = resolve; });
+    const ready = new Promise<void>((resolve) => { locked = resolve; });
+    const holding = owner.begin(async (tx) => {
+      await tx`SELECT object_key FROM attachment_object_deletions WHERE object_key IN ${tx(keys)} FOR UPDATE`;
+      locked();
+      await gate;
+    });
+    await ready;
+    try {
+      // A read-only selection must finish even while the queue rows are locked.
+      await sweepAttachments();
+      expect(await stillQueued(keys)).toEqual(keys);
+      await owner`DELETE FROM attachments WHERE id = ${a.id}`;
+      expect(await stillQueued(keys)).toEqual(keys);
+    } finally {
+      unlock();
+      await holding;
+    }
+    await sweepAttachments();
+    expect(await stillQueued(keys)).toEqual([]);
+    expect(keys.filter((key) => objects.has(key))).toEqual([]);
+  });
 
   test("removes uploads never sent after a day, keeps sent and recent ones, and deletes their objects", async () => {
     const stale: Json = await (await upload(anaKey, taskId, form(png(6, 6), "image/png", png(6, 6), "image/png"))).json();

@@ -74,13 +74,22 @@ type Tier struct {
 	Headers                 map[string]string
 }
 
-// systemPrompt is what the model is told before every question.
+// systemPrompt is what the model is told before every question. The format
+// rules are stated first and bluntly: a reply with prose before the object,
+// or reasoning long enough to hit maxTokens, does not parse.
 const systemPrompt = `You decide one question for dude, a software-delivery system that runs coding agents on tasks and pull requests.
 
-Read the question and its context, then answer with only a JSON object, nothing before or after it:
-{"decision":"yes"|"no"|"unsure","confidence":<a number from 0 to 1>,"reasoning":"<one or two sentences>"}
+` + onlyTheObject + ` A reply that does not parse as that object is thrown away and counted against the work you are judging.
 
+{"decision":"yes"|"no"|"unsure","confidence":<a number from 0 to 1>,"reasoning":"<at most two sentences, under 60 words>"}
+
+Do your thinking before you answer, not in the reply. Keep reasoning short: under 60 words, quoting at most a few words of the context, never a whole command or log, and no { or } characters in it.
 confidence is how sure you are of your decision. Answer "unsure" when the context does not settle the question.`
+
+// onlyTheObject is the format rule every judgement is told; a structured
+// one's comes after its caller's instructions.
+const onlyTheObject = `Your whole reply is one JSON object and nothing else. Its first character is { and its last character is }.
+No prose, heading, code fence or thinking out loud before or after it.`
 
 // recordTimeout bounds the write of a call's record, apart from the caller's ctx.
 const recordTimeout = 5 * time.Second

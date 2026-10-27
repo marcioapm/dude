@@ -162,7 +162,7 @@ func RetainUpTo(ctx context.Context, d *db.DB, now time.Time, limit int) (int, e
 			WHERE created_at < $1 AND payloads_purged_at IS NULL ORDER BY created_at LIMIT $2)`,
 			[]any{now.Add(-PayloadRetention), limit, now}},
 		// A run's activity goes with its log: the events first, then
-		// log_tail once the purge marked the run empty (216).
+		// log_tail once the purge marked the run empty (217).
 		{`SELECT purge_automation_run_events($1, $2)`, []any{now.Add(-LogRetention), limit}},
 		{`UPDATE automation_runs SET log_tail = NULL WHERE id IN (SELECT r.id FROM automation_runs r
 			WHERE r.created_at < $1 AND r.log_tail IS NOT NULL AND r.activity_purged_at IS NOT NULL ORDER BY r.created_at LIMIT $2)`,
