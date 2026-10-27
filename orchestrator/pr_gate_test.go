@@ -399,8 +399,9 @@ func TestUnderTheConductorAskMeFirstIsThePersonsQuestion(t *testing.T) {
 // fix of that pull request's feedback that changes the other opens the
 // second one with nobody asked, under Ask me first, and not as a draft
 // under Open as draft or after the owner's Open as draft at the hold.
-// Only the first opening reads the choice.
-func TestOnlyTheFirstOpeningReadsTheChoice(t *testing.T) {
+// That the choice is read only before the first pull request is the
+// delivery package's TestATasksPullRequestChoiceIsItsOwnersUntilAPullRequestOpens.
+func TestALaterRepositorysPullRequestIsNeitherHeldNorADraft(t *testing.T) {
 	for _, c := range []struct {
 		name, choice string
 		answerDraft  bool
