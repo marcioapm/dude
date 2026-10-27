@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { CONDITION_OP_LABEL, CONDITION_OPS, describeCondition, type ConditionOp } from "@dude/domain";
+import { CONDITION_OP_LABEL, CONDITION_OPS, describeCondition, REFUSAL_LABEL, type ConditionOp, type RefusalCode } from "@dude/domain";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
 import { Input } from "../primitives/Input.tsx";
@@ -115,7 +115,7 @@ export function ConditionRows({ value, onChange, disabled, results, paths }: {
 export type DeliveryVerdictValue =
   | { readonly kind: "started" | "sent"; readonly runId: string | null }
   | { readonly kind: "skipped"; readonly because: string }
-  | { readonly kind: "refused"; readonly reason: "signature" | "not_json" | "too_large" | "rate_limited" | "disabled" }
+  | { readonly kind: "refused"; readonly reason: RefusalCode }
   | { readonly kind: "pending" };
 
 const VERDICT: Record<DeliveryVerdictValue["kind"], { tone: string; icon: IconName; word: string }> = {
@@ -124,9 +124,6 @@ const VERDICT: Record<DeliveryVerdictValue["kind"], { tone: string; icon: IconNa
   skipped: { tone: "neutral", icon: "circle-dotted", word: "Skipped" },
   refused: { tone: "danger", icon: "circle-x", word: "Refused" },
   pending: { tone: "neutral", icon: "clock", word: "Waiting" },
-};
-const REFUSED: Record<Extract<DeliveryVerdictValue, { kind: "refused" }>["reason"], string> = {
-  signature: "Bad signature", not_json: "Not JSON", too_large: "Too large", rate_limited: "Rate limited", disabled: "Turned off",
 };
 
 /**
@@ -144,7 +141,7 @@ export function DeliveryVerdict({ verdict, onRun, detail = true }: {
   const chip = (
     <span className={styles["verdict"]} data-tone={v.tone} data-verdict={verdict.kind}>
       <Icon name={v.icon} size={12} />
-      <span>{verdict.kind === "refused" ? `${v.word} · ${REFUSED[verdict.reason]}` : v.word}</span>
+      <span>{verdict.kind === "refused" ? `${v.word} · ${REFUSAL_LABEL[verdict.reason]}` : v.word}</span>
     </span>
   );
   const run = (verdict.kind === "started" || verdict.kind === "sent") && verdict.runId && onRun ? verdict.runId : null;

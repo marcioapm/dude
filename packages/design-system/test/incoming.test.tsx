@@ -87,7 +87,7 @@ describe("DeliveryVerdict", () => {
       [{ kind: "sent", runId: "arn_1" }, "Sent to running agent", "info", "send"],
       [{ kind: "sent", runId: null }, "Sent to running agent", "info", "send"],
       [{ kind: "skipped", because: "status is resolved, not firing" }, "Skipped", "neutral", "circle-dotted"],
-      [{ kind: "refused", reason: "signature" }, "Refused · Bad signature", "danger", "circle-x"],
+      [{ kind: "refused", reason: "bad_signature" }, "Refused · Bad signature", "danger", "circle-x"],
       [{ kind: "refused", reason: "not_json" }, "Refused · Not JSON", "danger", "circle-x"],
       [{ kind: "refused", reason: "too_large" }, "Refused · Too large", "danger", "circle-x"],
       [{ kind: "refused", reason: "rate_limited" }, "Refused · Rate limited", "danger", "circle-x"],
@@ -113,7 +113,7 @@ describe("DeliveryVerdict", () => {
     await act(async () => b.click());
     expect(opened).toEqual(["arn_9"]);
     expect(row).toBe(0);
-    expect(renderToStaticMarkup(<DeliveryVerdict verdict={{ kind: "refused", reason: "signature" }} onRun={() => undefined} />)).not.toContain("<button");
+    expect(renderToStaticMarkup(<DeliveryVerdict verdict={{ kind: "refused", reason: "bad_signature" }} onRun={() => undefined} />)).not.toContain("<button");
   });
 });
 

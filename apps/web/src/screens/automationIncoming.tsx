@@ -37,6 +37,7 @@ import {
   INCOMING_RATE_MAX,
   INCOMING_VERIFY_LABEL,
   INCOMING_VERIFY_MODES,
+  REFUSAL_CODES,
   type Automation,
   type AutomationDelivery,
   type AutomationDeliveryDetail,
@@ -250,17 +251,13 @@ export function ProjectsRow({ projects, value, ro, error, onChange }: {
 // Deliveries
 // ---------------------------------------------------------------------------
 
-const REFUSAL_OF: Record<string, Extract<DeliveryVerdictValue, { kind: "refused" }>["reason"]> = {
-  bad_signature: "signature", not_json: "not_json", too_large: "too_large", rate_limited: "rate_limited", disabled: "disabled",
-};
-
 /** A delivery's verdict as the DS chip reads it. */
 export function verdictOf(d: AutomationDelivery): DeliveryVerdictValue {
   switch (d.verdict) {
     case "started": return { kind: "started", runId: d.runId };
     case "sent_to_run": return { kind: "sent", runId: d.runId };
     case "skipped": return { kind: "skipped", because: d.reason ?? "" };
-    case "refused": return { kind: "refused", reason: REFUSAL_OF[d.reason ?? ""] ?? "signature" };
+    case "refused": return { kind: "refused", reason: REFUSAL_CODES.find((c) => c === d.reason) ?? "bad_signature" };
     default: return { kind: "pending" };
   }
 }

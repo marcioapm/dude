@@ -209,7 +209,7 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <DeliveryVerdict verdict={{ kind: "started", runId: "arn_1" }} />
             <DeliveryVerdict verdict={{ kind: "sent", runId: null }} />
             <DeliveryVerdict verdict={{ kind: "skipped", because: "status is resolved, not firing" }} />
-            <DeliveryVerdict verdict={{ kind: "refused", reason: "signature" }} />
+            <DeliveryVerdict verdict={{ kind: "refused", reason: "bad_signature" }} />
             <DeliveryVerdict verdict={{ kind: "refused", reason: "not_json" }} />
             <DeliveryVerdict verdict={{ kind: "refused", reason: "too_large" }} />
             <DeliveryVerdict verdict={{ kind: "refused", reason: "rate_limited" }} />
