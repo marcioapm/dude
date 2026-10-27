@@ -246,7 +246,7 @@ func TestPostToChatRedactsTheRunsSecretValues(t *testing.T) {
 	c := setupChat(t, true)
 	mustExec(t, c.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'GH_TOKEN', 'ghp-digest-s3cr3t-value', 'alue')`,
 		c.org, c.project)
-	mustExec(t, c.owner, `UPDATE automations SET secrets = '{GH_TOKEN}' WHERE id = 'aut_digest'`)
+	mustExec(t, c.owner, `UPDATE automations SET secrets = '[{"source":"project","name":"GH_TOKEN"}]' WHERE id = 'aut_digest'`)
 	if status, out := c.postToChat(t, "#engineering", "Used ghp-digest-s3cr3t-value to read the stats"); status != 200 {
 		t.Fatalf("post: %d %v", status, out)
 	}
@@ -353,7 +353,7 @@ func TestPostToChatMeasuresTheTextBeforeRedactingIt(t *testing.T) {
 	c := setupChat(t, true)
 	mustExec(t, c.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'GH_TOKEN', 'ghp-digest-s3cr3t-value', 'alue')`,
 		c.org, c.project)
-	mustExec(t, c.owner, `UPDATE automations SET secrets = '{GH_TOKEN}' WHERE id = 'aut_digest'`)
+	mustExec(t, c.owner, `UPDATE automations SET secrets = '[{"source":"project","name":"GH_TOKEN"}]' WHERE id = 'aut_digest'`)
 	text := "ghp-digest-s3cr3t-value " + strings.Repeat("x", 40001-24)
 	status, out := c.postToChat(t, "#engineering", text)
 	if status != 422 || !strings.HasPrefix(fmt.Sprint(out["error"]), "text is 1 to 40000 characters of Slack mrkdwn; this one is 40001") {
