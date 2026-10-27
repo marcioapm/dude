@@ -161,7 +161,8 @@ def test_a_brainstorm_with_no_project_offers_the_learned_one_and_the_askers_clic
     link = fake_github.add_actions_run(813, "Nightly", [
         {"id": 9101, "name": "integration", "conclusion": "failure", "failed_steps": ["Run tests"], "log": "FAIL test_import\n"}])
     _report(n, link)
-    # The stub can't tell this one's project: a session with none linked.
+    # The stub can't tell this one's project: a session with none linked,
+    # routing suggesting the learned one.
     root = slack.mention(channel, "", u["U1"], "which project is this about? can you look at the failures above?")
     req = _requests(n["marcia"], 2)[1]
     assert req["route"] == "brainstorm" and req["result"]["kind"] == "session", req
@@ -170,8 +171,11 @@ def test_a_brainstorm_with_no_project_offers_the_learned_one_and_the_askers_clic
     reply = wait_until(lambda: next((m for m in slack.bot_messages(channel) if m["ThreadTS"] == root and _row(m)), None),
                        timeout=30, message="the reply with its row")
     buttons = _row(reply)
-    assert [b["text"]["text"] for b in buttons] == [f"{keys['api']} · Nightly API", "Choose in dude"], buttons
-    assert buttons[1]["url"].endswith(f"/sessions/{session}"), buttons[1]
+    assert [b["text"]["text"] for b in buttons] == [f"{keys['api']} · Nightly API"], buttons
+    assert "url" not in buttons[0] and buttons[0]["value"].startswith("link:"), buttons[0]
+    # The session page is the reply's own link.
+    opens = [e for b in reply["Blocks"] if b.get("block_id") != "row" for e in b.get("elements") or [] if e.get("type") == "button"]
+    assert [(e["text"]["text"], e["url"].endswith(f"/sessions/{session}")) for e in opens] == [("Open in dude", True)], opens
 
     def click(user: str, handle: str) -> None:
         resp = slack.interact({"type": "block_actions", "team": {"id": team}, "user": {"id": user, "username": handle},

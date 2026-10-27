@@ -1198,13 +1198,16 @@ An admin sets the usual projects on the provider's settings page
 from chat (`@dude this channel is usually about Acme`, the `channel_projects`
 route; anyone else is refused privately and nothing changes).
 
-**Link a project (`chat/link.go`, migration 203).** A mention routed to a
-brainstorm with no linked project offers up to 3 deduplicated candidates:
-the conversation's usual projects, learned hints (most first), then routing's
-`maybe_projects`. All are checked against the routing world, which excludes
-hidden projects. `Reply.Row` holds the choices (`KEY · Name`), linked lines,
-and "Choose in dude", a link to the session page. Slack renders the row as
-buttons and replaces it through `UpdateReply` (`chat.update`).
+**Link a project (`chat/link.go`, migration 213).** A mention routed to a
+brainstorm with no linked project offers the routing answer's
+`maybe_projects`: known, deduplicated, at most 3, in the model's order. The
+usual projects and learned hints are only the model's context; a null or
+empty `maybe_projects` offers no row at all. Only a failed routing call (no
+answer) falls back to the usual projects, then the learned hints. All are
+checked against the routing world, which excludes hidden projects.
+`Reply.Row` holds the choices (`KEY · Name`) and linked lines; the reply's
+own "Open in dude" is the session page. Slack renders the row as buttons and
+replaces it through `UpdateReply` (`chat.update`).
 
 The request keeps `link_offer` and the reply's `question_message_id`.
 An `Interaction` value, `link:<request id>:<index>`, resolves against that

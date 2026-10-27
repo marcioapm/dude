@@ -738,8 +738,7 @@ func (p *Provider) Permalink(inst chat.Installation, conversation, message, thre
 var mrkdwnEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
 
 // blocks is a reply as Block Kit: its words, its link as a button, and its
-// row: a line per choice made from it, then a button per choice left and
-// the row's link.
+// row: a line per choice made from it, then a button per choice left.
 func blocks(r chat.Reply) []any {
 	section := func(text string) any {
 		return map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": mrkdwnEscape(text)}}
@@ -762,9 +761,6 @@ func blocks(r chat.Reply) []any {
 		}
 		if row.Heading != "" {
 			out = append(out, section(row.Heading))
-		}
-		if row.LinkURL != "" {
-			buttons = append(buttons, link("row_link", firstOf(row.LinkLabel, "Open in dude"), row.LinkURL))
 		}
 		if len(buttons) > 0 {
 			out = append(out, map[string]any{"type": "actions", "block_id": "row", "elements": buttons})
