@@ -84,6 +84,21 @@ func TestAPublishedArtifactIsRecordedOnceFromTheStream(t *testing.T) {
 	}
 }
 
+// A thumbnail dude publish made is recorded, to be served with its file,
+// but says nothing in Activity; the file beside it still does.
+func TestAThumbnailIsRecordedWithoutAnEvent(t *testing.T) {
+	w := newReceiptWorld(t)
+	w.published("art_eeeeeeeeeeeeeeee", lux.PublishedPrefix+"shot.png", 1)
+	w.published("art_ffffffffffffffff", lux.PublishedPrefix+ThumbnailsPrefix+"ab12.jpg", 1)
+	got := w.artifacts()
+	if len(got) != 2 || got[0].Name != "shot.png" || got[1].Name != ThumbnailsPrefix+"ab12.jpg" {
+		t.Fatalf("recorded %+v; want the image and its thumbnail", got)
+	}
+	if n := w.events(ArtifactEventType); n != 1 {
+		t.Errorf("%d artifact.created events, want the image's alone", n)
+	}
+}
+
 // The final diff the beforeStop hook publishes is dude's own, left to the
 // stop-time sweep, which records it as the Run's diff; nor is anything
 // outside the published files (lux's artifacts.paths) for people.

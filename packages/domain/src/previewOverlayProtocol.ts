@@ -15,6 +15,12 @@ import type { FeedbackPreviewAnchor, FeedbackStatus } from "./feedback.ts";
 
 export const OVERLAY_PROTOCOL = 1;
 
+/**
+ * How many openers up a window's chain the overlay looks for dude, and dude
+ * for its own tab: a few tabs opened from tabs, never an unbounded walk.
+ */
+export const OVERLAY_OPENER_STEPS = 5;
+
 export const OVERLAY_LIMITS = {
   /**
    * One message, in UTF-16 code units of its strings plus 8 per other

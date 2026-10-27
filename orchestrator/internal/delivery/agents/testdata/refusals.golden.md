@@ -566,6 +566,46 @@ that message is too far back or ahead to page to from here: use a nearer message
 
 the chat is rate limiting reads: try again later, or work with what you have
 
+## refusals/tools/post-to-chat/automations-only
+
+post_to_chat is only available to automations
+
+## refusals/tools/post-to-chat/lookup-cut
+
+could not finish looking up the channel %s; pass the channel id (C0123ABCD): the workspace has more channels than one lookup reads. Nothing was posted
+
+## refusals/tools/post-to-chat/name-a-channel
+
+name a channel: #engineering, engineering, or its id (C0123ABCD)
+
+## refusals/tools/post-to-chat/not-connected
+
+Slack is not connected for %s: an organisation admin adds dude's Slack app in Organisation settings → Chat. Nothing was posted
+
+## refusals/tools/post-to-chat/not-in-channel
+
+dude's Slack bot is not in %s: ask someone in the channel to run /invite @dude, then call again. Nothing was posted
+
+## refusals/tools/post-to-chat/per-run
+
+post_to_chat is limited to %d messages per run; this run has posted them
+
+## refusals/tools/post-to-chat/slack-busy
+
+Slack did not take the post (%s): nothing was posted; try again in a minute
+
+## refusals/tools/post-to-chat/slack-refused
+
+Slack refused the post: %s. Nothing was posted
+
+## refusals/tools/post-to-chat/text-length
+
+text is 1 to %d characters of Slack mrkdwn; this one is %d: shorten it, or split it over more than one post
+
+## refusals/tools/post-to-chat/unknown-channel
+
+there is no channel %s that dude's Slack bot can see: check the name, or for a private channel ask someone in it to run /invite @dude, then call again
+
 ## refusals/tools/tools/choice-note-is-conductor-for-question-about
 
 a choice's note is a conductor's, for a question about an escalation: put what you mean in the choice's label or description
@@ -1270,11 +1310,11 @@ a choice's note is for the conductor's question about an escalation waiting on a
 
 %q takes no note on %s: a note is only for an action that needs the person's reason or direction. Leave it out and put what it means in the choice's label or description
 
-## refusals/delivery/escalations/choice-note-too-long
-
-the note on the %q choice is too long: its label is the action and the note, so keep the note to %d characters and put the rest in the choice's description or the question
-
 ## refusals/delivery/escalations/choice-note-takes-no-label
 
 the %q choice has a note and a label: dude writes the label of a choice with a note as its action and the note, so leave the label out and put anything else in the choice's description
+
+## refusals/delivery/escalations/choice-note-too-long
+
+the note on the %q choice is too long: its label is the action and the note, so keep the note to %d characters and put the rest in the choice's description or the question
 

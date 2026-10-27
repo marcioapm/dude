@@ -122,6 +122,30 @@ describe("task rail filtering", () => {
     expect(reads).toEqual(["image-a", "image-b"]);
   });
 
+  test("a card's picture is read from its thumbnail when it has one, never the video's or image's own bytes", async () => {
+    const client = new FixtureClient("a");
+    const base = { phase: "implement", role: "implementer", version: 1, createdAt: "2026-10-01", description: "" };
+    const artifacts = [
+      { ...base, id: "video", name: "walkthrough.webm", contentType: "video/webm", sizeBytes: 9_000_000, thumbnailId: "video-thumb" },
+      { ...base, id: "big", name: "big.png", contentType: "image/png", sizeBytes: 1_500_000, thumbnailId: "big-thumb" },
+      { ...base, id: "small", name: "small.png", contentType: "image/png", sizeBytes: 3, thumbnailId: null },
+      { ...base, id: "bare", name: "bare.webm", contentType: "video/webm", sizeBytes: 3 },
+    ] as Artifact[];
+    client.listArtifacts = async () => ({ artifacts });
+    const reads: string[] = [];
+    client.artifactContent = async (id) => { reads.push(id); return new Blob([id]); };
+    const page = await taskPage(client, { tab: "files" });
+    await until(() => reads.length === 3 ? true : null, "the three pictures");
+    await settle();
+    expect([...reads].sort()).toEqual(["big-thumb", "small", "video-thumb"]);
+    const card = (name: string) => page.querySelector<HTMLElement>(`[data-testid="file-card"][data-name="${name}"]`)!;
+    await until(() => card("walkthrough.webm").querySelector("img"), "the video's picture");
+    expect(card("walkthrough.webm").tagName).toBe("BUTTON");
+    expect(card("big.png").querySelector("img")).not.toBeNull();
+    // A video with no thumbnail is today's dark card.
+    expect(card("bare.webm").querySelector("img")).toBeNull();
+  });
+
   test("task chatter from other runs does not re-render the open RunScreen", async () => {
     const memo = RunScreen as unknown as { type: (props: RunScreenProps) => ReactNode };
     const screen = memo.type;

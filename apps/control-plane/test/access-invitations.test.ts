@@ -531,6 +531,22 @@ describe("/v1/me across organisations", () => {
     expect(hidden).toEqual(nowhere);
   });
 
+  test("a preview's lookup, asked in one organisation, finds the task in another of yours, and none in one that isn't", async () => {
+    const email = at("pia");
+    await member(owner, acme, email);
+    const origin = `https://web-pv-1-${suffix}.preview.example.test`;
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES (${`prj_${northwind}_pv`}, ${northwind}, 'PV', 'pv', 'PV')`;
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES (${`wi_${northwind}_pv`}, ${northwind}, ${`prj_${northwind}_pv`}, 7, 't')`;
+    await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind) VALUES (${`run_${northwind}_pv`}, ${northwind}, ${`prj_${northwind}_pv`}, ${`wi_${northwind}_pv`}, 1, 'preview')`;
+    await owner`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+      VALUES (${`run_${northwind}_pv`}, ${northwind}, 'web', ${`srv_${suffix}_pv`}, ${new URL(origin).hostname}, ${`${origin}/`})`;
+    const path = `/v1/preview-servers/lookup?origin=${encodeURIComponent(origin)}`;
+    expect((await as(email, "GET", path)).status).toBe(404);
+    await member(owner, northwind, email);
+    expect(await as(email, "GET", path)).toEqual({ status: 200,
+      body: { organizationSlug: northwind, taskId: `wi_${northwind}_pv`, taskKey: "PV-7", server: "web" } });
+  });
+
   test("PATCH /v1/me writes the account; active memberships copy it, a removed one keeps its old name", async () => {
     const email = at("jo");
     const active = await member(owner, acme, email, { name: "Jo" });

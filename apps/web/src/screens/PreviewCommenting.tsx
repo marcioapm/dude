@@ -1,6 +1,6 @@
 /**
  * Commenting on the branch preview, on the task page: the hook that holds
- * the task's commenting window (PreviewCommenting), its ways in — every
+ * the task's commenting windows (PreviewCommenting), its ways in — every
  * link dude shows to a commentable server (its URL and Preview on the
  * Servers tab and the Overview, a feedback card's Page) and the Feedback
  * tab's line — what is said when commenting is off, the notice while a
@@ -15,7 +15,7 @@ import type { ApiClient } from "../api/client.ts";
 import type { ServersState } from "../hooks/useServers.ts";
 import type { People } from "../people.tsx";
 import {
-  COMMENTING_UNAVAILABLE, PreviewCommenting, commentingOffer, previewOrigins, serverOf, showable,
+  COMMENTING_UNAVAILABLE, PreviewCommenting, arrivedFromPreview, commentingOffer, previewOrigins, serverOf, showable,
   type CommentingOffer, type CommentingView,
 } from "../previewComment.ts";
 import type { TaskFeedbackController } from "./FeedbackSection.tsx";
@@ -23,16 +23,16 @@ import type { TaskFeedbackController } from "./FeedbackSection.tsx";
 export interface PreviewCommentingControl {
   readonly offer: CommentingOffer;
   readonly view: CommentingView;
-  /** Opens a server's page with the overlay, in the task's window. */
+  /** Opens a server's page with the overlay: a window already open on that server brought forward, else the task's named window. */
   readonly open: (server: { name: string; url: string }) => void;
   /**
    * A link's `onOpen` for server `name`: present only while comments can be
-   * made on it, opening its URL in the task's window, or bringing that
-   * window forward when it is already open on the server (true when it did).
+   * made on it, bringing forward a commenting window already open on the
+   * server (true when it did), else opening its URL in the task's named window.
    * Absent, the link opens the server in a new tab as any link does.
    */
   readonly linkFor: (name: string) => ((url: string) => boolean) | undefined;
-  /** A feedback card's Page link on a commentable server: the task's window brought forward when already on that page, else navigated there; false otherwise. */
+  /** A feedback card's Page link on a commentable server: a commenting window already on that page brought forward, else the task's named window navigated there; false otherwise. */
   readonly openPage: (url: string) => boolean;
   /** Show on preview: the item's page, marked. */
   readonly show: (item: FeedbackItem) => void;
@@ -79,6 +79,7 @@ export function usePreviewCommenting({ client, taskId, taskKey, servers, fb, peo
     onSaved: (id) => latest.current.fb.flash(id),
     onOpenItem: (id) => latest.current.onOpenItem(id),
     onChange: setView,
+    openerArrived: () => arrivedFromPreview(window, taskId),
   }), [client, taskId]);
   useEffect(() => commenting.listen(), [commenting]);
   // The open page's pins and theme follow dude: a save, a submit, an agent's reply, the person switching light or dark.
@@ -200,7 +201,7 @@ export function CommentingNotices({ control }: { control: PreviewCommentingContr
         <span className="feedbackLine">
           <span>
             <span className="ds-live-dot" aria-hidden /> <b>Commenting on <span className="ds-mono">{view.server ?? "the preview"}</span></b> in another window — what you pick there lands in your drafts here.
-            <span className="muted"> {view.state === "waiting" ? "Waiting for the page to load…" : `${plural(view.saved, "draft")} saved from it so far.`}</span>
+            <span className="muted"> {view.state === "waiting" ? "Waiting for the page to load…" : `${plural(view.saved, "draft")} saved from the preview so far.`}</span>
           </span>
           <span className="noticeActions">
             <Button size="sm" variant="secondary" leadingIcon="external" onClick={control.focus} data-testid="commenting-go">Go to the preview</Button>
@@ -216,7 +217,7 @@ export function CommentingNotices({ control }: { control: PreviewCommentingContr
     out.push(
       <Callout key="closed" tone="neutral" data-testid="commenting-notice" data-state="closed">
         <span className="feedbackLine">
-          <span><b>The preview window was closed.</b> {view.saved > 0 ? `The ${plural(view.saved, "draft")} you saved from it are in your drafts.` : "Nothing was saved from it."}</span>
+          <span><b>The preview window was closed.</b> {view.saved > 0 ? `The ${plural(view.saved, "draft")} you saved from the preview are in your drafts.` : "Nothing was saved from the preview."}</span>
           <span className="noticeActions">
             {s ? <Button size="sm" variant="secondary" leadingIcon="comments" onClick={() => control.open(s)}>Comment on preview</Button> : null}
             <Button size="sm" variant="quiet" onClick={control.dismiss}>Dismiss</Button>

@@ -554,6 +554,26 @@ func TestChildResultBounds(t *testing.T) {
 	}
 }
 
+// A child's result lists the files it published, not the thumbnails dude
+// publish made beside them, which no Files list shows either.
+func TestAChildResultListsItsFilesNotTheirThumbnails(t *testing.T) {
+	w := newChildWorld(t)
+	id := w.child("thumbs")
+	w.exec(`INSERT INTO artifacts (id, organization_id, run_id, kind, name, storage_key, sha256)
+		VALUES ('art_shot', $1, $2, 'published', 'shot.png', 'k_shot', 'x'),
+		       ('art_0thumb', $1, $2, 'published', '.dude-thumbs/x.jpg', 'k_thumb', 'y')`, w.org, id)
+	if _, err := w.s.SettleChild(w.ctx, w.org, id, ChildOutcome{Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	var artifacts []string
+	if err := w.owner.QueryRow(w.ctx, `SELECT artifact_ids FROM child_results WHERE child_run_id = $1`, id).Scan(&artifacts); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(artifacts) != "[art_shot]" {
+		t.Fatalf("artifact ids %v; want only the file's", artifacts)
+	}
+}
+
 // A failed child's result tells its parent the child's error, clipped to
 // childErrorChars; a completed child's carries no error, even with one on
 // its Run.

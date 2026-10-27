@@ -77,6 +77,10 @@ const artifactsPatience = 24 * time.Hour
 // ArtifactEventType is the ledger event for a newly recorded artifact.
 const ArtifactEventType = "artifact.created"
 
+// ThumbnailsPrefix names the thumbnails dude publish makes for images and
+// videos (cmd/dude thumbsDir), as recorded.
+const ThumbnailsPrefix = ".dude-thumbs/"
+
 type dueRun struct {
 	ID, Org, ProjectID, TaskID, SessionID, LuxRunID string
 	// dude's status for it: stopped, or running again after a resume.
@@ -315,8 +319,9 @@ func (a *Artifacts) settled(ctx context.Context, r dueRun) (bool, error) {
 // artifactRun is the dude Run an artifact is recorded on.
 type artifactRun struct{ Org, ProjectID, TaskID, SessionID, ID string }
 
-// recordArtifact records one artifact lux can serve, with artifact.created,
-// once per lux artifact id: from the stream, a replay of it, or the sweep.
+// recordArtifact records one artifact lux can serve, with artifact.created
+// unless it is a thumbnail, once per lux artifact id: from the stream, a
+// replay of it, or the sweep.
 //
 // created_at is clock_timestamp(), not now(): versions of one name recorded
 // in one transaction keep lux's order in the listing, which numbers them by
@@ -340,6 +345,11 @@ func recordArtifact(ctx context.Context, tx pgx.Tx, r artifactRun, art lux.Artif
 		id, r.Org, r.ID, name, ctype, art.Size, art.ID, art.SHA256, art.Epoch, art.Description)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
+	}
+	// A thumbnail dude publish made is served with its file, never said
+	// in Activity as a file of its own.
+	if strings.HasPrefix(name, ThumbnailsPrefix) {
+		return nil
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{
 		Type: ArtifactEventType, OrganizationID: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID, SessionID: r.SessionID,

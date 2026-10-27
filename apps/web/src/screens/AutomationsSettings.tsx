@@ -116,6 +116,7 @@ import {
 } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
+import { AutomationToolList, ToolCallList } from "./automationTools.tsx";
 import { useOrgSecrets } from "./OrgSecrets.tsx";
 
 /** Where the automations pages are: a list, one automation (its tab), one run. */
@@ -506,6 +507,12 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   useEffect(() => {
     if (!a.projectId) client.automationRepositories().then((r) => setGroups(r.groups), () => undefined);
   }, [client, a.projectId]);
+  // Whether post_to_chat can post: the organisation's Slack installation; unknown (null) shows no callout.
+  const [slackInstalled, setSlackInstalled] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (a.kind !== "agent") return;
+    client.chatOverview().then((o) => setSlackInstalled(o.providers.some((p) => p.provider.id === "slack" && p.installed)), () => setSlackInstalled(null));
+  }, [client, a.kind]);
   const ro = !a.canEdit;
   const scope = a.projectId ? "project" : "organization";
   const invalid = automationProblem(form, scope);
@@ -641,7 +648,10 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
                 </SettingRow>
               </>
             ) : null}
-            <SettingsNote>It can create dude tasks and comment on GitHub as the dude App; it opens no pull requests.</SettingsNote>
+            <SettingRow label="Tools" block help="What its agent can call, besides the shell in its machine." data-testid="tools-row">
+              <AutomationToolList orgName={orgName} slackInstalled={slackInstalled} />
+            </SettingRow>
+            <SettingsNote>It opens no pull requests.</SettingsNote>
           </SettingsSection>
         ) : null}
 
@@ -1142,11 +1152,20 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
   if (!run) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
+  // The call the run failed on (a post_to_chat without Slack), as the API names it.
+  const failedCall = run.failedCallId ? run.toolCalls.find((c) => c.id === run.failedCallId) ?? null : null;
+  const failedOnLast = failedCall !== null && failedCall === run.toolCalls.at(-1);
   return (
-    <div data-testid="run-detail">
+    <div data-testid="run-detail" className="automationRunDetail">
       <SettingsSection title="Run">
-        <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span></p>
-        {run.reason ? <SettingsNote>{run.reason}</SettingsNote> : null}
+        <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span>
+          {run.costUsd !== null ? <span className="automationRunCost">· ${run.costUsd.toFixed(2)}</span> : null}</p>
+        {run.reason && failedCall ? (
+          <Callout tone="danger" data-testid="run-failed">
+            <b>Failed.</b> {run.reason}. {run.toolCalls.some((c) => c.posted) ? "That message was not posted" : "Nothing was posted"};{" "}
+            {a.owner?.name ?? "its owner"} was told.
+          </Callout>
+        ) : run.reason ? <SettingsNote>{run.reason}</SettingsNote> : null}
         {a.kind === "server" && run.containerStartedAt ? (
           <ol className="automationTimeline" data-testid="server-timeline">
             <li><time>{formatTimestamp(run.containerStartedAt, "time")}</time> Started</li>
@@ -1165,11 +1184,22 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
           </Table>
         ) : null}
       </SettingsSection>
+      {run.payloads.length === 0 && !run.payloadsPurged ? null : (
       <SettingsSection title="Trigger payload">
         {run.payloadsPurged ? <SettingsNote>Payloads are kept 30 days.</SettingsNote>
           : <pre className="automationPayload">{JSON.stringify(run.payloads.length === 1 ? run.payloads[0]!.body : run.payloads, null, 2)}</pre>}
       </SettingsSection>
-      {run.logTail ? <SettingsSection title="Log"><pre className="automationPayload">{run.logTail}</pre></SettingsSection> : null}
+      )}
+      {run.toolCalls.length > 0 ? (
+        <SettingsSection title="Log" data-testid="run-tools">
+          <SettingsNote>{run.toolCalls.length} tool {run.toolCalls.length === 1 ? "call" : "calls"}.{" "}
+            {failedOnLast ? "The run failed on the last one; its owner was told."
+              : failedCall ? `The run failed on the ${failedCall.tool} call at ${formatTimestamp(failedCall.at, "time")}; its owner was told.`
+              : "Open one for its output."}</SettingsNote>
+          <ToolCallList calls={run.toolCalls} />
+          {run.logTail ? <pre className="automationPayload">{run.logTail}</pre> : null}
+        </SettingsSection>
+      ) : run.logTail ? <SettingsSection title="Log"><pre className="automationPayload">{run.logTail}</pre></SettingsSection> : null}
     </div>
   );
 }
