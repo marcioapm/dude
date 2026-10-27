@@ -250,6 +250,8 @@ type Escalation struct {
 	// The step that was waiting on the Run that failed, for "resume": it
 	// waits on it again once it is taken back up. "" when no Run failed.
 	At string `json:"at,omitempty"`
+	// Signals awaited by the interrupted step, before the escalation.
+	AtSignals []string `json:"atSignals,omitempty"`
 	// A person's decision, once made: set as it is taken, so a second is
 	// refused before the workflow has acted on the first.
 	Decided *HumanDecision `json:"decided,omitempty"`
@@ -3045,8 +3047,10 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		status := "running"
 		if e.At == "awaitPullRequest" || e.At == "awaitRead" {
 			status = "review"
+		} else if e.At == "conductorDecision" && !st.conducted() && st.Decision != nil && st.Decision.Point == PointBeforePR {
+			status = "awaiting_input"
 		}
-		return resumeChecksAt(st, e.At), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)
+		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)
 	}
 	switch d.Action {
 	case "stop":
@@ -3166,26 +3170,24 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// The Run that failed was taken back up with the decision (the API
 		// does it, where it can say if it no longer can): the step that
 		// waited on it waits on it again.
-		return park(e.At, st, e.RunIDs()), nil
+		st.PendingRunIDs = e.RunIDs()
+		return resumeEscalationAt(st, e), nil
 	}
 	return retry(st, e.Step, e), nil
 }
 
-// resumeChecksAt goes back to the step a decided checks escalation stopped
-// (at). The held Run need not be one that step waits on: a Run the
-// conductor started itself is gated too, while the delivery waits at a
-// decision or on its pull requests. A step waiting on phase Runs (the keys
-// of AbortedRetryStep) waits on phase.finished again, settling what
-// finished meanwhile. Any other step runs at once and parks on its own
-// signals, as it does each time it runs: conductorDecision on
-// conductor.decision (with human.feedback at a gate Deliver holds),
-// awaitPullRequest on waitForPR's. A signal sent meanwhile is still
-// unconsumed then, and wakes it.
-func resumeChecksAt(st *State, at string) workflow.Result {
-	if AbortedRetryStep[at] != "" {
-		return workflow.Result{Next: at, State: st, AwaitSignals: []string{SignalPhaseFinished}}
+// resumeEscalationAt restores the interrupted wait. Old rows have no saved
+// signals: phase waits must keep folding phase.finished through settle;
+// other steps run immediately and reconstruct their own wait, including
+// the gate's human.feedback and the pull request wait's full signal set.
+func resumeEscalationAt(st *State, e *Escalation) workflow.Result {
+	if len(e.AtSignals) > 0 {
+		return workflow.Result{Next: e.At, State: st, AwaitSignals: slices.Clone(e.AtSignals)}
 	}
-	return workflow.Result{Next: at, State: st}
+	if AbortedRetryStep[e.At] != "" {
+		return workflow.Result{Next: e.At, State: st, AwaitSignals: []string{SignalPhaseFinished}}
+	}
+	return workflow.Result{Next: e.At, State: st}
 }
 
 // retry runs a step that stopped again, afresh — new Runs, a new budget

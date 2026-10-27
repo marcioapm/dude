@@ -172,6 +172,16 @@ func TestADecisionTakenBeforeAChecksEscalationIsCarriedOutAfterIt(t *testing.T) 
 	}
 }
 
+func TestAChecksEscalationRestoresEverySignalFromTheLockedWait(t *testing.T) {
+	w := newDecisionWait(t, "conductorDecision", `["conductor.decision","human.feedback"]`,
+		&Pending{Point: PointBeforePR, Policy: "openPullRequest"})
+	w.escalateFixer()
+	w.decideEscalation("retry", "")
+	w.settle()
+	w.waits("conductorDecision", SignalConductorDecision, SignalHumanFeedback)
+	w.conductorStartsAReview()
+}
+
 // waits says the delivery waits at step on exactly the signals want, in any order.
 func (w decisionWait) waits(step string, want ...string) {
 	w.t.Helper()
