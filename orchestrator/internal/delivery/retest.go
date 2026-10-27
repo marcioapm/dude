@@ -276,7 +276,8 @@ func (s *Store) stoodAt(ctx context.Context, org, taskID string, prev *Predecess
 }
 
 // MergeChange is what a clean before-PR merge brought in and what the task
-// changed, as <repo>/<path>s. Not Measured: refused, cut short, or no forge.
+// changed, as <repo>/<path>s; Task is not asked when Merged reaches every
+// change. Not Measured: refused, cut short, or no forge.
 type MergeChange struct {
 	Measured bool     `json:"measured"`
 	Merged   []string `json:"merged,omitempty"`
@@ -343,13 +344,17 @@ func (w *steps) mergeChange(ctx context.Context, sc workflow.StepContext, st *St
 		}
 		return out, true, nil
 	}
-	// Three dots: each side from the merge base of the two.
+	// Three dots: each side from the merge base of the two. A merge that
+	// reaches every change (affectsEveryChange) is tested whatever the task
+	// changed, so its task side is not asked.
 	m.Merged, m.Measured, err = paths(i.Head, i.BaseHead)
 	if err != nil || !m.Measured {
 		return MergeChange{}, err
 	}
-	if m.Task, m.Measured, err = paths(i.BaseHead, i.Head); err != nil || !m.Measured {
-		return MergeChange{}, err
+	if !affectsEveryChange(m.Merged) {
+		if m.Task, m.Measured, err = paths(i.BaseHead, i.Head); err != nil || !m.Measured {
+			return MergeChange{}, err
+		}
 	}
 	raw, _ := json.Marshal(m)
 	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {

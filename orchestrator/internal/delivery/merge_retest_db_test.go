@@ -544,24 +544,31 @@ func TestACleanMergeOfOtherFilesBeforeThePullRequestIsNotTestedAgain(t *testing.
 		name  string
 		files map[string]string
 		skip  bool
+		// GitHub compares asked: the merge's side, then the task's.
+		compares int64
 	}{
-		{"other files", map[string]string{"lib/other.go": "package lib"}, true},
+		{"other files", map[string]string{"lib/other.go": "package lib"}, true, 2},
 		// The same content: git merges it cleanly, and the path is the task's.
-		{"the task's file", map[string]string{"app/greet.go": "package app"}, false},
-		// A file every change of the repository depends on.
-		{"a lockfile", map[string]string{"lib/other.go": "package lib", "web/bun.lock": "{}"}, false},
+		{"the task's file", map[string]string{"app/greet.go": "package app"}, false, 2},
+		// A file every change of the repository depends on: the merge's
+		// side alone decides it.
+		{"a lockfile", map[string]string{"lib/other.go": "package lib", "web/bun.lock": "{}"}, false, 1},
 		// An empty commit on main: a merge whose compare lists no file is
 		// tested, an empty list not taken as clear of the task.
-		{"no files", map[string]string{}, false},
+		{"no files", map[string]string{}, false, 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, st, sc := mergeFixture(t, c.files)
 			f.merged(st, sc)
 			var runs int
 			_ = f.owner.QueryRow(f.ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_c'`).Scan(&runs)
+			asked := f.compares.Load()
 			skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false)
 			if err != nil || skip != c.skip {
 				t.Fatalf("skip %v (%v), want %v", skip, err, c.skip)
+			}
+			if n := f.compares.Load() - asked; n != c.compares {
+				t.Errorf("%d compares, want %d", n, c.compares)
 			}
 			var paths []string
 			var why string
