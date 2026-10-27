@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,9 +40,14 @@ const (
 
 // Blocker is an open blocker of a task, as task_blocked_by returns it.
 type Blocker struct {
-	ID     string `json:"-"`
-	Key    string `json:"key"`
-	Status string `json:"status"`
+	ID        string `json:"-"`
+	Key       string `json:"key"`
+	Status    string `json:"status"`
+	ProjectID string `json:"-"`
+	// HiddenFrom is the chat provider the blocker's project is hidden from,
+	// when it is shown to something that provider's fence covers: Words
+	// then names neither its key nor its state.
+	HiddenFrom string `json:"-"`
 }
 
 // stateWord names a blocker's state the way every refusal does, keyed by
@@ -51,6 +57,9 @@ var stateWord = agentTexts("refusals/words/blocker-state/", "review", "running",
 
 // Words is "CP-41 (in review)".
 func (b Blocker) Words() string {
+	if b.HiddenFrom != "" {
+		return hiddenTask(b.HiddenFrom)
+	}
 	w := stateWord[b.Status]
 	if w == "" {
 		w = strings.ReplaceAll(b.Status, "_", " ")
@@ -71,15 +80,52 @@ func KeyList(keys []string) string {
 
 // OpenBlockers is the task's blockers not yet merged.
 func OpenBlockers(ctx context.Context, tx pgx.Tx, taskID string) ([]Blocker, error) {
-	rows, err := tx.Query(ctx, `SELECT id, key, status::text FROM task_blocked_by($1)`, taskID)
+	rows, err := tx.Query(ctx, `SELECT b.id, b.key, b.status::text, t.project_id FROM task_blocked_by($1) b
+		JOIN tasks t ON t.id = b.id`, taskID)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Blocker, error) {
 		var b Blocker
-		err := r.Scan(&b.ID, &b.Key, &b.Status)
+		err := r.Scan(&b.ID, &b.Key, &b.Status, &b.ProjectID)
 		return b, err
 	})
+}
+
+// hiddenTask is how a task in a project hidden from provider is named to
+// what provider's fence covers.
+func hiddenTask(provider string) string { return render(hiddenTaskTmpl, provider) }
+
+// taskFence is the fence of what works on taskID (its conductor, its
+// Chat): its origin's hidden projects less its own project, which is never
+// fenced from the task itself.
+func taskFence(ctx context.Context, tx pgx.Tx, taskID string) (Fence, error) {
+	f, err := FenceOf(ctx, tx, "", taskID)
+	if err != nil || len(f.Hidden) == 0 {
+		return f, err
+	}
+	var own string
+	if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&own); err != nil {
+		return Fence{}, err
+	}
+	f.Hidden = slices.DeleteFunc(slices.Clone(f.Hidden), func(p string) bool { return p == own })
+	return f, nil
+}
+
+// maskBlockers is bs as taskID's fence lets it be shown: a blocker in a
+// project the fence hides is marked HiddenFrom, so Words names no key.
+func maskBlockers(ctx context.Context, tx pgx.Tx, taskID string, bs []Blocker) ([]Blocker, error) {
+	f, err := taskFence(ctx, tx, taskID)
+	if err != nil || len(f.Hidden) == 0 {
+		return bs, err
+	}
+	out := slices.Clone(bs)
+	for i := range out {
+		if f.Hides(out[i].ProjectID) {
+			out[i].HiddenFrom = f.Provider
+		}
+	}
+	return out, nil
 }
 
 // BlockedError is a start refused because the task waits on unmerged work.
@@ -190,7 +236,14 @@ func refuseBlockedStart(ctx context.Context, tx pgx.Tx, ref RunRef, st *State) e
 	}
 	err := RefuseStartTx(ctx, tx, ref.TaskID)
 	if blocked, ok := AsBlocked(err); ok {
-		return Refusal{Msg: blocked.AgentRefusal(), Blocked: &blocked}
+		// The conductor is told only what its task's fence lets it see;
+		// the recorded refusal keeps every blocker's key for people.
+		shown := blocked
+		var merr error
+		if shown.Blockers, merr = maskBlockers(ctx, tx, ref.TaskID, blocked.Blockers); merr != nil {
+			return merr
+		}
+		return Refusal{Msg: shown.AgentRefusal(), Blocked: &blocked}
 	}
 	return err
 }

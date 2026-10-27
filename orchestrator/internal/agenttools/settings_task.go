@@ -61,11 +61,17 @@ func settingsTask(ctx context.Context, tx pgx.Tx, c Caller, named string) (id, p
 	}
 	if _, ok := delivery.TaskKey(named); ok {
 		t, found, err := delivery.TaskByOrgKey(ctx, tx, named)
+		if err == nil && found {
+			err = fenced(ctx, tx, c, t.ProjectID, "")
+		}
 		if err != nil || found {
 			return t.ID, t.ProjectID, err
 		}
 	} else {
 		err := tx.QueryRow(ctx, `SELECT id, project_id FROM tasks WHERE id = $1`, named).Scan(&id, &projectID)
+		if err == nil {
+			err = fenced(ctx, tx, c, projectID, "")
+		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return id, projectID, err
 		}

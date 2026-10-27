@@ -292,9 +292,28 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 		return fail(http.StatusBadRequest, "bad_request", "at most %d projects", linksMax)
 	}
 	var projectIDs, repoIDs []string
+	// A session started from chat can never see a project hidden from its
+	// provider, whoever links it: a member's new link by hand is refused
+	// too. One linked before it was hidden may stay in the set (every read
+	// leaves it out).
+	fence, err := delivery.FenceOf(ctx, tx, sessionID, "")
+	if err != nil {
+		return err
+	}
 	for _, l := range projects {
 		if slices.Contains(projectIDs, l.ProjectID) {
 			return fail(http.StatusBadRequest, "bad_request", "project %s is named twice", l.ProjectID)
+		}
+		if fence.Hides(l.ProjectID) {
+			var linked bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_projects WHERE session_id = $1 AND project_id = $2)`,
+				sessionID, l.ProjectID).Scan(&linked); err != nil {
+				return err
+			}
+			if !linked {
+				return fail(http.StatusConflict, "hidden_from_chat",
+					"this session was started from %s, and an admin hid project %s from it: it can't be linked here", fence.Provider, l.ProjectID)
+			}
 		}
 		var n int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM projects WHERE id = $1`, l.ProjectID).Scan(&n); err != nil {
@@ -325,7 +344,7 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(projectIDs), org); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO session_repositories (session_id, repository_id, organization_id)
+	_, err = tx.Exec(ctx, `INSERT INTO session_repositories (session_id, repository_id, organization_id)
 		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(repoIDs), org)
 	return err
 }
@@ -702,8 +721,10 @@ type taskFacts struct {
 // before filing edits it; inserts referencing them (KEY SHARE) go on.
 func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []delivery.ProposalItem, lock bool) (fileFacts, error) {
 	f := fileFacts{projects: map[string]bool{}, orgProjects: map[string]string{}, tasks: map[string]taskFacts{}}
+	// A project hidden from the chat the session came from is not one its
+	// cards may be filed into, though it was linked before it was hidden.
 	rows, err := tx.Query(ctx, `SELECT upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
-		WHERE sp.session_id = $1`, sessionID)
+		WHERE sp.session_id = $1 AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id"), sessionID)
 	if err != nil {
 		return f, err
 	}
@@ -761,7 +782,7 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = t.id) AND t.status NOT IN ('aborted', 'failed')
 		FROM unnest($2::text[], $3::int[]) AS k(prefix, number)
 		JOIN projects p ON upper(p.key_prefix) = k.prefix
-		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1
+		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1 AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id")+`
 		JOIN tasks t ON t.project_id = p.id AND t.number = k.number
 		LEFT JOIN LATERAL (SELECT pe.id, pe.name, person_ref(pe) AS ref FROM task_people tp JOIN people pe ON pe.id = tp.person_id
 			WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) o ON true
@@ -1112,6 +1133,10 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 		if err != nil {
 			return "", "", "", err
 		}
+		// Filed from a chat-born session: fenced as the session is.
+		if err := delivery.InheritOrigin(ctx, tx, "epics", epicID, sessionID, ""); err != nil {
+			return "", "", "", err
+		}
 		// Its notes, pinned as the filer's from the session, in order.
 		for _, text := range item.Notes {
 			if _, err := delivery.PinNoteTx(ctx, tx, org, delivery.PinInput{EpicID: epicID, Text: text, Person: f.Person,
@@ -1150,6 +1175,9 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 			}
 		}
 		id, key, err := delivery.CreateTaskTx(ctx, tx, org, project, f, epic, item.Title, strings.TrimSpace(item.Goal), item.AcceptanceCriteria)
+		if err == nil {
+			err = delivery.InheritOrigin(ctx, tx, "tasks", id, sessionID, "")
+		}
 		return key, id, "", err
 	case "edit":
 		k, _ := delivery.TaskKey(item.Task)

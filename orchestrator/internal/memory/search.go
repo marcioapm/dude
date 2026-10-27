@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -21,6 +22,9 @@ type Query struct {
 	// OrgOnly: the organisation's own memories and nothing of any project
 	// (Project is then ignored).
 	OrgOnly bool
+	// Within, when not nil: these projects and the organization's
+	// memories, nothing of any other project (Project is then ignored).
+	Within []string
 	// Who searches: a session's memories are found by its members and its agent alone.
 	Viewer Viewer
 	// Types to include: memory, task, epic, project. Empty: all.
@@ -155,10 +159,19 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		types = Types
 	}
 	// A document is in scope when it is the project's, or the whole
-	// organization's (memories only); with $6 only the organization's. A
-	// session's memory only for whom it is visible ($7, $8).
-	const scope = `source_type = ANY($2) AND (CASE WHEN $6::bool THEN project_id IS NULL
+	// organization's (memories only); with $6 only the organization's;
+	// with Within (the parameter numbered within) its projects'. A session's
+	// memory only for whom it is visible ($7, $8).
+	scope := func(within int) string {
+		w := fmt.Sprintf("$%d::text[]", within)
+		return `source_type = ANY($2) AND (CASE WHEN $6::bool THEN project_id IS NULL
+		WHEN ` + w + ` IS NOT NULL THEN (project_id IS NULL OR project_id = ANY(` + w + `))
 		ELSE ($3 = '' OR project_id = $3 OR project_id IS NULL) END) AND memory_visible(d.session_id, $7, $8)`
+	}
+	var within any
+	if q.Within != nil {
+		within = q.Within
+	}
 	any, none := wordQuery(q.Text)
 
 	byKey := map[string]*Result{}
@@ -182,14 +195,14 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 	rows, err := tx.Query(ctx, `WITH q AS (SELECT websearch_to_tsquery('english', $1) AS q)
 		(SELECT source_type, source_id, ts_rank_cd(tsv, q.q), updated_at
 		FROM search_documents d, q
-		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+` AND `+scope+`
+		WHERE numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+` AND `+scope(9)+`
 		ORDER BY 3 DESC, updated_at DESC LIMIT $5)
 		UNION ALL
 		(SELECT 'doc', id, ts_rank_cd(tsv, q.q), updated_at
 		FROM guide_sections g, q
 		WHERE `+docs+` AND numnode(q.q) > 0 AND tsv @@ q.q AND `+excluded+`
 		ORDER BY 3 DESC, updated_at DESC LIMIT $5)
-		ORDER BY 3 DESC, 4 DESC LIMIT $5`, any, types, q.Project, none, candidates, q.OrgOnly, q.Viewer.Session, q.Viewer.Person)
+		ORDER BY 3 DESC, 4 DESC LIMIT $5`, any, types, q.Project, none, candidates, q.OrgOnly, q.Viewer.Session, q.Viewer.Person, within)
 	if err != nil {
 		return out, err
 	}
@@ -223,7 +236,7 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 		}
 		rows, err := tx.Query(ctx, `(SELECT source_type, source_id, embedding <=> $1::halfvec
 			FROM search_documents d
-			WHERE embedding IS NOT NULL AND embedding_model = $9 AND `+excluded+` AND `+scope+`
+			WHERE embedding IS NOT NULL AND embedding_model = $9 AND `+excluded+` AND `+scope(10)+`
 			ORDER BY embedding <=> $1::halfvec LIMIT $5)
 			UNION ALL
 			(SELECT 'doc', id, embedding <=> $1::halfvec
@@ -231,7 +244,7 @@ func Ranked(ctx context.Context, tx pgx.Tx, emb Embedded, q Query) (Outcome, err
 			WHERE `+docs+` AND embedding IS NOT NULL AND embedding_model = $9 AND `+excluded+`
 			ORDER BY embedding <=> $1::halfvec LIMIT $5)
 			ORDER BY 3 LIMIT $5`, Vector(emb.Vector), types, q.Project, none, candidates, q.OrgOnly,
-			q.Viewer.Session, q.Viewer.Person, emb.Model)
+			q.Viewer.Session, q.Viewer.Person, emb.Model, within)
 		if err != nil {
 			return out, err
 		}

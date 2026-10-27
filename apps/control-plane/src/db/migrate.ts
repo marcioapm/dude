@@ -9,7 +9,8 @@
  * a statement Postgres refuses in a transaction (CREATE INDEX CONCURRENTLY):
  * one statement, recorded once it succeeded. It must be safe to run again
  * (IF NOT EXISTS), as a crash between the statement and its record runs it
- * again on the next migrate.
+ * again on the next migrate. One that builds an index concurrently is
+ * recorded only once the index is valid (dropIfInvalid).
  *
  *   bun run src/db/migrate.ts                  # apply pending migrations
  *   bun run src/db/migrate.ts --status         # list applied/pending
@@ -117,6 +118,42 @@ export function outsideTransaction(contents: string): boolean {
   return contents.split("\n", 1)[0]?.trim() === NO_TRANSACTION;
 }
 
+/** The index a no-transaction file builds with CREATE INDEX CONCURRENTLY, or null. */
+export function concurrentIndex(contents: string): string | null {
+  const m = /CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+(?:IF\s+NOT\s+EXISTS\s+)?("[^"]+"|[\w.]+)/i.exec(contents);
+  return m?.[1] ?? null;
+}
+
+/**
+ * A concurrent build that was cancelled or failed leaves its index in the
+ * catalog, INVALID, and IF NOT EXISTS would skip it on the next run. Such an
+ * index is dropped (concurrently: no lock that blocks writes) before its
+ * file runs, and again if the file fails, which is then not recorded: the
+ * next migrate builds it afresh, and a later file that drops the index it
+ * replaces never runs over an invalid one. Says whether it dropped one.
+ */
+async function dropIfInvalid(sql: SQL, index: string): Promise<boolean> {
+  const [row] = await sql`SELECT NOT i.indisvalid AS invalid FROM pg_index i WHERE i.indexrelid = to_regclass(${index})`;
+  if (!row?.invalid) return false;
+  await sql.unsafe(`DROP INDEX CONCURRENTLY IF EXISTS ${index}`);
+  return true;
+}
+
+/**
+ * Refuses to touch index while a build of it is still running: a migrate
+ * retried after a timeout whose killed client's backend builds on would
+ * otherwise wait that build out, drop the index it made, and build it again.
+ */
+async function refuseWhileBuilding(sql: SQL, index: string): Promise<void> {
+  if (await building(sql, index)) throw new Error(`a build of ${index} is still running; migrate again when it finishes`);
+}
+
+async function building(sql: SQL, index: string): Promise<boolean> {
+  const [row] = await sql`SELECT EXISTS (SELECT 1 FROM pg_stat_progress_create_index
+    WHERE index_relid = to_regclass(${index})) AS building`;
+  return row?.building === true;
+}
+
 export async function migrate(
   databaseUrl: string,
   opts: { log?: (msg: string) => void } = {},
@@ -152,7 +189,28 @@ export async function migrate(
 
       log(`applying ${file.name}`);
       if (outsideTransaction(contents)) {
-        await sql.unsafe(contents);
+        const index = concurrentIndex(contents);
+        // An earlier interrupted build's leftover, which IF NOT EXISTS would
+        // skip; never one another backend is still building.
+        if (index) {
+          await refuseWhileBuilding(sql, index);
+          await dropIfInvalid(sql, index);
+        }
+        // Postgres reports a cancelled or failed CREATE INDEX CONCURRENTLY
+        // as an error, so an index this statement leaves invalid is dropped
+        // here and the file not recorded. A success never leaves it invalid:
+        // the leftover IF NOT EXISTS could skip was dropped just above, and
+        // none was being built.
+        // A statement that failed on the client's side (a dropped connection)
+        // can leave its backend still building: that index is left alone,
+        // and the next migrate refuses until the build ends. A failed check
+        // drops nothing either.
+        try {
+          await sql.unsafe(contents);
+        } catch (err) {
+          if (index && !(await building(sql, index).catch(() => true))) await dropIfInvalid(sql, index);
+          throw err;
+        }
         await sql`INSERT INTO schema_migrations (version, name, checksum)
                   VALUES (${file.version}, ${file.name}, ${sum})`;
         applied.push(file.name);

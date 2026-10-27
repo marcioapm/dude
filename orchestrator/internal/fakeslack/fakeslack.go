@@ -42,10 +42,14 @@ type Conversation struct {
 }
 
 // Message is one message in a conversation; ThreadTS is its thread's root.
+// Bot is dude's own message; BotID and BotName are another app's (a CI
+// bot's), whose words may be in Attachments and Blocks as well as Text.
 type Message struct {
 	Channel, TS, ThreadTS, User, Text string
 	Bot                               bool
+	BotID, BotName                    string
 	Blocks                            json.RawMessage
+	Attachments                       json.RawMessage
 }
 
 // Ephemeral is a message shown to one person.
@@ -77,6 +81,10 @@ type Server struct {
 	installer, signer      string // who authorizes the next install / sign-in
 	seq                    int
 	calls                  map[string]int
+	// The arguments of each conversations.history and .replies call, in order.
+	args map[string][]map[string]string
+	// The most messages one history or replies call returns (SetPageSize).
+	pageSize int
 	// Methods answered with a Slack error, so many times, for a failure test.
 	failNext map[string]failure
 }
@@ -84,6 +92,8 @@ type Server struct {
 type failure struct {
 	code        string
 	left, after int
+	// Calls of the method answered normally before the first failure.
+	skip int
 }
 
 type code struct{ kind, team, user, redirect string }
@@ -93,7 +103,7 @@ func New(clientID, clientSecret string) *Server {
 	return &Server{ClientID: clientID, ClientSecret: clientSecret, teams: map[string]string{}, users: map[string]User{},
 		convs: map[string]*Conversation{}, reactions: map[string]map[string]bool{}, tokens: map[string]string{},
 		userTokens: map[string]string{}, codes: map[string]code{}, calls: map[string]int{}, failNext: map[string]failure{},
-		scopes: map[string][]string{}, pendingScopes: map[string][]string{}}
+		scopes: map[string][]string{}, pendingScopes: map[string][]string{}, args: map[string][]map[string]string{}}
 }
 
 // AddTeam adds a workspace with its bot user (B<team>).
@@ -160,7 +170,7 @@ func methodScopes(method, kind string) []string {
 	switch method {
 	case "conversations.info", "conversations.members":
 		return byKind("channels:read", "groups:read", "mpim:read", "im:read")
-	case "conversations.replies":
+	case "conversations.replies", "conversations.history":
 		return byKind("channels:history", "groups:history", "mpim:history", "im:history")
 	case "chat.postMessage", "chat.postEphemeral", "chat.update":
 		return []string{"chat:write"}
@@ -195,11 +205,62 @@ func (s *Server) FailRetryAfter(method, code string, n, after int) {
 	s.failNext[method] = failure{code: code, left: n, after: after}
 }
 
+// FailAfter is FailTimes past the next ok calls of method, which answer
+// normally: the (ok+1)th call is the first to fail.
+func (s *Server) FailAfter(method, code string, ok, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failNext[method] = failure{code: code, left: n, after: 1, skip: ok}
+}
+
 // Post adds a person's message, in thread (a new root with ""), returning its ts.
 func (s *Server) Post(channel, thread, user, text string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.post(Message{Channel: channel, ThreadTS: thread, User: user, Text: text})
+}
+
+// PostApp adds another app's message (botID, shown as name), with its
+// attachments and blocks as Slack's JSON (nil for none), returning its ts.
+func (s *Server) PostApp(channel, thread, botID, name, text string, attachments, blocks any) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := Message{Channel: channel, ThreadTS: thread, Text: text, BotID: botID, BotName: name}
+	if attachments != nil {
+		m.Attachments, _ = json.Marshal(attachments)
+	}
+	if blocks != nil {
+		m.Blocks, _ = json.Marshal(blocks)
+	}
+	return s.post(m)
+}
+
+// PostOwn adds a message by team's dude app, as its chat.postMessage would.
+func (s *Server) PostOwn(channel, thread, team, text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.post(Message{Channel: channel, ThreadTS: thread, User: "UB" + team, Text: text, Bot: true})
+}
+
+// wire is m as conversations.replies and conversations.history return it.
+func (m Message) wire(team string) map[string]any {
+	msg := map[string]any{"ts": m.TS, "text": m.Text, "thread_ts": m.ThreadTS}
+	if m.User != "" {
+		msg["user"] = m.User
+	}
+	switch {
+	case m.Bot:
+		msg["bot_id"] = "B" + team
+	case m.BotID != "":
+		msg["bot_id"], msg["username"], msg["subtype"] = m.BotID, m.BotName, "bot_message"
+	}
+	if len(m.Attachments) > 0 {
+		msg["attachments"] = m.Attachments
+	}
+	if len(m.Blocks) > 0 {
+		msg["blocks"] = m.Blocks
+	}
+	return msg
 }
 
 func (s *Server) post(m Message) string {
@@ -210,6 +271,22 @@ func (s *Server) post(m Message) string {
 	}
 	s.messages = append(s.messages, m)
 	return m.TS
+}
+
+// PostAged adds a person's top-level message age before the fake's clock
+// (its messages are all at 1700000000), returning its ts.
+func (s *Server) PostAged(channel, user, text string, age time.Duration) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	ts := fmt.Sprintf("%d.%06d", 1700000000-int64(age/time.Second), s.seq)
+	s.messages = append(s.messages, Message{Channel: channel, TS: ts, ThreadTS: ts, User: user, Text: text})
+	return ts
+}
+
+func tsNum(ts string) float64 {
+	f, _ := strconv.ParseFloat(ts, 64)
+	return f
 }
 
 // BotMessages are the app's messages, in order.
@@ -263,6 +340,43 @@ func (s *Server) Calls(method string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls[method]
+}
+
+// SetPageSize caps how many messages one conversations.history or
+// .replies call returns, whatever its limit, as Slack's own caps do (0:
+// the call's limit alone).
+func (s *Server) SetPageSize(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pageSize = n
+}
+
+// paged is the page of msgs a call's limit and cursor (an offset) ask
+// for, and the next page's cursor ("" at the end).
+func (s *Server) paged(msgs []any, a map[string]json.RawMessage) ([]any, string) {
+	limit, _ := strconv.Atoi(str(a, "limit"))
+	if limit <= 0 {
+		limit = 100
+	}
+	if s.pageSize > 0 {
+		limit = min(limit, s.pageSize)
+	}
+	from, _ := strconv.Atoi(str(a, "cursor"))
+	from = min(from, len(msgs))
+	to := min(from+limit, len(msgs))
+	next := ""
+	if to < len(msgs) {
+		next = strconv.Itoa(to)
+	}
+	return append([]any{}, msgs[from:to]...), next
+}
+
+// Args are the arguments of each call of a conversations.history or
+// conversations.replies, in order.
+func (s *Server) Args(method string) []map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]map[string]string(nil), s.args[method]...)
 }
 
 // ServeHTTP serves /api/<method>, the OAuth pages and, for the E2E suite,
@@ -379,7 +493,17 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls[method]++
-	if f, ok := s.failNext[method]; ok {
+	if method == "conversations.history" || method == "conversations.replies" {
+		got := map[string]string{}
+		for k := range a {
+			got[k] = str(a, k)
+		}
+		s.args[method] = append(s.args[method], got)
+	}
+	if f, ok := s.failNext[method]; ok && f.skip > 0 {
+		f.skip--
+		s.failNext[method] = f
+	} else if ok {
 		if f.left--; f.left <= 0 {
 			delete(s.failNext, method)
 		} else {
@@ -464,28 +588,56 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 		if !ok {
 			return
 		}
-		root, oldest := str(a, "ts"), str(a, "oldest")
+		root, oldest, latest := str(a, "ts"), str(a, "oldest"), str(a, "latest")
 		var msgs []any
-		found := false
+		var parent any
 		for _, m := range s.messages {
 			if m.Channel != c.ID || m.ThreadTS != root {
 				continue
 			}
-			found = found || m.TS == root
-			if oldest != "" && m.TS <= oldest {
+			if m.TS == root {
+				parent = m.wire(team)
 				continue
 			}
-			msg := map[string]any{"ts": m.TS, "user": m.User, "text": m.Text, "thread_ts": m.ThreadTS}
-			if m.Bot {
-				msg["bot_id"] = "B" + team
+			if oldest != "" && m.TS <= oldest || latest != "" && m.TS >= latest {
+				continue
 			}
-			msgs = append(msgs, msg)
+			msgs = append(msgs, m.wire(team))
 		}
-		if !found {
+		if parent == nil {
 			refuse(w, "thread_not_found")
 			return
 		}
-		reply(w, map[string]any{"messages": msgs, "response_metadata": map[string]any{"next_cursor": ""}})
+		// Oldest first, as Slack lists replies, the parent first whatever
+		// oldest and latest say, on the first page, counted in its limit.
+		msgs = append([]any{parent}, msgs...)
+		page, next := s.paged(msgs, a)
+		reply(w, map[string]any{"messages": page, "has_more": next != "", "response_metadata": map[string]any{"next_cursor": next}})
+	case "conversations.history":
+		c, ok := conv()
+		if !ok {
+			return
+		}
+		latest, oldest := tsNum(str(a, "latest")), tsNum(str(a, "oldest"))
+		var top []Message
+		for _, m := range s.messages {
+			if m.Channel != c.ID || m.ThreadTS != m.TS {
+				continue
+			}
+			ts := tsNum(m.TS)
+			if (str(a, "latest") != "" && ts >= latest) || (str(a, "oldest") != "" && ts <= oldest) {
+				continue
+			}
+			top = append(top, m)
+		}
+		// Newest first, as Slack lists a channel.
+		sort.SliceStable(top, func(i, j int) bool { return tsNum(top[i].TS) > tsNum(top[j].TS) })
+		msgs := []any{}
+		for _, m := range top {
+			msgs = append(msgs, m.wire(team))
+		}
+		page, next := s.paged(msgs, a)
+		reply(w, map[string]any{"messages": page, "has_more": next != "", "response_metadata": map[string]any{"next_cursor": next}})
 	case "users.info":
 		u, ok := s.users[str(a, "user")]
 		if !ok || u.Team != team {
@@ -622,6 +774,8 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request, what string) {
 	var in struct {
 		ID, Team, Name, RealName, Kind, Channel, Thread, User, Text, Installer, Signer string
 		Members                                                                        []string
+		BotID                                                                          string
+		Attachments, Blocks                                                            json.RawMessage
 	}
 	if r.Method == http.MethodPost {
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -641,6 +795,15 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request, what string) {
 		s.AuthorizeAs(in.Installer, in.Signer)
 	case "post":
 		out["ts"] = s.Post(in.Channel, in.Thread, in.User, in.Text)
+	case "post-app":
+		var attachments, blocks any
+		if len(in.Attachments) > 0 {
+			attachments = in.Attachments
+		}
+		if len(in.Blocks) > 0 {
+			blocks = in.Blocks
+		}
+		out["ts"] = s.PostApp(in.Channel, in.Thread, in.BotID, in.Name, in.Text, attachments, blocks)
 	case "state":
 		out["messages"], out["ephemerals"], out["updates"] = s.BotMessages(), s.Ephemerals(), s.Updates()
 		s.mu.Lock()

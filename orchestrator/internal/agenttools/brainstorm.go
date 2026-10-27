@@ -42,6 +42,7 @@ var brainstormTools = []tool{
 	defineSession("name_session", nameSession).limit(namesPerRun),
 	defineSession("refresh_checkout", refreshCheckout).limit(checkoutsPerRun),
 	defineSession("start_agent", startAgent),
+	chatHistoryTool,
 }
 
 // namesPerRun bounds how often one Run renames its session.
@@ -94,6 +95,9 @@ func linkedProject(ctx context.Context, tx pgx.Tx, c Caller, key string) (delive
 		if strings.EqualFold(p.Key, key) || strings.EqualFold(p.Name, key) {
 			return p, nil
 		}
+	}
+	if err := hiddenNamed(ctx, tx, c, key); err != nil {
+		return delivery.LinkedProject{}, err
 	}
 	return delivery.LinkedProject{}, refuse(rProjectNotLinkedThisSession, key)
 }
@@ -523,6 +527,9 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 				return proposeOut{}, refuse(rItemNewEpicHasNoNote, n, item.Replaces)
 			}
 		case "link_project":
+			if err := hiddenNamed(ctx, tx, c, item.Project); err != nil {
+				return proposeOut{}, refuse(rItem, n, err)
+			}
 			p, err := orgProject(orgProjects, item.Project)
 			if err != nil {
 				return proposeOut{}, refuse(rItem, n, err)

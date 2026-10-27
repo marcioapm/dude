@@ -27,7 +27,7 @@ export const conversationKindSchema = z.enum(CONVERSATION_KINDS);
 export type ConversationKind = z.infer<typeof conversationKindSchema>;
 
 /** What the routing judgement may answer. */
-export const ROUTER_ROUTES = ["brainstorm", "task", "epic", "resume", "clarify"] as const;
+export const ROUTER_ROUTES = ["brainstorm", "task", "epic", "resume", "clarify", "channel_projects"] as const;
 /** Every route a request is logged with: the router's, a bound thread's link, and the refusals. */
 export const CHAT_ROUTES = [...ROUTER_ROUTES, "task_link", "not_connected", "not_member", "failed"] as const;
 export const chatRouteSchema = z.enum(CHAT_ROUTES);
@@ -52,8 +52,13 @@ export const chatOriginSchema = z.object({
   permalink: z.string(),
   /** The provider display name of who asked. */
   requestedBy: z.string(),
-  /** The thread as it was filed (a task's, a session's). */
-  thread: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean() }))
+  /** The thread as it was filed (a task's, a session's); `app` marks a bot's message. */
+  thread: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean(),
+    app: z.boolean().optional() }))
+    .optional(),
+  /** The channel before a request made outside a thread, as it was filed. */
+  channel: z.array(z.object({ by: z.string(), handle: z.string().optional(), person: z.string().optional(), text: z.string(), inDude: z.boolean(),
+    app: z.boolean().optional() }))
     .optional(),
 });
 export type ChatOrigin = z.infer<typeof chatOriginSchema>;
@@ -125,6 +130,29 @@ export interface ProviderRoutingInstructions extends RoutingInstructions {
 }
 export const routingInstructionsInputSchema = z.object({ additional: z.string().max(CHAT_INSTRUCTIONS_MAX) }).strict();
 export type RoutingInstructionsInput = z.infer<typeof routingInstructionsInputSchema>;
+
+/** A project as the chat settings name it. */
+export interface ChatProjectRef { id: string; key: string; name: string }
+/**
+ * `GET /v1/organization/chat/:provider/projects`: the conversations dude has
+ * heard from (or has hints for), each with the projects it is usually about
+ * (a hint the routing model weighs, never a rule); the projects hidden from
+ * this provider (nothing it starts can see them); and every project, to pick
+ * from. Admins edit; members read.
+ */
+export interface ChatProjectsView {
+  channels: Array<{ conversationId: string; conversationName: string; projects: ChatProjectRef[] }>;
+  hidden: ChatProjectRef[];
+  projects: ChatProjectRef[];
+  canEdit: boolean;
+}
+/** At most so many usual projects per conversation, and hidden projects per provider. */
+export const CHAT_PROJECTS_MAX = 50;
+export const chatChannelProjectsInputSchema = z.object({
+  conversationName: z.string().max(200).optional(),
+  projectIds: z.array(z.string().min(1)).max(CHAT_PROJECTS_MAX),
+}).strict();
+export const chatHiddenProjectsInputSchema = z.object({ projectIds: z.array(z.string().min(1)).max(CHAT_PROJECTS_MAX) }).strict();
 
 /** One row of Requests. */
 export interface ChatRequestRow {

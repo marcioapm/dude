@@ -907,7 +907,8 @@ log, 30 days, one per delivery), `organizations.chat_instructions`, and
 **The provider interface.** `orchestrator/internal/chat` is provider-neutral:
 a `Mention`, `Event`, `Interaction`, conversation kinds (`public`,
 `private`, `group`, `dm`), `Reply`, `Question`, `Reaction`, and the
-`Provider` interface (verify and parse webhooks; read a thread, a
+`Provider` interface (verify and parse webhooks; read a thread, a page of a
+thread or channel, the channel before a message, a
 conversation's kind and members, a user; post replies, ephemerals,
 questions; update a question; react; OAuth install and identity URLs and
 exchanges; revoke). Routing, the checks, binding, session access and
@@ -949,6 +950,78 @@ never bound; tasks in the Backlog, not started, with origin and blocked-by)
 delivery handled twice makes nothing twice (`chat_requests` is unique per
 delivery). An install or a link is begun by a signed-in browser (an HttpOnly
 cookie whose hash the state holds) and finished only in that browser.
+
+**What routing reads (`chat/context.go`).** Thread mentions use `FetchThread`;
+top-level mentions use `FetchHistory`: at most 30 messages from the preceding
+24 hours, oldest first under `## The channel before it`. `quoteMessages`
+drops dude's own messages, names other apps as apps (never people), and clips
+each message to 2000 characters. Slack text includes attachment and block
+text and links, with repeats removed (`chat/slack/text.go`). Channel context
+keeps the newest messages within 12 000 characters and counts those omitted.
+The retained context is stored on the decision for retries, hashed into
+`context_hash`, recorded with the routing call, and quoted as untrusted text
+in the session briefing. Origins and goals retain only that bounded context;
+task lists and navigation strip quoted thread/channel text from origins.
+A refused channel read is noted on the installation and routing continues
+without it; transient failures retry the delivery, as thread reads do.
+
+**Hints, never rules.** Routing sees the projects of the conversation's last
+20 requests (`chat_requests_conversation_idx`) and its usual projects
+(`chat_channel_projects`). The message and context override both hints.
+An admin sets the usual projects on the provider's settings page
+(`PUT /v1/organization/chat/:provider/channels/:conversation/projects`) or
+from chat (`@dude this channel is usually about Acme`, the `channel_projects`
+route; anyone else is refused privately and nothing changes).
+
+**Hidden projects (`chat_hidden_projects`, migration 196).** An admin hides
+projects from a provider on its settings page only (`PUT
+/v1/organization/chat/:provider/hidden-projects`), never from chat. Hiding
+applies to new work:
+- A session started from that provider's chat (`sessions.origin.provider`)
+  never sees a hidden project, nor do the investigators its agent starts:
+  `SessionProjects`, `OrgProjects` and `SessionRepositories` leave it out
+  (so the session's tools, briefing, checkout and credentials do, and an
+  investigator's `search_memory`/`get_memory` are scoped to them), as do
+  `settings` and filing a card. A parked agent still holding a checkout of a
+  project hidden since is not resumed with it (lux cannot remove a
+  repository from a Run): it is ended and a fresh agent, without it, takes
+  the next message.
+- Nothing new from chat is filed into or linked to a hidden project: it is
+  out of the routing world and the hints, a decision naming one is refused
+  as an invented project is, and a member's link by hand is refused (409
+  `hidden_from_chat`).
+- A task or epic whose `origin.provider` it is, and whose own project is
+  hidden later, keeps working on its own project: all its tools, Runs,
+  checkout and delivery go on. It never reaches any other hidden project:
+  its repositories, tasks, relations (`RelationsOf` leaves the other side
+  out), peers, memory, search, settings and `run_chat` there are refused or
+  left out.
+
+SQL reads use `delivery.HiddenProjectSQL` or `SessionHidesSQL`; Go checks
+use `delivery.FenceOf`. Agent tools' `fenceOf` and delivery's `taskFence`
+exempt a task's own project. The provider comes from origin, so hiding takes
+effect on subsequent reads and survives reinstalling the integration.
+
+**Session tools for chat.** `chat_history` (capability `chat.read`, a
+brainstorm's by default) reads more of the conversation a session came from
+— its thread, or the channel for a top-level mention — 30 messages a page
+before or after a message id, at most 30 reads a session an hour, recorded
+as `chat.read` with counts only, quoted as external text. A page that starts
+where Slack's order does (the latest, or before a message on a channel;
+after one in a thread) is one call; the other way it pages Slack's cursor up
+to 1 000 messages and, past that, tells the agent to use a nearer message
+rather than give a page that is not next to the one named. The conversation
+is the session's origin's, never one the agent names. `github_run_jobs`
+(`github.read`) lists a GitHub Actions run's jobs from its id or link, for
+`github_check_log` to read the failed job's log; it counts against the same
+hourly GitHub reads. Those counts, and `chat_history`'s, read the
+tool-agnostic indexes of counted attempts (`event_type =
+'agent.tool.attempted'` by session, task or automation and time, migrations
+197–199, which replace the tool-list indexes 200–202 drop); the tool list
+is a filter in the query, so a new counted tool needs no migration. The
+migrator records a `CREATE INDEX CONCURRENTLY` file only once its index is
+valid, and drops (concurrently) one an interrupted build left invalid, so
+the next migrate builds it afresh.
 
 **Reactions follow the work.** 👀 goes on the mention as the loop's first
 stage of a delivery (never in the webhook request), once per delivery:
