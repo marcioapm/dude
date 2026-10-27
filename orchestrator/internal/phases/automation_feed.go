@@ -3,11 +3,11 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"github.com/jackc/pgx/v5"
 	"maps"
 	"slices"
 	"strings"
 	"time"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
