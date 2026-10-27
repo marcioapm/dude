@@ -59,8 +59,6 @@ CREATE TABLE incoming_deliveries (
   payload         jsonb,
   payload_purged_at timestamptz,
   run_id          text REFERENCES automation_runs(id) ON DELETE SET NULL,
-  -- A test of an automation with a written body: kept for the run, never counted.
-  test            boolean NOT NULL DEFAULT false,
   UNIQUE (organization_id, id),
   CONSTRAINT incoming_deliveries_refused_bodyless CHECK (verdict IS DISTINCT FROM 'refused' OR payload IS NULL),
   CONSTRAINT incoming_deliveries_refusal_code CHECK (verdict IS DISTINCT FROM 'refused'
@@ -82,6 +80,26 @@ CREATE INDEX incoming_deliveries_run_idx ON incoming_deliveries (run_id) WHERE r
 
 -- The matcher, the runner and retention work across organisations.
 GRANT SELECT, UPDATE, DELETE ON incoming_deliveries TO dude_sweeper;
+
+-- What the matcher made of a GitHub delivery for each automation on its
+-- event, for that automation's Deliveries tab: started a run, sent to one,
+-- or skipped (the filter and why). Goes with the delivery (30 days).
+CREATE TABLE automation_github_verdicts (
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  automation_id   text NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  delivery_id     text NOT NULL REFERENCES webhook_deliveries(id) ON DELETE CASCADE,
+  verdict         text NOT NULL CHECK (verdict IN ('started', 'sent_to_run', 'skipped')),
+  reason          text CHECK (length(reason) <= 2000),
+  run_id          text REFERENCES automation_runs(id) ON DELETE SET NULL,
+  at              timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (automation_id, delivery_id)
+);
+ALTER TABLE automation_github_verdicts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE automation_github_verdicts FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON automation_github_verdicts USING (organization_id = current_organization_id())
+  WITH CHECK (organization_id = current_organization_id());
+CREATE INDEX automation_github_verdicts_delivery_idx ON automation_github_verdicts (delivery_id);
+GRANT SELECT, INSERT, UPDATE, DELETE ON automation_github_verdicts TO dude_sweeper;
 
 -- A run's payloads gain the delivery's group key ({deliveryId, event:
 -- "incoming", groupKey, body}); a live run's group is its first payload's.

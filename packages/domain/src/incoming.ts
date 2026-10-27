@@ -191,26 +191,35 @@ export const REFUSAL_LABEL: Record<RefusalCode, string> = {
   disabled: "Turned off",
 };
 
-/** One request to an incoming automation's URL, or a GitHub delivery of a GitHub automation's event. */
+/**
+ * One request to an incoming automation's URL, or a GitHub delivery of a
+ * GitHub automation's event, with what dude did with it. A GitHub one keeps
+ * Run now's fields (event, action, repository, sender, body).
+ */
 export interface AutomationDelivery {
   id: string;
+  receivedAt: string;
   /** null until the automations loop has read it. */
   verdict: DeliveryVerdictKind | null;
-  /** A skipped delivery's missed condition (its index and words); a refused one's code. */
-  reason: { condition: number; text: string } | { refused: RefusalCode } | null;
+  /** A skipped delivery's missed condition or filter, in words; a refused one's code. */
+  reason: string | null;
+  /** The condition a skipped incoming delivery missed, from 0. */
+  reasonIndex: number | null;
   groupKey: string | null;
   bytes: number;
-  receivedAt: string;
   runId: string | null;
-  /** A GitHub delivery's event, action and repository. */
-  event: { name: string; action: string | null; repository: string | null } | null;
+  /** "incoming", or the GitHub event. */
+  event: string;
+  action: string | null;
+  repository: string | null;
+  sender: string | null;
 }
 
 export interface AutomationDeliveryDetail extends AutomationDelivery {
-  /** As received, with every secret-bearing header's value dropped. */
+  /** As received, with every secret-bearing header's value replaced by ••••. */
   headers: Record<string, string>;
-  /** null for a refused delivery, and after 30 days. */
-  body: unknown;
+  /** null for a refused delivery, and once its 30 days are over. */
+  body: Record<string, unknown> | null;
 }
 
 /** The headers a delivery keeps no value of: what proves a sender, and anything named like a secret. */

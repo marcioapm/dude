@@ -91,6 +91,7 @@ func TestGoldenDeliveryLines(t *testing.T) {
 	add("lifecycle-pick-up", ClosedError{TaskKey: "GLD-7", PickUp: true}.Error())
 	add("lifecycle-agent", agentLifecycleRefusal(ArchivedError{TaskKey: "GLD-7"}))
 	add("external-text-note", ExternalTextNote)
+	add("incoming-payload-note", IncomingPayloadNote)
 	add("github-read-note", GitHubReadNote("abc"))
 	add("talk-it-through", TalkItThrough)
 	add("session-images-follow", WithImages("  see this\n"))

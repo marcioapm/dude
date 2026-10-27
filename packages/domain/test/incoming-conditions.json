@@ -2,7 +2,7 @@
   "body": {
     "status": "firing",
     "groupKey": "{}/{alertname=\"HighErrorRate\"}:{service=\"api\"}",
-    "commonLabels": { "alertname": "HighErrorRate", "severity": "critical", "service": "api" },
+    "commonLabels": { "alertname": "HighErrorRate", "service": "api", "severity": "critical" },
     "alerts": [
       { "status": "firing", "labels": { "pod": "api-7" } },
       { "status": "resolved", "labels": { "pod": "api-2" } }
@@ -37,7 +37,7 @@
     { "path": "tags", "op": "contains", "values": ["prod"], "ok": true, "actual": "[\"db\",\"prod\"]" },
     { "path": "tags", "op": "contains", "values": ["pro"], "ok": false, "actual": "[\"db\",\"prod\"]" },
     { "path": "tags.1", "op": "is", "values": ["prod"], "ok": true, "actual": "prod" },
-    { "path": "commonLabels", "op": "is", "values": ["x"], "ok": false, "actual": "{\"alertname\":\"HighErrorRate\",\"severity\":\"critical\",\"service\":\"api\"}" },
+    { "path": "commonLabels", "op": "is", "values": ["x"], "ok": false, "actual": "{\"alertname\":\"HighErrorRate\",\"service\":\"api\",\"severity\":\"critical\"}" },
     { "path": "count", "op": "contains", "values": ["3"], "ok": false, "actual": "3" },
     { "path": "missing.deeper", "op": "is", "values": ["x"], "ok": false, "actual": "missing" }
   ],

@@ -192,6 +192,8 @@ type Automation struct {
 	Secrets         json.RawMessage
 	NotifyOnFailure bool
 	NextRunAt       *time.Time
+	// An organisation incoming automation's projects (migration 211).
+	ProjectIDs []string
 }
 
 func (a Automation) policy() Policy {
@@ -202,14 +204,15 @@ const automationColumns = `a.id, a.organization_id, COALESCE(a.project_id, ''), 
 	COALESCE(a.owner_id, ''), a.owner_left_at IS NOT NULL, a.trigger, a.session_mode, COALESCE(a.expiry_days, 0),
 	a.concurrency, a.parallel_max, a.repos, a.repo_filter, COALESCE(a.agent, 'null'), COALESCE(a.machine_size_id, ''),
 	COALESCE(a.image_id, ''), COALESCE(a.setup_script, ''), COALESCE(a.command, ''), COALESCE(a.server, 'null'),
-	COALESCE(a.webhook, 'null'), COALESCE(a.webhook_secret, ''), a.secrets, a.notify_on_failure, a.next_run_at`
+	COALESCE(a.webhook, 'null'), COALESCE(a.webhook_secret, ''), a.secrets, a.notify_on_failure, a.next_run_at, a.project_ids`
 
 func scanAutomation(row pgx.Row) (Automation, error) {
 	var a Automation
 	var trigger, filter []byte
 	err := row.Scan(&a.ID, &a.Org, &a.ProjectID, &a.Name, &a.Kind, &a.Enabled, &a.OwnerID, &a.OwnerHeld, &trigger,
 		&a.SessionMode, &a.ExpiryDays, &a.Concurrency, &a.ParallelMax, &a.Repos, &filter, &a.Agent, &a.MachineSizeID,
-		&a.ImageID, &a.SetupScript, &a.Command, &a.Server, &a.Webhook, &a.WebhookSecret, &a.Secrets, &a.NotifyOnFailure, &a.NextRunAt)
+		&a.ImageID, &a.SetupScript, &a.Command, &a.Server, &a.Webhook, &a.WebhookSecret, &a.Secrets, &a.NotifyOnFailure, &a.NextRunAt,
+		&a.ProjectIDs)
 	if err != nil {
 		return a, err
 	}
@@ -243,6 +246,8 @@ type Payload struct {
 	Event      string          `json:"event"`
 	Action     string          `json:"action"`
 	Body       json.RawMessage `json:"body"`
+	// An incoming delivery's group (incoming.go); a live run's group is its first payload's.
+	GroupKey string `json:"groupKey,omitempty"`
 }
 
 // Sweep is one pass of the loop. Returns how much it did, so the loop runs
@@ -255,7 +260,7 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 	for _, step := range []struct {
 		name string
 		do   func(context.Context) (int, error)
-	}{{"schedules", r.fireSchedules}, {"deliveries", r.matchDeliveries}, {"start", r.startQueued},
+	}{{"schedules", r.fireSchedules}, {"deliveries", r.matchDeliveries}, {"incoming", r.matchIncoming}, {"start", r.startQueued},
 		{"follow", r.followRunning}, {"expiry", r.expireSessions}} {
 		did, err := step.do(ctx)
 		n += did
@@ -276,6 +281,8 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 type Fired struct {
 	Run       string
 	Cancelled []Cancelled
+	// What Arrive decided, for an incoming delivery's verdict.
+	Action Action
 }
 
 // Cancelled is a cancelled run's lux Run; Keep says it is the automation's
@@ -301,17 +308,17 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	}
 	d := Arrive(a.policy(), source, live)
 	raw, _ := json.Marshal(nonNil(payloads))
-	var fired Fired
+	fired := Fired{Action: d.Action}
 	switch d.Action {
 	case MergeInto, SendInto:
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw)
-		return Fired{Run: d.Into}, err
+		return Fired{Run: d.Into, Action: d.Action}, err
 	case Skip:
 		id := ids.New(ids.AutomationRun)
 		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 			started_by, scheduled_for, ended_at) VALUES ($1, $2, $3, 'skipped', $4, $5, $6, NULLIF($7, ''), $8, now())`,
 			id, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
-		return Fired{Run: id}, err
+		return Fired{Run: id, Action: d.Action}, err
 	case CancelAndStart:
 		rows, err := tx.Query(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
 			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'
@@ -556,6 +563,9 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 				continue
 			}
 			if !v.Matches {
+				if err := recordGitHubVerdict(ctx, tx, a, d.ID, VerdictSkipped, filterWords(v), ""); err != nil {
+					return err
+				}
 				continue
 			}
 			fired, err := Fire(ctx, tx, a, SourceEvent, payloads, "", nil)
@@ -563,6 +573,10 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 				return err
 			}
 			cancelled = append(cancelled, fired.Cancelled...)
+			verdict, reason := firedVerdict(ctx, tx, fired)
+			if err := recordGitHubVerdict(ctx, tx, a, d.ID, verdict, reason, fired.Run); err != nil {
+				return err
+			}
 		}
 		if len(pending) > 0 {
 			_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_attempts = automations_attempts + 1,
@@ -1772,8 +1786,12 @@ func (r *Runner) prompt(ctx context.Context, a Automation, payloads []Payload, a
 	var s agentSettings
 	_ = json.Unmarshal(a.Agent, &s)
 	vars := Variables(payloads, at, a.Trigger.TZ)
+	fill := func(text string) string { return Substitute(text, vars) }
+	if a.Trigger.Kind == "incoming" {
+		fill = func(text string) string { return incomingPrompt(text, payloads) }
+	}
 	if s.Own != nil {
-		return Substitute(s.Own.Prompt, vars), "agent", nil
+		return fill(s.Own.Prompt), "agent", nil
 	}
 	if s.Preset == nil {
 		return "", "", errors.New("the automation has no agent")
@@ -1795,7 +1813,7 @@ func (r *Runner) prompt(ctx context.Context, a Automation, payloads []Payload, a
 		in.ProjectPrompt, in.ProjectPromptMode = *projectPrompt, *mode
 	}
 	rolePrompt := delivery.Instructions(role, "", in)
-	brief := Substitute(s.Brief, vars)
+	brief := fill(s.Brief)
 	return rolePrompt + "\n\n# Your task\n\nYou were started by an automation, " + strconv.Quote(a.Name) +
 		", not for a task: there is no pull request to open. You may create dude tasks and comment on GitHub as dude.\n\n" + brief, role, nil
 }
@@ -1909,9 +1927,13 @@ func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, pay
 			return err
 		}
 		for _, repo := range repos {
-			if slug := slugOf(repo.URL); slug != "" && RepoAllowed(a.RepoFilter, slug) {
+			if slug := slugOf(repo.URL); slug != "" && RepoAllowed(a.RepoFilter, slug) && inProjects(a, repo.Project) {
 				scope.Repos = append(scope.Repos, slug)
 			}
+		}
+		if scope.ProjectID == "" && a.Trigger.Kind == "incoming" && len(a.ProjectIDs) > 0 {
+			// create_task files in the organisation incoming automation's first project.
+			scope.ProjectID = a.ProjectIDs[0]
 		}
 		if len(payloads) > 0 {
 			var event struct {
@@ -2127,6 +2149,9 @@ func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payl
 // schedule, none when its repos is "none", else every project's its filter
 // covers; on an event, the event's repository when one of the organisation's.
 func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Payload) ([]phases.AutomationRepo, error) {
+	if a.ProjectID == "" && a.Trigger.Kind == "incoming" {
+		return incomingRepos(ctx, tx, a)
+	}
 	type repo struct{ ID, Name, URL, Branch, Setup string }
 	rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, COALESCE(setup_script, '') FROM repositories
 		WHERE ($1 = '' OR project_id = $1) ORDER BY project_id, name`, a.ProjectID)

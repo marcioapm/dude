@@ -20,6 +20,11 @@ type Trigger struct {
 	Event   string   `json:"event,omitempty"`
 	Actions []string `json:"actions,omitempty"`
 	Filters Filters  `json:"filters"`
+	// An incoming webhook's (incoming.go).
+	HookID      string      `json:"hookId,omitempty"`
+	Conditions  []Condition `json:"conditions,omitempty"`
+	GroupBy     string      `json:"groupBy,omitempty"`
+	RatePerHour int         `json:"ratePerHour,omitempty"`
 }
 
 // Filters: values within one are OR'd, filters AND'd.
