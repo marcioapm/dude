@@ -1,4 +1,4 @@
--- 196_task_pull_request.sql — a task's own choice of what Deliver does
+-- 203_task_pull_request.sql — a task's own choice of what Deliver does
 -- before its pull request: open it, open it as a draft, or ask its owner
 -- first. NULL follows the project's delivery policy (`pullRequest`), else
 -- the factory's "open". Read when the delivery reaches the point before

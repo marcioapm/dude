@@ -450,7 +450,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 - **Before the pull request** is the project's `pullRequest` policy (`open`,
   the default; `draft`; `ask`), never the organisation's
   (`ProjectOnlyPolicyKeys`: layer 0 drops it, the API refuses it), and a
-  task may override it (`tasks.pull_request_choice`, migration 196; NULL
+  task may override it (`tasks.pull_request_choice`, migration 203; NULL
   is the project's). Only the task's owner changes it
   (`SetPullRequestChoiceTx`, `task.pull_request_choice_changed`), and only
   until a pull request of the attempt is on record. `openPullRequest` reads
