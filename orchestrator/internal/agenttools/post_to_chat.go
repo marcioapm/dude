@@ -112,10 +112,8 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		if inst, installed, err = chat.Installed(ctx, tx, chatProvider); err != nil {
 			return err
 		}
-		if recent, made, err = callsMade(ctx, tx, c, "post_to_chat"); err != nil {
-			return err
-		}
-		return nil
+		recent, made, err = callsMade(ctx, tx, c, "post_to_chat")
+		return err
 	}); err != nil {
 		return err
 	}
