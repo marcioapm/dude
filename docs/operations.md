@@ -645,6 +645,44 @@ records the names it was given and copies the values; dude redacts every
 form of an organisation value in what it stores and serves, and refuses a
 push holding one. A change reaches Runs that start after it.
 
+## Incoming webhooks
+
+An automation can run when anything POSTs JSON to its own URL:
+`<dude's public URL>/v1/hooks/<hook id>`, served by the control plane with
+no sign-in, like `/v1/webhooks/github/<org>`. It must be reachable from
+the sender (a monitoring tool, a CI system); put it behind the same
+ingress as the GitHub webhook. The hook id is unguessable (`hk_` and 16
+random characters) and is not the secret: every request proves itself with
+the automation's verification secret — an HMAC-SHA256 signature of the
+body in a header, the secret in a header, or the secret as a URL query
+parameter (which then shows in any proxy's access log: prefer the other
+two where the sender can). dude shows the secret once, at Create or
+Rotate, then only its last four characters.
+
+**What it answers.** 202 once stored; 404 for an unknown hook (nothing
+stored); 401 a wrong or missing secret; 413 a body over 1 MiB; 415 a body
+that is not a JSON object; 403 the automation is off; 429 over its
+deliveries an hour (1–600, default 30, counting every accepted delivery,
+including those sent to a run already going). It answers before any agent
+starts: the orchestrator's automations loop matches stored deliveries.
+
+**What is stored, and for how long** (`incoming_deliveries`, migration
+211, under row-level security). Every request to a known hook gets a row:
+when, its verdict, its group key, its size, and its headers with the
+values of `Authorization`, cookies, the signature header and any header
+named like a token or secret replaced by `••••`. An accepted request keeps
+its JSON body **30 days** (then the body is emptied and the row stays);
+a refused one **never stores its body**, and its row is deleted after **7
+days** (`automations.Retain`, hourly). The automation's Deliveries tab
+lists the last 30 days.
+
+**Upgrading to migration 211** adds the table, the hook lookup the public
+route uses before it knows the organisation (`incoming_hook`, security
+definer, answering only what verification needs), and
+`automation_github_verdicts` (what each GitHub delivery came to per
+automation, for the GitHub automations' Deliveries tab; gone with the
+delivery after 30 days). Nothing is backfilled.
+
 ## Postgres
 
 Postgres 17 with the pgvector extension is what the tests run against
