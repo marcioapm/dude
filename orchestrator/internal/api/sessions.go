@@ -1004,16 +1004,23 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": no.why})
 				continue
 			}
-			key, taskID, epicID, err := fileItem(r.Context(), tx, org, id, body.ProposalID, proposalRunID, linked, facts, item, f)
-			var refused delivery.NoteRefusal
-			if errors.As(err, &refused) {
-				results = append(results, map[string]any{"item": n, "status": "refused", "why": refused.Msg})
-				continue
+			// Each refusal must undo this item's writes without undoing earlier filings.
+			itemTx, err := tx.Begin(r.Context())
+			if err != nil {
+				return err
 			}
-			// An image no longer the session's to give: refused before anything of the item was written.
+			key, taskID, epicID, err := fileItem(r.Context(), itemTx, org, id, body.ProposalID, proposalRunID, linked, facts, item, f)
+			var refused delivery.NoteRefusal
 			var badImage delivery.AttachmentError
-			if errors.As(err, &badImage) {
-				results = append(results, map[string]any{"item": n, "status": "refused", "why": badImage.Message})
+			if errors.As(err, &refused) || errors.As(err, &badImage) {
+				if rollbackErr := itemTx.Rollback(r.Context()); rollbackErr != nil {
+					return rollbackErr
+				}
+				why := refused.Msg
+				if badImage.Message != "" {
+					why = badImage.Message
+				}
+				results = append(results, map[string]any{"item": n, "status": "refused", "why": why})
 				continue
 			}
 			if err != nil {
@@ -1021,6 +1028,9 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				if errors.As(err, &refused) {
 					return fail(http.StatusConflict, refused.Code, "item %d: %s", n+1, refused.Msg)
 				}
+				return err
+			}
+			if err := itemTx.Commit(r.Context()); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(r.Context(), `INSERT INTO session_filings (proposal_id, item, organization_id, session_id, filed_by, key, task_id, epic_id)

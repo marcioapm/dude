@@ -199,6 +199,60 @@ func TestProposeRefusesImagesNotSharedInTheSession(t *testing.T) {
 // An image the session no longer has when the item is filed (its session
 // row removed it, or the card names one another session's) refuses the
 // item, writing no task; the rest of the card is filed.
+func TestFilingImageRefusalRollsBackEachItem(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	b := s.withImages()
+	id, run, _ := s.linkedLiveSession()
+	s.sharedImage(b, id, "att_session", "design.png")
+	goal := "Build this ![design](attachment:att_session)"
+	body, _ := json.Marshal(map[string]any{"items": []delivery.ProposalItem{
+		{Kind: "task", Project: "BL", Title: "Refused design", Goal: goal, Images: []string{"att_session"}},
+		{Kind: "task", Project: "BL", Title: "Valid design", Goal: "A valid task without inline image references"},
+	}})
+	status, out := s.tool(run, "propose", string(body))
+	if status != 200 {
+		t.Fatalf("propose: %d %v", status, out)
+	}
+	before := s.count(`SELECT next_task_number FROM projects WHERE id = $1`, s.project)
+	for attempt := 0; attempt < 2; attempt++ {
+		filed := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": out["proposalId"], "items": []int{0, 1}})
+		results := filed["results"].([]any)
+		if results[0].(map[string]any)["status"] != "refused" {
+			t.Fatalf("inline source reference must refuse atomically: %v", results)
+		}
+		if attempt == 0 && results[1].(map[string]any)["status"] != "filed" {
+			t.Fatalf("valid item: %v", results)
+		}
+		if n := s.count(`SELECT count(*) FROM tasks WHERE organization_id = $1 AND title = 'Refused design'`, s.org); n != 0 {
+			t.Fatalf("refused item left %d tasks committed on attempt %d", n, attempt)
+		}
+		if n := s.count(`SELECT next_task_number FROM projects WHERE id = $1`, s.project); n != before+1 {
+			t.Fatalf("counter %d, want %d", n, before+1)
+		}
+		if n := s.count(`SELECT count(*) FROM session_filings WHERE proposal_id = $1`, out["proposalId"]); n != 1 {
+			t.Fatalf("%d filings, want only valid item", n)
+		}
+	}
+
+	task := s.taskIn(s.project, "Editable", s.marcio)
+	proposal := s.proposal(id, []delivery.ProposalItem{{Kind: "edit", Task: s.keyOf(task), After: &delivery.TaskText{
+		Goal: &goal, AcceptanceCriteria: &[]string{"Changed criteria"},
+	}}})
+	filed := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": proposal, "items": []int{0}})
+	if filed["results"].([]any)[0].(map[string]any)["status"] != "refused" {
+		t.Fatalf("edit: %v", filed)
+	}
+	var storedGoal string
+	var criteria []string
+	if err := s.owner.QueryRow(context.Background(), `SELECT goal, acceptance_criteria FROM tasks WHERE id = $1`, task).Scan(&storedGoal, &criteria); err != nil {
+		t.Fatal(err)
+	}
+	if storedGoal != "A goal long enough to keep" || !slices.Equal(criteria, []string{"works"}) {
+		t.Fatalf("refused edit persisted text: %q %v", storedGoal, criteria)
+	}
+}
+
 func TestFilingRefusesAnItemWhoseImageIsNotTheSessions(t *testing.T) {
 	s := newSessionWorld(t)
 	b := s.withImages()

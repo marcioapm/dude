@@ -135,8 +135,8 @@ func WithSessionImages(goal string, images []SessionImage) string {
 
 // CreateTaskWithSessionImagesTx is CreateTaskTx for a proposal's task
 // item: images (SessionImagesTx, of sessionID) become the new task's
-// uploads, and its goal ends with the section showing them. A refused image
-// is an AttachmentError, before anything is written.
+// uploads, and its goal ends with the section showing them. Callers must roll
+// back the item on refusal, including errors from the task's image sync.
 func CreateTaskWithSessionImagesTx(ctx context.Context, tx pgx.Tx, org, projectID string, f Filer, epicID, title, goal string,
 	criteria []string, sessionID string, imageIDs []string) (string, string, error) {
 	sources, err := SessionImagesTx(ctx, tx, sessionID, imageIDs)
