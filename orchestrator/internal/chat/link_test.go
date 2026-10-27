@@ -179,7 +179,8 @@ func TestChatALinkOffersOnlyTheModelsProjectsInItsOrderOnceEach(t *testing.T) {
 	w.earlier(w.project)
 	w.earlier(w.ops)
 	// The model's order, not the hints': SDK and OPS, which it left out, are not offered.
-	reply, session := w.brainstorm("Márcia", "ABS", "BIL", "abs")
+	reply, _ := w.brainstorm("Márcia", "ABS", "BIL", "abs")
+	session := w.one(`SELECT result_id FROM chat_requests WHERE organization_id = $1 AND result_kind = 'session'`, w.org)
 	got := row(t, reply.Blocks)
 	if l := labels(got); l != "ABS · Acme Backend, BIL · Billing" {
 		t.Fatalf("row %q", l)
@@ -192,7 +193,7 @@ func TestChatALinkOffersOnlyTheModelsProjectsInItsOrderOnceEach(t *testing.T) {
 	}
 	if l := allButtons(t, reply.Blocks); !strings.HasPrefix(l, "Open in dude https://dude.example.com/#/o/acme/sessions/"+session+", ABS") ||
 		strings.Count(l, "https://") != 1 {
-		t.Fatalf("buttons %q", l)
+		t.Fatalf("buttons %q, session %s", l, session)
 	}
 	if !strings.Contains(string(reply.Blocks), "No project is linked") {
 		t.Fatalf("blocks %s", reply.Blocks)
@@ -224,10 +225,10 @@ func TestChatABrainstormTheModelSuggestsNoProjectForOffersNoLink(t *testing.T) {
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Time in Berlin",
 		"reasoning": "the channel hint doesn't apply to this question", "maybe_projects": nil}))
 	w.mention("Eli", "C1", "", "what time is it in Berlin?")
-	got := w.requests()
-	last := got[len(got)-1]
-	if last.Route != "brainstorm" || last.ResultKind != "session" {
-		t.Fatalf("request %+v", last)
+	var last struct{ Route, ResultID string }
+	if err := w.owner.QueryRow(w.ctx, `SELECT route, result_id FROM chat_requests WHERE organization_id = $1 AND result_kind = 'session'`,
+		w.org).Scan(&last.Route, &last.ResultID); err != nil || last.Route != "brainstorm" {
+		t.Fatalf("request %+v, %v", last, err)
 	}
 	reply := lastBot(t, w.fake)
 	if bs := row(t, reply.Blocks); len(bs) != 0 {
