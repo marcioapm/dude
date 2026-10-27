@@ -457,17 +457,12 @@ func ArriveIncoming(ctx context.Context, tx pgx.Tx, automationID, deliveryID str
 	if live, err := liveGroupRun(ctx, tx, a, group); err != nil {
 		return nil, err
 	} else if live != "" {
-		var held int
-		if err := tx.QueryRow(ctx, `SELECT jsonb_array_length(payloads) FROM automation_runs WHERE id = $1`, live).Scan(&held); err != nil {
+		held, err := holdFollowUp(ctx, tx, live, payloads[0])
+		if err != nil {
 			return nil, err
 		}
-		if held >= FollowUpCap {
-			return nil, verdict(VerdictSkipped, fmt.Sprintf("the live run already holds %d deliveries", FollowUpCap), nil, group, "")
-		}
-		// By reference: the body stays in incoming_deliveries until it is sent (resolveIncoming).
-		raw, _ := json.Marshal([]Payload{{DeliveryID: deliveryID, Event: EventIncoming, GroupKey: group}})
-		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, live, raw); err != nil {
-			return nil, err
+		if !held {
+			return nil, verdict(VerdictSkipped, followUpsFull, nil, group, "")
 		}
 		return nil, verdict(VerdictSentToRun, "", nil, group, live)
 	}
@@ -495,9 +490,22 @@ func firedVerdict(fired Fired) (string, string) {
 	return VerdictStarted, ""
 }
 
-// FollowUpCap is how many deliveries one live run holds; a later one of
-// its group is skipped.
+// FollowUpCap is how many deliveries one live run holds; a later one
+// is skipped with followUpsFull.
 const FollowUpCap = 50
+
+var followUpsFull = fmt.Sprintf("the live run already holds %d deliveries", FollowUpCap)
+
+// holdFollowUp appends an incoming delivery to a live run by reference
+// ({deliveryId, event, groupKey}): its body stays in incoming_deliveries
+// until the run reads it (resolveIncoming). False when the run already
+// holds FollowUpCap deliveries.
+func holdFollowUp(ctx context.Context, tx pgx.Tx, runID string, p Payload) (bool, error) {
+	ref, _ := json.Marshal([]Payload{{DeliveryID: p.DeliveryID, Event: p.Event, GroupKey: p.GroupKey}})
+	tag, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb
+		WHERE id = $1 AND jsonb_array_length(payloads) < $3`, runID, ref, FollowUpCap)
+	return tag.RowsAffected() == 1, err
+}
 
 // resolveIncoming reads the bodies of incoming follow-ups a run keeps by
 // reference ({deliveryId, groupKey}) from incoming_deliveries. A body

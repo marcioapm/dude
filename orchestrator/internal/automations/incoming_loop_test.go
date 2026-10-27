@@ -213,6 +213,40 @@ func TestIncomingFollowUpsByReferenceUpToTheCap(t *testing.T) {
 	}
 }
 
+// Deliveries Fire sends into a live run (Concurrency send, each of another
+// group) are held by reference too, and no more than FollowUpCap: the rest
+// are skipped, saying so.
+func TestIncomingSentToARunByReferenceUpToTheCap(t *testing.T) {
+	h := newHarness(t)
+	h.incoming("aut_flood", nil, "g", map[string]any{"concurrency": "send", "session_mode": "resumable", "expiry_days": 7,
+		"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "x"}}})
+	h.receive("aut_flood", "s_00", map[string]any{"g": "0"})
+	h.until("the first runs", func() bool { r := h.runs("aut_flood"); return len(r) == 1 && r[0].Status == "running" })
+	for i := 1; i <= 60; i++ {
+		h.receive("aut_flood", fmt.Sprintf("s_%02d", i), map[string]any{"g": fmt.Sprint(i)})
+	}
+	h.until("the 60 are read", func() bool {
+		var n int
+		_ = h.owner.QueryRow(context.Background(), `SELECT count(*) FROM incoming_deliveries WHERE automation_id = 'aut_flood' AND verdict IS NULL`).Scan(&n)
+		return n == 0
+	})
+	run := h.runs("aut_flood")
+	var byValue int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM automation_runs r, jsonb_array_elements(r.payloads) WITH ORDINALITY p(e, i)
+		WHERE r.id = $1 AND i > 1 AND e ? 'body'`, run[0].ID).Scan(&byValue); err != nil {
+		t.Fatal(err)
+	}
+	if len(run) != 1 || run[0].Payloads != FollowUpCap || byValue != 0 {
+		t.Errorf("the run holds %d payloads, %d follow-ups by value (runs %+v)", run[0].Payloads, byValue, run)
+	}
+	if d := h.delivery("s_49"); d.Verdict != VerdictSentToRun || d.Run != run[0].ID {
+		t.Errorf("the 49th follow-up: %+v", d)
+	}
+	if d := h.delivery("s_60"); d.Verdict != VerdictSkipped || d.Reason != fmt.Sprintf("the live run already holds %d deliveries", FollowUpCap) || d.Run != "" {
+		t.Errorf("over the cap: %+v", d)
+	}
+}
+
 // A follow-up that arrives while its group's run is still queued does not
 // replace the delivery that started it: the run's prompt is built from the
 // first delivery, and the follow-up reaches the agent as its first input.

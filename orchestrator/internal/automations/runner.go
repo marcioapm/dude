@@ -312,6 +312,13 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	fired := Fired{Action: d.Action}
 	switch d.Action {
 	case MergeInto, SendInto:
+		if a.Trigger.Kind == "incoming" {
+			held, err := holdFollowUp(ctx, tx, d.Into, payloads[0])
+			if err != nil || held {
+				return Fired{Run: d.Into, Action: d.Action}, err
+			}
+			return Fired{Action: Skip, Reason: followUpsFull}, nil
+		}
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw)
 		return Fired{Run: d.Into, Action: d.Action}, err
 	case Skip:
@@ -1350,16 +1357,19 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 		Health *string `json:"health"`
 	}
 	_ = json.Unmarshal(a.Server, &cfg)
-	var payloads []Payload
-	var posted int
+	var pending []Payload
+	var held, posted int
 	var started, last time.Time
 	var failedReq bool
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT payloads, posted, started_at, last_request_at,
+		// Only the payloads not yet POSTed, as followRun reads its inputs. A
+		// Server runs on GitHub events only (automations_server_events), so each carries its body.
+		return tx.QueryRow(ctx, `SELECT jsonb_array_length(payloads), posted, started_at, last_request_at,
+			(SELECT COALESCE(jsonb_agg(e ORDER BY i), '[]') FROM jsonb_array_elements(payloads) WITH ORDINALITY p(e, i) WHERE i > posted),
 			EXISTS (SELECT 1 FROM automation_run_requests q WHERE q.run_id = r.id AND (q.http_status IS NULL OR q.http_status >= 400)
 			  AND NOT EXISTS (SELECT 1 FROM automation_run_requests q2 WHERE q2.run_id = r.id AND q2.delivery_id = q.delivery_id AND q2.try > q.try
 			    AND q2.http_status BETWEEN 200 AND 299) AND (q.try = 2 OR q.http_status BETWEEN 400 AND 499))
-			FROM automation_runs r WHERE id = $1`, runID).Scan(&payloads, &posted, &started, &last, &failedReq)
+			FROM automation_runs r WHERE id = $1`, runID).Scan(&held, &posted, &started, &last, &pending, &failedReq)
 	}); err != nil {
 		return false, err
 	}
@@ -1378,15 +1388,12 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 		}
 		return false, nil
 	}
-	if posted < len(payloads) {
-		if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error { return resolveIncoming(ctx, tx, payloads[posted:]) }); err != nil {
-			return false, err
-		}
-		for i := posted; i < len(payloads); i++ {
-			r.postOnce(ctx, a, runID, base+cfg.Path, signIn, payloads[i])
+	if len(pending) > 0 {
+		for _, p := range pending {
+			r.postOnce(ctx, a, runID, base+cfg.Path, signIn, p)
 		}
 		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, len(payloads))
+			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, held)
 			return err
 		})
 	}

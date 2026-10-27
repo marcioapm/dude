@@ -1003,7 +1003,13 @@ their creator.
     arrays (`alerts.0.status`); a non-string value compares as its JSON — and
     it fires as an event does (`Fire`: concurrency decides). The verdict
     (`started`, `sent_to_run`, `skipped` with the missed condition, or the
-    concurrency's skip) is written on the delivery.
+    concurrency's skip) is written on the delivery. A delivery added to a
+    live or waiting run (its group's, or by Merge or Send) is kept there by
+    reference (`holdFollowUp`; the body is read from `incoming_deliveries`
+    when the run uses it), and a run holds at most 50 (`FollowUpCap`): a
+    later one is skipped, "the live run already holds 50 deliveries". An
+    agent run starts from its first delivery and gets the rest as inputs; a
+    command run's event file is the list of all of them.
     `packages/domain/test/incoming-conditions.json` holds the cases the web's
     live check (`conditionHolds`) and the loop's (`Holds`) both pass.
   - **Group by** is required with Send to the running agent (the save says
