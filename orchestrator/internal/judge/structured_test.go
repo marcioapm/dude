@@ -82,7 +82,9 @@ func TestStructuredRedactsItsErrorAndStillUnwraps(t *testing.T) {
 	w := setup(t, answering(`{"route":"`+key+`"}`), true)
 	w.svc.LLM.Key = key
 	ask := routing
-	ask.Parse = func(obj []byte) (any, Judgement, error) { return nil, Judgement{}, fmt.Errorf("no such route in %s", obj) }
+	ask.Parse = func(obj []byte) (any, Judgement, error) {
+		return nil, Judgement{}, fmt.Errorf("no such route in %s", obj)
+	}
 	_, err := w.svc.Structured(context.Background(), w.org, ask)
 	if !errors.Is(err, ErrUnparseable) || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "[REDACTED:DUDE_LLM_KEY]") {
 		t.Fatalf("err %v", err)
