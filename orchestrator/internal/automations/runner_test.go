@@ -1169,6 +1169,72 @@ func TestAutomationConcurrencyCancel(t *testing.T) {
 	g.release(t)
 }
 
+// Output a cancelled command wrote after its last follow pass is read
+// once, before its lux Run is ended, into the cancelled run's activity.
+func TestAutomationConcurrencyCancelReadsTheLastOutput(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_last", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": "echo early; " + g.hold("echo late; sleep 60"), "concurrency": "cancel"})
+	h.deliver("l-1", "push", push)
+	lines := func(runID string) []string {
+		rows, err := h.owner.Query(context.Background(), `SELECT payload->>'text' FROM events
+			WHERE automation_run_id = $1 AND event_type = $2 ORDER BY cursor`, runID, phases.EvLogLine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	h.until("the first line is in the feed", func() bool {
+		r := h.runs("aut_last")
+		return len(r) == 1 && r[0].Status == "running" && slices.Contains(lines(r[0].ID), "early")
+	})
+	first := h.runs("aut_last")[0]
+	h.runner.Wait()
+	// No sweep from here: "late" reaches lux, and no follow pass reads it.
+	g.release(t)
+	wrote := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		seen := false
+		_ = h.lux.Output(ctx, first.LuxRunID, "", 0, func(f lux.Frame) error {
+			seen = seen || strings.Contains(f.Data, "late")
+			return nil
+		})
+		return seen
+	}
+	for deadline := time.Now().Add(10 * time.Second); !wrote(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("lux never recorded the late line")
+		}
+	}
+	ctx := context.Background()
+	body, _ := json.Marshal(push)
+	var fired Fired
+	if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+		a, err := Load(ctx, tx, "aut_last")
+		if err != nil {
+			return err
+		}
+		fired, err = Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: "l-2", Event: "push", Body: body}}, "", nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.runner.EndCancelled(ctx, fired.Cancelled)
+	if got := lines(first.ID); !slices.Equal(got, []string{"early", "late"}) {
+		t.Fatalf("cancelled run's lines %q", got)
+	}
+	if !lux.Terminated(h.luxState(first.LuxRunID)) {
+		t.Errorf("the cancelled command's lux Run is %s", h.luxState(first.LuxRunID))
+	}
+}
+
 // Concurrency send: an event arriving while the agent works is given to
 // that agent as input, with the automation's prompt for that event, once.
 func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {

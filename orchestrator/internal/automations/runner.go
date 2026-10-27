@@ -292,6 +292,9 @@ type Fired struct {
 type Cancelled struct {
 	LuxRunID string
 	Keep     bool
+	// The cancelled run, read once more before its lux Run is stopped.
+	RunID      string
+	automation Automation
 }
 
 // Fire records one firing of an automation and decides what it does
@@ -351,6 +354,7 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 		if _, err := pgx.ForEachRow(rows, []any{&cancelledID, &c.LuxRunID, &c.Keep}, func() error {
 			cancelledIDs = append(cancelledIDs, cancelledID)
 			if c.LuxRunID != "" {
+				c.RunID, c.automation = cancelledID, a
 				fired.Cancelled = append(fired.Cancelled, c)
 			}
 			return nil
@@ -381,10 +385,45 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 
 // EndCancelled ends the lux Runs of runs a firing cancelled: a kept
 // session's is stopped, so the new run resumes it; any other's is ended.
+// What each wrote since its last follow pass is read first, once.
 func (r *Runner) EndCancelled(ctx context.Context, cancelled []Cancelled) {
 	for _, c := range cancelled {
+		if err := r.readCancelled(ctx, c); err != nil {
+			r.Log.Warn("reading a cancelled automation run's last output failed", "run", c.RunID, "error", err)
+		}
 		r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
 	}
+}
+
+// readCancelled reads an agent's or command's lux output past the run's
+// cursor into its activity and log_tail, and moves the cursor past it: a
+// resumed session's next run starts reading there. Fire already ended the
+// feed; ending it again flushes and aborts only what these frames opened.
+// A server's log is read by followServer, not from this stream.
+func (r *Runner) readCancelled(ctx context.Context, c Cancelled) error {
+	a := c.automation
+	if c.RunID == "" || (a.Kind != "agent" && a.Kind != "command") {
+		return nil
+	}
+	var cursor, prior string
+	var busy bool
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, COALESCE(log_tail, '') FROM automation_runs WHERE id = $1`,
+			c.RunID).Scan(&cursor, &busy, &prior)
+	}); err != nil {
+		return err
+	}
+	_, log, newCursor, _, frames, err := r.readOutput(ctx, a.Kind, c.LuxRunID, cursor, busy, prior)
+	if err != nil || len(frames.list) == 0 {
+		return err
+	}
+	return r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, log_tail = right(COALESCE(log_tail, '') || $3, 16000)
+			WHERE id = $1`, c.RunID, newCursor, log); err != nil {
+			return err
+		}
+		return feedFrames(ctx, tx, a, c.RunID, frames.list, true, "cancelled", nil)
+	})
 }
 
 func nonNil(p []Payload) []Payload {
