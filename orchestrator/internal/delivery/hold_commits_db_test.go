@@ -116,6 +116,41 @@ func TestAHoldCountsAMergeByWhetherItBringsInTheBase(t *testing.T) {
 	}
 }
 
+// With two repositories the count is the sum of each one's task commits,
+// and a compare failing in either leaves it out.
+func TestAHoldOfTwoRepositoriesSumsTheirCounts(t *testing.T) {
+	twoRepos := func(f *verdictFixture, st *State) { f.withSecondRepo(st, map[string]string{"b/main.go": "package b"}) }
+	commitAndMergeEach := func(f *verdictFixture, st *State, sc workflow.StepContext) {
+		taskCommit(f.gh, st, "repo", 1)
+		taskCommit(f.other, st, "other", 1)
+		f.merged(st, sc, "other")
+		f.merged(st, sc, "repo")
+	}
+	otherPreviousFails := func(f *verdictFixture, first Hold) {
+		from := first.Heads["other"]
+		f.other.Set(func(s *fakegithub.Server) {
+			s.Intercept = func(r *http.Request) int {
+				if strings.Contains(r.URL.Path, "/compare/") && strings.HasSuffix(r.URL.Path, "..."+from) {
+					return 502
+				}
+				return 0
+			}
+		})
+	}
+	t.Run("both compared", func(t *testing.T) {
+		_, second := heldAround(t, twoRepos, commitAndMergeEach, nil)
+		if second.Round != 2 || second.CommitsSince == nil || *second.CommitsSince != 2 {
+			t.Errorf("round %d commitsSince %v, want 2", second.Round, countOf(second.CommitsSince))
+		}
+	})
+	t.Run("other's previous compare failed", func(t *testing.T) {
+		_, second := heldAround(t, twoRepos, commitAndMergeEach, otherPreviousFails)
+		if second.Round != 2 || second.CommitsSince != nil {
+			t.Errorf("round %d commitsSince %v, want it left out", second.Round, countOf(second.CommitsSince))
+		}
+	})
+}
+
 // A compare the count needs that GitHub fails or lists short (base...the
 // branch now, or base...the head the first hold showed) leaves the count
 // out.
