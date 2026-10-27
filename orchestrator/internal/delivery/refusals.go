@@ -68,6 +68,7 @@ const (
 	rNotChoiceNeedsPersonDirection          = "%q is not a choice without a note: on %s it needs a direction. Give the choice the direction you propose as its note, which the owner's pick makes theirs; or they %s from the banner, or answer your question in their own words"
 	rChoiceNoteOnlyWhereNeeded              = "%q takes no note on %s: a note is only for an action that needs the person's reason or direction. Leave it out and put what it means in the choice's label or description"
 	rChoiceNoteTooLong                      = "the note on the %q choice is too long: its label is the action and the note, so keep the note to %d characters and put the rest in the choice's description or the question"
+	rChoiceNoteTakesNoLabel                 = "the %q choice has a note and a label: dude writes the label of a choice with a note as its action and the note, so leave the label out and put anything else in the choice's description"
 	rChoiceNoteIsForEscalationQuestion      = "a choice's note is for the conductor's question about an escalation waiting on a person; there is none: put it in the choice's label or description"
 	rChoicesAndReadAsSameAnswer             = "choices %q and %q read as the same answer (case and spaces aside): make each one distinct"
 	rNoEscalationWaitsOnDecisionNow         = "no escalation waits on a decision now: decide_escalation is only for one the owner handed you with a free answer; %s"

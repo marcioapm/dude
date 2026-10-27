@@ -109,7 +109,7 @@ func TestGoldenNakedChoiceRefusals(t *testing.T) {
 		ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
 		items := []QuestionItem{{Question: "How?", Choices: []Choice{{Label: "Go"}, {Label: "Stop"}}}}
 		w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
-			_, err := EscalationQuestion(ctx, tx, ref, items, []string{c.action, "stop"})
+			_, _, err := EscalationQuestion(ctx, tx, ref, items, []string{c.action, "stop"})
 			if err == nil {
 				t.Fatalf("%s: a naked choice was not refused", c.name)
 			}

@@ -16,6 +16,8 @@
 
 {{- define "refusals/delivery/escalations/choice-note-too-long"}}the note on the %q choice is too long: its label is the action and the note, so keep the note to %d characters and put the rest in the choice's description or the question{{end}}
 
+{{- define "refusals/delivery/escalations/choice-note-takes-no-label"}}the %q choice has a note and a label: dude writes the label of a choice with a note as its action and the note, so leave the label out and put anything else in the choice's description{{end}}
+
 {{- define "refusals/delivery/escalations/choice-note-is-for-escalation-question"}}a choice's note is for the conductor's question about an escalation waiting on a person; there is none: put it in the choice's label or description{{end}}
 
 {{- define "refusals/delivery/escalations/choices-and-read-as-same-answer"}}choices %q and %q read as the same answer (case and spaces aside): make each one distinct{{end}}

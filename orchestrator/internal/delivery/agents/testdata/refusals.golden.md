@@ -1274,3 +1274,7 @@ a choice's note is for the conductor's question about an escalation waiting on a
 
 the note on the %q choice is too long: its label is the action and the note, so keep the note to %d characters and put the rest in the choice's description or the question
 
+## refusals/delivery/escalations/choice-note-takes-no-label
+
+the %q choice has a note and a label: dude writes the label of a choice with a note as its action and the note, so leave the label out and put anything else in the choice's description
+

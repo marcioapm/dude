@@ -77,6 +77,8 @@ func TestAChoicesNoteIsRequiredWhereNeededAndRefusedElsewhere(t *testing.T) {
 		`"retry" takes no note on checks unverified`)
 	w.refused(task, "ask_person", `{"questions":[{"question":"Waive?","choices":[{"note":"`+strings.Repeat("x", 120)+`"},{"label":"Stop"}]}],"actions":["waive","stop"]}`,
 		"too long")
+	w.refused(task, "ask_person", `{"questions":[{"question":"Waive?","choices":[{"label":"Waive it","note":"it predates the task"},{"label":"Stop"}]}],"actions":["waive","stop"]}`,
+		`the "waive" choice has a note and a label`)
 	if q := w.conductorQuestion(task); q != "" {
 		t.Errorf("question %s recorded with a refused choice", q)
 	}

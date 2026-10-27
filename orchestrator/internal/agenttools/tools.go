@@ -532,9 +532,12 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	// is that escalation's question.
 	var escalation string
 	if c.Role == delivery.RoleConductor {
-		if escalation, err = conducted(delivery.EscalationQuestion(ctx, tx, c.run(), items, in.Actions)); err != nil {
+		var composed []delivery.QuestionItem
+		escalation, composed, err = delivery.EscalationQuestion(ctx, tx, c.run(), items, in.Actions)
+		if _, err = conducted(escalation, err); err != nil {
 			return askOut{}, err
 		}
+		items = composed
 	} else if len(in.Actions) > 0 {
 		return askOut{}, refuseText(rActionsAreConductorForQuestionAbout)
 	} else if delivery.HasChoiceNote(items) {

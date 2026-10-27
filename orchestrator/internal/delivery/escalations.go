@@ -473,70 +473,74 @@ func escalationNote(proposal, answer, conductorNote string) string {
 // escalation's locks (LockEscalationTx), held until the question is
 // inserted in the same tx, so no decision lands between the check and it.
 // Its question is one question: several are refused, readably, as the
-// owner's pick of a choice is what decides it.
-func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []QuestionItem, actions []string) (string, error) {
+// owner's pick of a choice is what decides it. It returns the items to
+// store: those given, with each noted choice's label written by dude.
+func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []QuestionItem, actions []string) (string, []QuestionItem, error) {
 	_, d, err := LockEscalationTx(ctx, tx, ref.TaskID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if d != nil && d.State.conducted() && d.Live() && d.State.Escalation != nil && d.State.Escalation.Decided != nil {
-		return "", refusef(rEscalationWasJustDecidedAskNothing, strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
+		return "", nil, refusef(rEscalationWasJustDecidedAskNothing, strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
 			decidedBy(d.State.Escalation.Decided), d.State.Escalation.Decided.Action)
 	}
 	if !waitsAtDecide(d) || !d.State.conducted() {
 		if len(actions) > 0 {
-			return "", refuseText(rActionsAreForQuestionAboutEscalation)
+			return "", nil, refuseText(rActionsAreForQuestionAboutEscalation)
 		}
 		if HasChoiceNote(items) {
-			return "", refuseText(rChoiceNoteIsForEscalationQuestion)
+			return "", nil, refuseText(rChoiceNoteIsForEscalationQuestion)
 		}
-		return "", nil
+		return "", items, nil
 	}
 	offered := d.State.Escalation.Actions()
 	if len(items) != 1 {
-		return "", refusef(rTaskEscalationWaitsOnPersonAsk, listOr(offered), len(items))
+		return "", nil, refusef(rTaskEscalationWaitsOnPersonAsk, listOr(offered), len(items))
 	}
-	choices := items[0].Choices
-	if len(choices) == 0 || len(actions) != len(choices) {
-		return "", refusef(rTaskEscalationWaitsOnPersonThis,
+	item := items[0]
+	item.Choices = slices.Clone(item.Choices)
+	if len(item.Choices) == 0 || len(actions) != len(item.Choices) {
+		return "", nil, refusef(rTaskEscalationWaitsOnPersonThis,
 			listOr(offered))
 	}
 	reason := d.State.Escalation.Reason
 	for i, a := range actions {
 		if !slices.Contains(offered, a) {
-			return "", refusef(rNotOneThisEscalationActions, a, listOr(offered))
+			return "", nil, refusef(rNotOneThisEscalationActions, a, listOr(offered))
 		}
 		// A pick of an action that needs the person's reason or direction
 		// carries the conductor's proposed note, in its label, which the
 		// owner's pick makes theirs; no other pick carries one.
-		c := &choices[i]
+		c := &item.Choices[i]
 		switch {
 		case NeedsNote(reason, a) && c.Note == "":
 			format := rNotChoiceShippingPastNeedsPerson
 			if givesDirection(a) {
 				format = rNotChoiceNeedsPersonDirection
 			}
-			return "", refusef(format, a, strings.ReplaceAll(reason, "_", " "), a)
+			return "", nil, refusef(format, a, strings.ReplaceAll(reason, "_", " "), a)
 		case !NeedsNote(reason, a) && c.Note != "":
-			return "", refusef(rChoiceNoteOnlyWhereNeeded, a, strings.ReplaceAll(reason, "_", " "))
+			return "", nil, refusef(rChoiceNoteOnlyWhereNeeded, a, strings.ReplaceAll(reason, "_", " "))
+		case c.Note != "" && c.Label != "":
+			return "", nil, refusef(rChoiceNoteTakesNoLabel, a)
 		case c.Note != "":
 			c.Label = notedLabel(a, c.Note)
 			if runes(c.Label) > ChoiceLabelMax {
-				return "", refusef(rChoiceNoteTooLong, a, ChoiceLabelMax-runes(notedLabel(a, "")))
+				return "", nil, refusef(rChoiceNoteTooLong, a, ChoiceLabelMax-runes(notedLabel(a, "")))
 			}
 		}
 	}
 	// An answer picks the choice it equals trimmed and case-folded
 	// (choiceOf): two choices equal so would make the second unpickable,
 	// and a click on it would take the first's action.
-	labels := items[0].Labels()
+	labels := item.Labels()
 	for i, c := range labels {
 		if j := choiceOf(labels[:i], c); j >= 0 {
-			return "", refusef(rChoicesAndReadAsSameAnswer,
+			return "", nil, refusef(rChoicesAndReadAsSameAnswer,
 				labels[j], c)
 		}
 	}
-	return EscalationKey(d.WorkflowID, d.State.Escalations), nil
+	return EscalationKey(d.WorkflowID, d.State.Escalations), []QuestionItem{item}, nil
 }
 
 // notedLabel is the label of a choice carrying a note: its action, then

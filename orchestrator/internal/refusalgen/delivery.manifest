@@ -64,6 +64,7 @@ rNotChoiceShippingPastNeedsPerson       refusals/delivery/escalations/not-choice
 rNotChoiceNeedsPersonDirection          refusals/delivery/escalations/not-choice-needs-person-direction
 rChoiceNoteOnlyWhereNeeded              refusals/delivery/escalations/choice-note-only-where-needed
 rChoiceNoteTooLong                      refusals/delivery/escalations/choice-note-too-long
+rChoiceNoteTakesNoLabel                 refusals/delivery/escalations/choice-note-takes-no-label
 rChoiceNoteIsForEscalationQuestion      refusals/delivery/escalations/choice-note-is-for-escalation-question
 rChoicesAndReadAsSameAnswer             refusals/delivery/escalations/choices-and-read-as-same-answer
 rNoEscalationWaitsOnDecisionNow         refusals/delivery/escalations/no-escalation-waits-on-decision-now
