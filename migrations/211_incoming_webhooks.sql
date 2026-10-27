@@ -137,6 +137,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON automation_github_verdicts TO dude_sweep
 ALTER TABLE webhook_deliveries ADD COLUMN bytes integer CHECK (bytes >= 0);
 
 -- A run's payloads gain the delivery's group key ({deliveryId, event:
--- "incoming", groupKey, body}); a live run's group is its first payload's.
+-- "incoming", groupKey, body}; a follow-up has no body, read from
+-- incoming_deliveries when used); a live run's group is its first payload's.
 CREATE INDEX automation_runs_group_idx ON automation_runs (automation_id, (payloads->0->>'groupKey'))
   WHERE status IN ('queued', 'running');
