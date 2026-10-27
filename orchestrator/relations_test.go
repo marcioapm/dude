@@ -291,6 +291,54 @@ func TestAHiddenBlockersMergeIsNotNamedInTheTalkItStarts(t *testing.T) {
 	}
 }
 
+// A start when unblocked, released by a hidden blocker's merge and refused
+// at fire time by another task in that hidden project, says so in Chat
+// naming both: its notices are read by people only.
+func TestAHiddenBlockerIsNamedInTheAutoStartRefusedNotice(t *testing.T) {
+	w := newWorld(t)
+	first, task := w.hiddenBlocker()
+	second := "wi_sec8_" + w.org
+	mustExec(t, w.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria)
+		VALUES ($1, $2, $3, 8, 'Audit keys', 'Audit them', '["audited"]'::jsonb)`, second, w.org, "prj_sec_"+w.org)
+	w.blocks(first, task)
+	w.autoStart(task, "deliver")
+	w.mergeHidden(first)
+	w.blocks(second, task)
+	if w.fireAutoStarts() != 1 {
+		t.Fatal("the worker took no request")
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task); n != 0 {
+		t.Fatal("a request fired past an open blocker")
+	}
+	notice := w.str(`SELECT payload->>'text' FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+		AND payload->>'about' = 'auto_start_refused'`, task)
+	want := "SEC-7 merged, but " + w.keyOf(task) + " is still blocked by SEC-8 (not started): it starts when that merges, as Rel asked."
+	if notice != want || strings.Contains(notice, "hidden") {
+		t.Fatalf("the auto_start_refused notice, read by people only: %q, want %q", notice, want)
+	}
+}
+
+// A start when unblocked, released by a hidden blocker's merge, that fails
+// to start says so in Chat naming the merged task.
+func TestAHiddenBlockerIsNamedInTheAutoStartFailedNotice(t *testing.T) {
+	w := newWorld(t)
+	blocker, task := w.hiddenBlocker()
+	w.blocks(blocker, task)
+	w.autoStart(task, "deliver")
+	// The dependant's project policy does not decode: StartTx fails, not the guard.
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"maxReviewIterations": "many"}' WHERE id = $1`, w.project)
+	w.mergeHidden(blocker)
+	if w.fireAutoStarts() != 1 {
+		t.Fatal("the worker took no request")
+	}
+	notice := w.str(`SELECT payload->>'text' FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+		AND payload->>'about' = 'auto_start_failed'`, task)
+	prefix := "SEC-7 merged, but " + w.keyOf(task) + " could not start: "
+	if !strings.HasPrefix(notice, prefix) || strings.Contains(notice, "hidden") {
+		t.Fatalf("the auto_start_failed notice, read by people only: %q, want %q…", notice, prefix)
+	}
+}
+
 // Path 5: the workflow's own implement step, the backstop for an edge
 // added between the start and the step: it parks, the task goes back to
 // queued saying what it waits on, and nothing fails.

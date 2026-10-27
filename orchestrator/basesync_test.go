@@ -407,7 +407,9 @@ func TestAFixAfterACleanBeforePRMergesFailedTestReachesAnOpenPullRequestOnlyByPr
 	})
 	branch := w.gh.Pull(1).Head
 	w.gh.Review(1, "ana", "APPROVED")
-	w.commitFileIn(w.web.Repo, "main", "OTHER.md", "other\n", "Another task's change")
+	// A file the task changed in web, as the fix wrote it: GitHub merges it
+	// cleanly, and the merge is tested again because it touched the task's file.
+	w.commitFileIn(w.web.Repo, "main", "FIX.md", "fix\n", "Another task's change")
 	w.onModel("qa_browser", fakeagent.TestFailOnceModel)
 	afterMerge.Store(true)
 	merges := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task)

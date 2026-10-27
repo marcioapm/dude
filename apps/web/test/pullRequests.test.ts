@@ -131,8 +131,8 @@ describe("activity", () => {
 
   test("dude's base integration reads as dude's, in words, the base as a name, no internal reasons", () => {
     const merged = pullRequestActivity(event("pull_request.action", { action: "merge-base", number: undefined, base: "main", head: "abc" }), false);
-    expect(merged).toEqual({ who: null, actorId: null, text: "merged main into the branch in web on GitHub; it is tested again",
-      parts: ["merged ", { mono: "main" }, " into the branch in web on GitHub; it is tested again"], quote: undefined, byDude: true });
+    expect(merged).toEqual({ who: null, actorId: null, text: "merged main into the branch in web on GitHub; tested again if it touched the task's files",
+      parts: ["merged ", { mono: "main" }, " into the branch in web on GitHub; tested again if it touched the task's files"], quote: undefined, byDude: true });
     expect(pullRequestActivity(event("pull_request.action", { action: "integration-started", base: "main", runId: "run_1" }), false)?.text)
       .toBe("started resolving #41's conflicts with main");
     expect(pullRequestActivity(event("pull_request.action", { action: "integration-completed", base: "main" }), false)?.text)

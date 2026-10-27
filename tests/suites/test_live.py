@@ -225,6 +225,7 @@ def test_a_tasks_files_open_in_a_viewer_with_their_versions(
     expect(files.get_by_test_id("file-card")).to_have_count(1)
     expect(files.get_by_test_id("file-card")).to_contain_text("screenshot.png")
     expect(files.get_by_test_id("file-row")).to_have_count(2)
+    expect(files.get_by_test_id("file-row").first).to_contain_text("coverage.html")
     expect(files.get_by_test_id("file-row").filter(has_text="NOTES.md")).to_contain_text("v2")
 
     # The viewer: the latest, its versions, the one before, and the next file.
@@ -238,7 +239,11 @@ def test_a_tasks_files_open_in_a_viewer_with_their_versions(
     with page.expect_download() as download:
         viewer.get_by_test_id("viewer-download").click()
     assert download.value.suggested_filename == "NOTES.md"
-    # Neighbours as the page shows them: the picture first, then documents.
+    # Neighbours as the page shows them: the picture first, then documents,
+    # each by name (coverage.html before NOTES.md, case ignored).
+    expect(viewer).to_contain_text("3 of 3")
+    page.keyboard.press("ArrowLeft")
+    expect(viewer.get_by_role("heading", name="coverage.html", exact=True)).to_be_visible()
     expect(viewer).to_contain_text("2 of 3")
     page.keyboard.press("ArrowLeft")
     expect(viewer.get_by_role("heading", name="screenshot.png", exact=True)).to_be_visible()

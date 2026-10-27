@@ -123,6 +123,7 @@ func TestGoldenDecisionFacts(t *testing.T) {
 	add("took-over-continue", tookOverLine(carry, "0123456789abcdef", 4))
 	add("test-failed", testFailedLine("run_t", []int{1, 3}, 2, 1))
 	add("test-passed", testPassedLine("run_t"))
+	add("merge-not-retested", mergeNotRetestedLine("api", "main", "run_t", 3))
 	add("nothing-to-add", nothingToAdd)
 	for _, when := range []string{feedbackOpen, feedbackAfterFix, feedbackAfterIntegration, feedbackBeforePR, feedbackReadyToRead} {
 		add("feedback-"+when, feedbackOpenLine(when, 3))

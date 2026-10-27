@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,10 @@ type verdictFixture struct {
 	steps  *steps
 	gh     *fakegithub.Server
 	number int
+	// GitHub's compares answered, once withRepo gave it a repository.
+	compares *atomic.Int64
+	// A second repository's GitHub (withSecondRepo).
+	other *fakegithub.Server
 }
 
 type forgeOf struct{ gh *forge.GitHub }

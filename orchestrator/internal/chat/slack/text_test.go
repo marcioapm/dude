@@ -246,7 +246,8 @@ func TestAMessageIsReadAsTheWordsItShows(t *testing.T) {
 // Text that only looks like markup or an entity is the words typed: a
 // typed <url|label> is not a link, a typed "&lt;" stays "&lt;", in the
 // message text and in every JSON part of its blocks and attachments. A
-// person's link with & in it, repeated by its rich_text block, is read once.
+// person's link with & in it, bare or labelled, repeated by its rich_text
+// block, is read once.
 func TestTypedMarkupAndEntitiesStayAsTyped(t *testing.T) {
 	fake, p, inst := world(t)
 	root := fake.PostApp("C1", "", "BCI", "CI Bot", "&lt;https://e.x|y&gt;", nil, nil)
@@ -259,11 +260,15 @@ func TestTypedMarkupAndEntitiesStayAsTyped(t *testing.T) {
 	fake.PostApp("C1", root, "BCI", "CI Bot", "see <https://e.x/a?x=1&amp;y=2>", nil,
 		[]any{map[string]any{"type": "rich_text", "elements": []any{map[string]any{"type": "rich_text_section", "elements": []any{
 			map[string]any{"type": "text", "text": "see "}, map[string]any{"type": "link", "url": "https://e.x/a?x=1&y=2"}}}}}})
+	fake.PostApp("C1", root, "BCI", "CI Bot", "see <https://e.x/a?x=1&amp;y=2|here>", nil,
+		[]any{map[string]any{"type": "rich_text", "elements": []any{map[string]any{"type": "rich_text_section", "elements": []any{
+			map[string]any{"type": "text", "text": "see "}, map[string]any{"type": "link", "url": "https://e.x/a?x=1&y=2", "text": "here"}}}}}})
 	got, err := p.FetchThread(context.Background(), inst, "C1", root, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"<https://e.x|y>", "a &lt; b", "x &amp; y", "T https://e.x/t?q=a&amp;b", "see https://e.x/a?x=1&y=2"}
+	want := []string{"<https://e.x|y>", "a &lt; b", "x &amp; y", "T https://e.x/t?q=a&amp;b", "see https://e.x/a?x=1&y=2",
+		"see here (https://e.x/a?x=1&y=2)"}
 	var texts []string
 	for _, m := range got {
 		texts = append(texts, m.Text)

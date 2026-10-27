@@ -38,14 +38,16 @@ export interface GalleryFile {
 /** Media shows as a picture; everything else as a row. */
 const isMedia = (k: ArtifactKind) => k === "image" || k === "video";
 
+const byName = new Intl.Collator(undefined, { numeric: true });
+
 const mediaFirst = (f: GalleryFile) => (isMedia(artifactKind(f.versions[0]!.contentType, f.name)) ? 0 : 1);
 
 /**
- * Files in the order the gallery shows them — pictures, then documents —
- * which is the order the viewer walks them.
+ * Files in the order the gallery shows them — pictures, then documents, each
+ * by name (01-…, 02-… read in order) — which is the order the viewer walks them.
  */
 export function galleryOrder(files: ReadonlyArray<GalleryFile>): GalleryFile[] {
-  return [...files].sort((a, b) => mediaFirst(a) - mediaFirst(b));
+  return [...files].sort((a, b) => mediaFirst(a) - mediaFirst(b) || byName.compare(a.name, b.name));
 }
 
 type Filter = "all" | "documents" | "media";
@@ -72,8 +74,9 @@ export interface FileGalleryProps extends Omit<HTMLAttributes<HTMLDivElement>, "
 export function FileGallery({ files, controls = true, thumbnail, onOpen, onDownload, onDownloadAll, note, className, ...rest }: FileGalleryProps) {
   const [filter, setFilter] = useState<Filter>("all");
   const kinds = useMemo(() => new Map(files.map((f) => [f.name, artifactKind(f.versions[0]!.contentType, f.name)])), [files]);
-  const media = files.filter((f) => isMedia(kinds.get(f.name)!));
-  const documents = files.filter((f) => !isMedia(kinds.get(f.name)!));
+  const ordered = useMemo(() => galleryOrder(files), [files]);
+  const media = ordered.filter((f) => isMedia(kinds.get(f.name)!));
+  const documents = ordered.filter((f) => !isMedia(kinds.get(f.name)!));
   const total = files.reduce((n, f) => n + f.versions[0]!.sizeBytes, 0);
   const segments: Array<[Filter, string, number]> = [
     ["all", "All", files.length],

@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { EventTypes, type PersistedEvent, type Run } from "@dude/domain";
+import { EventTypes, runDoer, type PersistedEvent, type Run } from "@dude/domain";
 import { TASK_ID } from "../src/fixtures/data.ts";
 import { activityLines } from "../src/screens/TaskScreen.tsx";
 import { dudeName } from "../src/DudeMark.tsx";
@@ -115,5 +115,21 @@ describe("checks judgements in the task's Activity", () => {
     expect(lines.map((l) => [textOf(l.text), l.quote, l.open?.runId])).toEqual([[
       `${dudeName(TASK_ID)} did not run the tester again: the change since the last test touches only paths no criterion depends on. Its 2 verdicts stand.`,
       "api/.github/workflows/ci.yml", test1.id]]);
+  });
+
+  test("a merge of the target branch not tested again says so and names the round whose verdicts stand", () => {
+    const test1 = run("run_test_mg", "test", "qa_browser");
+    const skipped = { ...judged(test1.id, {}, 3), eventType: EventTypes.TestSkipped, runId: null,
+      payload: { fromRunId: test1.id, paths: ["api/lib/other.go"], why: "merged target branch touched none of the task's files",
+        criteria: [{ criterion: 1, status: "pass", decision: "" }] } } as PersistedEvent;
+    const lines = activityLines([skipped], people, [test1], [], 1);
+    expect(lines.map((l) => [textOf(l.text), l.quote, l.open?.runId])).toEqual([[
+      `${dudeName(TASK_ID)} did not run the tester again: the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. The verdict of ${runDoer(test1)} stands.`,
+      "api/lib/other.go", test1.id]]);
+    // The round is named by its doer, not as an anonymous agent.
+    expect(runDoer(test1)).not.toBe("agent");
+    const two = { ...skipped, payload: { ...skipped.payload,
+      criteria: [{ criterion: 1, status: "pass", decision: "" }, { criterion: 2, status: "pass", decision: "" }] } } as PersistedEvent;
+    expect(textOf(activityLines([two], people, [test1], [], 1)[0]!.text)).toEndWith(`The 2 verdicts of ${runDoer(test1)} stand.`);
   });
 });

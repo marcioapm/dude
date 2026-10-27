@@ -8,7 +8,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LiveDiff, splitRows, type LiveDiffFile } from "../src/components/LiveDiff.tsx";
-import type { GalleryFile } from "../src/components/FileGallery.tsx";
+import { galleryOrder, type GalleryFile } from "../src/components/FileGallery.tsx";
 import { artifactKind } from "../src/components/ArtifactRow.tsx";
 import { cssModuleAsWritten } from "./cssModule.ts";
 
@@ -135,6 +135,8 @@ describe("LiveDiff", () => {
 
 describe("FileGallery", () => {
   const v = (name: string, contentType: string, version = 1) => ({ id: `${name}${version}`, name, contentType, sizeBytes: 1024, createdAt: 0, role: "implementer" as const, session: "Implement", version });
+  const contentTypes: Record<string, string> = { md: "text/markdown", png: "image/png", webm: "video/webm" };
+  const named = (...names: string[]): GalleryFile[] => names.map((n) => ({ name: n, versions: [v(n, contentTypes[n.split(".").pop()!]!)] }));
   const files: GalleryFile[] = [
     { name: "shot.png", versions: [v("shot.png", "image/png", 2), v("shot.png", "image/png", 1)] },
     { name: "demo.webm", versions: [v("demo.webm", "video/webm")] },
@@ -148,6 +150,19 @@ describe("FileGallery", () => {
     expect(html).toContain(">v2<");
     expect(html).toContain("Download all");
     expect(html).toContain("3 KB");
+  });
+
+  test("pictures, then documents, each by name as a person counts: 2 before 10, the case ignored", () => {
+    const order = galleryOrder(named("b.md", "10-done.png", "02-cleared.png", "A.md", "2-saved.png", "walkthrough.png")).map((f) => f.name);
+    expect(order).toEqual(["02-cleared.png", "2-saved.png", "10-done.png", "walkthrough.png", "A.md", "b.md"]);
+  });
+
+  test("the gallery shows its cards and rows in that order, whatever order it was given", () => {
+    const given = named("NOTES.md", "02-cleared.png", "01-saved.png", "walkthrough.webm", "acceptance.md");
+    const doc = new DOMParser().parseFromString(renderToStaticMarkup(<FileGallery files={given} onOpen={() => {}} onDownload={() => {}} />), "text/html");
+    const names = (id: string) => [...doc.querySelectorAll(`[data-testid="${id}"]`)].map((e) => e.getAttribute("data-name"));
+    expect(names("file-card")).toEqual(["01-saved.png", "02-cleared.png", "walkthrough.webm"]);
+    expect(names("file-row")).toEqual(["acceptance.md", "NOTES.md"]);
   });
 
   test("a video with a picture shows it under a play glyph, still a button; without one, the dark card", () => {
