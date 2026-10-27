@@ -70,11 +70,13 @@ func hintCandidates(w World) []linkCandidate {
 func candidatesOf(w World, keys []string) []linkCandidate {
 	var out []linkCandidate
 	for _, key := range keys {
-		p, ok := w.project(key)
-		if !ok || len(out) == linkCandidatesMax || slices.ContainsFunc(out, func(c linkCandidate) bool { return c.ID == p.ID }) {
-			continue
+		if len(out) == linkCandidatesMax {
+			break
 		}
-		out = append(out, linkCandidate{ID: p.ID, Key: p.Key, Name: p.Name})
+		p, ok := w.project(key)
+		if ok && !slices.ContainsFunc(out, func(c linkCandidate) bool { return c.ID == p.ID }) {
+			out = append(out, linkCandidate{ID: p.ID, Key: p.Key, Name: p.Name})
+		}
 	}
 	return out
 }
