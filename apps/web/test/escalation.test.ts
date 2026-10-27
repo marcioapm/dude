@@ -106,6 +106,15 @@ describe("escalationWords", () => {
     expect(older.sentence).toBe("Pull request web #4 still conflicts with main: dude could not resolve it. Try again, or resolve it yourself and wait on it again.");
     expect([tried, beforePR, failed, older].filter((w) => /`|pair|budget|integration|stream_ended/.test(w.sentence)).length).toBe(0);
   });
+
+  test("delivery settings that don't load say what Deliver could not tell, the two ways on, and what does not load", () => {
+    const said = "Deliver stopped before opening the pull request: this project's delivery settings no longer load, so it can't tell whether to open it, open a draft or ask you first. Pick this task's own Before the pull request in Overview, or have a project admin fix Settings → Delivery, then Retry.";
+    expect(escalationWords({ reason: "pull_request_choice_unresolved", detail: null, at })).toEqual({ short: "Delivery settings don't load", sentence: said, runId: null });
+    const named = escalationWords({ reason: "pull_request_choice_unresolved", detail: { error: "alwaysReviewers: no-such-reviewer" }, at });
+    expect(named.short).toBe("Delivery settings don't load");
+    expect(named.sentence).toBe(`${said} What doesn't load: alwaysReviewers: no-such-reviewer.`);
+    expect(named.parts?.filter((p) => typeof p !== "string")).toEqual([{ mono: "alwaysReviewers: no-such-reviewer" }]);
+  });
 });
 
 test("shortError keeps the first line, and cuts a long one", () => {
