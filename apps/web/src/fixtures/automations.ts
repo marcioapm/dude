@@ -308,19 +308,17 @@ export class FixtureAutomations {
     if (!r) throw new Error(`no run ${runId}`);
     const facts = { scheduledFor: scheduledFor(r) };
     if (id === "aut_alert") return { ...alertRunDetail(r), ...facts, sentBodies: alertSentBodies(r) };
+    // A run's detail with nothing recorded beyond its row.
+    const bare = { ...r, ...facts, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
+      stopReason: null, requests: [], toolCalls: [], failedCallId: null };
     if (id === "aut_digest") {
-      return { ...r, ...facts, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-        stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null,
+      return { ...bare, toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null,
         ...(runId === "arn_d3" && localStorage.getItem("dude.fixtures.automationStep") === "posted"
           ? { live: { message: "Posted this week's digest to #engineering: 41 merged (+5 on last week), median time to merge", output: {} } } : {}) };
     }
-    if (id === "aut_cost" || id === "aut_audit") {
-      return { ...r, ...facts, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-        stopReason: null, requests: [], toolCalls: [], failedCallId: null };
-    }
+    if (id === "aut_cost" || id === "aut_audit") return bare;
     if (id === "aut_changelog") {
-      return { ...r, ...facts, ...serverRun(runId), payloads: [{ deliveryId: "d6f2a1c0-0101", event: "pull_request", action: "closed", body: { action: "closed", number: 214 } }],
-        payloadsPurged: false, logTail: null, exitCode: null, toolCalls: [], failedCallId: null };
+      return { ...bare, ...serverRun(runId), payloads: [{ deliveryId: "d6f2a1c0-0101", event: "pull_request", action: "closed", body: { action: "closed", number: 214 } }] };
     }
     return { ...r, payloads: [{ deliveryId: DELIVERIES[0]!.id, event: "pull_request", action: "opened", body: DELIVERIES[0]!.body }],
       payloadsPurged: false, logTail: "Labelled #214: area/checkout.", exitCode: null, containerStartedAt: null, containerStoppedAt: null,
