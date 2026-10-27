@@ -32,6 +32,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
+      ffmpeg \
       git \
       jq \
       openssh-client \
@@ -47,7 +48,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # A browser for the tester (the qa_browser role): Playwright, and the
 # Chromium it drives with its system dependencies, installed system-wide
 # (PLAYWRIGHT_BROWSERS_PATH), since the agent's home is a volume that would
-# hide it. Recording video needs nothing else: Playwright writes webm.
+# hide it. Recording video needs nothing else: Playwright writes webm. The
+# system ffmpeg (Playwright's own only records) lets the tester edit what it
+# recorded and dude publish pick a video's thumbnail from its frames.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN python3 -m venv /opt/playwright-venv \
     && /opt/playwright-venv/bin/pip install --no-cache-dir playwright==1.49.0 \
