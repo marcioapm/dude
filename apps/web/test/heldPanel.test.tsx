@@ -196,13 +196,16 @@ describe("a task held on Ask me first", () => {
     for (const n of ["Open pull request", "Open as draft", "Show feedback", "Done without a pull request"]) expect(named(card, n)).toBeUndefined();
   });
 
-  test("before the reader is known, the panel waits on the owner, also while sent back", async () => {
+  test("before the reader is known, the panel waits on the owner, also while sent back, and findings are left for the owner", async () => {
+    const sam = { owner: { id: "u_sam", name: "Sam Lee", photoUrl: null, online: false } };
     for (const hold of [HOLD, { ...HOLD, sentBack: true }]) {
-      const client = new Unknown(atHold(hold.sentBack ? { status: "running", awaitingDecision: null, hold } : {}));
+      const client = new Unknown(atHold(hold.sentBack ? { status: "running", awaitingDecision: null, hold, ...sam } : sam));
       const page = await taskPage(client);
       const card = await until(() => panel(page), "the panel");
       expect(card.getAttribute("data-state")).toBe("waiting");
       for (const n of ["Open pull request", "Open as draft", "Done without a pull request"]) expect(named(card, n)).toBeUndefined();
+      // The fixture's task has one open finding.
+      await until(() => named(card, "1 findings left for Sam, on Findings"), "the findings chip, naming the owner");
       for (const unmount of mounted.splice(0)) await unmount();
     }
   });
