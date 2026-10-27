@@ -240,7 +240,6 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	// target branch's commit the task builds on, or is one a later phase
 	// runs. Waivers are asked about first, and the first non-pass not passed
 	// rejects the report.
-	rejected := d
 	type held struct {
 		verdict checksVerdict
 		check   delivery.Check
@@ -280,7 +279,6 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		if d.bases, err = s.taskBases(ctx, r); err != nil {
 			return d, err
 		}
-		rejected.bases = d.bases
 	}
 	text, err := s.checksContext(ctx, r, checks, d.bases)
 	if err != nil {
@@ -290,21 +288,27 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	if svc == nil {
 		svc = &judge.Service{DB: s.DB}
 	}
+	// A rejection for want of a tier records the reported non-passes.
+	rejected := d
 	d.Verdicts = []checksVerdict{}
+	ask := func(question, more string) (judge.Judgement, error) {
+		return svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID, Question: question, Context: text + more})
+	}
+	// answered: j is the judge's recorded answer want. An absent CallID
+	// fails closed, including a zero Judgement.
+	answered := func(j judge.Judgement, err error, want string) bool {
+		return err == nil && j.CallID != "" && j.Decision == want
+	}
 	// preexisting asks the pre-existing (or deferred) question about h.
 	preexisting := func(h held) (judge.Judgement, error) {
 		if h.check.Result == delivery.CheckFail && len(d.bases) == 0 {
 			// Nothing to measure a failure against: rejected unasked.
 			return judge.Judgement{}, errNoTaskBase
 		}
-		return svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID,
-			Question: preexistingQuestion.Render(struct {
-				delivery.Check
-				TestPhase bool
-			}{h.check, testPhase}), Context: text})
-	}
-	passedBy := func(j judge.Judgement, err error) bool {
-		return err == nil && j.CallID != "" && j.Decision == judge.Yes
+		return ask(preexistingQuestion.Render(struct {
+			delivery.Check
+			TestPhase bool
+		}{h.check, testPhase}), "")
 	}
 	// notPassed is why j (or err) did not pass a check.
 	notPassed := func(j judge.Judgement, err error) string {
@@ -322,15 +326,14 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			if waived, err = s.waivedContext(ctx, r, h.waiver); err != nil {
 				return d, err
 			}
-			j, err = svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID,
-				Question: waivedQuestion.Render(h.waiver.Covered), Context: text + waived})
+			j, err = ask(waivedQuestion.Render(h.waiver.Covered), waived)
 			if offTier(err) {
 				return untiered(rejected), nil
 			}
 			if err != nil && ctx.Err() != nil {
 				return d, err
 			}
-			if passedBy(j, err) {
+			if answered(j, err, judge.Yes) {
 				d.Carried = true
 				d.Verdicts = append(d.Verdicts, checksVerdict{Command: v.Command, Result: delivery.CheckWaived, Decision: j.Decision,
 					Reason: j.Reasoning, CallID: j.CallID, Waiver: h.waiver})
@@ -348,7 +351,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		if err != nil && ctx.Err() != nil {
 			return d, err
 		}
-		if passedBy(j, err) {
+		if answered(j, err, judge.Yes) {
 			passed := checksVerdict{Command: v.Command, Decision: j.Decision, Reason: j.Reasoning, CallID: j.CallID, WaiverReason: v.WaiverReason}
 			switch v.Result {
 			case delivery.CheckFail:
@@ -387,7 +390,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		} else {
 			name, q, want = delivery.MissingChecks, missingQuestion.Render(nil), judge.No
 		}
-		j, err := svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID, Question: q, Context: text})
+		j, err := ask(q, "")
 		if offTier(err) {
 			// A non-pass the judge passed is never let through by a skip.
 			if len(nonPass) > 0 {
@@ -406,8 +409,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		if err != nil {
 			v.Reason = err.Error()
 		}
-		// An absent CallID also fails closed, including a zero Judgement.
-		if err == nil && j.CallID != "" && j.Decision == want {
+		if answered(j, err, want) {
 			v.Result = "pass"
 		} else {
 			verified = false
