@@ -335,9 +335,13 @@ export class PreviewCommenting {
   }
 
   get view(): CommentingView {
-    const latest = (fits: (p: Pane) => boolean) => this.#panes.filter(fits).sort((a, b) => b.touched - a.touched)[0];
-    const pick = latest((p) => p.state === "open") ?? latest((p) => p.state === "waiting") ?? latest((p) => p.state !== "idle");
+    const pick = this.#latest((p) => p.state === "open") ?? this.#latest((p) => p.state === "waiting") ?? this.#latest((p) => p.state !== "idle");
     return { state: pick?.state ?? "idle", server: pick?.server ?? null, saved: this.#panes.reduce((n, p) => n + p.saved, 0) };
+  }
+
+  // The window last opened, adopted or heard from among those that `fits`.
+  #latest(fits: (p: Pane) => boolean): Pane | undefined {
+    return this.#panes.filter(fits).sort((a, b) => b.touched - a.touched)[0];
   }
 
   // For tests: the windows held now, the named one among them.
@@ -421,7 +425,7 @@ export class PreviewCommenting {
 
   /** The latest window held, in one of `states` and not closed, that `fits`. */
   #live(fits: (p: Pane) => boolean, ...states: CommentingState[]): Pane | null {
-    return this.#panes.filter((p) => states.includes(p.state) && !closedOrGone(p.win) && fits(p)).sort((a, b) => b.touched - a.touched)[0] ?? null;
+    return this.#latest((p) => states.includes(p.state) && !closedOrGone(p.win) && fits(p)) ?? null;
   }
 
   /**
@@ -508,7 +512,7 @@ export class PreviewCommenting {
       return true;
     }
     const origin = httpsOriginOf(item.anchor.url);
-    const server = this.#panes.filter((p) => p.server !== null && httpsOriginOf(p.url) === origin).sort((a, b) => b.touched - a.touched)[0]?.server ?? null;
+    const server = this.#latest((p) => p.server !== null && httpsOriginOf(p.url) === origin)?.server ?? null;
     return this.open(item.anchor.url, server, item.id);
   }
 
