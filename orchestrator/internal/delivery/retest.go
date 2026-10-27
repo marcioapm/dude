@@ -197,12 +197,13 @@ func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st 
 	if ok, err := w.s.stoodAt(ctx, sc.OrganizationID, st.TaskID, prev, pre); err != nil || !ok {
 		return false, err
 	}
-	m, err := w.mergeChange(ctx, sc, st)
-	if err != nil || !m.Measured || len(m.Merged) == 0 || intersects(m.Merged, m.Task) || affectsEveryChange(m.Merged) {
-		return false, err
-	}
+	// The database's vetoes before GitHub's compares.
 	verdicts, ok, err := w.passedAsCriteriaRead(ctx, sc, st, prev.ID)
 	if err != nil || !ok {
+		return false, err
+	}
+	m, err := w.mergeChange(ctx, sc, st)
+	if err != nil || !m.Measured || len(m.Merged) == 0 || intersects(m.Merged, m.Task) || affectsEveryChange(m.Merged) {
 		return false, err
 	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {

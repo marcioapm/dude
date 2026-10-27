@@ -96,10 +96,15 @@ func TestACleanMergeIsTestedWhenAnyOtherConditionFails(t *testing.T) {
 				c.set(f, st)
 			}
 			gate := f.gate()
+			asked := f.compares.Load()
 			skip, err := f.steps.carryForward(f.ctx, sc, st, c.judge, c.directed)
 			want := strings.HasPrefix(c.name, "none")
 			if err != nil || skip != want || (f.skips() == 1) != want {
 				t.Fatalf("skip %v (%v), %d skips; want skip %v", skip, err, f.skips(), want)
+			}
+			// Every veto here is known without GitHub: none asks for a compare.
+			if n := f.compares.Load() - asked; !want && n != 0 {
+				t.Errorf("%d compares for a merge vetoed before measuring", n)
 			}
 			if after := f.gate(); !want && !reflect.DeepEqual(after, gate) {
 				t.Fatalf("gate moved from %+v to %+v without a skip", gate, after)
@@ -269,7 +274,7 @@ func TestACleanMergeSkipTellsOnlyALiveConductorInOneLine(t *testing.T) {
 func mergeFixture(t *testing.T, mainFiles map[string]string) (*verdictFixture, *State, workflow.StepContext) {
 	t.Helper()
 	f := newVerdictFixture(t)
-	f.withRepo()
+	f.compares = f.withRepo()
 	head := f.gh.CommitFiles("feature", "Greet", map[string]string{"app/greet.go": "package app"})
 	f.gh.CommitFiles("main", "Other work", mainFiles)
 	for _, q := range []struct {
