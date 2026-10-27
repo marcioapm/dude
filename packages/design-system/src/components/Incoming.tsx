@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { CONDITION_OP_LABEL, CONDITION_OPS, describeCondition, type ConditionOp } from "@dude/domain";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { Button, IconButton } from "../primitives/Button.tsx";
@@ -156,5 +156,25 @@ export function DeliveryVerdict({ verdict, onRun, detail = true }: {
       ) : chip}
       {detail && verdict.kind === "skipped" && verdict.because ? <span className={styles["why"]}>{verdict.because}</span> : null}
     </span>
+  );
+}
+
+/**
+ * A test body's verdict, live: a square sunken panel of lines (its group,
+ * each condition), then `outcome`, set apart by space, in danger when it
+ * would be skipped. A status region: a screen reader hears each change.
+ */
+export function IncomingVerdictPanel({ outcome, ok, children, ...rest }: {
+  readonly outcome?: ReactNode;
+  /** Whether the outcome is a run; false reads it in danger. */
+  readonly ok?: boolean | undefined;
+  readonly children: ReactNode;
+  readonly "data-testid"?: string | undefined;
+}) {
+  return (
+    <div className={styles["panel"]} role="status" {...rest}>
+      {children}
+      {outcome ? <p className={styles["outcome"]} data-ok={String(ok ?? true)}>{outcome}</p> : null}
+    </div>
   );
 }

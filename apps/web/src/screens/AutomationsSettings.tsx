@@ -714,7 +714,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry, on
             <SettingRow label="Tools" block help="What its agent can call, besides the shell in its machine." data-testid="tools-row">
               <AutomationToolList orgName={orgName} slackInstalled={slackInstalled} />
             </SettingRow>
-            <SettingsNote>It opens no pull requests.</SettingsNote>
+            <SettingsNote>It opens no pull requests.{trigger.kind === "incoming" ? " The payload is outside text: the prompt marks it so." : ""}</SettingsNote>
           </SettingsSection>
         ) : null}
 

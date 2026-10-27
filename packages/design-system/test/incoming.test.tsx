@@ -9,7 +9,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describeCondition } from "@dude/domain";
-import { ConditionRows, conditionWords, DeliveryVerdict, type TriggerCondition } from "../src/components/Incoming.tsx";
+import { ConditionRows, conditionWords, DeliveryVerdict, IncomingVerdictPanel, type TriggerCondition } from "../src/components/Incoming.tsx";
+import { CodeWell } from "../src/components/CodeWell.tsx";
+import { SettingsDisclosure } from "../src/components/Settings.tsx";
 import { TriggerSummary } from "../src/components/Automations.tsx";
 import { KeyShownOnce } from "../src/components/KeyShownOnce.tsx";
 import { TooltipProvider } from "../src/primitives/Tooltip.tsx";
@@ -112,6 +114,26 @@ describe("DeliveryVerdict", () => {
     expect(opened).toEqual(["arn_9"]);
     expect(row).toBe(0);
     expect(renderToStaticMarkup(<DeliveryVerdict verdict={{ kind: "refused", reason: "signature" }} onRun={() => undefined} />)).not.toContain("<button");
+  });
+});
+
+describe("IncomingVerdictPanel, CodeWell and a disclosure's glyph", () => {
+  test("the panel is a status region whose outcome reads in danger when it would be skipped", () => {
+    const skipped = renderToStaticMarkup(<IncomingVerdictPanel ok={false} outcome={<b>⊘ It would be skipped</b>}><p>Group key g</p></IncomingVerdictPanel>);
+    expect(skipped).toContain('role="status"');
+    expect(skipped).toMatch(/<p[^>]*data-ok="false"[^>]*><b>⊘ It would be skipped<\/b><\/p>/);
+    expect(renderToStaticMarkup(<IncomingVerdictPanel><p>sent</p></IncomingVerdictPanel>)).not.toContain("data-ok");
+  });
+
+  test("a well is a pre for a block and a code inline, its text as given", () => {
+    expect(renderToStaticMarkup(<CodeWell aria-label="curl example">{"curl -X POST\n  --data x"}</CodeWell>))
+      .toMatch(/^<pre[^>]*aria-label="curl example"[^>]*><code>curl -X POST\n {2}--data x<\/code><\/pre>$/);
+    expect(renderToStaticMarkup(<CodeWell inline>https://x/v1/hooks/hk_1</CodeWell>)).toMatch(/^<code[^>]*>https:\/\/x\/v1\/hooks\/hk_1<\/code>$/);
+  });
+
+  test("SettingsDisclosure takes a glyph; layers by default", () => {
+    expect(renderToStaticMarkup(<SettingsDisclosure summary="How">x</SettingsDisclosure>)).toContain('data-icon="layers"');
+    expect(renderToStaticMarkup(<SettingsDisclosure icon="send" summary="How">x</SettingsDisclosure>)).toContain('data-icon="send"');
   });
 });
 

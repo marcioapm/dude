@@ -177,12 +177,20 @@ export function SettingField({ label, htmlFor, source, children }: {
   );
 }
 
-/** Something inherited, folded: the organization's prompt a project's adds to. */
-export function SettingsDisclosure({ summary, children }: { readonly summary: ReactNode; readonly children: ReactNode }) {
+/**
+ * Something folded on the chrome shade: by default an inherited value (the
+ * organization's prompt a project's adds to; layers glyph); with `icon` any
+ * reference a row offers on demand (how to send to a URL).
+ */
+export function SettingsDisclosure({ summary, icon = "layers", children }: {
+  readonly summary: ReactNode;
+  readonly icon?: IconName | undefined;
+  readonly children: ReactNode;
+}) {
   return (
     <details className={styles["disclosure"]}>
       <summary className={styles["disclosureSummary"]}>
-        <Icon name="layers" size={14} className={styles["noteIcon"]} />
+        <Icon name={icon} size={14} className={styles["noteIcon"]} />
         <span className={styles["disclosureText"]}>{summary}</span>
         <span className={styles["disclosureShow"]}>Show</span>
       </summary>

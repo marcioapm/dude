@@ -664,14 +664,11 @@ body {
   white-space: pre-wrap;
 }
 
-/* An incoming webhook's rows, Deliveries and test dialog (screens/automationIncoming.tsx). */
+/* An incoming webhook's rows, Deliveries and test dialog (screens/automationIncoming.tsx): layout only; the wells, panel and timeline are the design system's. */
 .incomingSections {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-24);
-}
-.incomingMuted {
-  color: var(--ds-color-text-muted);
 }
 .incomingInline,
 .incomingEndpoint,
@@ -682,13 +679,6 @@ body {
   gap: var(--ds-space-8);
   min-width: 0;
 }
-.incomingUrl {
-  padding: var(--ds-space-4) var(--ds-space-8);
-  border-radius: var(--ds-radius-control);
-  background: var(--ds-color-sunken);
-  font-size: var(--ds-text-xs);
-  overflow-wrap: anywhere;
-}
 .incomingVerify {
   display: flex;
   flex-direction: column;
@@ -696,32 +686,18 @@ body {
   min-width: 0;
   flex: 1;
 }
-.incomingDisclosure > summary {
-  cursor: pointer;
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-secondary);
-}
 .incomingHowTo {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: var(--ds-space-8);
-  padding-top: var(--ds-space-8);
   min-width: 0;
 }
-.incomingCode {
-  align-self: stretch;
-  margin: 0;
-  padding: var(--ds-space-12);
-  overflow-x: auto;
-  border-radius: var(--ds-radius-control);
-  background: var(--ds-color-sunken);
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-text-xs);
+.incomingHowTo > button {
+  align-self: flex-start;
 }
 .incomingBreak {
   overflow-wrap: anywhere;
-  font-size: var(--ds-text-xs);
 }
 .incomingStack {
   display: flex;
@@ -731,50 +707,8 @@ body {
 .incomingFilter {
   max-width: 256px;
 }
-/* A verdict and its reason wrap to two lines; compact rows would touch. */
-.incomingRoomyRows td {
-  padding-block: var(--ds-space-6);
-}
-.incomingVerdictBox {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-8);
-  padding: var(--ds-space-12);
-  border-radius: var(--ds-radius-control);
-  background: var(--ds-color-sunken);
-  font-size: var(--ds-text-sm);
-}
-.incomingVerdictBox > p {
-  margin: 0;
-}
-.incomingVerdictBox > .incomingOutcome {
-  padding-top: var(--ds-space-8);
-}
-.incomingOutcome[data-ok="false"] b {
-  color: var(--ds-tone-danger-fg);
-}
 .incomingSubHead {
   margin: var(--ds-space-12) 0 var(--ds-space-8);
-  font-size: var(--ds-text-sm);
-}
-.incomingTimeline {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-6);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--ds-text-sm);
-}
-.incomingTimeline > li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ds-space-8);
-}
-.incomingTimeline time {
-  font-variant-numeric: tabular-nums;
-  color: var(--ds-color-text-muted);
 }
 
 /* A tier naming no model yet: its Requests cell, in the attention tone. */

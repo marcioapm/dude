@@ -135,6 +135,27 @@
   outline-offset: 2px;
 }
 
+/* The test dialog's verdict: square (structure is square), sunken, its outcome set apart by space. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  border-radius: var(--ds-radius-none);
+  background: var(--ds-color-sunken);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.panel > p {
+  margin: 0;
+}
+.panel > .outcome {
+  padding-top: var(--ds-space-8);
+}
+.outcome[data-ok="false"] b {
+  color: var(--ds-tone-danger-fg);
+}
+
 /* Below 560px of its own width a row stacks path and operator over its value. */
 @container conditions (max-width: 560px) {
   .row {

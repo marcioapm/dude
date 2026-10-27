@@ -15,7 +15,8 @@ import {
   TriggerSummary,
   type RepoFilterValue,
 } from "../../components/Automations.tsx";
-import { ConditionRows, DeliveryVerdict, type TriggerCondition } from "../../components/Incoming.tsx";
+import { ConditionRows, DeliveryVerdict, IncomingVerdictPanel, type TriggerCondition } from "../../components/Incoming.tsx";
+import { CodeWell } from "../../components/CodeWell.tsx";
 import { SettingRow } from "../../components/Settings.tsx";
 
 /*
@@ -179,6 +180,18 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <div style={{ width: 390 }}>
               <ConditionsDemo />
             </div>
+            <Label>The test dialog's verdict: a miss, then a live run of the group</Label>
+            <IncomingVerdictPanel ok={false} outcome={<><b>⊘ It would be skipped:</b> commonLabels.severity is warning, not one of critical, high.</>}>
+              <p>✓ Valid JSON. Group key <code className="ds-mono">g-api</code>: no run of this group is going.</p>
+              <ConditionRows value={ALERT_CONDITIONS} results={[{ ok: true, actual: "firing" }, { ok: false, actual: "warning" }]} />
+            </IncomingVerdictPanel>
+            <IncomingVerdictPanel>
+              <p>✓ Valid JSON. Group key <code className="ds-mono">g-api</code>: a run of this group is going.</p>
+              <p><b>As a real delivery it would be sent to the running agent;</b> conditions are not checked for it.</p>
+            </IncomingVerdictPanel>
+            <Label>CodeWell: a curl, and a URL inline</Label>
+            <CodeWell>{"curl -X POST https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18 \\\n  -H 'Content-Type: application/json' \\\n  --data '{\"status\":\"firing\"}'"}</CodeWell>
+            <span>POST to <CodeWell inline>https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18</CodeWell></span>
           </Col>
         </Panes>
       </Block>

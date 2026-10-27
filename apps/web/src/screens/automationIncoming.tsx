@@ -9,13 +9,16 @@
 import { useEffect, useState } from "react";
 import {
   CodeEditor,
+  CodeWell,
   ConditionRows,
   DeliveryVerdict,
+  IncomingVerdictPanel,
   KeyShownOnce,
   Segmented,
   SettingField,
   SettingFields,
   SettingRow,
+  SettingsDisclosure,
   SettingsNote,
   SettingsSection,
   TextButton,
@@ -96,9 +99,9 @@ function HowToSend({ url, verify }: { url: string; verify: IncomingVerify }) {
         { label: verify.mode === "query" ? "Secret" : "Header", mono: true, value: verify.mode === "signature"
           ? `${verify.header}: ${verify.prefix}<hex HMAC-SHA256 of the raw body, keyed by the secret>`
           : verify.mode === "header" ? `${verify.header}: <the secret>` : `in the URL as ?${verify.param}=` },
-        { label: "Answer", value: "202 at once; 401 bad secret, 415 not JSON, 413 too large, 429 over the rate limit" },
+        { label: "Answer", value: "202 at once; 401 bad secret, 403 turned off, 413 too large, 415 not JSON, 429 over the rate limit" },
       ]} />
-      <pre className="incomingCode" aria-label="curl example"><code>{curl}</code></pre>
+      <CodeWell aria-label="curl example">{curl}</CodeWell>
       <TextButton onClick={() => { void copy(curl); setCopied(true); }}>{copied ? "Copied" : "Copy curl"}</TextButton>
     </div>
   );
@@ -131,7 +134,7 @@ export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, pat
       <SettingRow label="Endpoint" data-testid="incoming-endpoint"
         help={v.mode === "query" ? `Copy gives the URL up to ?${v.param}=; add the secret, which dude shows only once.` : "POST JSON here. It answers 202 at once."}>
         <span className="incomingEndpoint">
-          <code className="incomingUrl ds-mono" data-testid="endpoint-url">{shown}</code>
+          <CodeWell inline data-testid="endpoint-url">{shown}</CodeWell>
           <Button size="sm" variant="secondary" leadingIcon="copy" type="button"
             aria-label={v.mode === "query" ? "Copy the URL, up to its token" : "Copy the URL"}
             onClick={() => { void copy(v.mode === "query" ? `${url}?${v.param}=` : url); setCopied(true); }}>{copied ? "Copied" : "Copy"}</Button>
@@ -164,10 +167,9 @@ export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, pat
         </div>
       </SettingRow>
       <SettingRow label="How to send" block>
-        <details className="incomingDisclosure">
-          <summary>URL, {v.mode === "query" ? "parameter" : "header"} and a curl example</summary>
+        <SettingsDisclosure icon="send" summary={`URL, ${v.mode === "query" ? "parameter" : "header"} and a curl example`}>
           <HowToSend url={url} verify={v} />
-        </details>
+        </SettingsDisclosure>
       </SettingRow>
       <SettingRow label="Conditions" block data-testid="incoming-conditions"
         help="Paths into the JSON body; every row must hold, values in one row are any of them. Checked when no run of the delivery's group is going.">
@@ -182,7 +184,7 @@ export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, pat
         <span className="incomingInline">
           <NumberInput step={1} aria-label="Deliveries per hour" min={1} max={INCOMING_RATE_MAX} value={trigger.ratePerHour} disabled={ro}
             onValueChange={(n) => onChange({ ...trigger, ratePerHour: n ?? INCOMING_RATE_DEFAULT })} />
-          <span className="incomingMuted">per hour</span>
+          <span className="muted">per hour</span>
         </span>
       </SettingRow>
     </>
@@ -301,14 +303,14 @@ export function DeliveriesTab({ client, a, onOpen, onRun }: {
         </SettingsNote></div>
       ) : null}
       {!list ? <Spinner label="Loading…" /> : shown.length === 0 ? <EmptyState title="No deliveries in the last 30 days" /> : (
-        <Table density="compact" className="incomingRoomyRows">
+        <Table density="compact">
           <THead><Tr><Th width="14%">When</Th><Th>Verdict</Th><Th hideWhenNarrow>{incoming ? "Group key" : "Event"}</Th><Th hideWhenNarrow width={88} align="right">Size</Th></Tr></THead>
           <TBody>{shown.map((d) => (
             <Tr key={d.id} interactive onClick={() => onOpen(d.id)} data-testid="delivery-row" data-id={d.id}>
               <Td muted wrap>{ago(d.receivedAt)}</Td>
               <Td wrap><DeliveryVerdict verdict={verdictOf(d)} onRun={onRun} /></Td>
               <Td hideWhenNarrow wrap>{incoming
-                ? d.groupKey ? <span className="incomingBreak ds-mono">{d.groupKey}</span> : <span className="incomingMuted">—</span>
+                ? d.groupKey ? <span className="incomingBreak ds-mono">{d.groupKey}</span> : <span className="muted">—</span>
                 : <span className="ds-mono">{[d.event, d.action, d.repository].filter(Boolean).join(" · ")}</span>}</Td>
               <Td hideWhenNarrow muted align="right">{sizeOf(d.bytes)}</Td>
             </Tr>
@@ -378,21 +380,15 @@ function VerdictBox({ trigger, verdict, body }: { trigger: IncomingTrigger; verd
   const results = verdict?.results ?? trigger.conditions.map((c) => conditionHolds(c, body));
   const groupKey = verdict?.groupKey ?? "";
   const miss = trigger.conditions.findIndex((_, i) => !results[i]?.ok);
+  const live = Boolean(verdict?.liveRunId);
   return (
-    <div className="incomingVerdictBox" role="status" data-testid="test-verdict">
-      <p>✓ Valid JSON. Group key <code className="incomingBreak ds-mono">{groupKey || "(empty)"}</code>: {verdict?.liveRunId ? "a run of this group is going." : "no run of this group is going."}</p>
-      {verdict?.liveRunId ? (
-        <p><b>As a real delivery it would be sent to the running agent;</b> conditions are not checked for it.</p>
-      ) : (
-        <>
-          {trigger.conditions.length ? <ConditionRows value={trigger.conditions} results={results} /> : null}
-          <p className="incomingOutcome" data-ok={String(miss < 0)}>
-            {miss < 0 ? <b>✓ Every condition holds: it would start a run.</b>
-              : <><b>⊘ It would be skipped:</b> {conditionMiss(trigger.conditions[miss]!, results[miss]!)}.</>}
-          </p>
-        </>
-      )}
-    </div>
+    <IncomingVerdictPanel data-testid="test-verdict" ok={miss < 0}
+      outcome={live ? undefined : miss < 0 ? <b>✓ Every condition holds: it would start a run.</b>
+        : <><b>⊘ It would be skipped:</b> {conditionMiss(trigger.conditions[miss]!, results[miss]!)}.</>}>
+      <p>✓ Valid JSON. Group key <code className="incomingBreak ds-mono">{groupKey || "(empty)"}</code>: {live ? "a run of this group is going." : "no run of this group is going."}</p>
+      {live ? <p><b>As a real delivery it would be sent to the running agent;</b> conditions are not checked for it.</p>
+        : trigger.conditions.length ? <ConditionRows value={trigger.conditions} results={results} /> : null}
+    </IncomingVerdictPanel>
   );
 }
 
@@ -472,7 +468,7 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
             </span>} />
         )}
         {body ? <VerdictBox trigger={trigger} verdict={verdict} body={body} />
-          : <p className="incomingMuted" role="status">{mode === "past" ? "Pick a delivery to see what it would do."
+          : <p className="muted" role="status">{mode === "past" ? "Pick a delivery to see what it would do."
             : json.ok ? "× The body must be a JSON object." : `× Not valid JSON, line ${json.line}, column ${json.column}: ${json.message}`}</p>}
         <SettingsNote>A test run starts its own run, with a fresh session, whatever is running or skipped. It is a real run: it can comment and create tasks.</SettingsNote>
       </FormStack>
@@ -499,12 +495,12 @@ export function RunTrigger({ a, run, onDelivery }: { a: Automation; run: Automat
       ]} />
       {later.length > 0 ? (
         <div data-testid="sent-to-run">
-          <h4 className="incomingSubHead">Sent to this run <span className="incomingMuted">· later deliveries of the same group</span></h4>
-          <ol className="incomingTimeline">
+          <h4 className="incomingSubHead ds-label">Sent to this run <span className="muted">· later deliveries of the same group</span></h4>
+          <ol className="automationTimeline">
             {later.map((d) => (
               <li key={d.id}>
                 <time dateTime={d.receivedAt}>{formatTimestamp(d.receivedAt, "time")}</time>
-                <DeliveryVerdict verdict={verdictOf(d)} detail={false} />
+                <DeliveryVerdict verdict={verdictOf(d)} detail={false} />{" "}
                 <TextButton onClick={() => onDelivery(d.id)}><span className="ds-mono">{d.id}</span></TextButton>
               </li>
             ))}

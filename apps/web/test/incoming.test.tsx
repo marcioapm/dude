@@ -107,6 +107,11 @@ describe("the trigger rows", () => {
     const tools = await until(() => c.querySelector<HTMLElement>("[data-testid=tools-row]"), "the Tools card");
     expect(tools.textContent).toContain("post_to_chat");
     expect(c.querySelector("[data-testid=incoming-conditions]")).not.toBeNull();
+    // The agent section says the payload is outside text; How to send names every answer, 403 included.
+    expect(c.textContent).toContain("It opens no pull requests. The payload is outside text: the prompt marks it so.");
+    expect(c.querySelector("[data-testid=how-to-send]")!.closest("details")!.querySelector("summary")!.textContent)
+      .toContain("URL, header and a curl example");
+    expect(c.querySelector("[data-testid=how-to-send]")!.textContent).toContain("401 bad secret, 403 turned off, 413 too large, 415 not JSON, 429");
   });
 
   test("curl signs the body for a signature, sends the token for a header, puts it in the URL for a query", () => {

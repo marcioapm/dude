@@ -3,6 +3,7 @@ import { Button } from "../primitives/Button.tsx";
 import { Dialog } from "../primitives/Dialog.tsx";
 import { Input } from "../primitives/Input.tsx";
 import { FormStack } from "../primitives/Layout.tsx";
+import { CodeWell } from "./CodeWell.tsx";
 import styles from "./KeyShownOnce.module.css";
 
 export interface KeyShownOnceProps {
@@ -44,7 +45,7 @@ export function KeyShownOnce({ title, secret, onClose, description, usage, usage
         {usage ? (
           <div className={styles["usage"]}>
             <span className="ds-label">{usageHeading}</span>
-            {typeof usage === "string" ? <pre className={styles["code"]} data-testid="key-usage"><code>{usage}</code></pre> : usage}
+            {typeof usage === "string" ? <CodeWell data-testid="key-usage">{usage}</CodeWell> : usage}
             {usageNote ? <p className={styles["note"]}>{usageNote}</p> : null}
           </div>
         ) : null}

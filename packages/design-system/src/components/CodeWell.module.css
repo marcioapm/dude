@@ -1,0 +1,21 @@
+/* A square sunken well for text to copy as it is; structure is square, so no radius. */
+
+.block,
+.inline {
+  border-radius: var(--ds-radius-none);
+  background: var(--ds-color-sunken);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-mono);
+  color: var(--ds-color-text-primary);
+}
+.block {
+  margin: 0;
+  padding: var(--ds-space-code-y) var(--ds-space-code-x);
+  line-height: var(--ds-leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inline {
+  padding: var(--ds-space-2) var(--ds-space-6);
+  overflow-wrap: anywhere;
+}
