@@ -57,8 +57,8 @@ describe("Organisation settings → Secrets", () => {
       ["GH_TOKENplatform has its own", "ImplementerFixer", "1 automation", "…Q8e2"],
       ["NPM_TOKEN", "PreviewsTesterImplementerFixerSimplifierReviewer", "—", "…x0Lm"],
       ["SEED_LLM_KEYweb-console has its own", "Tester", "—", "…Kq7w"],
-      ["SENTRY_TOKEN", "TesterImplementer", "1 automation", "…7c1d"],
-      ["STATUSPAGE_KEY", "Only automations that pick it", "1 automation", "…kk42"],
+      ["SENTRY_TOKEN", "TesterImplementer", "2 automations", "…7c1d"],
+      ["STATUSPAGE_KEY", "Only automations that pick it", "2 automations", "…kk42"],
     ]);
     expect(container.textContent).toContain(NO_TALKERS_NOTE);
     expect(container.textContent).toContain("A project secret with the same name takes the place of Example's in that project");
