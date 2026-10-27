@@ -176,7 +176,11 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <ConditionRows value={ALERT_CONDITIONS} results={[{ ok: true, actual: "firing" }, { ok: false, actual: "warning" }]} />
             <Label>Disabled</Label>
             <ConditionRows value={ALERT_CONDITIONS} onChange={() => undefined} disabled />
-            <Label>390px</Label>
+            <Label>460px, in a settings row: one line each</Label>
+            <div style={{ width: 460 }}>
+              <ConditionsDemo />
+            </div>
+            <Label>390px: stacked</Label>
             <div style={{ width: 390 }}>
               <ConditionsDemo />
             </div>

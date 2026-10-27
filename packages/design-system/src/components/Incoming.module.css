@@ -57,7 +57,8 @@
 }
 .row {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1.4fr) minmax(96px, 0.8fr) minmax(0, 1.1fr) auto;
+  /* The operator column's minimum is the Select trigger's own (120px). */
+  grid-template-columns: 40px minmax(0, 1.4fr) minmax(120px, 0.8fr) minmax(0, 1.1fr) auto;
   align-items: start;
   gap: var(--ds-space-8);
 }
@@ -156,8 +157,8 @@
   color: var(--ds-tone-danger-fg);
 }
 
-/* Below 560px of its own width a row stacks path and operator over its value. */
-@container conditions (max-width: 560px) {
+/* Below 420px of its own width (narrower than a settings row's control column) a row stacks path and operator over its value. */
+@container conditions (max-width: 420px) {
   .row {
     grid-template-columns: 36px minmax(0, 1fr) minmax(88px, auto) auto;
   }
