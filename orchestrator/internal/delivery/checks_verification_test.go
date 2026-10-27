@@ -439,12 +439,20 @@ func TestChecksStatusPrecedence(t *testing.T) {
 }
 
 // The tester reads why the judge did not pass a writer's failure, beside
-// the agent's own evidence.
+// the agent's own evidence, and, for a failure a waiver did not cover
+// either, both reasons.
 func TestWriterChecksCarryTheJudgesReason(t *testing.T) {
-	runs := []gatedJudgement{{Role: "Fixer", Checks: []gatedCheck{{Command: "npx tsc --noEmit", Result: CheckFail, Reason: "95 errors",
-		JudgeReason: "not passed by the judge: no run at the task's base"}}}}
-	if text, want := writerChecksText(runs, writerChecksMax), "npx tsc --noEmit: fail (95 errors) — not passed by the judge: no run at the task's base"; !strings.Contains(text, want) {
-		t.Errorf("account lacks %q:\n%s", want, text)
+	runs := []gatedJudgement{{Role: "Fixer", Checks: []gatedCheck{
+		{Command: "npx tsc --noEmit", Result: CheckFail, Reason: "95 errors", JudgeReason: "not passed by the judge: no run at the task's base"},
+		{Command: "make test", Result: CheckFail, Reason: "TestClock fails", WaiverReason: "the Implementer's waiver does not cover this failure: another test",
+			JudgeReason: "not passed by the judge: passes at the task's base"},
+	}}}
+	text := writerChecksText(runs, writerChecksMax)
+	for _, want := range []string{"npx tsc --noEmit: fail (95 errors) — not passed by the judge: no run at the task's base",
+		"make test: fail (TestClock fails) — the Implementer's waiver does not cover this failure: another test — not passed by the judge: passes at the task's base"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("account lacks %q:\n%s", want, text)
+		}
 	}
 }
 
