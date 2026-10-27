@@ -199,6 +199,9 @@ func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st 
 		return false, err
 	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		if err := carryGateOverMergeTx(ctx, tx, sc.WorkflowRunID, st, pre); err != nil {
+			return err
+		}
 		return emitTx(ctx, tx, sc.OrganizationID, st, EvTestSkipped, map[string]any{"fromRunId": prev.ID,
 			"from": pre, "heads": st.Heads, "paths": m.Merged, "criteria": verdicts, "why": MergeUntouchedWhy,
 			"merge": map[string]any{"repo": i.Repo, "base": i.Base, "baseHead": i.BaseHead}})
@@ -207,6 +210,29 @@ func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st 
 	}
 	st.TestRunID = prev.ID
 	return true, nil
+}
+
+// carryGateOverMergeTx moves a person's Open or Draft given at the heads
+// before the merge (pre) to the merged heads: the merge is what opening the
+// pull request brought in, not new work to authorize. One given at other
+// heads, or none, is left as it is. gateAt is Owned: read and written in
+// the row, locked.
+func carryGateOverMergeTx(ctx context.Context, tx pgx.Tx, wfID string, st *State, pre map[string]string) error {
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT state->'gateAt' FROM workflow_runs WHERE id = $1 FOR UPDATE`, wfID).Scan(&raw); err != nil {
+		return err
+	}
+	var at *GateAt
+	if len(raw) == 0 || json.Unmarshal(raw, &at) != nil || at == nil || !maps.Equal(nonNilMap(at.Heads), nonNilMap(pre)) {
+		return nil
+	}
+	at.Heads = maps.Clone(nonNilMap(st.Heads))
+	moved, _ := json.Marshal(at)
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{gateAt}', $2::jsonb) WHERE id = $1`, wfID, moved); err != nil {
+		return err
+	}
+	st.GateAt = at
+	return nil
 }
 
 // stoodAt says the verdicts of prev were the delivery's at heads: its
