@@ -399,22 +399,29 @@ func TestUnderTheConductorAskMeFirstIsThePersonsQuestion(t *testing.T) {
 // A task across two repositories, its first pull request open in one: a
 // fix of that pull request's feedback that changes the other opens the
 // second one with nobody asked, under Ask me first, and not as a draft
-// under Open as draft or after the owner's Open as draft at the hold.
+// under Open as draft or after the owner's Open as draft at the hold, given
+// on the hold or as the answer to the gate question Deliver asks through a
+// live conductor.
 // That the choice is read only before the first pull request is the
 // delivery package's TestATasksPullRequestChoiceIsItsOwnersUntilAPullRequestOpens.
 func TestALaterRepositorysPullRequestIsNeitherHeldNorADraft(t *testing.T) {
 	for _, c := range []struct {
 		name, choice string
 		answerDraft  bool
+		viaConductor bool
 	}{
-		{"ask", delivery.PullRequestAsk, false},
-		{"ask answered draft", delivery.PullRequestAsk, true},
-		{"draft", delivery.PullRequestDraft, false},
+		{"ask", delivery.PullRequestAsk, false, false},
+		{"ask answered draft", delivery.PullRequestAsk, true, false},
+		{"ask answered draft to the conductor's question", delivery.PullRequestAsk, true, true},
+		{"draft", delivery.PullRequestDraft, false, false},
 	} {
 		choice := c.choice
 		firstDraft := choice == delivery.PullRequestDraft || c.answerDraft
 		t.Run(c.name, func(t *testing.T) {
 			w := newWorld(t)
+			if c.viaConductor {
+				w = conducting(t)
+			}
 			ana := w.person("Ana")
 			var prOpen atomic.Bool
 			scripted := w.lux.Decide
@@ -434,8 +441,22 @@ func TestALaterRepositorysPullRequestIsNeitherHeldNorADraft(t *testing.T) {
 			w.addWeb(task, "write")
 			w.assignOwner(task, ana)
 			w.projectChoice(choice)
-			w.deliver(task)
-			if choice == delivery.PullRequestAsk {
+			if c.viaConductor {
+				// Talked through, then handed to Deliver: its conductor stays live.
+				w.talk(task)
+				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+					t.Fatalf("hand back: %d %v", status, out)
+				}
+				w.until("the hold's gate question", func() bool {
+					return w.heldBeforePR(task) && w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0
+				})
+				if status, out := w.answerAs(ana, task, "Draft"); status != 200 {
+					t.Fatalf("the owner's Draft to the gate question: %d %v", status, out)
+				}
+			} else {
+				w.deliver(task)
+			}
+			if choice == delivery.PullRequestAsk && !c.viaConductor {
 				w.until("the hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
 				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true, "draft": c.answerDraft}); status != 200 {
 					t.Fatalf("the owner's Open: %d %v", status, out)
