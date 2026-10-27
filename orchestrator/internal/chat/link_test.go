@@ -89,6 +89,27 @@ func row(t *testing.T, blocks json.RawMessage) []button {
 	return out
 }
 
+// sections are the texts of a message's section blocks, in order.
+func sections(t *testing.T, blocks json.RawMessage) []string {
+	t.Helper()
+	var bs []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	if err := json.Unmarshal(blocks, &bs); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, b := range bs {
+		if b.Type == "section" {
+			out = append(out, b.Text.Text)
+		}
+	}
+	return out
+}
+
 func labels(bs []button) string {
 	var out []string
 	for _, b := range bs {
@@ -193,6 +214,9 @@ func TestChatTheAskersClickLinksTheProjectWithItsRepositories(t *testing.T) {
 	if len(u) != 1 || u[0].TS != reply.TS || !strings.Contains(string(u[0].Blocks), "Eli linked ABS · Acme Backend") {
 		t.Fatalf("updates %+v", u)
 	}
+	if h := sections(t, u[0].Blocks); len(h) != 2 || h[1] != "Link another project:" {
+		t.Fatalf("sections after the first link %q", h)
+	}
 	if l := labels(row(t, u[0].Blocks)); l != "BIL · Billing, Choose in dude" {
 		t.Fatalf("row after %q", l)
 	}
@@ -226,6 +250,10 @@ func TestChatTheAskersClickLinksTheProjectWithItsRepositories(t *testing.T) {
 	}
 	if l := labels(row(t, u[1].Blocks)); l != "Choose in dude" {
 		t.Fatalf("row after both %q", l)
+	}
+	// Nothing left to offer: no heading, only the reply's own words.
+	if h := sections(t, u[1].Blocks); len(h) != 1 || strings.Contains(h[0], "Link") {
+		t.Fatalf("sections after both %q", h)
 	}
 	// The mention's marks are the session's, as before: 👀 until its agent answers.
 	if r := w.fake.Reactions("C1", reply.ThreadTS); strings.Join(r, ",") != "eyes" {
@@ -389,6 +417,79 @@ func TestChatAForgedLinkValueLinksNothing(t *testing.T) {
 	w.click("Eli", "G1", reply.TS, reply.ThreadTS, value)
 	if l := w.linked(session); l != "" {
 		t.Fatalf("linked %q from another conversation", l)
+	}
+}
+
+func TestChatAFailedRoutingCallStillOffersTheUsualAndLearnedProjects(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	w.earlier(w.sdk)
+	w.model.queue("I think a task")
+	w.mention("Eli", "C1", "", "can you investigate the failures above?")
+	got := w.requests()
+	last := got[len(got)-1]
+	if last.Route != "failed" || last.ResultKind != "session" {
+		t.Fatalf("request %+v", last)
+	}
+	if l := labels(row(t, lastBot(t, w.fake).Blocks)); l != "ABS · Acme Backend, SDK · Client SDK, Choose in dude" {
+		t.Fatalf("row %q", l)
+	}
+}
+
+func TestChatAClickFromAnotherWorkspaceLinksAndPostsNothing(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, session := w.brainstorm("Eli")
+	value := row(t, reply.Blocks)[0].Value
+	// Eli is connected in T2 as well, where the same conversation id
+	// exists: only the installation's workspace T1 is dude's.
+	w.exec(`INSERT INTO chat_identities (organization_id, provider, external_workspace_id, external_user_id, account_id, person_id,
+		handle, display_name) VALUES ($1, 'slack', 'T2', 'U2', $2, $3, 'eli', 'Eli')`, w.org, "acc_U2_"+w.org, w.people["Eli"][0])
+	in, _ := json.Marshal(chat.Interaction{ID: "click-T2", WorkspaceID: "T2", ConversationID: "C1", ThreadID: reply.ThreadTS, MessageID: reply.TS,
+		User: chat.ExternalUser{ID: "U2", WorkspaceID: "T2"}, Value: value})
+	w.exec(`INSERT INTO chat_events (provider, event_id, organization_id, kind, payload, thread_key) VALUES ('slack', 'click-T2', $1, 'interaction', $2, 'T2:C1')`,
+		w.org, string(in))
+	w.sweep()
+	if n := w.count(`SELECT count(*) FROM chat_events WHERE organization_id = $1 AND event_id = 'click-T2' AND processed_at IS NOT NULL`, w.org); n != 1 {
+		t.Fatal("the click was not handled")
+	}
+	if l := w.linked(session); l != "" || len(w.fake.Updates()) != 0 || len(w.fake.Ephemerals()) != 0 ||
+		w.count(`SELECT count(*) FROM chat_request_links WHERE organization_id = $1`, w.org) != 0 {
+		t.Fatalf("linked %q, updates %+v, ephemerals %+v", l, w.fake.Updates(), w.fake.Ephemerals())
+	}
+}
+
+func TestChatAClickNamingAnotherOrgsOfferIsNotOffered(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, _ := w.brainstorm("Eli")
+	// Globex: its own person, project, session and an offer in the same
+	// workspace and conversation ids, asked by the same Slack user id.
+	other := "org_globex_" + w.org
+	w.exec(`INSERT INTO organizations (id, name, slug) VALUES ($1, 'Globex', $1)`, other)
+	w.exec(`INSERT INTO people (id, organization_id, name, role) VALUES ('per_g_'||$1, $1, 'Gil', 'admin')`, other)
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_g_'||$1, $1, 'Globex Core', 'core', 'GLX')`, other)
+	w.exec(`INSERT INTO sessions (id, organization_id, title, created_by, access) VALUES ('ssn_g_'||$1, $1, 'Theirs', 'per_g_'||$1, 'private')`, other)
+	w.exec(`INSERT INTO session_people (session_id, person_id, organization_id, role, invited_by, accepted_at)
+		VALUES ('ssn_g_'||$1, 'per_g_'||$1, $1, 'owner', 'per_g_'||$1, now())`, other)
+	offer, _ := json.Marshal(map[string]any{"text": "Started", "session": "ssn_g_" + other,
+		"candidates": []map[string]string{{"id": "prj_g_" + other, "key": "GLX", "name": "Globex Core"}}})
+	w.exec(`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id, route,
+		result_kind, result_id, link_offer, question_message_id, replied_at)
+		VALUES ('chr_g_'||$1, $1, 'slack', 'ev_g_'||$1, 'T1', 'C1', 'U2', 'brainstorm', 'session', 'ssn_g_'||$1, $2, $3, now())`,
+		other, string(offer), reply.TS)
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, "link:chr_g_"+other+":0")
+	if eph := w.fake.Ephemerals(); len(eph) != 1 || eph[0].Text != "That isn't a project dude offered to link here." {
+		t.Fatalf("ephemerals %+v", eph)
+	}
+	if n := w.count(`SELECT count(*) FROM session_projects WHERE organization_id IN ($1, $2)`, w.org, other); n != 0 {
+		t.Fatalf("%d session links", n)
+	}
+	if n := w.count(`SELECT count(*) FROM chat_request_links WHERE organization_id IN ($1, $2)`, w.org, other); n != 0 {
+		t.Fatalf("%d recorded", n)
+	}
+	if len(w.fake.Updates()) != 0 {
+		t.Fatalf("updates %+v", w.fake.Updates())
 	}
 }
 

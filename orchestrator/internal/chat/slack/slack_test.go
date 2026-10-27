@@ -239,13 +239,24 @@ func TestAReplysRowIsButtonsAndItsUpdateReplacesThem(t *testing.T) {
 	if len(buttons) != 2 || buttons[0].(map[string]any)["value"] != "link:chr_1:0" || buttons[1].(map[string]any)["url"] != "https://dude.example.com/s/1" {
 		t.Fatalf("buttons %v", buttons)
 	}
-	row.Choices, row.Heading, row.Linked = nil, "", []string{"Márcia linked ABS · Acme"}
+	row.Choices, row.Heading, row.Linked = nil, "", []string{"Márcia linked ABS · Acme", "Eli linked SDK · Client SDK"}
 	if err := p.UpdateReply(ctx, inst, "C1", ts, chat.Reply{Text: "Started", Row: row}); err != nil {
 		t.Fatal(err)
 	}
 	u := fake.Updates()
-	if len(u) != 1 || u[0].TS != ts || !strings.Contains(string(u[0].Blocks), "Márcia linked ABS · Acme") || strings.Contains(string(u[0].Blocks), "link:chr_1:0") {
+	if len(u) != 1 || u[0].TS != ts || strings.Contains(string(u[0].Blocks), "link:chr_1:0") {
 		t.Fatalf("updates %+v", u)
+	}
+	var context []string
+	var after []map[string]any
+	_ = json.Unmarshal(u[0].Blocks, &after)
+	for _, b := range after {
+		if b["type"] == "context" {
+			context = append(context, b["elements"].([]any)[0].(map[string]any)["text"].(string))
+		}
+	}
+	if strings.Join(context, "\n") != "Márcia linked ABS · Acme\nEli linked SDK · Client SDK" {
+		t.Fatalf("context blocks %q", context)
 	}
 }
 
