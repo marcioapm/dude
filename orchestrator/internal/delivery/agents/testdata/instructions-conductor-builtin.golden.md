@@ -65,7 +65,7 @@ dude does the mechanics: it starts Runs, moves branches, opens pull requests, re
 Your tools act on the work you are part of. Use them; do not work around them.
 - **Ask a person**: `ask_person`, when you cannot go on without a decision only a person can make. Several questions go in one call. The answer comes back as your next message, even hours later; your work is kept meanwhile.
 - **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known; save what the next agent should know (`remember`), after searching so you do not save it twice.
-- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once. For a video, `--poster IMAGE` names the screenshot its card shows.
+- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once. For a video, `--poster PATH` is the file path where you saved the screenshot its card shows (not its `--name`), e.g. `--poster /tmp/shots/04-saved.png`.
 - **Progress**: `emit_event` / `dude event progress` so people can follow long work.
 - **Other work you find**: record it as a task (`create_task`); a person decides on it. Do not do it inside yours.
 - **Another repository you need**: `request_repository`.

@@ -64,7 +64,7 @@ dude does the mechanics: it starts Runs, moves branches, opens pull requests, re
 ## What you have
 Your tools act on the work you are part of. Use them; do not work around them.
 - **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known; save what the next agent should know (`remember`), after searching so you do not save it twice.
-- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once. For a video, `--poster IMAGE` names the screenshot its card shows.
+- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once. For a video, `--poster PATH` is the file path where you saved the screenshot its card shows (not its `--name`), e.g. `--poster /tmp/shots/04-saved.png`.
 - **Progress**: `emit_event` / `dude event progress` so people can follow long work.
 - **Another repository you need**: `request_repository`.
 - **What a Run changed**: `run_diff`.

@@ -15,6 +15,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"os/exec"
@@ -57,8 +58,12 @@ func publishFile(path, name, description, poster string) (json.RawMessage, error
 			return nil, errors.New("usage: --poster is for a video (mp4, m4v, webm, mov, ogv): dude publish VIDEO --poster IMAGE")
 		}
 		img, err := decodeFile(poster)
+		var bad notAPicture
+		if errors.As(err, &bad) {
+			return nil, fmt.Errorf("--poster %s is not a PNG, JPEG, GIF or WebP picture: %w", poster, bad.err)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("--poster %s is not a PNG, JPEG, GIF or WebP picture: %w", poster, err)
+			return nil, fmt.Errorf("--poster %s: %w", poster, err)
 		}
 		posterImg = img
 	}
@@ -125,15 +130,29 @@ func isVideo(path, name string) bool {
 		len(head) >= 4 && bytes.Equal(head[:4], []byte{0x1a, 0x45, 0xdf, 0xa3})
 }
 
+// notAPicture is a file that opens and reads but does not decode.
+type notAPicture struct{ err error }
+
+func (e notAPicture) Error() string { return e.err.Error() }
+
+// decodeFile returns the file system's own error (open, read, seek), a
+// too-large error, or notAPicture.
 func decodeFile(path string) (image.Image, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	asDecodeError := func(err error) error {
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			return err
+		}
+		return notAPicture{err}
+	}
 	cfg, _, err := image.DecodeConfig(f)
 	if err != nil {
-		return nil, err
+		return nil, asDecodeError(err)
 	}
 	if cfg.Width*cfg.Height > maxPixels {
 		return nil, fmt.Errorf("%dx%d is too large to decode", cfg.Width, cfg.Height)
@@ -142,7 +161,10 @@ func decodeFile(path string) (image.Image, error) {
 		return nil, err
 	}
 	img, _, err := image.Decode(f)
-	return img, err
+	if err != nil {
+		return nil, asDecodeError(err)
+	}
+	return img, nil
 }
 
 // imageToShrink is FILE decoded when it is a PNG, JPEG, GIF or WebP worth

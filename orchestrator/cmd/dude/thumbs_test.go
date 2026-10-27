@@ -239,9 +239,13 @@ func TestABadPosterPublishesNothing(t *testing.T) {
 	if _, _, err := publishing(t, md, "--poster", poster); err == nil || !strings.Contains(err.Error(), "usage") || shim.count() != 0 {
 		t.Fatalf("--poster on a .md: %v, %d calls; want a usage error and nothing published", err, shim.count())
 	}
-	for _, p := range []string{notAPicture, filepath.Join(dir, "missing.png")} {
-		if _, _, err := publishing(t, video, "--poster", p); err == nil || !strings.Contains(err.Error(), "--poster") || shim.count() != 0 {
-			t.Fatalf("--poster %s: %v, %d calls; want an error and nothing published", p, err, shim.count())
+	for p, want := range map[string]string{
+		notAPicture:                       "--poster " + notAPicture + " is not a PNG, JPEG, GIF or WebP picture: ",
+		filepath.Join(dir, "missing.png"): "--poster " + filepath.Join(dir, "missing.png") + ": open " + filepath.Join(dir, "missing.png") + ": no such file or directory",
+	} {
+		_, _, err := publishing(t, video, "--poster", p)
+		if err == nil || !strings.HasPrefix(err.Error(), want) || shim.count() != 0 {
+			t.Fatalf("--poster %s: %v, %d calls; want %q and nothing published", p, err, shim.count(), want)
 		}
 	}
 }
