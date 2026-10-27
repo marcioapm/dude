@@ -157,6 +157,30 @@ func TestChatAFailedRequestKeepsItsCauseForRequests(t *testing.T) {
 			t.Fatalf("request %+v", got)
 		}
 	})
+	t.Run("a model's resume made a brainstorm instead, its reply never taken: given up as a brainstorm", func(t *testing.T) {
+		w := setup(t)
+		w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "My ideas"}))
+		w.dm("Márcia", "my private ideas")
+		private := w.last().ResultID
+		w.model.queue(resume(private))
+		w.fake.FailTimes("chat.postMessage", "internal_error", 100)
+		_, ev := w.receive("Márcia", "C1", "", "continue that")
+		w.once()
+		for range chat.MaxAttempts {
+			w.due()
+			w.once()
+		}
+		if e := w.event(ev); !e.Processed {
+			t.Fatalf("not given up: %+v", e)
+		}
+		got := w.last()
+		if got.Route != "failed" || got.AskedRoute != "resume" || got.ResultKind != "session" || got.ResultID == "" || got.ResultID == private || got.MadeRoute != "brainstorm" {
+			t.Fatalf("request %+v", got)
+		}
+		if got.Failure != "its reply was not posted: Slack did not answer after 6 tries" {
+			t.Fatalf("failure %q", got.Failure)
+		}
+	})
 	t.Run("a thread bound to an epic, its reply refused: made as a task link", func(t *testing.T) {
 		w := setup(t)
 		w.model.queue(answer(map[string]any{"route": "epic", "confidence": 0.9, "project": "BIL", "new_epic": map[string]any{"title": "Fast exports",
