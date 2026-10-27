@@ -1199,7 +1199,7 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
       {problem ?? fresh.problem ? <Callout tone="danger">{problem ?? fresh.problem}</Callout> : null}
       {!data ? <Spinner label="Loading…" /> : data.runs.length === 0 ? <EmptyState title="No runs yet" /> : (
         <Table density="compact">
-          <THead><Tr><Th>Status</Th><Th>Why</Th><Th hideWhenNarrow>Session</Th><Th hideWhenNarrow>Cost</Th><Th>When</Th></Tr></THead>
+          <THead><Tr><Th style={{ width: 100 }}>Status</Th><Th style={{ width: "60%" }}>Why</Th>{a.sessionMode === "resumable" ? <Th hideWhenNarrow>Session</Th> : null}<Th hideWhenNarrow>Cost</Th><Th>When</Th></Tr></THead>
           <TBody>
             {data.runs.map((r) => (
               <Tr key={r.id} interactive onClick={() => onOpenRun(r.id)} data-testid="run-row" data-id={r.id}>
@@ -1207,7 +1207,7 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
                 <Td>{r.reason ?? (r.event ? `${r.event}${r.action ? ` · ${r.action}` : ""}${r.payloadCount > 1 ? ` · ${r.payloadCount} events` : ""}` : r.source === "schedule" ? "Scheduled" : "Run now")}
                   {r.source === "test" ? <Badge size="sm" tone="info">Test</Badge> : null}
                   {r.status === "running" && r.now ? <RunNowLine tool={r.now.tool} args={r.now.args} /> : null}</Td>
-                <Td hideWhenNarrow muted>{r.session ?? "—"}</Td>
+                 {a.sessionMode === "resumable" ? <Td hideWhenNarrow muted>{r.session ?? "—"}</Td> : null}
                 <Td hideWhenNarrow muted>{r.costUsd !== null ? `$${r.costUsd.toFixed(2)}` : "—"}</Td>
                 <Td muted>{ago(r.createdAt)}</Td>
               </Tr>
