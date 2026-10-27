@@ -69,8 +69,8 @@ def _inputs(env, lux_run: str) -> list[str]:
                     rec = json.loads(line[5:]).get("event") or {}
                     if rec.get("type") == "lux.input" and (rec.get("data") or {}).get("text"):
                         out.append(rec["data"]["text"])
-        except requests.exceptions.ConnectionError:
-            pass  # the read timeout: everything recorded so far has been read
+        except requests.exceptions.RequestException:
+            pass  # the read timeout, whichever class it surfaces as: everything recorded so far has been read
     return out
 
 

@@ -657,7 +657,10 @@ the automation's verification secret — an HMAC-SHA256 signature of the
 body in a header, the secret in a header, or the secret as a URL query
 parameter (which then shows in any proxy's access log: prefer the other
 two where the sender can). dude shows the secret once, at Create or
-Rotate, then only its last four characters.
+Rotate, then only its last four characters. The page shows the URL at the
+public URL the organisation's GitHub connection registered its webhooks at;
+an organisation without one sees the origin the browser opened dude at,
+which is the right one only when people and senders reach dude the same way.
 
 **What it answers.** 202 once stored; 404 for an unknown hook (nothing
 stored); 401 a wrong or missing secret; 413 a body over 1 MiB; 415 a body
