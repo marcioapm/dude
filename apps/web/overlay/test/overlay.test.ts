@@ -1224,6 +1224,24 @@ test("once dude answered through the chain, the page stays connected to it after
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
 
+test("dude reached through the openers, with the page between them closed, stays pinned through a slow reload and reconnects", async () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  const previewPage = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: dudeTab });
+  opener = previewPage as unknown as Opener;
+  boot({ heartbeatMs: HB });
+  fromDude(sessionFor(), DUDE, dudeTab);
+  previewPage.closed = true;
+  // With no chain left to fall back to, the pin outlasts the waiting beats: dude is still said hello to, not taken for closed.
+  dropToWaiting(beat);
+  for (let i = 0; i < 6; i++) beat();
+  await tick(1_100);
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
 test("a dude window that answered and then stops answering is let go after the waiting beats: the dude up the openers is heard instead", () => {
   page(CART, false);
   const beat = heartbeatByHand();
