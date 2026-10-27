@@ -1,0 +1,53 @@
+{
+  "body": {
+    "status": "firing",
+    "groupKey": "{}/{alertname=\"HighErrorRate\"}:{service=\"api\"}",
+    "commonLabels": { "alertname": "HighErrorRate", "severity": "critical", "service": "api" },
+    "alerts": [
+      { "status": "firing", "labels": { "pod": "api-7" } },
+      { "status": "resolved", "labels": { "pod": "api-2" } }
+    ],
+    "count": 3,
+    "silenced": false,
+    "nothing": null,
+    "tags": ["db", "prod"],
+    "a.b": "dotted key"
+  },
+  "cases": [
+    { "path": "status", "op": "is", "values": ["firing"], "ok": true, "actual": "firing" },
+    { "path": "status", "op": "is", "values": ["resolved"], "ok": false, "actual": "firing" },
+    { "path": "status", "op": "is_not", "values": ["resolved"], "ok": true, "actual": "firing" },
+    { "path": "status", "op": "is_not", "values": ["firing"], "ok": false, "actual": "firing" },
+    { "path": "missing", "op": "is_not", "values": ["x"], "ok": true, "actual": "missing" },
+    { "path": "commonLabels.severity", "op": "one_of", "values": ["critical", "high"], "ok": true, "actual": "critical" },
+    { "path": "commonLabels.severity", "op": "one_of", "values": ["warning", "high"], "ok": false, "actual": "critical" },
+    { "path": "commonLabels.alertname", "op": "contains", "values": ["Error"], "ok": true, "actual": "HighErrorRate" },
+    { "path": "commonLabels.alertname", "op": "contains", "values": ["error"], "ok": false, "actual": "HighErrorRate" },
+    { "path": "commonLabels.service", "op": "exists", "values": [], "ok": true, "actual": "api" },
+    { "path": "commonLabels.team", "op": "exists", "values": [], "ok": false, "actual": "missing" },
+    { "path": "nothing", "op": "exists", "values": [], "ok": false, "actual": "null" },
+    { "path": "alerts.0.status", "op": "is", "values": ["firing"], "ok": true, "actual": "firing" },
+    { "path": "alerts.1.labels.pod", "op": "is", "values": ["api-2"], "ok": true, "actual": "api-2" },
+    { "path": "alerts.2.status", "op": "exists", "values": [], "ok": false, "actual": "missing" },
+    { "path": "alerts.first", "op": "exists", "values": [], "ok": false, "actual": "missing" },
+    { "path": "status.0", "op": "exists", "values": [], "ok": false, "actual": "missing" },
+    { "path": "count", "op": "is", "values": ["3"], "ok": true, "actual": "3" },
+    { "path": "count", "op": "one_of", "values": ["1", "2"], "ok": false, "actual": "3" },
+    { "path": "silenced", "op": "is", "values": ["false"], "ok": true, "actual": "false" },
+    { "path": "tags", "op": "contains", "values": ["prod"], "ok": true, "actual": "[\"db\",\"prod\"]" },
+    { "path": "tags", "op": "contains", "values": ["pro"], "ok": false, "actual": "[\"db\",\"prod\"]" },
+    { "path": "tags.1", "op": "is", "values": ["prod"], "ok": true, "actual": "prod" },
+    { "path": "commonLabels", "op": "is", "values": ["x"], "ok": false, "actual": "{\"alertname\":\"HighErrorRate\",\"severity\":\"critical\",\"service\":\"api\"}" },
+    { "path": "count", "op": "contains", "values": ["3"], "ok": false, "actual": "3" },
+    { "path": "missing.deeper", "op": "is", "values": ["x"], "ok": false, "actual": "missing" }
+  ],
+  "groupKeys": [
+    { "groupBy": "groupKey", "key": "{}/{alertname=\"HighErrorRate\"}:{service=\"api\"}" },
+    { "groupBy": "commonLabels.service", "key": "api" },
+    { "groupBy": "count", "key": "3" },
+    { "groupBy": "alerts.0.labels.pod", "key": "api-7" },
+    { "groupBy": "missing", "key": "" },
+    { "groupBy": "nothing", "key": "" },
+    { "groupBy": "", "key": "" }
+  ]
+}

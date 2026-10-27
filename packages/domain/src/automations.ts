@@ -1,6 +1,7 @@
 /**
- * Automations: work nobody started by hand. Each runs on a schedule or when
- * GitHub tells dude something happened, and is one of four kinds: an agent
+ * Automations: work nobody started by hand. Each runs on a schedule, when
+ * GitHub tells dude something happened, or when a request reaches its own
+ * URL (an incoming webhook, incoming.ts), and is one of four kinds: an agent
  * (its own, or one of dude's roles given a brief), a command that runs and
  * exits, a server that answers events, or a signed POST to a URL. An
  * automation belongs to the organisation or to one of its projects; an
@@ -13,6 +14,7 @@ import { harnessSchema } from "./harnesses.ts";
 import { timeLimitMinutesSchema } from "./hierarchy.ts";
 import { secretRefSchema, type SecretRecipient } from "./secrets.ts";
 import { SETTINGS_ROLE_LABEL } from "./settings.ts";
+import { incomingTriggerSchema, newHookId, type AutomationDelivery, type ConditionResult } from "./incoming.ts";
 
 export const AUTOMATION_KINDS = ["agent", "command", "server", "webhook"] as const;
 export const automationKindSchema = z.enum(AUTOMATION_KINDS);
@@ -136,7 +138,7 @@ export const githubTriggerSchema = z.object({
   filters: eventFiltersSchema.default({}),
 }).strict();
 
-export const triggerSchema = z.discriminatedUnion("kind", [scheduleTriggerSchema, githubTriggerSchema]);
+export const triggerSchema = z.discriminatedUnion("kind", [scheduleTriggerSchema, githubTriggerSchema, incomingTriggerSchema]);
 export type Trigger = z.infer<typeof triggerSchema>;
 export type ScheduleTrigger = z.infer<typeof scheduleTriggerSchema>;
 export type GithubTrigger = z.infer<typeof githubTriggerSchema>;
@@ -272,6 +274,14 @@ export const AUTOMATION_PROMPT_VARIABLES = [
   { name: "schedule.time", description: "When a scheduled run was due, in the schedule's time zone." },
 ] as const;
 
+/** An incoming webhook's variables: the GitHub ones name nothing in its body. */
+export const INCOMING_PROMPT_VARIABLES = [
+  { name: "payload.<path>", description: "A value from the delivery's JSON body: {{payload.commonLabels.alertname}}." },
+  { name: "event.payload", description: "The whole body, as JSON." },
+  { name: "event.delivery_id", description: "dude's delivery id." },
+  { name: "event.group_key", description: "The group-by value." },
+] as const;
+
 // ---------------------------------------------------------------------------
 // Command, server, webhook
 // ---------------------------------------------------------------------------
@@ -344,6 +354,8 @@ const baseSchema = z.object({
   webhook: automationWebhookSchema.nullable().default(null),
   secrets: z.array(secretRefSchema).max(100).default([]),
   notifyOnFailure: z.boolean().default(true),
+  /** An organisation incoming automation's projects: create_task files there; their repositories are the ones it may check out. */
+  projectIds: z.array(z.string().min(1)).max(50).default([]),
 }).strict();
 
 export type AutomationInput = z.infer<typeof baseSchema>;
@@ -369,6 +381,25 @@ export const PRESET_PICKS_NO_SECRETS = "one of dude's agents gets what its role 
 /** What a Webhook or Server automation does when a POST gets a 5xx or no answer. */
 export const AUTOMATION_POST_RETRY = "A 5xx or no answer within 30 s is retried once; then the run fails and its owner is told.";
 
+/** An organisation incoming automation saved with no project. */
+export const INCOMING_NEEDS_PROJECT = "Pick at least one project: tasks are filed there and its repositories are the ones it can check out.";
+/** Send to the running agent on an incoming webhook with no group-by path. */
+export const INCOMING_SEND_NEEDS_GROUP =
+  "Name a group-by path: with Send to the running agent, a later delivery of the same group goes to its run.";
+
+/** The incoming trigger's own rules; null when it keeps them. */
+function incomingProblem(a: AutomationInput, scope: AutomationScope): { path: string; message: string } | null {
+  if (a.trigger.kind !== "incoming") {
+    return a.projectIds.length > 0 ? { path: "projectIds", message: "only an organisation automation on an incoming webhook names projects" } : null;
+  }
+  if (scope === "project" && a.projectIds.length > 0) return { path: "projectIds", message: "a project automation works in its own project" };
+  if (scope === "organization" && a.projectIds.length === 0) return { path: "projectIds", message: INCOMING_NEEDS_PROJECT };
+  if (new Set(a.projectIds).size !== a.projectIds.length) return { path: "projectIds", message: "each project is named once" };
+  if (a.repoFilter) return { path: "repoFilter", message: "an incoming webhook names no repository: its projects' repositories are the ones it checks out" };
+  if (a.concurrency === "send" && !a.trigger.groupBy) return { path: "trigger.groupBy", message: INCOMING_SEND_NEEDS_GROUP };
+  return null;
+}
+
 /**
  * Why an automation cannot be saved as it is in this scope, as the field it
  * is about and a sentence; null when it can. The database checks the same
@@ -385,7 +416,11 @@ export function automationProblem(a: AutomationInput, scope: AutomationScope): {
   if (a.kind === "command" && a.sessionMode !== "ephemeral") return { path: "sessionMode", message: "a command runs to its end; it keeps no session to resume" };
   if (a.concurrency === "send" && !(a.kind === "agent" && a.sessionMode === "resumable")) return { path: "concurrency", message: "only a resumable agent is sent events while it runs" };
   if (a.concurrency === "parallel" && a.sessionMode !== "ephemeral") return { path: "concurrency", message: "a resumable automation has one session; it cannot run in parallel" };
-  if (a.kind === "server" && a.trigger.kind !== "github") return { path: "trigger", message: "a server answers GitHub events; it has no schedule" };
+  if (a.kind === "server" && a.trigger.kind !== "github") {
+    return { path: "trigger", message: a.trigger.kind === "incoming" ? "a server answers GitHub events; it has no incoming webhook" : "a server answers GitHub events; it has no schedule" };
+  }
+  const incoming = incomingProblem(a, scope);
+  if (incoming) return incoming;
   if (a.kind === "agent" && !a.agent) return { path: "agent", message: "an agent automation needs its agent" };
   if (a.kind === "command" && !a.command) return { path: "command", message: "a command automation needs its command" };
   if (a.kind === "server" && !a.server) return { path: "server", message: "a server automation needs its command and port" };
@@ -401,7 +436,7 @@ export function automationProblem(a: AutomationInput, scope: AutomationScope): {
 export function automationInputSchema(scope: AutomationScope) {
   return baseSchema.superRefine((a, ctx) => {
     const p = automationProblem(a, scope);
-    if (p) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [p.path], message: p.message });
+    if (p) ctx.addIssue({ code: z.ZodIssueCode.custom, path: p.path.split("."), message: p.message });
   });
 }
 
@@ -411,12 +446,12 @@ export const newAutomationSchema = z.object({
   kind: automationKindSchema,
   /** For an agent: its own, or one of dude's roles. */
   preset: presetRoleSchema.nullable().default(null),
-  trigger: z.enum(["schedule", "github"]),
+  trigger: z.enum(["schedule", "github", "incoming"]),
 }).strict();
 export type NewAutomation = z.infer<typeof newAutomationSchema>;
 
-/** A new automation's first settings, which the dialog's three answers decide. */
-export function automationDefaults(n: NewAutomation, tz = "UTC"): AutomationInput {
+/** A new automation's first settings, which the dialog's three answers decide; an incoming one gets hookId. */
+export function automationDefaults(n: NewAutomation, tz = "UTC", hookId: string = newHookId()): AutomationInput {
   // A server answers events only; a reviewer needs a pull request.
   const onEvents = n.trigger === "github" || n.kind === "server" || n.preset === "reviewer";
   return baseSchema.parse({
@@ -424,7 +459,9 @@ export function automationDefaults(n: NewAutomation, tz = "UTC"): AutomationInpu
     kind: n.kind,
     trigger: onEvents
       ? { kind: "github", event: "pull_request", actions: ["opened", "synchronize"], filters: {} }
-      : { kind: "schedule", cron: "0 9 * * 1-5", tz },
+      : n.trigger === "incoming"
+        ? { kind: "incoming", hookId }
+        : { kind: "schedule", cron: "0 9 * * 1-5", tz },
     agent: n.kind !== "agent" ? null : n.preset ? { preset: { role: n.preset, overrides: {} }, brief: "" } : { own: { prompt: "" } },
     command: n.kind === "command" ? "echo hello" : null,
     server: n.kind === "server" ? { command: "npm start", port: 3000, path: "/events", health: null } : null,
@@ -457,6 +494,8 @@ export interface Automation extends AutomationInput {
   ownerLeftAt: string | null;
   /** Whether the signing secret is set (its hint, never the value). */
   webhookSecretHint: string | null;
+  /** An incoming webhook's verification secret: its last four characters, never the value. */
+  incomingSecretHint: string | null;
   nextRunAt: string | null;
   lastRun: { id: string; status: AutomationRunStatus; at: string } | null;
   canEdit: boolean;
@@ -516,9 +555,11 @@ export interface AutomationRunDetail extends AutomationRun {
   containerStoppedAt: string | null;
   stopReason: "idle" | "error" | "aborted" | null;
   requests: AutomationRunRequest[];
+  /** An incoming run's first delivery and the later ones of its group sent to it, oldest first. */
+  deliveries?: AutomationDelivery[];
 }
 
-/** Run now: nothing on a schedule; a past delivery or a written test event on GitHub events. */
+/** Run now: nothing on a schedule; a past delivery or a written test event on GitHub events; a past delivery or a written body on an incoming webhook. */
 export const runNowSchema = z.union([
   z.object({}).strict(),
   z.object({ deliveryId: z.string().min(1).max(200) }).strict(),
@@ -530,11 +571,20 @@ export const runNowSchema = z.union([
       body: z.record(z.unknown()),
     }).strict(),
   }).strict(),
+  z.object({ payload: z.record(z.unknown()) }).strict(),
 ]);
 export type RunNow = z.infer<typeof runNowSchema>;
 
 export const evaluateEventSchema = z.object({ body: z.record(z.unknown()) }).strict();
 export type EventVerdict = { matches: true } | { matches: false; filter: FilterName; because: string };
+/** A written body against an incoming trigger: each condition's result, its group key, and whether a run of that group is going. */
+export interface IncomingVerdict {
+  matches: boolean;
+  results: ConditionResult[];
+  groupKey: string;
+  /** A live run of its group: a real delivery would be sent there, its conditions unchecked. */
+  liveRunId: string | null;
+}
 
 /** An automation's runs, and its kept session when it has one. */
 export interface AutomationRunsResponse {
