@@ -35,9 +35,9 @@ type gatedCheck struct {
 	Waiver                                                               *CarriedWaiver
 }
 
-// status is a gated Run's outcome as its row in the pull request names it.
-// A waived, carried, judge-passed, skipped or unchanged Run is never called
-// verified.
+// status is a gated Run's outcome as its row in the pull request names it,
+// from what its verdicts show. A waived, carried, judge-passed, skipped or
+// unchanged Run is never called verified.
 func (j gatedJudgement) status() string {
 	switch {
 	case j.Skipped:
@@ -46,15 +46,40 @@ func (j gatedJudgement) status() string {
 		return "waived"
 	case j.Unchanged:
 		return "no changes; checks not needed"
-	case j.Carried && j.Verified:
-		return "waiver carried"
-	case j.JudgePassed && j.Verified:
-		return "backed; the rest passed by the judge"
-	case j.Verified:
-		return "backed"
+	case !j.Verified:
+		return "not backed"
 	}
-	return "not backed"
+	var backed, carried, judged bool
+	for _, c := range j.Checks {
+		switch c.Result {
+		case CheckPass:
+			// Missing's answer backs no reported check.
+			backed = backed || c.Command != missingChecks
+		case CheckPreexisting, CheckDeferred:
+			judged = true
+		case checksWaived:
+			carried = true
+		}
+	}
+	switch {
+	case carried && judged:
+		return "waiver carried; passed by the judge"
+	case carried:
+		return "waiver carried"
+	case judged && backed:
+		return "backed; the rest passed by the judge"
+	case judged:
+		return "passed by the judge"
+	}
+	return "backed"
 }
+
+// The checks gate's recorded verdict of its Missing question, and the
+// result of a reported failure a person's waiver passed.
+const (
+	missingChecks = "missing checks"
+	checksWaived  = "waived"
+)
 
 // carriedFrom is the waiver a carried Run's first waived check rests on.
 func (j gatedJudgement) carriedFrom() *CarriedWaiver {
@@ -297,8 +322,12 @@ const writerChecksMax = 12_000
 // each field one clipped line.
 type writerCheck struct {
 	Role, Heads, Status, Message string
-	Checks                       []struct{ Command, Result, Reason, WaiverReason, Waiver string }
+	Checks                       []writerCheckLine
 }
+
+// writerCheckLine is one check as the tester reads it. Why: why it was not
+// passed, a person's waiver not covering it or the judge not passing it.
+type writerCheckLine struct{ Command, Result, Reason, Why, Waiver string }
 
 // WriterChecksTx is what a tester of the task's attempt is told about the
 // checks its writers reported (contracts/writer-checks), from the same
@@ -331,8 +360,8 @@ func writerChecksText(runs []gatedJudgement, room int) string {
 				waiver = checksField(render(writerCarriedFromTmpl, map[string]any{"By": valueOr(w.PersonName, "a person"),
 					"Role": w.Role, "Run": w.RunID, "Turn": w.Turn, "Note": w.Note}))
 			}
-			c.Checks = append(c.Checks, struct{ Command, Result, Reason, WaiverReason, Waiver string }{checksField(v.Command),
-				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason), checksField(valueOr(v.WaiverReason, v.JudgeReason)), waiver})
+			c.Checks = append(c.Checks, writerCheckLine{checksField(v.Command),
+				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason), checksField(strings.Join(slices.DeleteFunc([]string{v.WaiverReason, v.JudgeReason}, func(s string) bool { return s == "" }), " — ")), waiver})
 		}
 		items[i] = c
 	}

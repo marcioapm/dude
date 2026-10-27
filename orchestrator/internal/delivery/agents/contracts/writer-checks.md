@@ -4,6 +4,6 @@ These are the checks the implementer, fixers and simplifier of this attempt repo
 {{range .}}
 - {{.Role}}{{with .Heads}} ({{.}}){{end}}: {{.Status}}{{with .Message}}: {{.}}{{end}}
 {{- range .Checks}}
-  - {{.Command}}: {{.Result}}{{with .Reason}} ({{.}}){{end}}{{with .WaiverReason}} — {{.}}{{end}}{{with .Waiver}} — {{.}}{{end}}
+  - {{.Command}}: {{.Result}}{{with .Reason}} ({{.}}){{end}}{{with .Why}} — {{.}}{{end}}{{with .Waiver}} — {{.}}{{end}}
 {{- end}}
 {{- end}}

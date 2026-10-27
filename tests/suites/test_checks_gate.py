@@ -186,7 +186,7 @@ def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient,
     assert not any(e["eventType"] == "run.checks.decided" for e in activity)
     headline, rows = _rows(_checks_section(fake_github.pulls[1].body))
     assert "the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)" in headline, headline
-    assert rows[0] == ("Implementer", "backed; the rest passed by the judge", [("make test", "pre-existing"), ("missing checks", "pass")])
+    assert rows[0] == ("Implementer", "passed by the judge", [("make test", "pre-existing"), ("missing checks", "pass")])
 
 
 @pytest.mark.e2e
