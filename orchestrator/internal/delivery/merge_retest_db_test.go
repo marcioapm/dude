@@ -14,6 +14,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
@@ -445,17 +447,13 @@ func TestACleanMergeSkipTellsOnlyALiveConductorInOneLine(t *testing.T) {
 			if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
 				t.Fatalf("skip %v (%v)", skip, err)
 			}
-			var lines []string
 			rows, err := f.owner.Query(f.ctx, `SELECT line FROM conductor_wakes WHERE task_id = 'wi_c'`)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for rows.Next() {
-				var l string
-				if err := rows.Scan(&l); err != nil {
-					t.Fatal(err)
-				}
-				lines = append(lines, l)
+			lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			if err != nil {
+				t.Fatal(err)
 			}
 			if !live {
 				if len(lines) != 0 {
@@ -520,8 +518,7 @@ func TestACleanMergeOfOtherFilesBeforeThePullRequestIsNotTestedAgain(t *testing.
 		t.Run(c.name, func(t *testing.T) {
 			f, st, sc := mergeFixture(t, c.files)
 			f.merged(st, sc, "repo")
-			var runs int
-			_ = f.owner.QueryRow(f.ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_c'`).Scan(&runs)
+			runs := f.runs()
 			asked := f.compares.Load()
 			skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false)
 			if err != nil || skip != c.skip {
@@ -547,16 +544,14 @@ func TestACleanMergeOfOtherFilesBeforeThePullRequestIsNotTestedAgain(t *testing.
 			}
 			if !c.skip {
 				if n != 0 {
-					t.Fatalf("%d skips of a merge that touched the task's file", n)
+					t.Fatalf("%d skips of a merge to be tested", n)
 				}
 				return
 			}
 			if n != 1 || why != MergeUntouchedWhy || !slices.Equal(paths, []string{"repo/lib/other.go"}) || st.TestRunID != "run_c" {
 				t.Fatalf("%d skips, why %q, paths %v, gate on %q", n, why, paths, st.TestRunID)
 			}
-			var after int
-			_ = f.owner.QueryRow(f.ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_c'`).Scan(&after)
-			if after != runs {
+			if after := f.runs(); after != runs {
 				t.Errorf("%d Runs created by a skip", after-runs)
 			}
 		})
