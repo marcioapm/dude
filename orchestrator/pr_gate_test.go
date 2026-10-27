@@ -8,11 +8,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -367,6 +369,45 @@ func TestOnlyTheFirstOpeningReadsTheChoice(t *testing.T) {
 				t.Errorf("%d holds before a pull request under %s", n, choice)
 			}
 		})
+	}
+}
+
+// Open as draft across two repositories, the opening step failing after
+// the first pull request is on record: its retry opens the second as a
+// draft too.
+func TestOpenAsDraftSurvivesARetriedOpening(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+	var failed atomic.Bool
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pulls") && failed.CompareAndSwap(false, true) {
+				return http.StatusBadGateway
+			}
+			return 0
+		}
+	})
+	task := w.task()
+	w.addWeb(task, "write")
+	w.projectChoice(delivery.PullRequestDraft)
+	w.deliver(task)
+	w.until("a pull request in each repository", func() bool { return len(w.gh.Pulls()) == 1 && len(w.web.Pulls()) == 1 })
+	if !failed.Load() {
+		t.Fatal("web's first opening was never refused")
+	}
+	if !w.gh.Pulls()[0].Draft {
+		t.Error("target's pull request is not a draft")
+	}
+	if !w.web.Pulls()[0].Draft {
+		t.Error("web's pull request, opened by the retry, is not a draft")
 	}
 }
 

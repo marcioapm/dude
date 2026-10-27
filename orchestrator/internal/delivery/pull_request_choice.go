@@ -102,6 +102,22 @@ func firstPullRequestChoiceTx(ctx context.Context, tx pgx.Tx, taskID string) (st
 	return PullRequestChoiceTx(ctx, tx, taskID)
 }
 
+// PullRequestChoiceAtOpening is the task's choice as the step opening its
+// first pull requests reads it, and whether the current attempt already
+// has a pull request row: a run of that step retried after opening some
+// repositories still opens the rest as the choice says (Open as draft),
+// but is never held again.
+func (s *Store) PullRequestChoiceAtOpening(ctx context.Context, org, taskID string) (choice string, opened bool, err error) {
+	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		if opened, err = PullRequestOpenedTx(ctx, tx, taskID); err != nil {
+			return err
+		}
+		choice, err = PullRequestChoiceTx(ctx, tx, taskID)
+		return err
+	})
+	return choice, opened, err
+}
+
 // ReasonChoiceChanged is the task's status reason once a change of its
 // choice released the hold its Ask me first made.
 const ReasonChoiceChanged = "the owner changed what happens before the pull request"

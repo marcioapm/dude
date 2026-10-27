@@ -1576,21 +1576,22 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	// one handed back after the conductor entered the gate opens only with
 	// the person's Open or Draft at the heads it opens.
 	if len(st.PullRequestIDs) == 0 && (!st.GateRequired || st.ChoiceGate) {
-		// The task's choice before its first pull request, read now: Ask me
-		// first holds as a gate the conductor entered does; Open as draft
-		// opens a draft. Never once the attempt has had a pull request.
-		choice, err := w.s.FirstPullRequestChoice(ctx, sc.OrganizationID, st.TaskID)
+		// The task's choice before its first pull requests, read now: Open
+		// as draft opens them as drafts, a retry of this step that already
+		// opened some included. Ask me first holds as a gate the conductor
+		// entered does, but never once the attempt has a pull request row.
+		choice, opened, err := w.s.PullRequestChoiceAtOpening(ctx, sc.OrganizationID, st.TaskID)
 		if unresolved := (ChoiceUnresolved{}); errors.As(err, &unresolved) {
 			return w.escalate(ctx, sc, st, ReasonChoiceUnresolved, map[string]any{"error": unresolved.Err.Error()})
 		}
 		if err != nil {
 			return workflow.Result{}, err
 		}
-		if choice != "" {
+		if !opened {
 			st.GateRequired, st.ChoiceGate = choice == PullRequestAsk, choice == PullRequestAsk
-			// Not the latched Draft: a later opening (another repository's) is not this one.
-			st.draftChoice = choice == PullRequestDraft
 		}
+		// Not the latched Draft: a later opening (another repository's) is not this one.
+		st.draftChoice = choice == PullRequestDraft
 	}
 	if len(st.PullRequestIDs) == 0 && (st.conducted() || st.GateRequired) && !st.gateHeld() {
 		if st.conducted() {
