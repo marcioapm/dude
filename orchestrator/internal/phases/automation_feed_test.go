@@ -220,7 +220,7 @@ func TestAutomationAbortedCallIsNeverCompletedAfter(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if open := f.OpenCalls(); len(open) != 0 {
+		if open := f.t.openCalls; len(open) != 0 {
 			return fmt.Errorf("open after its abort: %v", open)
 		}
 		return f.End(ctx, tx, "Stopped: the run was cancelled.")
