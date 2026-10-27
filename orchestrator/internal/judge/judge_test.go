@@ -123,7 +123,8 @@ func TestTheSystemMessageStatesTheFormatRules(t *testing.T) {
 	for _, rule := range []string{
 		"Your whole reply is one JSON object and nothing else.",
 		"Its first character is { and its last character is }.",
-		"No prose, heading, code fence or thinking out loud before or after it.",
+		"before or after it",
+		"at most two sentences",
 		"counted against the work you are judging",
 		"under 60 words",
 		"no { or } characters in it",

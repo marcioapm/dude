@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
+
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 
 	"github.com/jackc/pgx/v5"
 
@@ -199,6 +202,88 @@ func TestProposeRefusesImagesNotSharedInTheSession(t *testing.T) {
 // An image the session no longer has when the item is filed (its session
 // row removed it, or the card names one another session's) refuses the
 // item, writing no task; the rest of the card is filed.
+func TestProposalImageMetadataStaysInItsSession(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	id, other := s.session(), s.session()
+	for _, image := range []struct{ session, id string }{{id, "att_own"}, {other, "att_foreign"}} {
+		s.uploadToSession(b, image.id, image.session, "design.png", screenshot)
+		s.sentIn(image.session, image.id)
+	}
+	s.proposal(id, []delivery.ProposalItem{{Kind: "task", Project: "BL", Title: "Design", Goal: "Build the proposed design", Images: []string{"att_own", "att_foreign"}}})
+	card := s.ok(s.marcio, "GET", "/internal/sessions/"+id, nil)
+	raw, _ := json.Marshal(card["proposals"])
+	var cards []struct{ Attachments map[string]json.RawMessage }
+	if err := json.Unmarshal(raw, &cards); err != nil {
+		t.Fatal(err)
+	}
+	if len(cards) != 1 || len(cards[0].Attachments) != 1 || cards[0].Attachments["att_own"] == nil {
+		t.Fatalf("proposal metadata: %s", raw)
+	}
+	if status, out := s.as(s.outsider, "GET", "/internal/sessions/"+id, nil); status != 404 {
+		t.Fatalf("unauthorized detail: %d %v", status, out)
+	}
+}
+
+func TestProposalImageAggregateByteBoundary(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	b := s.withImages()
+	id, run, _ := s.linkedLiveSession()
+	for _, image := range []string{"att_large_a", "att_large_b"} {
+		s.sharedImage(b, id, image, "design.png")
+	}
+	mustExec(t, s.owner, `UPDATE attachments SET bytes = $1 WHERE id = ANY($2)`, delivery.MaxMessageAttachmentBytes/2, []string{"att_large_a", "att_large_b"})
+	item := delivery.ProposalItem{Kind: "task", Project: "BL", Title: "Boundary", Goal: "Build the boundary design", Images: []string{"att_large_a", "att_large_b"}}
+	body, _ := json.Marshal(map[string]any{"items": []delivery.ProposalItem{item}})
+	status, out := s.tool(run, "propose", string(body))
+	if status != 200 {
+		t.Fatalf("exact 5MiB: %d %v", status, out)
+	}
+	mustExec(t, s.owner, `UPDATE attachments SET bytes = bytes + 1 WHERE id = 'att_large_b'`)
+	if status, out := s.tool(run, "propose", string(body)); status != 422 {
+		t.Fatalf("5MiB+1: %d %v", status, out)
+	}
+	if n := s.count(`SELECT count(*) FROM session_proposals WHERE session_id = $1`, id); n != 1 {
+		t.Fatalf("overage recorded a proposal (%d)", n)
+	}
+	filed := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": out["proposalId"], "items": []int{0}})
+	if filed["results"].([]any)[0].(map[string]any)["status"] != "refused" {
+		t.Fatalf("file must revalidate: %v", filed)
+	}
+	if n := s.count(`SELECT count(*) FROM tasks WHERE organization_id = $1`, s.org); n != 0 {
+		t.Fatalf("%d tasks written on overage", n)
+	}
+	if n := s.count(`SELECT count(*) FROM attachments WHERE organization_id = $1 AND task_id IS NOT NULL`, s.org); n != 0 {
+		t.Fatalf("%d copies written on overage", n)
+	}
+}
+
+func TestProposalImageExpandedGoalBoundary(t *testing.T) {
+	s := newSessionWorld(t)
+	s.withTools()
+	b := s.withImages()
+	id, run, _ := s.linkedLiveSession()
+	imageID := "att_" + strings.Repeat("0", 25)
+	s.sharedImage(b, id, imageID, "design.png")
+	// Propose reserves a production-length task-owned ID for the generated section.
+	section := delivery.WithSessionImages("", []delivery.SessionImage{{ID: "att_" + strings.Repeat("0", 25), Name: "design.png"}})
+	goal := strings.Repeat("x", agenttools.GoalMax-len(utf16.Encode([]rune(section)))-2) + "\U0001f680"
+	propose := func(goal string) (int, map[string]any) {
+		body, _ := json.Marshal(map[string]any{"items": []delivery.ProposalItem{{Kind: "task", Project: "BL", Title: "Boundary", Goal: goal, Images: []string{imageID}}}})
+		return s.tool(run, "propose", string(body))
+	}
+	if status, out := propose(goal); status != 200 {
+		t.Fatalf("exact expanded GoalMax: %d %v", status, out)
+	}
+	if status, out := propose(goal + "x"); status != 422 {
+		t.Fatalf("expanded GoalMax+1: %d %v", status, out)
+	}
+	if n := s.count(`SELECT count(*) FROM session_proposals WHERE session_id = $1`, id); n != 1 {
+		t.Fatalf("overlong proposal recorded (%d)", n)
+	}
+}
+
 func TestFilingImageRefusalRollsBackEachItem(t *testing.T) {
 	s := newSessionWorld(t)
 	s.withTools()

@@ -397,11 +397,22 @@ func TestUpdateTaskRestatingARelationAppliesTheRest(t *testing.T) {
 		return goal
 	}
 
+	criteriaOf := func() []string {
+		var criteria []string
+		if err := w.owner.QueryRow(context.Background(), `SELECT acceptance_criteria FROM tasks WHERE id = $1`, task).Scan(&criteria); err != nil {
+			t.Fatal(err)
+		}
+		return criteria
+	}
 	args, _ := json.Marshal(map[string]any{"goal": "Say hello, as the person decided.",
-		"addRelations": []map[string]string{{"kind": "blocks", "task": otherKey}}})
+		"acceptanceCriteria": []string{"It greets in Portuguese."},
+		"addRelations":       []map[string]string{{"kind": "blocks", "task": otherKey}}})
 	out := w.must(task, "update_task", string(args))
 	if got := goalOf(); got != "Say hello, as the person decided." {
 		t.Errorf("the goal after a re-stated relation: %q", got)
+	}
+	if got := criteriaOf(); !slices.Equal(got, []string{"It greets in Portuguese."}) {
+		t.Errorf("criteria after re-stated relation: %v", got)
 	}
 	if present, _ := out["alreadyRelated"].([]any); len(present) != 1 || present[0] != "blocks "+otherKey {
 		t.Errorf("the answer does not name the relation already there: %v", out)
@@ -418,8 +429,12 @@ func TestUpdateTaskRestatingARelationAppliesTheRest(t *testing.T) {
 
 	for _, rel := range []map[string]string{{"kind": "related", "task": otherKey}, {"kind": "blocked_by", "task": otherKey}} {
 		args, _ = json.Marshal(map[string]any{"goal": "Something else, with another relation.",
-			"addRelations": []map[string]string{rel}})
+			"acceptanceCriteria": []string{"This must not persist."},
+			"addRelations":       []map[string]string{rel}})
 		w.refused(task, "update_task", string(args), key+" and "+otherKey+" are already related")
+		if got := criteriaOf(); !slices.Equal(got, []string{"It greets in Portuguese."}) {
+			t.Errorf("%s refused, yet criteria changed: %v", rel["kind"], got)
+		}
 		if got := goalOf(); got != "Say hello, as the person decided." {
 			t.Errorf("%s refused, yet the goal was saved: %q", rel["kind"], got)
 		}
