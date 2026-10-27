@@ -145,9 +145,7 @@ func isVideo(path, name string) bool {
 	defer f.Close()
 	head := make([]byte, 12)
 	n, _ := io.ReadFull(f, head)
-	head = head[:n]
-	return len(head) >= 12 && string(head[4:8]) == "ftyp" ||
-		len(head) >= 4 && bytes.Equal(head[:4], []byte{0x1a, 0x45, 0xdf, 0xa3})
+	return n >= 12 && string(head[4:8]) == "ftyp" || n >= 4 && string(head[:4]) == "\x1a\x45\xdf\xa3"
 }
 
 // notAPicture is a file that opens and reads but does not decode.
