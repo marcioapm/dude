@@ -77,8 +77,8 @@ function digest(run: string, t0: number, step: "running" | "done" | "posted" | "
     called(run, t0 + 64 * SEC, "c4", "post_to_chat", { channel: "#engineering", text: DIGEST_TEXT }),
     completed(run, t0 + 64.6 * SEC, "c4", "post_to_chat", { output: out(`{"channel":"#engineering","channelId":"C0ENGINEER","ts":"1761318192.000100"}`),
       dude: { eventId: `evt_dude_${run}`, posted: { channel: "#engineering", channelId: "C0ENGINEER", ts: "1761318192.000100",
-        permalink: "https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100" } } }),
-    message(run, t0 + 81 * SEC, "Posted this week's digest to #engineering: 41 merged (+5 on last week), median time to merge 19.4h (down from 23.1h). Bots opened 22 and merged 18."));
+         permalink: "https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100" } } }));
+  if (step !== "posted") e.push(message(run, t0 + 81 * SEC, "Posted this week's digest to #engineering: 41 merged (+5 on last week), median time to merge 19.4h (down from 23.1h). Bots opened 22 and merged 18."));
   return e;
 }
 

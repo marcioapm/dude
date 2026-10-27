@@ -310,7 +310,9 @@ export class FixtureAutomations {
     if (id === "aut_alert") return { ...alertRunDetail(r), ...facts, sentBodies: alertSentBodies(r) };
     if (id === "aut_digest") {
       return { ...r, ...facts, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-        stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null };
+        stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null,
+        ...(runId === "arn_d3" && localStorage.getItem("dude.fixtures.automationStep") === "posted"
+          ? { live: { message: "Posted this week's digest to #engineering: 41 merged (+5 on last week), median time to merge", output: {} } } : {}) };
     }
     if (id === "aut_cost" || id === "aut_audit") {
       return { ...r, ...facts, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,

@@ -825,6 +825,17 @@ describe("a run's activity", () => {
     expect(bash.textContent).toContain("{\"merged\": 12");
   });
 
+  test("the posted fixture exposes the unfinished reply with its caret", async () => {
+    localStorage.setItem("dude.fixtures.automationStep", "posted");
+    try {
+      const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+      const reply = await until(() => c.querySelector<HTMLElement>("[data-testid=automation-streaming]"), "the unfinished fixture reply");
+      expect(reply.textContent).toContain("median time to merge");
+    } finally {
+      localStorage.removeItem("dude.fixtures.automationStep");
+    }
+  });
+
   test("a reply the agent finished reaches a live run's feed over the stream, as on the Run page, without reading the run", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);
