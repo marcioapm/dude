@@ -483,32 +483,31 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
 // ---------------------------------------------------------------------------
 
 /** The run's trigger: the delivery that started it, its group, its conditions, and the later deliveries sent to it. */
-export function RunTrigger({ a, run, onDelivery }: { a: Automation; run: AutomationRunDetail; onDelivery: (id: string) => void }) {
+/**
+ * What started an incoming run, as one line of its Run section: the
+ * delivery's id (opening it), when it was received, the conditions that
+ * held, and how many later deliveries were sent to the run (each is in the
+ * activity where it arrived); its group key and payload folded below.
+ */
+export function IncomingTriggerLine({ a, run, onDelivery }: { a: Automation; run: AutomationRunDetail; onDelivery: (id: string) => void }) {
   const trigger = a.trigger.kind === "incoming" ? a.trigger : null;
   const [first, ...later] = run.deliveries ?? [];
   if (!trigger || !first) return null;
+  const held = trigger.conditions.length ? ` · ${trigger.conditions.map(describeCondition).join(" · ")}: ${trigger.conditions.length > 1 ? "all held" : "it held"}` : "";
+  const body = run.payloads[0]?.body;
   return (
-    <SettingsSection title="Trigger" data-testid="run-trigger">
-      <KeyValueList items={[
-        { label: "Started by", value: <TextButton onClick={() => onDelivery(first.id)}><span className="ds-mono">{first.id}</span></TextButton> },
-        { label: "Received", value: formatTimestamp(first.receivedAt, "datetime") },
-        ...(first.groupKey ? [{ label: "Group key", value: <span className="incomingBreak ds-mono">{first.groupKey}</span> }] : []),
-        ...(trigger.conditions.length ? [{ label: "Conditions", value: `${trigger.conditions.map(describeCondition).join(" · ")}: ${trigger.conditions.length > 1 ? "all held" : "it held"}` }] : []),
-      ]} />
-      {later.length > 0 ? (
-        <div data-testid="sent-to-run">
-          <h4 className="incomingSubHead">Sent to this run <span className="muted">· later deliveries of the same group</span></h4>
-          <ol className="automationTimeline">
-            {later.map((d) => (
-              <li key={d.id}>
-                <time dateTime={d.receivedAt}>{formatTimestamp(d.receivedAt, "time")}</time>
-                <DeliveryVerdict verdict={verdictOf(d)} detail={false} />{" "}
-                <TextButton onClick={() => onDelivery(d.id)}><span className="ds-mono">{d.id}</span></TextButton>
-              </li>
-            ))}
-          </ol>
-        </div>
+    <>
+      <span className="automationTriggerLine" data-testid="run-trigger">
+        Incoming <TextButton onClick={() => onDelivery(first.id)}><span className="ds-mono">{first.id}</span></TextButton>
+        <span className="ds-hint"> · received {formatTimestamp(first.receivedAt, "time")}{held}</span>
+        {later.length > 0 ? <span className="ds-hint" data-testid="sent-to-run-count"> · {later.length} later {later.length === 1 ? "delivery" : "deliveries"} sent to this run</span> : null}
+      </span>
+      {first.groupKey || body !== undefined ? (
+        <SettingsDisclosure icon="braces" summary={<>Group key and payload · <span className="ds-mono">{first.id}</span></>}>
+          {first.groupKey ? <p className="incomingBreak ds-mono">{first.groupKey}</p> : null}
+          {body !== undefined ? <pre className="automationPayload">{JSON.stringify(body, null, 2)}</pre> : null}
+        </SettingsDisclosure>
       ) : null}
-    </SettingsSection>
+    </>
   );
 }

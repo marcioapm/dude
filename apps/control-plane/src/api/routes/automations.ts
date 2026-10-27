@@ -509,14 +509,21 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const a = await readOne(scope, ctx.params.id!);
     const [r] = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS}, r.payloads, r.payloads_purged_at IS NOT NULL AS "payloadsPurged",
         r.log_tail AS "logTail", r.exit_code AS "exitCode", r.container_started_at AS "containerStartedAt",
-        r.container_stopped_at AS "containerStoppedAt", r.stop_reason AS "stopReason"
+        r.container_stopped_at AS "containerStoppedAt", r.stop_reason AS "stopReason", r.scheduled_for AS "scheduledFor"
       FROM automation_runs r WHERE r.automation_id = $1 AND r.id = $2`, [a.id, ctx.params.runId!])) as Array<Record<string, unknown>>;
     if (!r) throw notFound(`automation ${a.id} has no run ${ctx.params.runId}`);
     const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,
         response_excerpt AS "responseExcerpt", at FROM automation_run_requests WHERE run_id = ${r.id as string} ORDER BY at, try`) as Array<Record<string, unknown>>;
     // An incoming run's deliveries: the one that started it and the later ones of its group sent to it.
     const deliveries = a.trigger.kind === "incoming" ? await runDeliveries(scope, a.id, r.id as string) : undefined;
+    // What each delivery sent to the run while it ran gave its agent, for its row in the activity (FeedDelivery):
+    // an incoming one's body is kept on the delivery (30 days), a GitHub one's in the run's payloads.
+    const sent = (await scope.sql`SELECT e.payload->>'deliveryId' AS id,
+        COALESCE(d.payload, (SELECT p->'body' FROM jsonb_array_elements(${JSON.stringify(r.payloads ?? [])}::jsonb) p WHERE p->>'deliveryId' = e.payload->>'deliveryId' LIMIT 1)) AS body
+      FROM events e LEFT JOIN incoming_deliveries d ON d.id = e.payload->>'deliveryId'
+      WHERE e.automation_run_id = ${r.id as string} AND e.event_type = 'automation.delivery.sent'`) as Array<{ id: string; body: unknown }>;
     return { ...runOut(r), containerStartedAt: iso(r.containerStartedAt), containerStoppedAt: iso(r.containerStoppedAt),
+      scheduledFor: iso(r.scheduledFor), sentBodies: Object.fromEntries(sent.map((s) => [s.id, s.body ?? null])),
       requests: requests.map((q) => ({ ...q, at: iso(q.at) })), ...(deliveries ? { deliveries } : {}),
       ...(await toolCalls(scope, r.id as string)) };
   });

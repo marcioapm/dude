@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
-import { FixtureClient } from "../src/fixtures/client.ts";
+import { FixtureClient, emit } from "../src/fixtures/client.ts";
 import { ORG, PEOPLE, PROJECT } from "../src/fixtures/data.ts";
 import { ORG_AUTOMATION_PICKS, PRESET_SECRETS } from "@dude/domain";
 import { AutomationPage, AutomationsList, NewAutomationDialog, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
@@ -400,7 +400,7 @@ describe("the header's ⋯ menu", () => {
       const el = document.querySelector<HTMLElement>("[data-testid=delete-consequences]");
       return el && !el.textContent?.includes("Reading") ? el : null;
     }, "what goes");
-    expect(says.textContent).toContain("Its one run goes with it: history, log and payload.");
+    expect(says.textContent).toContain("Its 2 runs go with it: their history, logs and payloads.");
     expect(says.textContent).toContain("Its kept session is ended");
     await click(document.querySelector<HTMLElement>("[data-testid=delete-confirm]")!);
     await until(() => (back === 1 ? true : null), "back to the list");
@@ -681,10 +681,9 @@ describe("post_to_chat", () => {
     expect(c.querySelectorAll("[data-testid=tool-unavailable]").length).toBe(1);
   });
 
-  test("a run's post is a Slack card on the log with its channel and the link to the message", async () => {
+  test("a run's post is the feed's Slack card with its channel and the link to the message; there is no separate log of calls", async () => {
     const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d1" });
-    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]"), "the call");
-    expect(call.querySelector("time")?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed] [data-tool=post_to_chat]"), "the call");
     expect(call.querySelector('[data-icon="slack"]')).not.toBeNull();
     expect(call.textContent).toContain("#engineering");
     const posted = call.querySelector<HTMLElement>("[data-testid=posted-link]")!;
@@ -692,29 +691,29 @@ describe("post_to_chat", () => {
     const link = posted.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100");
     expect(link.getAttribute("target")).toBe("_blank");
-    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("1 tool call. Open one for its output.");
+    expect(c.querySelector("[data-testid=run-tools]")).toBeNull();
+    expect(c.querySelector("[data-testid=run-activity]")?.textContent).toContain("3 messages and 4 tool calls. Kept as long as the run's log.");
     expect(c.querySelector("[data-testid=run-failed]")).toBeNull();
-    // The note's "Open one" holds: the post opens to its answer.
+    // It opens to the answer the tool gave.
     const head = call.querySelector<HTMLElement>("[role=button][aria-expanded]");
     expect(head?.getAttribute("aria-expanded")).toBe("false");
     await click(head!);
     expect(head!.getAttribute("aria-expanded")).toBe("true");
-    expect(call.textContent).toContain(`"channelId": "C0ENGINEER"`);
-    expect(call.textContent).toContain(`"ts": "1761318192.000100"`);
+    expect(call.textContent).toContain(`"channelId":"C0ENGINEER"`);
   });
 
-  test("a run that failed on post_to_chat says so under Run, and the call shows its error", async () => {
+  test("a run that failed on post_to_chat says so under Run, and the call in the feed is failed with its error", async () => {
     const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d0" });
     const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
     expect(failed.getAttribute("data-tone")).toBe("danger");
     expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. Nothing was posted; Márcio Martins was told.`);
-    const call = c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]")!;
+    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed] [data-tool=post_to_chat]"), "the call");
+    expect(call.getAttribute("data-status")).toBe("failed");
     expect(call.textContent).toContain(`Slack is not connected for ${ORG.name}: an organisation admin adds dude's Slack app in Organisation settings → Chat.`);
     expect(call.querySelector("[data-testid=posted-link]")).toBeNull();
-    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the last one; its owner was told.");
   });
 
-  test("the danger callout follows the call the run failed on, not the reason's words nor which call came last", async () => {
+  test("the danger callout says what was posted only for the call the run failed on, not for the reason's words", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);
     const search = { id: "evt_s", tool: "github_search", at: new Date().toISOString(), status: "completed" as const, args: { q: "is:pr" },
@@ -726,12 +725,10 @@ describe("post_to_chat", () => {
         : { ...r, status: "failed", reason: "post_to_chat failed: the agent wrote this itself", failedCallId: null };
     };
     const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
-    await until(() => c.querySelector("[data-testid=run-failed]"), "the failure");
-    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the post_to_chat call at");
+    expect((await until(() => c.querySelector("[data-testid=run-failed]"), "the failure")).textContent).toContain("Nothing was posted");
     const other = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d1" });
-    await until(() => other.querySelector("[data-testid=run-tools]"), "the log");
-    expect(other.querySelector("[data-testid=run-failed]")).toBeNull();
-    expect(other.textContent).toContain("post_to_chat failed: the agent wrote this itself");
+    const failed = await until(() => other.querySelector("[data-testid=run-failed]"), "the other's failure");
+    expect(failed.textContent).toBe("Failed. post_to_chat failed: the agent wrote this itself. Márcio Martins was told.");
   });
 
   test("a run that posted, then failed on a refused post, says that message was not posted, not that nothing was", async () => {
@@ -745,6 +742,90 @@ describe("post_to_chat", () => {
     const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
     const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
     expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. That message was not posted; Márcio Martins was told.`);
-    expect(c.querySelector("[data-testid=posted-link]")).not.toBeNull();
+  });
+});
+
+describe("a run's activity", () => {
+  const page = (client: FixtureClient, place: AutomationsPlace) =>
+    show(<AutomationPage client={client} orgName="Acme" people={PEOPLE} place={place} onPlace={() => undefined} onBack={() => undefined} />);
+  const card = (c: HTMLElement, tool: string, i = 0) => [...c.querySelectorAll<HTMLElement>(`[data-testid=run-feed] [data-tool=${tool}]`)][i];
+
+  test("a live agent run is a following feed signed by the automation, its running call ticking, with the Live mark", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const feed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed]"), "the feed");
+    await until(() => card(c, "bash"), "the call");
+    expect(feed.getAttribute("data-live")).toBe("true");
+    expect(c.querySelector("[data-testid=live-mark]")?.textContent).toBe("Live");
+    const turn = c.querySelector<HTMLElement>("[data-testid=agent-turn]")!;
+    expect(turn.textContent).toContain("Weekly PR digestAutomation");
+    expect(turn.querySelector('[role=img][aria-label="Automation"]')).not.toBeNull();
+    expect(card(c, "bash")!.getAttribute("data-status")).toBe("running");
+    expect(c.querySelector("[data-testid=run-activity]")?.textContent).toContain("Follows the latest · scroll up to stop");
+  });
+
+  test("a running call's card turns completed with its output when its completion arrives", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    await until(() => card(c, "bash"), "the call");
+    expect(card(c, "bash")!.getAttribute("data-status")).toBe("running");
+    emit({ eventType: "agent.tool.completed", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_d3", actor: { type: "agent", id: "arn_d3" }, source: "runner",
+      correlationId: null, causationId: null, payload: { tool: "bash", callId: "c1", status: "completed", output: { head: '{"merged": 41}' }, exitCode: 0 } });
+    await until(() => card(c, "bash")!.getAttribute("data-status") === "completed" || null, "the completion");
+    await click(card(c, "bash")!.querySelector<HTMLElement>("[role=button]")!);
+    expect(card(c, "bash")!.textContent).toContain('{"merged": 41}');
+  });
+
+  test("a follow-up delivery is a row in the feed at its time, and the trigger line counts it instead of listing it", async () => {
+    const opened: string[] = [];
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Acme" people={PEOPLE}
+      place={{ id: "aut_alert", tab: "runs", runId: "arn_alert1" }} onPlace={(p) => { if (p.deliveryId) opened.push(p.deliveryId); }} onBack={() => undefined} />);
+    const rows = await until(() => {
+      const r = [...c.querySelectorAll<HTMLElement>("[data-testid=run-feed] [data-testid=feed-delivery]")];
+      return r.length === 2 ? r : null;
+    }, "the deliveries");
+    expect(rows[1]!.textContent).toContain("resolved · HighErrorRate · api");
+    // At its time: after the error-rate call it arrived during, before the message that reacts to it.
+    const feed = c.querySelector<HTMLElement>("[data-testid=run-feed]")!;
+    const order = [...feed.querySelectorAll<HTMLElement>("[data-testid=feed-delivery], [data-testid=agent-turn]")].map((e) =>
+      e.getAttribute("data-testid") === "feed-delivery" ? "delivery" : e.textContent ?? "");
+    const reacts = order.findIndex((t) => t.includes("It resolved nine minutes in"));
+    expect(reacts).toBeGreaterThan(0);
+    expect(order[reacts - 1]).toBe("delivery");
+    expect(c.querySelector("[data-testid=sent-to-run]")).toBeNull();
+    expect(c.querySelector("[data-testid=sent-to-run-count]")?.textContent).toBe(" · 2 later deliveries sent to this run");
+    await click(rows[1]!.querySelector<HTMLElement>('[aria-label="Open delivery dlv_9k2h"]')!);
+    expect(opened).toEqual(["dlv_9k2h"]);
+    await click(rows[1]!.querySelector<HTMLElement>('[aria-label="Show what the agent was sent"]')!);
+    expect(JSON.parse(rows[1]!.querySelector("pre")!.textContent!).status).toBe("resolved");
+  });
+
+  test("a command run's output arrives in order in a LogStream with its exit code", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_cost", tab: "runs", runId: "arn_c1" });
+    const log = await until(() => c.querySelector<HTMLElement>("[data-testid=command-log]"), "the log");
+    expect(c.querySelector("[data-testid=command-exit]")?.textContent).toBe("exit 0");
+    expect(log.textContent).toContain("$ bun run lint && bun test");
+    expect(log.textContent!.indexOf("lint")).toBeLessThan(log.textContent!.indexOf("pass · 0 fail"));
+  });
+
+  test("a run stopped mid-call shows the call aborted, its partial output kept, with the stopped note", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_audit", tab: "runs", runId: "arn_a2" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.textContent).toContain("Stopped at its 30-minute time limit during a bash call");
+    const last = card(c, "bash", 2)!;
+    expect(last.getAttribute("data-status")).toBe("aborted");
+    expect(c.querySelector("[data-testid=stopped-note]")?.textContent).toBe(" Stopped by the time limit after 27m 14s.");
+    await click(last.querySelector<HTMLElement>("[role=button]")!);
+    expect(last.textContent).toContain("TestRotateUnderLoad");
+    // A non-zero exit is failed, never ✓.
+    expect(card(c, "bash", 1)!.getAttribute("data-exit-code")).toBe("3");
+  });
+
+  test("the runs list's running row says what its agent is doing now; a finished row says nothing", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, { id: "aut_digest", tab: "runs" });
+    const now = await until(() => c.querySelector<HTMLElement>("[data-testid=run-now-line]"), "the now line");
+    expect(now.getAttribute("aria-label")).toBe("Now: bash, pr-stats --org acme --since 7d --format json");
+    expect(c.querySelectorAll("[data-testid=run-now-line]").length).toBe(1);
   });
 });

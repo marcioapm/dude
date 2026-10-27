@@ -21,6 +21,7 @@ import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import { FixtureAutomations } from "./automations.ts";
+import { automationActivity, automationLater } from "./automationActivity.ts";
 import { FixtureOrgSecrets } from "./orgSecrets.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { OpenSessionsList } from "@dude/domain";
@@ -30,7 +31,7 @@ import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, READY_FOR_REVIEW_WAITING, type Artifact, type AttachmentLimits, type DeliveryFilter, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type StopRequest, type StopResult, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
 
-type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
+type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; automationRunId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
 
 /** Slack, as the fixtures' backend lists it. */
@@ -67,12 +68,23 @@ class QuietEventSource extends EventTarget {
       this.onopen?.(new Event("open"));
       if (q.get("live") || !ledger) return;
       const params = { ...(q.get("runId") ? { runId: q.get("runId")! } : {}), ...(q.get("taskId") ? { taskId: q.get("taskId")! } : {}),
-        ...(q.get("sessionId") ? { sessionId: q.get("sessionId")! } : {}), after: Number(q.get("after") ?? 0) };
+        ...(q.get("sessionId") ? { sessionId: q.get("sessionId")! } : {}),
+        ...(q.get("automationRunId") ? { automationRunId: q.get("automationRunId")! } : {}), after: Number(q.get("after") ?? 0) };
       for (const e of ledger(params)) this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(e) }));
+      // An automation run's turns that arrive after it opens, as its live stream sends them.
+      const later = params.automationRunId ? automationLater(params.automationRunId) : [];
+      if (later.length) {
+        this.#later = setTimeout(() => {
+          if (this.readyState !== 1) return;
+          for (const e of later) this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(e) }));
+        }, 1500);
+      }
     }, 20);
   }
+  #later: ReturnType<typeof setTimeout> | undefined;
   close() {
     clearTimeout(this.#opening);
+    clearTimeout(this.#later);
     this.readyState = 2;
     streams.delete(this);
   }
@@ -555,7 +567,8 @@ export class FixtureClient extends ApiClient {
   }
 
   /** The scope's events after a cursor, as the API and the stream's backfill both answer. A test's client adds its own. */
-  protected ledgerFor({ runId, taskId, sessionId, after = 0 }: LedgerQuery): PersistedEvent[] {
+  protected ledgerFor({ runId, taskId, sessionId, automationRunId, after = 0 }: LedgerQuery): PersistedEvent[] {
+    if (automationRunId) return automationActivity(automationRunId).filter((e) => e.cursor > after);
     if (sessionId && localStorage.getItem(RUN_KEY) === "org-sessions" && ORG_SESSIONS[sessionId]) {
       return orgSessionEvents().filter((e) => e.sessionId === sessionId && e.cursor > after);
     }

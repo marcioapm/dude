@@ -2131,6 +2131,81 @@ body {
 .automationRunCost {
   color: var(--ds-color-text-muted);
 }
+.automationRunHead {
+  flex-wrap: wrap;
+  font-size: var(--ds-text-sm);
+}
+/* The run's trigger on one line; it wraps on a phone. */
+.automationTriggerLine {
+  display: inline;
+  font-size: var(--ds-text-sm);
+}
+/* An automation's face: the integration square (sunken, its border, the agent face's radius) with a zap. */
+.automationFace {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: var(--ds-color-sunken);
+  border: 1px solid var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-face-agent);
+  color: var(--ds-color-text-secondary);
+}
+.automationFace[data-size="sm"] {
+  width: var(--ds-size-avatar-sm);
+  height: var(--ds-size-avatar-sm);
+}
+.automationFaceLive {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-shadow: 0 0 0 2px var(--ds-color-surface);
+}
+.liveMark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+/* A live run's activity is its own scroller filling the window under it. */
+.automationFeed[data-live] {
+  height: calc(100dvh - 160px);
+  min-height: 420px;
+}
+.automationStoppedNote {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-attention-fg);
+}
+.runNowLine {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.runNowTool {
+  color: var(--ds-color-text-primary);
+}
+.logToolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.logExit {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.logExitBad {
+  color: var(--ds-tone-danger-fg);
+}
 .automationToolsCard {
   width: 100%;
 }

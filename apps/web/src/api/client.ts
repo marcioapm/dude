@@ -778,7 +778,7 @@ export class ApiClient {
   }
 
   /** A scope's events, oldest first, from a cursor: for who did what, and a task's activity. */
-  events(params: { runId?: string; taskId?: string; after?: number; limit?: number }): Promise<{ events: PersistedEvent[]; nextCursor: number }> {
+  events(params: { runId?: string; taskId?: string; automationRunId?: string; after?: number; limit?: number }): Promise<{ events: PersistedEvent[]; nextCursor: number }> {
     return this.#request("GET", `/v1/events${qs(params)}`);
   }
 
@@ -2148,6 +2148,8 @@ export class ApiClient {
     sessionId?: string | undefined;
     taskId?: string | undefined;
     projectId?: string | undefined;
+    /** An automation run's activity (its run page). */
+    automationRunId?: string | undefined;
     /** Skip the backfill and deliver only what happens from now on. */
     live?: boolean | undefined;
   }): string {

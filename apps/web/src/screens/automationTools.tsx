@@ -1,12 +1,10 @@
 /**
- * An automation agent's tools, as its page lists them (the DS AgentTools),
- * and a run's calls to them, as its log shows them (ToolCallRow).
+ * An automation agent's tools, as its page lists them (the DS AgentTools).
+ * A run's calls to them are in its activity feed (automationFeed.tsx).
  */
 
-import { AgentTools, ToolCallCard, type AgentTool, type AgentToolUnavailable } from "@dude/design-system/components";
-import { formatTimestamp, Icon } from "@dude/design-system";
+import { AgentTools, type AgentTool, type AgentToolUnavailable } from "@dude/design-system/components";
 import { Card } from "@dude/design-system/primitives";
-import type { AutomationToolCall } from "@dude/domain";
 import { formatPlace } from "../place.ts";
 
 /** What an automation's agent can call, besides the shell in its machine (orchestrator agenttools, Caller.tools). */
@@ -36,36 +34,5 @@ export function AutomationToolList({ orgName, slackInstalled }: { orgName: strin
     <Card variant="raised" className="automationToolsCard">
       <AgentTools tools={automationTools(orgName)} unavailable={slackInstalled === false ? slackMissing(orgName) : undefined} />
     </Card>
-  );
-}
-
-/** One call in a run's log: its time in mono, then the call's card; a post links its message in Slack. */
-function ToolCallRow({ call }: { call: AutomationToolCall }) {
-  const post = call.tool === "post_to_chat";
-  const channel = typeof call.args["channel"] === "string" ? (call.args["channel"] as string) : null;
-  const { posted } = call;
-  return (
-    <div className="automationToolCall" data-testid="tool-call" data-tool={call.tool}>
-      <time className="automationToolCallAt ds-mono ds-hint" dateTime={call.at}>{formatTimestamp(call.at, "time")}</time>
-      <ToolCallCard name={call.tool} status={call.status} durationMs={call.durationMs ?? undefined}
-        {...(post ? { icon: "slack" as const, summary: <span className="ds-mono">{posted?.channel ?? channel ?? ""}</span> } : { args: call.args })}
-        {...(posted ? { result: JSON.stringify(posted, null, 2) } : {})}
-        {...(call.error ? { error: call.error } : {})}
-        note={posted ? (
-          <p className="automationToolCallPosted ds-hint" data-testid="posted-link">
-            <Icon name="slack" size={12} /> Posted to <b>{posted.channel}</b> ·{" "}
-            <a href={posted.permalink} target="_blank" rel="noreferrer">Open the message in Slack</a>
-          </p>
-        ) : undefined} />
-    </div>
-  );
-}
-
-/** A run's calls, oldest first. */
-export function ToolCallList({ calls }: { calls: readonly AutomationToolCall[] }) {
-  return (
-    <ol className="automationToolCalls" aria-label="Tool calls">
-      {calls.map((c) => <li key={c.id}><ToolCallRow call={c} /></li>)}
-    </ol>
   );
 }

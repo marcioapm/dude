@@ -252,27 +252,26 @@ describe("Run now on a payload", () => {
 });
 
 describe("a run an alert started", () => {
-  test("names the delivery that started it, its group, and the later ones sent to it", async () => {
+  test("names the delivery that started it in one line, its group folded, and counts the later ones sent to it", async () => {
     const delivered: string[] = [];
     const c = await page(new FixtureClient("a"), { id: "aut_alert", tab: "runs", runId: "arn_alert1" },
       (p) => p.deliveryId && delivered.push(p.deliveryId));
-    const t = await until(() => c.querySelector<HTMLElement>("[data-testid=run-trigger]"), "the trigger block");
+    const t = await until(() => c.querySelector<HTMLElement>("[data-testid=run-trigger]"), "the trigger line");
     expect(t.textContent).toContain("dlv_5n3x");
-    expect(t.textContent).toContain('{}/{alertname="HighErrorRate"}:{service="api"}');
-    const sent = t.querySelector<HTMLElement>("[data-testid=sent-to-run]")!;
-    expect([...sent.querySelectorAll("li")].map((li) => li.querySelector(".ds-mono")?.textContent)).toEqual(["dlv_7c5m", "dlv_9k2h"]);
-    await click(button(sent, "dlv_9k2h")!);
-    expect(delivered).toEqual(["dlv_9k2h"]);
+    expect(t.textContent).toContain("2 later deliveries sent to this run");
+    expect(c.querySelector("[data-testid=run-detail]")!.textContent).toContain('{}/{alertname="HighErrorRate"}:{service="api"}');
+    expect(c.querySelector("[data-testid=sent-to-run]")).toBeNull();
+    await click(button(t, "dlv_5n3x")!);
+    expect(delivered).toEqual(["dlv_5n3x"]);
   });
 
-  test("shows its trigger block and its agent's tool calls on one page", async () => {
+  test("its trigger line comes before its activity, where the agent's create_task is a card", async () => {
     const c = await page(new FixtureClient("a"), { id: "aut_alert", tab: "runs", runId: "arn_alert1" }, () => undefined);
     const detail = await until(() => c.querySelector<HTMLElement>("[data-testid=run-detail]"), "the run");
     const trigger = detail.querySelector<HTMLElement>("[data-testid=run-trigger]")!;
-    const tools = detail.querySelector<HTMLElement>("[data-testid=run-tools]")!;
-    expect(tools.textContent).toContain("1 tool call.");
-    expect(tools.textContent).toContain("create_task");
-    expect(trigger.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const feed = await until(() => detail.querySelector<HTMLElement>("[data-testid=run-feed] [data-tool=create_task]") ? detail.querySelector<HTMLElement>("[data-testid=run-feed]") : null, "the feed");
+    expect(trigger.compareDocumentPosition(feed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(detail.querySelector("[data-testid=run-tools]")).toBeNull();
     expect(detail.querySelector("[data-testid=run-failed]")).toBeNull();
   });
 });
