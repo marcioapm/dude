@@ -2262,6 +2262,10 @@ func (r *Runner) RunNow(ctx context.Context, org, automationID, person string, d
 			runID, verdict = fired.Run, Verdict{Matches: true}
 			return err
 		}
+		if a.Trigger.Kind == "incoming" {
+			runID, verdict, err = runNowIncoming(ctx, tx, a, person, deliveryID, test)
+			return err
+		}
 		var p Payload
 		switch {
 		case test != nil:

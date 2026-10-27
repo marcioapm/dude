@@ -3,6 +3,7 @@ package automations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -97,6 +98,36 @@ func TestIncomingAfterTheRunEndedStartsAgain(t *testing.T) {
 	h.until("read", func() bool { return h.delivery("dlv_b").Verdict != "" })
 	if d := h.delivery("dlv_b"); d.Verdict != VerdictStarted || d.Run == h.delivery("dlv_a").Run {
 		t.Errorf("after the run ended: %+v", d)
+	}
+}
+
+// Run now on an incoming webhook: a past delivery's body or a written one
+// is a test run of its own, its conditions unchecked; a refused delivery
+// keeps no body to run on.
+func TestIncomingRunNowWithADeliveryOrABody(t *testing.T) {
+	h := newHarness(t)
+	h.incoming("aut_now", []Condition{{Path: "status", Op: "is", Values: []string{"firing"}}}, "groupKey",
+		map[string]any{"command": "true"})
+	exec(t, h.owner, `UPDATE automations SET kind = 'command', agent = NULL WHERE id = 'aut_now'`)
+	h.receive("aut_now", "dlv_past", alert("resolved", "g", "high"))
+	exec(t, h.owner, `INSERT INTO incoming_deliveries (id, organization_id, automation_id, verdict, reason, bytes) VALUES ('dlv_ref', $1, 'aut_now', 'refused', 'bad_signature', 3)`, h.org)
+	ctx := context.Background()
+	run, v, err := h.runner.RunNow(ctx, h.org, "aut_now", h.person, "dlv_past", nil)
+	if err != nil || !v.Matches || run == "" {
+		t.Fatalf("past delivery: %q %+v %v", run, v, err)
+	}
+	written, _, err := h.runner.RunNow(ctx, h.org, "aut_now", h.person, "", &Payload{Body: json.RawMessage(`{"status":"firing","groupKey":"g2"}`)})
+	if err != nil || written == "" || written == run {
+		t.Fatalf("written body: %q %v", written, err)
+	}
+	if _, _, err := h.runner.RunNow(ctx, h.org, "aut_now", h.person, "dlv_ref", nil); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("a refused delivery: %v, want a bad request", err)
+	}
+	var sources []string
+	rows, _ := h.owner.Query(ctx, `SELECT source || ':' || (payloads->0->>'groupKey') FROM automation_runs WHERE automation_id = 'aut_now' ORDER BY created_at, id`)
+	sources, _ = pgx.CollectRows(rows, pgx.RowTo[string])
+	if !slices.Equal(sources, []string{"test:g", "test:g2"}) {
+		t.Errorf("runs %v", sources)
 	}
 }
 

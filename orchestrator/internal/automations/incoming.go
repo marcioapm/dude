@@ -12,6 +12,7 @@ package automations
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
@@ -412,6 +414,35 @@ func incomingRepos(ctx context.Context, tx pgx.Tx, a Automation) ([]phases.Autom
 		out = append(out, phases.AutomationRepo{Name: r.Name, URL: r.URL, Ref: r.Branch, Setup: r.Setup})
 	}
 	return out, nil
+}
+
+// runNowIncoming is Run now on an incoming webhook: a stored delivery's
+// body, or a written one, as a test run of its own whatever its conditions
+// say (the dialog shows them first) and whatever runs.
+func runNowIncoming(ctx context.Context, tx pgx.Tx, a Automation, person, deliveryID string, test *Payload) (string, Verdict, error) {
+	var p Payload
+	switch {
+	case test != nil:
+		p = Payload{DeliveryID: cmp.Or(test.DeliveryID, "test-"+ids.New("t")[2:]), Event: EventIncoming, Body: test.Body}
+	case deliveryID != "":
+		var body []byte
+		err := tx.QueryRow(ctx, `SELECT payload FROM incoming_deliveries WHERE id = $1 AND automation_id = $2`, deliveryID, a.ID).Scan(&body)
+		if db.IsNotFound(err) {
+			return "", Verdict{}, fmt.Errorf("%w: no delivery %s of this automation", ErrNotFound, deliveryID)
+		}
+		if err != nil {
+			return "", Verdict{}, err
+		}
+		if body == nil {
+			return "", Verdict{}, fmt.Errorf("%w: delivery %s keeps no body (refused, or older than 30 days)", ErrBadRequest, deliveryID)
+		}
+		p = Payload{DeliveryID: deliveryID, Event: EventIncoming, Body: body}
+	default:
+		return "", Verdict{}, fmt.Errorf("%w: an incoming webhook runs on a past delivery or a written body", ErrBadRequest)
+	}
+	p.GroupKey = GroupKey(a.Trigger.GroupBy, p.Body)
+	fired, err := Fire(ctx, tx, a, SourceTest, []Payload{p}, person, nil)
+	return fired.Run, Verdict{Matches: true}, err
 }
 
 // filterWords is a skipping filter as the Deliveries tab says it: "Author: it is by …".

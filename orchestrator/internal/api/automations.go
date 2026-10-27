@@ -43,13 +43,22 @@ func (s *Server) automationRunNow(w http.ResponseWriter, r *http.Request, org st
 		return fail(http.StatusServiceUnavailable, "unavailable", "automations are not running here")
 	}
 	var body struct {
-		DeliveryID string     `json:"deliveryId"`
-		TestEvent  *testEvent `json:"testEvent"`
+		DeliveryID string          `json:"deliveryId"`
+		TestEvent  *testEvent      `json:"testEvent"`
+		Payload    json.RawMessage `json:"payload"`
 	}
 	if err := read(r, &body); err != nil {
 		return err
 	}
 	var test *automations.Payload
+	if len(body.Payload) > 0 {
+		// An incoming webhook's written body.
+		var obj map[string]any
+		if json.Unmarshal(body.Payload, &obj) != nil || obj == nil {
+			return fail(http.StatusBadRequest, "bad_request", "a payload is a JSON object")
+		}
+		test = &automations.Payload{Event: automations.EventIncoming, Body: body.Payload}
+	}
 	if body.TestEvent != nil {
 		var obj map[string]any
 		if json.Unmarshal(body.TestEvent.Body, &obj) != nil || obj == nil {
@@ -94,9 +103,15 @@ func (s *Server) evaluateTestEvent(w http.ResponseWriter, r *http.Request, org s
 		return fail(http.StatusBadRequest, "bad_request", "a test event's body is a JSON object")
 	}
 	var verdict automations.Verdict
+	var incoming *automations.IncomingVerdict
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		a, err := automations.Load(r.Context(), tx, r.PathValue("id"))
 		if err != nil {
+			return err
+		}
+		if a.Trigger.Kind == "incoming" {
+			v, err := automations.EvaluateIncoming(r.Context(), tx, a, body.Body)
+			incoming = &v
 			return err
 		}
 		if a.Trigger.Kind != "github" {
@@ -110,6 +125,10 @@ func (s *Server) evaluateTestEvent(w http.ResponseWriter, r *http.Request, org s
 	}
 	if err != nil {
 		return err
+	}
+	if incoming != nil {
+		write(w, http.StatusOK, incoming)
+		return nil
 	}
 	write(w, http.StatusOK, verdict)
 	return nil
