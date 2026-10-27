@@ -566,8 +566,10 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 
 // tasksOwnSince counts the commits of now (base...head, listed whole) that
 // are not in then (base...the previous hold's head) and are not a merge of
-// the base: a merge with a parent outside now's list, which the base holds
-// (syncBeforePR's, a person's Update branch).
+// the base: a merge with any parent outside now's list, which the base
+// holds (syncBeforePR's, a person's Update branch, or main merged with the
+// branch as its second parent and pushed to it). A task's first commit has
+// its parent in the base too, but it is never a merge.
 func tasksOwnSince(now, then []forge.ComparedCommit) int {
 	inNow := make(map[string]bool, len(now))
 	for _, c := range now {
@@ -583,8 +585,10 @@ func tasksOwnSince(now, then []forge.ComparedCommit) int {
 			continue
 		}
 		baseMerge := false
-		for _, p := range c.Parents[min(1, len(c.Parents)):] {
-			baseMerge = baseMerge || !inNow[p.SHA]
+		if len(c.Parents) > 1 {
+			for _, p := range c.Parents {
+				baseMerge = baseMerge || !inNow[p.SHA]
+			}
 		}
 		if !baseMerge {
 			n++

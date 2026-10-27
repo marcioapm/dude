@@ -2,35 +2,64 @@ package delivery
 
 import (
 	"net/http"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
-// heldTwice holds the merge fixture's delivery at its head (round 1), then
-// commits taskCommits of the task's own to the branch, has GitHub merge
-// main in (syncBeforePR), sets GitHub's answers with answer (given round
-// 1's head), and holds it again at the merged head (round 2).
-func heldTwice(t *testing.T, taskCommits int, answer func(s *fakegithub.Server, from string)) (first, second Hold) {
+// heldAround holds the merge fixture's delivery at its head (round 1),
+// after before (nil: nothing) set it up; then between changes the branches,
+// answer (nil: none) sets GitHub's answers given round 1, and it holds the
+// delivery again at st's heads (round 2).
+func heldAround(t *testing.T, before func(*verdictFixture, *State), between func(*verdictFixture, *State, workflow.StepContext),
+	answer func(*verdictFixture, Hold)) (first, second Hold) {
 	t.Helper()
 	f, st, sc := mergeFixture(t, map[string]string{"go.mod": "module example.com/acme\n"})
+	if before != nil {
+		before(f, st)
+	}
 	if err := f.steps.holdAt(f.ctx, sc, st); err != nil {
 		t.Fatal(err)
 	}
 	first = *st.Hold
-	for i := range taskCommits {
-		st.Heads["repo"] = f.gh.CommitFiles("feature", "A fix", map[string]string{"app/greet.go": "package app // " + strings.Repeat("x", i+1)})
-	}
-	f.merged(st, sc, "repo")
+	between(f, st, sc)
 	if answer != nil {
-		from := first.Heads["repo"]
-		f.gh.Set(func(s *fakegithub.Server) { answer(s, from) })
+		answer(f, first)
 	}
 	if err := f.steps.holdAt(f.ctx, sc, st); err != nil {
 		t.Fatal(err)
 	}
 	return first, *st.Hold
+}
+
+// heldTwice is heldAround with taskCommits of the task's own committed to
+// repo's branch, then GitHub merging main in (syncBeforePR).
+func heldTwice(t *testing.T, taskCommits int, answer func(*verdictFixture, Hold)) (first, second Hold) {
+	t.Helper()
+	return heldAround(t, nil, func(f *verdictFixture, st *State, sc workflow.StepContext) {
+		taskCommit(f.gh, st, "repo", taskCommits)
+		f.merged(st, sc, "repo")
+	}, answer)
+}
+
+// taskCommit commits n changes of the task's own to repo's branch.
+func taskCommit(gh *fakegithub.Server, st *State, repo string, n int) {
+	for i := range n {
+		st.Heads[repo] = gh.CommitFiles("feature", "A fix", map[string]string{"app/greet.go": "package app // " + strings.Repeat("x", i+1)})
+	}
+}
+
+// gitOn runs git in a fake's repository; its trimmed output.
+func gitOn(t *testing.T, gh *fakegithub.Server, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", gh.Repo}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // The first hold has no commits since; the second counts only the task's
@@ -47,30 +76,65 @@ func TestAHoldCountsTheTasksOwnCommitsSinceThePreviousHold(t *testing.T) {
 	}
 }
 
+// A merge of main made with main as its first parent (a person's
+// `git checkout main && git merge feature`, pushed to feature) is main's,
+// not the task's.
+func TestAHoldCountsAMergeByWhetherItBringsInTheBase(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		between func(*verdictFixture, *State, workflow.StepContext)
+		want    int
+	}{
+		{"main merged with the branch as its second parent", func(f *verdictFixture, st *State, _ workflow.StepContext) {
+			taskCommit(f.gh, st, "repo", 1)
+			gitOn(t, f.gh, "update-ref", "refs/heads/onmain", "refs/heads/main")
+			merge := f.gh.MergeLocally("onmain", "feature", nil)
+			if merge == "" || f.gh.Parents(merge)[0] != f.gh.SHA("main") {
+				t.Fatalf("merge %q of feature into main's head", merge)
+			}
+			gitOn(t, f.gh, "update-ref", "refs/heads/feature", merge)
+			st.Heads["repo"] = merge
+		}, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, second := heldAround(t, nil, c.between, nil)
+			if second.Round != 2 || second.CommitsSince == nil || *second.CommitsSince != c.want {
+				t.Errorf("round %d commitsSince %v, want %d", second.Round, countOf(second.CommitsSince), c.want)
+			}
+		})
+	}
+}
+
 // A compare the count needs that GitHub fails or lists short (base...the
 // branch now, or base...the head the first hold showed) leaves the count
 // out.
 func TestAHoldWhoseCompareFailsOrIsTruncatedLeavesTheCountOut(t *testing.T) {
-	failing := func(previous bool) func(*fakegithub.Server, string) {
-		return func(s *fakegithub.Server, from string) {
-			s.Intercept = func(r *http.Request) int {
-				if strings.Contains(r.URL.Path, "/compare/") && strings.HasSuffix(r.URL.Path, "..."+from) == previous {
-					return 502
+	failing := func(previous bool) func(*verdictFixture, Hold) {
+		return func(f *verdictFixture, first Hold) {
+			from := first.Heads["repo"]
+			f.gh.Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if strings.Contains(r.URL.Path, "/compare/") && strings.HasSuffix(r.URL.Path, "..."+from) == previous {
+						return 502
+					}
+					return 0
 				}
-				return 0
-			}
+			})
 		}
 	}
-	truncated := func(previous bool) func(*fakegithub.Server, string) {
-		return func(s *fakegithub.Server, from string) {
-			s.CompareAnswer = func(_, head string, a map[string]any) {
-				if (head == from) == previous {
-					a["total_commits"] = 251
+	truncated := func(previous bool) func(*verdictFixture, Hold) {
+		return func(f *verdictFixture, first Hold) {
+			from := first.Heads["repo"]
+			f.gh.Set(func(s *fakegithub.Server) {
+				s.CompareAnswer = func(_, head string, a map[string]any) {
+					if (head == from) == previous {
+						a["total_commits"] = 251
+					}
 				}
-			}
+			})
 		}
 	}
-	for name, answer := range map[string]func(*fakegithub.Server, string){
+	for name, answer := range map[string]func(*verdictFixture, Hold){
 		"now failed": failing(false), "previous failed": failing(true),
 		"now truncated": truncated(false), "previous truncated": truncated(true),
 	} {
