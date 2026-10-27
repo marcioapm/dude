@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -48,9 +49,10 @@ func TestACleanMergeIsTestedWhenAnyOtherConditionFails(t *testing.T) {
 		{"a previous round at other heads", func(f *verdictFixture, _ *State) {
 			f.exec(`UPDATE runs SET base_refs = '{"repo": "0000000000000000000000000000000000000000"}' WHERE id = 'run_c' AND organization_id = $1`)
 		}, nil, false},
-		// The same merge, not known as MergeBase's answer: a head adopted, or
-		// a delivery's state from before ServerMerge was recorded.
-		{"a merge not answered by MergeBase", func(_ *verdictFixture, st *State) { st.Integration.ServerMerge = false }, nil, false},
+		// The same merge, not known as GitHub's merge onto the head read: a
+		// head adopted, or a delivery's state from before ServerMerge was
+		// recorded.
+		{"a merge not answered by MergeCommit", func(_ *verdictFixture, st *State) { st.Integration.ServerMerge = false }, nil, false},
 		{"an agent's integration", func(_ *verdictFixture, st *State) { st.Integration.RunID = "run_integration" }, nil, false},
 		// Each of the merge's other marks, alone: one after the pull request,
 		// one not published (a prFix's), one on an open pull request.
@@ -168,6 +170,29 @@ func TestAnAdoptedMovedHeadBeforeThePullRequestIsTested(t *testing.T) {
 	}
 	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != 0 {
 		t.Fatalf("skip %v (%v): an adopted head must be tested", skip, err)
+	}
+}
+
+// A push to the task branch landing between syncBeforePR's read of it and
+// GitHub's merge is in the merge: its first parent is not the head read,
+// so the merged head is tested.
+func TestAMergeOverAPushThatLandedMeanwhileIsTested(t *testing.T) {
+	f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+	var pushed atomic.Bool
+	f.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/merges") && !pushed.Swap(true) {
+				f.gh.CommitFiles("feature", "A fix", map[string]string{"app/greet.go": "package app // fixed"})
+			}
+			return 0
+		}
+	})
+	res, diverted, err := f.steps.syncBeforePR(f.ctx, sc, st)
+	if err != nil || !diverted || res.Next != "test" || !pushed.Load() || st.Integration == nil || st.Integration.ServerMerge {
+		t.Fatalf("syncBeforePR: %+v %v %v pushed %v, %+v; want a merge not known clean", res, diverted, err, pushed.Load(), st.Integration)
+	}
+	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != 0 {
+		t.Fatalf("skip %v (%v): a merge over a push must be tested", skip, err)
 	}
 }
 

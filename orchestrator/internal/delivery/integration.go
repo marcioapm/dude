@@ -101,7 +101,7 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 			r, e := w.integrationFailure(ctx, sc, st, causePairAttempted, reasonPairAttempted)
 			return r, true, e
 		}
-		merged, e := gh.MergeBase(ctx, slug, st.Branch, bh)
+		merged, e := gh.MergeCommit(ctx, slug, st.Branch, bh)
 		if e != nil {
 			if fe, ok := e.(*forge.Error); ok && fe.Status == 409 {
 				st.Integration = i
@@ -110,14 +110,16 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 			}
 			return workflow.Result{}, false, e
 		}
-		if merged == "" {
+		if merged.SHA == "" {
 			continue
 		}
-		st.Heads[repo.Name] = merged
-		st.Integration = serverMerged(head, merged)
-		st.Integration.ServerMerge = true
+		st.Heads[repo.Name] = merged.SHA
+		st.Integration = serverMerged(head, merged.SHA)
+		// Only a merge onto the head read above is that head plus the target
+		// branch: a push landing between the read and the merge is in it too.
+		st.Integration.ServerMerge = len(merged.Parents) > 0 && merged.Parents[0] == head
 		err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			_, e := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID, ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: map[string]any{"action": "merge-base", "repo": repo.Name, "base": base, "head": merged}})
+			_, e := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: sc.OrganizationID, ProjectID: st.ProjectID, TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID, Payload: map[string]any{"action": "merge-base", "repo": repo.Name, "base": base, "head": merged.SHA}})
 			return e
 		})
 		if err != nil {
@@ -147,8 +149,9 @@ type Integration struct {
 	// on to open it, not back to waiting on it.
 	BeforePR bool `json:"beforePr,omitempty"`
 	// GitHub answered the merge of BaseHead into Head it made before the
-	// pull request (MergeBase): the head is that clean merge and nothing
-	// else. A head found moved (adopted) is not one.
+	// pull request (MergeCommit), with Head its first parent: the head is
+	// that clean merge and nothing else. A head found moved (adopted) is
+	// not one.
 	ServerMerge bool `json:"serverMerge,omitempty"`
 	// Reads of the pull request after the integration published that
 	// found GitHub had not worked its mergeability out yet.

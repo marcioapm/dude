@@ -170,8 +170,8 @@ const MergeUntouchedWhy = "merged target branch touched none of the task's files
 
 // cleanServerMerge says the integration is the merge GitHub made, cleanly,
 // of the target branch into the task branch before its pull request opened
-// (syncBeforePR's MergeBase): not a head found moved, not an agent's
-// integration, not one on an open pull request.
+// (syncBeforePR's MergeCommit, onto the head it read): not a head found
+// moved, not an agent's integration, not one on an open pull request.
 func (i *Integration) cleanServerMerge() bool {
 	return i.BeforePR && i.Published && i.ServerMerge && i.Number == 0 && strings.HasPrefix(i.RunID, "server-")
 }
