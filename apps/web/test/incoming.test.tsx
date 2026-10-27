@@ -208,7 +208,8 @@ describe("Run now on a payload", () => {
     const asked: unknown[] = [];
     const run = client.runAutomation.bind(client);
     client.runAutomation = async (id, body) => { asked.push(body); return run(id, body); };
-    const c = await page(client, { id: "aut_alert" });
+    const places: AutomationsPlace[] = [];
+    const c = await page(client, { id: "aut_alert" }, (p) => places.push(p));
     await click(await until(() => c.querySelector<HTMLElement>("[data-testid=run-now]"), "Run now"));
     const verdict = await until(() => document.body.querySelector<HTMLElement>("[data-testid=test-verdict]"), "the verdict");
     // The last delivery is the resolved one, of the live run's group.
@@ -216,6 +217,7 @@ describe("Run now on a payload", () => {
     await click(document.body.querySelector("[data-testid=test-run]")!);
     await until(() => (asked.length ? asked : null), "the run");
     expect(asked[0]).toMatchObject({ payload: { status: "resolved" } });
+    await until(() => places.some((p) => p.runId) || null, "the new run opens");
   });
 
   test("a past delivery that missed a condition says it would be skipped", async () => {

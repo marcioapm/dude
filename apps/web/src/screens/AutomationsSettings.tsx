@@ -515,9 +515,9 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
         ) : null}
       </Tabs>
       {running && a.trigger.kind === "incoming" ? <RunNowIncomingDialog client={client} a={a} picked={place.deliveryId} checkJson={checkJson}
-        onClose={() => setRunning(false)} onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
+        onClose={() => setRunning(false)} onStarted={(runId) => { setRunning(false); onPlace({ id: a.id, tab: "runs", runId }); }} /> : null}
       {running && a.trigger.kind === "github" ? <RunNowDialog client={client} a={a} onClose={() => setRunning(false)}
-        onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
+        onStarted={(runId) => { setRunning(false); onPlace({ id: a.id, tab: "runs", runId }); }} /> : null}
       {rotating ? <RotateDialog client={client} a={a} onClose={() => setRotating(false)}
         onRotated={(x, value) => { setRotating(false); setA(x); setSecret({ value, rotated: true }); }} /> : null}
       {secret && a.trigger.kind === "incoming" ? <SecretOnce secret={secret.value} trigger={a.trigger} origin={a.publicOrigin} rotated={secret.rotated} onClose={() => setSecret(null)} /> : null}
@@ -1416,7 +1416,7 @@ export function testTemplate(event: string, action: string | null): Record<strin
   return base;
 }
 
-function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a: Automation; onClose: () => void; onStarted: () => void }) {
+function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a: Automation; onClose: () => void; onStarted: (runId: string) => void }) {
   const trigger = a.trigger as Extract<Trigger, { kind: "github" }>;
   const [mode, setMode] = useState<"past" | "write">("past");
   const [deliveries, setDeliveries] = useState<PastDelivery[] | null>(null);
@@ -1440,8 +1440,8 @@ function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a:
       footer={<>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={busy || !canRun} data-testid="test-run"
-          onClick={() => void save(() => client.runAutomation(a.id, mode === "past" ? { deliveryId: picked! }
-            : { testEvent: { event: trigger.event, action, deliveryId, body: (json as { value: Record<string, unknown> }).value } }), onStarted, "Run started")}>
+          onClick={() => void save(async () => { const result = await client.runAutomation(a.id, mode === "past" ? { deliveryId: picked! }
+            : { testEvent: { event: trigger.event, action, deliveryId, body: (json as { value: Record<string, unknown> }).value } }); onStarted(result.runId); }, () => undefined, "Run started")}>
           {mode === "past" ? "Run on this delivery" : "Run with this event"}
         </Button>
       </>}>

@@ -402,7 +402,7 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
   mode?: "past" | "write" | undefined;
   checkJson: (text: string) => JsonCheck;
   onClose: () => void;
-  onStarted: () => void;
+  onStarted: (runId: string) => void;
 }) {
   const trigger = a.trigger as IncomingTrigger;
   const [mode, setMode] = useState<"past" | "write">(initialMode ?? (initial ? "past" : "write"));
@@ -441,7 +441,7 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
       footer={<>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={busy || !body} data-testid="test-run"
-          onClick={() => void save(() => client.runAutomation(a.id, mode === "past" ? { deliveryId: picked! } : { payload: written! }), onStarted, "Run started")}>
+          onClick={() => void save(async () => { const result = await client.runAutomation(a.id, mode === "past" ? { deliveryId: picked! } : { payload: written! }); onStarted(result.runId); }, () => undefined, "Run started")}>
           {mode === "past" ? "Run on this delivery" : "Run with this payload"}
         </Button>
       </>}>
