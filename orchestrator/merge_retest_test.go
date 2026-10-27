@@ -12,9 +12,9 @@ import (
 // the pull request gate; main then gains a commit of path from the task's
 // own content (same: the task's FACTORY.md as the task wrote it, a clean
 // merge of a file it changed) or of a file it did not touch; the person
-// answers Draft and the conductor opens. It returns the task and the test
-// Runs before the opening.
-func mergeAtTheGate(t *testing.T, same bool) (*world, string, int) {
+// answers (Draft or Open) and the conductor opens. It returns the task and
+// the test Runs before the opening.
+func mergeAtTheGate(t *testing.T, same bool, answer string) (*world, string, int) {
 	w := conducting(t)
 	task := w.task()
 	w.talk(task)
@@ -32,8 +32,8 @@ func mergeAtTheGate(t *testing.T, same bool) (*world, string, int) {
 		w.commitFileIn(w.gh.Repo, "main", "OTHER.md", "other\n", "Another task's change")
 	}
 	w.must(task, "decide", `{"action":"ask_person"}`)
-	if status, out := w.chat(task, "Draft"); status != 200 {
-		t.Fatalf("answer Draft: %d %v", status, out)
+	if status, out := w.chat(task, answer); status != 200 {
+		t.Fatalf("answer %s: %d %v", answer, status, out)
 	}
 	w.must(task, "decide", `{"action":"open_pull_request"}`)
 	w.t.Cleanup(func() {
@@ -46,20 +46,26 @@ func mergeAtTheGate(t *testing.T, same bool) (*world, string, int) {
 	return w, task, tests
 }
 
-// The person answered Draft; GitHub merges main, which touched none of the
-// task's files, into the branch: no tester starts, the skip is recorded
-// with the merge's paths, and the pull request opens as a draft at the
-// merged head.
-func TestADraftOpensAtTheMergedHeadWithoutAnotherTestWhenMainTouchedNoneOfTheTasksFiles(t *testing.T) {
-	w, task, tests := mergeAtTheGate(t, false)
+// The person answered Draft, or Open; GitHub merges main, which touched
+// none of the task's files, into the branch: no tester starts, the skip is
+// recorded with the merge's paths, and the pull request opens as the
+// person chose at the merged head.
+func TestAPullRequestOpensAtTheMergedHeadWithoutAnotherTestWhenMainTouchedNoneOfTheTasksFiles(t *testing.T) {
+	for _, answer := range []string{"Draft", "Open"} {
+		t.Run(answer, func(t *testing.T) { mergedHeadOpensUntested(t, answer) })
+	}
+}
+
+func mergedHeadOpensUntested(t *testing.T, answer string) {
+	w, task, tests := mergeAtTheGate(t, false, answer)
 	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	branch := delivery.BranchFor(task, 1)
 	head := w.gh.SHA(branch)
 	if got := gitOut(t, w.gh.Repo, "rev-list", "--count", head+"..main"); got != "0" {
 		t.Fatalf("the pull request lacks main: %s behind", got)
 	}
-	if pr := w.gh.Pulls()[0]; !pr.Draft || w.gh.SHA(pr.Head) != head {
-		t.Errorf("pull request draft %v at %s, want a draft at the merged head %s", pr.Draft, w.gh.SHA(pr.Head), head)
+	if pr := w.gh.Pulls()[0]; pr.Draft != (answer == "Draft") || w.gh.SHA(pr.Head) != head {
+		t.Errorf("pull request draft %v at %s, want %s at the merged head %s", pr.Draft, w.gh.SHA(pr.Head), answer, head)
 	}
 	if n := w.phaseRuns(task, "test"); n != tests {
 		t.Errorf("%d test Runs, want the %d before the merge\n%s", n, tests, w.describeRuns())
@@ -92,7 +98,7 @@ func TestADraftOpensAtTheMergedHeadWithoutAnotherTestWhenMainTouchedNoneOfTheTas
 // The same, but main's change is to a file the task changed: the merged
 // head is tested again, as before.
 func TestAMergeOfMainTouchingTheTasksFileIsTestedBeforeThePullRequest(t *testing.T) {
-	w, task, tests := mergeAtTheGate(t, true)
+	w, task, tests := mergeAtTheGate(t, true, "Draft")
 	w.until("a tester of the merged head", func() bool { return w.phaseRuns(task, "test") > tests || len(w.gh.Pulls()) > 0 })
 	if n := w.phaseRuns(task, "test"); n <= tests {
 		t.Fatalf("%d test Runs, want one more for the merged head\n%s", n, w.describeRuns())
