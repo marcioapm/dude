@@ -116,4 +116,16 @@ describe("checks judgements in the task's Activity", () => {
       `${dudeName(TASK_ID)} did not run the tester again: the change since the last test touches only paths no criterion depends on. Its 2 verdicts stand.`,
       "api/.github/workflows/ci.yml", test1.id]]);
   });
+
+  test("a merge of the target branch not tested again says so and names the round whose verdicts stand", () => {
+    const test1 = run("run_test_mg", "test", "qa_browser");
+    const skipped = { ...judged(test1.id, {}, 3), eventType: EventTypes.TestSkipped, runId: null,
+      payload: { fromRunId: test1.id, paths: ["api/lib/other.go"], why: "merged target branch touched none of the task's files",
+        criteria: [{ criterion: 1, status: "pass", decision: "" }] } } as PersistedEvent;
+    const lines = activityLines([skipped], people, [test1], [], 1);
+    const [line] = lines.map((l) => [textOf(l.text), l.quote, l.open?.runId]);
+    expect(line?.[0]).toStartWith(`${dudeName(TASK_ID)} did not run the tester again: the merge of the target branch before the pull request touches none of the task's files; the pull request's CI checks it. The 1 verdict of `);
+    expect(line?.[0]).toEndWith(" stand.");
+    expect(line?.slice(1)).toEqual(["api/lib/other.go", test1.id]);
+  });
 });

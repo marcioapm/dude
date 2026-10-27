@@ -391,7 +391,21 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   `lux/<base>` without moving it, and the agent merges it. Before a pull
   request opens, with `whenBehind` `update`, the workflow asks GitHub to
   merge the moved base into the task branch (`/merges`, `merge-base` on the
-  activity) and tests the new head again. A conflict, there or on an open
+  activity) and tests the new head again — unless GitHub's merge was clean
+  and touched none of the task's files: the paths the merge brought in
+  (`compare <task head>...<base head>`) share none with the task's own
+  (`compare <base head>...<task head>`), measured once per merge and cached
+  in `roundDelta`, and every other condition of `carryForward` holds (no
+  fix of a failed test due, no directed test, no tester finding to judge,
+  the previous round passed the gate at the heads before the merge, on the
+  criteria as they read now). Then no tester starts: `test.skipped` records
+  the merge's paths with `why` "merged target branch touched none of the
+  task's files", the gate weighs the previous round, a person's Open or
+  Draft at the pre-merge heads moves to the merged heads
+  (`carryGateOverMergeTx`), and the pull request opens; its CI checks the
+  merge. Overlap, a refused or truncated compare: tested again; a transient
+  GitHub failure waits. A head found moved (adopted) is always tested. A
+  conflict, there or on an open
   pull request, starts one integration Run per head/base pair
   (`State.IntegrationPairs`): a fixer told to `git merge lux/<base>` and
   resolve keeping both sides' intent, then an internal review that runs

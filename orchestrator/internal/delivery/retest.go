@@ -28,7 +28,9 @@ import (
 // {fromRunId, from, heads, paths, criteria}: the previous round whose
 // verdicts stand, its checkouts, the heads they now stand for, the paths
 // changed between (all non-product), and each verdict as {criterion,
-// status, decision}.
+// status, decision}. For a clean merge of the target branch before the
+// pull request (carryOverMerge), also why (MergeUntouchedWhy) and merge
+// {repo, base, baseHead}; paths are then the paths the merge brought in.
 const EvTestSkipped = "test.skipped"
 
 // carryTx is what test Run runID's carried criteria may rest on: the
