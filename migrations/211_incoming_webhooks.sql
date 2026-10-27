@@ -72,8 +72,13 @@ ALTER TABLE incoming_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE incoming_deliveries FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON incoming_deliveries USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
--- The Deliveries tab, newest first; and the rate limit's rolling hour.
+-- The Deliveries tab, newest first.
 CREATE INDEX incoming_deliveries_automation_idx ON incoming_deliveries (automation_id, received_at DESC);
+-- The rate limit's rolling hour: only the deliveries it counts (started,
+-- sent to a run, or not yet read), so refused and skipped ones in the hour
+-- cost the count nothing.
+CREATE INDEX incoming_deliveries_rate_idx ON incoming_deliveries (automation_id, received_at)
+  WHERE verdict IS NULL OR verdict IN ('started', 'sent_to_run');
 -- The loop's queue: accepted, not yet read.
 CREATE INDEX incoming_deliveries_pending_idx ON incoming_deliveries (received_at) WHERE verdict IS NULL;
 -- Retention: refused rows go at 7 days, bodies at 30.

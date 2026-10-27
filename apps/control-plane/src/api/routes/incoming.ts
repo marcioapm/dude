@@ -107,8 +107,8 @@ async function store(scope: OrgScope, hook: Hook, row: {
 /** A refusal's row, or past REFUSED_ROWS_PER_HOUR this clock hour only its count: a flood without the secret writes one row an hour. */
 async function storeRefusal(scope: OrgScope, hook: Hook, row: { id: string; bytes: number; headers: Record<string, string>; refused: RefusalCode }): Promise<void> {
   await scope.sql`SELECT pg_advisory_xact_lock(hashtextextended(${"incoming-refused:" + hook.automation_id}, 0))`;
-  const [{ n }] = (await scope.sql`SELECT count(*)::int AS n FROM incoming_deliveries WHERE automation_id = ${hook.automation_id}
-    AND verdict = 'refused' AND received_at >= date_trunc('hour', now())`) as [{ n: number }];
+  const [{ n }] = (await scope.sql`SELECT count(*)::int AS n FROM (SELECT 1 FROM incoming_deliveries WHERE automation_id = ${hook.automation_id}
+    AND verdict = 'refused' AND received_at >= date_trunc('hour', now()) LIMIT ${REFUSED_ROWS_PER_HOUR}) r`) as [{ n: number }];
   if (n < REFUSED_ROWS_PER_HOUR) return store(scope, hook, row);
   await scope.sql`INSERT INTO incoming_refusals (organization_id, automation_id, hour, code, n)
     VALUES (${scope.organizationId}, ${hook.automation_id}, date_trunc('hour', now()), ${row.refused}, 1)
