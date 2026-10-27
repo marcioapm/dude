@@ -36,6 +36,7 @@ const (
 	SessionAgents   Key = "session.agents"
 	SessionCheckout Key = "session.checkout"
 	ChatRead        Key = "chat.read"
+	ChatReply       Key = "chat.reply"
 	RunsRead        Key = "runs.read"
 	PRRefresh       Key = "pr.refresh"
 	LimitsRead      Key = "limits.read"
@@ -106,6 +107,8 @@ var All = []Capability{
 		Tools: []string{"refresh_checkout"}},
 	{Key: ChatRead, Description: "Read more of the chat conversation a session was started from: its thread, or the channel; at most 30 reads an hour.",
 		Tools: []string{"chat_history"}},
+	{Key: ChatReply, Description: "Reply in the chat thread a session was started from: at most 3 posts a turn, about 3,000 characters each; only a session started from chat has it.",
+		Tools: []string{"reply_in_thread"}},
 	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
 		Tools: []string{"run_chat"}},
 	{Key: PRRefresh, Description: "Read the task's pull requests from GitHub now, rather than dude's last poll; counts against the hourly GitHub reads.",
@@ -129,7 +132,7 @@ var All = []Capability{
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
 		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, ChatReply, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
@@ -154,33 +157,41 @@ type Grants struct {
 
 // Resolve is the capabilities a has: its role's defaults, less
 // session.name once a member has named a's session (titled_by 'person',
-// which the agent may not override). A stored per-organisation or
+// which the agent may not override), and with chat.reply only when its
+// role's row lists it and a's session was started from a chat thread
+// (sessions.origin names its conversation). A stored per-organisation or
 // per-agent override is applied here, in tx, and nowhere else.
 func Resolve(ctx context.Context, tx pgx.Tx, a Agent) (Grants, error) {
 	g := Default(a.Role)
-	if a.Session == "" || !g.Has(SessionName) {
+	replies := slices.Contains(Defaults[a.Role], ChatReply)
+	if a.Session == "" || !g.Has(SessionName) && !replies {
 		return g, nil
 	}
-	var byPerson bool
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(bool_or(titled_by = 'person'), false) FROM sessions WHERE id = $1`,
-		a.Session).Scan(&byPerson); err != nil {
+	var byPerson, fromChat bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(bool_or(titled_by = 'person'), false),
+			COALESCE(bool_or(origin->>'provider' IS NOT NULL AND origin->>'conversationId' IS NOT NULL), false)
+		FROM sessions WHERE id = $1`, a.Session).Scan(&byPerson, &fromChat); err != nil {
 		return Grants{}, err
 	}
 	if byPerson {
 		g = g.Without(SessionName)
 	}
+	if replies && fromChat {
+		g.keys = append(g.keys, ChatReply)
+	}
 	return g, nil
 }
 
 // Default is role's row of Defaults, or the "" row for a role it does not
-// list. For callers with no agent to resolve (a settings page's built-in
-// prompt) and for tests.
+// list, less chat.reply, which only Resolve grants, having read the
+// session. For callers with no agent to resolve (a settings page's
+// built-in prompt) and for tests.
 func Default(role string) Grants {
 	keys, ok := Defaults[role]
 	if !ok {
 		keys = Defaults[""]
 	}
-	return Of(keys...)
+	return Of(keys...).Without(ChatReply)
 }
 
 // Of grants exactly keys.

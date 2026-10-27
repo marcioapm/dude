@@ -1,6 +1,6 @@
 ---
 title: Brainstorm sessions
-covers: [tool:propose, tool:relate, tool:name_session, tool:refresh_checkout, tool:chat_history]
+covers: [tool:propose, tool:relate, tool:name_session, tool:refresh_checkout, tool:chat_history, tool:reply_in_thread]
 ---
 A brainstorm session is a conversation with an agent about your projects, before any work is planned. This page covers starting a session, linking projects, sharing it, filing what it proposes, and the investigators it can start.
 
@@ -62,10 +62,23 @@ Besides the checkouts, the brainstorm agent can:
 - read linked projects' tasks, epics, repositories, findings and pull requests;
 - read GitHub issues, pull requests, Actions runs' jobs and check logs;
 - read another Run's Chat, for the Runs the session started (`run_chat`);
-- for a session started from chat, read more of the conversation it came from: its thread, or the channel when the request was not in one, 30 messages a page, at most 30 reads an hour (`chat_history`);
+- for a session started from chat, read more of the conversation it came from: its thread, or the channel when the request was not in one, 30 messages a page, at most 30 reads an hour (`chat_history`), and reply in its thread (`reply_in_thread`, below);
 - read dude's settings as they apply to the session (`settings`).
 
 A session started from chat never sees a project an admin hid from that chat (on the chat provider's settings page): it is not offered, cannot be linked, and every tool refuses it, its investigators' included. Hiding applies to new work: a task already filed in a project that is hidden later keeps working on it, and still reaches no other hidden project.
+
+## What you see in the chat thread
+
+When you mention dude in a chat thread and it starts or resumes a session, dude replies with the session's link and marks your message: 👀 while it works, ⏳ while the agent boots, ✅ once it answered.
+
+The agent then decides what goes back to the thread, with `reply_in_thread`. It posts only in the thread the session came from:
+
+- a question it can answer directly gets a short answer there, and the full answer in the session;
+- when work is filed from the conversation, one short note saying what was created, with its link;
+- a question it needs answered, briefly;
+- nothing when the thread gains nothing: the ✅ says it answered.
+
+It never posts logs, code or tool output, since people outside the organisation may read the thread. It posts at most 3 messages after each message of yours, each at most about 3,000 characters, and never notifies the whole channel. Each post, or why one was refused, shows in the session.
 
 Its machine is small and does not run code. What needs running to be known, it says is not checked, and proposes a task that finds out.
 

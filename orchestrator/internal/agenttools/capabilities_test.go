@@ -62,7 +62,8 @@ func TestEachRolesToolsAreTheSameAsBeforeCapabilities(t *testing.T) {
 // A role's tool resolves to the definition its audience uses: a session
 // agent's own where it has one, the task agents' otherwise.
 func TestASessionAgentsNameFindsItsOwnDefinition(t *testing.T) {
-	brainstorm := capabilities.Default(delivery.RoleBrainstorm)
+	// The brainstorm's whole row: a chat-born session's, reply_in_thread included.
+	brainstorm := capabilities.Of(capabilities.Defaults[delivery.RoleBrainstorm]...)
 	conductor := capabilities.Default(delivery.RoleConductor)
 	own := map[string]bool{}
 	for _, def := range allTools() {

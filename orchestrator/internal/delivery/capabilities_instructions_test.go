@@ -166,6 +166,32 @@ func TestGoldenInstructionsBrainstormMemberNamed(t *testing.T) {
 	golden(t, "instructions-brainstorm-member-named", Instructions(RoleBrainstorm, "", ii))
 }
 
+// A brainstorm whose session a chat thread started, as a golden: Resolve
+// gives it chat.reply, so its file has the thread's contract; a session
+// without it (from the web, or any default grant) has none of it.
+func TestGoldenInstructionsBrainstormFromChat(t *testing.T) {
+	fromChat := capabilities.Of(capabilities.Defaults[RoleBrainstorm]...)
+	if !fromChat.Tool("reply_in_thread") {
+		t.Fatal("the brainstorm's row grants no chat.reply")
+	}
+	in := goldenTask()
+	in.Tools, in.CLI = true, true
+	in.Repositories, in.Anywhere = readOnlyRepos(), true
+	ii := in.InstructionsInput()
+	ii.Grants = &fromChat
+	got := Instructions(RoleBrainstorm, "", ii)
+	golden(t, "instructions-brainstorm-from-chat", got)
+	contract := render(mustTemplate("contracts/chat-thread"), nil)
+	if !strings.Contains(got, "## The chat thread\n"+contract) {
+		t.Error("a chat-born session's file has no thread contract")
+	}
+	web := capabilities.Default(RoleBrainstorm)
+	ii.Grants = &web
+	if got := Instructions(RoleBrainstorm, "", ii); strings.Contains(got, "reply_in_thread") || strings.Contains(got, "## The chat thread") {
+		t.Error("a web session's file names the thread contract")
+	}
+}
+
 // The shell form of each dude tool the instruction files show, as
 // cmd/dude parses it.
 var toolCommands = map[string][]string{

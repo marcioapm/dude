@@ -269,9 +269,13 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 }
 
 // checkText refuses a post's text that is blank or longer than Slack takes.
-func checkText(text string) error {
-	if n := utf8.RuneCountInString(text); strings.TrimSpace(text) == "" || n > postTextMax {
-		return refuse(rPostTextLength, postTextMax, n)
+func checkText(text string) error { return textWithin(text, postTextMax, rPostTextLength) }
+
+// textWithin refuses text that is blank or longer than max characters, in
+// format's words (max, then the text's length).
+func textWithin(text string, max int, format string) error {
+	if n := utf8.RuneCountInString(text); strings.TrimSpace(text) == "" || n > max {
+		return refuse(format, max, n)
 	}
 	return nil
 }
