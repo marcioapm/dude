@@ -20,7 +20,7 @@ import {
   redactedHeader,
   type AutomationDelivery,
   type AutomationDeliveryDetail,
-  type DeliveryVerdictKind,
+  type DeliveryFilter,
   type IncomingVerify,
   type RefusalCode,
 } from "@dude/domain";
@@ -230,9 +230,6 @@ function deliveryOut(r: Record<string, unknown>): AutomationDelivery {
   const { body: _b, headers: _h, ...rest } = r;
   return { ...(rest as unknown as AutomationDelivery), receivedAt: isoOf(r.receivedAt) };
 }
-
-/** The list's verdict filter: a verdict; "pending" for one the loop has not read; "accepted" for any not refused. */
-export type DeliveryFilter = DeliveryVerdictKind | "pending" | "accepted";
 
 /**
  * The last 30 days' deliveries, newest first (at most 100), of one verdict

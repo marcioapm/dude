@@ -47,7 +47,7 @@ import {
   type IncomingVerify,
   type IncomingVerifyMode,
 } from "@dude/domain";
-import type { ApiClient, DeliveryFilter, ListedDelivery } from "../api/client.ts";
+import type { ApiClient, DeliveryFilter } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 
 const ago = (iso: string) => formatTimestamp(iso, "relative");
@@ -278,7 +278,7 @@ const VERDICT_FILTER: Array<{ value: DeliveryFilter | "all"; label: string }> = 
 export function DeliveriesTab({ client, a, onOpen, onRun }: {
   client: ApiClient; a: Automation; onOpen: (id: string) => void; onRun: (runId: string) => void;
 }) {
-  const [list, setList] = useState<ListedDelivery[] | null>(null);
+  const [list, setList] = useState<AutomationDelivery[] | null>(null);
   const [unstored, setUnstored] = useState(0);
   const [problem, setProblem] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<DeliveryFilter | "all">("all");
@@ -406,7 +406,7 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
 }) {
   const trigger = a.trigger as IncomingTrigger;
   const [mode, setMode] = useState<"past" | "write">(initialMode ?? (initial ? "past" : "write"));
-  const [list, setList] = useState<ListedDelivery[] | null>(null);
+  const [list, setList] = useState<AutomationDelivery[] | null>(null);
   const [picked, setPicked] = useState<string | null>(initial ?? null);
   // The list carries no bodies: a picked delivery's is read from its detail.
   const [bodies, setBodies] = useState<Record<string, Record<string, unknown> | null>>({});

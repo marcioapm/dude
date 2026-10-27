@@ -178,6 +178,8 @@ export function groupKeyOf(groupBy: string, body: unknown): string {
 
 export const DELIVERY_VERDICTS = ["started", "sent_to_run", "skipped", "refused"] as const;
 export type DeliveryVerdictKind = (typeof DELIVERY_VERDICTS)[number];
+/** The Deliveries list's filter: a verdict; "pending" for one the loop has not read; "accepted" for any not refused. */
+export type DeliveryFilter = DeliveryVerdictKind | "pending" | "accepted";
 export const REFUSAL_CODES = ["bad_signature", "not_json", "too_large", "rate_limited", "disabled"] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 export const REFUSAL_LABEL: Record<RefusalCode, string> = {

@@ -29,6 +29,7 @@ import {
   type AutomationInput,
   type AutomationPromptVersion,
   type AutomationScope,
+  type DeliveryFilter,
   type RepoFilter,
 } from "@dude/domain";
 import { newId } from "@dude/domain";
@@ -41,7 +42,7 @@ import { badRequest, HttpError, json, noContent, notFound, parseBody } from "../
 import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { readDeliveries, readDelivery, refusedNotStored, runDeliveries, type DeliveryFilter } from "./incoming.ts";
+import { readDeliveries, readDelivery, refusedNotStored, runDeliveries } from "./incoming.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */

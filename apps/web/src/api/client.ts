@@ -25,6 +25,7 @@ import type {
   AutomationRunsResponse,
   AutomationDelivery,
   AutomationDeliveryDetail,
+  DeliveryFilter,
   IncomingVerdict,
   EventSubscriptions,
   EventVerdict,
@@ -268,11 +269,7 @@ export interface GithubAppInput {
   clearOauthClientSecret?: boolean;
 }
 
-/** A delivery as the Deliveries tab lists it: no body (its detail has it). */
-export type ListedDelivery = AutomationDelivery;
-
-/** The Deliveries list's verdict filter on the server: a verdict; "pending" for one not read yet; "accepted" for any not refused. */
-export type DeliveryFilter = NonNullable<AutomationDelivery["verdict"]> | "pending" | "accepted";
+export type { DeliveryFilter } from "@dude/domain";
 
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
 export interface WebhookHealth {
@@ -1409,7 +1406,7 @@ export class ApiClient {
   }
 
   /** The Deliveries tab: the last 30 days' deliveries with their verdicts, at most 100, of one verdict when filtered; an incoming automation's refusals this hour counted, not stored. */
-  automationDeliveryList(id: string, verdict?: DeliveryFilter): Promise<{ deliveries: ListedDelivery[]; refusedNotStored?: number }> {
+  automationDeliveryList(id: string, verdict?: DeliveryFilter): Promise<{ deliveries: AutomationDelivery[]; refusedNotStored?: number }> {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries${verdict ? `?verdict=${verdict}` : ""}`);
   }
 
