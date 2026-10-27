@@ -144,7 +144,7 @@ func TestAPreexistingFailurePassesOnTheJudgesYes(t *testing.T) {
 	if n := w.countEvents(delivery.EvRunChecksJudged); n != 1 {
 		t.Fatalf("%d judgements", n)
 	}
-	if n := countOwner(w, `SELECT count(*) FROM directives WHERE run_id = $1`, w.run.ID); n != 0 {
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, w.run.ID); n != 0 {
 		t.Fatalf("%d directives sent for a passed report", n)
 	}
 }
@@ -643,13 +643,4 @@ func recordedJudgement(w *harnessWorld) checksDecision {
 		w.t.Fatal(err)
 	}
 	return got
-}
-
-func countOwner(w *harnessWorld, sql string, args ...any) int {
-	w.t.Helper()
-	var n int
-	if err := w.owner.QueryRow(context.Background(), sql, args...).Scan(&n); err != nil {
-		w.t.Fatal(err)
-	}
-	return n
 }

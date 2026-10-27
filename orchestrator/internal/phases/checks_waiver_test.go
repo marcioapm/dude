@@ -3,7 +3,6 @@ package phases
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -174,20 +173,13 @@ func TestBesideACarriedFailureThePassesAreBackedAndMissingIsAsked(t *testing.T) 
 			fake := &waiverFake{waived: judge.Yes, missing: tc.missing}
 			w.s.Judge = fake
 			pass, _, err := w.s.checksBeforePush(context.Background(), w.run)
-			var got checksDecision
-			if err == nil {
-				err = w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
-					var raw []byte
-					if err := tx.QueryRow(context.Background(), `SELECT payload FROM events WHERE run_id = $1 AND event_type = $2`,
-						w.run.ID, delivery.EvRunChecksJudged).Scan(&raw); err != nil {
-						return err
-					}
-					return json.Unmarshal(raw, &got)
-				})
+			if err != nil {
+				t.Fatal(err)
 			}
-			if err != nil || pass != tc.verified || got.Verified != tc.verified || len(fake.asked) != 3 || len(got.Verdicts) != 3 ||
+			got := recordedJudgement(w)
+			if pass != tc.verified || got.Verified != tc.verified || len(fake.asked) != 3 || len(got.Verdicts) != 3 ||
 				got.Verdicts[0].Result != delivery.CheckWaived || got.Verdicts[1].Command != "make lint" || got.Verdicts[1].Result != "pass" {
-				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
+				t.Fatalf("%+v, asked %d", got, len(fake.asked))
 			}
 			// The send-back names the missing check alone, never the
 			// carried failure or the backed pass.
