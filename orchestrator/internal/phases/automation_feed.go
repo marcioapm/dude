@@ -86,7 +86,7 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 		return nil, err
 	}
 	t := &translator{run: phaseRun{AutomationRunID: run.ID, ID: run.ID, Org: run.Org, ProjectID: run.ProjectID, Status: statusRunning},
-		seenCalls: map[string]string{}, openCalls: map[string]bool{}, waitsOn: map[string][]string{}, announced: st.Announced}
+		seenCalls: map[string]string{}, openCalls: map[string]bool{}, waitsOn: map[string][]string{}, announced: st.Announced, closed: map[string]bool{}}
 	if len(st.Harness) > 0 {
 		if err := json.Unmarshal(st.Harness, &t.harnessState); err != nil {
 			return nil, err
@@ -102,9 +102,6 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 		t.openCalls[id] = true
 	}
 	for _, id := range st.Closed {
-		if t.closed == nil {
-			t.closed = map[string]bool{}
-		}
 		t.closed[id] = true
 	}
 	return f, nil
@@ -337,9 +334,6 @@ func (f *AutomationFeed) End(ctx context.Context, tx pgx.Tx, note string, exitCo
 		}
 		if err := f.t.callEnded(ctx, tx, f.s, nil, p); err != nil {
 			return err
-		}
-		if f.t.closed == nil {
-			f.t.closed = map[string]bool{}
 		}
 		f.t.closed[id] = true
 	}
