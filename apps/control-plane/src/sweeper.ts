@@ -4,9 +4,9 @@
  * Images uploaded and never sent (or taken out of their task's text) are
  * removed a day later, unless a feedback item names one as its picture, and every object
  * whose attachment row is gone — swept, removed by a person, or taken with
- * its task (ON DELETE CASCADE) — is deleted from storage. The rows' trigger
- * queues the keys (migration 071); this drains the queue. A key whose
- * delete fails stays queued for the next pass.
+ * its task (ON DELETE CASCADE) — is deleted from storage, unless another row
+ * still names it. The rows' trigger queues the keys (migration 071); this
+ * drains the queue. A key whose delete fails stays queued for the next pass.
  *
  * It looks across organizations, so it runs as dude_sweeper, which may see
  * attachments and the queue and nothing else of a tenant.
@@ -53,8 +53,13 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
   while (Date.now() < deadline) {
     const keys = await withoutTenant(async ({ sql }) => {
       await sql`SET LOCAL ROLE dude_sweeper`;
-      return (await sql`SELECT object_key FROM attachment_object_deletions WHERE NOT (object_key = ANY(${sql.array(skip, "TEXT")}))
-        ORDER BY queued_at LIMIT ${SWEEP_BATCH}`) as Array<{ object_key: string }>;
+      // Retain referenced keys: the last reference's delete trigger may already
+      // have found this queue entry. Filter before LIMIT so retained keys cannot starve later ones.
+      return (await sql`SELECT q.object_key FROM attachment_object_deletions q
+        WHERE NOT (q.object_key = ANY(${sql.array(skip, "TEXT")}))
+          AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.object_key = q.object_key)
+          AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.original_key = q.object_key)
+        ORDER BY q.queued_at LIMIT ${SWEEP_BATCH}`) as Array<{ object_key: string }>;
     });
     if (keys.length === 0) break;
     const done: string[] = [];

@@ -524,7 +524,9 @@ type proposalCard struct {
 	CreatedAt any                     `json:"createdAt"`
 	Items     []delivery.ProposalItem `json:"items"`
 	Status    []map[string]any        `json:"status"`
-	raw       json.RawMessage
+	// The images its task items name, by id, as a message's attachments are.
+	Attachments map[string]json.RawMessage `json:"attachments,omitempty"`
+	raw         json.RawMessage
 }
 
 // proposalsFor reads the session's cards for one member. Every card it ever
@@ -577,6 +579,23 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	if err != nil {
 		return nil, err
 	}
+	shown, err := proposalImages(ctx, tx, sessionID, cards)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cards {
+		c := &cards[i]
+		for _, it := range c.Items {
+			for _, img := range it.Images {
+				if info, ok := shown[img]; ok {
+					if c.Attachments == nil {
+						c.Attachments = map[string]json.RawMessage{}
+					}
+					c.Attachments[img] = info
+				}
+			}
+		}
+	}
 	for i := range cards {
 		c := &cards[i]
 		c.Status = make([]map[string]any, len(c.Items))
@@ -618,6 +637,17 @@ func linkedProjectIDs(ctx context.Context, tx pgx.Tx, sessionID string) ([]strin
 	}
 	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	return db.NonNil(out), err
+}
+
+// proposalImages is the metadata of every image the cards' items name, by id.
+func proposalImages(ctx context.Context, tx pgx.Tx, sessionID string, cards []proposalCard) (map[string]json.RawMessage, error) {
+	var named []string
+	for _, c := range cards {
+		for _, it := range c.Items {
+			named = append(named, it.Images...)
+		}
+	}
+	return delivery.SessionImageInfo(ctx, tx, sessionID, named)
 }
 
 // fileFacts is what deciding who may file a set of items reads: the
@@ -833,6 +863,20 @@ func (f fileFacts) cannotFileIn(items []delivery.ProposalItem, n int, filed func
 	return fileBlock{}
 }
 
+// refusedBlocker checks direct blockers: withBlockers processes each blocker
+// first, so its recorded refusal already includes any refused dependency.
+func refusedBlocker(items []delivery.ProposalItem, n int, filed func(int) bool, refused map[int]string) (int, string) {
+	for _, b := range delivery.ItemBlockers(items, n) {
+		if b < 0 || b >= len(items) || b == n || filed(b) {
+			continue
+		}
+		if why, ok := refused[b]; ok {
+			return b, why
+		}
+	}
+	return -1, ""
+}
+
 // withBlockers is the items to file, each with the card's unfiled items it
 // waits on (filing an item files its blockers with it), in the order
 // filing takes them: new epics first, then each task after what it waits on.
@@ -960,6 +1004,14 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 			return err
 		}
 		relations := 0
+		// Items refused in this request, with why: an item waiting on one is
+		// refused too, since its blocking edge would have no task to point at.
+		refusedWhy := map[int]string{}
+		refuse := func(n int, why string) {
+			refusedWhy[n] = why
+			results = append(results, map[string]any{"item": n, "status": "refused", "why": why})
+		}
+		isDone := func(i int) bool { return done[i] }
 		for _, n := range order {
 			if n < 0 || n >= len(items) {
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "no such item"})
@@ -970,14 +1022,31 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "already filed"})
 				continue
 			}
-			if no := facts.cannotFileIn(items, n, func(i int) bool { return done[i] }, p.Person, role); no.why != "" {
-				results = append(results, map[string]any{"item": n, "status": "refused", "why": no.why})
+			if no := facts.cannotFileIn(items, n, isDone, p.Person, role); no.why != "" {
+				refuse(n, no.why)
 				continue
 			}
-			key, taskID, epicID, err := fileItem(r.Context(), tx, org, id, body.ProposalID, proposalRunID, linked, facts, item, f)
+			if at, why := refusedBlocker(items, n, isDone, refusedWhy); at >= 0 {
+				refuse(n, fmt.Sprintf("Waits on item %d, which was refused: %s.", at+1, strings.TrimSuffix(why, ".")))
+				continue
+			}
+			// Each refusal must undo this item's writes without undoing earlier filings.
+			itemTx, err := tx.Begin(r.Context())
+			if err != nil {
+				return err
+			}
+			key, taskID, epicID, err := fileItem(r.Context(), itemTx, org, id, body.ProposalID, proposalRunID, linked, facts, item, f)
 			var refused delivery.NoteRefusal
-			if errors.As(err, &refused) {
-				results = append(results, map[string]any{"item": n, "status": "refused", "why": refused.Msg})
+			var badImage delivery.AttachmentError
+			if errors.As(err, &refused) || errors.As(err, &badImage) {
+				if rollbackErr := itemTx.Rollback(r.Context()); rollbackErr != nil {
+					return rollbackErr
+				}
+				why := refused.Msg
+				if badImage.Message != "" {
+					why = badImage.Message
+				}
+				refuse(n, why)
 				continue
 			}
 			if err != nil {
@@ -985,6 +1054,9 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				if errors.As(err, &refused) {
 					return fail(http.StatusConflict, refused.Code, "item %d: %s", n+1, refused.Msg)
 				}
+				return err
+			}
+			if err := itemTx.Commit(r.Context()); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(r.Context(), `INSERT INTO session_filings (proposal_id, item, organization_id, session_id, filed_by, key, task_id, epic_id)
@@ -1094,7 +1166,8 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 				return "", "", "", err
 			}
 		}
-		id, key, err := delivery.CreateTaskTx(ctx, tx, org, project, f, epic, item.Title, strings.TrimSpace(item.Goal), item.AcceptanceCriteria)
+		id, key, err := delivery.CreateTaskWithSessionImagesTx(ctx, tx, org, project, f, epic, item.Title, strings.TrimSpace(item.Goal),
+			item.AcceptanceCriteria, sessionID, item.Images)
 		if err == nil {
 			err = delivery.InheritOrigin(ctx, tx, "tasks", id, sessionID, "")
 		}

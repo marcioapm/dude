@@ -310,3 +310,7 @@ Only %s or an admin can link a project here.
 
 dude couldn't link %s: %s
 
+## refusals/domain/attachments/image-not-shared-in-this-session
+
+image %s is not one a member shared in this session
+

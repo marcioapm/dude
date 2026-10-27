@@ -819,9 +819,7 @@ func CheckoutLine(s lux.SyncResult) string {
 		return ""
 	case "kept":
 		data.Case = "kept"
-		if !s.Dirty && !s.Diverged && s.Ahead == 0 {
-			// Nothing of its own in the way: HEAD is not on the task branch,
-			// and lux never switches it.
+		if CheckoutOffBranch(s) {
 			data.Case = "off-branch"
 			break
 		}
@@ -838,6 +836,13 @@ func CheckoutLine(s lux.SyncResult) string {
 		data.Case = s.Status
 	}
 	return render(checkoutTmpl, data)
+}
+
+// CheckoutOffBranch is a sync kept with nothing of the conductor's own in
+// the way: HEAD is not on the task branch, and lux never switches it.
+// News for its next note, not a reason for a turn.
+func CheckoutOffBranch(s lux.SyncResult) bool {
+	return s.Operation == "" && s.Status == "kept" && !s.Dirty && !s.Diverged && s.Ahead == 0
 }
 
 // operationLine tells a checkout stopped mid-operation how to finish or

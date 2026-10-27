@@ -553,6 +553,27 @@ describe("a brainstorm session's page", () => {
     expect(card.textContent).toContain("Read them with useTotals(country).");
   });
 
+  test("a task item shows the images it will carry, as a message's; one the session no longer has is left out", async () => {
+    const design = { id: "att_design", name: "design.png", contentType: "image/png" as const, width: 640, height: 400, bytes: 2048,
+      original: { contentType: "image/png" as const, width: 1280, height: 800, bytes: 8192 } };
+    const client = new SessionClient(detail("chat", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [
+        { kind: "task", project: "BL", title: "Dropdown checklist", goal: "g", images: ["att_design", "att_gone"] },
+        { kind: "task", project: "BL", title: "No images", goal: "g" },
+      ], status: [{ canFile: true }, { canFile: true }], attachments: { att_design: design } }],
+    }));
+    const page = await sessionPage(client);
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    const shown = card.querySelectorAll("[data-testid=proposal-images]");
+    expect(shown.length).toBe(1);
+    const images = shown[0]!.querySelectorAll("[data-testid=message-image]");
+    expect(images.length).toBe(1);
+    expect(images[0]!.getAttribute("aria-label")).toBe("Open design.png");
+    await click(images[0]!);
+    const viewer = await until(() => document.querySelector("[data-testid=image-viewer]"), "the image viewer");
+    expect(viewer.textContent).toContain("design.png");
+  });
+
   test("the card files what you tick, as you, and says what was refused", async () => {
     const client = new SessionClient(detail("chat", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [

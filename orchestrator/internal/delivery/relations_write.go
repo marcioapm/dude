@@ -214,21 +214,47 @@ func releasedByRemovalTx(ctx context.Context, tx pgx.Tx, org, taskID, actorType,
 	return workflow.SignalTx(ctx, tx, org, wf, SignalRelationsUnblock, map[string]any{"removed": true}, "")
 }
 
+// edgeStoredTx is whether the edge is stored exactly: same ends, same
+// direction, same kind. The caller holds the relation lock.
+func edgeStoredTx(ctx context.Context, tx pgx.Tx, e Edge) (bool, error) {
+	from, to, kind := e.ends()
+	var stored bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM task_relations WHERE from_task_id = $1 AND to_task_id = $2
+		AND kind = $3::task_relation_kind)`, from.ID, to.ID, kind).Scan(&stored)
+	return stored, err
+}
+
 // ConductRelationsTx is update_task's relations: the task's live conductor
 // adds and removes edges of its own task, at any status. Each is checked
-// as it is written; the first refused refuses the call.
-func ConductRelationsTx(ctx context.Context, tx pgx.Tx, ref RunRef, add, remove []Edge) error {
+// as it is written; the first refused refuses the call. An added edge that
+// is stored already, as the same kind in the same direction, is written as
+// nothing and returned in present ("blocks ABS-32"); another relation
+// between the same two tasks is still refused.
+func ConductRelationsTx(ctx context.Context, tx pgx.Tx, ref RunRef, add, remove []Edge) (present []string, err error) {
 	if err := liveConductor(ctx, tx, ref); err != nil {
-		return err
+		return nil, err
+	}
+	if len(add) > 0 {
+		if err := lockRelations(ctx, tx, ref.Org); err != nil {
+			return nil, err
+		}
 	}
 	for _, e := range add {
 		e.RunID = ref.RunID
+		stored, err := edgeStoredTx(ctx, tx, e)
+		if err != nil {
+			return nil, err
+		}
+		if stored {
+			present = append(present, strings.ReplaceAll(e.Side, "_", " ")+" "+e.Other.Key)
+			continue
+		}
 		if err := AddRelationTx(ctx, tx, ref.Org, e); err != nil {
-			return asRefusal(err)
+			return nil, asRefusal(err)
 		}
 	}
 	if len(remove) == 0 {
-		return nil
+		return present, nil
 	}
 	var owner string
 	_ = tx.QueryRow(ctx, `SELECT p.name FROM task_people tp JOIN people p ON p.id = tp.person_id
@@ -241,10 +267,10 @@ func ConductRelationsTx(ctx context.Context, tx pgx.Tx, ref RunRef, add, remove 
 	for _, e := range remove {
 		e.RunID = ref.RunID
 		if err := RemoveAgentRelationTx(ctx, tx, ref.Org, e, owner); err != nil {
-			return asRefusal(err)
+			return nil, asRefusal(err)
 		}
 	}
-	return nil
+	return present, nil
 }
 
 // asRefusal is a relation refused, as the tools say a refusal.

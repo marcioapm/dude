@@ -50,6 +50,10 @@ The relations are written. A task blocked by another starts only once that one i
 
 The implementer's prompt will have it.
 
+## update-task-present
+
+Already there, so nothing was written for it: this task blocks GLD-9, related GLD-4.
+
 ## propose
 
 The card is in the session. A member files what they keep, as themselves; you are not told unless they say so.

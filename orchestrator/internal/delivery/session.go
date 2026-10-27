@@ -650,6 +650,9 @@ type ProposalItem struct {
 	// card (the session does not link it yet).
 	Reason      string `json:"reason,omitempty"`
 	ProjectName string `json:"projectName,omitempty"`
+	// task: images a member shared in this session (attachment ids), each
+	// an upload of the task when it is filed, shown in its goal.
+	Images []string `json:"images,omitempty"`
 }
 
 // ReasonMax bounds a link_project item's reason, in characters.

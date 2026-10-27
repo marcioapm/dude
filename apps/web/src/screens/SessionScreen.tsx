@@ -18,7 +18,7 @@ import {
   ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
-import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
+import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type AttachmentInfo, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
@@ -31,7 +31,7 @@ import { useEventStream, useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { usePeople, type People } from "../people.tsx";
-import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
+import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type SentImages } from "../hooks/useImages.tsx";
 import { byInstant } from "../instant.ts";
 import { NotFound } from "./NotFound.tsx";
 import { EventLog, asides, clock, conversationOption, eventsOption, interleaved, questionTurnSelector, renderTurn, viewedContext, type SteerActions, type ViewedTurn } from "./RunScreen.tsx";
@@ -287,6 +287,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
       out.push({ id: proposal.id, at: proposal.createdAt, node: (
         <ProposalBlock key={proposal.id} client={client} sessionId={sessionId} proposal={proposal} linked={linkedKeys} statusOf={statusOf}
           readOnly={detail.you.role === "read"} filingAs={firstName(people.names.get(detail.you.id) ?? "you")} you={detail.you.id}
+          images={images} onOpenImage={(attachments, index) => setImageViewing({ turn: { kind: "prompt", attachments, at: proposal.createdAt }, index })}
           onFiled={() => void load()} />
       ) });
     }
@@ -301,7 +302,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
         by={by} text={text} at={e.occurredAt} data-testid="session-notice" /> });
     }
     return out.sort(byInstant((l) => l.at));
-  }, [detail, events, people, client, sessionId, linkedKeys, load]);
+  }, [detail, events, people, client, sessionId, linkedKeys, load, images]);
 
   if (missing) return <NotFound what="session" onBack={onBack} />;
   if (!detail) return <div className="centered">{problem ?? <Spinner label="Loading the session…" />}</div>;
@@ -667,7 +668,7 @@ function tierName(tier: unknown): string | null {
 }
 
 /** One proposal's card: what the person looking can file, ticked, and filing it. */
-function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly, filingAs, you, onFiled }: {
+function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly, filingAs, you, images, onOpenImage, onFiled }: {
   client: ApiClient;
   sessionId: string;
   proposal: Proposal;
@@ -676,6 +677,8 @@ function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly
   readOnly: boolean;
   filingAs: string;
   you: string;
+  images: Pick<SentImages, "sent" | "mounted" | "visible">;
+  onOpenImage: (attachments: AttachmentInfo[], index: number) => void;
   onFiled: () => void;
 }) {
   const fileable = proposal.items.flatMap((_, i) => (proposal.status[i]?.canFile && !proposal.status[i]?.filed ? [i] : []));
@@ -684,10 +687,15 @@ function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly
   const [problem, setProblem] = useState<string | null>(null);
   const epics = new Set(proposal.items.filter((i) => i.kind === "epic").map((i) => i.title));
   const numbered = proposal.items.some((i) => i.blockedBy?.length || i.blocks?.length || i.related?.length);
-  const items = proposal.items.map((item, i) => ({
-    ...cardItem(item, proposal.status[i] ?? {}, linked, epics, you),
-    ...(numbered ? { n: i + 1, relations: itemRelations(item, statusOf), tickedWith: tickedWith(proposal, selected, i) } : {}),
-  }));
+  const items = proposal.items.map((item, i) => {
+    // The item's images the session still has, shown as a message's are.
+    const shown = (item.images ?? []).flatMap((id) => (proposal.attachments?.[id] ? [proposal.attachments[id]] : []));
+    return {
+      ...cardItem(item, proposal.status[i] ?? {}, linked, epics, you),
+      ...(shown.length ? { images: <TurnImages attachments={shown} images={images} onOpen={(n) => onOpenImage(shown, n)} /> } : {}),
+      ...(numbered ? { n: i + 1, relations: itemRelations(item, statusOf), tickedWith: tickedWith(proposal, selected, i) } : {}),
+    };
+  });
   const order = numbered ? proposalOrder(proposal) : undefined;
   const file = async () => {
     setBusy(true);

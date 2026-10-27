@@ -174,6 +174,7 @@ func TestGoldenToolResults(t *testing.T) {
 		{"publish", publishNext},
 		{"update-task-relations", relationsWrittenNext},
 		{"update-task", taskUpdatedNext},
+		{"update-task-present", relationsPresent.Render([]string{"blocks GLD-9", "related GLD-4"})},
 		{"propose", proposedNext},
 		{"relate", relationProposedNext},
 		{"feedback-resolve", feedbackResolvedNext},

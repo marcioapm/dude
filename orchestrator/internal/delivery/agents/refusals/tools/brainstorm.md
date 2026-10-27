@@ -60,6 +60,10 @@
 
 {{- define "refusals/tools/brainstorm/item-only-task-item-has-relations"}}item %d: only a task item has relations; relate existing tasks with relate{{end}}
 
+{{- define "refusals/tools/brainstorm/item-only-task-item-has-images"}}item %d: only a task item has images{{end}}
+
+{{- define "refusals/tools/brainstorm/item-goal-too-long-with-images"}}item %d: too long with its images: a goal of at most %d characters{{end}}
+
 {{- define "refusals/tools/brainstorm/item-names-task-by-key-or"}}item %d: %s names a task by key or by item, not both{{end}}
 
 {{- define "refusals/tools/brainstorm/item-names-itself"}}item %d: %s names itself{{end}}

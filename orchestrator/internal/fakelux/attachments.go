@@ -122,3 +122,19 @@ func (s *Server) Attachments(runID string) map[string][]lux.Attachment {
 	}
 	return out
 }
+
+// Sent is the text of every input lux took for a Run, read or not yet, in
+// the order taken.
+func (s *Server) Sent(runID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[runID]
+	if run == nil {
+		return nil
+	}
+	out := append([]string(nil), run.Inputs...)
+	for _, q := range run.queued {
+		out = append(out, q.text)
+	}
+	return out
+}
