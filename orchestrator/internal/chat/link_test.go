@@ -245,8 +245,13 @@ func TestChatAnAdminMayLinkForTheAskerAndNobodyElse(t *testing.T) {
 		t.Fatalf("linked %q by someone else", l)
 	}
 	eph := w.fake.Ephemerals()
-	if len(eph) != 3 || eph[0].Text != "Only Eli or an admin can link a project here." || eph[2].User != "U3" {
+	if len(eph) != 3 || eph[2].User != "U3" {
 		t.Fatalf("ephemerals %+v", eph)
+	}
+	for _, e := range eph {
+		if e.Text != "Only Eli or an admin can link a project here." {
+			t.Fatalf("ephemeral %+v", e)
+		}
 	}
 	w.click("Márcia", "C1", reply.TS, reply.ThreadTS, value)
 	if l := w.linked(session); l != "ABS" {
@@ -280,8 +285,11 @@ func TestChatAnAskerWhoLeftCannotLink(t *testing.T) {
 	if l := w.linked(session); l != "" || len(w.fake.Updates()) != 0 {
 		t.Fatalf("linked %q by someone no longer in Acme", l)
 	}
-	if eph := w.fake.Ephemerals(); len(eph) != 1 || eph[0].User != "U2" {
+	if eph := w.fake.Ephemerals(); len(eph) != 1 || eph[0].User != "U2" || eph[0].Text != "Only Eli or an admin can link a project here." {
 		t.Fatalf("ephemerals %+v", eph)
+	}
+	if n := w.count(`SELECT count(*) FROM chat_events WHERE organization_id = $1 AND kind = 'interaction' AND attempts > 1`, w.org); n != 0 {
+		t.Fatalf("%d clicks were tried again", n)
 	}
 }
 
