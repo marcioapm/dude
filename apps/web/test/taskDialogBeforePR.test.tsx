@@ -9,11 +9,13 @@
 import { afterEach, expect, test } from "bun:test";
 import type { PullRequestChoice } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { act, click, mount, until } from "./dom.ts";
+import { act, click, mount, settle, until } from "./dom.ts";
 import type { Epic, ProjectDetail, Task, TaskDetail } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PROJECT, TASK_ID } from "../src/fixtures/data.ts";
+import { PeopleProvider } from "../src/people.tsx";
 import { TaskDialog, existingTask, type ExistingTask } from "../src/screens/TaskDialog.tsx";
+import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -112,6 +114,30 @@ test("someone else's task: the field is disabled with whose it is", async () => 
   const detail = await client.getTask(TASK_ID);
   const sams = { ...detail, pullRequestOpened: false, owner: { id: "u_sam", name: "Sam Lee", photoUrl: null, online: false } } as TaskDetail;
   const trigger = await open(client, existingTask(sams, true, "u_me"));
+  expect(trigger.hasAttribute("disabled") || trigger.getAttribute("data-disabled") !== null).toBe(true);
+  expect(document.body.textContent).toContain("Only Sam can change it.");
+});
+
+/** Sam's task, read by the fixture's reader (someone else). */
+class SamsTask extends Recording {
+  override async getTask(id: string): Promise<TaskDetail> {
+    return { ...(await super.getTask(id)), pullRequestOpened: false, owner: { id: "u_sam", name: "Sam Lee", photoUrl: null, online: false } } as TaskDetail;
+  }
+}
+
+test("the task page's Edit, opened by someone else, gives the field disabled with whose it is", async () => {
+  const client = new SamsTask("a");
+  const { container, unmount } = await mount(
+    <TooltipProvider><ToastProvider><PeopleProvider client={client}>
+      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} />
+    </PeopleProvider></ToastProvider></TooltipProvider>,
+  );
+  mounted.push(unmount);
+  // The reader is known before Edit: the lock reads who they are.
+  await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");
+  await settle();
+  await click(await until(() => container.querySelector<HTMLElement>("[data-testid=edit-task]"), "Edit"));
+  const trigger = await until(() => document.querySelector<HTMLElement>("[data-testid=task-before-pr]"), "the field");
   expect(trigger.hasAttribute("disabled") || trigger.getAttribute("data-disabled") !== null).toBe(true);
   expect(document.body.textContent).toContain("Only Sam can change it.");
 });
