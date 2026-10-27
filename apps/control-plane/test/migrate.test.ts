@@ -278,11 +278,15 @@ test("214 keys an automation run's activity to it, alone, moves the tool server'
       await tx`SET LOCAL ROLE dude_sweeper`;
       await tx`DELETE FROM events WHERE automation_run_id = 'arn_old'`;
     }))).toContain("permission denied");
-    const purged = await sql.begin(async (tx) => {
+    const purge = () => sql.begin(async (tx) => {
       await tx`SET LOCAL ROLE dude_sweeper`;
-      return [...await tx`SELECT purge_automation_run_events(now() - interval '90 days', 100) AS n`];
+      return Number([...await tx`SELECT purge_automation_run_events(now() - interval '90 days', 100) AS n`][0].n);
     });
-    expect(Number(purged[0].n)).toBe(1);
+    // One activity row deleted and its run marked empty; the next pass has nothing due.
+    expect(await purge()).toBe(2);
+    expect(await purge()).toBe(0);
+    expect([...await sql`SELECT id, activity_purged_at IS NOT NULL AS purged FROM automation_runs ORDER BY id`])
+      .toEqual([{ id: "arn_new", purged: false }, { id: "arn_old", purged: true }]);
     expect([...await sql`SELECT id FROM events WHERE automation_run_id IS NOT NULL ORDER BY id`]).toEqual([{ id: "evt_live" }]);
     // Deleting the automation takes its runs' activity with it.
     await sql`DELETE FROM automations WHERE id = 'aut_a'`;
