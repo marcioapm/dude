@@ -297,7 +297,7 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
     const rows = await sql`
     SELECT r.id, r.provider, r.conversation_kind AS "conversationKind", r.conversation_name AS "conversationName",
       r.external_user_name AS "externalUserName", (SELECT person_ref(p) FROM people p WHERE p.id = r.person_id) AS person,
-      r.text, r.permalink, r.route, r.asked_route AS "askedRoute", r.confidence::float8 AS confidence, r.reasoning, r.failure, r.rounds,
+      r.text, r.permalink, r.route, r.asked_route AS "askedRoute", r.confidence::float8 AS confidence, r.reasoning, r.failure, r.made_route AS "madeRoute", r.rounds,
       CASE WHEN r.result_kind IS NULL THEN NULL ELSE json_build_object('kind', r.result_kind, 'id', r.result_id, 'label',
         CASE r.result_kind
           WHEN 'session' THEN (SELECT s.title FROM sessions s WHERE s.id = r.result_id)

@@ -162,6 +162,10 @@ type request struct {
 	// model's reasoning: the routing call's error, the refusal of what it
 	// tried to make, or giving up.
 	Failure string
+	// The route a failed request still made something as (made_route): a
+	// failed routing call's fallback brainstorm. deliver and giveUp set it
+	// from the row's route when they fail a request that made something.
+	MadeRoute string
 	// What is posted once the request commits.
 	effects []effect
 	// A brainstorm with no project: what may be offered to link (before
@@ -204,15 +208,15 @@ func record(ctx context.Context, tx pgx.Tx, r *request) (bool, error) {
 	tag, err := tx.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
 			conversation_kind, conversation_name, thread_id, external_user_id, external_user_name, person_id, text, permalink, context_hash,
 			route, asked_route, confidence, reasoning, rounds, result_kind, result_id, shared_added, shared_skipped, model_call_id,
-			mention, question, effects, awaits_session_after, link_offer, failure)
+			mention, question, effects, awaits_session_after, link_offer, failure, made_route)
 		VALUES ($1, current_organization_id(), $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10, NULLIF($11, ''), $12, $13, NULLIF($14, ''),
 			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27, $28, $29,
-			NULLIF($30, ''))
+			NULLIF($30, ''), NULLIF($31, ''))
 		ON CONFLICT (provider, event_id) DO NOTHING`,
 		r.ID, r.Mention.Provider, r.EventID, r.Mention.WorkspaceID, r.Mention.ConversationID, r.Kind, r.ConversationName,
 		r.Mention.ThreadID, r.Mention.UserID, r.UserName, r.Person, clip(r.Mention.Text, 4000), r.Permalink, r.ContextHash,
 		r.Route, r.AskedRoute, r.Confidence, clip(r.Reasoning, 2000), r.Rounds, r.ResultKind, r.ResultID, db.NonNil(r.Added),
-		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects, r.AwaitsAfter, offer, clip(r.Failure, 2000))
+		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects, r.AwaitsAfter, offer, clip(r.Failure, 2000), r.MadeRoute)
 	if err != nil {
 		return false, err
 	}
@@ -1041,6 +1045,7 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 		var mRaw, eRaw []byte
 		err = tx.QueryRow(ctx, `UPDATE chat_requests SET route = 'failed', replied_at = now(),
 				asked_route = CASE WHEN route = 'failed' THEN asked_route ELSE COALESCE(asked_route, route) END,
+				made_route = COALESCE(made_route, CASE WHEN route <> 'failed' AND result_kind IS NOT NULL THEN route END),
 				reasoning = left(btrim(reasoning || ' (' || $3 || ')'), 2000),
 				failure = left(btrim(COALESCE(failure || '; ', '') || $3), 2000),
 				mark_settled = COALESCE(mark_settled, 'failed'), mark_settled_at = COALESCE(mark_settled_at, now())

@@ -236,7 +236,7 @@ test("212 takes incoming triggers, finds a hook across organisations, and keeps 
   }
 }, 120_000);
 
-test("214 adds a failed request's cause, empty on every row, bounded to 2000 characters", async () => {
+test("214 adds a failed request's cause and what it made, empty on every row, each bounded", async () => {
   const { sql } = await migratedBefore("214");
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'Acme', 'acme')`;
@@ -248,6 +248,14 @@ test("214 adds a failed request's cause, empty on every row, bounded to 2000 cha
     expect(await refusal(async () => await sql`UPDATE chat_requests SET failure = ${"x".repeat(2000)} WHERE id = 'chr_old'`)).toBe("");
     expect(await refusal(async () => await sql`UPDATE chat_requests SET failure = ${"x".repeat(2001)} WHERE id = 'chr_old'`))
       .toContain("chat_requests_failure_check");
+    // made_route is a route that makes something, or nothing.
+    for (const ok of ["brainstorm", "task", "epic", "resume", "task_link", null]) {
+      expect(await refusal(async () => await sql`UPDATE chat_requests SET made_route = ${ok} WHERE id = 'chr_old'`)).toBe("");
+    }
+    for (const bad of ["failed", "clarify", "not_member"]) {
+      expect(await refusal(async () => await sql`UPDATE chat_requests SET made_route = ${bad} WHERE id = 'chr_old'`))
+        .toContain("chat_requests_made_route_check");
+    }
   } finally {
     await sql.end();
   }
@@ -301,6 +309,29 @@ test("215 gives each failed request of the last 30 days its cause apart from the
     for (const f of Object.values(failures)) {
       expect(String(f)).not.toMatch(/A clear task|An epic of three|A task|sk-x/);
     }
+    // What a failed row made, only where its result and asked route say it alone.
+    const made: Array<[string, string, string | null, string | null, string | null]> = [
+      ["chr_m_fallback", "failed", null, "session", "brainstorm"],
+      ["chr_m_brainstorm", "failed", "brainstorm", "session", "brainstorm"],
+      ["chr_m_resume", "failed", "resume", "session", null],
+      ["chr_m_task", "failed", "task", "task", "task"],
+      ["chr_m_epic", "failed", "epic", "epic", "epic"],
+      ["chr_m_link_task", "failed", "task_link", "task", "task_link"],
+      ["chr_m_link_epic", "failed", "task_link", "epic", "task_link"],
+      ["chr_m_none", "failed", "task", null, null],
+      ["chr_m_fine", "task", null, "task", null],
+    ];
+    await sql`UPDATE chat_requests SET failure = NULL, made_route = NULL`;
+    await sql`DELETE FROM schema_migrations WHERE version = '215'`;
+    for (const [id, route, asked, kind] of made) {
+      await sql`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id,
+          route, asked_route, result_kind, result_id, reasoning)
+        VALUES (${id}, 'org_a', 'slack', ${id}, 'T1', 'C1', 'U1', ${route}, ${asked}, ${kind}, ${kind ? `x_${id}` : null}, 'x')`;
+    }
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["215_chat_request_failure_backfill.sql"]);
+    expect(Object.fromEntries((await sql`SELECT id, made_route FROM chat_requests WHERE starts_with(id, 'chr_m_')`)
+      .map((r: { id: string; made_route: string | null }) => [r.id, r.made_route])))
+      .toEqual(Object.fromEntries(made.map(([id, , , , want]) => [id, want])));
   } finally {
     await sql.end();
   }

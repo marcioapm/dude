@@ -174,6 +174,8 @@ export interface ChatRequestRow {
    * when it did not fail.
    */
   failure: string | null;
+  /** A failed request's route when it still made something; null when nothing was, or for a row older than 214 whose route is not certain. */
+  madeRoute: ChatRoute | null;
   rounds: number;
   result: { kind: "session" | "task" | "epic"; id: string; label: string | null } | null;
   sharedAdded: PersonRef[];

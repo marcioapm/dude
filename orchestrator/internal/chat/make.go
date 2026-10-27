@@ -67,10 +67,12 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 		return err
 	}
 	s.log().Warn("a chat decision could not be made", "organization", org, "route", d.Route, "error", err)
-	r.ResultKind, r.ResultID, r.Added, r.Skipped, r.AwaitsAfter = "", "", nil, nil, nil
+	r.ResultKind, r.ResultID, r.Added, r.Skipped, r.AwaitsAfter, r.MadeRoute = "", "", nil, nil, nil, ""
+	var refused []string
 	if d.Route != RouteBrainstorm {
 		r.AskedRoute = d.Route
-		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + clip(err.Error(), 300) + ")")
+		refused = append(refused, clip(err.Error(), 300))
+		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + refused[0] + ")")
 		fallback := Decision{Route: RouteBrainstorm, Title: d.Title, Project: d.Project}
 		if err = s.makeOnce(ctx, org, p, inst, who, r, h, fallback, pick); err == nil {
 			return nil
@@ -80,9 +82,10 @@ func (s *Service) make(ctx context.Context, org string, p Provider, inst Install
 		}
 	}
 	cause := clip(err.Error(), 300)
-	r.Route, r.Reasoning = RouteFailed, strings.TrimSpace(r.Reasoning+" ("+cause+")")
-	// A failed routing call's error stays first: the brainstorm made instead was refused after it.
-	r.Failure = strings.TrimPrefix(r.Failure+"; "+cause, "; ")
+	r.Route, r.Reasoning, r.MadeRoute = RouteFailed, strings.TrimSpace(r.Reasoning+" ("+cause+")"), ""
+	// In the order they happened: a failed routing call's error, the
+	// decision's refusal, then its brainstorm's.
+	r.Failure = strings.TrimPrefix(r.Failure+"; "+strings.Join(append(refused, cause), "; "), "; ")
 	r.effects = []effect{ephemeralEffect(Reply{Text: "Sorry, dude couldn't act on this."}), reactEffect(ReactionFailed)}
 	return s.commit(ctx, org, p, inst, r, pick, nil)
 }
@@ -160,6 +163,9 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 			return fmt.Errorf("nothing makes route %q", d.Route)
 		}
 		reply.LinkLabel = "Open in dude"
+		if r.Route == RouteFailed {
+			r.MadeRoute = d.Route
+		}
 		r.effects = []effect{replyEffect(reply), reactEffect(ReactionDone)}
 		if r.ResultKind == "session" {
 			if err := awaitSession(ctx, tx, r); err != nil {

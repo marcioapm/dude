@@ -420,9 +420,9 @@ describe("settings", () => {
     // The orchestrator redacts before it stores; the route returns the text as it is.
     const insert = (id: string, route: string, reasoning: string, failure: string | null, result: string | null) => owner`
       INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id,
-        route, asked_route, reasoning, failure, result_kind, result_id, created_at)
+        route, asked_route, reasoning, failure, result_kind, result_id, made_route, created_at)
       VALUES (${id}, ${ORG}, 'slack', ${id}, 'T1', 'C1', 'U2', ${route}, ${route === "failed" ? "task" : null}, ${reasoning}, ${failure},
-        ${result ? "session" : null}, ${result}, now() - interval '3 hours')`;
+        ${result ? "session" : null}, ${result}, ${result && route === "failed" ? "brainstorm" : null}, now() - interval '3 hours')`;
     await owner`INSERT INTO sessions (id, organization_id, title) VALUES ('ses_fb', ${ORG}, 'Exports')`;
     await insert("chr_f1", "failed", "A clear task. (its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token])",
       "its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token]", null);
@@ -438,6 +438,8 @@ describe("settings", () => {
       expect(byId.get("chr_f1").result).toBeNull();
       expect(byId.get("chr_f2").failure).toBe("the routing call failed: the LLM proxy answered 400: Basic question about exports");
       expect(byId.get("chr_f2").result).toEqual({ kind: "session", id: "ses_fb", label: "Exports" });
+      expect(byId.get("chr_f2").madeRoute).toBe("brainstorm");
+      expect(byId.get("chr_f1").madeRoute).toBeNull();
       expect(byId.get("chr_f3").failure).toBeNull();
       expect(byId.get("chr_f3").reasoning).toBe("A clear task.");
       // The route filter's Failed finds both failures, with or without a fallback.

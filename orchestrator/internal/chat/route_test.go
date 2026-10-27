@@ -269,13 +269,14 @@ type req struct {
 	Added, Skipped                                                   []string
 	ModelCall                                                        string
 	Failure                                                          string
+	MadeRoute                                                        string
 }
 
 func (w *world) requests() []req {
 	w.t.Helper()
 	rows, err := w.owner.Query(w.ctx, `SELECT route, COALESCE(asked_route, ''), COALESCE(result_kind, ''), COALESCE(result_id, ''),
 			COALESCE(conversation_kind, ''), COALESCE(person_id, ''), reasoning, shared_added, shared_skipped, COALESCE(model_call_id, ''),
-			COALESCE(failure, '')
+			COALESCE(failure, ''), COALESCE(made_route, '')
 		FROM chat_requests WHERE organization_id = $1 ORDER BY created_at, id`, w.org)
 	if err != nil {
 		w.t.Fatal(err)
