@@ -135,6 +135,7 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 		askedBy    string
 		askerName  string
 		message    string
+		replied    bool
 		who        asker
 		admin      bool
 		providerID = p.Info().ID
@@ -145,9 +146,10 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 			return err
 		}
 		var raw []byte
-		err := tx.QueryRow(ctx, `SELECT link_offer, external_user_id, external_user_name, COALESCE(question_message_id, '') FROM chat_requests
+		err := tx.QueryRow(ctx, `SELECT link_offer, external_user_id, external_user_name, COALESCE(question_message_id, ''),
+				replied_at IS NOT NULL FROM chat_requests
 			WHERE id = $1 AND provider = $2 AND external_workspace_id = $3 AND conversation_id = $4 AND link_offer IS NOT NULL`,
-			reqID, providerID, in.WorkspaceID, in.ConversationID).Scan(&raw, &askedBy, &askerName, &message)
+			reqID, providerID, in.WorkspaceID, in.ConversationID).Scan(&raw, &askedBy, &askerName, &message, &replied)
 		if err != nil && !db.IsNotFound(err) {
 			return err
 		}
@@ -232,8 +234,23 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 	if !post {
 		return nil
 	}
-	return s.postLinks(ctx, d.Org, p, inst, reqID, in.ConversationID, message, offer)
+	// The link is made: the update is owed to the reply, never the click's
+	// outcome. Tried again while attempts are left, then dropped with a log,
+	// so the click never ends as a failed request or a "Sorry".
+	err = s.postLinks(ctx, d.Org, p, inst, reqID, in.ConversationID, message, replied, offer)
+	if err == nil {
+		return nil
+	}
+	if transient, _ := IsTransient(err); transient && d.Attempts+1 < MaxAttempts {
+		return err
+	}
+	s.log().Warn("a linked project's reply was not updated", "provider", providerID, "request", reqID, "event", d.ID, "error", err)
+	return nil
 }
+
+// errNoReplyMessage is an offer whose reply went out with no id dude kept
+// (refused in the thread): there is no message to update.
+var errNoReplyMessage = errors.New("the reply offering the link was never posted in the thread")
 
 func linkRefusal(r delivery.LinkRefusal, c linkCandidate, provider string) string {
 	switch r.Code {
@@ -247,7 +264,8 @@ func linkRefusal(r delivery.LinkRefusal, c linkCandidate, provider string) strin
 
 // postLinks updates the reply to say every project linked from it, by
 // whom, and to offer only the candidates left; then marks those links posted.
-func (s *Service) postLinks(ctx context.Context, org string, p Provider, inst Installation, reqID, conversation, message string, o linkOffer) error {
+func (s *Service) postLinks(ctx context.Context, org string, p Provider, inst Installation, reqID, conversation, message string, replied bool,
+	o linkOffer) error {
 	var linked []linkedLine
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT project_id, project_key, project_name, linked_by_name FROM chat_request_links
@@ -261,6 +279,9 @@ func (s *Service) postLinks(ctx context.Context, org string, p Provider, inst In
 		return err
 	}
 	if message == "" {
+		if replied {
+			return errNoReplyMessage
+		}
 		// The click came before the reply's id was kept: the update waits for it.
 		return Transient(errors.New("the reply offering the link has no message id yet"), 0)
 	}

@@ -97,7 +97,10 @@ func (s *Service) deliver(ctx context.Context, org string, p Provider, inst Inst
 			if ts, err = p.PostReply(ctx, inst, m.ConversationID, threadOf(m), reply); err != nil {
 				if transient, _ := IsTransient(err); !transient {
 					// Refused in the thread: the asker still gets the link, privately.
+					// Not the row: a click on it could never update a message
+					// dude keeps no id of, and the link reaches the session page.
 					reply.Text += fmt.Sprintf(" (%s did not take dude's reply in the thread.)", p.Info().Name)
+					reply.Row = nil
 					s.noteFailure(ctx, org, m.Provider, p.PostEphemeral(ctx, inst, m.ConversationID, threadOf(m), m.UserID, reply))
 				}
 			} else if e.Row != nil {

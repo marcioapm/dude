@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeslack"
 )
 
@@ -370,5 +371,106 @@ func TestChatAProjectHiddenAfterTheOfferIsRefusedAtTheClick(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM chat_request_links WHERE organization_id = $1`, w.org); n != 0 {
 		t.Fatalf("%d recorded", n)
+	}
+}
+
+// linkedOnce is what a click that linked ABS leaves however its update
+// fared: the one link, no failed request and no "Sorry".
+func (w *linkWorld) linkedOnce(session string) {
+	w.t.Helper()
+	if l := w.linked(session); l != "ABS" {
+		w.t.Fatalf("linked %q", l)
+	}
+	if n := w.count(`SELECT count(*) FROM chat_request_links WHERE organization_id = $1`, w.org); n != 1 {
+		w.t.Fatalf("%d recorded", n)
+	}
+	for _, r := range w.requests() {
+		if r.Route == "failed" {
+			w.t.Fatalf("requests %+v", w.requests())
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM chat_requests WHERE organization_id = $1`, w.org); n != 1 {
+		w.t.Fatalf("%d requests: %+v", n, w.requests())
+	}
+	for _, e := range w.fake.Ephemerals() {
+		if strings.Contains(e.Text, "Sorry") {
+			w.t.Fatalf("ephemerals %+v", w.fake.Ephemerals())
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM chat_events WHERE organization_id = $1 AND kind = 'interaction' AND processed_at IS NULL`, w.org); n != 0 {
+		w.t.Fatalf("%d clicks pending", n)
+	}
+}
+
+func TestChatAReplyRefusedInTheThreadGoesPrivatelyWithoutItsRow(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	w.fake.FailNext("chat.postMessage", "msg_too_long")
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.5, "reasoning": "can't tell the project", "title": "Nightly failures"}))
+	w.mention("Eli", "C1", "", "can you investigate the failures above?")
+	eph := w.fake.Ephemerals()
+	if len(eph) != 1 || !strings.Contains(eph[0].Text, "did not take dude's reply") {
+		t.Fatalf("ephemerals %+v", eph)
+	}
+	if bs := row(t, eph[0].Blocks); len(bs) != 0 {
+		t.Fatalf("the private reply carries the row %+v", bs)
+	}
+	// Its own link still reaches the session page.
+	session := w.requests()[0].ResultID
+	if !strings.Contains(string(eph[0].Blocks), "https://dude.example.com/#/o/acme/sessions/"+session) {
+		t.Fatalf("blocks %s", eph[0].Blocks)
+	}
+}
+
+func TestChatAClickOnAnOfferWithNoMessageLinksOnceAndFailsNothing(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, session := w.brainstorm("Eli")
+	value := row(t, reply.Blocks)[0].Value
+	// The reply refused in the thread (as a fallback ephemeral would have it):
+	// replied, with no message id.
+	w.exec(`UPDATE chat_requests SET question_message_id = NULL WHERE organization_id = $1`, w.org)
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, value)
+	w.linkedOnce(session)
+	if n := w.count(`SELECT count(*) FROM chat_events WHERE organization_id = $1 AND kind = 'interaction' AND attempts > 0`, w.org); n != 0 {
+		t.Fatalf("%d clicks were tried again", n)
+	}
+	if len(w.fake.Updates()) != 0 {
+		t.Fatalf("updates %+v", w.fake.Updates())
+	}
+}
+
+func TestChatAnUpdateFailingPastItsRetriesLeavesTheLinkAndFailsNothing(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, session := w.brainstorm("Eli")
+	w.fake.FailTimes("chat.update", "ratelimited", 100)
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
+	for range chat.MaxAttempts {
+		w.due()
+		w.sweep()
+	}
+	w.linkedOnce(session)
+	if n := w.count(`SELECT count(*) FROM chat_events WHERE organization_id = $1 AND kind = 'interaction' AND attempts = $2 - 1`,
+		w.org, chat.MaxAttempts); n != 1 {
+		t.Fatal("the update was not tried MaxAttempts times")
+	}
+}
+
+func TestChatAClickBeforeTheReplysIdIsKeptUpdatesItOnceItIs(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, session := w.brainstorm("Eli")
+	// The reply posted, its id and outcome not written yet.
+	w.exec(`UPDATE chat_requests SET question_message_id = NULL, replied_at = NULL WHERE organization_id = $1`, w.org)
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
+	if l := w.linked(session); l != "ABS" || len(w.fake.Updates()) != 0 {
+		t.Fatalf("linked %q, updates %+v", l, w.fake.Updates())
+	}
+	w.exec(`UPDATE chat_requests SET question_message_id = $2, replied_at = now() WHERE organization_id = $1`, w.org, reply.TS)
+	w.due()
+	w.sweep()
+	if u := w.fake.Updates(); len(u) != 1 || u[0].TS != reply.TS || !strings.Contains(string(u[0].Blocks), "Eli linked ABS") {
+		t.Fatalf("updates %+v", u)
 	}
 }
