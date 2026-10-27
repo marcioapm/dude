@@ -294,6 +294,42 @@ func TestChatAnAskerWhoLeftCannotLink(t *testing.T) {
 	}
 }
 
+func TestChatAnAskerWhoHandedTheSessionOverCannotLink(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, session := w.brainstorm("Eli")
+	// Eli hands it to Gus, keeping chat; then leaves it.
+	gus := w.people["Gus"][0]
+	// One owner at a time, checked at commit.
+	w.exec(`BEGIN`)
+	w.exec(`UPDATE session_people SET role = 'chat' WHERE session_id = $1 AND person_id = $2`, session, w.people["Eli"][0])
+	w.exec(`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at) VALUES ($1, $2, $3, 'owner', now())`,
+		session, gus, w.org)
+	w.exec(`COMMIT`)
+	value := row(t, reply.Blocks)[0].Value
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, value)
+	w.exec(`DELETE FROM session_people WHERE session_id = $1 AND person_id = $2`, session, w.people["Eli"][0])
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, value)
+	if l := w.linked(session); l != "" || len(w.fake.Updates()) != 0 ||
+		w.count(`SELECT count(*) FROM chat_request_links WHERE organization_id = $1`, w.org) != 0 {
+		t.Fatalf("linked %q by someone who no longer owns the session", l)
+	}
+	eph := w.fake.Ephemerals()
+	if len(eph) != 2 {
+		t.Fatalf("ephemerals %+v", eph)
+	}
+	for _, e := range eph {
+		if e.User != "U2" || e.Text != "Only Eli or an admin can link a project here." {
+			t.Fatalf("ephemeral %+v", e)
+		}
+	}
+	// An admin still links for the asker.
+	w.click("Márcia", "C1", reply.TS, reply.ThreadTS, value)
+	if l := w.linked(session); l != "ABS" {
+		t.Fatalf("the admin's click linked %q", l)
+	}
+}
+
 func TestChatASecondClickOrARetryLinksAndPostsOnce(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)

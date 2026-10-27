@@ -168,8 +168,9 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 	if !found {
 		return private(delivery.MChatLinkNotOffered)
 	}
+	onlyAsker := fmt.Sprintf(delivery.MChatLinkOnlyAskerOrAdmin, firstNonEmpty(askerName, "the person who asked"))
 	if who.Person == "" || (in.User.ID != askedBy && !admin) {
-		return private(fmt.Sprintf(delivery.MChatLinkOnlyAskerOrAdmin, firstNonEmpty(askerName, "the person who asked")))
+		return private(onlyAsker)
 	}
 	c := offer.Candidates[i]
 	by := firstNonEmpty(who.Display, who.Name)
@@ -191,6 +192,18 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 		}
 		if !db.IsNotFound(err) {
 			return err
+		}
+		if !admin {
+			// The asker links as the web lets a session's owner: one who
+			// handed it over, or left it, no longer may.
+			role, err := delivery.SessionRole(ctx, tx, offer.Session, who.Person)
+			if err != nil && !errors.Is(err, delivery.ErrNotMember) {
+				return err
+			}
+			if role != delivery.SessionOwner {
+				refusal = onlyAsker
+				return errLinkRefused
+			}
 		}
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM session_projects WHERE session_id = $1 AND project_id = $2)`,
 			offer.Session, c.ID).Scan(&linked); err != nil {
