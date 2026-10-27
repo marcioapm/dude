@@ -1,4 +1,6 @@
+/* Positioned: inside a form Radix adds an absolute hidden <input>, which would otherwise lengthen the document. */
 .root {
+  position: relative;
   display: inline-flex;
   align-items: flex-start;
   gap: var(--ds-space-8);

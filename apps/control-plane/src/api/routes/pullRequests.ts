@@ -409,8 +409,8 @@ async function receiveWebhook(ctx: PublicContext): Promise<Response> {
 
   await withOrg(organizationId, async (scope) => {
     await scope.sql`
-      INSERT INTO webhook_deliveries (id, organization_id, event, payload)
-      VALUES (${deliveryId}, ${organizationId}, ${event}, ${payload}::jsonb)
+      INSERT INTO webhook_deliveries (id, organization_id, event, payload, bytes)
+      VALUES (${deliveryId}, ${organizationId}, ${event}, ${payload}::jsonb, ${Buffer.byteLength(body)})
       ON CONFLICT (id) DO NOTHING`;
   });
   void kickOrchestrator(organizationId);

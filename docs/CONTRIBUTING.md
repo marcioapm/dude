@@ -796,14 +796,15 @@ the API `apps/control-plane/src/api/routes/automations.ts`, the pages
 `apps/web/src/screens/AutomationsSettings.tsx`). An automation belongs to
 the organisation (`project_id` NULL) or a project, and is one of four kinds:
 an **agent**, a **command** that runs and exits, a **server** that answers
-events, or a **webhook** (one signed POST). New ones start off, owned by
+events, or **Send a webhook** (`webhook`: one signed POST). New ones start off, owned by
 their creator.
 
 - **Triggers.** `{kind: schedule, cron, tz}` — five-field cron in an IANA
   zone (`ParseCron`/`Next`: no dependency; a minute a spring-forward skips
   never fires, one a fall-back repeats fires once) — or `{kind: github,
   event, actions[], filters{branch,label,paths,author}}`. The event is any
-  GitHub event name, so an App permission added later needs no code. Values
+  GitHub event name, so an App permission added later needs no code, or
+  `{kind: incoming, …}` (below). Values
   in a filter are OR'd, filters AND'd; `!login` excludes an author; paths
   read the pull request's files from GitHub and are checked last (`Match`).
   An event dude has no code for still matches on event, action, repository
@@ -989,8 +990,82 @@ their creator.
   `events_asks_v2_idx` predicate, migration 184); recipients come from the
   payload's `to`. The message names the automation and reason, linking to
   that run under its organisation's or project's settings.
-- **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90
-  (`automations.Retain`, hourly).
+- **Incoming webhooks** (migration 212; `routes/incoming.ts`,
+  `internal/automations/incoming.go`, `screens/automationIncoming.tsx`). A
+  third trigger, `{kind: incoming, hookId, verify, conditions[], groupBy,
+  ratePerHour}`: the automation's own URL, `POST /v1/hooks/<hookId>`, public
+  like GitHub's. Create (and a save that turns a trigger incoming) makes the
+  hook id and a verification secret (32 random bytes, base64url, `whsec_`),
+  answered once (`incomingSecret`, shown by `SecretOnce` = `KeyShownOnce`
+  with "I've stored it"); after that only its last four (`incomingSecretHint`).
+  Rotate (`POST …/incoming-secret/rotate`) replaces it at once. A save never
+  changes the hook id; Duplicate makes a new one and a new secret.
+  - **Verification**, one of three: **Signature** — the hex HMAC-SHA256 of
+    the raw body with the secret in a named header, after an optional prefix
+    (`sha256=`); **Header token** — the secret in a named header (a `Bearer `
+    before it is taken); **URL query parameter** — `?<param>=<secret>`. Each
+    compares in constant time (digests of equal length, `timingSafeEqual`).
+  - **The endpoint, in order:** unknown hook → 404, nothing stored; secret
+    wrong or missing → 401; body over 1 MiB → 413; not a JSON object → 415;
+    automation off → 403; over `ratePerHour` (1–600, default 30) in the
+    rolling hour → 429. Each refusal stores a row (`incoming_deliveries`,
+    verdict `refused`, its code) with no body and answers one line of JSON;
+    an accepted request stores its body and answers 202 `{delivery}`. The
+    rate counts the hour's deliveries that started a run or were sent to a
+    live one, and those the loop has not matched yet (each holds a place
+    until it is decided, so a burst is limited before matching); skipped and
+    refused deliveries take no place. One delivery counts at a time, under a
+    per-automation lock. A header or query secret is checked before the body
+    is read. At most 100 refused rows an automation a clock hour are stored;
+    past that a refusal only adds to `incoming_refusals` (automation, hour,
+    code, n), answered the same, and the Deliveries tab says "N more refused
+    this hour". A `bad_signature` row keeps no headers. Headers are kept with the values of
+    the configured verification header (by its exact name), `x-amz-*`, and
+    any name holding `token`, `secret`, `signature`, `cookie`, `key`,
+    `auth`, `password` or `credential` replaced by `••••`.
+  - **Matching** (`ArriveIncoming`, a step of the automations loop): a
+    delivery whose group key (the value at `groupBy`) is a live run's of the
+    automation is **sent to that run** whatever the concurrency, its
+    conditions unchecked (a resolved alert reaches the agent that is on it).
+    Otherwise every condition must hold — `path op values`, `op` one of is,
+    is not, one of (values OR'd), contains (a substring, or an array's
+    element), exists; the path is dot keys with all-digit segments indexing
+    arrays (`alerts.0.status`); a non-string value compares as its JSON — and
+    it fires as an event does (`Fire`: concurrency decides). The verdict
+    (`started`, `sent_to_run`, `skipped` with the missed condition, or the
+    concurrency's skip) is written on the delivery. A delivery added to a
+    live or waiting run (its group's, or by Merge or Send) is kept there by
+    reference (`holdFollowUp`; the body is read from `incoming_deliveries`
+    when the run uses it), and a run holds at most 50 (`FollowUpCap`): a
+    later one is skipped, "the live run already holds 50 deliveries". An
+    agent run starts from its first delivery and gets the rest as inputs; a
+    command run's event file is the list of all of them.
+    `packages/domain/test/incoming-conditions.json` holds the cases the web's
+    live check (`conditionHolds`) and the loop's (`Holds`) both pass.
+  - **Group by** is required with Send to the running agent (the save says
+    so on the field). An **organisation** incoming automation names one or
+    more `projectIds` (save refused otherwise): `create_task` files in the
+    first; its runs check out those projects' repositories (all, none or
+    some).
+  - **Variables.** `{{payload.<path>}}`, `{{event.payload}}` and
+    `{{event.group_key}}` are the sender's words: quoted as external text
+    (the prompt saying so first), each cut at 8 KiB with "… (truncated, N
+    bytes)" inside its quote, all of them together at 64 KiB.
+    `{{event.delivery_id}}` is dude's and is not quoted.
+  - **Deliveries tab** (incoming and GitHub automations): every delivery of
+    the last 30 days, its `DeliveryVerdict`, group key (or event) and size;
+    a delivery's detail shows each condition's ✓/✗ (`ConditionRows` with
+    results), its headers and body, and Run with this delivery. A GitHub
+    automation's verdicts come from `automation_github_verdicts`, written as
+    the matcher reads each delivery. Run now on an incoming automation takes
+    a past delivery's body or a written one (`{payload}`), checked live
+    against the conditions (`test-event/evaluate` answers per condition).
+    A run's detail names the delivery that started it, its group, and the
+    later deliveries sent to it.
+- **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90;
+  an incoming delivery's body and headers 30 days (then its row is deleted
+  unless a run holds it), a refused one's row 7 and the per-hour refusal
+  counts 7 (`automations.Retain`, hourly).
 
 ### Chat providers (Slack first)
 

@@ -371,9 +371,9 @@ owner and the admins transfer one, and its owner may run it.
 
 | Command | Does |
 |---|---|
-| `automation list [PROJECT] [--scope organization\|project] [--trigger schedule\|github] [--kind K] [--enabled true\|false] [--mine] [--name N]` | The organisation's and every project's, filtered (`--kind agent:own`, `agent:reviewer`… for one kind of agent); with PROJECT, its own and the organisation's that also run there |
+| `automation list [PROJECT] [--scope organization\|project] [--trigger schedule\|github\|incoming] [--kind K] [--enabled true\|false] [--mine] [--name N]` | The organisation's and every project's, filtered (`--kind agent:own`, `agent:reviewer`… for one kind of agent); with PROJECT, its own and the organisation's that also run there |
 | `automation show ID [--settings]` | One in full; `--settings`: only what `automation update` takes |
-| `automation create [PROJECT] --name N --kind agent\|command\|server\|webhook --trigger schedule\|github [--preset qa_browser\|reviewer\|investigator] [--tz TZ]` | A new one, as the New automation dialog makes it: **disabled**, owned by you, with defaults (a schedule is weekdays at 09:00 in `--tz`, default UTC; events are `pull_request` opened/synchronize) |
+| `automation create [PROJECT] --name N --kind agent\|command\|server\|webhook --trigger schedule\|github\|incoming [--preset qa_browser\|reviewer\|investigator] [--tz TZ]` | A new one, as the New automation dialog makes it: **disabled**, owned by you, with defaults (a schedule is weekdays at 09:00 in `--tz`, default UTC; events are `pull_request` opened/synchronize; an incoming webhook verifies by signature, and its secret is in the answer's `incomingSecret`, this once) |
 | `automation update ID SETTINGS` | Replaces its settings with a JSON file, or `-` for stdin. `automation show ID`'s output, edited, is accepted as it is: the read-only fields (`id`, `enabled`, `owner`, `lastRun`, …) are dropped |
 | `automation enable ID` / `automation disable ID` | Turns it on or off (off keeps a kept session) |
 | `automation delete ID`, `automation duplicate ID` | Deletes it with its runs; copies it, off, as "NAME (copy)" |
@@ -381,10 +381,12 @@ owner and the admins transfer one, and its owner may run it.
 | `automation secret ID` | A webhook's signing secret, 16–256 characters, read from stdin only, like `login`'s key; only its last four characters are ever shown |
 | `automation run ID` | Runs it now: a schedule as it is |
 | `automation run ID --delivery D` | On GitHub events: with a past delivery (from `automation deliveries`) |
-| `automation run ID --body FILE [--event E] [--action A] [--delivery-id D]` | On GitHub events: with a test event (`-` reads stdin; the event defaults to the automation's, the delivery id to a made-up `test-…`; `--action` is written into the body, which must name no other action) |
+| `automation run ID --body FILE [--event E] [--action A] [--delivery-id D]` | On GitHub events: with a test event (`-` reads stdin; the event defaults to the automation's, the delivery id to a made-up `test-…`; `--action` is written into the body, which must name no other action). On an incoming webhook: `--body` alone, the request body to run with |
 | `automation run-list ID [--status S] [--limit N]` | Its runs, newest first, and its kept session: `queued`, `running`, `succeeded`, `failed`, `skipped`, `cancelled` |
-| `automation run-show ID RUN` | One run: its payloads, log tail, a Server's requests |
-| `automation deliveries ID` | The last 30 days' deliveries of its event |
+| `automation run-show ID RUN` | One run: its payloads, log tail, a Server's requests, an incoming run's deliveries |
+| `automation deliveries ID` | The last 30 days' deliveries of its event, or to its incoming URL, each with what dude did (`verdict`, `reason`) |
+| `automation delivery ID DELIVERY` | One delivery: verdict, group key, headers (secrets as `••••`), body |
+| `automation rotate ID` | A new verification secret for an incoming webhook, printed this once (`incomingSecret`); the old one stops working |
 | `automation test ID BODY` | Whether an event body would run it: `{"matches": true}`, or the filter that skips it and why |
 | `automation start-fresh ID` | Ends its kept session; the next run starts a new one |
 | `automation prompts ID`, `automation prompt-restore ID VERSION` | Its prompt's saved versions; saves one (number or id) again as the newest |

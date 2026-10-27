@@ -1,0 +1,169 @@
+/*
+ * Incoming webhooks' pieces. The verdicts and the condition marks take the
+ * five existing tones; nothing here adds a colour (paletteDistance untouched).
+ */
+
+.muted {
+  color: var(--ds-color-text-muted);
+}
+
+.summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  white-space: nowrap;
+  color: var(--ds-color-text-primary);
+}
+.summaryWrap {
+  display: inline;
+  white-space: normal;
+}
+.summaryLead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  white-space: nowrap;
+}
+.summaryWrap .summaryLead {
+  margin-inline-end: var(--ds-space-6);
+}
+.summaryWrap .muted :global(.ds-mono) {
+  overflow-wrap: anywhere;
+}
+.glyph {
+  flex: none;
+  color: var(--ds-color-text-muted);
+}
+
+.conditions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  container: conditions / inline-size;
+}
+.conditions > p {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.row {
+  display: grid;
+  /* The operator column's minimum is the Select trigger's own (120px). */
+  grid-template-columns: 40px minmax(0, 1.4fr) minmax(120px, 0.8fr) minmax(0, 1.1fr) auto;
+  align-items: start;
+  gap: var(--ds-space-8);
+}
+.and {
+  padding-top: var(--ds-space-6);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+  text-align: right;
+}
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  width: 20px;
+  height: 20px;
+  margin-top: var(--ds-space-4);
+  border-radius: var(--ds-radius-full);
+}
+.mark[data-ok="true"] {
+  background: var(--ds-tone-success-bg);
+  color: var(--ds-tone-success-fg);
+}
+.mark[data-ok="false"] {
+  background: var(--ds-tone-danger-bg);
+  color: var(--ds-tone-danger-fg);
+}
+.path,
+.value {
+  min-width: 0;
+}
+.why {
+  grid-column: 2 / -1;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-danger-fg);
+}
+.verdictLine .why {
+  color: var(--ds-color-text-secondary);
+}
+.verdictLine {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+.verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-6);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-tone-neutral-bg);
+  color: var(--ds-tone-neutral-fg);
+  font-size: var(--ds-text-xs);
+  white-space: nowrap;
+}
+.verdict[data-tone="success"] { background: var(--ds-tone-success-bg); color: var(--ds-tone-success-fg); }
+.verdict[data-tone="info"] { background: var(--ds-tone-info-bg); color: var(--ds-tone-info-fg); }
+.verdict[data-tone="danger"] { background: var(--ds-tone-danger-bg); color: var(--ds-tone-danger-fg); }
+.verdictLink {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--ds-radius-control);
+}
+.verdictLink:hover .verdict {
+  text-decoration: underline;
+}
+.verdictLink:focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--ds-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* The test dialog's verdict: square (structure is square), sunken, its outcome set apart by space. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-12) var(--ds-space-16);
+  border-radius: var(--ds-radius-none);
+  background: var(--ds-color-sunken);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-primary);
+}
+.panel > p {
+  margin: 0;
+}
+.panel > .outcome {
+  padding-top: var(--ds-space-8);
+}
+.outcome[data-ok="false"] b {
+  color: var(--ds-tone-danger-fg);
+}
+
+/* Below 420px of its own width (narrower than a settings row's control column) a row stacks path and operator over its value. */
+@container conditions (max-width: 420px) {
+  .row {
+    grid-template-columns: 36px minmax(0, 1fr) minmax(88px, auto) auto;
+  }
+  .value {
+    grid-column: 2 / 4;
+    grid-row: 2;
+  }
+}

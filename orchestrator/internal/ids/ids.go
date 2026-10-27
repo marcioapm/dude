@@ -46,6 +46,8 @@ const (
 	// Automations (migration 183): a firing, and one POST it made.
 	AutomationRun     = "arn"
 	AutomationRequest = "arq"
+	// A request to an incoming webhook (migration 212).
+	IncomingDelivery = "dlv"
 	// A chat provider's installation, and a routed mention (migration 195).
 	ChatInstallation = "chi"
 	ChatRequest      = "chr"

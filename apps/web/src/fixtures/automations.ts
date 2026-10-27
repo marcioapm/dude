@@ -7,6 +7,7 @@
 import type { Automation, AutomationInput, AutomationPromptVersion, AutomationRun, AutomationRunDetail, AutomationRunsResponse, AutomationToolCall, EventSubscriptions, EventVerdict, NewAutomation, PastDelivery, RunNow } from "@dude/domain";
 import { automationDefaults, parseCron, repoFilterAllows } from "@dude/domain";
 import { ORG, PEOPLE, PROJECT } from "./data.ts";
+import { ALERT_RUNS, alertRunDetail, deliveriesOf, evaluateIncomingFixture, FIXTURE_SECRET, incomingAutomations } from "./incoming.ts";
 
 const promptOf = (agent: Automation["agent"]): string | null => (!agent ? null : "own" in agent ? agent.own.prompt : agent.brief);
 
@@ -22,8 +23,8 @@ function automation(over: Partial<Automation> & Pick<Automation, "id" | "name" |
     description: "", sessionMode: "ephemeral", expiryDays: null, concurrency: "queue", parallelMax: 2, repos: "all", repoFilter: null,
     agent: null, machineSizeId: null, imageId: null, setupScript: null, command: null, server: null, webhook: null, secrets: [],
     notifyOnFailure: true, projectId: null, projectName: null, enabled: true, owner: person("u_marcio"), ownerLeftAt: null,
-    webhookSecretHint: null, nextRunAt: null, lastRun: null, canEdit: true, canTransfer: true, createdAt: iso(30 * 24 * 60 * MIN),
-    updatedAt: iso(24 * 60 * MIN), ...over,
+    webhookSecretHint: null, incomingSecretHint: null, publicOrigin: null, projectIds: [], nextRunAt: null, lastRun: null, canEdit: true, canTransfer: true,
+    createdAt: iso(30 * 24 * 60 * MIN), updatedAt: iso(24 * 60 * MIN), ...over,
   };
 }
 
@@ -91,6 +92,7 @@ export const AUTOMATIONS: Automation[] = [
     trigger: { kind: "github", event: "workflow_run", actions: ["completed"], filters: NO_FILTERS },
     agent: { own: { prompt: "Read the failed run's logs in {{repository}} and file one task with the evidence." } },
     secrets: [{ source: "organization", name: "SENTRY_TOKEN" }, { source: "project", name: "SEED_LLM_KEY" }] }),
+  ...incomingAutomations(automation, PROJECT),
 ];
 
 const RUNS: Record<string, AutomationRun[]> = {
@@ -105,6 +107,7 @@ const RUNS: Record<string, AutomationRun[]> = {
       session: "resumed", runId: null, startedBy: null, costUsd: 0.84, createdAt: iso(21 * 60 * MIN), startedAt: iso(21 * 60 * MIN),
       endedAt: iso(21 * 60 * MIN - 6 * MIN), event: null, action: null, payloadCount: 0 },
   ],
+  aut_alert: ALERT_RUNS,
   aut_digest: [
     { id: "arn_d1", automationId: "aut_digest", status: "succeeded", reason: null, source: "schedule", session: "ephemeral", runId: null,
       startedBy: null, costUsd: 0.44, createdAt: iso(DIGEST_AGO), startedAt: iso(DIGEST_AGO), endedAt: iso(DIGEST_AGO - 4 * MIN), event: null,
@@ -115,7 +118,7 @@ const RUNS: Record<string, AutomationRun[]> = {
   ],
 };
 
-const DELIVERIES: PastDelivery[] = [
+const DELIVERIES: Array<PastDelivery & { body: Record<string, unknown> }> = [
   { id: "d6f2a1c0-0001", event: "pull_request", action: "opened", repository: "example/web-console", sender: "ana", receivedAt: iso(13 * MIN),
     body: { action: "opened", repository: { full_name: "example/web-console" }, sender: { login: "ana" }, pull_request: { number: 214, title: "Checkout: keep the cart" } } },
   { id: "d6f2a1c0-0002", event: "pull_request", action: "opened", repository: "example/web-console", sender: "dependabot[bot]", receivedAt: iso(60 * MIN),
@@ -151,12 +154,39 @@ export class FixtureAutomations {
     return a;
   }
 
-  create(input: NewAutomation & { projectId: string | null; tz: string }): Automation {
+  create(input: NewAutomation & { projectId: string | null; tz: string }): Automation & { incomingSecret?: string } {
     const settings = automationDefaults(input, input.tz);
     const a = automation({ ...settings, id: `aut_fx_${this.list.length + 1}`, enabled: false, projectId: input.projectId,
-      projectName: input.projectId ? PROJECT.name : null });
+      projectName: input.projectId ? PROJECT.name : null, incomingSecretHint: settings.trigger.kind === "incoming" ? FIXTURE_SECRET.slice(-4) : null });
     this.list.push(a);
-    return a;
+    return settings.trigger.kind === "incoming" ? { ...a, incomingSecret: FIXTURE_SECRET } : a;
+  }
+
+  /** The Deliveries tab's list (no bodies, one verdict when filtered), and one delivery. */
+  deliveryList(id: string, verdict?: string) {
+    this.one(id);
+    return { ...(id === "aut_alert" ? { refusedNotStored: 37 } : {}),
+      deliveries: deliveriesOf(id).filter((d) => !verdict || d.verdict === verdict || (verdict === "pending" && d.verdict === null)
+      || (verdict === "accepted" && d.verdict !== "refused"))
+      .map(({ headers: _h, body: _b, ...d }) => d) };
+  }
+
+  delivery(id: string, deliveryId: string) {
+    const d = deliveriesOf(id).find((x) => x.id === deliveryId);
+    if (!d) throw new Error(`no delivery ${deliveryId}`);
+    return d;
+  }
+
+  rotate(id: string): Automation & { incomingSecret: string } {
+    const a = this.one(id);
+    a.incomingSecretHint = FIXTURE_SECRET.slice(-4);
+    return { ...a, incomingSecret: FIXTURE_SECRET };
+  }
+
+  evaluateIncoming(id: string, body: Record<string, unknown>) {
+    const a = this.one(id);
+    if (a.trigger.kind !== "incoming") throw new Error("not an incoming webhook");
+    return evaluateIncomingFixture(a.trigger, body);
   }
 
   update(id: string, input: AutomationInput): Automation {
@@ -271,6 +301,7 @@ export class FixtureAutomations {
   run(id: string, runId: string): AutomationRunDetail {
     const r = (this.runs[id] ?? []).find((x) => x.id === runId);
     if (!r) throw new Error(`no run ${runId}`);
+    if (id === "aut_alert") return alertRunDetail(r);
     if (id === "aut_digest") {
       return { ...r, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
         stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null };
@@ -281,12 +312,12 @@ export class FixtureAutomations {
   }
 
   deliveries(): { deliveries: PastDelivery[] } {
-    return { deliveries: DELIVERIES };
+    return { deliveries: DELIVERIES.map(({ body: _b, ...d }) => d) };
   }
 
   runNow(id: string, body: RunNow): { runId: string } {
     const runId = `arn_fx_${Date.now()}`;
-    const test = "testEvent" in body || "deliveryId" in body;
+    const test = "testEvent" in body || "deliveryId" in body || "payload" in body;
     (this.runs[id] ??= []).unshift({ id: runId, automationId: id, status: "queued", reason: null, source: test ? "test" : "run_now",
       session: null, runId: null, startedBy: person("u_marcio"), costUsd: null, createdAt: new Date().toISOString(), startedAt: null,
       endedAt: null, event: "testEvent" in body ? body.testEvent.event : null, action: "testEvent" in body ? body.testEvent.action : null, payloadCount: test ? 1 : 0 });

@@ -134,6 +134,7 @@
       "name": "Morning digest",
       "notifyOnFailure": true,
       "parallelMax": 2,
+      "projectIds": [],
       "repoFilter": null,
       "repos": "all",
       "secrets": [],
@@ -344,6 +345,56 @@
       "aut_gh"
     ],
     "route": "GET /v1/automations/:id/deliveries"
+  },
+  {
+    "args": [
+      "automation",
+      "delivery",
+      "aut_in",
+      "dlv_1"
+    ],
+    "route": "GET /v1/automations/:id/deliveries/:deliveryId"
+  },
+  {
+    "args": [
+      "automation",
+      "rotate",
+      "aut_in"
+    ],
+    "route": "POST /v1/automations/:id/incoming-secret/rotate"
+  },
+  {
+    "args": [
+      "automation",
+      "run",
+      "aut_in",
+      "--body",
+      "-"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {
+      "payload": {
+        "status": "firing"
+      }
+    }
+  },
+  {
+    "args": [
+      "automation",
+      "create",
+      "--name",
+      "Investigate the alert",
+      "--kind",
+      "agent",
+      "--trigger",
+      "incoming"
+    ],
+    "route": "POST /v1/automations",
+    "body": {
+      "kind": "agent",
+      "name": "Investigate the alert",
+      "trigger": "incoming"
+    }
   },
   {
     "args": [

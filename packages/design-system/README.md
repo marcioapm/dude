@@ -117,7 +117,12 @@ colour table) can import the typed values from `@dude/design-system/tokens`.
 
 Behavioural primitives (Select, Dialog, Tabs, Tooltip, Toast, Checkbox,
 ScrollArea, RowMenu) sit on Radix, which is unstyled and does keyboard/ARIA
-correctly. Everything else is hand-rolled.
+correctly. Everything else is hand-rolled. Inside a `<form>`, Radix's
+Checkbox and Select add a hidden, absolutely positioned native control, so
+each of their roots is `position: relative` to keep it in the primitive's
+box; unpositioned, it lands at the control's document offset and makes the
+whole page scroll under a fixed app shell
+(`test/formControlContainment.test.tsx`).
 
 Shared keyframes live in `styles/base.css`; a CSS module must reference
 them as `animation: global(ds-name) …` or the name is hashed to nothing and
@@ -2737,6 +2742,12 @@ are in `docs/design/accounts.md`):
   set in a square sunken well) under `usageHeading` ("How to use it"),
   with a muted `usageNote`. Done closes it;
   nothing shows it again. `copy` replaces the clipboard write in tests.
+  `doneLabel?` (default "Done") names the closing button, e.g. "I've stored it" for an incoming webhook's secret; `label?` (default "Key") names the field.
+- **CodeWell** (`inline?`) — text to copy as it is (a curl, a CLI line, a
+  URL): a square sunken well, mono at the mono size, the density's code
+  padding (`--ds-space-code-y/x`), no frame, wrapping anywhere. A `pre` for
+  a block; `inline` a `code` in a line of text. `KeyShownOnce`'s usage is
+  one; an incoming webhook's endpoint URL and curl are others.
 - **FrontDoor / FrontDoorMessage / FrontDoorLink / HowList** — a page that
   is one centred column: the app's `mark`, a heading (the page's `h1`) and
   its `line`, cards, and fine print (`footer`) with an inline
@@ -3077,13 +3088,21 @@ Settings → *Project secrets* (`#s-secrets`), *OverriddenBy / SecretName*
 `TriggerSummary`, `SessionMark`, `ListSwitch`, `NextRuns`, `DayToggles`,
 `SchedulePicker`, `ChipsInput`, `RepoFilterField`, `AgentTools`, and the helpers
 `describeCron`, `scheduleOf`, `cronOf`, `repoGlob`, `repoFilterCount`,
-`cityOf`. Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
-`#au-schedule`, `#au-chips`, `#au-repo-filter`, `#au-tools`), in both themes and
+`cityOf`; `src/components/Incoming.tsx`: `ConditionRows`, `DeliveryVerdict`, `IncomingVerdictPanel`; `src/components/CodeWell.tsx`: `CodeWell`.
+Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
+`#au-schedule`, `#au-chips`, `#au-repo-filter`, `#au-conditions`,
+`#au-delivery-verdict`, `#au-tools`), in both themes and
 densities. No tone of their own: an automation's state is its runs'
 (`StatusMark`), so `paletteDistance` is untouched.
 
+- **ConditionRows** (`value`, `onChange?`, `results?`, `paths?`): an incoming webhook's conditions on its JSON body, AND'd. Each row is a mono path `Input`, an operator `Select` (is, is not, one of, contains, exists) and its value: an `Input`, a `ChipsInput` for one of (values OR'd), nothing for exists. Rows lead with "When"/"and"; with `results` the lead is a ✓ (success tone) or ✗ (danger tone) mark named "Holds"/"Does not hold", and a missed row says what the body had. "+ Condition" adds a row; each row's remove button is named "Remove condition N". The rows are a container: below 420px of their own width (a phone, a narrow dialog, the gallery's 390px sample; a desktop settings row's ~460px control column keeps one line, as the gallery's 460px sample shows) a row stacks path and operator over its value. Its operator words, and `conditionWords`, are the domain's (`CONDITION_OPS`, `CONDITION_OP_LABEL`, `describeCondition` in `@dude/domain`).
+- **DeliveryVerdict** (`verdict`, `onRun?`, `detail?`): what dude did with one delivery, as a chip at the chip height: Started run (success, play glyph), Sent to running agent (info, send), Skipped (neutral, dotted circle) and the condition that missed, Refused · Bad signature / Not JSON / Too large / Rate limited / Turned off (danger, circle-x); Waiting (neutral, clock) while dude has not read it yet. With `onRun` the first two are buttons named "<verdict>: open the run" when they have a run; a sent verdict with none is a plain chip. Tones are the existing five.
+- **IncomingVerdictPanel** (`outcome?`, `ok?`): a test body's live verdict in the Run now dialog: a status region on the sunken shade, square (structure is square), 12/16 padding, its lines (group key, `ConditionRows` with results) and then `outcome` set apart by space, its bold words in danger when `ok` is false. No frame: shade and space tell it apart.
+- **SettingsDisclosure** takes `icon?` (default `layers`, for something inherited): with another glyph it folds a reference a row offers on demand, e.g. an incoming webhook's How to send (`send`), on the chrome shade with no border. Its body scrolls past 320px; `full` shows it whole (How to send's curl).
+- **Td** `wrap`: a cell allowed onto more lines also gets 6px block padding, so wrapped compact rows keep apart by space.
+
 - **KindMark** (`kind`, `role?`): the kind as glyph and word (Agent,
-  Command, Server, Webhook only); an agent that is one of dude's roles adds
+  Command, Server, Send a webhook); an agent that is one of dude's roles adds
   "· Tester" in muted text.
 - **ScopeChip** (`org`, `project?`, `projectId?`): where an automation lives:
   "Organisation" with a building glyph on the info tint, or the project's
@@ -3096,7 +3115,7 @@ densities. No tone of their own: an automation's state is its runs'
   that wrap in a narrow cell, the glyph staying beside the first word; a long event name breaks under the glyph rather than being cut off, and a line never ends on the "·" alone. A schedule in words when it is a
   preset ("Daily at 03:00", "Weekdays at 09:30", "Every 15 minutes") else
   the cron line, then the zone's city muted; an event in mono and its
-  actions, or "any action".
+  actions, or "any action"; an incoming webhook as "Incoming" and, muted in mono, its first condition and "+N" for the rest, or "any JSON".
 - **SessionMark** (`mode`, `expiryDays?`): Ephemeral, or Resumable and its
   expiry in days.
 - **ListSwitch** (`checked`, `onCheckedChange`, `label`): the settings

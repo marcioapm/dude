@@ -130,6 +130,12 @@ describe("marks", () => {
     expect(html).toContain("· Tester");
   });
 
+  test("the outbound kind reads Send a webhook", () => {
+    const html = renderToStaticMarkup(<KindMark kind="webhook" />);
+    expect(html).toContain(">Send a webhook<");
+    expect(html).not.toContain("Webhook only");
+  });
+
   test("an owner's avatar alone is named; one who left is the admins'", () => {
     expect(renderToStaticMarkup(<OwnerMark owner={{ name: "Ana Ribeiro" }} org="Acme" avatarOnly />)).toContain('aria-label="Ana Ribeiro"');
     const held = renderToStaticMarkup(<OwnerMark owner={null} org="Acme" left avatarOnly />);

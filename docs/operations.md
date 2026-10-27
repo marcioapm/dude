@@ -645,6 +645,65 @@ records the names it was given and copies the values; dude redacts every
 form of an organisation value in what it stores and serves, and refuses a
 push holding one. A change reaches Runs that start after it.
 
+## Incoming webhooks
+
+An automation can run when anything POSTs JSON to its own URL:
+`<dude's public URL>/v1/hooks/<hook id>`, served by the control plane with
+no sign-in, like `/v1/webhooks/github/<org>`. It must be reachable from
+the sender (a monitoring tool, a CI system); put it behind the same
+ingress as the GitHub webhook. The hook id is unguessable (`hk_` and 16
+random characters) and is not the secret: every request proves itself with
+the automation's verification secret — an HMAC-SHA256 signature of the
+body in a header, the secret in a header, or the secret as a URL query
+parameter (which then shows in any proxy's access log: prefer the other
+two where the sender can). dude shows the secret once, at Create or
+Rotate, then only its last four characters. The page shows the URL at the
+public URL the organisation's GitHub connection registered its webhooks at;
+an organisation without one sees the origin the browser opened dude at,
+which is the right one only when people and senders reach dude the same way.
+
+**What it answers.** 202 once stored; 404 for an unknown hook (nothing
+stored); 401 a wrong or missing secret; 413 a body over 1 MiB; 415 a body
+that is not a JSON object (or one Postgres cannot store: a NUL character,
+or nested more than 512 levels); 403 the automation is off; 429 over its
+deliveries an hour (1–600, default 30). Only deliveries that started a run
+or were sent to a run already going count, plus those not matched yet,
+which hold a place until the loop decides; deliveries skipped because a
+condition did not hold, and refused ones, do not. It answers before any agent
+starts: the orchestrator's automations loop matches stored deliveries.
+
+**What is stored, and for how long** (`incoming_deliveries`, migration
+211, under row-level security). Every request to a known hook gets a row:
+when, its verdict, its group key, its size, and its headers with the
+values of the configured verification header, `Authorization`, cookies,
+`x-amz-*` and any header named like a credential (token, secret,
+signature, key, auth, password, credential) replaced by `••••`. An accepted request keeps
+its JSON body and headers **30 days**; then a delivery a run holds keeps
+its row (body and headers emptied) for the run's page, and any other
+(skipped, or its run deleted) is deleted;
+a refused one **never stores its body**, and its row is deleted after **7
+days** (`automations.Retain`, hourly). The automation's Deliveries tab
+lists the last 30 days.
+
+**When flooded.** A header or query secret is checked before the body is
+read, so a request without it costs no body read. A request refused for
+its secret keeps **no headers**, only its time and size. Each automation
+stores at most **100 refused rows a clock hour**; past that a refusal
+writes no row, only adds one to a per-hour, per-code count
+(`incoming_refusals`, kept 7 days), and is answered the same
+401/413/415/403/429. The Deliveries tab says "N more refused this hour".
+So a flood without the secret writes at most 100 rows and one count row
+an hour per automation; it still costs one indexed hook lookup and one
+small write per request, so put a per-IP rate limit at the ingress if a
+hook id leaks to someone hostile.
+
+**Upgrading to migration 212** adds the table, the hook lookup the public
+route uses before it knows the organisation (`incoming_hook`, security
+definer, answering only what verification needs), and
+`automation_github_verdicts` (what each GitHub delivery came to per
+automation, for the GitHub automations' Deliveries tab; gone with the
+delivery after 30 days). Nothing is backfilled.
+
 ## Postgres
 
 Postgres 17 with the pgvector extension is what the tests run against

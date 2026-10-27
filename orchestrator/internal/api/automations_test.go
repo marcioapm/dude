@@ -128,4 +128,29 @@ func TestAutomationRunNowAndEvaluateRefusals(t *testing.T) {
 		errOf(out) != "bad_request: a schedule is five fields: minute hour day-of-month month day-of-week" {
 		t.Errorf("a bad cron: %d %v", status, out)
 	}
+
+	// An incoming webhook's test dialog: each condition's result, the body's
+	// group and the live run of that group a real delivery would be sent to.
+	for _, q := range []string{
+		`INSERT INTO automations (id, organization_id, project_id, name, kind, enabled, trigger, agent) VALUES
+			('aut_api_in', $1, $1 || '_p', 'Alert', 'agent', true, '{"kind":"incoming","hookId":"hk_apiin00000000000","groupBy":"groupKey",
+			 "conditions":[{"path":"status","op":"is","values":["firing"]},{"path":"commonLabels.severity","op":"one_of","values":["critical","high"]}]}',
+			 '{"own":{"prompt":"x"}}')`,
+		`INSERT INTO automation_runs (id, organization_id, automation_id, status, source, payloads) VALUES
+			('arn_api_live', $1, 'aut_api_in', 'running', 'event', '[{"deliveryId":"dlv_x","event":"incoming","groupKey":"g"}]')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := "/internal/automations/aut_api_in/test-event/evaluate"
+	status, out = call(s, in, `{"body":{"status":"firing","groupKey":"g","commonLabels":{"severity":"warning"}}}`)
+	got, _ := json.Marshal(out)
+	if want := `{"groupKey":"g","liveRunId":"arn_api_live","matches":false,"results":[{"actual":"firing","ok":true},{"actual":"warning","ok":false}]}`; status != 200 || string(got) != want {
+		t.Errorf("evaluate incoming: %d %s, want %s", status, got, want)
+	}
+	status, out = call(s, in, `{"body":{"status":"firing","groupKey":"other","commonLabels":{"severity":"high"}}}`)
+	if got, _ := json.Marshal(out); status != 200 || string(got) != `{"groupKey":"other","liveRunId":null,"matches":true,"results":[{"actual":"firing","ok":true},{"actual":"high","ok":true}]}` {
+		t.Errorf("evaluate incoming, all hold, no live run: %d %s", status, got)
+	}
 }

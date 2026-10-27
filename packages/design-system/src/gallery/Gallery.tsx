@@ -244,6 +244,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
       ["au-schedule", "SchedulePicker / NextRuns"],
       ["au-chips", "ChipsInput"],
       ["au-repo-filter", "RepoFilterField"],
+      ["au-conditions", "ConditionRows"],
+      ["au-delivery-verdict", "DeliveryVerdict"],
     ],
   ],
   [

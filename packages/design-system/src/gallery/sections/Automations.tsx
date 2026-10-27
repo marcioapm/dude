@@ -15,6 +15,8 @@ import {
   TriggerSummary,
   type RepoFilterValue,
 } from "../../components/Automations.tsx";
+import { ConditionRows, DeliveryVerdict, IncomingVerdictPanel, type TriggerCondition } from "../../components/Incoming.tsx";
+import { CodeWell } from "../../components/CodeWell.tsx";
 import { SettingRow } from "../../components/Settings.tsx";
 
 /*
@@ -68,7 +70,7 @@ function DaysDemo() {
 
 export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
   return (
-    <Section id="automations" title="Automations" intro="Work nobody started by hand: on a schedule or a GitHub event, an agent, a command, a server or a webhook.">
+    <Section id="automations" title="Automations" intro="Work nobody started by hand: on a schedule, a GitHub event or an incoming webhook, an agent, a command, a server or a webhook it sends.">
       <Block id="au-marks" title="KindMark / ScopeChip / TriggerSummary / SessionMark / ListSwitch" note="An automation's row: on/off from the row, kind (an agent that is one of dude's roles adds it muted), where it lives, when it runs, its session.">
         <Panes mode={mode}>
           <Col>
@@ -89,6 +91,13 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <Label>Trigger, wrapping in a narrow cell</Label>
             <div style={{ width: 128 }}>
               <TriggerSummary wrap trigger={{ kind: "github", event: "pull_request", actions: ["opened", "synchronize", "reopened"] }} />
+            </div>
+            <Label>Incoming triggers: none, one, three conditions; wrapped at 128</Label>
+            <TriggerSummary trigger={{ kind: "incoming", conditions: [] }} />
+            <TriggerSummary trigger={{ kind: "incoming", conditions: ALERT_CONDITIONS.slice(0, 1) }} />
+            <TriggerSummary trigger={{ kind: "incoming", conditions: [...ALERT_CONDITIONS, { path: "receiver", op: "exists", values: [] }] }} />
+            <div style={{ width: 128 }}>
+              <TriggerSummary wrap trigger={{ kind: "incoming", conditions: ALERT_CONDITIONS }} />
             </div>
             <Label>Session</Label>
             <SessionMark mode="ephemeral" />
@@ -156,6 +165,64 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
           </Col>
         </Panes>
       </Block>
+      <Block id="au-conditions" title="ConditionRows" note="An incoming webhook's conditions on its JSON body: every row must hold; one of is any of its values. With results, each row says whether it held and what the body had.">
+        <Panes mode={mode}>
+          <Col>
+            <Label>None</Label>
+            <ConditionRows value={[]} onChange={() => undefined} />
+            <Label>Two rows, editable</Label>
+            <ConditionsDemo />
+            <Label>Two rows with results, one missed</Label>
+            <ConditionRows value={ALERT_CONDITIONS} results={[{ ok: true, actual: "firing" }, { ok: false, actual: "warning" }]} />
+            <Label>Disabled</Label>
+            <ConditionRows value={ALERT_CONDITIONS} onChange={() => undefined} disabled />
+            <Label>460px, in a settings row: one line each</Label>
+            <div style={{ width: 460 }}>
+              <ConditionsDemo />
+            </div>
+            <Label>390px: stacked</Label>
+            <div style={{ width: 390 }}>
+              <ConditionsDemo />
+            </div>
+            <Label>The test dialog's verdict: a miss, then a live run of the group</Label>
+            <IncomingVerdictPanel ok={false} outcome={<><b>⊘ It would be skipped:</b> commonLabels.severity is warning, not one of critical, high.</>}>
+              <p>✓ Valid JSON. Group key <code className="ds-mono">g-api</code>: no run of this group is going.</p>
+              <ConditionRows value={ALERT_CONDITIONS} results={[{ ok: true, actual: "firing" }, { ok: false, actual: "warning" }]} />
+            </IncomingVerdictPanel>
+            <IncomingVerdictPanel>
+              <p>✓ Valid JSON. Group key <code className="ds-mono">g-api</code>: a run of this group is going.</p>
+              <p><b>As a real delivery it would be sent to the running agent;</b> conditions are not checked for it.</p>
+            </IncomingVerdictPanel>
+            <Label>CodeWell: a curl, and a URL inline</Label>
+            <CodeWell>{"curl -X POST https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18 \\\n  -H 'Content-Type: application/json' \\\n  --data '{\"status\":\"firing\"}'"}</CodeWell>
+            <span>POST to <CodeWell inline>https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18</CodeWell></span>
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="au-delivery-verdict" title="DeliveryVerdict" note="What dude did with one delivery; the two with a run open it. Waiting until dude has read it.">
+        <Panes mode={mode}>
+          <Col>
+            <Label>Linked</Label>
+            <DeliveryVerdict verdict={{ kind: "started", runId: "arn_1" }} onRun={() => undefined} />
+            <DeliveryVerdict verdict={{ kind: "sent", runId: "arn_1" }} onRun={() => undefined} />
+            <Label>Not linked</Label>
+            <DeliveryVerdict verdict={{ kind: "started", runId: "arn_1" }} />
+            <DeliveryVerdict verdict={{ kind: "sent", runId: null }} />
+            <DeliveryVerdict verdict={{ kind: "skipped", because: "status is resolved, not firing" }} />
+            <DeliveryVerdict verdict={{ kind: "refused", reason: "bad_signature" }} />
+            <DeliveryVerdict verdict={{ kind: "refused", reason: "not_json" }} />
+            <DeliveryVerdict verdict={{ kind: "refused", reason: "too_large" }} />
+            <DeliveryVerdict verdict={{ kind: "refused", reason: "rate_limited" }} />
+            <DeliveryVerdict verdict={{ kind: "refused", reason: "disabled" }} />
+            <Label>Not read yet</Label>
+            <DeliveryVerdict verdict={{ kind: "pending" }} />
+            <Label>Skipped with a long reason, in a 390 cell</Label>
+            <div style={{ width: 390 }}>
+              <DeliveryVerdict verdict={{ kind: "skipped", because: "commonLabels.severity is warning, not one of critical, high" }} />
+            </div>
+          </Col>
+        </Panes>
+      </Block>
       <Block id="au-tools" title="AgentTools" note="What an automation's agent can call: wrench, mono name, New when fresh, its one line; an unavailable tool keeps its row and says why and the fix.">
         <Panes mode={mode}>
           <Col>
@@ -172,4 +239,14 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
     </Section>
   );
+}
+
+const ALERT_CONDITIONS: TriggerCondition[] = [
+  { path: "status", op: "is", values: ["firing"] },
+  { path: "commonLabels.severity", op: "one_of", values: ["critical", "high"] },
+];
+
+function ConditionsDemo() {
+  const [v, setV] = useState(ALERT_CONDITIONS);
+  return <ConditionRows value={v} onChange={setV} paths={["status", "commonLabels.severity", "groupKey"]} />;
 }

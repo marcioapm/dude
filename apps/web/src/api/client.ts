@@ -23,6 +23,10 @@ import type {
   AutomationRunDetail,
   AutomationPromptVersion,
   AutomationRunsResponse,
+  AutomationDelivery,
+  AutomationDeliveryDetail,
+  DeliveryFilter,
+  IncomingVerdict,
   EventSubscriptions,
   EventVerdict,
   NewAutomation,
@@ -265,6 +269,8 @@ export interface GithubAppInput {
   oauthClientSecret?: string;
   clearOauthClientSecret?: boolean;
 }
+
+export type { DeliveryFilter } from "@dude/domain";
 
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
 export interface WebhookHealth {
@@ -1379,11 +1385,11 @@ export class ApiClient {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}`);
   }
 
-  createAutomation(input: NewAutomation & { projectId: string | null; tz: string }): Promise<Automation> {
+  createAutomation(input: NewAutomation & { projectId: string | null; tz: string }): Promise<Automation & { incomingSecret?: string }> {
     return this.#request("POST", "/v1/automations", input);
   }
 
-  updateAutomation(id: string, input: AutomationInput): Promise<Automation> {
+  updateAutomation(id: string, input: AutomationInput): Promise<Automation & { incomingSecret?: string }> {
     return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}`, input);
   }
 
@@ -1424,6 +1430,24 @@ export class ApiClient {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries`);
   }
 
+  /** The Deliveries tab: the last 30 days' deliveries with their verdicts, at most 100, of one verdict when filtered; an incoming automation's refusals this hour counted, not stored. */
+  automationDeliveryList(id: string, verdict?: DeliveryFilter): Promise<{ deliveries: AutomationDelivery[]; refusedNotStored?: number }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries${verdict ? `?verdict=${verdict}` : ""}`);
+  }
+
+  automationDelivery(id: string, deliveryId: string): Promise<AutomationDeliveryDetail> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}`);
+  }
+
+  /** A new verification secret for an incoming webhook, answered this once. */
+  rotateIncomingSecret(id: string): Promise<Automation & { incomingSecret: string }> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/incoming-secret/rotate`);
+  }
+
+  evaluateIncoming(id: string, body: Record<string, unknown>): Promise<IncomingVerdict> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/test-event/evaluate`, { body });
+  }
+
   runAutomation(id: string, body: RunNow): Promise<{ runId: string }> {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/runs`, body);
   }
@@ -1444,7 +1468,7 @@ export class ApiClient {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/prompt-history/restore`, { versionId });
   }
 
-  duplicateAutomation(id: string): Promise<Automation> {
+  duplicateAutomation(id: string): Promise<Automation & { incomingSecret?: string }> {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/duplicate`);
   }
 

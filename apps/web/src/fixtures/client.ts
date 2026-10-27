@@ -27,7 +27,7 @@ import type { OpenSessionsList } from "@dude/domain";
 import type { ChatProvider, ChatRequestRow } from "@dude/domain";
 import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
 import type { ServerLogLine } from "@dude/design-system";
-import { ApiClient, ApiError, READY_FOR_REVIEW_WAITING, type Artifact, type AttachmentLimits, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type StopRequest, type StopResult, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
+import { ApiClient, ApiError, READY_FOR_REVIEW_WAITING, type Artifact, type AttachmentLimits, type DeliveryFilter, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type StopRequest, type StopResult, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; after?: number | undefined };
@@ -1207,6 +1207,18 @@ export class FixtureClient extends ApiClient {
   }
   override automationDeliveries(): ReturnType<ApiClient["automationDeliveries"]> {
     return this.#auto(() => this.#automations.deliveries());
+  }
+  override automationDeliveryList(id: string, verdict?: DeliveryFilter): ReturnType<ApiClient["automationDeliveryList"]> {
+    return this.#auto(() => this.#automations.deliveryList(id, verdict));
+  }
+  override automationDelivery(id: string, deliveryId: string): ReturnType<ApiClient["automationDelivery"]> {
+    return this.#auto(() => this.#automations.delivery(id, deliveryId));
+  }
+  override rotateIncomingSecret(id: string): ReturnType<ApiClient["rotateIncomingSecret"]> {
+    return this.#auto(() => this.#automations.rotate(id));
+  }
+  override evaluateIncoming(id: string, body: Record<string, unknown>): ReturnType<ApiClient["evaluateIncoming"]> {
+    return this.#auto(() => this.#automations.evaluateIncoming(id, body));
   }
   override runAutomation(id: string, body: Parameters<ApiClient["runAutomation"]>[1]): ReturnType<ApiClient["runAutomation"]> {
     return this.#auto(() => this.#automations.runNow(id, body));

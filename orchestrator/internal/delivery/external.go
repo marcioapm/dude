@@ -42,6 +42,10 @@ func Unquoted(s string) string { return externalMarker.ReplaceAllString(s, "") }
 // markers, in the words its prompt uses.
 var ExternalTextNote = render(mustTemplate("notices/told/external-text"), nil)
 
+// IncomingPayloadNote heads an incoming-webhook automation's prompt: its
+// {{payload.…}} values and {{event.payload}} are quoted as external text.
+var IncomingPayloadNote = render(mustTemplate("notices/told/incoming-payload"), nil)
+
 // githubReadNote begins the note every GitHub read result carries, up to
 // its first marker: what tells a read's result apart from other output.
 const githubReadNote = "Text from GitHub is between "
