@@ -288,18 +288,7 @@ func (d *testRounds) testRun(id, how, reply string) {
 // It returns how many compares GitHub has answered.
 func (f *verdictFixture) withRepo() *atomic.Int64 {
 	f.t.Helper()
-	bare := f.t.TempDir()
-	git := func(args ...string) string {
-		out, err := exec.Command("git", append([]string{"-C", bare}, args...)...).Output()
-		if err != nil {
-			f.t.Fatalf("git %v: %v", args, err)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	git("init", "-q", "--bare", "--initial-branch=main")
-	initial := git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", git("mktree"), "-m", "Initial")
-	git("update-ref", "refs/heads/main", initial)
-	f.gh = fakegithub.New(bare, "acme/repo")
+	f.gh = fakegithub.New(bareRepo(f.t), "acme/repo")
 	f.gh.Branch("feature", "main", "Start")
 	compares := &atomic.Int64{}
 	gh := f.gh.Handler()
@@ -312,6 +301,22 @@ func (f *verdictFixture) withRepo() *atomic.Int64 {
 	f.t.Cleanup(srv.Close)
 	f.steps.forges = forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})}
 	return compares
+}
+
+// bareRepo is a bare git repository whose main holds one empty commit.
+func bareRepo(t *testing.T) string {
+	t.Helper()
+	bare := t.TempDir()
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", bare}, args...)...).Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "--bare", "--initial-branch=main")
+	git("update-ref", "refs/heads/main", git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", git("mktree"), "-m", "Initial"))
+	return bare
 }
 
 // A test round that is not skipped compares each changed repository once:

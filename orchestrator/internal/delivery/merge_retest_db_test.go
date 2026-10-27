@@ -7,7 +7,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
@@ -352,17 +351,7 @@ func TestACleanMergeInEachOfTwoRepositories(t *testing.T) {
 // GitHub answers for both repositories.
 func (f *verdictFixture) withSecondRepo(st *State, mainFiles map[string]string) {
 	f.t.Helper()
-	bare := f.t.TempDir()
-	git := func(args ...string) string {
-		out, err := exec.Command("git", append([]string{"-C", bare}, args...)...).Output()
-		if err != nil {
-			f.t.Fatalf("git %v: %v", args, err)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	git("init", "-q", "--bare", "--initial-branch=main")
-	git("update-ref", "refs/heads/main", git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", git("mktree"), "-m", "Initial"))
-	other := fakegithub.New(bare, "acme/other")
+	other := fakegithub.New(bareRepo(f.t), "acme/other")
 	head := other.Branch("feature", "main", "Start")
 	other.CommitFiles("main", "Other work", mainFiles)
 	first, second := f.gh.Handler(), other.Handler()
