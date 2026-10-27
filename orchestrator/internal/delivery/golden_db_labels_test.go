@@ -119,3 +119,47 @@ func TestGoldenNakedChoiceRefusals(t *testing.T) {
 	}
 	goldenTexts(t, "naked-choice-refusals", lines)
 }
+
+// The pick of a noted waiver decides an owned task's escalation only when
+// the owner picked it: anyone else's pick, reaching EscalationAnswerTx,
+// decides nothing.
+func TestOnAnOwnedTaskOnlyTheOwnersNotedPickDecides(t *testing.T) {
+	for _, c := range []struct {
+		person  string
+		decides bool
+	}{{"per_bo", false}, {"per_ana", true}} {
+		t.Run(c.person, func(t *testing.T) {
+			w := newGoldenWorld(t)
+			w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+				VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'running', 'conductor', 'agent')`)
+			w.exec(t, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ('wi_g', 'per_ana', $1, 0)`)
+			w.delivery(t, "decide", `{"taskId":"wi_g","projectId":"prj_g","attempt":1,"decider":"conductor","escalation":{"reason":"`+ReasonChecksUnverified+`","step":"implement"}}`)
+			ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
+			items := []QuestionItem{{Question: "Waive?", Choices: []Choice{{Note: "it predates the task"}, {Label: "Send it back"}}}}
+			q := w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+				key, composed, err := EscalationQuestion(ctx, tx, ref, items, []string{ActionWaive, "retry"})
+				if err != nil {
+					return "", err
+				}
+				id, err := AskItemsTx(ctx, tx, ref, composed)
+				if err != nil {
+					return "", err
+				}
+				_, err = tx.Exec(ctx, `UPDATE questions SET escalation = $2, actions = '["waive","retry"]', status = 'answered',
+					answer = 'Waive: it predates the task', answered_at = now() WHERE id = $1`, id, key)
+				return id, err
+			})
+			decided := w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+				if err := EscalationAnswerTx(ctx, tx, w.org, "wi_g", q, "person", c.person, c.person); err != nil {
+					return "", err
+				}
+				var action string
+				err := tx.QueryRow(ctx, `SELECT COALESCE(state->'escalation'->'decided'->>'action', '') FROM workflow_runs WHERE id = 'wfr_g'`).Scan(&action)
+				return action, err
+			})
+			if want := map[bool]string{true: ActionWaive, false: ""}[c.decides]; decided != want {
+				t.Fatalf("%s's pick decided %q, want %q", c.person, decided, want)
+			}
+		})
+	}
+}
