@@ -171,14 +171,30 @@ CHECKS_NOTICES = REPO_ROOT / "orchestrator" / "internal" / "delivery" / "agents"
 
 
 def _checks_questions() -> list[str]:
-    """The fixed opening of the checks gate's Backed and Missing questions:
-    each template's text up to its first action, as the orchestrator sends it."""
+    """The fixed opening of the checks gate's Backed, Missing and pre-existing
+    questions: each template's text up to its first action, as the
+    orchestrator sends it."""
     text = CHECKS_NOTICES.read_text()
     out = []
-    for name in ("notices/checks/backed", "notices/checks/missing"):
+    for name in ("notices/checks/backed", "notices/checks/missing", "notices/checks/preexisting"):
         start = text.index('{{define "' + name + '"}}') + len('{{define "' + name + '"}}')
         out.append(text[start:text.index("{{", start)])
     return out
+
+
+def _preexisting_answer(question: str) -> str:
+    """The scripted answer to the pre-existing question: yes when the Run
+    recorded the reported command's failure at the starting commit (a call
+    naming ../starting-commit) with the same FAIL lines as its own run."""
+    calls = question.split("### The tool calls this Run recorded, in order", 1)[-1].split("\n- ")[1:]
+    base = head = None
+    for call in calls:
+        fails = sorted({line.strip() for line in call.split("\n") if line.strip().startswith("FAIL: ")})
+        if "../starting-commit" in call:
+            base = fails
+        else:
+            head = fails
+    return "yes" if base and base == head else "no"
 
 
 # The chat routing call's built-in instructions open with this (chat.BuiltInInstructions).
@@ -469,7 +485,9 @@ class TestEnvironment:
                     return
                 context = question.lower()
                 decision = "no" if "missing" in context else "yes"
-                if "status: error" in context or "fail: testgreeting" in context or "exit status 1" in context:
+                if questions[2] in question:
+                    decision = _preexisting_answer(question)
+                elif "status: error" in context or "fail: testgreeting" in context or "exit status 1" in context:
                     # Judge the latest recorded completion: an earlier
                     # failed turn is not evidence against the corrected turn.
                     last = context.rsplit("status:", 1)[-1]

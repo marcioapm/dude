@@ -152,6 +152,18 @@ func TestAFailureShownAtTheStartingCommitPassesWithoutAPerson(t *testing.T) {
 		AND payload->'checks'->0->>'callId' = 'mcall_test' AND (payload->>'judgePassed')::bool`, wi, delivery.EvRunChecksJudged, delivery.CheckPreexisting); n != 3 {
 		t.Errorf("%d judgements recording the failure pre-existing, want each writer's", n)
 	}
+	// The pull request names the judge's pass as its own result, never a
+	// plain pass or a person's waiver.
+	account := checksSection(w.gh.Pull(1).Body)
+	for _, want := range []string{"the judge passed failures that fail the same at the starting commit (pre-existing)",
+		"- **Implementer** — backed; the rest passed by the judge\n  - `" + fakeagent.FailingCommand + "` — **pre-existing** — the recorded call says so (`mcall_test`)"} {
+		if !strings.Contains(account, want) {
+			t.Errorf("PR account lacks %q:\n%s", want, account)
+		}
+	}
+	if strings.Contains(account, "waived") || strings.Contains(account, "`"+fakeagent.FailingCommand+"` — **pass**") {
+		t.Errorf("PR account reads as a waiver or a pass:\n%s", account)
+	}
 }
 
 // The same writer without a run at its starting commit is held as before.

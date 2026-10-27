@@ -106,6 +106,37 @@ func TestACarriedWaiverIsAccountedAsTheWaiverItCarries(t *testing.T) {
 	}
 }
 
+// A failure or unrun check the judge passed is named as such, with the
+// judge's reason, in its own headline: never a plain pass, never a waiver;
+// one it did not pass carries the judge's reason.
+func TestAJudgePassedFailureIsAccountedAsSuch(t *testing.T) {
+	passed := gatedJudgement{Role: "Implementer", Verified: true, JudgePassed: true, Checks: []gatedCheck{
+		{Command: "npx tsc --noEmit", Result: CheckPreexisting, Decision: "yes", Reason: "95 errors at the parent, 95 with the change", CallID: "mcall_1"},
+		{Command: "open the settings page", Result: CheckDeferred, Decision: "yes", Reason: "the tester runs it", CallID: "mcall_2"},
+		{Command: "missing checks", Result: "pass", Decision: "no", CallID: "mcall_3"},
+	}}
+	want := "### Checks\nChecks were verified against the Run's recorded commands; the judge passed failures that fail the same at the starting commit (pre-existing) and checks a later phase runs (deferred).\n\n" +
+		"- **Implementer** — backed; the rest passed by the judge\n" +
+		"  - `npx tsc --noEmit` — **pre-existing** — 95 errors at the parent, 95 with the change (`mcall_1`)\n" +
+		"  - `open the settings page` — **deferred** — the tester runs it (`mcall_2`)\n" +
+		"  - `missing checks` — **pass** (`mcall_3`)"
+	if got := checksAccountText([]gatedJudgement{passed}, prBodyMax); got != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", got, want)
+	}
+	held := gatedJudgement{Role: "Fixer", Checks: []gatedCheck{{Command: "npx tsc --noEmit", Result: CheckFail, Decision: "unsure", Reason: "94 errors",
+		JudgeReason: "not passed by the judge: no run at the parent", CallID: "mcall_4"}}}
+	want = "### Checks\nChecks were not verified; the work was sent back or awaits a person.\n\n" +
+		"- **Implementer** — backed; the rest passed by the judge\n" +
+		"  - `npx tsc --noEmit` — **pre-existing** — 95 errors at the parent, 95 with the change (`mcall_1`)\n" +
+		"  - `open the settings page` — **deferred** — the tester runs it (`mcall_2`)\n" +
+		"  - `missing checks` — **pass** (`mcall_3`)\n" +
+		"- **Fixer** — not backed\n" +
+		"  - `npx tsc --noEmit` — **fail** — 94 errors — not passed by the judge: no run at the parent (`mcall_4`)"
+	if got := checksAccountText([]gatedJudgement{passed, held}, prBodyMax); got != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", got, want)
+	}
+}
+
 // oversized is a Run whose every check is a run of backticks: its full row
 // fences to over checksRowsMax.
 func oversized(t *testing.T, j gatedJudgement) gatedJudgement {
@@ -388,6 +419,9 @@ func TestChecksStatusPrecedence(t *testing.T) {
 		{gatedJudgement{Verified: true, Waived: true, Unchanged: true, Carried: true}, "waived"},
 		{gatedJudgement{Verified: true, Unchanged: true, Carried: true}, "no changes; checks not needed"},
 		{gatedJudgement{Verified: true, Carried: true}, "waiver carried"},
+		{gatedJudgement{Verified: true, Carried: true, JudgePassed: true}, "waiver carried"},
+		{gatedJudgement{Verified: true, JudgePassed: true}, "backed; the rest passed by the judge"},
+		{gatedJudgement{JudgePassed: true}, "not backed"},
 		{gatedJudgement{Carried: true}, "not backed"},
 	} {
 		if got := tc.j.status(); got != tc.want {

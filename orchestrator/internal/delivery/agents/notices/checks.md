@@ -40,6 +40,7 @@ That report said {{printf "%q" .Command}} failed:
 {{define "notices/checks/account-compact"}}- **{{.Role}}** — {{.Status}}
   - {{.Count}} {{if eq .Count 1}}check{{else}}checks{{end}} reported; checks omitted from this account: see the task's Activity.{{end}}
 {{define "notices/checks/account-omitted"}}Checks account omitted: see the task's Activity.{{end}}
+{{define "notices/checks/account-judged"}}Checks were verified against the Run's recorded commands; the judge passed failures that fail the same at the starting commit (pre-existing) and checks a later phase runs (deferred).{{end}}
 {{define "notices/checks/account-carried"}}- {{.Role}}: carried the {{.From}}'s waiver of the same failure: {{.Note}}{{end}}
 {{define "notices/checks/account-carried-from"}}carried from {{.By}}'s waiver of the {{.Role}}'s report ({{.Run}}){{end}}
 {{define "notices/checks/writer-carried-from"}}carried from {{.By}}'s waiver of the {{.Role}}'s report ({{.Run}}, turn {{.Turn}}): {{.Note}}{{end}}

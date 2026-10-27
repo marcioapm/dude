@@ -1746,11 +1746,18 @@ const AUTO_END: Record<string, string> = {
 };
 
 type ChecksVerdict = { command?: string; result?: string; reason?: string; decision?: string; callId?: string;
-  waiver?: { role?: string; note?: string }; waiverReason?: string };
+  waiver?: { role?: string; note?: string }; waiverReason?: string; judgeReason?: string };
+
+/** How a check's recorded result reads: one the judge passed without a backed pass says so, never "pass". */
+const CHECK_RESULT_LABEL = new Map([
+  ["pre-existing", "pre-existing, passed by the judge: it fails the same at the commit the Run started from"],
+  ["deferred", "deferred, passed by the judge: a later phase runs it"],
+]);
 
 /**
  * A run.checks.judged event's outcome ("were verified") and its quote: the send-back message, then each verdict.
  * `unchanged` is a turn that changed nothing it could push: no report was judged, and it is not a pass of any check.
+ * `judgePassed` is a verified turn some of whose reported failures or unrun checks the judge passed.
  */
 function checksJudgedLine(p: Record<string, unknown>): { outcome: string; quote: string } {
   let outcome: string;
@@ -1758,10 +1765,11 @@ function checksJudgedLine(p: Record<string, unknown>): { outcome: string; quote:
   else if (p.waived) outcome = "were waived";
   else if (p.unchanged) outcome = "were not needed: it changed nothing";
   else if (p.carried && p.verified) outcome = "carried a person's waiver";
+  else if (p.judgePassed && p.verified) outcome = "were verified, with failures the judge passed";
   else if (p.verified) outcome = "were verified";
   else outcome = "were not verified";
   const verdicts = Array.isArray(p.checks) ? p.checks as ChecksVerdict[] : [];
-  const details = verdicts.map((v) => `${v.command ?? "Check"}: ${v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.waiverReason ? ` — ${v.waiverReason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}`
+  const details = verdicts.map((v) => `${v.command ?? "Check"}: ${(v.result && CHECK_RESULT_LABEL.get(v.result)) ?? v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.waiverReason ? ` — ${v.waiverReason}` : ""}${v.judgeReason ? ` — ${v.judgeReason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}`
     + (v.waiver ? `\nWaived by a person for the ${v.waiver.role ?? "earlier Run"}: ${v.waiver.note ?? ""}` : "")).join("\n");
   return { outcome, quote: [typeof p.message === "string" ? p.message : "", details].filter(Boolean).join("\n") };
 }

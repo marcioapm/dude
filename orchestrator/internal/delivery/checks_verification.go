@@ -23,17 +23,21 @@ type gatedJudgement struct {
 	Waived    bool
 	Unchanged bool
 	Carried   bool
-	Message   string
-	Checks    []gatedCheck `json:"checks"`
+	// Some reported failure or not-run check passed on the judge's word:
+	// CheckPreexisting or CheckDeferred.
+	JudgePassed bool
+	Message     string
+	Checks      []gatedCheck `json:"checks"`
 }
 
 type gatedCheck struct {
-	Command, Result, Decision, Reason, CallID, WaiverReason string
-	Waiver                                                  *CarriedWaiver
+	Command, Result, Decision, Reason, CallID, WaiverReason, JudgeReason string
+	Waiver                                                               *CarriedWaiver
 }
 
 // status is a gated Run's outcome as its row in the pull request names it.
-// A waived, carried, skipped or unchanged Run is never called verified.
+// A waived, carried, judge-passed, skipped or unchanged Run is never called
+// verified.
 func (j gatedJudgement) status() string {
 	switch {
 	case j.Skipped:
@@ -44,6 +48,8 @@ func (j gatedJudgement) status() string {
 		return "no changes; checks not needed"
 	case j.Carried && j.Verified:
 		return "waiver carried"
+	case j.JudgePassed && j.Verified:
+		return "backed; the rest passed by the judge"
 	case j.Verified:
 		return "backed"
 	}
@@ -101,6 +107,7 @@ var (
 	checksOmittedTmpl     = mustTemplate("notices/checks/account-omitted")
 	checksCarriedTmpl     = mustTemplate("notices/checks/account-carried")
 	checksCarriedFromTmpl = mustTemplate("notices/checks/account-carried-from")
+	checksJudgedTmpl      = mustTemplate("notices/checks/account-judged")
 )
 
 // checksAccountText is the checks gate's compact account of runs (oldest
@@ -114,7 +121,7 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 	if len(runs) == 0 {
 		return ""
 	}
-	var skipped, unverified bool
+	var skipped, unverified, judgePassed bool
 	var waivers []gatedJudgement
 	judged := 0
 	for _, j := range runs {
@@ -128,6 +135,7 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 		case !j.Verified:
 			unverified = true
 		}
+		judgePassed = judgePassed || j.JudgePassed && j.Verified
 		judged++
 	}
 	newest := runs[len(runs)-1]
@@ -158,6 +166,8 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 		b.WriteString("Checks were not verified; the work was sent back or awaits a person.\n")
 	case judged == 0:
 		b.WriteString("No gated Run changed anything; no checks were needed.\n")
+	case judgePassed:
+		b.WriteString(render(checksJudgedTmpl, nil) + "\n")
 	default:
 		b.WriteString("Checks were verified against the Run's recorded commands.\n")
 	}
@@ -233,6 +243,9 @@ func checksRow(j gatedJudgement) string {
 		}
 		if c.WaiverReason != "" {
 			fmt.Fprintf(&b, " — %s", checksField(c.WaiverReason))
+		}
+		if c.JudgeReason != "" {
+			fmt.Fprintf(&b, " — %s", checksField(c.JudgeReason))
 		}
 		if c.Waiver != nil {
 			fmt.Fprintf(&b, " — %s", render(checksCarriedFromTmpl, map[string]any{"Role": c.Waiver.Role, "Run": codeSpan(checksField(c.Waiver.RunID)),
@@ -319,7 +332,7 @@ func writerChecksText(runs []gatedJudgement, room int) string {
 					"Role": w.Role, "Run": w.RunID, "Turn": w.Turn, "Note": w.Note}))
 			}
 			c.Checks = append(c.Checks, struct{ Command, Result, Reason, WaiverReason, Waiver string }{checksField(v.Command),
-				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason), checksField(v.WaiverReason), waiver})
+				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason), checksField(valueOr(v.WaiverReason, v.JudgeReason)), waiver})
 		}
 		items[i] = c
 	}
