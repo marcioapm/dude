@@ -94,13 +94,16 @@ func (s *Store) rangeFindings(ctx context.Context, org string, st *State, r *Rev
 	return out, err
 }
 
-// candidateLoopFindings are the open findings a pull request's fix loop on
-// its candidate owns: its own reviews' — of the fix, and of its
-// simplifier's diff — never the findings a person let the pull request
-// open with. After a failed test SimplifyBase is empty: the narrow
-// review's open findings are not the loop's. Both the fix it sends and the
-// exit it weighs read these.
-func (s *Store) candidateLoopFindings(ctx context.Context, org string, st *State) ([]string, error) {
+// loopsOwn keeps, on a candidate, the findings a pull request's fix loop
+// owns: its own reviews' — of the fix, and of its simplifier's diff — never
+// the findings a person let the pull request open with. After a failed
+// test SimplifyBase is empty: the narrow review's open findings are not the
+// loop's. Both the fix it sends and the exit it weighs read these.
+// Elsewhere it keeps every finding.
+func (s *Store) loopsOwn(ctx context.Context, org string, st *State, findings []FindingState) ([]FindingState, error) {
+	if !st.checkingCandidate() {
+		return findings, nil
+	}
 	ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: st.Candidate.Base}}
 	if len(st.SimplifyBase) > 0 {
 		ranges = append(ranges, &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase})
@@ -112,19 +115,6 @@ func (s *Store) candidateLoopFindings(ctx context.Context, org string, st *State
 			return nil, err
 		}
 		ours = append(ours, ids...)
-	}
-	return ours, nil
-}
-
-// loopsOwn keeps, on a candidate, the findings its loop owns
-// (candidateLoopFindings); elsewhere every finding.
-func (s *Store) loopsOwn(ctx context.Context, org string, st *State, findings []FindingState) ([]FindingState, error) {
-	if !st.checkingCandidate() {
-		return findings, nil
-	}
-	ours, err := s.candidateLoopFindings(ctx, org, st)
-	if err != nil {
-		return nil, err
 	}
 	return slices.DeleteFunc(findings, func(f FindingState) bool { return !slices.Contains(ours, f.ID) }), nil
 }
