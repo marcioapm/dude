@@ -188,3 +188,43 @@ func TestRetainKeepsPayloadsThirtyDaysAndLogsNinety(t *testing.T) {
 		t.Errorf("runs after retention: %+v", got)
 	}
 }
+
+// A run's activity goes when its log does, in batches, and the log only
+// once its activity is gone; a newer run's stays.
+func TestRetainRemovesARunsActivityWithItsLog(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	now := time.Now()
+	exec(t, owner, `INSERT INTO automations (id, organization_id, name, kind, trigger, command)
+		VALUES ('aut_a', $1, 'A', 'command', '{"kind":"schedule","cron":"0 * * * *","tz":"UTC"}', 'true')`, org)
+	exec(t, owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source, log_tail, created_at) VALUES
+		('arn_old', $1, 'aut_a', 'succeeded', 'schedule', 'log', $2), ('arn_new', $1, 'aut_a', 'succeeded', 'schedule', 'log', $3)`,
+		org, now.Add(-91*24*time.Hour), now.Add(-89*24*time.Hour))
+	exec(t, owner, `INSERT INTO events (id, organization_id, event_type, automation_run_id, actor_type, actor_id, source, payload)
+		SELECT 'evt_' || r || i, $1, 'automation.log.line', r, 'agent', r, 'runner', '{}'
+		FROM unnest(ARRAY['arn_old', 'arn_new']) r, generate_series(1, 3) i`, org)
+	activity := func(run string) (n int, log bool) {
+		t.Helper()
+		if err := owner.QueryRow(ctx, `SELECT (SELECT count(*) FROM events WHERE automation_run_id = $1),
+			(SELECT log_tail IS NOT NULL FROM automation_runs WHERE id = $1)`, run).Scan(&n, &log); err != nil {
+			t.Fatal(err)
+		}
+		return n, log
+	}
+	if _, err := RetainUpTo(ctx, app, now, 2); err != nil {
+		t.Fatal(err)
+	}
+	if n, log := activity("arn_old"); n != 1 || !log {
+		t.Fatalf("after one batch of 2: %d events, log kept %v; want 1 and the log kept", n, log)
+	}
+	if _, err := RetainUpTo(ctx, app, now, 2); err != nil {
+		t.Fatal(err)
+	}
+	if n, log := activity("arn_old"); n != 0 || log {
+		t.Fatalf("after the second: %d events, log kept %v", n, log)
+	}
+	if n, log := activity("arn_new"); n != 3 || !log {
+		t.Fatalf("the newer run lost its activity: %d, log %v", n, log)
+	}
+}

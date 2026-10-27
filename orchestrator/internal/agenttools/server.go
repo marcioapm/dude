@@ -137,12 +137,24 @@ func (c Caller) run() delivery.RunRef {
 	return delivery.RunRef{Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID, SessionID: c.SessionID}
 }
 
-// event is a ledger event by the calling agent, on its Run.
+// event is a ledger event by the calling agent, on its Run; an automation
+// run's is keyed by automation_run_id alone.
 func (c Caller) event(typ string, payload map[string]any) ledger.Event {
 	if c.AutomationID != "" {
 		payload["automationId"], payload["automationRunId"], payload["actingFor"] = c.AutomationID, c.RunID, c.AutomationScope.OwnerID
+		e := c.run().Event(typ, ledger.ActorAgent, payload)
+		e.RunID, e.AutomationRunID = "", c.RunID
+		return e
 	}
 	return c.run().Event(typ, ledger.ActorAgent, payload)
+}
+
+// runColumn is the events column c's own events are keyed by.
+func (c Caller) runColumn() string {
+	if c.AutomationID != "" {
+		return "automation_run_id"
+	}
+	return "run_id"
 }
 
 // NewToken mints a random token: the value, and the hash to store.
@@ -848,7 +860,7 @@ func oldName(tool string) string {
 // ledger, where every call is, once (its attempt, or its result).
 func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	tool := t.name
-	recent, sameTool, err := callsMade(ctx, tx, c.RunID, tool)
+	recent, sameTool, err := callsMade(ctx, tx, c, tool)
 	if err != nil {
 		return err
 	}
@@ -865,12 +877,12 @@ func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 // callsMade are the Run's tool calls in the last minute, and its calls of
 // tool in its lifetime: counted from the ledger, where every call is, once
 // (its attempt, or its result).
-func callsMade(ctx context.Context, tx pgx.Tx, runID, tool string) (recent, sameTool int, err error) {
+func callsMade(ctx context.Context, tx pgx.Tx, c Caller, tool string) (recent, sameTool int, err error) {
 	err = tx.QueryRow(ctx, `SELECT
 			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
 			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
-		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
-		runID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
+		FROM events WHERE `+c.runColumn()+` = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
+		c.RunID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
 	return recent, sameTool, err
 }
 

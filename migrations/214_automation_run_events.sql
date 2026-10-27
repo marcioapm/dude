@@ -34,16 +34,17 @@ ALTER TABLE events ADD CONSTRAINT events_automation_run_fk
   FOREIGN KEY (automation_run_id) REFERENCES automation_runs(id) ON DELETE CASCADE NOT VALID;
 
 -- Retention (automations.Retain, as dude_sweeper, which may not delete
--- from events): the activity of runs whose log is due to go, up to
--- p_limit rows; it says how many went. The run's log_tail is emptied only
--- once none is left.
+-- from events): the activity of runs created before p_before, up to
+-- p_limit rows; it says how many went. Retain empties a run's log_tail
+-- only once none of its activity is left, so a backlog drained in batches
+-- leaves no row behind.
 CREATE FUNCTION purge_automation_run_events(p_before timestamptz, p_limit integer) RETURNS bigint
 LANGUAGE sql SECURITY DEFINER
 SET search_path = public, pg_temp AS $$
   WITH gone AS (
     DELETE FROM events WHERE cursor IN (
       SELECT e.cursor FROM automation_runs r JOIN events e ON e.automation_run_id = r.id
-      WHERE r.created_at < p_before AND r.log_tail IS NOT NULL
+      WHERE r.created_at < p_before
       LIMIT p_limit)
     RETURNING 1)
   SELECT count(*) FROM gone

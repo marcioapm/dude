@@ -115,6 +115,9 @@ type translator struct {
 	// The Run records no project secret names: its text has nothing to
 	// redact. Fixed once its lux Run exists (recordGiven), so load reads it.
 	noSecrets bool
+	// Adds to a completion of the Run's own call before it is recorded
+	// (AutomationFeed: dude's record of the call); nil for a Run.
+	completing func(ctx context.Context, tx pgx.Tx, payload map[string]any) error
 }
 
 // harnessState is runs.harness_state: Claude Code's running cost for its

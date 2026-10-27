@@ -112,12 +112,12 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		if inst, installed, err = chat.Installed(ctx, tx, chatProvider); err != nil {
 			return err
 		}
-		if recent, made, err = callsMade(ctx, tx, c.RunID, "post_to_chat"); err != nil {
+		if recent, made, err = callsMade(ctx, tx, c, "post_to_chat"); err != nil {
 			return err
 		}
 		// This step's refusals (tagged "lookup") write no call, so the minute's bound adds them here.
 		var lookups int
-		err = tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2
+		err = tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE `+c.runColumn()+` = $1 AND event_type = $2
 			AND payload->>'lookup' = 'true' AND occurred_at > now() - interval '1 minute'`, c.RunID, EvSlackPostRefused).Scan(&lookups)
 		recent += lookups
 		return err
@@ -247,7 +247,7 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM automation_runs WHERE id = $1 FOR UPDATE`, c.RunID); err != nil {
 		return out, "", err
 	}
-	_, made, err := callsMade(ctx, tx, c.RunID, "post_to_chat")
+	_, made, err := callsMade(ctx, tx, c, "post_to_chat")
 	if err != nil {
 		return out, "", err
 	}

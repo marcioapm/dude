@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -17,6 +18,9 @@ import (
 // into the ledger: its id (automation_runs), organisation and project.
 type AutomationRunRef struct {
 	ID, Org, ProjectID string
+	// A command's or server's run: its plain output is the log. An
+	// agent's plain stdout repeats its reply and is not recorded.
+	Lines bool
 }
 
 // AutomationFeed translates an automation run's agent output with the
@@ -31,6 +35,9 @@ type AutomationFeed struct {
 	s *Syncer
 	// A command's or server's output line not yet ended by a newline, per stream.
 	partial map[string]string
+	// Per dude tool, the cursor of the last of its records joined to a completion.
+	joined map[string]int64
+	logs   bool
 }
 
 // automationFeedState is automation_runs.feed_state.
@@ -45,7 +52,8 @@ type automationFeedState struct {
 	// The placement whose session the agent has: frames of a later one
 	// before its lux.session are a resume's replay. At least 1, so a run
 	// on a kept session (placement 2 on) skips the replay its resume starts with.
-	SessionEpoch int `json:"sessionEpoch,omitempty"`
+	SessionEpoch int              `json:"sessionEpoch,omitempty"`
+	Joined       map[string]int64 `json:"joined,omitempty"`
 }
 
 // LoadAutomationFeed restores the feed of run as its last batch saved it.
@@ -63,12 +71,73 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 	}
 	t.message.WriteString(st.Message)
 	t.sessionEpoch = max(st.SessionEpoch, 1)
+	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines}
+	t.completing = f.joinDudeRecord
 	t.thought.WriteString(st.Thought)
 	maps.Copy(t.seenCalls, st.Calls)
 	for _, id := range st.Open {
 		t.openCalls[id] = true
 	}
-	return &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial}, nil
+	return f, nil
+}
+
+// dudeTools are the tool server's tools an automation's agent has, whose
+// records (agent.tool.dude, and post_to_chat's posts and refusals) join
+// the harness's completion of the call.
+var dudeTools = map[string]bool{"create_task": true, "github_search": true, "github_issue": true, "github_pull_request": true,
+	"github_check_log": true, "github_comment": true, "post_to_chat": true}
+
+// joinDudeRecord puts dude's record of one of its tools on the harness's
+// completion of the call, as payload.dude {eventId, result, posted, error}.
+// The tool server knows a call by its MCP request, not by the harness's
+// call id, so a completion takes the oldest record of its tool not yet
+// taken: the server answers before the harness reports the call done, so
+// the record is in by then, and calls of one tool end in the order the
+// server answered them.
+func (f *AutomationFeed) joinDudeRecord(ctx context.Context, tx pgx.Tx, payload map[string]any) error {
+	name, _ := payload["tool"].(string)
+	tool := strings.TrimPrefix(name, "dude_")
+	if !dudeTools[tool] || payload["status"] == "aborted" {
+		return nil
+	}
+	var id, typ string
+	var cursor int64
+	var p map[string]any
+	err := tx.QueryRow(ctx, `SELECT id, event_type, cursor, payload FROM events
+		WHERE automation_run_id = $1 AND cursor > $2 AND payload->>'tool' = $3
+		  AND (event_type = 'agent.tool.dude' OR event_type = 'slack.message.refused')
+		ORDER BY cursor LIMIT 1`, f.t.run.ID, f.joined[tool], tool).Scan(&id, &typ, &cursor, &p)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	dude := map[string]any{"eventId": id}
+	if typ == "slack.message.refused" {
+		dude["error"] = p["error"]
+		payload["status"] = "error"
+	} else if r, ok := p["result"]; ok {
+		dude["result"] = r
+	}
+	if tool == "post_to_chat" && typ == "agent.tool.dude" {
+		var posted map[string]any
+		err := tx.QueryRow(ctx, `SELECT payload FROM events WHERE automation_run_id = $1 AND event_type = 'slack.message.posted'
+			AND cursor > $2 AND cursor < $3 ORDER BY cursor DESC LIMIT 1`, f.t.run.ID, f.joined[tool], cursor).Scan(&posted)
+		if err != nil && !db.IsNotFound(err) {
+			return err
+		}
+		if posted != nil {
+			dude["posted"] = map[string]any{"channel": posted["channel"], "channelId": posted["channelId"], "ts": posted["ts"],
+				"permalink": posted["permalink"]}
+		}
+	}
+	if f.joined == nil {
+		f.joined = map[string]int64{}
+	}
+	f.joined[tool] = cursor
+	payload["dude"] = dude
+	return nil
 }
 
 // Apply translates one frame of the run's lux output. An agent's record
@@ -79,6 +148,9 @@ func (f *AutomationFeed) Apply(ctx context.Context, tx pgx.Tx, fr lux.Frame) err
 		return nil
 	}
 	if fr.Event == nil {
+		if !f.logs {
+			return nil
+		}
 		return f.lines(ctx, tx, fr.Channel, fr.Data)
 	}
 	switch fr.Event.Type {
@@ -189,7 +261,7 @@ func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 		calls[id] = t.seenCalls[id]
 	}
 	st := automationFeedState{Message: t.message.String(), Thought: t.thought.String(), Open: slices.Sorted(maps.Keys(t.openCalls)),
-		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch}
+		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch, Joined: f.joined}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err

@@ -12,7 +12,7 @@ import (
 )
 
 // postHarness is an agent automation whose runs' post_to_chat events are
-// written as the tool writes them (run_id set, at given times).
+// written as the tool writes them (automation_run_id set, at given times).
 type postHarness struct {
 	*harness
 	t  *testing.T
@@ -37,7 +37,7 @@ func (h *postHarness) event(run, typ string, payload map[string]any) string {
 	h.at = h.at.Add(time.Second)
 	payload["automationRunId"] = run
 	id := "evt_" + run + "_" + string(rune('a'+h.n))
-	exec(h.t, h.owner, `INSERT INTO events (id, organization_id, project_id, event_type, actor_type, actor_id, source, run_id, occurred_at, payload)
+	exec(h.t, h.owner, `INSERT INTO events (id, organization_id, project_id, event_type, actor_type, actor_id, source, automation_run_id, occurred_at, payload)
 		VALUES ($1, $2, $3, $4, 'agent', $5, 'orchestrator', $5, $6, $7)`, id, h.org, h.project, typ, run, h.at, payload)
 	return id
 }
@@ -78,7 +78,7 @@ func (h *postHarness) finishAs(status, reason string, runs ...string) map[string
 // failedOn is the event the runner recorded run as failed on; "" for none.
 func (h *postHarness) failedOn(run string) string {
 	var id string
-	err := h.owner.QueryRow(context.Background(), `SELECT payload->>'eventId' FROM events WHERE run_id = $1 AND event_type = $2`,
+	err := h.owner.QueryRow(context.Background(), `SELECT payload->>'eventId' FROM events WHERE automation_run_id = $1 AND event_type = $2`,
 		run, EvRunFailedOnPost).Scan(&id)
 	if err != nil && !db.IsNotFound(err) {
 		h.t.Fatal(err)

@@ -105,6 +105,40 @@ func TestAnAutomationRunStoppedMidCallAbortsTheCall(t *testing.T) {
 	}
 }
 
+// post_to_chat's completion carries the tool server's record of it: the
+// channel, ts and permalink it posted at.
+func TestPostToChatsCompletionCarriesThePermalink(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	for _, q := range []string{
+		`INSERT INTO events (id, organization_id, event_type, automation_run_id, actor_type, actor_id, source, payload) VALUES
+			('evt_p_'||$1, $1, 'slack.message.posted', 'arn_'||$1, 'agent', 'a', 'control-plane',
+			 '{"tool":"post_to_chat","channel":"#engineering","channelId":"C1","ts":"1.2","permalink":"https://acme.slack.com/archives/C1/p12"}')`,
+		`INSERT INTO events (id, organization_id, event_type, automation_run_id, actor_type, actor_id, source, payload) VALUES
+			('evt_d_'||$1, $1, 'agent.tool.dude', 'arn_'||$1, 'agent', 'a', 'control-plane', '{"tool":"post_to_chat","result":{"channel":"#engineering"}}')`,
+	} {
+		if _, err := w.owner.Exec(context.Background(), q, w.run.Org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.feed(feedCases[1].records...)
+	var done map[string]any
+	for _, e := range a.events() {
+		if e.Type == evToolCompleted && e.Payload["tool"] == "post_to_chat" {
+			done = e.Payload
+		}
+		// The Bash call before it is no dude tool: nothing joined.
+		if e.Payload["tool"] == "bash" && e.Payload["dude"] != nil {
+			t.Fatalf("bash joined: %v", e.Payload)
+		}
+	}
+	dude, _ := done["dude"].(map[string]any)
+	posted, _ := dude["posted"].(map[string]any)
+	if posted["permalink"] != "https://acme.slack.com/archives/C1/p12" || posted["channel"] != "#engineering" || dude["eventId"] != "evt_d_"+w.run.Org {
+		t.Fatalf("completion: %v", done)
+	}
+}
+
 type automationWorld struct {
 	t    *testing.T
 	w    *harnessWorld

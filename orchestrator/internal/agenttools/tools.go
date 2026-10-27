@@ -389,6 +389,8 @@ func createTask(ctx context.Context, tx pgx.Tx, c Caller, in createTaskIn) (crea
 	created := c.event("task.created", map[string]any{"title": title, "goal": strings.TrimSpace(in.Goal),
 		"createdByTaskId": c.TaskID})
 	created.TaskID, created.CorrelationID = id, id
+	// On the new task: an automation run's id stays in its payload.
+	created.AutomationRunID = ""
 	if _, err := ledger.Append(ctx, tx, created); err != nil {
 		return createTaskOut{}, err
 	}

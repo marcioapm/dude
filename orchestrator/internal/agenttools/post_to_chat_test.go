@@ -308,7 +308,7 @@ func TestPostToChatWithARevokedInstallationSaysItIsNotConnected(t *testing.T) {
 			}
 			var code, reason string
 			if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'code', payload->>'reason' FROM events WHERE event_type = $1
-				AND run_id = 'arn_digest'`, agenttools.EvSlackPostRefused).Scan(&code, &reason); err != nil ||
+				AND automation_run_id = 'arn_digest'`, agenttools.EvSlackPostRefused).Scan(&code, &reason); err != nil ||
 				code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
 				t.Errorf("the refusal on the run: %q %q %v", code, reason, err)
 			}
@@ -449,7 +449,7 @@ func TestPostToChatSaysToTryAgainWhenSlackIsBusy(t *testing.T) {
 		t.Fatalf("rate-limited: %d %v", status, out)
 	}
 	var attempts int
-	if err := c.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE run_id = 'arn_digest' AND event_type = $1
+	if err := c.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE automation_run_id = 'arn_digest' AND event_type = $1
 		AND payload->>'tool' = 'post_to_chat'`, agenttools.AttemptEventType).Scan(&attempts); err != nil || attempts != 1 {
 		t.Errorf("attempts recorded: %d %v", attempts, err)
 	}
@@ -504,7 +504,7 @@ func TestPostToChatLookupRefusalsCountTowardTheMinutesCalls(t *testing.T) {
 func TestPostToChatCountsAPostSlackRefusedOnceTowardTheMinute(t *testing.T) {
 	c := setupChat(t, true)
 	for i := range 30 {
-		mustExec(t, c.owner, `INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, run_id, payload) VALUES
+		mustExec(t, c.owner, `INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, automation_run_id, payload) VALUES
 			($1, $3, $4, 'agent', 'arn_digest', 'orchestrator', 'arn_digest', '{"tool":"github_comment"}'),
 			($2, $3, $5, 'agent', 'arn_digest', 'orchestrator', 'arn_digest', '{"tool":"post_to_chat","channel":"#engineering"}')`,
 			fmt.Sprintf("evt_att%02d", i), fmt.Sprintf("evt_ref%02d", i), c.org, agenttools.AttemptEventType, agenttools.EvSlackPostRefused)

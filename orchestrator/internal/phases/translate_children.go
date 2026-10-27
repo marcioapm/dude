@@ -266,6 +266,11 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 		if err := t.parentCallEnded(ctx, tx, s, id, payload); err != nil {
 			return err
 		}
+		if t.completing != nil {
+			if err := t.completing(ctx, tx, payload); err != nil {
+				return err
+			}
+		}
 		return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent, payload)
 	}
 	if err := t.startChild(ctx, tx, s, c); err != nil {

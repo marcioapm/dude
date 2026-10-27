@@ -1049,10 +1049,11 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	}); err != nil {
 		return false, err
 	}
-	turnDone, log, newCursor, failed, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy, prior)
+	turnDone, log, newCursor, failed, frames, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy, prior)
 	if err != nil {
 		return false, err
 	}
+	ended := lux.Terminal(got.State)
 	// Events sent into the run while it works (Concurrency: send): each
 	// reaches its agent as input, and its turn is waited for afresh.
 	sent := 0
@@ -1065,7 +1066,19 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, busy_seen = busy_seen OR $3,
 			inputs_sent = inputs_sent + $5, log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1`,
 			runID, newCursor, turnDone.busy, log, sent)
-		return err
+		if err != nil {
+			return err
+		}
+		// The activity feed, with the cursor past the frames it came from.
+		var exit *int
+		if ended && a.Kind == "command" {
+			exit = frames.exit
+			if exit == nil && got.State == "succeeded" {
+				zero := 0
+				exit = &zero
+			}
+		}
+		return feedFrames(ctx, tx, a, runID, frames.list, ended, cmp.Or(got.StateReason, got.State), exit)
 	}); err != nil {
 		return false, err
 	}
@@ -1157,6 +1170,54 @@ func (r *Runner) stopOrCancel(ctx context.Context, luxRunID string, keep bool) {
 
 type turnState struct{ busy, done bool }
 
+// readFrames are the frames one read took, for the activity feed, and the
+// workload's exit code when lux reported it.
+type readFrames struct {
+	list []lux.Frame
+	exit *int
+}
+
+// feedFrames translates one read's frames into the run's activity (an
+// agent's through phases.AutomationFeed; a command's or server's output
+// as lines), and, once its lux Run has ended, what it left open: a
+// call still running is aborted, saying why the run stopped.
+func feedFrames(ctx context.Context, tx pgx.Tx, a Automation, runID string, frames []lux.Frame, ended bool, reason string, exit *int) error {
+	if a.Kind == "webhook" || (len(frames) == 0 && !ended) {
+		return nil
+	}
+	f, err := phases.LoadAutomationFeed(ctx, tx, phases.AutomationRunRef{ID: runID, Org: a.Org, ProjectID: a.ProjectID, Lines: a.Kind != "agent"})
+	if err != nil {
+		return err
+	}
+	for _, fr := range frames {
+		if err := f.Apply(ctx, tx, fr); err != nil {
+			return err
+		}
+	}
+	if ended {
+		var codes []int
+		if exit != nil {
+			codes = append(codes, *exit)
+		}
+		if err := f.End(ctx, tx, stoppedNote(reason), codes...); err != nil {
+			return err
+		}
+	}
+	return f.Save(ctx, tx)
+}
+
+// stoppedNote is what a call the run's end cut short says under it; the
+// page adds how long the call had run.
+func stoppedNote(reason string) string {
+	switch reason {
+	case "timeout":
+		return "Stopped by the time limit."
+	case "cancelled", "canceled":
+		return "Stopped: the run was cancelled."
+	}
+	return "Stopped when the run ended: " + reason + "."
+}
+
 // readOutput reads a Run's records since cursor without waiting for more:
 // the text the workload printed, and whether its agent went busy, then idle.
 // An agent's reply is read from its harness's message events (ACP chunks,
@@ -1164,19 +1225,29 @@ type turnState struct{ busy, done bool }
 // adapter also writes each reply as one stdout record: that copy is left
 // out, matched against the reply read so far and prior, the log before
 // this read; any other record, stderr included, is kept.
-func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool, prior string) (turnState, string, string, string, error) {
+func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool, prior string) (turnState, string, string, string, readFrames, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	state := turnState{busy: busy}
 	var log strings.Builder
+	var frames readFrames
 	failed := ""
 	err := r.Lux.Output(ctx, luxRunID, cursor, 0, func(f lux.Frame) error {
+		if f.Kind == "lux" && f.EventType == "exited" {
+			var d struct {
+				ExitCode *int `json:"exitCode"`
+			}
+			if json.Unmarshal(f.EventData, &d) == nil && d.ExitCode != nil {
+				frames.exit = d.ExitCode
+			}
+		}
 		if f.Kind != "record" {
 			return nil
 		}
 		if f.Cursor != "" {
 			cursor = f.Cursor
 		}
+		frames.list = append(frames.list, f)
 		if f.Event == nil {
 			copied := strings.TrimSpace(f.Data)
 			// Assumes the copy directly follows the reply: a record between them leaves it logged twice.
@@ -1237,9 +1308,9 @@ func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, 
 		return nil
 	})
 	if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-		return state, log.String(), cursor, failed, err
+		return state, log.String(), cursor, failed, frames, err
 	}
-	return state, log.String(), cursor, failed, nil
+	return state, log.String(), cursor, failed, frames, nil
 }
 
 // cost is what lux has priced the Run at so far, nil when unknown.
