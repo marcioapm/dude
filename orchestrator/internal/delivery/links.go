@@ -102,11 +102,7 @@ func AddSessionProject(ctx context.Context, tx pgx.Tx, org, sessionID, projectID
 	if err != nil {
 		return nil, err
 	}
-	links, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Link, error) {
-		var l Link
-		err := row.Scan(&l.ProjectID, &l.RepositoryIDs)
-		return l, err
-	})
+	links, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Link])
 	if err != nil {
 		return nil, err
 	}

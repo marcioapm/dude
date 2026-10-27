@@ -114,7 +114,9 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 			r.ResultKind, r.ResultID = "session", id
 			reply = Reply{Text: sessionReply(title, r, who), LinkURL: s.link(who.Slug, "sessions/"+url.PathEscape(id)), LinkLabel: "Open in dude"}
 			if d.Project == nil {
-				offerLinks(r, &reply, id, r.candidates)
+				r.offer = &linkOffer{Text: reply.Text, LinkURL: reply.LinkURL, LinkLabel: reply.LinkLabel,
+					ChooseURL: reply.LinkURL, Session: id, Candidates: r.candidates}
+				reply.Row = r.offer.row(r.ID, nil)
 			}
 		case RouteResume:
 			if err := delivery.LockSession(ctx, tx, d.Session); err != nil {

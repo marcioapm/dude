@@ -72,14 +72,6 @@ func linkCandidates(w World, maybe []Project) []linkCandidate {
 	return out
 }
 
-// offerLinks puts the "Link a project" row on a new session's reply and
-// keeps what it offered on the request.
-func offerLinks(r *request, reply *Reply, session string, cands []linkCandidate) {
-	r.offer = &linkOffer{Text: reply.Text, LinkURL: reply.LinkURL, LinkLabel: reply.LinkLabel, ChooseURL: reply.LinkURL, Session: session,
-		Candidates: cands}
-	reply.Row = r.offer.row(r.ID, nil)
-}
-
 // linkedLine is one project linked from a reply, and by whom.
 type linkedLine struct {
 	ProjectID, Key, Name, By string
