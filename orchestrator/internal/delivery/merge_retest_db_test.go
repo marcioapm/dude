@@ -550,6 +550,9 @@ func TestACleanMergeOfOtherFilesBeforeThePullRequestIsNotTestedAgain(t *testing.
 		{"the task's file", map[string]string{"app/greet.go": "package app"}, false},
 		// A file every change of the repository depends on.
 		{"a lockfile", map[string]string{"lib/other.go": "package lib", "web/bun.lock": "{}"}, false},
+		// An empty commit on main: a merge whose compare lists no file is
+		// tested, an empty list not taken as clear of the task.
+		{"no files", map[string]string{}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, st, sc := mergeFixture(t, c.files)
