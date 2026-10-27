@@ -21,6 +21,8 @@ import {
   RepoFilterField,
   SchedulePicker,
   ScopeChip,
+  PresetSecrets,
+  SecretPicker,
   Segmented,
   SessionMark,
   SettingField,
@@ -74,7 +76,9 @@ import {
   AUTOMATION_PROMPT_VARIABLES,
   AUTOMATION_POST_RETRY,
   COMMAND_MAX_BYTES,
-  ORG_AUTOMATION_SECRETS,
+  ORG_AUTOMATION_PICKS,
+  PRESET_SECRET_RECIPIENT,
+  PRESET_SECRETS,
   CONCURRENCY,
   CONCURRENCY_LABEL,
   EVENT_ACTIONS,
@@ -87,6 +91,7 @@ import {
   automationProblem,
   isTimeZone,
   parseCron,
+  secretPicksInForce,
   type AgentOverrides,
   type Automation,
   type AutomationInput,
@@ -103,11 +108,15 @@ import {
   type ModelTier,
   type PastDelivery,
   type PresetRole,
+  type OrgSecret,
+  type ProjectSecret,
+  type SecretRef,
   type SettingsResponse,
   type Trigger,
 } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
+import { useOrgSecrets } from "./OrgSecrets.tsx";
 
 /** Where the automations pages are: a list, one automation (its tab), one run. */
 export interface AutomationsPlace {
@@ -451,7 +460,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
           <Tab value="runs">Runs</Tab>
         </TabList>
         <TabPanel value="settings">
-          <AutomationSettings client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} onTry={() => setRunning(true)} />
+          <AutomationSettings key={a.id} client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} onTry={() => setRunning(true)} />
         </TabPanel>
         <TabPanel value="runs">
           {place.runId ? <RunDetail client={client} a={a} runId={place.runId} />
@@ -467,6 +476,8 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
   );
 }
 
+const SECRETS_LOADING = "The project's secrets are still loading; save again in a moment.";
+
 function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: {
   client: ApiClient;
   a: Automation;
@@ -479,6 +490,15 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   const [subs, setSubs] = useState<EventSubscriptions | null>(null);
   const [groups, setGroups] = useState<Array<{ project: string; repos: string[] }>>([]);
   const { busy, problem, save } = useSave();
+  // A project's own secrets, null until read: a save resolves picks against their names, so it waits for them.
+  const [project, setProject] = useState<ProjectSecret[] | null>(a.projectId ? null : []);
+  useEffect(() => {
+    if (!a.projectId) return;
+    let live = true;
+    client.projectSecrets(a.projectId).then((r) => live && setProject(r.secrets), () => live && setProject([]));
+    return () => { live = false; };
+  }, [client, a.projectId]);
+  const picksInForce = (refs: SecretRef[]) => project ? secretPicksInForce(refs, project.map((s) => s.name)) : null;
   useEffect(() => { setForm(inputOf(a)); }, [a]);
   useEffect(() => {
     if (form.trigger.kind === "github") client.eventSubscriptions().then(setSubs, () => setSubs(null));
@@ -503,13 +523,19 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   }, []);
   // Saving the prompt or brief saves the automation with it, so each save is a version in its history.
   const saveText = async (agent: AutomationInput["agent"]) => {
-    const next = { ...form, agent };
+    const secrets = picksInForce(form.secrets);
+    if (!secrets) throw new Error(SECRETS_LOADING);
+    const next = { ...form, agent, secrets };
     const wrong = automationProblem(next, scope);
     if (wrong) throw new Error(wrong.message);
     onSaved(await client.updateAutomation(a.id, next));
   };
   return (
-    <form className="settingsForm" onSubmit={(e) => { e.preventDefault(); void save(() => client.updateAutomation(a.id, form).then(onSaved), undefined, "Automation saved"); }}>
+    <form className="settingsForm" onSubmit={(e) => {
+      e.preventDefault();
+      const secrets = picksInForce(form.secrets);
+      if (secrets) void save(() => client.updateAutomation(a.id, { ...form, secrets }).then(onSaved), undefined, "Automation saved");
+    }}>
       <fieldset disabled={ro} className="plainFieldset">
         <SettingsSection title="Trigger">
           <SettingRow label="Runs on">
@@ -527,7 +553,17 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           ) : (
             <EventTrigger trigger={trigger} subs={subs} disabled={ro} onChange={(t) => set("trigger", t)} />
           )}
-          {a.projectId ? null : (
+          {a.projectId ? null : trigger.kind === "schedule" && a.kind !== "webhook" ? (
+            <SettingRow label="Checked out" help="What each run checks out. None: it starts in an empty workspace, with its image's tools." data-testid="org-checked-out">
+              <Segmented<"none" | "some"> label="Checked out" value={form.repos === "none" ? "none" : "some"} disabled={ro} data-testid="repos-checked-out"
+                onChange={(m) => setForm((f) => ({ ...f, repos: m === "none" ? "none" : "all", repoFilter: m === "none" ? null : f.repoFilter }))}
+                options={[{ value: "none", label: "None" }, { value: "some", label: "Some" }]} />
+              {form.repos !== "none" ? (
+                <RepoFilterField value={(form.repoFilter ?? { mode: "all", repos: [] }) as RepoFilterValue} org={orgName} groups={groups} disabled={ro}
+                  onChange={(v) => set("repoFilter", { mode: v.mode, repos: [...v.repos] })} />
+              ) : null}
+            </SettingRow>
+          ) : (
             <SettingRow label="Repositories" help={trigger.kind === "schedule" ? "What each run checks out." : "Where its events may come from."}>
               <RepoFilterField value={(form.repoFilter ?? { mode: "all", repos: [] }) as RepoFilterValue} org={orgName} groups={groups} disabled={ro}
                 onChange={(v) => set("repoFilter", { mode: v.mode, repos: [...v.repos] })} />
@@ -573,7 +609,9 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           <SettingsSection title="Agent" data-testid="agent-source">
             <SettingRow label="Agent">
               <Segmented<"own" | "preset"> label="Agent" value={preset ? "preset" : "own"} disabled={ro}
-                onChange={(s) => set("agent", s === "own" ? { own: { prompt: "" } } : { preset: { role: "qa_browser", overrides: {} }, brief: "" })}
+                onChange={(s) => setForm((f) => ({ ...f, agent: s === "own" ? { own: { prompt: "" } } : { preset: { role: "qa_browser", overrides: {} }, brief: "" },
+                  // One of dude's agents gets what its role is given; it keeps no picks.
+                  secrets: s === "preset" ? [] : f.secrets }))}
                 options={[{ value: "own", label: "Its own agent" }, { value: "preset", label: "One of dude's agents" }]} />
               {preset ? (
                 <Select<PresetRole> label="Role" value={preset.preset.role} disabled={ro}
@@ -660,8 +698,8 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           </SettingsSection>
         ) : null}
 
-        {a.kind !== "webhook" ? <AutomationSecrets client={client} projectId={a.projectId} ro={ro} chosen={form.secrets}
-          onChange={(names) => set("secrets", names)} /> : null}
+        {a.kind !== "webhook" ? <AutomationSecrets client={client} a={a} orgName={orgName} preset={preset?.preset.role ?? null} ro={ro}
+          project={project} chosen={form.secrets} onChange={(refs) => set("secrets", refs)} /> : null}
         <SettingsSection title="Notifications">
           <SettingRow label="When a run fails" help={a.ownerLeftAt ? `Every one of ${orgName}'s admins is told.` : "Its owner is told."}>
             <Switch checked={form.notifyOnFailure} label={form.notifyOnFailure ? "Notify" : "Don't notify"} disabled={ro} onCheckedChange={(v) => set("notifyOnFailure", v)} />
@@ -680,7 +718,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
         <div className="automationSave">
           {invalid ? <Callout tone="attention">{invalid.message}</Callout> : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
-          <Button type="submit" variant="primary" disabled={busy || !dirty || Boolean(invalid)}>Save</Button>
+          <Button type="submit" variant="primary" disabled={busy || !dirty || Boolean(invalid)} loading={project === null}>Save</Button>
         </div>
       )}
     </form>
@@ -726,26 +764,42 @@ function ProjectReposRow({ client, projectId, ro, value, onChange }: {
   );
 }
 
-function AutomationSecrets({ client, projectId, ro, chosen, onChange }: {
-  client: ApiClient; projectId: string | null; ro: boolean; chosen: string[]; onChange: (names: string[]) => void;
+function AutomationSecrets({ client, a, orgName, preset, ro, project, chosen, onChange }: {
+  client: ApiClient; a: Automation; orgName: string; preset: PresetRole | null; ro: boolean;
+  project: ProjectSecret[] | null; chosen: SecretRef[]; onChange: (refs: SecretRef[]) => void;
 }) {
-  const [names, setNames] = useState<string[] | null>(null);
-  useEffect(() => {
-    if (projectId) client.projectSecrets(projectId).then((r) => setNames(r.secrets.map((s) => s.name)), () => setNames([]));
-  }, [client, projectId]);
+  const org = useOrgSecrets(client);
+  const own = a.projectId && project ? { name: a.projectName ?? "the project", secrets: project } : undefined;
   return (
     <SettingsSection title="Secrets">
-      {!projectId ? <SettingsNote>{ORG_AUTOMATION_SECRETS}</SettingsNote> : (
-        <SettingRow label="Project secrets" help="Only those chosen here are given to each run, as environment variables.">
-          {names === null ? <Spinner label="Loading secrets…" /> : names.length === 0 ? <span>No project secrets.</span> : (
-            <div role="group" aria-label="Project secrets">
-              {names.map((name) => <Checkbox key={name} label={name} checked={chosen.includes(name)} disabled={ro}
-                onCheckedChange={(checked) => onChange(checked ? [...chosen, name] : chosen.filter((s) => s !== name))} />)}
-            </div>
-          )}
+      {org.secrets === null || project === null ? (
+        <SettingRow label="Secrets">{org.problem ? <span>{org.problem}</span> : <Spinner label="Loading secrets…" />}</SettingRow>
+      ) : preset ? (
+        <SettingRow label="Secrets" help={PRESET_SECRETS(PRESET_ROLE_LABEL[preset])} data-testid="preset-secrets">
+          <PresetSecretsLine role={preset} orgName={orgName} org={org.secrets} project={own} />
+        </SettingRow>
+      ) : (
+        <SettingRow label="Secrets" block help={ORG_AUTOMATION_PICKS(orgName)} data-testid="automation-secrets">
+          <SecretPicker orgName={orgName} org={org.secrets} disabled={ro} value={chosen} data-testid="secret-picker"
+            project={own} onChange={onChange} />
         </SettingRow>
       )}
     </SettingsSection>
+  );
+}
+
+/** What a dude-role preset's runs get: its role's ticks at both levels, the project's winning a name. */
+function PresetSecretsLine({ role, orgName, org, project }: {
+  role: PresetRole; orgName: string; org: readonly OrgSecret[]; project?: { name: string; secrets: readonly ProjectSecret[] } | undefined;
+}) {
+  const recipient = PRESET_SECRET_RECIPIENT[role];
+  const own = new Set((project?.secrets ?? []).map((s) => s.name));
+  const fromProject = recipient ? (project?.secrets ?? []).filter((s) => s.recipients.includes(recipient)) : [];
+  const fromOrg = recipient ? org.filter((s) => s.recipients.includes(recipient) && !own.has(s.name)) : [];
+  return (
+    <PresetSecrets role={PRESET_ROLE_LABEL[role]} data-testid="preset-secrets-line"
+      given={[{ from: orgName, names: fromOrg.map((s) => s.name) }, ...(project ? [{ from: project.name, names: fromProject.map((s) => s.name) }] : [])]}
+      none={recipient ? undefined : "no secrets: it is not one of the agents a secret is given to"} />
   );
 }
 

@@ -211,15 +211,16 @@ func TestAHeaderValueEchoedIsRedacted(t *testing.T) {
 	}
 }
 
-// A question about a task is kept redacted with its project's secret
-// values, and names the task.
+// A question about a task is kept redacted with its project's and its
+// organisation's secret values, and names the task.
 func TestAQuestionAboutATaskIsRedactedWithItsProjectsSecrets(t *testing.T) {
-	w := setup(t, answering(`{"decision":"yes","confidence":0.7,"reasoning":"The key s3cr3t-value-42 is in the diff."}`), true)
+	w := setup(t, answering(`{"decision":"yes","confidence":0.7,"reasoning":"The key s3cr3t-value-42 is in the diff, and org-v4lue-77."}`), true)
 	ctx := context.Background()
 	for _, q := range []string{
 		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_judge', $1, 'Web', 'web', 'WEB')`,
 		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_judge', $1, 'prj_judge', 1, 'T', 'G')`,
 		`INSERT INTO project_secrets (project_id, organization_id, name, value, hint) VALUES ('prj_judge', $1, 'API_KEY', 's3cr3t-value-42', '-42')`,
+		`INSERT INTO organization_secrets (organization_id, name, value, hint) VALUES ($1, 'ORG_KEY', 'org-v4lue-77', '-77')`,
 	} {
 		if _, err := w.owner.Exec(ctx, q, w.org); err != nil {
 			t.Fatal(err)
@@ -228,7 +229,7 @@ func TestAQuestionAboutATaskIsRedactedWithItsProjectsSecrets(t *testing.T) {
 	task := "wi_judge"
 	a := ask
 	a.TaskID = &task
-	a.Context = "diff: API_KEY=s3cr3t-value-42"
+	a.Context = "diff: API_KEY=s3cr3t-value-42 ORG_KEY=org-v4lue-77"
 	if _, err := w.svc.Judge(ctx, w.org, a); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +240,8 @@ func TestAQuestionAboutATaskIsRedactedWithItsProjectsSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for what, text := range map[string]string{"request": string(request), "response": response, "result": string(result)} {
-		if strings.Contains(text, "s3cr3t-value-42") || !strings.Contains(text, "[REDACTED:API_KEY]") {
+		if strings.Contains(text, "s3cr3t-value-42") || !strings.Contains(text, "[REDACTED:API_KEY]") ||
+			strings.Contains(text, "org-v4lue-77") || !strings.Contains(text, "[REDACTED:ORG_KEY]") {
 			t.Errorf("%s not redacted: %s", what, text)
 		}
 	}

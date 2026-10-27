@@ -20,6 +20,7 @@ import {
   previewSettingsSchema,
   recipeInputSchema,
   recipeSecretClash,
+  recipeOrgSecretClash,
   replaceSecretSchema,
   secretHint,
   secretNameProblem,
@@ -27,6 +28,7 @@ import {
   type ProjectSecret,
   type PreviewSettings,
   type Recipe,
+  type RecipeEnvNames,
 } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { appendInScope } from "../../events/ledger.ts";
@@ -75,7 +77,8 @@ async function putProjectServer(ctx: RequestContext): Promise<Response> {
   const input = await parseBody(ctx.request, recipeInputSchema);
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     await lockProject(scope, projectId); // 404 for another organization's
-    const clash = recipeSecretClash({ name: input.name, env: input.env ?? [] }, await secretNames(scope, projectId));
+    const recipe = { name: input.name, env: input.env ?? [] };
+    const clash = recipeSecretClash(recipe, await secretNames(scope, projectId)) ?? await recipeOrgClash(scope, recipe, projectId);
     if (clash) throw conflict(clash);
     if (input.name !== current) {
       const taken = await scope.sql`SELECT 1 FROM project_servers WHERE project_id = ${projectId} AND name = ${input.name}`;
@@ -168,6 +171,19 @@ async function lockProject(scope: OrgScope, projectId: string): Promise<void> {
 async function secretNames(scope: OrgScope, projectId: string): Promise<string[]> {
   const rows = (await scope.sql`SELECT name FROM project_secrets WHERE project_id = ${projectId}`) as Array<{ name: string }>;
   return rows.map((r) => r.name);
+}
+
+/**
+ * Why a recipe would override one of the organisation's secrets that reach
+ * this project's previews, or null. Shares the organisation's row lock with
+ * its secret writes (routes/orgSecrets.ts), so the two checks take turns.
+ */
+async function recipeOrgClash(scope: OrgScope, recipe: RecipeEnvNames, projectId: string): Promise<string | null> {
+  const [org] = (await scope.sql`SELECT name FROM organizations WHERE id = ${scope.organizationId} FOR SHARE`) as Array<{ name: string }>;
+  const rows = (await scope.sql`
+    SELECT name FROM secrets_in_force(${scope.organizationId}, ${projectId})
+    WHERE source = 'organization' AND 'previews' = ANY (recipients)`) as Array<{ name: string }>;
+  return recipeOrgSecretClash(recipe, org?.name ?? scope.organizationId, rows.map((r) => r.name));
 }
 
 async function listSecrets(scope: OrgScope, projectId: string, name?: string): Promise<ProjectSecret[]> {

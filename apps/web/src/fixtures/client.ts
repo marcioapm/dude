@@ -21,6 +21,7 @@ import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
 import { FixtureAutomations } from "./automations.ts";
+import { FixtureOrgSecrets } from "./orgSecrets.ts";
 import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, implementerPeerEvents } from "./peers.ts";
 import type { OpenSessionsList } from "@dude/domain";
 import type { ChatProvider, ChatRequestRow } from "@dude/domain";
@@ -1187,5 +1188,33 @@ export class FixtureClient extends ApiClient {
   /** An automation as the fixture backend holds it now, read synchronously (tests). */
   fixtureAutomation(id: string) {
     return this.#automations.one(id);
+  }
+  // -- the organisation's secrets (fixtures/orgSecrets.ts) --
+  #orgSecrets = new FixtureOrgSecrets();
+  override async organizationSecrets(_orgId: string): ReturnType<ApiClient["organizationSecrets"]> {
+    return this.#orgSecrets.read(ORG, this.#secrets.map((s) => s.name), this.#automations.list);
+  }
+  override async addOrganizationSecret(_orgId: string, name: string, value: string, recipients: readonly SecretRecipient[]): ReturnType<ApiClient["addOrganizationSecret"]> {
+    await wait(120);
+    return this.#orgSecrets.add(name, value, recipients);
+  }
+  override async changeOrganizationSecretRecipients(_orgId: string, name: string, recipients: readonly SecretRecipient[]): ReturnType<ApiClient["changeOrganizationSecretRecipients"]> {
+    await wait(120);
+    return this.#orgSecrets.recipients(name, recipients);
+  }
+  override async replaceOrganizationSecret(_orgId: string, name: string, value: string): ReturnType<ApiClient["replaceOrganizationSecret"]> {
+    await wait(120);
+    return this.#orgSecrets.replace(name, value);
+  }
+  override async removeOrganizationSecret(_orgId: string, name: string): Promise<void> {
+    await wait(100);
+    this.#orgSecrets.remove(name);
+  }
+  // Organisation settings reads these on every page: answered here so the fixtures never reach a control plane.
+  override memoryIndex(): ReturnType<ApiClient["memoryIndex"]> {
+    return Promise.resolve({ health: {}, total: 0, waiting: 0, failed: 0, kinds: [], failures: [] });
+  }
+  override invitationCounts(): ReturnType<ApiClient["invitationCounts"]> {
+    return Promise.resolve({ pending: 0, expired: 0, accepted: 0, revoked: 0, all: 0 });
   }
 }

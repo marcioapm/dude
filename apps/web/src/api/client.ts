@@ -128,6 +128,7 @@ import type {
   RoutingInstructions,
 } from "@dude/domain";
 import type { ServerLogLine } from "@dude/design-system";
+import type { OrgSecret, OrgSecretsResponse } from "@dude/domain";
 
 /** A page of dude's guide; its sections' text only when one page is read (the intro's anchor and heading are ""). */
 export interface HelpPage {
@@ -2101,6 +2102,27 @@ export class ApiClient {
     const { live, ...rest } = params;
     return `${this.#baseUrl}/v1/events/stream${qs({ ...rest, ...(live ? { live: 1 } : {}),
       ...(this.#organizationId ? { org: this.#organizationId } : {}), ...(this.#apiKey ? { key: this.#apiKey } : {}) })}`;
+  }
+
+  /** The organisation's secrets: names, recipients, hints; which projects have their own; who picks each (admins). */
+  organizationSecrets(orgId: string): Promise<OrgSecretsResponse> {
+    return this.#request("GET", `/v1/organizations/${encodeURIComponent(orgId)}/secrets`);
+  }
+
+  addOrganizationSecret(orgId: string, name: string, value: string, recipients: readonly SecretRecipient[]): Promise<OrgSecret> {
+    return this.#request("POST", `/v1/organizations/${encodeURIComponent(orgId)}/secrets`, { name, value, recipients });
+  }
+
+  changeOrganizationSecretRecipients(orgId: string, name: string, recipients: readonly SecretRecipient[]): Promise<OrgSecret> {
+    return this.#request("PUT", `/v1/organizations/${encodeURIComponent(orgId)}/secrets/${encodeURIComponent(name)}/recipients`, { recipients });
+  }
+
+  replaceOrganizationSecret(orgId: string, name: string, value: string): Promise<OrgSecret> {
+    return this.#request("PUT", `/v1/organizations/${encodeURIComponent(orgId)}/secrets/${encodeURIComponent(name)}`, { value });
+  }
+
+  removeOrganizationSecret(orgId: string, name: string): Promise<void> {
+    return this.#request("DELETE", `/v1/organizations/${encodeURIComponent(orgId)}/secrets/${encodeURIComponent(name)}`);
   }
 }
 

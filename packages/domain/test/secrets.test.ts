@@ -19,6 +19,39 @@ const project = {
   ],
 };
 
+describe("organisation secrets", () => {
+  const s = (name: string) => ({ name, recipients: [], hint: "abcd", updatedAt: "", updatedBy: null });
+
+  test("the project's come first; an organisation row whose name the project holds is overridden", () => {
+    const resolved = secrets.resolveSecrets([s("GH_TOKEN"), s("NPM_TOKEN")], [s("DB_PASS"), s("GH_TOKEN")]);
+    expect(resolved.map((r) => [r.source, r.secret.name, r.overridden])).toEqual([
+      ["project", "DB_PASS", false],
+      ["project", "GH_TOKEN", false],
+      ["organization", "GH_TOKEN", true],
+      ["organization", "NPM_TOKEN", false],
+    ]);
+  });
+
+  test("may be ticked for nobody, defaulting to nobody; never the conductor", () => {
+    expect(secrets.addOrgSecretSchema.parse({ name: "STATUSPAGE_KEY", value: "statuspage-value" }).recipients).toEqual([]);
+    expect(secrets.changeOrgSecretRecipientsSchema.safeParse({ recipients: [] }).success).toBe(true);
+    expect(secrets.changeOrgSecretRecipientsSchema.safeParse({ recipients: ["conductor"] }).success).toBe(false);
+    expect(secrets.changeOrgSecretRecipientsSchema.safeParse({ recipients: ["tester", "tester"] }).success).toBe(false);
+  });
+
+  test("a name the organisation holds is a conflict; dude's own is invalid", () => {
+    expect(secrets.orgSecretNameProblem("GH_TOKEN", ["GH_TOKEN"])?.kind).toBe("conflict");
+    expect(secrets.orgSecretNameProblem("GIT_TOKEN", [])?.kind).toBe("invalid");
+    expect(secrets.orgSecretNameProblem("NPM_TOKEN", ["GH_TOKEN"])).toBeNull();
+  });
+
+  test("secretPicksInForce turns an overridden organisation pick into the project's, once", () => {
+    expect(secrets.secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }], ["GH_TOKEN"]))
+      .toEqual([{ source: "project", name: "GH_TOKEN" }, { source: "organization", name: "NPM_TOKEN" }]);
+    expect(secrets.secretPicksInForce([{ source: "organization", name: "GH_TOKEN" }], [])).toEqual([{ source: "organization", name: "GH_TOKEN" }]);
+  });
+});
+
 describe("project secret recipients", () => {
   test("a new secret defaults to Previews and Tester", () => {
     expect(addSecretSchema.parse({ name: "SNOWFLAKE_PASSWORD", value: "sf-test-not-a-real-password-123" }).recipients).toEqual(["previews", "tester"]);

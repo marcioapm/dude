@@ -106,6 +106,8 @@ func TestAutomationReposCheckedOut(t *testing.T) {
 		{"project named elsewhere", Automation{ProjectID: other, Repos: json.RawMessage(`["` + h.project + `_r"]`)}, nil, nil},
 		{"org schedule, filter", Automation{RepoFilter: only}, nil, []string{"svc-api", "svc-ui"}},
 		{"org schedule, all", Automation{}, nil, []string{"web", "svc-api", "svc-ui"}},
+		{"org schedule, checked out none", Automation{Repos: json.RawMessage(`"none"`)}, nil, nil},
+		{"org schedule, some", Automation{Repos: json.RawMessage(`"all"`), RepoFilter: only}, nil, []string{"svc-api", "svc-ui"}},
 		{"org event, covered", Automation{RepoFilter: only}, push("acme/svc-api"), []string{"svc-api"}},
 		{"org event, filtered out", Automation{RepoFilter: only}, push("acme/web"), nil},
 	} {

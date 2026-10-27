@@ -175,7 +175,7 @@ export function ProjectSettingsScreen({ client, projectId, projects, admin, page
             </>
           ) : page === "servers" ? (
             <ServersSettingsPage client={client} project={project} canEdit={scope.settings.canEdit} orgName={orgName} sizes={sizes} onCount={setServerCount}
-              images={images} onManageImages={admin ? () => onOrganization("images") : undefined} />
+              images={images} onManageImages={admin ? () => onOrganization("images") : undefined} onManageOrgSecrets={() => onOrganization("secrets")} />
           ) : page === "delivery" ? (
             <DeliveryPage scope={scope} />
           ) : page === "network" ? (
