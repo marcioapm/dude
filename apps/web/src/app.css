@@ -696,11 +696,6 @@ body {
   min-width: 0;
   flex: 1;
 }
-.incomingDisclosure {
-  padding: var(--ds-space-6) var(--ds-space-12);
-  border: 1px solid var(--ds-color-border);
-  border-radius: var(--ds-radius-control);
-}
 .incomingDisclosure > summary {
   cursor: pointer;
   font-size: var(--ds-text-sm);
@@ -754,7 +749,6 @@ body {
 }
 .incomingVerdictBox > .incomingOutcome {
   padding-top: var(--ds-space-8);
-  border-top: 1px solid var(--ds-color-border);
 }
 .incomingOutcome[data-ok="false"] b {
   color: var(--ds-tone-danger-fg);
