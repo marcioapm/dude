@@ -166,6 +166,9 @@ func RetainUpTo(ctx context.Context, d *db.DB, now time.Time, limit int) (int, e
 		{`DELETE FROM incoming_deliveries WHERE id IN (SELECT id FROM incoming_deliveries
 			WHERE verdict = 'refused' AND received_at < $1 ORDER BY received_at LIMIT $2)`,
 			[]any{now.Add(-RefusedRetention), limit}},
+		{`DELETE FROM incoming_refusals WHERE (automation_id, hour, code) IN (SELECT automation_id, hour, code FROM incoming_refusals
+			WHERE hour < $1 ORDER BY hour LIMIT $2)`,
+			[]any{now.Add(-RefusedRetention), limit}},
 		{`UPDATE incoming_deliveries SET payload = NULL, payload_purged_at = $3 WHERE id IN (SELECT id FROM incoming_deliveries
 			WHERE payload IS NOT NULL AND verdict IS NOT NULL AND received_at < $1 ORDER BY received_at LIMIT $2)`,
 			[]any{now.Add(-PayloadRetention), limit, now}},

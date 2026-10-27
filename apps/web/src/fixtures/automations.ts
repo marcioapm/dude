@@ -165,7 +165,8 @@ export class FixtureAutomations {
   /** The Deliveries tab's list (no bodies, one verdict when filtered), and one delivery. */
   deliveryList(id: string, verdict?: string) {
     this.one(id);
-    return { deliveries: deliveriesOf(id).filter((d) => !verdict || d.verdict === verdict || (verdict === "pending" && d.verdict === null)
+    return { ...(id === "aut_alert" ? { refusedNotStored: 37 } : {}),
+      deliveries: deliveriesOf(id).filter((d) => !verdict || d.verdict === verdict || (verdict === "pending" && d.verdict === null)
       || (verdict === "accepted" && d.verdict !== "refused"))
       .map(({ headers: _h, body: _b, ...d }) => d) };
   }

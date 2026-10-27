@@ -275,12 +275,16 @@ export function DeliveriesTab({ client, a, onOpen, onRun }: {
   client: ApiClient; a: Automation; onOpen: (id: string) => void; onRun: (runId: string) => void;
 }) {
   const [list, setList] = useState<ListedDelivery[] | null>(null);
+  const [unstored, setUnstored] = useState(0);
   const [problem, setProblem] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<DeliveryFilter | "all">("all");
   // Filtered by the server: a burst of refusals filling the newest 100 hides none of the rest.
   useEffect(() => {
     setList(null);
-    client.automationDeliveryList(a.id, verdict === "all" ? undefined : verdict).then((r) => setList(r.deliveries), (e: unknown) => setProblem(errorText(e)));
+    client.automationDeliveryList(a.id, verdict === "all" ? undefined : verdict).then((r) => {
+      setList(r.deliveries);
+      setUnstored(r.refusedNotStored ?? 0);
+    }, (e: unknown) => setProblem(errorText(e)));
   }, [client, a.id, verdict]);
   const incoming = a.trigger.kind === "incoming";
   const shown = list ?? [];
@@ -291,6 +295,11 @@ export function DeliveriesTab({ client, a, onOpen, onRun }: {
         <Select<DeliveryFilter | "all"> label="Verdict" size="sm" value={verdict} onValueChange={setVerdict} options={VERDICT_FILTER} />
       </span>
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      {unstored > 0 && (verdict === "all" || verdict === "refused") ? (
+        <div data-testid="refused-unstored"><SettingsNote icon="lock">
+          {unstored} more refused this hour, not listed: past 100 refusals an hour dude counts them without keeping a row.
+        </SettingsNote></div>
+      ) : null}
       {!list ? <Spinner label="Loading…" /> : shown.length === 0 ? <EmptyState title="No deliveries in the last 30 days" /> : (
         <Table density="compact" className="incomingRoomyRows">
           <THead><Tr><Th width="14%">When</Th><Th>Verdict</Th><Th hideWhenNarrow>{incoming ? "Group key" : "Event"}</Th><Th hideWhenNarrow width={88} align="right">Size</Th></Tr></THead>

@@ -93,6 +93,9 @@ export function storedHeaders(headers: Headers, verify: IncomingVerify | null): 
   return out;
 }
 
+/** How many refused rows an automation stores in a clock hour; past it a refusal is only counted (incoming_refusals). */
+export const REFUSED_ROWS_PER_HOUR = 100;
+
 async function store(scope: OrgScope, hook: Hook, row: {
   id: string; bytes: number; headers: Record<string, string>; refused?: RefusalCode; payload?: unknown;
 }): Promise<void> {
@@ -101,31 +104,62 @@ async function store(scope: OrgScope, hook: Hook, row: {
       ${row.bytes}, ${row.headers}::jsonb, ${row.refused ? null : row.payload}::jsonb)`;
 }
 
+/** A refusal's row, or past REFUSED_ROWS_PER_HOUR this clock hour only its count: a flood without the secret writes one row an hour. */
+async function storeRefusal(scope: OrgScope, hook: Hook, row: { id: string; bytes: number; headers: Record<string, string>; refused: RefusalCode }): Promise<void> {
+  await scope.sql`SELECT pg_advisory_xact_lock(hashtextextended(${"incoming-refused:" + hook.automation_id}, 0))`;
+  const [{ n }] = (await scope.sql`SELECT count(*)::int AS n FROM incoming_deliveries WHERE automation_id = ${hook.automation_id}
+    AND verdict = 'refused' AND received_at >= date_trunc('hour', now())`) as [{ n: number }];
+  if (n < REFUSED_ROWS_PER_HOUR) return store(scope, hook, row);
+  await scope.sql`INSERT INTO incoming_refusals (organization_id, automation_id, hour, code, n)
+    VALUES (${scope.organizationId}, ${hook.automation_id}, date_trunc('hour', now()), ${row.refused}, 1)
+    ON CONFLICT (automation_id, hour, code) DO UPDATE SET n = incoming_refusals.n + 1`;
+}
+
+/** The refusals this clock hour that were counted, not stored. */
+export async function refusedNotStored(scope: OrgScope, automationId: string): Promise<number> {
+  const [{ n }] = (await scope.sql`SELECT COALESCE(sum(n), 0)::int AS n FROM incoming_refusals
+    WHERE automation_id = ${automationId} AND hour = date_trunc('hour', now())`) as [{ n: number }];
+  return n;
+}
+
 async function receiveHook(ctx: PublicContext): Promise<Response> {
   const [hook] = (await withoutTenant(({ sql }) => sql`SELECT * FROM incoming_hook(${ctx.params.hookId!})`)) as Hook[];
   if (!hook) throw notFound("no incoming webhook here");
   const id = newId("incomingDelivery");
-  const headers = storedHeaders(ctx.request.headers, hook.verify);
-  let body: Uint8Array | null = null;
-  try {
-    body = await readCapped(ctx.request, INCOMING_MAX_BYTES, () => new Error("too large"));
-  } catch {
-    body = null;
-  }
   const declared = Number(ctx.request.headers.get("content-length") ?? "0");
-  const bytes = body?.length ?? (Number.isFinite(declared) && declared > INCOMING_MAX_BYTES ? declared : INCOMING_MAX_BYTES + 1);
+  let body: Uint8Array | null = null;
+  let bytes = 0;
   const refuse = async (code: RefusalCode) => {
-    await withOrg(hook.organization_id, (scope) => store(scope, hook, { id, bytes, headers, refused: code }));
+    // A request that did not prove itself keeps no headers: nothing it sent is stored but its size.
+    const headers = code === "bad_signature" ? {} : storedHeaders(ctx.request.headers, hook.verify);
+    await withOrg(hook.organization_id, (scope) => storeRefusal(scope, hook, { id, bytes, headers, refused: code }));
     const r = REFUSAL[code];
     return json({ error: { code, message: r.message }, delivery: id }, r.status);
   };
-  // A signature is over the whole body: one past 1 MiB is refused as too large unchecked.
-  if (body === null && hook.verify?.mode === "signature") return refuse("too_large");
-  if (!verified(hook, ctx.request, ctx.url, body)) return refuse("bad_signature");
-  if (body === null) return refuse("too_large");
+  const read = async () => {
+    try {
+      body = await readCapped(ctx.request, INCOMING_MAX_BYTES, () => new Error("too large"));
+    } catch {
+      body = null;
+    }
+    bytes = body?.length ?? (Number.isFinite(declared) && declared > INCOMING_MAX_BYTES ? declared : INCOMING_MAX_BYTES + 1);
+  };
+  if (hook.verify?.mode === "signature") {
+    // A signature is over the whole body: one past 1 MiB is refused as too large unchecked.
+    await read();
+    if (body === null) return refuse("too_large");
+    if (!verified(hook, ctx.request, ctx.url, body)) return refuse("bad_signature");
+  } else {
+    // A header or query secret is checked before the body is read: a request without it costs no read.
+    bytes = Number.isFinite(declared) && declared > 0 ? declared : 0;
+    if (!verified(hook, ctx.request, ctx.url, null)) return refuse("bad_signature");
+    await read();
+    if (body === null) return refuse("too_large");
+  }
+  const headers = storedHeaders(ctx.request.headers, hook.verify);
   let payload: unknown;
   try {
-    payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+    payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body!));
   } catch {
     return refuse("not_json");
   }
@@ -139,7 +173,7 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
     const [{ n }] = (await scope.sql`SELECT count(*)::int AS n FROM incoming_deliveries WHERE automation_id = ${hook.automation_id}
       AND received_at > now() - interval '1 hour' AND (verdict IS NULL OR verdict IN ('started', 'sent_to_run'))`) as [{ n: number }];
     if (n >= hook.rate_per_hour) {
-      await store(scope, hook, { id, bytes, headers, refused: "rate_limited" });
+      await storeRefusal(scope, hook, { id, bytes, headers, refused: "rate_limited" });
       return false;
     }
     await store(scope, hook, { id, bytes, headers, payload });

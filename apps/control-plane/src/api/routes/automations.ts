@@ -40,7 +40,7 @@ import { badRequest, HttpError, json, noContent, notFound, parseBody } from "../
 import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { readDeliveries, readDelivery, runDeliveries, type DeliveryFilter } from "./incoming.ts";
+import { readDeliveries, readDelivery, refusedNotStored, runDeliveries, type DeliveryFilter } from "./incoming.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */
@@ -558,7 +558,8 @@ async function listDeliveries(ctx: RequestContext): Promise<Response> {
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const a = await readOne(scope, ctx.params.id!);
     if (a.trigger.kind === "schedule") throw badRequest("a scheduled automation runs on no event");
-    return { deliveries: await readDeliveries(scope, a.id, a.trigger, verdict as DeliveryFilter | null) };
+    return { deliveries: await readDeliveries(scope, a.id, a.trigger, verdict as DeliveryFilter | null),
+      ...(a.trigger.kind === "incoming" ? { refusedNotStored: await refusedNotStored(scope, a.id) } : {}) };
   });
   return json(out);
 }

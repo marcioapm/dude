@@ -985,7 +985,11 @@ their creator.
     live one, and those the loop has not matched yet (each holds a place
     until it is decided, so a burst is limited before matching); skipped and
     refused deliveries take no place. One delivery counts at a time, under a
-    per-automation lock. Headers are kept with the values of
+    per-automation lock. A header or query secret is checked before the body
+    is read. At most 100 refused rows an automation a clock hour are stored;
+    past that a refusal only adds to `incoming_refusals` (automation, hour,
+    code, n), answered the same, and the Deliveries tab says "N more refused
+    this hour". A `bad_signature` row keeps no headers. Headers are kept with the values of
     `Authorization`, cookies, the signature header and any name holding
     `token`, `secret` or `signature` replaced by `••••`.
   - **Matching** (`ArriveIncoming`, a step of the automations loop): a

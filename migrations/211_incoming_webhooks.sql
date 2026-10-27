@@ -78,12 +78,32 @@ CREATE INDEX incoming_deliveries_automation_idx ON incoming_deliveries (automati
 CREATE INDEX incoming_deliveries_pending_idx ON incoming_deliveries (received_at) WHERE verdict IS NULL;
 -- Retention: refused rows go at 7 days, bodies at 30.
 CREATE INDEX incoming_deliveries_refused_idx ON incoming_deliveries (received_at) WHERE verdict = 'refused';
+-- The endpoint's count of an automation's refused rows this hour (at most 100 are stored).
+CREATE INDEX incoming_deliveries_refused_automation_idx ON incoming_deliveries (automation_id, received_at) WHERE verdict = 'refused';
 CREATE INDEX incoming_deliveries_payload_kept_idx ON incoming_deliveries (received_at) WHERE payload IS NOT NULL;
 -- Run detail's "Sent to this run".
 CREATE INDEX incoming_deliveries_run_idx ON incoming_deliveries (run_id) WHERE run_id IS NOT NULL;
 
 -- The matcher, the runner and retention work across organisations.
 GRANT SELECT, UPDATE, DELETE ON incoming_deliveries TO dude_sweeper;
+
+-- Refusals past the 100 an automation stores in a clock hour: a count per
+-- code instead of a row each, so a flood of requests without the secret
+-- writes one row an hour. Goes with refused rows (7 days).
+CREATE TABLE incoming_refusals (
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  automation_id   text NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  hour            timestamptz NOT NULL CHECK (hour = date_trunc('hour', hour)),
+  code            text NOT NULL CHECK (code IN ('bad_signature', 'not_json', 'too_large', 'rate_limited', 'disabled')),
+  n               integer NOT NULL CHECK (n > 0),
+  PRIMARY KEY (automation_id, hour, code)
+);
+ALTER TABLE incoming_refusals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incoming_refusals FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON incoming_refusals USING (organization_id = current_organization_id())
+  WITH CHECK (organization_id = current_organization_id());
+CREATE INDEX incoming_refusals_hour_idx ON incoming_refusals (hour);
+GRANT SELECT, DELETE ON incoming_refusals TO dude_sweeper;
 
 -- What the matcher made of a GitHub delivery for each automation on its
 -- event, for that automation's Deliveries tab: started a run, sent to one,

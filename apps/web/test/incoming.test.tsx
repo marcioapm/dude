@@ -150,6 +150,8 @@ describe("Deliveries", () => {
     expect(places).toEqual([{ id: "aut_alert", tab: "runs", runId: "arn_alert1" }]);
     await click(rows[3]!);
     expect(places.at(-1)).toEqual({ id: "aut_alert", tab: "deliveries", deliveryId: "dlv_6p0z" });
+    expect(c.querySelector("[data-testid=refused-unstored]")?.textContent)
+      .toBe("37 more refused this hour, not listed: past 100 refusals an hour dude counts them without keeping a row.");
   });
 
   test("a skipped delivery's detail marks each condition and keeps its headers' secrets as ••••", async () => {

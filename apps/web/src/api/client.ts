@@ -1408,8 +1408,8 @@ export class ApiClient {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries`);
   }
 
-  /** The Deliveries tab: the last 30 days' deliveries with their verdicts, at most 100, of one verdict when filtered. */
-  automationDeliveryList(id: string, verdict?: DeliveryFilter): Promise<{ deliveries: ListedDelivery[] }> {
+  /** The Deliveries tab: the last 30 days' deliveries with their verdicts, at most 100, of one verdict when filtered; an incoming automation's refusals this hour counted, not stored. */
+  automationDeliveryList(id: string, verdict?: DeliveryFilter): Promise<{ deliveries: ListedDelivery[]; refusedNotStored?: number }> {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries${verdict ? `?verdict=${verdict}` : ""}`);
   }
 

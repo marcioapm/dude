@@ -678,6 +678,18 @@ a refused one **never stores its body**, and its row is deleted after **7
 days** (`automations.Retain`, hourly). The automation's Deliveries tab
 lists the last 30 days.
 
+**When flooded.** A header or query secret is checked before the body is
+read, so a request without it costs no body read. A request refused for
+its secret keeps **no headers**, only its time and size. Each automation
+stores at most **100 refused rows a clock hour**; past that a refusal
+writes no row, only adds one to a per-hour, per-code count
+(`incoming_refusals`, kept 7 days), and is answered the same
+401/413/415/403/429. The Deliveries tab says "N more refused this hour".
+So a flood without the secret writes at most 100 rows and one count row
+an hour per automation; it still costs one indexed hook lookup and one
+small write per request, so put a per-IP rate limit at the ingress if a
+hook id leaks to someone hostile.
+
 **Upgrading to migration 211** adds the table, the hook lookup the public
 route uses before it knows the organisation (`incoming_hook`, security
 definer, answering only what verification needs), and

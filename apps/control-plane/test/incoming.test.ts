@@ -207,6 +207,36 @@ describe("the public endpoint", () => {
     expect((await post(hook, "{}", { authorization: secret })).status).toBe(403);
     expect((await rows(id)).map((r) => [r.verdict, r.reason, r.payload])).toEqual([["refused", "disabled", null]]);
   });
+
+  test("a header or query secret is checked before the body is read; a bad signature keeps no headers", async () => {
+    const { id, hook } = await hookWith({ mode: "header", header: "X-Hook-Key" });
+    let pulled = false;
+    // highWaterMark 0: the stream is pulled only when the body is read.
+    const stream = new ReadableStream({ pull(c) { pulled = true; c.enqueue(new TextEncoder().encode("{}")); c.close(); } }, { highWaterMark: 0 });
+    const res = await router.handle(new Request(`http://dude.test/v1/hooks/${hook}`, {
+      method: "POST", headers: { "content-type": "application/json", "x-hook-key": "wrong", "user-agent": "curl/8" }, body: stream,
+      duplex: "half" } as RequestInit));
+    expect(res.status).toBe(401);
+    expect(pulled).toBe(false);
+    expect((await rows(id)).map((r) => [r.reason, r.headers])).toEqual([["bad_signature", {}]]);
+  });
+
+  test("past 100 refused rows in an hour, a refusal is counted, not stored, and answered the same", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
+    await owner`INSERT INTO incoming_deliveries (id, organization_id, automation_id, verdict, reason, bytes, received_at)
+      SELECT 'dlv_flood' || n, ${ORG}, ${id}, 'refused', 'bad_signature', 2, date_trunc('hour', now()) FROM generate_series(1, 100) n`;
+    expect((await post(hook, "{}", { authorization: "wrong" })).status).toBe(401);
+    expect((await post(hook, "{}", { authorization: "wrong" })).status).toBe(401);
+    expect((await post(hook, "nope", { authorization: secret })).status).toBe(415);
+    expect((await rows(id)).length).toBe(100);
+    const counted = [...await owner`SELECT code, n FROM incoming_refusals WHERE automation_id = ${id} ORDER BY code`] as Json[];
+    expect(counted.map((r) => [r.code, r.n])).toEqual([["bad_signature", 2], ["not_json", 1]]);
+    // An accepted delivery is still stored.
+    expect((await post(hook, "{}", { authorization: secret })).status).toBe(202);
+    expect((await rows(id)).length).toBe(101);
+    const listed = await (await call("GET", `/v1/automations/${id}/deliveries`)).json() as Json;
+    expect(listed.refusedNotStored).toBe(3);
+  });
 });
 
 describe("an incoming automation's routes", () => {
