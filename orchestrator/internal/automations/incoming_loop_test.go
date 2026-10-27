@@ -326,6 +326,36 @@ func TestIncomingVerdictSaysWhatTheConcurrencyDid(t *testing.T) {
 	}
 }
 
+// Matching a GitHub delivery keeps, per automation on its event, what it
+// came to for that automation's Deliveries tab: skipped with the filter in
+// words, or the run it started.
+func TestGitHubDeliveryVerdictsAreKeptPerAutomation(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_gh_skip", "command", map[string]any{"kind": "github", "event": "pull_request",
+		"filters": map[string]any{"author": []string{"!dependabot[bot]"}}}, map[string]any{"command": "true"})
+	h.automation("aut_gh_fire", "command", map[string]any{"kind": "github", "event": "pull_request"}, map[string]any{"command": "true"})
+	h.deliver("d-gh", "pull_request", prBody("opened", "acme/web", "dependabot[bot]"))
+	type verdict struct{ Automation, Verdict, Reason, Run string }
+	read := func() []verdict {
+		rows, err := h.owner.Query(context.Background(), `SELECT automation_id, verdict, COALESCE(reason, ''), COALESCE(run_id, '')
+			FROM automation_github_verdicts WHERE delivery_id = 'd-gh' ORDER BY automation_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[verdict])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	h.until("both verdicts", func() bool { return len(read()) == 2 })
+	runs := h.runs("aut_gh_fire")
+	want := []verdict{{"aut_gh_fire", VerdictStarted, "", runs[0].ID}, {"aut_gh_skip", VerdictSkipped, "Author: it is by dependabot[bot], who is excluded", ""}}
+	if got := read(); len(runs) != 1 || !slices.Equal(got, want) {
+		t.Errorf("verdicts %+v, want %+v (runs %+v)", got, want, runs)
+	}
+}
+
 // Once the group's run has ended, the next delivery of that group is
 // checked and fires afresh.
 func TestIncomingAfterTheRunEndedStartsAgain(t *testing.T) {
