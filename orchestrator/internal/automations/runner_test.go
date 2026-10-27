@@ -734,7 +734,16 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	var got []http.Header
 	var bodies []string
 	fails := map[string]int{"d-2": 1}
+	var printAtHealth atomic.Pointer[string]
 	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			// A line printed after the pass read the log and before it stops the server.
+			if luxRun := printAtHealth.Swap(nil); luxRun != nil {
+				h.fake.ServerPrint(*luxRun, "automation", "stdout", "flushed at stop")
+			}
+			w.WriteHeader(200)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		defer mu.Unlock()
@@ -750,7 +759,7 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		t.Fatalf("ServerIdle %v, the decision says 30 s (Q3, Q16)", ServerIdle)
 	}
 	h.automation("aut_srv", "server", map[string]any{"kind": "github", "event": "pull_request"},
-		map[string]any{"server": map[string]any{"command": "bun run serve", "port": 8080, "path": "/events", "health": nil}})
+		map[string]any{"server": map[string]any{"command": "bun run serve", "port": 8080, "path": "/events", "health": "/health"}})
 	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("the first POST", func() bool { mu.Lock(); defer mu.Unlock(); return len(got) == 1 })
 	// The clock stands still: nothing idles out before d-2 reaches the same container.
@@ -776,6 +785,8 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		t.Fatalf("29 s after the last answer: %+v", r)
 	}
 	h.advance(time.Second)
+	luxRun := h.runs("aut_srv")[0].LuxRunID
+	printAtHealth.Store(&luxRun)
 	h.until("the run ends idle", func() bool { r := h.runs("aut_srv"); return len(r) == 1 && r[0].Status != "running" })
 	r := h.runs("aut_srv")[0]
 	if r.Status != "succeeded" || r.StopReason != "idle" || r.Payloads != 2 {
@@ -805,7 +816,7 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	rows, _ = h.owner.Query(context.Background(), `SELECT payload->>'text' FROM events WHERE automation_run_id = $1 AND event_type = $2
 		AND (payload->>'server')::bool ORDER BY cursor`, r.ID, phases.EvLogLine)
 	lines, _ = pgx.CollectRows(rows, pgx.RowTo[string])
-	if len(lines) != 3 || lines[1] != "bun run serve" || lines[2] != "listening on :8080" {
+	if len(lines) != 4 || lines[1] != "bun run serve" || lines[2] != "listening on :8080" || lines[3] != "flushed at stop" {
 		t.Errorf("container log in the activity: %q", lines)
 	}
 	h.until("the container is ended", func() bool { return lux.Terminated(h.luxState(r.LuxRunID)) })

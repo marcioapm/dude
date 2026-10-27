@@ -1524,6 +1524,8 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	if failedReq {
 		status, reason = "failed", "a POST to the server failed"
 	}
+	// What the server printed since this pass's first read, before it stops.
+	r.serverLog(ctx, a, runID, luxRunID)
 	// Decided under the automation's lock Fire takes: an event sent into
 	// this run since payloads were read keeps it up, to be POSTed next pass.
 	ended := false
@@ -1568,7 +1570,7 @@ func (r *Runner) serverLog(ctx context.Context, a Automation, runID, luxRunID st
 		if err != nil {
 			return err
 		}
-		if err := f.ServerLines(ctx, tx, out.Lines); err != nil {
+		if err := f.ServerLines(ctx, tx, out.Lines, serverLogTail); err != nil {
 			return err
 		}
 		return f.Save(ctx, tx)

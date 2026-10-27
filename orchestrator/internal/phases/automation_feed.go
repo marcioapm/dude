@@ -2,12 +2,16 @@ package phases
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"github.com/jackc/pgx/v5"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -38,13 +42,18 @@ type AutomationFeed struct {
 	// Consumed dude record ids; values are sentinels retained in feed_state.
 	joined map[string]int64
 	logs   bool
-	// A server's log: the newest line time recorded, and how many lines at it.
+	// A server's log: the newest line time recorded, and the keys of the
+	// lines recorded at it (ServerLines aligns the next read against them).
 	serverAt   int64
-	serverSeen int
-	logCount   int
-	logCut     bool
+	serverTail []string
+	// Log lines recorded as events, and whether the run's cap was said.
+	logCount int
+	logCut   bool
+	// This transaction's lines, and whether its cap was said.
 	batchLines int
-	exited     bool
+	batchCut   bool
+	// A command's exit code was recorded.
+	exited bool
 }
 
 // automationFeedState is automation_runs.feed_state.
@@ -65,7 +74,7 @@ type automationFeedState struct {
 	SessionEpoch int              `json:"sessionEpoch,omitempty"`
 	Joined       map[string]int64 `json:"joined,omitempty"`
 	ServerAt     int64            `json:"serverAt,omitempty"`
-	ServerSeen   int              `json:"serverSeen,omitempty"`
+	ServerTail   []string         `json:"serverTail,omitempty"`
 }
 
 // LoadAutomationFeed restores the feed of run as its last batch saved it.
@@ -83,7 +92,7 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 	}
 	t.message.WriteString(st.Message)
 	t.sessionEpoch = max(st.SessionEpoch, 1)
-	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines, serverAt: st.ServerAt, serverSeen: st.ServerSeen, logCount: st.LogCount, logCut: st.LogCut, exited: st.Exited}
+	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines, serverAt: st.ServerAt, serverTail: st.ServerTail, logCount: st.LogCount, logCut: st.LogCut, exited: st.Exited}
 	t.completing = f.joinDudeRecord
 	t.thought.WriteString(st.Thought)
 	maps.Copy(t.seenCalls, st.Calls)
@@ -234,12 +243,32 @@ func (f *AutomationFeed) lines(ctx context.Context, tx pgx.Tx, stream, data stri
 	return nil
 }
 
+// EvLogCut marks log lines not recorded: {text}. log_tail keeps the end.
+const EvLogCut = "automation.log.cut"
+
+// A run records at most logRunLines lines as events, and at most
+// logBatchLines in one transaction; past either it writes one EvLogCut.
+const (
+	logRunLines   = 2000
+	logBatchLines = 500
+)
+
+func (f *AutomationFeed) cut(ctx context.Context, tx pgx.Tx, text string) error {
+	return f.s.event(ctx, tx, f.t.run, EvLogCut, ledger.ActorSystem, map[string]any{"text": text})
+}
+
 func (f *AutomationFeed) allowLogLine(ctx context.Context, tx pgx.Tx) (bool, error) {
-	if f.logCount >= 2000 || f.batchLines >= 500 {
+	switch {
+	case f.logCount >= logRunLines:
 		if !f.logCut {
 			f.logCut = true
-			return false, f.s.event(ctx, tx, f.t.run, "automation.log.cut", ledger.ActorSystem,
-				map[string]any{"text": "Additional log lines omitted; the final output remains in the log tail."})
+			return false, f.cut(ctx, tx, fmt.Sprintf("Lines after the first %d are not kept here; the run's log keeps its end.", logRunLines))
+		}
+		return false, nil
+	case f.batchLines >= logBatchLines:
+		if !f.batchCut {
+			f.batchCut = true
+			return false, f.cut(ctx, tx, fmt.Sprintf("Lines past %d in one read are not kept here; the run's log keeps its end.", logBatchLines))
 		}
 		return false, nil
 	}
@@ -306,24 +335,44 @@ type ServerLine struct {
 	Text   string `json:"text"`
 }
 
-// ServerLines records the lines of a server's log (lux's tail, oldest
-// first) not recorded before: each after the newest time recorded, and
-// at that time those of its lines not yet counted.
-func (f *AutomationFeed) ServerLines(ctx context.Context, tx pgx.Tx, lines []ServerLine) error {
-	seen := 0
+// ServerLines records the lines of a server's log not recorded before.
+// lines is lux's last tail lines, oldest first; lux has no cursor for
+// them. Lines before the newest recorded time are old; at that time the
+// window's lines are aligned against the recorded ones by content, since
+// the window may start partway through them. A full window whose oldest
+// line is newer than anything recorded means lines were lost between
+// reads, said by one EvLogCut.
+func (f *AutomationFeed) ServerLines(ctx context.Context, tx pgx.Tx, lines []ServerLine, tail int) error {
+	if len(lines) == 0 {
+		return nil
+	}
+	if f.serverAt > 0 && lines[0].T > f.serverAt && len(lines) >= tail {
+		if err := f.cut(ctx, tx, fmt.Sprintf("Earlier container log lines were not kept: more than %d arrived between reads.", tail)); err != nil {
+			return err
+		}
+	}
+	var atBoundary []string
+	for _, l := range lines {
+		if l.T == f.serverAt {
+			atBoundary = append(atBoundary, lineKey(l))
+		}
+	}
+	skip := overlap(f.serverTail, atBoundary)
 	for _, l := range lines {
 		if l.T < f.serverAt {
 			continue
 		}
-		if l.T == f.serverAt {
-			seen++
-			if seen <= f.serverSeen {
-				continue
-			}
-		} else {
-			f.serverAt, f.serverSeen, seen = l.T, 0, 1
+		if l.T == f.serverAt && skip > 0 {
+			skip--
+			continue
 		}
-		f.serverSeen = seen
+		if l.T > f.serverAt {
+			f.serverAt, f.serverTail = l.T, nil
+		}
+		f.serverTail = append(f.serverTail, lineKey(l))
+		if len(f.serverTail) > serverTailKeys {
+			f.serverTail = f.serverTail[len(f.serverTail)-serverTailKeys:]
+		}
 		stream := l.Stream
 		if stream != "stderr" {
 			stream = "stdout"
@@ -348,6 +397,25 @@ func (f *AutomationFeed) ServerLines(ctx context.Context, tx pgx.Tx, lines []Ser
 	return nil
 }
 
+// serverTailKeys bounds the recorded lines kept, by key, at the newest time.
+const serverTailKeys = 200
+
+func lineKey(l ServerLine) string {
+	sum := sha256.Sum256([]byte(l.Stream + "\x00" + l.Text))
+	return hex.EncodeToString(sum[:8])
+}
+
+// overlap is how many of window's first keys repeat recorded's last ones:
+// the largest m with window[:m] == recorded[len(recorded)-m:].
+func overlap(recorded, window []string) int {
+	for m := min(len(recorded), len(window)); m > 0; m-- {
+		if slices.Equal(window[:m], recorded[len(recorded)-m:]) {
+			return m
+		}
+	}
+	return 0
+}
+
 // Save keeps what the feed holds for the next batch, in tx.
 func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 	t := f.t
@@ -361,7 +429,7 @@ func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 	}
 	st := automationFeedState{Message: t.message.String(), Thought: t.thought.String(), Open: slices.Sorted(maps.Keys(t.openCalls)),
 		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch, Joined: f.joined,
-		ServerAt: f.serverAt, ServerSeen: f.serverSeen, LogCount: f.logCount, LogCut: f.logCut, Exited: f.exited}
+		ServerAt: f.serverAt, ServerTail: f.serverTail, LogCount: f.logCount, LogCut: f.logCut, Exited: f.exited}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err

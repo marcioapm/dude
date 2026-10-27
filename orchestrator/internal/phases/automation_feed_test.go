@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -260,18 +261,86 @@ func TestAutomationFeedDoesNotRewriteUnchangedState(t *testing.T) {
 	}
 }
 
+// serverPass records one read of a server's log in its own transaction.
+func (a *automationWorld) serverPass(lines []ServerLine) {
+	a.t.Helper()
+	ctx := context.Background()
+	if err := a.w.s.DB.InOrg(ctx, a.ref.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		if err := f.ServerLines(ctx, tx, lines, 500); err != nil {
+			return err
+		}
+		return f.Save(ctx, tx)
+	}); err != nil {
+		a.t.Fatal(err)
+	}
+}
+
+// serverLog is the run's recorded server lines and omitted markers, in order.
+func (a *automationWorld) serverLog() []string {
+	a.t.Helper()
+	rows, err := a.w.owner.Query(context.Background(), `SELECT event_type, COALESCE(payload->>'text', '') FROM events
+		WHERE automation_run_id = $1 AND event_type IN ('automation.log.line', 'automation.log.cut') ORDER BY cursor`, a.ref.ID)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	var out []string
+	for rows.Next() {
+		var typ, text string
+		if err := rows.Scan(&typ, &text); err != nil {
+			a.t.Fatal(err)
+		}
+		if typ == "automation.log.cut" {
+			text = "CUT " + text
+		}
+		out = append(out, text)
+	}
+	return out
+}
+
+func TestServerLogReadsAreDedupedAtTheWindowEdgeAndGapsAreMarked(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	a.ref.Lines = true
+	at := func(t int64, text string) ServerLine { return ServerLine{T: t, Stream: "stdout", Text: text} }
+	// Lines share a millisecond; the next read's window starts inside them,
+	// and a line at that millisecond arrives after the first read.
+	a.serverPass([]ServerLine{at(10, "a"), at(20, "b1"), at(20, "b2")})
+	a.serverPass([]ServerLine{at(20, "b2"), at(20, "b3"), at(30, "c")})
+	// The following read's oldest line is newer than any recorded and lux kept only its tail: a gap.
+	var window []ServerLine
+	for i := range 500 {
+		window = append(window, at(int64(1000+i), fmt.Sprintf("late %d", i)))
+	}
+	a.serverPass(window)
+	got := a.serverLog()
+	want := []string{"a", "b1", "b2", "b3", "c", "CUT Earlier container log lines were not kept: more than 500 arrived between reads."}
+	if len(got) != len(want)+500 || !reflect.DeepEqual(got[:len(want)], want) || got[len(got)-1] != "late 499" {
+		t.Fatalf("server log: %d lines, head %q, last %q", len(got), got[:min(len(got), len(want))], got[len(got)-1])
+	}
+}
+
+// A command's lines are capped per read (500, then one marker for that
+// read) and per run (2000, then one marker for the rest of the run).
 func TestAutomationCommandLogIsBoundedAcrossBatches(t *testing.T) {
 	w := newHarnessWorld(t)
 	a := newAutomationWorld(t, w)
 	a.ref.Lines = true
 	ctx := context.Background()
-	for range 3 {
+	for batch := range 6 {
 		if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
 			f, err := LoadAutomationFeed(ctx, tx, a.ref)
 			if err != nil {
 				return err
 			}
-			if err := f.Apply(ctx, tx, lux.Frame{Kind: "record", Channel: "stdout", Data: strings.Repeat("line\n", 3000)}); err != nil {
+			var data strings.Builder
+			for i := range 600 {
+				fmt.Fprintf(&data, "b%d-%d\n", batch, i)
+			}
+			if err := f.Apply(ctx, tx, lux.Frame{Kind: "record", Channel: "stdout", Data: data.String()}); err != nil {
 				return err
 			}
 			return f.Save(ctx, tx)
@@ -279,12 +348,13 @@ func TestAutomationCommandLogIsBoundedAcrossBatches(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var lines, cuts int
-	if err := w.owner.QueryRow(ctx, `SELECT count(*) FILTER (WHERE event_type='automation.log.line'), count(*) FILTER (WHERE event_type='automation.log.cut') FROM events WHERE automation_run_id=$1`, a.ref.ID).Scan(&lines, &cuts); err != nil {
-		t.Fatal(err)
-	}
-	if lines > 2000 || cuts != 1 {
-		t.Fatalf("lines=%d cuts=%d", lines, cuts)
+	got := a.serverLog()
+	readCut := "CUT Lines past 500 in one read are not kept here; the run's log keeps its end."
+	runCut := "CUT Lines after the first 2000 are not kept here; the run's log keeps its end."
+	// Three reads end with their read marker; the fourth reaches the run's cap at its 500th line.
+	if len(got) != 2000+3+1 || got[0] != "b0-0" || got[499] != "b0-499" || got[500] != readCut ||
+		got[501] != "b1-0" || got[1502] != readCut || got[2002] != "b3-499" || got[2003] != runCut {
+		t.Fatalf("%d entries; around the edges: %q %q %q %q", len(got), got[499], got[500], got[501], got[len(got)-1])
 	}
 }
 
