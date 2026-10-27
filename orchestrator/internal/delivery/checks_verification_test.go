@@ -106,6 +106,37 @@ func TestACarriedWaiverIsAccountedAsTheWaiverItCarries(t *testing.T) {
 	}
 }
 
+// A failure or unrun check the judge passed is named as such, with the
+// judge's reason, in its own headline: never a plain pass, never a waiver;
+// one it did not pass carries the judge's reason.
+func TestAJudgePassedFailureIsAccountedAsSuch(t *testing.T) {
+	passed := gatedJudgement{Role: "Implementer", Verified: true, JudgePassed: true, Checks: []gatedCheck{
+		{Command: "npx tsc --noEmit", Result: CheckPreexisting, Decision: "yes", Reason: "95 errors at the parent, 95 with the change", CallID: "mcall_1"},
+		{Command: "open the settings page", Result: CheckDeferred, Decision: "yes", Reason: "the tester runs it", CallID: "mcall_2"},
+		{Command: "missing checks", Result: "pass", Decision: "no", CallID: "mcall_3"},
+	}}
+	want := "### Checks\nChecks were verified against the Run's recorded commands; the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing) and checks a later phase runs (deferred).\n\n" +
+		"- **Implementer** — passed by the judge\n" +
+		"  - `npx tsc --noEmit` — **pre-existing** — 95 errors at the parent, 95 with the change (`mcall_1`)\n" +
+		"  - `open the settings page` — **deferred** — the tester runs it (`mcall_2`)\n" +
+		"  - `missing checks` — **pass** (`mcall_3`)"
+	if got := checksAccountText([]gatedJudgement{passed}, prBodyMax); got != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", got, want)
+	}
+	held := gatedJudgement{Role: "Fixer", Checks: []gatedCheck{{Command: "npx tsc --noEmit", Result: CheckFail, Decision: "unsure", Reason: "94 errors",
+		JudgeReason: "not passed by the judge: no run at the parent", CallID: "mcall_4"}}}
+	want = "### Checks\nChecks were not verified; the work was sent back or awaits a person.\n\n" +
+		"- **Implementer** — passed by the judge\n" +
+		"  - `npx tsc --noEmit` — **pre-existing** — 95 errors at the parent, 95 with the change (`mcall_1`)\n" +
+		"  - `open the settings page` — **deferred** — the tester runs it (`mcall_2`)\n" +
+		"  - `missing checks` — **pass** (`mcall_3`)\n" +
+		"- **Fixer** — not backed\n" +
+		"  - `npx tsc --noEmit` — **fail** — 94 errors — not passed by the judge: no run at the parent (`mcall_4`)"
+	if got := checksAccountText([]gatedJudgement{passed, held}, prBodyMax); got != want {
+		t.Errorf("the checks account is\n%s\nwant\n%s", got, want)
+	}
+}
+
 // oversized is a Run whose every check is a run of backticks: its full row
 // fences to over checksRowsMax.
 func oversized(t *testing.T, j gatedJudgement) gatedJudgement {
@@ -380,6 +411,11 @@ func TestAWriterRunWithUnreadableHeadsStillHasItsChecksAccounted(t *testing.T) {
 }
 
 func TestChecksStatusPrecedence(t *testing.T) {
+	pass := gatedCheck{Command: "make lint", Result: CheckPass}
+	missing := gatedCheck{Command: "missing checks", Result: CheckPass}
+	carried := gatedCheck{Command: "make test", Result: "waived"}
+	preexisting := gatedCheck{Command: "npx tsc --noEmit", Result: CheckPreexisting}
+	deferred := gatedCheck{Command: "open the page", Result: CheckDeferred}
 	for _, tc := range []struct {
 		j    gatedJudgement
 		want string
@@ -387,11 +423,35 @@ func TestChecksStatusPrecedence(t *testing.T) {
 		{gatedJudgement{Verified: true, Skipped: true, Waived: true, Unchanged: true, Carried: true}, "not model-checked"},
 		{gatedJudgement{Verified: true, Waived: true, Unchanged: true, Carried: true}, "waived"},
 		{gatedJudgement{Verified: true, Unchanged: true, Carried: true}, "no changes; checks not needed"},
-		{gatedJudgement{Verified: true, Carried: true}, "waiver carried"},
-		{gatedJudgement{Carried: true}, "not backed"},
+		{gatedJudgement{Verified: true, Carried: true, Checks: []gatedCheck{carried, pass, missing}}, "waiver carried"},
+		{gatedJudgement{Verified: true, Carried: true, JudgePassed: true, Checks: []gatedCheck{carried, preexisting, missing}}, "waiver carried; passed by the judge"},
+		{gatedJudgement{Verified: true, JudgePassed: true, Checks: []gatedCheck{preexisting, pass, missing}}, "backed; the rest passed by the judge"},
+		// Missing's answer backs no reported check.
+		{gatedJudgement{Verified: true, JudgePassed: true, Checks: []gatedCheck{preexisting, deferred, missing}}, "passed by the judge"},
+		{gatedJudgement{Verified: true, Checks: []gatedCheck{pass, missing}}, "backed"},
+		{gatedJudgement{JudgePassed: true, Checks: []gatedCheck{preexisting}}, "not backed"},
+		{gatedJudgement{Carried: true, Checks: []gatedCheck{carried}}, "not backed"},
 	} {
 		if got := tc.j.status(); got != tc.want {
 			t.Errorf("%+v: %s, want %s", tc.j, got, tc.want)
+		}
+	}
+}
+
+// The tester reads why the judge did not pass a writer's failure, beside
+// the agent's own evidence, and, for a failure a waiver did not cover
+// either, both reasons.
+func TestWriterChecksCarryTheJudgesReason(t *testing.T) {
+	runs := []gatedJudgement{{Role: "Fixer", Checks: []gatedCheck{
+		{Command: "npx tsc --noEmit", Result: CheckFail, Reason: "95 errors", JudgeReason: "not passed by the judge: no run at the task's base"},
+		{Command: "make test", Result: CheckFail, Reason: "TestClock fails", WaiverReason: "the Implementer's waiver does not cover this failure: another test",
+			JudgeReason: "not passed by the judge: passes at the task's base"},
+	}}}
+	text := writerChecksText(runs, writerChecksMax)
+	for _, want := range []string{"npx tsc --noEmit: fail (95 errors) — not passed by the judge: no run at the task's base",
+		"make test: fail (TestClock fails) — the Implementer's waiver does not cover this failure: another test — not passed by the judge: passes at the task's base"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("account lacks %q:\n%s", want, text)
 		}
 	}
 }

@@ -27,6 +27,11 @@ type Choice struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
 	Recommended bool   `json:"recommended"`
+	// The conductor's proposed note on a choice of an escalation's question
+	// whose action needs the person's reason or direction (NeedsNote): the
+	// owner's pick decides the escalation with it as theirs. Its label is
+	// composed from the action and this note (EscalationQuestion).
+	Note string `json:"note,omitempty"`
 }
 
 // QuestionItem is one question of an ask (questions.items).
@@ -97,9 +102,10 @@ func NormalizeItems(items []QuestionItem) ([]QuestionItem, error) {
 		}
 		recommended := 0
 		for j, c := range it.Choices {
-			c = Choice{Label: strings.TrimSpace(c.Label), Description: strings.TrimSpace(c.Description), Recommended: c.Recommended}
+			c = Choice{Label: strings.TrimSpace(c.Label), Description: strings.TrimSpace(c.Description), Recommended: c.Recommended,
+				Note: strings.TrimSpace(c.Note)}
 			switch {
-			case c.Label == "":
+			case c.Label == "" && c.Note == "":
 				return nil, refusef(rChoiceHasNoLabel, n, j+1)
 			case runes(c.Label) > ChoiceLabelMax:
 				return nil, refusef(rChoiceTooLongLabelAtMost,
@@ -108,7 +114,9 @@ func NormalizeItems(items []QuestionItem) ([]QuestionItem, error) {
 				return nil, refusef(rChoiceDescriptionAtMostCharacters, n, c.Label, ChoiceDescriptionMax)
 			}
 			for _, prev := range q.Choices[:j] {
-				if strings.EqualFold(prev.Label, c.Label) {
+				// A noted choice's label is composed, and compared, once
+				// its action is known (EscalationQuestion).
+				if c.Label != "" && strings.EqualFold(prev.Label, c.Label) {
 					return nil, refusef(rChoicesAndReadAsSameAnswer2, n, prev.Label, c.Label)
 				}
 			}

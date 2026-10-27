@@ -382,7 +382,7 @@ func TestAWaiverCarriesTheOwnersOwnWords(t *testing.T) {
 	var ana string
 	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
 	w.refused(task, "ask_person", `{"question":"The app would not start. Test again, or ship it unchecked?",
-		"choices":["Test again","Waive"],"actions":["retry","waive"]}`, "own words")
+		"choices":["Test again","Waive"],"actions":["retry","waive"]}`, "is not a choice without a note")
 	w.must(task, "ask_person", blockedQuestion)
 	if status, out := w.answerAs(ana, task, "Ship it, I checked it by hand on staging."); status != 200 {
 		t.Fatalf("the answer: %d %v", status, out)

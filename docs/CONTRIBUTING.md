@@ -377,8 +377,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   to explain and propose. Its `ask_person` while the delivery waits at
   `decide` is the escalation's question (`questions.escalation`, each
   choice naming an action): the owner picking a choice decides it as the
-  banner does (`delivery.DecideEscalationTx`, the one path for both); a
-  free answer of the owner lets the conductor decide this escalation once
+  banner does (`delivery.DecideEscalationTx`, the one path for both). A
+  choice whose action needs the person's note (`NeedsNote`) carries the
+  conductor's proposed `note` (`questions.items`), its label composed as
+  "Waive: <note>"; the owner's pick decides with that note as theirs
+  (`EscalationAnswerTx`). A free answer of the owner lets the conductor
+  decide this escalation once
   (`decide_escalation`), recorded as its decision on that answer. The banner
   closes an open question about it (`question.closed`).
 - **A task keeps up with its base by merging, never rebasing**

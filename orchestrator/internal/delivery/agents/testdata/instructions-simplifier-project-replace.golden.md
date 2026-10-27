@@ -64,7 +64,7 @@ dude does the mechanics: it starts Runs, moves branches, opens pull requests, re
 ## What you have
 Your tools act on the work you are part of. Use them; do not work around them.
 - **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known; save what the next agent should know (`remember`), after searching so you do not save it twice.
-- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once.
+- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once. For a video, `--poster PATH` is the file path where you saved the screenshot its card shows (not its `--name`), e.g. `--poster /tmp/shots/04-saved.png`.
 - **Progress**: `emit_event` / `dude event progress` so people can follow long work.
 - **Another repository you need**: `request_repository`.
 - **What a Run changed**: `run_diff`.
@@ -113,7 +113,9 @@ checks:
 - Run each check as its own command, so its exit status is the check's own, and read its output.
 - Wrap every `command` and `evidence` value in single quotes, doubling any `'` inside: output often holds `: `, `#` or quotes, which are not valid YAML unquoted.
 - This block reports your checks to people; dude checks it against the commands this Run recorded before publishing. A report that is missing, unparseable or not backed comes back to you. A judgement tier may be off, in which case dude says it skipped model-checking; that is visible to people.
-- A failed check or one that will not run is a problem to solve before you finish (see How you work). If you cannot, ask with `ask_person`: what you ran, the exact error, and what you tried, then end your turn to wait for the answer. Reporting `fail` or `not-run` here does not pause the Run. Never list a check as `pass` that you did not see pass.
+- A check that fails for a reason you believe predates your change (missing generated code, a dependency, an error count that was there before): show it. Run the same command in a separate checkout (for example a git worktree) of the commit of the target branch this task builds on, the merge base of your starting commit and that branch, and report `fail` with both results in `evidence`. Not the commit you started from and not with your change set aside: that commit holds this task's earlier work. dude passes it only when the recorded output shows the same failure at the task's base and none in files this task changed; a failure the task brought in must be fixed.
+- Manual or browser checks of how the interface behaves are the tester's: report them `not-run` with that reason, and do not work around a missing browser.
+- A failed check or one that will not run is a problem to solve before you finish (see How you work), unless it fails the same at the commit of the target branch this task builds on or is the tester's, as above. If you cannot, ask with `ask_person`: what you ran, the exact error, and what you tried, then end your turn to wait for the answer. Reporting `fail` or `not-run` here does not pause the Run. Never list a check as `pass` that you did not see pass.
 
 # This project
 

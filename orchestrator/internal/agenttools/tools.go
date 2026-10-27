@@ -465,9 +465,10 @@ type askItemIn struct {
 }
 
 type askChoiceIn struct {
-	Label       string `json:"label"`
+	Label       string `json:"label,omitempty"`
 	Description string `json:"description,omitempty"`
 	Recommended bool   `json:"recommended,omitempty"`
+	Note        string `json:"note,omitempty"`
 }
 
 type askIn struct {
@@ -496,7 +497,7 @@ func askItems(question string, choices []string, questions []askItemIn) ([]deliv
 		for _, q := range questions {
 			item := delivery.QuestionItem{Header: q.Header, Question: q.Question, Multiple: q.Multiple}
 			for _, c := range q.Choices {
-				item.Choices = append(item.Choices, delivery.Choice{Label: c.Label, Description: c.Description, Recommended: c.Recommended})
+				item.Choices = append(item.Choices, delivery.Choice{Label: c.Label, Description: c.Description, Recommended: c.Recommended, Note: c.Note})
 			}
 			items = append(items, item)
 		}
@@ -531,11 +532,16 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	// is that escalation's question.
 	var escalation string
 	if c.Role == delivery.RoleConductor {
-		if escalation, err = conducted(delivery.EscalationQuestion(ctx, tx, c.run(), items, in.Actions)); err != nil {
+		var composed []delivery.QuestionItem
+		escalation, composed, err = delivery.EscalationQuestion(ctx, tx, c.run(), items, in.Actions)
+		if _, err = conducted(escalation, err); err != nil {
 			return askOut{}, err
 		}
+		items = composed
 	} else if len(in.Actions) > 0 {
 		return askOut{}, refuseText(rActionsAreConductorForQuestionAbout)
+	} else if delivery.HasChoiceNote(items) {
+		return askOut{}, refuseText(rChoiceNoteIsConductorForQuestionAbout)
 	}
 	id, err := delivery.AskItemsTx(ctx, tx, c.run(), items)
 	if err != nil {
