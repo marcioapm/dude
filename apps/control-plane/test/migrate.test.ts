@@ -196,7 +196,7 @@ test("212 takes incoming triggers, finds a hook across organisations, and keeps 
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'Acme', 'acme'), ('org_b', 'Other', 'other')`;
     await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'platform', 'platform', 'PLAT')`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["211_fake_checks_base_shown_model.sql", "212_incoming_webhooks.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["212_incoming_webhooks.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     const incoming = { kind: "incoming", hookId: "hk_abcdefghijkl0123", verify: { mode: "header", header: "Authorization" }, ratePerHour: 12 };
     await sql`INSERT INTO automations (id, organization_id, project_id, name, kind, trigger, agent, incoming_secret, incoming_hint, project_ids)
