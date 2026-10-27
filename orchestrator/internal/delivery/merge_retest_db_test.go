@@ -1,11 +1,133 @@
 package delivery
 
 import (
+	"errors"
+	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
+
+// skips counts the task's test.skipped events.
+func (f *verdictFixture) skips() int {
+	f.t.Helper()
+	var n int
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM events WHERE task_id = 'wi_c' AND event_type = $1`, EvTestSkipped).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+// Each carryForward condition still holds for a clean merge of other
+// files: a fix of a failed test due, a directed test, a finding to judge,
+// a previous round that did not pass, criteria edited since, and a
+// previous round at heads other than the merge's first parent each retest.
+func TestACleanMergeIsTestedWhenAnyOtherConditionFails(t *testing.T) {
+	other := map[string]string{"lib/other.go": "package lib"}
+	for _, c := range []struct {
+		name     string
+		set      func(f *verdictFixture, st *State)
+		judge    []string
+		directed bool
+	}{
+		{"none (the skip happens)", nil, nil, false},
+		{"a fix of a failed test due", func(_ *verdictFixture, st *State) { st.RetestDue = true }, nil, false},
+		{"a directed test", nil, nil, true},
+		{"a finding to judge", nil, []string{"fnd_1"}, false},
+		{"a previous round that failed", func(f *verdictFixture, _ *State) {
+			f.exec(`UPDATE acceptance_verdicts SET status = 'fail' WHERE run_id = 'run_c' AND organization_id = $1`)
+		}, nil, false},
+		{"a criterion edited since", func(f *verdictFixture, _ *State) {
+			f.exec(`UPDATE tasks SET acceptance_criteria = '["it greets by name"]' WHERE id = 'wi_c' AND organization_id = $1`)
+		}, nil, false},
+		{"a previous round at other heads", func(f *verdictFixture, _ *State) {
+			f.exec(`UPDATE runs SET base_refs = '{"repo": "0000000000000000000000000000000000000000"}' WHERE id = 'run_c' AND organization_id = $1`)
+		}, nil, false},
+		// The same merge, not known as MergeBase's answer: a head adopted, or
+		// a delivery's state from before ServerMerge was recorded.
+		{"a merge not answered by MergeBase", func(_ *verdictFixture, st *State) { st.Integration.ServerMerge = false }, nil, false},
+		{"an agent's integration", func(_ *verdictFixture, st *State) { st.Integration.RunID = "run_integration" }, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc := mergeFixture(t, other)
+			f.merged(st, sc)
+			if c.set != nil {
+				c.set(f, st)
+			}
+			skip, err := f.steps.carryForward(f.ctx, sc, st, c.judge, c.directed)
+			want := strings.HasPrefix(c.name, "none")
+			if err != nil || skip != want || (f.skips() == 1) != want {
+				t.Fatalf("skip %v (%v), %d skips; want skip %v", skip, err, f.skips(), want)
+			}
+		})
+	}
+}
+
+func (f *verdictFixture) exec(sql string) {
+	f.t.Helper()
+	if _, err := f.owner.Exec(f.ctx, sql, f.org); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// GitHub failing to compare the merge: a transient failure waits and asks
+// again, starting nothing; a refusal retests. The comparison GitHub
+// answered is cached: the step entered again asks nothing new.
+func TestACleanMergeGitHubCannotCompareIsWaitedOnOrTested(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		wait   bool
+	}{{"transient", http.StatusBadGateway, true}, {"refused", http.StatusUnprocessableEntity, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+			f.merged(st, sc)
+			// The task's side (target branch...task's head): the merge's side
+			// alone would leave nothing to skip for.
+			taskSide := "/compare/" + st.Integration.BaseHead + "..."
+			f.gh.Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if strings.Contains(r.URL.Path, taskSide) {
+						return c.status
+					}
+					return 0
+				}
+			})
+			skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false)
+			var wait workflow.Wait
+			if skip || errors.As(err, &wait) != c.wait || !c.wait && err != nil || f.skips() != 0 {
+				t.Fatalf("skip %v, %v; want a wait %v and no skip", skip, err, c.wait)
+			}
+			if !c.wait {
+				return
+			}
+			// GitHub answers again: the skip happens.
+			f.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+			if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+				t.Fatalf("after GitHub answers: skip %v, %v", skip, err)
+			}
+		})
+	}
+}
+
+// A branch found moved before the pull request (GitHub merged, its answer
+// lost, or a person pushed) is adopted and tested again, whatever it holds.
+func TestAnAdoptedMovedHeadBeforeThePullRequestIsTested(t *testing.T) {
+	f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+	if f.gh.MergeInto("feature", "main", nil) == "" {
+		t.Fatal("merging main on GitHub")
+	}
+	res, diverted, err := f.steps.syncBeforePR(f.ctx, sc, st)
+	if err != nil || !diverted || res.Next != "test" || st.Integration == nil || st.Integration.ServerMerge {
+		t.Fatalf("syncBeforePR: %+v %v %v %+v; want the moved head adopted", res, diverted, err, st.Integration)
+	}
+	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != 0 {
+		t.Fatalf("skip %v (%v): an adopted head must be tested", skip, err)
+	}
+}
 
 // mergeFixture is a task whose test round run_c passed its one criterion
 // at the feature branch's head, the task's own change app/greet.go on it;
