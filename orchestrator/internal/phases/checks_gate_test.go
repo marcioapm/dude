@@ -85,8 +85,8 @@ func TestChecksJudgementsFailClosed(t *testing.T) {
 		})
 	}
 }
-func TestChecksMissingAndSelfReportedFailuresRejectWithoutJudge(t *testing.T) {
-	for _, text := range []string{"done", "checks: [broken", "checks:\n - command: verify\n   result: fail", "checks:\n - command: verify\n   result: not-run"} {
+func TestChecksMissingOrUnparseableReportsRejectWithoutJudge(t *testing.T) {
+	for _, text := range []string{"done", "checks: [broken"} {
 		t.Run(text, func(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, text)
@@ -302,7 +302,7 @@ func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
 				return
 			}
 			want := fmt.Sprintf("the report lists %d checks, more than the %d that are verified", tc.n, checksCountMax)
-			if got.Verified || !strings.Contains(checksText.Render(got.Verdicts), want) {
+			if got.Verified || !strings.Contains((checksDecision{Verdicts: got.Verdicts}).sendBack(), want) {
 				t.Fatalf("%+v: the send-back lacks %q", got, want)
 			}
 		})

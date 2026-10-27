@@ -55,11 +55,12 @@ Ask a person for decisions only a person can make — the task is ambiguous in a
                 "recommended": {
                   "type": "boolean",
                   "description": "the one you would pick, shown as your suggestion; at most one per question"
+                },
+                "note": {
+                  "type": "string",
+                  "description": "not used here: a note is a task conductor's, on its question about an escalation"
                 }
               },
-              "required": [
-                "label"
-              ],
               "additionalProperties": false
             },
             "description": "0 to 6 answers to offer, when there are sensible options; never an other or something-else choice: dude adds one"

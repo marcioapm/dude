@@ -153,9 +153,9 @@ func TestGoldenPublishAndUnblockWords(t *testing.T) {
 // stuck, with the actions the escalation itself offers.
 func TestGoldenEscalatedConvergenceWakes(t *testing.T) {
 	notConverging := &Escalation{Reason: ReasonNotConverging, Step: "fix", Detail: LoopExit{FindingIDs: []string{"fnd_1", "fnd_2"}}}
-	stuck := &Escalation{Reason: "stuck", Step: "fix"}
+	stuck := &Escalation{Reason: "stuck", Step: "fix", Detail: LoopExit{Reason: "stuck", FindingIDs: []string{"fnd_3"}}}
 	goldenTexts(t, "wake-escalated-convergence", [][2]string{
-		{"not-converging", escalatedLine(notConverging.Reason, notConverging.Actions(), notConverging.findingIDs()...)},
-		{"stuck", escalatedLine(stuck.Reason, stuck.Actions(), stuck.findingIDs()...)},
+		{"not-converging", escalatedLine(notConverging)},
+		{"stuck", escalatedLine(stuck)},
 	})
 }

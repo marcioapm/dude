@@ -21,6 +21,7 @@ CHECKS_MODELS = {
     "honest": "fake/checks-honest",
     "unbacked": "fake/checks-unbacked",
     "fixed": "fake/checks-fixed",
+    "base-shown": "fake/checks-base-shown",
 }
 
 
@@ -166,6 +167,26 @@ def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClie
             ("Simplifier", "backed", [("missing checks", "pass")]),
         ])
     assert any(e["eventType"] == "run.checks.decided" and e["payload"].get("action") == "waive" for e in client.events(taskId=task["id"]))
+
+
+@pytest.mark.e2e
+def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient, fake_github: FakeGitHub):
+    # No send-back allowed: a failure the judge did not pass would ask a person at once.
+    _judge(client, fake_github)
+    assert client.patch("/v1/forge/settings", {"checksFixRounds": 0}).status_code == 200
+    task = _start(client, fake_github, CHECKS_MODELS["base-shown"])
+    _wait_pr(client, fake_github, task["id"])
+
+    events = _checks_events(client, _implementer(client, task["id"])["id"])
+    assert len(events) == 1 and events[0]["payload"]["verified"] is True, events
+    first = events[0]["payload"]["checks"][0]
+    assert first["command"] == "make test" and first["result"] == "pre-existing" and first["callId"], first
+    activity = client.events(taskId=task["id"])
+    assert not any(e["eventType"] == "question.asked" for e in activity)
+    assert not any(e["eventType"] == "run.checks.decided" for e in activity)
+    headline, rows = _rows(_checks_section(fake_github.pulls[1].body))
+    assert "the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)" in headline, headline
+    assert rows[0] == ("Implementer", "passed by the judge", [("make test", "pre-existing"), ("missing checks", "pass")])
 
 
 @pytest.mark.e2e

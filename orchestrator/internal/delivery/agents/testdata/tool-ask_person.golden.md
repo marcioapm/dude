@@ -46,7 +46,7 @@ Ask a person for decisions only a person can make — the task is ambiguous in a
               "properties": {
                 "label": {
                   "type": "string",
-                  "description": "the answer, short (at most 120 characters)"
+                  "description": "the answer, short (at most 120 characters); left out for a choice with a note, whose label dude writes as its action and note"
                 },
                 "description": {
                   "type": "string",
@@ -55,11 +55,12 @@ Ask a person for decisions only a person can make — the task is ambiguous in a
                 "recommended": {
                   "type": "boolean",
                   "description": "the one you would pick, shown as your suggestion; at most one per question"
+                },
+                "note": {
+                  "type": "string",
+                  "description": "a conductor's, on its question about an escalation, for a choice whose action needs the person's reason or direction (a waiver, an acceptance, a stuck or non-converging retry, an amend): the reason or direction you propose, in plain words. The person sees \"Waive: \u003cnote\u003e\"; the owner picking it decides the escalation with your note as theirs. Required for such an action, refused on any other"
                 }
               },
-              "required": [
-                "label"
-              ],
               "additionalProperties": false
             },
             "description": "0 to 6 answers to offer, when there are sensible options; never an other or something-else choice: dude adds one"
@@ -85,7 +86,7 @@ Ask a person for decisions only a person can make — the task is ambiguous in a
       "items": {
         "type": "string"
       },
-      "description": "a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it, except a waiver or an acceptance of a failed test, which needs the person's own words"
+      "description": "a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it. A choice whose action needs the person's reason or direction (waive, accept of a failed test, a stuck retry, a non-converging loop's retry, accept or amend) carries the one you propose as its note, in questions' choices"
     }
   },
   "additionalProperties": false

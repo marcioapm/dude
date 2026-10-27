@@ -1,6 +1,6 @@
 /**
  * Incoming webhooks' public endpoint, POST /v1/hooks/:hookId, and the
- * Deliveries an automation's page lists (migration 211).
+ * Deliveries an automation's page lists (migration 212).
  *
  * The endpoint is unauthenticated, as GitHub's (/v1/webhooks/github/:org):
  * the hook's secret is the authentication. It answers at once and stores;

@@ -351,9 +351,11 @@ func escalationOnBannerLine(action, questionID string, system bool) string {
 // EscalationAnswerTx decides the task's escalation when the owner's answer
 // to the conductor's question about it picks one of its choices: the
 // action the choice names, the answer and the conductor's proposal its
-// note. A free answer, one to an escalation no longer waiting, or a choice
-// whose action needs the person's note (NeedsNote) decides nothing: it
-// reaches the conductor, which may then decide_escalation.
+// note. A choice whose action needs the person's note (NeedsNote) decides
+// it only when it carries the conductor's proposed note, which the pick
+// makes the person's. A free answer, one to an escalation no longer
+// waiting, or a needing choice without a note decides nothing: it reaches
+// the conductor, which may then decide_escalation.
 func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, actorType, actorID, person string) error {
 	// The answer routes took the delivery and the task's row before the
 	// question (LockEscalationTx); taken again here, they are held already.
@@ -363,14 +365,16 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	}
 	var key, prompt, answer string
 	var options, actions []string
-	var rawOpts, rawActions []byte
-	err = tx.QueryRow(ctx, `SELECT COALESCE(escalation, ''), prompt, COALESCE(answer, ''), options, COALESCE(actions, '[]')
-		FROM questions WHERE id = $1`, questionID).Scan(&key, &prompt, &answer, &rawOpts, &rawActions)
+	var items []QuestionItem
+	var rawOpts, rawActions, rawItems []byte
+	err = tx.QueryRow(ctx, `SELECT COALESCE(escalation, ''), prompt, COALESCE(answer, ''), options, COALESCE(actions, '[]'), COALESCE(items, '[]')
+		FROM questions WHERE id = $1`, questionID).Scan(&key, &prompt, &answer, &rawOpts, &rawActions, &rawItems)
 	if err != nil || key == "" {
 		return err
 	}
 	_ = json.Unmarshal(rawOpts, &options)
 	_ = json.Unmarshal(rawActions, &actions)
+	_ = json.Unmarshal(rawItems, &items)
 	i := choiceOf(options, answer)
 	if i < 0 || i >= len(actions) {
 		return nil
@@ -378,14 +382,43 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	if !waitsAtDecide(d) || EscalationKey(d.WorkflowID, d.State.Escalations) != key {
 		return nil
 	}
-	// A choice carries no reason of the person's: a waiver or acceptance
-	// picked so is a free answer, for decide_escalation once they say why.
-	if NeedsNote(d.State.Escalation.Reason, actions[i]) {
-		return nil
+	note := escalationNote(prompt, answer, "")
+	if reason := d.State.Escalation.Reason; NeedsNote(reason, actions[i]) {
+		// Only the conductor's proposed note, shown in the label the owner
+		// picked, is a reason or direction a pick carries. The decision
+		// records it with what was asked; an amend's note is the criteria
+		// text that replaces the named ones, so it is the note alone.
+		if len(items) != 1 || i >= len(items[0].Choices) || items[0].Choices[i].Note == "" {
+			return nil
+		}
+		if actions[i] == "amend" {
+			note = items[0].Choices[i].Note
+		}
+		ok, err := mayDecideNoted(ctx, tx, taskID, reason, actions[i], person)
+		if err != nil || !ok {
+			return err
+		}
 	}
 	return DecideEscalationTx(ctx, tx, org, taskID, EscalationDecision{Action: actions[i],
-		Note:      escalationNote(prompt, answer, ""),
+		Note:      note,
 		ActorType: actorType, ActorID: actorID, QuestionID: questionID, AnsweredBy: person})
+}
+
+// mayDecideNoted says person's pick of a noted choice decides the
+// escalation, as decide_escalation on their free answer would: the owner's,
+// or on a task nobody owns an admin's where the action ships past what was
+// not shown (NeedsReason). Anyone else's pick decides nothing.
+func mayDecideNoted(ctx context.Context, tx pgx.Tx, taskID, reason, action, person string) (bool, error) {
+	owner, err := TaskOwner(ctx, tx, taskID)
+	if err != nil || owner != "" {
+		return owner != "" && owner == person, err
+	}
+	if !NeedsReason(reason, action) {
+		return true, nil
+	}
+	var admin bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM people WHERE id = $1 AND role = 'admin' AND removed_at IS NULL)`, person).Scan(&admin)
+	return admin, err
 }
 
 // EscalationDecisionQuestion is the question a person's note on an
@@ -444,55 +477,88 @@ func escalationNote(proposal, answer, conductorNote string) string {
 // escalation's locks (LockEscalationTx), held until the question is
 // inserted in the same tx, so no decision lands between the check and it.
 // Its question is one question: several are refused, readably, as the
-// owner's pick of a choice is what decides it.
-func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []QuestionItem, actions []string) (string, error) {
+// owner's pick of a choice is what decides it. It returns the items to
+// store: those given, with each noted choice's label written by dude.
+func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []QuestionItem, actions []string) (string, []QuestionItem, error) {
 	_, d, err := LockEscalationTx(ctx, tx, ref.TaskID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if d != nil && d.State.conducted() && d.Live() && d.State.Escalation != nil && d.State.Escalation.Decided != nil {
-		return "", refusef(rEscalationWasJustDecidedAskNothing, strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
+		return "", nil, refusef(rEscalationWasJustDecidedAskNothing, strings.ReplaceAll(d.State.Escalation.Reason, "_", " "),
 			decidedBy(d.State.Escalation.Decided), d.State.Escalation.Decided.Action)
 	}
 	if !waitsAtDecide(d) || !d.State.conducted() {
 		if len(actions) > 0 {
-			return "", refuseText(rActionsAreForQuestionAboutEscalation)
+			return "", nil, refuseText(rActionsAreForQuestionAboutEscalation)
 		}
-		return "", nil
+		if HasChoiceNote(items) {
+			return "", nil, refuseText(rChoiceNoteIsForEscalationQuestion)
+		}
+		return "", items, nil
 	}
 	offered := d.State.Escalation.Actions()
 	if len(items) != 1 {
-		return "", refusef(rTaskEscalationWaitsOnPersonAsk, listOr(offered), len(items))
+		return "", nil, refusef(rTaskEscalationWaitsOnPersonAsk, listOr(offered), len(items))
 	}
-	choices := items[0].Labels()
-	if len(choices) == 0 || len(actions) != len(choices) {
-		return "", refusef(rTaskEscalationWaitsOnPersonThis,
+	item := items[0]
+	item.Choices = slices.Clone(item.Choices)
+	if len(item.Choices) == 0 || len(actions) != len(item.Choices) {
+		return "", nil, refusef(rTaskEscalationWaitsOnPersonThis,
 			listOr(offered))
 	}
 	reason := d.State.Escalation.Reason
-	for _, a := range actions {
+	for i, a := range actions {
 		if !slices.Contains(offered, a) {
-			return "", refusef(rNotOneThisEscalationActions, a, listOr(offered))
+			return "", nil, refusef(rNotOneThisEscalationActions, a, listOr(offered))
 		}
-		// A pick carries no reason or direction of the person's.
-		if NeedsNote(reason, a) {
+		// A pick of an action that needs the person's reason or direction
+		// carries the conductor's proposed note, in its label, which the
+		// owner's pick makes theirs; no other pick carries one.
+		c := &item.Choices[i]
+		needs := NeedsNote(reason, a)
+		switch {
+		case needs && c.Note == "":
 			format := rNotChoiceShippingPastNeedsPerson
 			if givesDirection(a) {
 				format = rNotChoiceNeedsPersonDirection
 			}
-			return "", refusef(format, a, strings.ReplaceAll(reason, "_", " "), a)
+			return "", nil, refusef(format, a, strings.ReplaceAll(reason, "_", " "), a)
+		case !needs && c.Note != "":
+			return "", nil, refusef(rChoiceNoteOnlyWhereNeeded, a, strings.ReplaceAll(reason, "_", " "))
+		case c.Note != "" && c.Label != "":
+			return "", nil, refusef(rChoiceNoteTakesNoLabel, a)
+		case c.Note != "":
+			c.Label = notedLabel(a, c.Note)
+			if runes(c.Label) > ChoiceLabelMax {
+				return "", nil, refusef(rChoiceNoteTooLong, a, ChoiceLabelMax-runes(notedLabel(a, "")))
+			}
 		}
 	}
 	// An answer picks the choice it equals trimmed and case-folded
 	// (choiceOf): two choices equal so would make the second unpickable,
 	// and a click on it would take the first's action.
-	for i, c := range choices {
-		if j := choiceOf(choices[:i], c); j >= 0 {
-			return "", refusef(rChoicesAndReadAsSameAnswer,
-				choices[j], c)
+	labels := item.Labels()
+	for i, c := range labels {
+		if j := choiceOf(labels[:i], c); j >= 0 {
+			return "", nil, refusef(rChoicesAndReadAsSameAnswer,
+				labels[j], c)
 		}
 	}
-	return EscalationKey(d.WorkflowID, d.State.Escalations), nil
+	return EscalationKey(d.WorkflowID, d.State.Escalations), []QuestionItem{item}, nil
+}
+
+// notedLabel is the label of a choice carrying a note: its action, then
+// the note, so what the person picks reads as what is recorded.
+func notedLabel(action, note string) string {
+	return strings.ToUpper(action[:1]) + action[1:] + ": " + note
+}
+
+// HasChoiceNote says some choice of items carries a note.
+func HasChoiceNote(items []QuestionItem) bool {
+	return slices.ContainsFunc(items, func(it QuestionItem) bool {
+		return slices.ContainsFunc(it.Choices, func(c Choice) bool { return c.Note != "" })
+	})
 }
 
 // escalationBanner is how a person decides an escalation, for the
@@ -547,8 +613,9 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	}
 	decisionNote := escalationNote(prompt, answer, note)
 	if NeedsNote(d.State.Escalation.Reason, action) {
-		// Required direction comes from the owner's text, never a choice
-		// label or the conductor's proposal.
+		// decide_escalation takes required direction from the owner's own
+		// text, never a choice's label or the conductor's proposal: a pick
+		// of a noted choice is decided at the answer (EscalationAnswerTx).
 		var options []string
 		_ = json.Unmarshal(rawOpts, &options)
 		var items []ItemAnswer

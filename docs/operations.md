@@ -697,7 +697,7 @@ an hour per automation; it still costs one indexed hook lookup and one
 small write per request, so put a per-IP rate limit at the ingress if a
 hook id leaks to someone hostile.
 
-**Upgrading to migration 211** adds the table, the hook lookup the public
+**Upgrading to migration 212** adds the table, the hook lookup the public
 route uses before it knows the organisation (`incoming_hook`, security
 definer, answering only what verification needs), and
 `automation_github_verdicts` (what each GitHub delivery came to per

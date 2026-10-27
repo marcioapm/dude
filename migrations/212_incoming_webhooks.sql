@@ -1,4 +1,4 @@
--- 211_incoming_webhooks.sql — an automation's own URL: POST /v1/hooks/<hook id>.
+-- 212_incoming_webhooks.sql — an automation's own URL: POST /v1/hooks/<hook id>.
 --
 -- A third trigger kind, {kind: incoming, hookId, verify, conditions[],
 -- groupBy, ratePerHour}. Every request to the URL is stored before anything

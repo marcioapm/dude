@@ -72,7 +72,7 @@ func TestTheChecksContextCarriesEachDialectsFailingCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
 			w.feed(tc.records...)
-			text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "pass"}})
+			text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "pass"}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,7 +103,7 @@ func TestTheChecksContextIsBoundedKeepingTheLatestCalls(t *testing.T) {
 				"status": "completed", "rawOutput": map[string]any{"output": longFailure, "metadata": map[string]any{"exit": 0}}}})
 	}
 	w.feed(records...)
-	text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "pass", Evidence: "ok"}})
+	text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "pass", Evidence: "ok"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestTheChecksContextKeepsTheNewestCallsAndCountsTheRest(t *testing.T) {
 				"status": "completed", "rawOutput": map[string]any{"output": strings.Repeat("ok\n", 300), "metadata": map[string]any{"exit": 0}}}})
 	}
 	w.feed(records...)
-	text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "pass"}})
+	text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "pass"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

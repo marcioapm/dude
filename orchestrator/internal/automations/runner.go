@@ -192,7 +192,7 @@ type Automation struct {
 	Secrets         json.RawMessage
 	NotifyOnFailure bool
 	NextRunAt       *time.Time
-	// An organisation incoming automation's projects (migration 211).
+	// An organisation incoming automation's projects (migration 212).
 	ProjectIDs []string
 }
 

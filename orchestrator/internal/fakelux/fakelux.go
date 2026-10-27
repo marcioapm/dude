@@ -1963,6 +1963,7 @@ func (s *Server) turn(run *Run) {
 	}
 	if !asking {
 		for i, c := range commands {
+			c[0] = s.atCommits(run, c[0])
 			s.command(run, fmt.Sprintf("check_%d_%d", run.turnsEnded, i), c)
 		}
 	}

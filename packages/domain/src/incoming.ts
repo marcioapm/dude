@@ -4,7 +4,7 @@
  * with a secret (a signature, a header token or a URL parameter); the body's
  * conditions decide whether a delivery starts a run; its group key sends a
  * later delivery of the same group to the run still going.
- * docs/CONTRIBUTING.md, "Automations"; migration 211.
+ * docs/CONTRIBUTING.md, "Automations"; migration 212.
  */
 
 import { z } from "zod";

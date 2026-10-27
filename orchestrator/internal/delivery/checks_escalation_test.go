@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -51,7 +52,7 @@ func TestChecksEscalationSurvivesLeasedWaitTransition(t *testing.T) {
 			t.Fatal("test did not intercept a leased transition")
 		}
 		if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
-			return EscalateChecksTx(ctx, tx, org, "wi_checks", "run_checks", "verify was not backed", 2)
+			return EscalateChecksTx(ctx, tx, org, "wi_checks", "run_checks", "verify was not backed", 2, nil)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -120,9 +121,41 @@ func (h heldTask) exec(q string, args ...any) {
 func (h heldTask) escalate(runID string) {
 	h.t.Helper()
 	if err := h.app.InOrg(h.ctx, h.org, func(tx pgx.Tx) error {
-		return EscalateChecksTx(h.ctx, tx, h.org, "wi_h", runID, "held", 0)
+		return EscalateChecksTx(h.ctx, tx, h.org, "wi_h", runID, "held", 0, nil)
 	}); err != nil {
 		h.t.Fatal(err)
+	}
+}
+
+// The escalation keeps the held checks as data, each field one line, and
+// the conductor's wake lists them from it: a reason that spans lines,
+// however it is worded, is one check.
+func TestAChecksEscalationKeepsItsUnverifiedChecksOneLineEach(t *testing.T) {
+	h := newHeldTask(t)
+	reason := "not passed by the judge: the calls show\n- base: 95 errors\n- head: 96 errors"
+	if err := h.app.InOrg(h.ctx, h.org, func(tx pgx.Tx) error {
+		return EscalateChecksTx(h.ctx, tx, h.org, "wi_h", "run_held", "- base: 95 errors\n- head: 96 errors", 0,
+			[]UnverifiedCheck{{Command: "npx tsc\n--noEmit", Reason: reason}, {Command: "make lint", Reason: "exit 1"}})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	if err := h.owner.QueryRow(h.ctx, `SELECT state->'escalation' FROM workflow_runs WHERE id = 'wf_h'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var e Escalation
+	if err := json.Unmarshal(raw, &e); err != nil {
+		t.Fatal(err)
+	}
+	var d struct{ Unverified []UnverifiedCheck }
+	e.decode(&d)
+	if len(d.Unverified) != 2 || d.Unverified[0].Command != "npx tsc --noEmit" ||
+		d.Unverified[0].Reason != "not passed by the judge: the calls show - base: 95 errors - head: 96 errors" {
+		t.Fatalf("the detail keeps %+v", d.Unverified)
+	}
+	line := escalatedLine(&e)
+	if want := "The checks not verified: npx tsc --noEmit: not passed by the judge: the calls show - base: 95 errors - head: 96 errors; make lint: exit 1."; !strings.Contains(line, want) {
+		t.Fatalf("the wake lacks %q:\n%s", want, line)
 	}
 }
 
@@ -220,7 +253,7 @@ func TestAnAttemptWaiverCoversOnlyReportedFailures(t *testing.T) {
 				}
 			}
 			err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
-				if err := EscalateChecksTx(ctx, tx, org, "wi_w", "run_w", "held", 0); err != nil {
+				if err := EscalateChecksTx(ctx, tx, org, "wi_w", "run_w", "held", 0, nil); err != nil {
 					return err
 				}
 				return DecideEscalationTx(ctx, tx, org, "wi_w", EscalationDecision{Action: ActionWaive, Note: "Accepted.", Scope: ScopeAttempt,

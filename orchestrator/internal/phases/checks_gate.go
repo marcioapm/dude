@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -18,26 +19,31 @@ import (
 )
 
 var (
-	checksText          = delivery.MustText("notices/checks")
-	backedQuestion      = delivery.MustText("notices/checks/backed")
-	missingQuestion     = delivery.MustText("notices/checks/missing")
-	waivedQuestion      = delivery.MustText("notices/checks/waived")
-	checksWaivedContext = delivery.MustText("notices/checks/waived-context")
-	checksNotCovered    = delivery.MustText("notices/checks/not-covered")
-	checksSkip          = delivery.MustText("notices/checks/skip")
-	checksMany          = delivery.MustText("notices/checks/many")
-	checksUnparseable   = delivery.MustText("notices/checks/unparseable")
-	checksUnestablished = delivery.MustText("notices/checks/unestablished")
-	checksUnchanged     = delivery.MustText("notices/checks/unchanged")
+	checksText           = delivery.MustText("notices/checks")
+	backedQuestion       = delivery.MustText("notices/checks/backed")
+	missingQuestion      = delivery.MustText("notices/checks/missing")
+	waivedQuestion       = delivery.MustText("notices/checks/waived")
+	preexistingQuestion  = delivery.MustText("notices/checks/preexisting")
+	checksWaivedContext  = delivery.MustText("notices/checks/waived-context")
+	checksNotCovered     = delivery.MustText("notices/checks/not-covered")
+	checksNotPreexisting = delivery.MustText("notices/checks/not-preexisting")
+	checksSkip           = delivery.MustText("notices/checks/skip")
+	checksMany           = delivery.MustText("notices/checks/many")
+	checksUnparseable    = delivery.MustText("notices/checks/unparseable")
+	checksUnestablished  = delivery.MustText("notices/checks/unestablished")
+	checksUnchanged      = delivery.MustText("notices/checks/unchanged")
+	checksNoTaskBase     = delivery.MustText("notices/checks/no-task-base")
+	checksNoTier         = delivery.MustText("notices/checks/no-tier")
 )
 
-// checksCountMax bounds the judge calls one report costs, one per check
-// plus one, made in turn before anything is pushed.
-const checksCountMax = 30
+// errNoTaskBase rejects a reported failure without a judge call when no
+// target-branch commit is known to measure it against.
+var errNoTaskBase = errors.New(checksNoTaskBase.Render(nil))
 
-// checksWaived is the result of a reported failure the judge found to be
-// one a person waived for the attempt: carried, never backed.
-const checksWaived = "waived"
+// checksCountMax caps the checks one report may list, and so its judge
+// calls, made in turn before anything is pushed: each check costs one,
+// two when a carried waiver does not cover it, plus one for Missing.
+const checksCountMax = 30
 
 type checksVerdict struct {
 	Command  string `json:"command"`
@@ -50,6 +56,9 @@ type checksVerdict struct {
 	// Why an attempt waiver does not cover a reported failure, beside the
 	// agent's own result and evidence, which a person may still waive.
 	WaiverReason string `json:"waiverReason,omitempty"`
+	// Why the judge did not pass a reported failure or not-run check as
+	// pre-existing or deferred, beside the agent's own result and evidence.
+	JudgeReason string `json:"judgeReason,omitempty"`
 }
 
 type checksDecision struct {
@@ -58,9 +67,17 @@ type checksDecision struct {
 	Verified bool  `json:"verified"`
 	Skipped  bool  `json:"skipped,omitempty"`
 	// Some reported failure passed as one a person waived for the attempt.
-	Carried  bool            `json:"carried,omitempty"`
-	Verdicts []checksVerdict `json:"checks"`
-	Message  string          `json:"message"`
+	Carried bool `json:"carried,omitempty"`
+	// Some reported failure or not-run check passed on the judge's word
+	// alone: pre-existing at the task's base, or deferred to a later phase.
+	JudgePassed bool            `json:"judgePassed,omitempty"`
+	Verdicts    []checksVerdict `json:"checks"`
+	Message     string          `json:"message"`
+	// The commit of each repository's target branch the task builds on,
+	// for the send-back.
+	bases []taskBase
+	// No judgement tier answered: only a person can pass what is held.
+	untiered bool
 	// Unchanged: a fresh inspection at this turn found every repository the
 	// Run may push at its starting commit with nothing staged, unstaged or
 	// untracked (unchangedBeforePush), so no report was judged. Epoch is
@@ -142,8 +159,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	if !d.Verified {
 		// The send-back names only what the agent must fix; d.Verdicts,
 		// recorded below, keeps the passed checks too.
-		failed := slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return v.Result == "pass" || v.Result == checksWaived })
-		d.Message = checksText.Render(failed)
+		d.Message = d.sendBack()
 	}
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		current, err := delivery.LatestTurnTx(ctx, tx, r.ID)
@@ -177,7 +193,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 			return err
 		}
 		if escalate {
-			return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds)
+			return delivery.EscalateChecksTx(ctx, tx, r.Org, r.TaskID, r.ID, d.Message, rounds, d.unverified())
 		}
 		return nil
 	})
@@ -212,11 +228,19 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			d.Verdicts = append(d.Verdicts, checksVerdict{Command: c.Command, Result: c.Result, Reason: c.Evidence})
 		}
 	}
-	// A reported failure passes only as one a person waived for the
-	// attempt, and only once the judge says it is that failure: any
-	// other non-pass, or one no waiver names, is rejected unasked.
-	rejected := d
-	var waivers []*delivery.CarriedWaiver
+	// A reported failure a person waived for the attempt passes once the
+	// judge says it is that failure; any reported failure or not-run check
+	// not passed so passes once the judge says it fails the same way at the
+	// target branch's commit the task builds on, or is one a later phase
+	// runs. Waivers are asked about first, and the first non-pass not passed
+	// rejects the report.
+	type held struct {
+		verdict checksVerdict
+		check   delivery.Check
+		waiver  *delivery.CarriedWaiver
+	}
+	var nonPass []held
+	var testPhase bool
 	if len(d.Verdicts) > 0 {
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			turn, err := delivery.LatestTurnTx(ctx, tx, r.ID)
@@ -227,23 +251,30 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			if err != nil {
 				return err
 			}
-			for _, c := range checks {
-				if c.Result == delivery.CheckPass {
-					continue
+			var unwaived []held
+			for i, c := range slices.DeleteFunc(slices.Clone(checks), func(c delivery.Check) bool { return c.Result == delivery.CheckPass }) {
+				h := held{d.Verdicts[i], c, candidates.For(c)}
+				if h.waiver == nil {
+					unwaived = append(unwaived, h)
+				} else {
+					nonPass = append(nonPass, h)
 				}
-				w := candidates.For(c)
-				if w == nil {
-					waivers = nil
-					return nil
-				}
-				waivers = append(waivers, w)
 			}
-			return nil
-		}); err != nil || len(waivers) == 0 {
-			return rejected, err
+			nonPass = append(nonPass, unwaived...)
+			testPhase, err = deliveryTests(ctx, tx, r.TaskID)
+			return err
+		}); err != nil {
+			return d, err
 		}
 	}
-	text, err := s.checksContext(ctx, r, checks)
+	// Only a reported failure is measured against the task base.
+	if slices.ContainsFunc(nonPass, func(h held) bool { return h.check.Result == delivery.CheckFail }) {
+		var err error
+		if d.bases, err = s.taskBases(ctx, r); err != nil {
+			return d, err
+		}
+	}
+	text, err := s.checksContext(ctx, r, checks, d.bases)
 	if err != nil {
 		return d, err
 	}
@@ -251,39 +282,97 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	if svc == nil {
 		svc = &judge.Service{DB: s.DB}
 	}
+	// A rejection for want of a tier records the reported non-passes.
+	rejected := d
 	d.Verdicts = []checksVerdict{}
-	for i, w := range waivers {
-		waived, err := s.waivedContext(ctx, r, w)
-		if err != nil {
-			return d, err
+	ask := func(question, more string) (judge.Judgement, error) {
+		return svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID, Question: question, Context: text + more})
+	}
+	// answered: j is the judge's recorded answer want. An absent CallID
+	// fails closed, including a zero Judgement.
+	answered := func(j judge.Judgement, err error, want string) bool {
+		return err == nil && j.CallID != "" && j.Decision == want
+	}
+	// preexisting asks the pre-existing (or deferred) question about h.
+	preexisting := func(h held) (judge.Judgement, error) {
+		if h.check.Result == delivery.CheckFail && len(d.bases) == 0 {
+			// Nothing to measure a failure against: rejected unasked.
+			return judge.Judgement{}, errNoTaskBase
 		}
-		j, err := svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID,
-			Question: waivedQuestion.Render(w.Covered), Context: text + waived})
-		if errors.Is(err, judge.ErrOff) || errors.Is(err, judge.ErrNoModel) {
-			// No tier judges the failure the same: it stays rejected,
-			// never the skip a tier's absence gives passes.
-			return rejected, nil
+		return ask(preexistingQuestion.Render(struct {
+			delivery.Check
+			TestPhase bool
+		}{h.check, testPhase}), "")
+	}
+	// notPassed is why j (or err) did not pass a check.
+	notPassed := func(j judge.Judgement, err error) string {
+		if err != nil {
+			return err.Error()
+		}
+		return cmp.Or(j.Reasoning, checksUnestablished.Render(nil))
+	}
+	for i, h := range nonPass {
+		v := h.verdict
+		var j judge.Judgement
+		var err error
+		if h.waiver != nil {
+			var waived string
+			if waived, err = s.waivedContext(ctx, r, h.waiver); err != nil {
+				return d, err
+			}
+			j, err = ask(waivedQuestion.Render(h.waiver.Covered), waived)
+			if offTier(err) {
+				return untiered(rejected), nil
+			}
+			if err != nil && ctx.Err() != nil {
+				return d, err
+			}
+			if answered(j, err, judge.Yes) {
+				d.Carried = true
+				d.Verdicts = append(d.Verdicts, checksVerdict{Command: v.Command, Result: delivery.CheckWaived, Decision: j.Decision,
+					Reason: j.Reasoning, CallID: j.CallID, Waiver: h.waiver})
+				continue
+			}
+			// Not the waived failure: it may still predate the task.
+			v.WaiverReason = checksNotCovered.Render(struct{ Role, Reason string }{h.waiver.Role, notPassed(j, err)})
+		}
+		j, err = preexisting(h)
+		if offTier(err) {
+			// No tier to judge the failure: it stays rejected, never the
+			// skip a tier's absence gives passes.
+			return untiered(rejected), nil
 		}
 		if err != nil && ctx.Err() != nil {
 			return d, err
 		}
-		held := rejected.Verdicts[i]
-		if err == nil && j.CallID != "" && j.Decision == judge.Yes {
-			d.Verdicts = append(d.Verdicts, checksVerdict{Command: held.Command, Result: checksWaived, Decision: j.Decision,
-				Reason: j.Reasoning, CallID: j.CallID, Waiver: w})
+		if answered(j, err, judge.Yes) {
+			passed := checksVerdict{Command: v.Command, Decision: j.Decision, Reason: j.Reasoning, CallID: j.CallID, WaiverReason: v.WaiverReason}
+			switch v.Result {
+			case delivery.CheckFail:
+				passed.Result = delivery.CheckPreexisting
+			case delivery.CheckNotRun:
+				passed.Result = delivery.CheckDeferred
+			default:
+				return d, fmt.Errorf("checks gate: the judge passed a %q check", v.Result)
+			}
+			d.JudgePassed = true
+			d.Verdicts = append(d.Verdicts, passed)
 			continue
 		}
-		reason := j.Reasoning
-		if err != nil {
-			reason = err.Error()
+		v.Decision, v.CallID = j.Decision, j.CallID
+		if errors.Is(err, errNoTaskBase) {
+			v.JudgeReason = err.Error()
+		} else {
+			v.JudgeReason = checksNotPreexisting.Render(notPassed(j, err))
 		}
-		held.Decision, held.CallID = j.Decision, j.CallID
-		held.WaiverReason = checksNotCovered.Render(struct{ Role, Reason string }{w.Role, cmp.Or(reason, checksUnestablished.Render(nil))})
-		// The send-back names this and every failure not yet judged.
-		d.Verdicts = append(append(d.Verdicts, held), rejected.Verdicts[i+1:]...)
+		// The send-back names this and every non-pass not yet judged.
+		d.Verdicts = append(d.Verdicts, v)
+		for _, rest := range nonPass[i+1:] {
+			d.Verdicts = append(d.Verdicts, rest.verdict)
+		}
+		d.Carried, d.JudgePassed = false, false
 		return d, nil
 	}
-	d.Carried = len(waivers) > 0
 	passes := slices.DeleteFunc(slices.Clone(checks), func(c delivery.Check) bool { return c.Result != delivery.CheckPass })
 	verified := true
 	// One Backed question per check, answered yes to pass, then Missing,
@@ -293,12 +382,13 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		if i < len(passes) {
 			name, q, want = passes[i].Command, backedQuestion.Render(passes[i]), judge.Yes
 		} else {
-			name, q, want = "missing checks", missingQuestion.Render(nil), judge.No
+			name, q, want = delivery.MissingChecks, missingQuestion.Render(nil), judge.No
 		}
-		j, err := svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID, Question: q, Context: text})
-		if errors.Is(err, judge.ErrOff) || errors.Is(err, judge.ErrNoModel) {
-			if d.Carried {
-				return rejected, nil
+		j, err := ask(q, "")
+		if offTier(err) {
+			// A non-pass the judge passed is never let through by a skip.
+			if len(nonPass) > 0 {
+				return untiered(rejected), nil
 			}
 			d.Verified, d.Skipped = true, true
 			d.Message = checksSkip.Render(nil)
@@ -313,8 +403,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		if err != nil {
 			v.Reason = err.Error()
 		}
-		// An absent CallID also fails closed, including a zero Judgement.
-		if err == nil && j.CallID != "" && j.Decision == want {
+		if answered(j, err, want) {
 			v.Result = "pass"
 		} else {
 			verified = false
@@ -327,6 +416,134 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	}
 	d.Verified = verified
 	return d, nil
+}
+
+// offTier says a judgement could not be asked for want of a tier.
+func offTier(err error) bool { return errors.Is(err, judge.ErrOff) || errors.Is(err, judge.ErrNoModel) }
+
+// untiered is a rejection for want of a judgement tier: each reported
+// failure or not-run check says only a person can pass it, and the
+// send-back does not say how the judge would.
+func untiered(d checksDecision) checksDecision {
+	d.Verdicts = slices.Clone(d.Verdicts)
+	for i := range d.Verdicts {
+		d.Verdicts[i].JudgeReason = checksNoTier.Render(nil)
+	}
+	d.untiered = true
+	return d
+}
+
+// sendBack is the send-back of a rejected report: only the verdicts that
+// did not pass, and, when one is a reported failure, a judgement tier
+// answered and a task base is known, how a failure that predates the task
+// passes, naming the commit of each target branch the task builds on.
+func (d checksDecision) sendBack() string {
+	failed := d.unpassed()
+	// Each field one line: evidence and reasons are free text, and the
+	// send-back's lines are one per check.
+	for i, v := range failed {
+		failed[i].Command, failed[i].Reason = oneLine(v.Command), oneLine(v.Reason)
+		failed[i].WaiverReason, failed[i].JudgeReason = oneLine(v.WaiverReason), oneLine(v.JudgeReason)
+	}
+	passable := !d.untiered && len(d.bases) > 0
+	return checksText.Render(struct {
+		Checks []checksVerdict
+		Failed bool
+		Bases  string
+	}{failed, passable && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases)})
+}
+
+// unpassed are the verdicts that did not pass: neither backed, waived,
+// pre-existing nor deferred.
+func (d checksDecision) unpassed() []checksVerdict {
+	passed := []string{delivery.CheckPass, delivery.CheckWaived, delivery.CheckPreexisting, delivery.CheckDeferred}
+	return slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return slices.Contains(passed, v.Result) })
+}
+
+// unverified is what the escalation of a held report keeps of each check
+// it did not pass: its command, and its reason with why it was not passed.
+func (d checksDecision) unverified() []delivery.UnverifiedCheck {
+	var out []delivery.UnverifiedCheck
+	for _, v := range d.unpassed() {
+		why := slices.DeleteFunc([]string{v.Reason, v.WaiverReason, v.JudgeReason}, func(s string) bool { return s == "" })
+		out = append(out, delivery.UnverifiedCheck{Command: v.Command, Reason: strings.Join(why, " — ")})
+	}
+	return out
+}
+
+// taskBase is the commit of a repository's target branch the task builds
+// on, rendered "repo: branch at sha".
+type taskBase struct{ Repo, Branch, SHA string }
+
+func (b taskBase) String() string { return b.Repo + ": " + b.Branch + " at " + b.SHA }
+
+func joinBases(bases []taskBase) string {
+	out := make([]string, len(bases))
+	for i, b := range bases {
+		out[i] = b.String()
+	}
+	return strings.Join(out, ", ")
+}
+
+// taskBases are, per repository the task may change that the Run's
+// checkout holds, the commit of its target branch the task builds on:
+// GitHub's merge base of that branch and the commit the Run started from
+// (runs.base_shas). The Run's start holds the task's earlier work and any
+// merge of the target branch made before the Run started, so the base is
+// the newest such merged commit, never one of the task's own. A merge made
+// during the Run is not seen: a failure it brought in is measured against
+// the older base, where it does not show, and is rejected. A repository
+// whose start was not recorded, or that GitHub refuses to compare, has
+// none: no failure in it passes as pre-existing. Sorted by repository.
+func (s *Syncer) taskBases(ctx context.Context, r phaseRun) ([]taskBase, error) {
+	var starts map[string]string
+	var tb delivery.TaskBranch
+	var repos []delivery.Repository
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		if err = tx.QueryRow(ctx, `SELECT base_shas FROM runs WHERE id = $1`, r.ID).Scan(&starts); err != nil {
+			return err
+		}
+		if tb, err = delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+			return err
+		}
+		repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID)
+		return err
+	}); err != nil || len(starts) == 0 || s.Forges == nil {
+		return nil, err
+	}
+	gh, err := s.Forges.For(ctx, r.Org)
+	if err != nil || gh == nil {
+		return nil, err
+	}
+	byName := repositoriesBySpecName(repos)
+	var out []taskBase
+	for _, name := range slices.Sorted(maps.Keys(starts)) {
+		repo, ok := byName[name]
+		slug := forge.SlugFromURL(repo.URL)
+		if !ok || repo.Access != "write" || !isSHA(starts[name]) || slug == "" {
+			continue
+		}
+		branch := baseBranch(tb, repo)
+		c, err := gh.Compare(ctx, slug, branch, starts[name])
+		if err != nil && forge.Transient(err) {
+			return nil, err
+		}
+		if err != nil || !isSHA(c.MergeBase.SHA) {
+			continue
+		}
+		out = append(out, taskBase{Repo: repo.Name, Branch: branch, SHA: c.MergeBase.SHA})
+	}
+	return out, nil
+}
+
+// deliveryTests says the task's delivery runs a test phase: its attempt's
+// policy (workflow_runs.state->'policy'), not the settings as they are now.
+func deliveryTests(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	d, err := delivery.ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return false, err
+	}
+	return d.State.Policy.Test, nil
 }
 
 // The judge's context is bounded, so a long Run's still fits the model it
@@ -371,8 +588,9 @@ type checksStream struct {
 
 // checksContext is what the judge reads: the report, the project's notes
 // for the Run's role, what the Run changed and the tool calls it recorded,
-// each with how it ended, in order (checksReportMax and its neighbours).
-func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []delivery.Check) (string, error) {
+// each with how it ended, in order (checksReportMax and its neighbours);
+// with bases, the target-branch commits the task builds on (taskBases).
+func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []delivery.Check, bases []taskBase) (string, error) {
 	report, _ := json.Marshal(checks)
 	var notes string
 	// Changes and calls are read only up to what their caps can show.
@@ -414,10 +632,11 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 	}
 	return checksContextText.Render(struct {
 		Report, Notes, Changes string
+		Bases                  []taskBase
 		Calls                  []string
 		Omitted                int
 	}{boundHead(string(report), checksReportMax), boundHead(notes, checksNotesMax), boundHead(changes.String(), checksChangesMax),
-		shown, total - len(shown)}), nil
+		bases, shown, total - len(shown)}), nil
 }
 
 // waivedContext is what the judge reads beside checksContext about a
