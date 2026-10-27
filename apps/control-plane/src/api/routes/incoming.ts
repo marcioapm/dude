@@ -196,6 +196,13 @@ export async function readDelivery(scope: OrgScope, automationId: string, trigge
   return { ...deliveryOut(r), headers: (r.headers ?? {}) as Record<string, string>, body: (r.body ?? null) as Record<string, unknown> | null };
 }
 
+/** A run's deliveries, oldest first: what started it, then what was sent to it. */
+export async function runDeliveries(scope: OrgScope, automationId: string, runId: string): Promise<AutomationDelivery[]> {
+  const rows = (await scope.sql.unsafe(`SELECT ${INCOMING_COLUMNS} FROM incoming_deliveries d
+    WHERE d.automation_id = $1 AND d.run_id = $2 ORDER BY d.received_at, d.id`, [automationId, runId])) as Array<Record<string, unknown>>;
+  return rows.map(deliveryOut);
+}
+
 export function registerIncomingRoutes(router: Router): void {
   router.publicRoute("POST", "/v1/hooks/:hookId", receiveHook);
 }

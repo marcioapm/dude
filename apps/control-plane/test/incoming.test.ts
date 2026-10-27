@@ -233,6 +233,17 @@ describe("an incoming automation's routes", () => {
     expect((await call("PUT", `/v1/automations/${id}`, { ...settings, projectIds: ["prj_nope"] })).status).toBe(400);
   });
 
+  test("a run's detail lists the delivery that started it and those sent to it, oldest first", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
+    for (const status of ["firing", "resolved"]) await post(hook, `{"status":"${status}"}`, { authorization: secret });
+    const [first, second] = [...await owner`SELECT id FROM incoming_deliveries WHERE automation_id = ${id} ORDER BY received_at, id`] as Json[];
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_inc', ${ORG}, ${id}, 'running', 'event')`;
+    await owner`UPDATE incoming_deliveries SET verdict = 'started', run_id = 'arn_inc', group_key = 'g' WHERE id = ${first.id}`;
+    await owner`UPDATE incoming_deliveries SET verdict = 'sent_to_run', run_id = 'arn_inc', group_key = 'g' WHERE id = ${second.id}`;
+    const run = await (await call("GET", `/v1/automations/${id}/runs/arn_inc`)).json() as Json;
+    expect(run.deliveries.map((d: Json) => [d.id, d.verdict, d.groupKey])).toEqual([[first.id, "started", "g"], [second.id, "sent_to_run", "g"]]);
+  });
+
   test("Deliveries lists what came, newest first, and a delivery's detail keeps its headers redacted", async () => {
     const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
     await post(hook, `{"status":"firing"}`, { authorization: secret, "user-agent": "Grafana/12.2.0", "x-api-secret": "s3" });

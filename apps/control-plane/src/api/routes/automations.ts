@@ -39,7 +39,7 @@ import { badRequest, HttpError, json, noContent, notFound, parseBody } from "../
 import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { readDeliveries, readDelivery } from "./incoming.ts";
+import { readDeliveries, readDelivery, runDeliveries } from "./incoming.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */
@@ -488,8 +488,10 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     if (!r) throw notFound(`automation ${a.id} has no run ${ctx.params.runId}`);
     const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,
         response_excerpt AS "responseExcerpt", at FROM automation_run_requests WHERE run_id = ${r.id as string} ORDER BY at, try`) as Array<Record<string, unknown>>;
+    // An incoming run's deliveries: the one that started it and the later ones of its group sent to it.
+    const deliveries = a.trigger.kind === "incoming" ? await runDeliveries(scope, a.id, r.id as string) : undefined;
     return { ...runOut(r), containerStartedAt: iso(r.containerStartedAt), containerStoppedAt: iso(r.containerStoppedAt),
-      requests: requests.map((q) => ({ ...q, at: iso(q.at) })) };
+      requests: requests.map((q) => ({ ...q, at: iso(q.at) })), ...(deliveries ? { deliveries } : {}) };
   });
   return json(out);
 }
