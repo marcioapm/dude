@@ -75,6 +75,9 @@ import {
 import {
   AUTOMATION_KIND_LABEL,
   AUTOMATION_PROMPT_VARIABLES,
+  DEFAULT_VERIFY_OF,
+  INCOMING_PROMPT_VARIABLES,
+  INCOMING_RATE_DEFAULT,
   AUTOMATION_POST_RETRY,
   COMMAND_MAX_BYTES,
   ORG_AUTOMATION_PICKS,
@@ -118,22 +121,27 @@ import {
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { useOrgSecrets } from "./OrgSecrets.tsx";
+import { DeliveriesTab, DeliveryDetail, holdSecret, IncomingTriggerRows, ProjectsRow, RotateDialog, RunNowIncomingDialog, RunTrigger,
+  SecretOnce, takeSecret } from "./automationIncoming.tsx";
 
-/** Where the automations pages are: a list, one automation (its tab), one run. */
+/** Where the automations pages are: a list, one automation (its tab), one run or one delivery. */
 export interface AutomationsPlace {
   readonly id?: string | undefined;
-  readonly tab?: "settings" | "runs" | undefined;
+  readonly tab?: "settings" | "runs" | "deliveries" | undefined;
   readonly runId?: string | undefined;
+  readonly deliveryId?: string | undefined;
 }
 
-/** `sub` of a settings place ("aut_1/runs/arn_2") as the pages read it. */
+/** `sub` of a settings place ("aut_1/runs/arn_2", "aut_1/deliveries/dlv_3") as the pages read it. */
 export function automationsPlace(sub: string | undefined): AutomationsPlace {
-  const [id, tab, runId] = (sub ?? "").split("/");
-  return { id: id || undefined, tab: tab === "runs" ? "runs" : id ? "settings" : undefined, runId: runId || undefined };
+  const [id, tab, item] = (sub ?? "").split("/");
+  if (tab === "deliveries") return { id, tab: "deliveries", deliveryId: item || undefined };
+  return { id: id || undefined, tab: tab === "runs" ? "runs" : id ? "settings" : undefined, runId: item || undefined };
 }
 
 export function automationsSub(p: AutomationsPlace): string | undefined {
   if (!p.id) return undefined;
+  if (p.tab === "deliveries") return p.deliveryId ? `${p.id}/deliveries/${p.deliveryId}` : `${p.id}/deliveries`;
   return p.tab === "runs" ? (p.runId ? `${p.id}/runs/${p.runId}` : `${p.id}/runs`) : p.id;
 }
 
@@ -166,6 +174,7 @@ const NEXT_RUN = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "nume
 export function nextRun(a: Pick<Automation, "enabled" | "trigger" | "nextRunAt">): string {
   if (!a.enabled) return "Off";
   if (a.trigger.kind === "github") return "On event";
+  if (a.trigger.kind === "incoming") return "On delivery";
   if (!a.nextRunAt) return "—";
   const parts = Object.fromEntries(NEXT_RUN.formatToParts(new Date(a.nextRunAt)).map((p) => [p.type, p.value]));
   return `${parts["weekday"]} ${parts["day"]} ${parts["month"]} ${parts["hour"]}:${parts["minute"]}`;
@@ -243,7 +252,8 @@ export function AutomationsList({ client, orgName, projectId, canCreate, onOpen,
           <Select<string> aria-label="Scope" size="sm" value={filters.scope} onValueChange={set("scope")}
             options={[{ value: ANY, label: "All scopes" }, { value: "organization", label: orgName }, { value: "project", label: "Projects" }]} />
           <Select<string> aria-label="Trigger" size="sm" value={filters.trigger} onValueChange={set("trigger")}
-            options={[{ value: ANY, label: "All triggers" }, { value: "schedule", label: "Schedule" }, { value: "github", label: "GitHub event" }]} />
+            options={[{ value: ANY, label: "All triggers" }, { value: "schedule", label: "Schedule" }, { value: "github", label: "GitHub event" },
+              { value: "incoming", label: "Incoming webhook" }]} />
           <Select<string> aria-label="Kind" size="sm" value={filters.kind} onValueChange={set("kind")} options={kinds} />
           <Select<string> aria-label="On or off" size="sm" value={filters.enabled} onValueChange={set("enabled")}
             options={[{ value: ANY, label: "On and off" }, { value: "true", label: "On" }, { value: "false", label: "Off" }]} />
@@ -268,7 +278,7 @@ export function AutomationsList({ client, orgName, projectId, canCreate, onOpen,
         </SettingsSection>
       ) : null}
       {creating ? <NewAutomationDialog client={client} projectId={projectId} onClose={() => setCreating(false)}
-        onCreated={(a) => { setCreating(false); onOpen(a.id); }} /> : null}
+        onCreated={(a) => { setCreating(false); holdSecret(a); onOpen(a.id); }} /> : null}
     </div>
   );
 }
@@ -336,16 +346,17 @@ export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {
   client: ApiClient;
   projectId: string | null;
   onClose: () => void;
-  onCreated: (a: Automation) => void;
+  onCreated: (a: Automation & { incomingSecret?: string }) => void;
 }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<AutomationKind>("agent");
   const [agentAs, setAgentAs] = useState<"own" | PresetRole>("own");
-  const [when, setWhen] = useState<"schedule" | "github">("schedule");
+  const [when, setWhen] = useState<"schedule" | "github" | "incoming">("schedule");
   const { busy, problem, save } = useSave();
   const preset = kind === "agent" && agentAs !== "own" ? agentAs : undefined;
   const eventsOnly = kind === "server" || preset === "reviewer";
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const trigger = eventsOnly ? "github" : when;
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="New automation"
       footerProblem={problem}
@@ -353,7 +364,7 @@ export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={busy || !name.trim()} data-testid="create-automation"
           onClick={() => void save(async () => onCreated(await client.createAutomation({ name: name.trim(), kind, preset: preset ?? null,
-            trigger: eventsOnly ? "github" : when, projectId, tz })))}>Create</Button>
+            trigger, projectId, tz })))}>Create</Button>
       </>}>
       <FormStack>
         <Input label="Name" value={name} autoFocus maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="Nightly QA pass" />
@@ -365,10 +376,12 @@ export function NewAutomationDialog({ client, projectId, onClose, onCreated }: {
             options={[{ value: "own", label: "Its own agent" }, ...PRESET_ROLES.map((r) => ({ value: r, label: PRESET_ROLE_LABEL[r] }))]} />
         ) : null}
         <Fieldset legend="When it runs"
-          hint={eventsOnly ? (kind === "server" ? "A server answers GitHub events." : REVIEWER_NEEDS_PULL_REQUEST) : undefined}>
-          <Segmented<"schedule" | "github"> label="When it runs" value={eventsOnly ? "github" : when} onChange={setWhen}
+          hint={eventsOnly ? (kind === "server" ? "A server answers GitHub events." : REVIEWER_NEEDS_PULL_REQUEST)
+            : when === "incoming" ? "Its own URL: anything that can POST JSON starts it. The URL and secret are on its settings." : undefined}>
+          <Segmented<"schedule" | "github" | "incoming"> label="When it runs" value={trigger} onChange={setWhen}
             data-testid="new-automation-trigger"
-            options={[{ value: "schedule", label: "Schedule", disabled: eventsOnly }, { value: "github", label: "GitHub event" }]} />
+            options={[{ value: "schedule", label: "Schedule", disabled: eventsOnly }, { value: "github", label: "GitHub event" },
+              { value: "incoming", label: "Incoming webhook", disabled: eventsOnly }]} />
         </Fieldset>
         <SettingsNote>It starts off, owned by you. Its settings open next.</SettingsNote>
       </FormStack>
@@ -396,7 +409,7 @@ function inputOf(a: Automation): AutomationInput {
     name: a.name, description: a.description, kind: a.kind, trigger: a.trigger, sessionMode: a.sessionMode, expiryDays: a.expiryDays,
     concurrency: a.concurrency, parallelMax: a.parallelMax, repos: a.repos, repoFilter: a.repoFilter, agent: a.agent,
     machineSizeId: a.machineSizeId, imageId: a.imageId, setupScript: a.setupScript, command: a.command, server: a.server,
-    webhook: a.webhook, secrets: a.secrets, notifyOnFailure: a.notifyOnFailure,
+    webhook: a.webhook, secrets: a.secrets, notifyOnFailure: a.notifyOnFailure, projectIds: a.projectIds ?? [],
   };
 }
 
@@ -408,6 +421,12 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
   const [deleting, setDeleting] = useState(false);
   const duplicate = useSave();
   const id = place.id!;
+  // An incoming webhook's secret, shown once: after Create, a save that made it, or Rotate.
+  const [secret, setSecret] = useState<{ value: string; rotated: boolean } | null>(() => {
+    const held = takeSecret(id);
+    return held ? { value: held, rotated: false } : null;
+  });
+  const [rotating, setRotating] = useState(false);
   const load = useCallback(() => {
     client.automation(id).then((x) => { setA(x); setProblem(null); }, (e: unknown) => setProblem(errorText(e)));
   }, [client, id]);
@@ -416,6 +435,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
   if (!a) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
   const tab = place.tab ?? "settings";
   const canRun = a.canEdit || a.canTransfer;
+  const hasDeliveries = a.trigger.kind !== "schedule";
   return (
     <div className="settingsPage" data-testid="automation-page" data-id={a.id}>
       <Breadcrumb size="sm" data-testid="automation-breadcrumb" items={[
@@ -424,16 +444,20 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
           ? [{ id: "name", label: a.name, onSelect: () => onPlace({ id: a.id }) },
              { id: "runs", label: "Runs", onSelect: () => onPlace({ id: a.id, tab: "runs" }) },
              { id: "run", label: "Run", mono: true }]
+          : tab === "deliveries" && place.deliveryId
+          ? [{ id: "name", label: a.name, onSelect: () => onPlace({ id: a.id }) },
+             { id: "deliveries", label: "Deliveries", onSelect: () => onPlace({ id: a.id, tab: "deliveries" }) },
+             { id: "delivery", label: place.deliveryId, mono: true }]
           : [{ id: "name", label: a.name }]),
       ]} />
       <SettingsHeader title={a.name}
-        description={<span className="automationKind"><KindMark kind={a.kind} role={roleOf(a)} /><TriggerSummary trigger={a.trigger} /></span>}
+        description={<span className="automationKind"><KindMark kind={a.kind} role={roleOf(a)} /><TriggerSummary trigger={a.trigger} wrap={a.trigger.kind === "incoming"} /></span>}
         actions={<>
           <Switch checked={a.enabled} label={a.enabled ? "On" : "Off"} disabled={!a.canEdit} testId="automation-enabled"
             onCheckedChange={(on) => void client.setAutomationEnabled(a.id, on).then(setA, (e: unknown) => setProblem(errorText(e)))} />
           {canRun ? (
             <Button variant="secondary" leadingIcon="play" data-testid="run-now" disabled={runNow.busy}
-              onClick={() => a.trigger.kind === "github" ? setRunning(true)
+              onClick={() => a.trigger.kind !== "schedule" ? setRunning(true)
                 : void runNow.save(() => client.runAutomation(a.id, {}), () => onPlace({ id: a.id, tab: "runs" }), "Run started")}>
               Run now
             </Button>
@@ -442,7 +466,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
             trigger={<IconButton icon="more" label={`More for ${a.name}`} data-testid="automation-more" />}
             items={[
               { id: "duplicate", label: "Duplicate", icon: "copy", disabled: !a.canEdit,
-                onSelect: () => void duplicate.save(async () => onPlace({ id: (await client.duplicateAutomation(a.id)).id }), undefined, "Duplicated: it starts off") },
+                onSelect: () => void duplicate.save(async () => { const copy = await client.duplicateAutomation(a.id); holdSecret(copy); onPlace({ id: copy.id }); }, undefined, "Duplicated: it starts off") },
               { kind: "separator" },
               { id: "delete", label: "Delete…", icon: "archive", tone: "danger", disabled: !a.canEdit, onSelect: () => setDeleting(true) },
             ]} />
@@ -455,21 +479,38 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
         </Callout>
       ) : null}
       {problem || runNow.problem || duplicate.problem ? <Callout tone="danger">{problem ?? runNow.problem ?? duplicate.problem}</Callout> : null}
-      <Tabs value={tab} onValueChange={(t) => onPlace({ id: a.id, tab: t as "settings" | "runs" })}>
+      <Tabs value={tab} onValueChange={(t) => onPlace({ id: a.id, tab: t as "settings" | "runs" | "deliveries" })}>
         <TabList aria-label="Automation">
           <Tab value="settings">Settings</Tab>
           <Tab value="runs">Runs</Tab>
+          {hasDeliveries ? <Tab value="deliveries">Deliveries</Tab> : null}
         </TabList>
         <TabPanel value="settings">
-          <AutomationSettings key={a.id} client={client} a={a} orgName={orgName} onSaved={setA} onTransfer={() => setTransferring(true)} onTry={() => setRunning(true)} />
+          <AutomationSettings key={a.id} client={client} a={a} orgName={orgName} onTransfer={() => setTransferring(true)} onTry={() => setRunning(true)}
+            onSaved={(x) => { setA(x); if (x.incomingSecret) setSecret({ value: x.incomingSecret, rotated: false }); }}
+            onRotate={() => setRotating(true)} />
         </TabPanel>
         <TabPanel value="runs">
-          {place.runId ? <RunDetail client={client} a={a} runId={place.runId} />
+          {place.runId ? <RunDetail client={client} a={a} runId={place.runId} onDelivery={(d) => onPlace({ id: a.id, tab: "deliveries", deliveryId: d })} />
             : <RunsTab client={client} a={a} onOpenRun={(runId) => onPlace({ id: a.id, tab: "runs", runId })} />}
         </TabPanel>
+        {hasDeliveries ? (
+          <TabPanel value="deliveries">
+            {tab !== "deliveries" ? null : place.deliveryId
+              ? <DeliveryDetail client={client} a={a} id={place.deliveryId} onRun={(runId) => onPlace({ id: a.id, tab: "runs", runId })}
+                onRunWith={() => setRunning(true)} />
+              : <DeliveriesTab client={client} a={a} onOpen={(d) => onPlace({ id: a.id, tab: "deliveries", deliveryId: d })}
+                onRun={(runId) => onPlace({ id: a.id, tab: "runs", runId })} />}
+          </TabPanel>
+        ) : null}
       </Tabs>
-      {running ? <RunNowDialog client={client} a={a} onClose={() => setRunning(false)}
+      {running && a.trigger.kind === "incoming" ? <RunNowIncomingDialog client={client} a={a} picked={place.deliveryId} checkJson={checkJson}
+        onClose={() => setRunning(false)} onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
+      {running && a.trigger.kind === "github" ? <RunNowDialog client={client} a={a} onClose={() => setRunning(false)}
         onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
+      {rotating ? <RotateDialog client={client} a={a} onClose={() => setRotating(false)}
+        onRotated={(x, value) => { setRotating(false); setA(x); setSecret({ value, rotated: true }); }} /> : null}
+      {secret && a.trigger.kind === "incoming" ? <SecretOnce secret={secret.value} trigger={a.trigger} rotated={secret.rotated} onClose={() => setSecret(null)} /> : null}
       {transferring ? <TransferDialog client={client} a={a} orgName={orgName} people={people} onClose={() => setTransferring(false)}
         onDone={(x) => { setTransferring(false); setA(x); }} /> : null}
       {deleting ? <DeleteDialog client={client} a={a} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); onBack(); }} /> : null}
@@ -479,17 +520,18 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
 
 const SECRETS_LOADING = "The project's secrets are still loading; save again in a moment.";
 
-function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: {
+function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry, onRotate }: {
   client: ApiClient;
   a: Automation;
   orgName: string;
-  onSaved: (a: Automation) => void;
+  onSaved: (a: Automation & { incomingSecret?: string }) => void;
   onTransfer: () => void;
   onTry: () => void;
+  onRotate: () => void;
 }) {
   const [form, setForm] = useState<AutomationInput>(() => inputOf(a));
   const [subs, setSubs] = useState<EventSubscriptions | null>(null);
-  const [groups, setGroups] = useState<Array<{ project: string; repos: string[] }>>([]);
+  const [groups, setGroups] = useState<Array<{ projectId: string; project: string; repos: string[] }>>([]);
   const { busy, problem, save } = useSave();
   // A project's own secrets, null until read: a save resolves picks against their names, so it waits for them.
   const [project, setProject] = useState<ProjectSecret[] | null>(a.projectId ? null : []);
@@ -510,7 +552,10 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   const ro = !a.canEdit;
   const scope = a.projectId ? "project" : "organization";
   const invalid = automationProblem(form, scope);
-  const dirty = JSON.stringify(form) !== JSON.stringify(inputOf(a));
+  // A problem its own field shows: Save stays live and, tried, says "Not saved" there and under the button.
+  const fieldProblem = invalid?.path === "projectIds" || invalid?.path === "trigger.groupBy";
+  const [tried, setTried] = useState(false);
+  const dirty = JSON.stringify(form) !== JSON.stringify(inputOf(a)) || fieldProblem;
   const set = <K extends keyof AutomationInput>(k: K, v: AutomationInput[K]) => setForm((f) => ({ ...f, [k]: v }));
   const trigger = form.trigger;
   const preset = form.agent && "preset" in form.agent ? form.agent : null;
@@ -534,16 +579,21 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
   return (
     <form className="settingsForm" onSubmit={(e) => {
       e.preventDefault();
+      setTried(true);
+      if (invalid) return;
       const secrets = picksInForce(form.secrets);
       if (secrets) void save(() => client.updateAutomation(a.id, { ...form, secrets }).then(onSaved), undefined, "Automation saved");
     }}>
       <fieldset disabled={ro} className="plainFieldset">
         <SettingsSection title="Trigger">
           <SettingRow label="Runs on">
-            <Segmented<"schedule" | "github"> label="Runs on" value={trigger.kind} disabled={ro || a.kind === "server"} data-testid="trigger-kind"
+            <Segmented<Trigger["kind"]> label="Runs on" value={trigger.kind} disabled={ro || a.kind === "server"} data-testid="trigger-kind"
               onChange={(k) => set("trigger", k === "schedule" ? { kind: "schedule", cron: "0 9 * * 1-5", tz: "UTC" }
+                : k === "incoming" ? { kind: "incoming", hookId: a.trigger.kind === "incoming" ? a.trigger.hookId : "hk_000000000000", verify: DEFAULT_VERIFY_OF.signature,
+                  conditions: [], groupBy: "", ratePerHour: INCOMING_RATE_DEFAULT }
                 : { kind: "github", event: "pull_request", actions: [], filters: { branch: [], label: [], paths: [], author: [] } })}
-              options={[{ value: "schedule", label: "Schedule" }, { value: "github", label: "GitHub event" }]} />
+              options={[{ value: "schedule", label: "Schedule" }, { value: "github", label: "GitHub event" },
+                { value: "incoming", label: "Incoming webhook", disabled: a.kind === "server" }]} />
           </SettingRow>
           {trigger.kind === "schedule" ? (
             <SettingRow label="Schedule">
@@ -551,10 +601,18 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
                 next={<ScheduleNext client={client} cron={trigger.cron} tz={trigger.tz} />}
                 onChange={(s) => set("trigger", { kind: "schedule", ...s })} />
             </SettingRow>
+          ) : trigger.kind === "incoming" ? (
+            <IncomingTriggerRows trigger={trigger} hint={a.trigger.kind === "incoming" ? a.incomingSecretHint : null} ro={ro}
+              groupError={tried && invalid?.path === "trigger.groupBy" ? invalid.message : undefined}
+              onChange={(t) => set("trigger", t)} onRotate={onRotate} />
           ) : (
             <EventTrigger trigger={trigger} subs={subs} disabled={ro} onChange={(t) => set("trigger", t)} />
           )}
-          {a.projectId ? null : trigger.kind === "schedule" && a.kind !== "webhook" ? (
+          {a.projectId ? null : trigger.kind === "incoming" ? (
+            <ProjectsRow projects={groups.map((g) => ({ id: g.projectId, name: g.project }))} value={form.projectIds} ro={ro}
+              error={tried && invalid?.path === "projectIds" ? invalid.message : undefined}
+              onChange={(ids) => setForm((f) => ({ ...f, projectIds: ids, repos: Array.isArray(f.repos) ? "all" : f.repos }))} />
+          ) : trigger.kind === "schedule" && a.kind !== "webhook" ? (
             <SettingRow label="Checked out" help="What each run checks out. None: it starts in an empty workspace, with its image's tools." data-testid="org-checked-out">
               <Segmented<"none" | "some"> label="Checked out" value={form.repos === "none" ? "none" : "some"} disabled={ro} data-testid="repos-checked-out"
                 onChange={(m) => setForm((f) => ({ ...f, repos: m === "none" ? "none" : "all", repoFilter: m === "none" ? null : f.repoFilter }))}
@@ -573,9 +631,11 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
           {a.projectId && a.kind !== "webhook" ? (
             <ProjectReposRow client={client} projectId={a.projectId} ro={ro} value={form.repos} onChange={(v) => set("repos", v)} />
           ) : null}
-          {trigger.kind === "github" && (a.canEdit || a.canTransfer) ? (
-            <SettingRow label="Try it" help="Runs it once on a past delivery or an event you write, as its own run.">
-              <Button variant="secondary" size="sm" leadingIcon="play" data-testid="try-it" onClick={onTry}>Test with an event…</Button>
+          {trigger.kind !== "schedule" && (a.canEdit || a.canTransfer) ? (
+            <SettingRow label="Try it" help={trigger.kind === "incoming" ? "Runs it once on a past delivery or JSON you write, as its own run."
+              : "Runs it once on a past delivery or an event you write, as its own run."}>
+              <Button variant="secondary" size="sm" leadingIcon="play" data-testid="try-it" onClick={onTry}>
+                {trigger.kind === "incoming" ? "Test with a payload…" : "Test with an event…"}</Button>
             </SettingRow>
           ) : null}
         </SettingsSection>
@@ -594,7 +654,9 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
               ) : null}
             </SettingRow>
             )}
-            <SettingRow label="While a run is going" help="What a new event does. A test run always starts its own." data-testid="automation-concurrency">
+            <SettingRow label="While a run is going" data-testid="automation-concurrency"
+              help={trigger.kind === "incoming" ? "What a delivery of another group does. A delivery whose group's run is still going is always sent to it. A test run always starts its own."
+                : "What a new event does. A test run always starts its own."}>
               <Select<string> aria-label="Concurrency" value={form.concurrency} disabled={ro} onValueChange={(c) => set("concurrency", c as AutomationInput["concurrency"])}
                 options={CONCURRENCY.map((c) => ({ value: c, label: CONCURRENCY_LABEL[c],
                   disabled: (c === "send" && !(a.kind === "agent" && form.sessionMode === "resumable")) || (c === "parallel" && form.sessionMode !== "ephemeral") }))} />
@@ -717,9 +779,10 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry }: 
 
       {ro ? null : (
         <div className="automationSave">
-          {invalid ? <Callout tone="attention">{invalid.message}</Callout> : null}
+          {invalid && !(tried && fieldProblem) ? <Callout tone="attention">{invalid.message}</Callout> : null}
+          {tried && fieldProblem && invalid ? <Callout tone="danger" data-testid="not-saved"><b>Not saved:</b> {invalid.message}</Callout> : null}
           {problem ? <Callout tone="danger">{problem}</Callout> : null}
-          <Button type="submit" variant="primary" disabled={busy || !dirty || Boolean(invalid)} loading={project === null}>Save</Button>
+          <Button type="submit" variant="primary" disabled={busy || !dirty || (Boolean(invalid) && !fieldProblem)} loading={project === null}>Save</Button>
         </div>
       )}
     </form>
@@ -1012,7 +1075,7 @@ function PromptEditor({ client, a, ro, label, text, onSave, onRestored }: {
   return (
     <>
       <MarkdownDocument key={`${a.id}-${a.updatedAt}`} data-testid="automation-prompt-document" breaks label={label} source={text}
-        emptyText="Nothing written yet." meta={meta} variables={AUTOMATION_PROMPT_VARIABLES}
+        emptyText="Nothing written yet." meta={meta} variables={a.trigger.kind === "incoming" ? INCOMING_PROMPT_VARIABLES : AUTOMATION_PROMPT_VARIABLES}
         onSave={ro ? undefined : async (body) => {
           setProblem(null);
           try {
@@ -1138,7 +1201,7 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
   );
 }
 
-function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; runId: string }) {
+function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Automation; runId: string; onDelivery: (id: string) => void }) {
   const [run, setRun] = useState<AutomationRunDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
@@ -1146,7 +1209,8 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
   return (
     <div data-testid="run-detail">
       <SettingsSection title="Run">
-        <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span></p>
+        <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span>
+          {run.costUsd !== null ? <span className="incomingMuted"> · ${run.costUsd.toFixed(2)}</span> : null}</p>
         {run.reason ? <SettingsNote>{run.reason}</SettingsNote> : null}
         {a.kind === "server" && run.containerStartedAt ? (
           <ol className="automationTimeline" data-testid="server-timeline">
@@ -1166,6 +1230,7 @@ function RunDetail({ client, a, runId }: { client: ApiClient; a: Automation; run
           </Table>
         ) : null}
       </SettingsSection>
+      <RunTrigger a={a} run={run} onDelivery={onDelivery} />
       <SettingsSection title="Trigger payload">
         {run.payloadsPurged ? <SettingsNote>Payloads are kept 30 days.</SettingsNote>
           : <pre className="automationPayload">{JSON.stringify(run.payloads.length === 1 ? run.payloads[0]!.body : run.payloads, null, 2)}</pre>}

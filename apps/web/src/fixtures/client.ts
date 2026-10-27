@@ -1167,6 +1167,18 @@ export class FixtureClient extends ApiClient {
   override automationDeliveries(): ReturnType<ApiClient["automationDeliveries"]> {
     return this.#auto(() => this.#automations.deliveries());
   }
+  override automationDeliveryList(id: string): ReturnType<ApiClient["automationDeliveryList"]> {
+    return this.#auto(() => this.#automations.deliveryList(id));
+  }
+  override automationDelivery(id: string, deliveryId: string): ReturnType<ApiClient["automationDelivery"]> {
+    return this.#auto(() => this.#automations.delivery(id, deliveryId));
+  }
+  override rotateIncomingSecret(id: string): ReturnType<ApiClient["rotateIncomingSecret"]> {
+    return this.#auto(() => this.#automations.rotate(id));
+  }
+  override evaluateIncoming(id: string, body: Record<string, unknown>): ReturnType<ApiClient["evaluateIncoming"]> {
+    return this.#auto(() => this.#automations.evaluateIncoming(id, body));
+  }
   override runAutomation(id: string, body: Parameters<ApiClient["runAutomation"]>[1]): ReturnType<ApiClient["runAutomation"]> {
     return this.#auto(() => this.#automations.runNow(id, body));
   }
