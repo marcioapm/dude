@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -301,6 +304,35 @@ func TestAPanicMakingTheThumbnailLeavesTheFilesAnswer(t *testing.T) {
 		t.Fatalf("%v, %d calls, answer %v; want the image's answer alone", err, shim.count(), answer)
 	}
 	if stderr != "dude publish: no thumbnail for shot.png: panic: decoder exploded\n" {
+		t.Fatalf("stderr %q", stderr)
+	}
+}
+
+// A PNG whose header claims more than maxPixels is not decoded: the image
+// is published alone and stderr says why. Only the header is real here,
+// which is all image.DecodeConfig reads.
+func TestAnImageTooLargeToDecodeGetsNoThumbnail(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, filled(1, 1, color.Black)); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	// Signature (8), IHDR length and type (8), then width and height.
+	binary.BigEndian.PutUint32(b[16:], 8000)
+	binary.BigEndian.PutUint32(b[20:], 8000)
+	binary.BigEndian.PutUint32(b[29:], crc32.ChecksumIEEE(b[12:29]))
+	src := filepath.Join(t.TempDir(), "huge.png")
+	os.WriteFile(src, b, 0o644)
+	if 8000*8000 <= maxPixels {
+		t.Fatalf("8000x8000 is within maxPixels %d", maxPixels)
+	}
+	shim := recordingShim(t, 0)
+	answer, stderr, err := publishing(t, src)
+	if err != nil || shim.count() != 1 || answer["id"] != "art_0000000000000001" || answer["thumbnail"] != nil {
+		t.Fatalf("%v, %d calls, answer %v; want the image published alone", err, shim.count(), answer)
+	}
+	if stderr != "dude publish: no thumbnail for huge.png: 8000x8000 is too large to decode\n" {
 		t.Fatalf("stderr %q", stderr)
 	}
 }

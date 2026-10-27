@@ -38,10 +38,13 @@ const (
 	thumbEdge = 640
 	// An image this small already is its own thumbnail.
 	smallImageBytes = 200 << 10
-	// Larger pictures are not decoded: their pixels alone would take
-	// hundreds of megabytes.
-	maxPixels    = 64 << 20
-	videoTimeout = 60 * time.Second
+	// Larger pictures are not decoded. At the cap, decoding alone takes
+	// 128 MiB (8-bit RGBA) or 256 MiB (16-bit PNG).
+	maxPixels = 32 << 20
+	// Above this the scaler is bilinear, which keeps no float buffer of
+	// the source's height beside the decoded picture.
+	approxScalePixels = 4 << 20
+	videoTimeout      = 60 * time.Second
 )
 
 // thumbStderr is where a thumbnail that could not be made is said.
@@ -221,7 +224,11 @@ func writeThumb(img image.Image) (string, error) {
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(dst, dst.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
-	draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
+	var scaler draw.Scaler = draw.CatmullRom
+	if b.Dx()*b.Dy() > approxScalePixels {
+		scaler = draw.ApproxBiLinear
+	}
+	scaler.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
 	f, err := os.CreateTemp("", "dude-thumb-*.jpg")
 	if err != nil {
 		return "", err
