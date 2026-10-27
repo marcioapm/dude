@@ -353,8 +353,9 @@ func writerChecksText(runs []gatedJudgement, room int) string {
 				waiver = checksField(render(writerCarriedFromTmpl, map[string]any{"By": valueOr(w.PersonName, "a person"),
 					"Role": w.Role, "Run": w.RunID, "Turn": w.Turn, "Note": w.Note}))
 			}
-			c.Checks = append(c.Checks, writerCheckLine{checksField(v.Command),
-				checksField(valueOr(v.Result, v.Decision)), checksField(v.Reason), checksField(strings.Join(slices.DeleteFunc([]string{v.WaiverReason, v.JudgeReason}, func(s string) bool { return s == "" }), " — ")), waiver})
+			why := slices.DeleteFunc([]string{v.WaiverReason, v.JudgeReason}, func(s string) bool { return s == "" })
+			c.Checks = append(c.Checks, writerCheckLine{Command: checksField(v.Command), Result: checksField(valueOr(v.Result, v.Decision)),
+				Reason: checksField(v.Reason), Why: checksField(strings.Join(why, " — ")), Waiver: waiver})
 		}
 		items[i] = c
 	}
