@@ -356,6 +356,65 @@ func TestGitHubDeliveryVerdictsAreKeptPerAutomation(t *testing.T) {
 	}
 }
 
+// An organisation incoming automation runs in its projects only: it checks
+// out their repositories (all, or the ids its repos names), its tools may
+// reach only theirs, and create_task files in its first project.
+func TestOrgIncomingRunIsScopedToItsProjects(t *testing.T) {
+	h := newHarness(t)
+	p2 := h.org + "_p2"
+	exec(t, h.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'api', 'api', 'API')`, p2, h.org)
+	exec(t, h.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
+		($1 || '_r', $2, $1, 'api', 'https://github.com/acme/api.git'),
+		($3 || '_docs', $2, $3, 'docs', 'https://github.com/acme/docs.git')`, p2, h.org, h.project)
+	h.incoming("aut_org", nil, "", map[string]any{"command": "true", "project_id": nil})
+	exec(t, h.owner, `UPDATE automations SET kind = 'command', agent = NULL, project_ids = ARRAY[$1], repos = '"all"' WHERE id = 'aut_org'`, h.project)
+	exec(t, h.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_org', $1, 'aut_org', 'queued', 'event')`, h.org)
+	ctx := context.Background()
+	names := func() []string {
+		var a Automation
+		var got []string
+		if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+			var err error
+			if a, err = Load(ctx, tx, "aut_org"); err != nil {
+				return err
+			}
+			repos, err := automationRepos(ctx, tx, a, nil)
+			for _, r := range repos {
+				got = append(got, r.Name)
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := names(); !slices.Equal(got, []string{"docs", "web"}) {
+		t.Errorf("checked out with repos all: %v, want P1's docs and web", got)
+	}
+	exec(t, h.owner, `UPDATE automations SET repos = to_jsonb(ARRAY[$1 || '_docs']) WHERE id = 'aut_org'`, h.project)
+	if got := names(); !slices.Equal(got, []string{"docs"}) {
+		t.Errorf("checked out with repos [docs]: %v", got)
+	}
+	var a Automation
+	if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) (err error) { a, err = Load(ctx, tx, "aut_org"); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.runner.toolsToken(ctx, a, "arn_org", nil); err != nil {
+		t.Fatal(err)
+	}
+	var scope struct {
+		ProjectID string   `json:"projectId"`
+		Repos     []string `json:"repos"`
+	}
+	if err := h.owner.QueryRow(ctx, `SELECT tools_scope FROM automation_runs WHERE id = 'arn_org'`).Scan(&scope); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(scope.Repos)
+	if scope.ProjectID != h.project || !slices.Equal(scope.Repos, []string{"acme/docs", "acme/web"}) {
+		t.Errorf("tools scope %+v, want project %s and its repositories only", scope, h.project)
+	}
+}
+
 // Once the group's run has ended, the next delivery of that group is
 // checked and fires afresh.
 func TestIncomingAfterTheRunEndedStartsAgain(t *testing.T) {
