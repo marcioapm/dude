@@ -209,8 +209,12 @@ def test_a_brainstorm_with_no_project_offers_the_learned_one_and_the_askers_clic
     assert "dude github_" not in answer, answer
     jobs = next(line for line in answer.splitlines() if line.startswith("Jobs:"))
     assert "integration" in jobs and "failure" in jobs, jobs
-    # Its agent was told of the checkout as a member's link in dude tells it (the syncer's resume).
-    assert f"A member linked {keys['api']}/{fake_github.repo}; it is checked out at" in answer, answer
+    # Its agent was told of the checkout as a member's link in dude tells it (the syncer's resume). That
+    # resume can land before or after the `said` snapshot, so the whole transcript is searched.
+    notice = f"A member linked {keys['api']}/{fake_github.repo}; it is checked out at"
+    wait_until(lambda: any(notice in t for t in _said(n["marcia"], session)), timeout=30,
+               message="the agent was never told of the checkout")
+    assert any(notice in t for t in _said(n["marcia"], session)), _said(n["marcia"], session)
 
 
 def test_a_project_hidden_from_slack_is_never_routed_to_linked_or_read(
