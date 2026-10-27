@@ -70,9 +70,6 @@ export const INCOMING_RATE_DEFAULT = 30;
 export const INCOMING_RATE_MAX = 600;
 /** The largest body the endpoint reads: 1 MiB. */
 export const INCOMING_MAX_BYTES = 1_048_576;
-/** Accepted and skipped deliveries keep their body this long; refused rows are deleted sooner. */
-export const INCOMING_PAYLOAD_DAYS = 30;
-export const INCOMING_REFUSED_DAYS = 7;
 
 export const hookIdSchema = z.string().regex(/^hk_[a-z0-9]{12,40}$/, "a hook id");
 
@@ -145,11 +142,6 @@ export function conditionHolds(c: Condition, body: unknown): ConditionResult {
       return { ok: typeof v === "string" && v.includes(want), actual };
     }
   }
-}
-
-/** Every condition's result, in order. */
-export function evaluateConditions(conditions: readonly Condition[], body: unknown): ConditionResult[] {
-  return conditions.map((c) => conditionHolds(c, body));
 }
 
 /** A condition in words: "status is firing", "commonLabels.severity one of critical, high". */
