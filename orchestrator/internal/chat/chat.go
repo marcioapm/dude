@@ -120,12 +120,22 @@ type ConversationInfo struct {
 	Name string
 }
 
-// ThreadMessage is one message of a thread, oldest first.
+// ThreadMessage is one message of a thread or channel. Text is everything
+// the message shows as text: its body, attachments and blocks, links kept.
+// A bot's message carries the bot's name as the provider shows it.
 type ThreadMessage struct {
-	ID     string
-	UserID string
-	Text   string
-	Bot    bool
+	ID      string
+	UserID  string
+	Text    string
+	Bot     bool
+	BotName string
+}
+
+// Page asks for the messages just Before one message, or just After one
+// (an empty After with no Before: from the start), at most Limit.
+type Page struct {
+	Before, After string
+	Limit         int
 }
 
 // Reply is what dude posts: words, and optionally a link with its label
@@ -195,6 +205,15 @@ type Provider interface {
 
 	// Reading the conversation.
 	FetchThread(ctx context.Context, inst Installation, conversation, thread, since string) ([]ThreadMessage, error)
+	// FetchHistory is the conversation's top-level messages before message
+	// before (not it), newest first: at most limit, none older than within
+	// before it.
+	FetchHistory(ctx context.Context, inst Installation, conversation, before string, within time.Duration, limit int) ([]ThreadMessage, error)
+	// FetchPage is a page of a thread (thread "" for the conversation's
+	// top level), oldest first: at most limit messages just before message
+	// before, or just after message after (one of the two), and whether
+	// there are more that way.
+	FetchPage(ctx context.Context, inst Installation, conversation, thread string, page Page) ([]ThreadMessage, bool, error)
 	Conversation(ctx context.Context, inst Installation, conversation string) (ConversationInfo, error)
 	ListMembers(ctx context.Context, inst Installation, conversation string) ([]string, error)
 	User(ctx context.Context, inst Installation, userID string) (ExternalUser, error)

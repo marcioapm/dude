@@ -6,7 +6,10 @@ package orchestrator_test
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -161,6 +164,131 @@ func TestTheConductorsFirstImplementerIsRefusedWhileBlocked(t *testing.T) {
 	w.mergeByHand(blocker)
 	w.must(task, "start_phase", `{"phase":"implement"}`)
 	w.until("the implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
+}
+
+// hiddenBlocker is SEC-7, a task in project SEC with its repository, and
+// a task from slack in the world's project; SEC is hidden from slack.
+func (w *world) hiddenBlocker() (blocker, task string) {
+	w.t.Helper()
+	sec := "prj_sec_" + w.org
+	mustExec(w.t, w.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'sec', $1, 'SEC')`, sec, w.org)
+	mustExec(w.t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ($1, $2, $3, 'sec', 'git://127.0.0.1/acme/sec.git', 'main')`, "repo_sec_"+w.org, w.org, sec)
+	blocker = "wi_sec_" + w.org
+	mustExec(w.t, w.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria)
+		VALUES ($1, $2, $3, 7, 'Rotate keys', 'Rotate them', '["rotated"]'::jsonb)`, blocker, w.org, sec)
+	task = w.task()
+	mustExec(w.t, w.owner, `UPDATE tasks SET origin = '{"provider":"slack"}' WHERE id = $1`, task)
+	mustExec(w.t, w.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, sec)
+	return blocker, task
+}
+
+// mergeHidden merges hiddenBlocker's SEC-7 on a pull request of its own
+// project, through the status move that releases its dependants.
+func (w *world) mergeHidden(blocker string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE tasks SET status = 'review' WHERE id = $1`, blocker)
+	mustExec(w.t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
+			head_branch, base_branch, head_sha, title, state)
+		VALUES ('pr_sec_' || $1, $2, $3, $1, $4, 77, 'u', 'h', 'main', 's', 't', 'merged')`, blocker, w.org, "prj_sec_"+w.org, "repo_sec_"+w.org)
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		_, err := delivery.SetTaskStatusTx(context.Background(), tx, w.org, "prj_sec_"+w.org, blocker, "", "done", "pull requests merged")
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// A task from chat blocked by a task in another project hidden from that
+// chat is still refused its start, but its conductor is not told the
+// hidden task's key or status.
+func TestABlockerInAProjectHiddenFromTheTasksChatIsNotNamed(t *testing.T) {
+	w := conducting(t)
+	blocker, task := w.hiddenBlocker()
+	w.talk(task)
+	w.blocks(blocker, task)
+	want := w.keyOf(task) + " is blocked by a task in a project hidden from slack: it can start once that's merged."
+	for _, call := range [][2]string{{"start_phase", `{"phase":"implement"}`}, {"decide", `{"action":"next"}`}} {
+		status, out := w.as(task, call[0], call[1])
+		msg, _ := out["error"].(string)
+		if status != 422 || !strings.Contains(msg, want) || strings.Contains(msg, "SEC") || strings.Contains(msg, "not started") {
+			t.Fatalf("%s: %d %q, want refused saying %q and naming no SEC task", call[0], status, msg, want)
+		}
+	}
+	if n := w.phaseRuns(task, "implement"); n != 0 {
+		t.Fatalf("a refused start made %d implementers", n)
+	}
+	// The recorded refusal, for people, keeps the blocker's key.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.start_refused'
+		AND payload->'blockers'->0->>'key' = 'SEC-7'`, task); n != 2 {
+		t.Fatalf("%d task.start_refused naming SEC-7, want 2", n)
+	}
+}
+
+// A task's own project is never fenced from it: a task from chat whose own
+// project is hidden from that chat has a blocker there named, key and state.
+func TestABlockerInTheTasksOwnHiddenProjectIsNamed(t *testing.T) {
+	w := conducting(t)
+	blocker, task := w.task(), w.task()
+	mustExec(t, w.owner, `UPDATE tasks SET origin = '{"provider":"slack"}' WHERE id = $1`, task)
+	mustExec(t, w.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, w.project)
+	w.talk(task)
+	w.blocks(blocker, task)
+	want := w.keyOf(task) + " is blocked by " + w.keyOf(blocker) + " (not started): it can start once that's merged."
+	status, out := w.as(task, "start_phase", `{"phase":"implement"}`)
+	if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, want) {
+		t.Fatalf("start_phase: %d %q, want refused saying %q", status, msg, want)
+	}
+}
+
+// The merge of a task in a project hidden from a dependant's chat releases
+// the dependant; its conductor's wake says so without the merged task's
+// key, and its Chat notice, which only people read, names it.
+func TestAHiddenBlockersMergeIsNotNamedToWhatItReleases(t *testing.T) {
+	w := conducting(t)
+	blocker, task := w.hiddenBlocker()
+	w.blocks(blocker, task)
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, role, base_refs)
+		VALUES ('run_c_'||$1, $2, $3, $1, 1, 'paused', 'agent', 'conductor', '{}')`, task, w.org, w.project)
+	w.mergeHidden(blocker)
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.unblocked' AND payload->>'by' = 'SEC-7'`, task); n != 1 {
+		t.Fatalf("the hidden blocker's merge did not release the task: %d task.unblocked", n)
+	}
+	wake := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'unblocked'`, task)
+	if !strings.HasPrefix(wake, "A task in a project hidden from slack merged: "+w.keyOf(task)+" can start now") || strings.Contains(wake, "SEC") {
+		t.Fatalf("the conductor's wake: %q", wake)
+	}
+	notice := w.str(`SELECT payload::text FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'unblocked'`, task)
+	if !strings.Contains(notice, "SEC-7 merged — "+w.keyOf(task)+" can start.") {
+		t.Fatalf("the Chat notice, read by people only, does not name the merged task: %s", notice)
+	}
+}
+
+// A start when unblocked with Talk it through, released by the merge of a
+// task in a project hidden from its chat, opens its conductor without the
+// merged task's key; the auto_started notice, for people, names it.
+func TestAHiddenBlockersMergeIsNotNamedInTheTalkItStarts(t *testing.T) {
+	w := newWorld(t)
+	w.onModel("conductor", "fake/scripted")
+	blocker, task := w.hiddenBlocker()
+	w.blocks(blocker, task)
+	w.autoStart(task, "talk")
+	w.mergeHidden(blocker)
+	if w.fireAutoStarts() != 1 {
+		t.Fatal("the worker took no request")
+	}
+	run := w.str(`SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor'`, task)
+	opening := w.str(`SELECT payload->>'text' FROM events WHERE run_id = $1 AND event_type = 'chat.message' ORDER BY cursor LIMIT 1`, run)
+	if !strings.Contains(opening, "nothing was in front of it, and a task in a project hidden from slack merged.") || strings.Contains(opening, "SEC") {
+		t.Fatalf("the conductor's opening: %q", opening)
+	}
+	if prompt := w.str(`SELECT prompt FROM runs WHERE id = $1`, run); strings.Contains(prompt, "SEC-7") {
+		t.Fatalf("the conductor's briefing names the hidden task: %q", prompt)
+	}
+	notice := w.str(`SELECT payload->>'text' FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'auto_started'`, task)
+	if !strings.HasPrefix(notice, "SEC-7 merged — "+w.keyOf(task)+" started (") {
+		t.Fatalf("the auto_started notice, read by people only: %q", notice)
+	}
 }
 
 // Path 5: the workflow's own implement step, the backstop for an edge

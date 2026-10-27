@@ -526,6 +526,46 @@ section is one of %s, or left out for all
 
 no section %s in dude's guide: search it with types ["doc"] for the ids it has
 
+## refusals/tools/chat/project-hidden
+
+%s is hidden from what is started from %s: this session or task can't see it, its repositories, tasks or memory
+
+## refusals/tools/github/run-id-run-from-1-or-its-link
+
+runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>)
+
+## refusals/tools/github/run-link-is-another-repository
+
+%s is a run of another repository than %s: leave repo out, or name the link's
+
+## refusals/tools/chat/history-at-most-reads-hour
+
+at most %d chat reads an hour; this session has made them: wait, or work with what you read
+
+## refusals/tools/chat/history-before-or-after
+
+page with before or with after, not both
+
+## refusals/tools/chat/history-not-from-chat
+
+this session was not started from a chat: there is no conversation to read
+
+## refusals/tools/chat/history-not-installed
+
+the chat this session came from is no longer connected to dude: its conversation can't be read; ask a member what it said
+
+## refusals/tools/chat/history-unavailable
+
+the chat did not answer: try again in a while, or work with what you have
+
+## refusals/tools/chat/history-too-far
+
+that message is too far back or ahead to page to from here: use a nearer message's id, from a page you read
+
+## refusals/tools/chat/history-rate-limited
+
+the chat is rate limiting reads: try again later, or work with what you have
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

@@ -23,6 +23,9 @@ const (
 	// A link went: the person unlinked, or the provider revoked their
 	// sign-in. Payload: { provider, personId, reason }.
 	EvChatUnlinked = "chat_identity.unlinked"
+	// The projects a conversation is usually about changed. Payload:
+	// { provider, conversationId, conversationName, added, removed, via }.
+	EvChatChannelProjects = "chat_channel.projects_set"
 )
 
 // chatLedger appends an organisation-level chat event, by a person or the system.

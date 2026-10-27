@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/guide"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/memory"
@@ -46,6 +47,22 @@ func embedQuery(ctx context.Context, c Caller, args json.RawMessage) any {
 }
 
 func searchMemory(ctx context.Context, tx pgx.Tx, c Caller, in searchMemoryIn) ([]searchHit, error) {
+	if sessionChild(c) {
+		// Scoped as its session is: the projects linked to it and not
+		// fenced off from it, else the organisation's own memories.
+		linked, err := delivery.SessionProjects(ctx, tx, c.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if len(linked) == 0 {
+			return searchScoped(ctx, tx, c, in, memory.Query{OrgOnly: true})
+		}
+		within := make([]string, len(linked))
+		for i, p := range linked {
+			within[i] = p.ID
+		}
+		return searchScoped(ctx, tx, c, in, memory.Query{Within: within})
+	}
 	return searchScoped(ctx, tx, c, in, memory.Query{Project: c.ProjectID})
 }
 
@@ -145,6 +162,9 @@ func getDoc(ctx context.Context, tx pgx.Tx, c Caller, id string) (docOut, error)
 func getMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (any, error) {
 	if id := strings.TrimSpace(in.ID); strings.HasPrefix(id, docPrefix) {
 		return getDoc(ctx, tx, c, id)
+	}
+	if sessionChild(c) {
+		return sessionGetMemory(ctx, tx, c, in)
 	}
 	return getOneMemory(ctx, tx, c, in)
 }

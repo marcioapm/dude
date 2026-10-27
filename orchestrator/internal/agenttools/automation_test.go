@@ -58,7 +58,7 @@ func TestAutomationToolsScopeAndLifecycle(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	want := []string{"create_task", "github_check_log", "github_comment", "github_issue", "github_pull_request", "github_search"}
+	want := []string{"create_task", "github_check_log", "github_comment", "github_issue", "github_pull_request", "github_run_jobs", "github_search"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools: %v", names)
 	}

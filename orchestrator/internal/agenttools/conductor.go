@@ -557,6 +557,9 @@ func edgesOf(ctx context.Context, tx pgx.Tx, c Caller, in []relationIn) ([]deliv
 		if !ok {
 			return nil, refuse(rNoTaskInThisOrganisation, r.Task)
 		}
+		if err := fenced(ctx, tx, c, other.ProjectID, ""); err != nil {
+			return nil, err
+		}
 		here, err := hereOf(ctx, tx, c)
 		if err != nil {
 			return nil, err

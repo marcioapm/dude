@@ -226,6 +226,18 @@ def _chat_route(messages: list) -> str | None:
     said = user.split("## The message", 1)[-1].split("## ", 1)[0].lower()
     projects = re.findall(r"^- ([A-Z][A-Z0-9]{1,5}) \(", user.split("## Projects they can file in", 1)[-1], re.MULTILINE)
     project = projects[0] if projects else None
+    # A channel's "usually about" hint, when routing was given one, is where an
+    # unspecific message goes; a message naming a listed project goes there.
+    if "## This channel is usually about" in user:
+        usual = user.split("## This channel is usually about", 1)[1].strip().split(" (a hint", 1)[0].split(", ")
+        project = next((k for k in usual if k in projects), project)
+    named = next((k for k in projects if re.search(rf"\b{k.lower()}\b", said)), None)
+    if m := re.search(r"this channel is usually about ([a-z0-9 ,]+)", said):
+        keys = [k for k in projects if re.search(rf"\b{k.lower()}\b", m[1])]
+        return json.dumps({"route": "channel_projects", "confidence": 0.95, "reasoning": "scripted: they say what the channel is about",
+                           "channel_projects": {"add": keys, "remove": []}})
+    if named:
+        project = named
     if "file a task" in said and project:
         return json.dumps({"route": "task", "confidence": 0.95, "reasoning": "scripted: one clear change", "project": project,
                            "title": "Tidy the export page", "goal": "Tidy the export page.", "criteria": ["It is tidy"]})

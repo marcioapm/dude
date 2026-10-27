@@ -418,6 +418,89 @@ describe("settings", () => {
     }
   });
 
+  test("a channel's usual projects and the hidden ones: everyone reads, admins write, each change in the ledger", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_abs', ${ORG}, 'Acme Backend', 'abs', 'ABS'),
+      ('prj_sec', ${ORG}, 'Secret', 'sec', 'SEC') ON CONFLICT DO NOTHING`;
+    await owner`INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, conversation_kind,
+      conversation_name, external_user_id, route) VALUES ('chr_ch1', ${ORG}, 'slack', 'EvCh1', 'T1', 'C77', 'public', '#nightly', 'U1', 'brainstorm')`;
+    const view = await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json;
+    expect(view.canEdit).toBe(false);
+    expect(view.hidden).toEqual([]);
+    expect(view.channels.find((c: Json) => c.conversationId === "C77")).toEqual({ conversationId: "C77", conversationName: "#nightly", projects: [] });
+    expect(view.projects.map((p: Json) => p.key)).toContain("ABS");
+
+    const usual = (key: string, ids: string[]) => call(key, "PUT", "/v1/organization/chat/slack/channels/C77/projects",
+      { conversationName: "#nightly", projectIds: ids });
+    expect((await usual(memberKey, ["prj_abs"])).status).toBe(403);
+    expect((await usual(adminKey, ["prj_nope"])).status).toBe(404);
+    const set = await (await usual(adminKey, ["prj_abs", "prj_sec"])).json() as Json;
+    expect(set.channels.find((c: Json) => c.conversationId === "C77").projects.map((p: Json) => p.key)).toEqual(["ABS", "SEC"]);
+    await usual(adminKey, ["prj_abs"]);
+    expect([...await owner`SELECT project_id FROM chat_channel_projects WHERE conversation_id = 'C77'`]).toEqual([{ project_id: "prj_abs" }]);
+
+    const hide = (key: string, ids: string[]) => call(key, "PUT", "/v1/organization/chat/slack/hidden-projects", { projectIds: ids });
+    expect((await hide(memberKey, ["prj_sec"])).status).toBe(403);
+    const hidden = await (await hide(adminKey, ["prj_sec"])).json() as Json;
+    expect(hidden.hidden.map((p: Json) => p.key)).toEqual(["SEC"]);
+    expect((await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json).hidden.map((p: Json) => p.key)).toEqual(["SEC"]);
+    expect([...await owner`SELECT event_type, payload FROM events WHERE organization_id = ${ORG}
+      AND event_type IN ('chat_channel.projects_set', 'chat_provider.hidden_projects_set') ORDER BY cursor`].map((e: Json) => [e.event_type, e.payload]))
+      .toEqual([
+        ["chat_channel.projects_set", { provider: "slack", conversationId: "C77", conversationName: "#nightly", added: ["prj_abs", "prj_sec"], removed: [], via: "settings" }],
+        ["chat_channel.projects_set", { provider: "slack", conversationId: "C77", conversationName: "#nightly", added: [], removed: ["prj_sec"], via: "settings" }],
+        ["chat_provider.hidden_projects_set", { provider: "slack", hidden: ["prj_sec"], shown: [] }],
+      ]);
+    await hide(adminKey, []);
+  });
+
+  test("a hidden project is no channel's usual project: left out of the read, refused on save, and back once shown", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_abs', ${ORG}, 'Acme Backend', 'abs', 'ABS'),
+      ('prj_sec', ${ORG}, 'Secret', 'sec', 'SEC') ON CONFLICT DO NOTHING`;
+    const usual = (ids: string[]) => call(adminKey, "PUT", "/v1/organization/chat/slack/channels/C78/projects",
+      { conversationName: "#ops", projectIds: ids });
+    const hide = (ids: string[]) => call(adminKey, "PUT", "/v1/organization/chat/slack/hidden-projects", { projectIds: ids });
+    const keys = (view: Json) => view.channels.find((c: Json) => c.conversationId === "C78").projects.map((p: Json) => p.key);
+    expect(keys(await (await usual(["prj_abs", "prj_sec"])).json() as Json)).toEqual(["ABS", "SEC"]);
+    await hide(["prj_sec"]);
+    // GET, as a member reads it: SEC is out.
+    expect(keys(await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json)).toEqual(["ABS"]);
+    // PUT naming it is refused, and changes nothing.
+    const refused = await usual(["prj_abs", "prj_sec"]);
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as Json).error.code).toBe("hidden_from_chat");
+    // Saving the set as shown keeps the hidden row, which comes back once it is shown.
+    expect(keys(await (await usual(["prj_abs"])).json() as Json)).toEqual(["ABS"]);
+    await hide([]);
+    expect(keys(await (await call(memberKey, "GET", "/v1/organization/chat/slack/projects")).json() as Json)).toEqual(["ABS", "SEC"]);
+  });
+
+  test("a task filed from a chat-born session is fenced by its origin, but is not shown as having come from chat", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_fil', ${ORG}, 'Filed', 'fil', 'FIL')
+      ON CONFLICT DO NOTHING`;
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, origin) VALUES
+      ('wi_via', ${ORG}, 'prj_fil', 1, 'Through a session', '{"provider":"slack","via":"session","from":"ssn_x"}'::jsonb),
+      ('wi_direct', ${ORG}, 'prj_fil', 2, 'From Slack', '{"provider":"slack","conversationName":"#nightly"}'::jsonb)`;
+    expect((await (await call(adminKey, "GET", "/v1/tasks/wi_via")).json() as Json).origin).toBeNull();
+    expect((await (await call(adminKey, "GET", "/v1/tasks/wi_direct")).json() as Json).origin.conversationName).toBe("#nightly");
+    const nav = JSON.stringify(await (await call(adminKey, "GET", "/v1/navigation")).json());
+    expect(nav).not.toContain("ssn_x");
+  });
+
+  test("a task's list row carries its origin without the conversation quoted on it; its own page has it", async () => {
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_q', ${ORG}, 'Quoted', 'quo', 'QUO')
+      ON CONFLICT DO NOTHING`;
+    const channel = Array.from({ length: 6 }, (_, i) => ({ by: "CI Bot", app: true, text: `report ${i} ` + "z".repeat(1900) }));
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, origin) VALUES ('wi_quoted', ${ORG}, 'prj_q', 1, 'Quoted',
+      ${{ provider: "slack", conversationName: "#nightly", topLevel: true, channel, thread: [{ by: "Ana", text: "a thread line" }] }}::jsonb)`;
+    const list = await (await call(adminKey, "GET", "/v1/tasks?projectId=prj_q")).json() as Json;
+    const row = list.tasks.find((t: Json) => t.id === "wi_quoted");
+    expect(row.origin).toEqual({ provider: "slack", conversationName: "#nightly", topLevel: true });
+    expect(JSON.stringify(list).length).toBeLessThan(4000);
+    const detail = await (await call(adminKey, "GET", "/v1/tasks/wi_quoted")).json() as Json;
+    expect(detail.origin.channel.length).toBe(6);
+    expect(detail.origin.thread[0].text).toBe("a thread line");
+  });
+
   test("disconnect is an admin's, and unlinking one's own", async () => {
     expect((await call(memberKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(403);
     expect((await call(adminKey, "DELETE", "/v1/organization/chat/slack")).status).toBe(204);

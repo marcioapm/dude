@@ -19,13 +19,18 @@ import {
   CHAT_REQUESTS_MAX,
   type ChatProvider,
   type ChatRequestsSummary,
+  EventTypes,
+  chatChannelProjectsInputSchema,
+  chatHiddenProjectsInputSchema,
   chatRequestsQuerySchema,
   routingInstructionsInputSchema,
 } from "@dude/domain";
-import { withOrg } from "../../db/client.ts";
+import { type OrgScope, withOrg } from "../../db/client.ts";
 import { config } from "../../config.ts";
+import { appendInScope } from "../../events/ledger.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
 import { isOrgAdmin, requireOrgAdmin } from "../access.ts";
+import { auditActor } from "../auth.ts";
 import { HttpError, json, noContent, notFound, parseBody } from "../http.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 
@@ -308,6 +313,115 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
   return json(week ? { requests: rows, week } : { requests: rows });
 }
 
+/** `GET /v1/organization/chat/:provider/projects`: channels' usual projects and the hidden ones. Everyone reads; admins write. */
+async function getProjects(ctx: RequestContext): Promise<Response> {
+  const { provider } = await providerOf(ctx);
+  const out = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+    const [i] = await sql`SELECT external_workspace_id AS workspace FROM chat_installations WHERE provider = ${provider.id}`;
+    const projects = await sql`SELECT id, key_prefix AS key, name FROM projects WHERE key_prefix IS NOT NULL ORDER BY key_prefix`;
+    const hidden = await sql`SELECT p.id, p.key_prefix AS key, p.name FROM chat_hidden_projects h JOIN projects p ON p.id = h.project_id
+      WHERE h.provider = ${provider.id} ORDER BY p.key_prefix`;
+    // Every conversation with a hint, and those dude was mentioned in over the last 30 days, newest first.
+    const channels = i ? await sql`
+      WITH c AS (
+        SELECT conversation_id, max(conversation_name) AS name, max(set_at) AS at FROM chat_channel_projects
+          WHERE provider = ${provider.id} AND external_workspace_id = ${i.workspace} GROUP BY conversation_id
+        UNION ALL
+        SELECT conversation_id, max(conversation_name), max(created_at) FROM chat_requests
+          WHERE provider = ${provider.id} AND external_workspace_id = ${i.workspace} AND conversation_kind IN ('public', 'private')
+            AND created_at > now() - interval '30 days'
+          GROUP BY conversation_id)
+      SELECT c.conversation_id AS "conversationId", max(c.name) AS "conversationName",
+        COALESCE((SELECT json_agg(json_build_object('id', p.id, 'key', p.key_prefix, 'name', p.name) ORDER BY p.key_prefix)
+          FROM chat_channel_projects cp JOIN projects p ON p.id = cp.project_id
+          WHERE cp.provider = ${provider.id} AND cp.external_workspace_id = ${i.workspace} AND cp.conversation_id = c.conversation_id
+            -- A project hidden from the provider is no channel's hint: routing never reads it either.
+            AND NOT EXISTS (SELECT 1 FROM chat_hidden_projects h WHERE h.provider = cp.provider AND h.project_id = cp.project_id)), '[]') AS projects
+      FROM c GROUP BY c.conversation_id ORDER BY max(c.at) DESC LIMIT 200` : [];
+    return { channels: [...channels], hidden: [...hidden], projects: [...projects], installed: Boolean(i) };
+  });
+  return json({ channels: out.channels, hidden: out.hidden, projects: out.projects, canEdit: await isOrgAdmin(ctx) });
+}
+
+/** The projects ids name, all of this organisation's, or a 404. */
+async function knownProjects(sql: OrgScope["sql"], ids: string[]): Promise<string[]> {
+  const unique = [...new Set(ids)];
+  const found = (await sql`SELECT id FROM projects WHERE id = ANY(${sql.array(unique, "TEXT")})`).map((r: { id: string }) => r.id);
+  if (found.length !== unique.length) throw notFound("a project given is not one of this organisation's");
+  return unique;
+}
+
+/** `PUT /v1/organization/chat/:provider/channels/:conversation/projects`: what a conversation is usually about. Admins only. */
+async function putChannelProjects(ctx: RequestContext): Promise<Response> {
+  await requireOrgAdmin(ctx);
+  const { provider } = await providerOf(ctx);
+  const conversation = ctx.params.conversation!;
+  const input = await parseBody(ctx.request, chatChannelProjectsInputSchema);
+  await withOrg(ctx.principal.organizationId, async (scope) => {
+    const { sql } = scope;
+    const [i] = await sql`SELECT external_workspace_id AS workspace FROM chat_installations WHERE provider = ${provider.id}`;
+    if (!i) throw new HttpError(409, `${provider.name} is not installed`, "not_installed");
+    const ids = await knownProjects(sql, input.projectIds);
+    const hiddenIds = (await sql`SELECT project_id FROM chat_hidden_projects WHERE provider = ${provider.id}
+      AND project_id = ANY(${sql.array(ids, "TEXT")})`).map((r: { project_id: string }) => r.project_id);
+    if (hiddenIds.length) {
+      throw new HttpError(409, `${hiddenIds.join(", ")} ${hiddenIds.length === 1 ? "is" : "are"} hidden from ${provider.name}: ` +
+        `a channel can't be usually about a hidden project`, "hidden_from_chat");
+    }
+    const name = input.conversationName?.trim() ?? "";
+    // Rows of projects hidden since are kept (unhiding brings the hint
+    // back) and left out of every read; saving the shown set keeps them.
+    const removed = (await sql`DELETE FROM chat_channel_projects cp WHERE provider = ${provider.id} AND external_workspace_id = ${i.workspace}
+      AND conversation_id = ${conversation} AND NOT (project_id = ANY(${sql.array(ids, "TEXT")}))
+      AND NOT EXISTS (SELECT 1 FROM chat_hidden_projects h WHERE h.provider = cp.provider AND h.project_id = cp.project_id) RETURNING project_id`)
+      .map((r: { project_id: string }) => r.project_id);
+    const added: string[] = [];
+    for (const id of ids) {
+      const rows = await sql`INSERT INTO chat_channel_projects (organization_id, provider, external_workspace_id, conversation_id,
+          conversation_name, project_id, set_by)
+        VALUES (current_organization_id(), ${provider.id}, ${i.workspace}, ${conversation}, ${name}, ${id}, ${ctx.principal.personId ?? null})
+        ON CONFLICT DO NOTHING RETURNING project_id`;
+      if (rows.length) added.push(id);
+    }
+    if (name) {
+      await sql`UPDATE chat_channel_projects SET conversation_name = ${name} WHERE provider = ${provider.id}
+        AND external_workspace_id = ${i.workspace} AND conversation_id = ${conversation}`;
+    }
+    if (added.length || removed.length) {
+      const actor = auditActor(ctx.principal);
+      await appendInScope(scope, { eventType: EventTypes.ChatChannelProjectsSet, organizationId: scope.organizationId,
+        actor: { type: actor.kind, id: actor.id }, source: "control-plane",
+        payload: { provider: provider.id, conversationId: conversation, conversationName: name, added, removed, via: "settings" } });
+    }
+  });
+  return getProjects(ctx);
+}
+
+/** `PUT /v1/organization/chat/:provider/hidden-projects`: the projects nothing this provider starts can see. Admins only, never from chat. */
+async function putHiddenProjects(ctx: RequestContext): Promise<Response> {
+  await requireOrgAdmin(ctx);
+  const { provider } = await providerOf(ctx);
+  const input = await parseBody(ctx.request, chatHiddenProjectsInputSchema);
+  await withOrg(ctx.principal.organizationId, async (scope) => {
+    const { sql } = scope;
+    const ids = await knownProjects(sql, input.projectIds);
+    const shown = (await sql`DELETE FROM chat_hidden_projects WHERE provider = ${provider.id}
+      AND NOT (project_id = ANY(${sql.array(ids, "TEXT")})) RETURNING project_id`).map((r: { project_id: string }) => r.project_id);
+    const hidden: string[] = [];
+    for (const id of ids) {
+      const rows = await sql`INSERT INTO chat_hidden_projects (organization_id, provider, project_id, hidden_by)
+        VALUES (current_organization_id(), ${provider.id}, ${id}, ${ctx.principal.personId ?? null}) ON CONFLICT DO NOTHING RETURNING project_id`;
+      if (rows.length) hidden.push(id);
+    }
+    if (hidden.length || shown.length) {
+      const actor = auditActor(ctx.principal);
+      await appendInScope(scope, { eventType: EventTypes.ChatHiddenProjectsSet, organizationId: scope.organizationId,
+        actor: { type: actor.kind, id: actor.id }, source: "control-plane", payload: { provider: provider.id, hidden, shown } });
+    }
+  });
+  return getProjects(ctx);
+}
+
 /** `GET /v1/me/chat/:provider`: the caller's own link. */
 async function myLink(ctx: RequestContext): Promise<Response> {
   const { provider } = await providerOf(ctx);
@@ -344,6 +458,9 @@ export function registerChatRoutes(router: Router): void {
   router.put(BUILT_IN_ROUTE, putInstructions);
   router.get("/v1/organization/chat/:provider/routing-instructions", getProviderInstructions);
   router.put("/v1/organization/chat/:provider/routing-instructions", putProviderInstructions);
+  router.get("/v1/organization/chat/:provider/projects", getProjects);
+  router.put("/v1/organization/chat/:provider/channels/:conversation/projects", putChannelProjects);
+  router.put("/v1/organization/chat/:provider/hidden-projects", putHiddenProjects);
   router.get("/v1/me/chat/:provider", myLink);
   router.delete("/v1/me/chat/:provider", async (ctx) => {
     const res = await forward("DELETE", (c) => `/internal/me/chat/${encodeURIComponent(c.params.provider!)}`)(ctx);

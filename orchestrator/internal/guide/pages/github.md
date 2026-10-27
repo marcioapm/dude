@@ -1,6 +1,6 @@
 ---
 title: GitHub
-covers: [settings:github, tool:github_search, tool:github_issue, tool:github_pull_request, tool:github_check_log]
+covers: [settings:github, tool:github_search, tool:github_issue, tool:github_pull_request, tool:github_check_log, tool:github_run_jobs]
 ---
 dude opens every pull request on GitHub and reacts to what happens there. This page covers connecting GitHub and each setting on **Settings → GitHub**.
 
@@ -71,6 +71,7 @@ The conductor and a brainstorm can read the project's GitHub repositories:
 - `github_issue` — read an issue and its comments.
 - `github_pull_request` — read a pull request: conversation, reviews, unresolved threads, checks and changed files.
 - `github_check_log` — read a failed check's log.
+- `github_run_jobs` — list a GitHub Actions run's jobs, from its id or its link: each job's id, conclusion and failed steps. A failed job's id is what `github_check_log` reads.
 
 These are read only. What people wrote comes marked as external text, so agents treat it as information, not instructions. A task's agents, or a session's, share 60 GitHub reads an hour.
 

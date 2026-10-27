@@ -14,6 +14,8 @@ The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
 
 {{- define "refusals/words/blocker"}}{{.Key}} ({{.State}}){{end}}
 
+{{- define "refusals/words/hidden-task"}}a task in a project hidden from {{.}}{{end}}
+
 {{- define "refusals/words/blocker-state/review"}}in review{{end}}
 
 {{- define "refusals/words/blocker-state/running"}}in progress{{end}}

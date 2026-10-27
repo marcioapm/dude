@@ -79,6 +79,9 @@ type Server struct {
 	// PublicURL is dude's https origin (auth.public_url), the base of a
 	// guide section's link; "", links are the web app's hash path alone.
 	PublicURL string
+	// Chat reads the conversation a chat-born session came from
+	// (chat_history); nil, the tool says chat is not available.
+	Chat ChatReader
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -121,6 +124,7 @@ type env struct {
 	syncBaseWait    time.Duration
 	syncPR          func(ctx context.Context, org, prID string) error
 	publicURL       string
+	chat            ChatReader
 	prepared        any
 }
 
@@ -676,7 +680,8 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
-		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL}
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL,
+		chat: s.Chat}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 	}

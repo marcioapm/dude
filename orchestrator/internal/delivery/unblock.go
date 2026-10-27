@@ -58,11 +58,11 @@ func NotStarted(status string) bool { return notStartedSet[status] }
 // signalled, and its start when unblocked marked due. Done with nothing
 // merged releases nobody, and says so on each task it still blocks.
 func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) error {
-	var key string
+	var key, projectID string
 	var prNumber *int
-	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number,
+	if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, t.project_id,
 			(SELECT pr.number FROM pull_requests pr WHERE pr.task_id = t.id AND pr.state = 'merged' ORDER BY pr.updated_at DESC LIMIT 1)
-		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&key, &prNumber); err != nil {
+		FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, taskID).Scan(&key, &projectID, &prNumber); err != nil {
 		return err
 	}
 	if err := lockReleasesTx(ctx, tx, taskID); err != nil {
@@ -107,7 +107,15 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 		if !d.Free {
 			continue
 		}
-		if err := event(EvTaskUnblocked, map[string]any{"by": key, "pr": *prNumber, "blockers": []any{}}); err != nil {
+		// The dependant's conductor sees the merged task only as the
+		// dependant's fence allows; "shown" is that name, kept for the Talk
+		// it through opening its start when unblocked gives later. Chat
+		// notices are read by people only and name the task.
+		shown, err := shownTask(ctx, tx, d.ID, projectID, key)
+		if err != nil {
+			return err
+		}
+		if err := event(EvTaskUnblocked, map[string]any{"by": key, "shown": shown, "pr": *prNumber, "blockers": []any{}}); err != nil {
 			return err
 		}
 		if d.Auto {
@@ -120,13 +128,13 @@ func releaseDependantsTx(ctx context.Context, tx pgx.Tx, org, taskID string) err
 			"text": fmt.Sprintf("%s merged — %s can start. Nothing started it: Deliver or Talk it through when you're ready.", key, d.Key)}); err != nil {
 			return err
 		}
-		if err := wakeUnblockedTx(ctx, tx, org, d.ID, d.Key, key, d.Auto); err != nil {
+		if err := wakeUnblockedTx(ctx, tx, org, d.ID, d.Key, key, shown, d.Auto); err != nil {
 			return err
 		}
 		// A delivery a person started, parked at its implement step on this
 		// blocker (path 5), goes on: its step reads every blocker again.
 		var wf string
-		err := tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND workflow_type = $2 AND status = 'waiting'
+		err = tx.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id = $1 AND workflow_type = $2 AND status = 'waiting'
 			AND awaiting_signals ? $3 ORDER BY created_at DESC LIMIT 1`, d.ID, WorkflowType, SignalRelationsUnblock).Scan(&wf)
 		if err == nil {
 			err = workflow.SignalTx(ctx, tx, org, wf, SignalRelationsUnblock, map[string]any{"by": key}, "unblocked:"+taskID)
@@ -166,15 +174,35 @@ func lockReleasesTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	return nil
 }
 
-// wakeUnblockedTx tells a released task's live conductor it can start. A
-// task with none gets none: a wake would start one, and that is a start.
-func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by string, auto bool) error {
+// wakeUnblockedTx tells a released task's live conductor it can start,
+// naming the merged task by as shown. A task with none gets none: a wake
+// would start one, and that is a start.
+func wakeUnblockedTx(ctx context.Context, tx pgx.Tx, org, taskID, taskKey, by, shown string, auto bool) error {
 	var live bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`)`, taskID).Scan(&live); err != nil || !live {
 		return err
 	}
-	_, err := RecordWakeTx(ctx, tx, org, taskID, WakeUnblocked, "unblocked:"+by, unblockedLine(by, taskKey, auto))
+	_, err := RecordWakeTx(ctx, tx, org, taskID, WakeUnblocked, "unblocked:"+by, unblockedLine(capitalised(shown), taskKey, auto))
 	return err
+}
+
+// shownTask is how the task key, in project, is named to what works on
+// taskID: key, or hiddenTask when taskID's fence hides project.
+func shownTask(ctx context.Context, tx pgx.Tx, taskID, project, key string) (string, error) {
+	f, err := taskFence(ctx, tx, taskID)
+	if err != nil || !f.Hides(project) {
+		return key, err
+	}
+	return hiddenTask(f.Provider), nil
+}
+
+// capitalised is s with its first letter upper-case, for a name that
+// starts a sentence.
+func capitalised(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // unblockedLine tells a conductor its task taskKey can start, by merged;
@@ -382,7 +410,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 		// or archived one is the guard's below, which says so.
 		return EndAutoStartTx(ctx, tx, org, taskID, "started", "", "")
 	}
-	by, pr, err := lastUnblock(ctx, tx, taskID)
+	by, shown, pr, err := lastUnblock(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
@@ -425,7 +453,7 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 			that = "they merge"
 		}
 		return event(EvChatNotice, map[string]any{"about": "auto_start_refused", "text": fmt.Sprintf(
-			"%s merged, but %s is still blocked by %s: it starts when %s, as %s asked.", by, taskKey, KeyList(words), that, first)})
+			"%s merged, but %s is still blocked by %s: it starts when %s, as %s asked.", capitalised(by), taskKey, KeyList(words), that, first)})
 	}
 	if err != nil {
 		return err
@@ -442,35 +470,38 @@ func (a *AutoStarts) fire(ctx context.Context, tx pgx.Tx, org, taskID string, cl
 	}
 	in := StartInput{Org: org, TaskID: taskID, How: how, Writer: Writer{ActorType: ledger.ActorSystem, ActorID: "dude", Person: setBy}}
 	if how == HowTalk {
-		in.Message = talkWhenUnblocked(first, by)
+		in.Message = talkWhenUnblocked(first, shown)
 	}
 	if _, err := StartTx(ctx, tx, a.Starter, in); err != nil {
 		return err
 	}
 	return event(EvChatNotice, map[string]any{"about": "auto_started", "text": fmt.Sprintf(
-		"%s merged — %s started (%s), as %s asked. Nothing else was waiting in front of it.", by, taskKey, howLabel[how], first)})
+		"%s merged — %s started (%s), as %s asked. Nothing else was waiting in front of it.", capitalised(by), taskKey, howLabel[how], first)})
 }
 
 // howLabel names each way to start (HowDeliver, HowTalk) as its button does.
 var howLabel = agentTexts("notices/start-how/", HowDeliver, HowTalk)
 
-// lastUnblock is the blocker whose merge released the task last, and its
-// pull request's number: "" and nil when none is recorded.
-func lastUnblock(ctx context.Context, tx pgx.Tx, taskID string) (string, *int, error) {
-	var by *string
-	var pr *int
-	err := tx.QueryRow(ctx, `SELECT payload->>'by', (payload->>'pr')::int FROM events WHERE task_id = $1 AND event_type = $2
-		ORDER BY cursor DESC LIMIT 1`, taskID, EvTaskUnblocked).Scan(&by, &pr)
+// lastUnblock is the blocker whose merge released the task last, its name
+// as the task's fence lets it be shown, and its pull request's number: ""
+// and nil when none is recorded.
+func lastUnblock(ctx context.Context, tx pgx.Tx, taskID string) (by, shown string, pr *int, err error) {
+	var b, s *string
+	err = tx.QueryRow(ctx, `SELECT payload->>'by', COALESCE(payload->>'shown', payload->>'by'), (payload->>'pr')::int FROM events
+		WHERE task_id = $1 AND event_type = $2 ORDER BY cursor DESC LIMIT 1`, taskID, EvTaskUnblocked).Scan(&b, &s, &pr)
 	if db.IsNotFound(err) {
-		return "", nil, nil
+		return "", "", nil, nil
 	}
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	if by == nil {
-		return "", pr, nil
+	if b != nil {
+		by = *b
 	}
-	return *by, pr, nil
+	if s != nil {
+		shown = *s
+	}
+	return by, shown, pr, nil
 }
 
 // failed ends a request that will not fire (task.auto_start_cancelled, why
@@ -486,13 +517,13 @@ func (a *AutoStarts) failed(ctx context.Context, tx pgx.Tx, org, taskID, generat
 	if err != nil {
 		return err
 	}
-	by, _, err := lastUnblock(ctx, tx, taskID)
+	by, _, _, err := lastUnblock(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
 	text := fmt.Sprintf("%s could not start: %s. Start it from its page.", t.Key, msg)
 	if by != "" {
-		text = by + " merged, but " + text
+		text = capitalised(by) + " merged, but " + text
 	}
 	return dudeEventTx(ctx, tx, org, t.ProjectID, taskID, EvChatNotice, map[string]any{"about": "auto_start_failed", "text": text})
 }

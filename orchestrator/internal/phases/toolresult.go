@@ -85,7 +85,7 @@ func contentText(v any) string {
 func withholdGitHubRead(names []string, payload map[string]any) {
 	if !slices.ContainsFunc(names, func(name string) bool {
 		switch strings.TrimPrefix(name, "dude_") {
-		case "github_search", "github_issue", "github_pull_request", "github_check_log":
+		case "github_search", "github_issue", "github_pull_request", "github_check_log", "github_run_jobs":
 			return true
 		}
 		return false

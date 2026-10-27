@@ -37,6 +37,7 @@ var (
 	blockedTmpl        = mustTemplate("refusals/words/blocked")
 	blockedAgentTmpl   = mustTemplate("refusals/words/blocked-agent")
 	blockerTmpl        = mustTemplate("refusals/words/blocker")
+	hiddenTaskTmpl     = mustTemplate("refusals/words/hidden-task")
 	notAPeerTmpl       = mustTemplate("refusals/words/not-a-peer")
 	relationLineTmpl   = mustTemplate("refusals/words/relation-line")
 	sourceChangedTmpl  = mustTemplate("refusals/words/source-changed")
