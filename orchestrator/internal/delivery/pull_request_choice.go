@@ -78,7 +78,9 @@ func (e ChoiceUnresolved) Error() string { return "before the pull request: " + 
 func (e ChoiceUnresolved) Unwrap() error { return e.Err }
 
 // ReasonChoiceUnresolved is the escalation of an opening whose choice
-// before the pull request could not be read (ChoiceUnresolved).
+// before the pull request could not be read (ChoiceUnresolved). Only an
+// attempt with no pull request row reads it (PullRequestChoiceAtOpening),
+// so the task's own choice its words advise can still be set.
 const ReasonChoiceUnresolved = "pull_request_choice_unresolved"
 
 // FirstPullRequestChoice is the task's choice before its pull request, as
@@ -102,18 +104,36 @@ func firstPullRequestChoiceTx(ctx context.Context, tx pgx.Tx, taskID string) (st
 	return PullRequestChoiceTx(ctx, tx, taskID)
 }
 
+// draftOpenedSQL ($1 the task): a draft pull request row of the task's
+// current attempt, as pullRequestOpenedSQL scopes it.
+const draftOpenedSQL = `SELECT EXISTS (SELECT 1 FROM pull_requests pr LEFT JOIN runs r ON r.id = pr.run_id
+	WHERE pr.task_id = $1 AND COALESCE(r.attempt, task_attempt($1)) = task_attempt($1) AND pr.state = 'draft')`
+
 // PullRequestChoiceAtOpening is the task's choice as the step opening its
 // first pull requests reads it, and whether the current attempt already
-// has a pull request row: a run of that step retried after opening some
-// repositories still opens the rest as the choice says (Open as draft),
-// but is never held again.
+// has a pull request row. A run of that step retried after opening some
+// repositories is never held again, and opens the rest as the ones it
+// opened: Open as draft while one of them is a draft, else Open it. The
+// task's and project's choice are not read then, so a project policy that
+// stopped resolving cannot stop a half-opened delivery.
 func (s *Store) PullRequestChoiceAtOpening(ctx context.Context, org, taskID string) (choice string, opened bool, err error) {
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		if opened, err = PullRequestOpenedTx(ctx, tx, taskID); err != nil {
 			return err
 		}
-		choice, err = PullRequestChoiceTx(ctx, tx, taskID)
-		return err
+		if !opened {
+			choice, err = PullRequestChoiceTx(ctx, tx, taskID)
+			return err
+		}
+		var draft bool
+		if err := tx.QueryRow(ctx, draftOpenedSQL, taskID).Scan(&draft); err != nil {
+			return err
+		}
+		choice = PullRequestOpen
+		if draft {
+			choice = PullRequestDraft
+		}
+		return nil
 	})
 	return choice, opened, err
 }

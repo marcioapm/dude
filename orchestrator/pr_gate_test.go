@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -492,6 +493,57 @@ func TestOpenAsDraftSurvivesARetriedOpening(t *testing.T) {
 	}
 	if !w.gh.Pulls()[0].Draft {
 		t.Error("target's pull request is not a draft")
+	}
+	if !w.web.Pulls()[0].Draft {
+		t.Error("web's pull request, opened by the retry, is not a draft")
+	}
+}
+
+// Open as draft across two repositories, the project's policy ceasing to
+// resolve once target's pull request is on record: the retried opening
+// follows the draft it opened, never escalates, and opens web's as a draft.
+func TestARetriedOpeningFollowsItsOpenedPullRequestNotThePolicy(t *testing.T) {
+	w := newWorld(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+	var failed atomic.Bool
+	var broke atomic.Value
+	w.web.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pulls") && failed.CompareAndSwap(false, true) {
+				_, err := w.owner.Exec(context.Background(),
+					`UPDATE projects SET delivery_policy = delivery_policy || '{"alwaysReviewers":["no-such-reviewer"]}'::jsonb WHERE id = $1`, w.project)
+				broke.Store(fmt.Sprint(err))
+				return http.StatusBadGateway
+			}
+			return 0
+		}
+	})
+	task := w.task()
+	w.addWeb(task, "write")
+	w.projectChoice(delivery.PullRequestDraft)
+	w.deliver(task)
+	w.until("web's pull request or an escalation", func() bool {
+		return len(w.web.Pulls()) == 1 || w.escalationReason(task) != ""
+	})
+	if !failed.Load() {
+		t.Fatal("web's first opening was never refused")
+	}
+	if e := broke.Load(); e != "<nil>" {
+		t.Fatalf("breaking the project's policy: %v", e)
+	}
+	if r := w.escalationReason(task); r != "" {
+		t.Fatalf("the retried opening escalated %q with target's pull request open", r)
+	}
+	if n := len(w.gh.Pulls()); n != 1 || !w.gh.Pulls()[0].Draft {
+		t.Fatalf("target's pull requests: %d, want one draft", n)
 	}
 	if !w.web.Pulls()[0].Draft {
 		t.Error("web's pull request, opened by the retry, is not a draft")
