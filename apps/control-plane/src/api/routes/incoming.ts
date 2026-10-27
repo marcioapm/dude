@@ -152,15 +152,15 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
   if (!hook) throw notFound("no incoming webhook here");
   const id = newId("incomingDelivery");
   // The declared length is the sender's word: a stored size is at most one past the cap.
-  const declared = Math.min(Number(ctx.request.headers.get("content-length") ?? "0"), INCOMING_MAX_BYTES + 1);
+  const declared = Math.min(Number(ctx.request.headers.get("content-length")) || 0, INCOMING_MAX_BYTES + 1);
   let body: Uint8Array | null = null;
   let bytes = 0;
+  const refused = (code: RefusalCode) => json({ error: { code, message: REFUSAL[code].message }, delivery: id }, REFUSAL[code].status);
   const refuse = async (code: RefusalCode) => {
     // A request that did not prove itself keeps no headers: nothing it sent is stored but its size.
     const headers = code === "bad_signature" ? {} : storedHeaders(ctx.request.headers, hook.verify);
     await withOrg(hook.organization_id, (scope) => storeRefusal(scope, hook, { id, bytes, headers, refused: code }));
-    const r = REFUSAL[code];
-    return json({ error: { code, message: r.message }, delivery: id }, r.status);
+    return refused(code);
   };
   const read = async () => {
     try {
@@ -168,7 +168,7 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
     } catch {
       body = null;
     }
-    bytes = body?.length ?? (Number.isFinite(declared) && declared > INCOMING_MAX_BYTES ? declared : INCOMING_MAX_BYTES + 1);
+    bytes = body?.length ?? INCOMING_MAX_BYTES + 1;
   };
   if (hook.verify?.mode === "signature") {
     // A signature is over the whole body: one past 1 MiB is refused as too large unchecked.
@@ -177,7 +177,7 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
     if (!verified(hook, ctx.request, ctx.url, body)) return refuse("bad_signature");
   } else {
     // A header or query secret is checked before the body is read: a request without it costs no read.
-    bytes = Number.isFinite(declared) && declared > 0 ? declared : 0;
+    bytes = Math.max(declared, 0);
     if (!verified(hook, ctx.request, ctx.url, null)) return refuse("bad_signature");
     await read();
     if (body === null) return refuse("too_large");
@@ -205,10 +205,7 @@ async function receiveHook(ctx: PublicContext): Promise<Response> {
     await store(scope, hook, { id, bytes, headers, payload });
     return true;
   });
-  if (!accepted) {
-    const r = REFUSAL.rate_limited;
-    return json({ error: { code: "rate_limited", message: r.message }, delivery: id }, r.status);
-  }
+  if (!accepted) return refused("rate_limited");
   void kickOrchestrator(hook.organization_id);
   return json({ delivery: id }, 202);
 }
