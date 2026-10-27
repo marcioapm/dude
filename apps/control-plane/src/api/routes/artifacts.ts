@@ -73,6 +73,8 @@ interface ArtifactRow {
   version: number;
   /** How many of its name there are. */
   versions: number;
+  /** The thumbnail dude publish made of these bytes in the same task or session, when there is one. */
+  thumbnailId: string | null;
 }
 
 /** Whose files: a task's Runs', or a brainstorm session's. */
@@ -85,23 +87,37 @@ const VERSIONS_LISTED = 50;
 async function artifactsOf(organizationId: string, owner: Owner): Promise<ArtifactRow[]> {
   const taskId = "taskId" in owner ? owner.taskId : null;
   const sessionId = "sessionId" in owner ? owner.sessionId : null;
+  // A file's thumbnail is the newest `.dude-thumbs/<its sha256>.jpg` dude
+  // publish left among the same owner's files: never another task's or
+  // session's, though the same bytes may have one there.
   const rows = await withOrg(organizationId, async ({ sql }) => (await sql`
-    SELECT id, "taskId", "sessionId", "runId", name, "contentType", "sizeBytes", sha256, description, epoch,
-      "createdAt", phase, role, version, versions
+    WITH owned AS (
+      SELECT a.id, r.task_id, r.session_id, a.run_id, a.name, a.content_type, a.size_bytes, a.sha256, a.description,
+        a.epoch, a.created_at, r.phase, r.role
+      FROM artifacts a JOIN runs r ON r.id = a.run_id
+      WHERE r.task_id = ${taskId} OR r.session_id = ${sessionId}
+    ), thumbs AS (
+      SELECT DISTINCT ON (name) name, id FROM owned WHERE name LIKE '.dude-thumbs/%'
+      ORDER BY name, created_at DESC, epoch DESC, id DESC
+    )
+    SELECT listed.id, "taskId", "sessionId", "runId", listed.name, "contentType", "sizeBytes", sha256, description, epoch,
+      "createdAt", phase, role, version, versions, thumbs.id AS "thumbnailId"
     FROM (
-      SELECT a.id, r.task_id AS "taskId", r.session_id AS "sessionId", a.run_id AS "runId", a.name,
+      SELECT a.id, a.task_id AS "taskId", a.session_id AS "sessionId", a.run_id AS "runId", a.name,
         a.content_type AS "contentType", a.size_bytes::float8 AS "sizeBytes", a.sha256, a.description, a.epoch,
-        a.created_at AS "createdAt", r.phase::text AS phase, r.role::text AS role,
+        a.created_at AS "createdAt", a.phase::text AS phase, a.role::text AS role,
         row_number() OVER (PARTITION BY a.name ORDER BY a.created_at, a.epoch, a.id)::int AS version,
         count(*) OVER (PARTITION BY a.name)::int AS versions,
         row_number() OVER (PARTITION BY a.name ORDER BY a.created_at DESC, a.epoch DESC, a.id DESC) AS rank
-      FROM artifacts a JOIN runs r ON r.id = a.run_id
-      -- dude's own (the final diff its beforeStop hook leaves) is never a
-      -- file for people; the collector keeps it out, and so does this.
-      WHERE (r.task_id = ${taskId} OR r.session_id = ${sessionId}) AND a.name NOT LIKE '.dude-%'
+      FROM owned a
+      -- dude's own (the final diff its beforeStop hook leaves, thumbnails)
+      -- is never a file for people; the collector keeps the diff out, and
+      -- so does this.
+      WHERE a.name NOT LIKE '.dude-%'
     ) listed
+    LEFT JOIN thumbs ON thumbs.name = '.dude-thumbs/' || listed.sha256 || '.jpg'
     WHERE rank <= ${VERSIONS_LISTED}
-    ORDER BY "createdAt" DESC, epoch DESC, id DESC`) as ArtifactRow[]);
+    ORDER BY "createdAt" DESC, epoch DESC, listed.id DESC`) as ArtifactRow[]);
   return rows.map((a) => ({ ...a, contentType: artifactType(a.contentType, a.name) }));
 }
 
@@ -118,12 +134,12 @@ async function listArtifacts(ctx: RequestContext): Promise<Response> {
 }
 
 /** An artifact's row, in the caller's organization; a session's Run's, for its members only. */
-async function artifactNamed(organizationId: string, personId: string, id: string): Promise<{ name: string; contentType: string } | undefined> {
+async function artifactNamed(organizationId: string, personId: string, id: string): Promise<{ name: string; contentType: string; inSession: boolean } | undefined> {
   return withOrg(organizationId, async ({ sql }) => {
-    const [row] = (await sql`SELECT a.name, a.content_type AS "contentType" FROM artifacts a
+    const [row] = (await sql`SELECT a.name, a.content_type AS "contentType", r.session_id IS NOT NULL AS "inSession" FROM artifacts a
       LEFT JOIN runs r ON r.id = a.run_id
       WHERE a.id = ${id} AND (r.session_id IS NULL OR session_role(r.session_id, ${personId}) IS NOT NULL)`) as Array<{
-      name: string; contentType: string }>;
+      name: string; contentType: string; inSession: boolean }>;
     return row;
   });
 }
@@ -170,6 +186,9 @@ async function artifactContent(ctx: RequestContext): Promise<Response> {
     body = rest;
   }
   headers.set("content-type", type);
+  // An artifact id names one upload: its bytes never change. A session's
+  // membership does, and a cached copy would outlive a member's removal.
+  headers.set("cache-control", artifact.inSession ? "private, no-store" : "private, max-age=31536000, immutable");
   if (isActive(type) && ctx.url.searchParams.get("inline") !== "1") {
     headers.set("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(name.split("/").pop() || "file")}`);
   }

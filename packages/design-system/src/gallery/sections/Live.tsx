@@ -82,9 +82,12 @@ const T = Date.now();
 const GALLERY: GalleryFile[] = [
   { name: "revenue-chart.png", versions: [3, 2, 1].map((v) => ({ id: `png${v}`, name: "revenue-chart.png", contentType: "image/png", sizeBytes: 84_000, createdAt: T - (4 - v) * 3_600_000, role: "implementer" as const, session: "Implement", version: v })) },
   { name: "session.webm", versions: [{ id: "webm", name: "session.webm", contentType: "video/webm", sizeBytes: 4_800_000, createdAt: T - 2_400_000, role: "reviewer", session: "Review · browser", version: 1, description: "The sign-in flow, end to end" }] },
+  { name: "walkthrough.webm", versions: [{ id: "walk", name: "walkthrough.webm", contentType: "video/webm", sizeBytes: 6_100_000, createdAt: T - 1_800_000, role: "qa_browser", session: "Test", version: 1, description: "Saving a draft, with its poster", thumbnailId: "walk-poster" }] },
   { name: "DECISION.md", versions: [2, 1].map((v) => ({ id: `md${v}`, name: "DECISION.md", contentType: "text/markdown", sizeBytes: 3_200, createdAt: T - 6_600_000, role: "implementer" as const, session: "Implement", version: v, description: "Why the chart uses visx" })) },
   { name: "coverage.html", versions: [{ id: "html", name: "coverage.html", contentType: "text/html", sizeBytes: 212_000, createdAt: T - 6_600_000, role: "implementer", session: "Implement", version: 1 }] },
 ];
+// A video's thumbnail, as the app would make it from the thumbnail's bytes.
+const POSTER = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 90"><rect width="160" height="90" fill="#f4f5f7"/><rect x="12" y="12" width="136" height="10" fill="#d0d4da"/><rect x="12" y="32" width="90" height="8" fill="#9aa3ae"/><rect x="12" y="62" width="40" height="14" rx="3" fill="#3b6fd8"/></svg>')}`;
 
 function FilesDemo() {
   const [open, setOpen] = useState<string | null>(null);
@@ -92,7 +95,8 @@ function FilesDemo() {
   const shown = useMemo(() => GALLERY.find((f) => f.name === open), [open]);
   return (
     <>
-      <FileGallery files={GALLERY} onOpen={(f) => { setVersion(undefined); setOpen(f.name); }} onDownload={() => {}} onDownloadAll={() => {}} note="kept 90 days" />
+      <FileGallery files={GALLERY} thumbnail={(v) => v.thumbnailId ? POSTER : undefined}
+        onOpen={(f) => { setVersion(undefined); setOpen(f.name); }} onDownload={() => {}} onDownloadAll={() => {}} note="kept 90 days" />
       <FileViewer files={GALLERY} open={open} onOpenChange={(n) => { setVersion(undefined); setOpen(n); }} version={version} onVersionChange={setVersion}
         onDownload={() => {}} onCopy={() => {}} onOpenSession={() => {}}>
         {shown ? (
