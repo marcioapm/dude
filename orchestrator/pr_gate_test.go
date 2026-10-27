@@ -54,12 +54,18 @@ func (w *world) heldBeforePR(task string) bool {
 		AND state->'decision'->>'point' = 'before_pull_request' AND NOT state->'decision' ? 'taken'`, task) == 1
 }
 
-// signalsTaken says the task's delivery has consumed every signal sent to
-// it: the step a signal wakes has run. What a test then finds absent did
-// not happen, rather than not yet.
+// signalsTaken says no signal sent to the task's delivery is left
+// unconsumed: once one was sent, the step it woke has run. It is also true
+// when none was ever sent; signalsConsumed tells the two apart.
 func (w *world) signalsTaken(task string) bool {
 	return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs wf ON wf.id = s.workflow_run_id
 		WHERE wf.task_id = $1 AND s.consumed_at IS NULL`, task) == 0
+}
+
+// signalsConsumed counts the signals the task's delivery has taken.
+func (w *world) signalsConsumed(task string) int {
+	return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs wf ON wf.id = s.workflow_run_id
+		WHERE wf.task_id = $1 AND s.consumed_at IS NOT NULL`, task)
 }
 
 // readyForReview counts the task's moves to awaiting_input for its owner's review.
@@ -492,14 +498,17 @@ func TestAHoldWhoseHeadsMovedAsksAgain(t *testing.T) {
 	w := newWorld(t)
 	ana := w.person("Ana")
 	task := w.atTheHold(ana)
+	taken := w.signalsConsumed(task)
 	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
 		t.Fatalf("the owner's Open: %d %v", status, out)
 	}
 	// The heads move before the step that opens runs.
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{heads,target}', '"0123456789abcdef0123456789abcdef01234567"')
 		WHERE task_id = $1`, task)
-	// The step that wakes on the Open ran at the new heads: its signal consumed, the delivery waiting again.
-	w.until("the step that opens to run", func() bool { return w.signalsTaken(task) && w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
+	// The step the Open wakes ran at the new heads: its signal consumed, the delivery waiting again.
+	w.until("the step that opens to run", func() bool {
+		return w.signalsConsumed(task) > taken && w.signalsTaken(task) && w.heldBeforePR(task) || len(w.gh.Pulls()) > 0
+	})
 	if n := len(w.gh.Pulls()); n != 0 {
 		t.Fatalf("%d pull requests opened at heads the owner did not see", n)
 	}
