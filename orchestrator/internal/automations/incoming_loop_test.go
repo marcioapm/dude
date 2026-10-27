@@ -255,6 +255,38 @@ func TestIncomingRunStartsFromItsFirstDelivery(t *testing.T) {
 	}
 }
 
+// A command automation with Concurrency merge: the deliveries merged into
+// its waiting run are all in that run's event file, bodies included.
+func TestIncomingMergedDeliveriesReachACommandRun(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	h.automation("aut_merge", "command", map[string]any{"kind": "incoming", "hookId": "hk_merge000000000000", "ratePerHour": 30,
+		"verify": map[string]any{"mode": "header", "header": "Authorization"}},
+		map[string]any{"command": g.hold(`cat "$DUDE_EVENT_PATH"`), "concurrency": "merge"})
+	h.receive("aut_merge", "m_1", map[string]any{"n": 1})
+	h.until("m_1 runs", func() bool { r := h.runs("aut_merge"); return len(r) == 1 && r[0].Status == "running" })
+	h.receive("aut_merge", "m_2", map[string]any{"n": 2})
+	h.until("m_2 is read", func() bool { return h.delivery("m_2").Verdict != "" })
+	h.receive("aut_merge", "m_3", map[string]any{"n": 3})
+	h.until("m_3 is read", func() bool { return h.delivery("m_3").Verdict != "" })
+	m2, m3 := h.delivery("m_2"), h.delivery("m_3")
+	if m2.Verdict != VerdictStarted || m3.Verdict != VerdictSentToRun || m3.Run != m2.Run {
+		t.Fatalf("m_2 %+v, m_3 %+v", m2, m3)
+	}
+	g.release(t)
+	h.until("the merged run ends", func() bool { return h.run("aut_merge", m2.Run).Status == "succeeded" })
+	var list []struct {
+		DeliveryID string `json:"deliveryId"`
+		Body       struct{ N int }
+	}
+	log := h.run("aut_merge", m2.Run).Log
+	if err := json.Unmarshal([]byte(strings.TrimSpace(log)), &list); err != nil || len(list) != 2 ||
+		list[0].DeliveryID != "m_2" || list[0].Body.N != 2 || list[1].DeliveryID != "m_3" || list[1].Body.N != 3 {
+		t.Errorf("the merged run's event file %q: %v", log, err)
+	}
+}
+
 // A delivery accepted while its automation was on is skipped if it is off
 // by the time the loop reads it, and an organisation incoming automation
 // naming no project skips every delivery, saying so.
