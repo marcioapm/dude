@@ -61,7 +61,7 @@ Answer with only a JSON object, nothing before or after it:
  "channel_projects":{"add":["<project key>", …],"remove":["<project key>", …]}|null,
  "maybe_projects":["<project key>", …]|null}
 
-maybe_projects is for a brainstorm without a project only, and is the only source of the projects the person is offered to link: at most 3 listed project keys whose repository or CI the request could need, most likely first. Include the project this conversation is usually about, or where its earlier requests went, when the request could plausibly involve that project's code, CI, runs or data. null when the request needs no project: general knowledge, small talk, the time or the weather, questions about dude itself.`
+maybe_projects is for an answer that may end in a session without a project (a brainstorm without one, or a clarifying question offering a session), and is the only source of the projects the person is offered to link: at most 3 listed project keys whose code, CI, runs or data the request could involve, most likely first. Include the project this conversation is usually about, or where its earlier requests went, when the request could involve it. null when the request needs no project: general knowledge, small talk, the time or the weather, questions about dude itself.`
 
 // maybeProjectsMax is how many of an answer's maybe_projects are read.
 const maybeProjectsMax = 3

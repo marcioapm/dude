@@ -1198,7 +1198,7 @@ An admin sets the usual projects on the provider's settings page
 from chat (`@dude this channel is usually about Acme`, the `channel_projects`
 route; anyone else is refused privately and nothing changes).
 
-**Link a project (`chat/link.go`, migration 203).** A mention routed to a
+**Link a project (`chat/link.go`, migration 213).** A mention routed to a
 brainstorm with no linked project offers the routing answer's
 `maybe_projects`: known, deduplicated, at most 3, in the model's order. The
 usual projects and learned hints are only the model's context; a null or

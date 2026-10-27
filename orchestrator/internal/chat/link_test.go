@@ -258,12 +258,15 @@ func TestChatALinkNeverOffersAHiddenProjectAndWithoutCandidatesOnlyTheSessionPag
 	w.earlier(w.abs)
 	w.exec(`INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, w.abs)
 	// An unknown key and a hidden one from the model are dropped as well.
-	reply, _ := w.brainstorm("Márcia", "ABS", "NOPE")
+	reply, session := w.brainstorm("Márcia", "ABS", "NOPE")
 	if bs := row(t, reply.Blocks); len(bs) != 0 {
 		t.Fatalf("row %+v", bs)
 	}
 	if strings.Contains(string(reply.Blocks), "ABS") {
 		t.Fatalf("the hidden project is offered: %s", reply.Blocks)
+	}
+	if b := allButtons(t, reply.Blocks); b != "Open in dude https://dude.example.com/#/o/acme/sessions/"+session {
+		t.Fatalf("buttons %q", b)
 	}
 }
 
@@ -577,6 +580,56 @@ func TestChatAForgedLinkValueLinksNothing(t *testing.T) {
 	w.click("Eli", "G1", reply.TS, reply.ThreadTS, value)
 	if l := w.linked(session); l != "" {
 		t.Fatalf("linked %q from another conversation", l)
+	}
+}
+
+// The fallback's hints overlap and run past the cap: usual BIL, learned
+// BIL 2, ABS, OPS, SDK. Each is offered once, at most 3, usual first.
+func TestChatAFailedRoutingCallOffersItsHintsOnceEachAtMostThree(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.project)
+	w.earlier(w.project)
+	w.earlier(w.project)
+	w.earlier(w.abs)
+	w.earlier(w.ops)
+	w.earlier(w.sdk)
+	w.model.queue("I think a task")
+	w.mention("Eli", "C1", "", "can you investigate the failures above?")
+	if got := w.requests(); got[len(got)-1].Route != "failed" {
+		t.Fatalf("request %+v", got[len(got)-1])
+	}
+	if l := labels(row(t, lastBot(t, w.fake).Blocks)); l != "BIL · Billing, ABS · Acme Backend, OPS · Operations" {
+		t.Fatalf("row %q", l)
+	}
+}
+
+// A clarifying question whose session choice is picked offers the
+// projects the question's answer suggested.
+func TestChatASessionPickedFromAQuestionOffersTheSuggestedProjects(t *testing.T) {
+	w := linkSetup(t)
+	w.model.queue(answer(map[string]any{"route": "clarify", "confidence": 0.9, "reasoning": "two ways", "maybe_projects": []string{"SDK"},
+		"question": map[string]any{"text": "Task or session?", "choices": []map[string]any{
+			{"id": "a", "label": "A task", "route": "task", "project": "BIL"}, {"id": "b", "label": "A session", "route": "brainstorm"}}}}))
+	root := w.mention("Eli", "C1", "", "the SDK release looks off")
+	q := lastBot(t, w.fake)
+	var blocks []map[string]any
+	_ = json.Unmarshal(q.Blocks, &blocks)
+	var value string
+	for _, e := range blocks[1]["elements"].([]any) {
+		if el := e.(map[string]any); el["text"].(map[string]any)["text"] == "A session" {
+			value = el["value"].(string)
+		}
+	}
+	if value == "" {
+		t.Fatalf("no session choice in %s", q.Blocks)
+	}
+	w.click("Eli", "C1", q.TS, root, value)
+	got := w.requests()
+	if last := got[len(got)-1]; last.Route != "brainstorm" || last.ResultKind != "session" {
+		t.Fatalf("request %+v", last)
+	}
+	if l := labels(row(t, lastBot(t, w.fake).Blocks)); l != "SDK · Client SDK" {
+		t.Fatalf("row %q", l)
 	}
 }
 
