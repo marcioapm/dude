@@ -286,3 +286,27 @@ scope %q is not one this decision takes: "run", or "attempt" only when waiving u
 
 %s needs a note with the person's direction
 
+## refusals/domain/chat-links/gone
+
+%s is no longer a project in dude.
+
+## refusals/domain/chat-links/hidden
+
+An admin hid %s from %s: it can't be linked to this session.
+
+## refusals/domain/chat-links/linked-already
+
+%s is linked to this session already.
+
+## refusals/domain/chat-links/not-offered
+
+That isn't a project dude offered to link here.
+
+## refusals/domain/chat-links/only-asker-or-admin
+
+Only %s or an admin can link a project here.
+
+## refusals/domain/chat-links/refused
+
+dude couldn't link %s: %s
+
