@@ -1263,6 +1263,40 @@ test("a dude window that stops answering, with no other dude up the openers, is 
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
 
+// A page another site opened: its opener is live, of another origin, and never answers, so Connect is offered.
+async function connectUnderForeignOpener(): Promise<FakeWin> {
+  const dudeTab = fakeWin();
+  win.open = () => dudeTab;
+  boot({ heartbeatMs: HB });
+  await tick(80);
+  tid("ov-connect")!.click();
+  return dudeTab;
+}
+
+test("with a foreign opener up the chain, the tab Connect opened that goes quiet after connecting stays the one said hello to, and its session reconnects", async () => {
+  const beat = heartbeatByHand();
+  const dudeTab = await connectUnderForeignOpener();
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  const toForeign = posted(opener as unknown as FakeWin).length;
+  dropToWaiting(beat);
+  for (let i = 0; i < 6; i++) beat();
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  expect(posted(opener as unknown as FakeWin).length).toBe(toForeign);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("with a foreign opener up the chain, the tab Connect opened that answers only after the waiting beats still connects", async () => {
+  const beat = heartbeatByHand();
+  const dudeTab = await connectUnderForeignOpener();
+  for (let i = 0; i < 6; i++) beat();
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
 test("the walk up the openers reaches dude at exactly five steps, stops after five same-origin pages, and at an opener that can't be read past", () => {
   page(CART, false);
   const origin = new URL(PAGE).origin;

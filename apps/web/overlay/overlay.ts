@@ -429,9 +429,10 @@ export class Overlay {
     const said = this.#saidHello;
     this.#saidHello = false;
     if (this.#connection === "waiting" && ++this.#waitBeats === WAITING_BEATS) {
-      // The pinned dude window went unanswered this long: the dude up the openers, if there is one, is talked to instead.
-      // With none it stays pinned, so it is still said hello to and not taken for closed.
-      if (this.#chain()) this.#connectWin = null;
+      // The pinned dude window went unanswered this long: the window up the openers, if there is one, is talked to instead.
+      // The tab this page's Connect opened stays pinned: it is proven to be dude, and the chain's window is not.
+      // With no chain the pin stays too, so it is still said hello to and not taken for closed.
+      if (this.#connectWin !== this.#connectOpened && this.#chain()) this.#connectWin = null;
       this.#render();
     }
     if (this.#connection === "connected") {
