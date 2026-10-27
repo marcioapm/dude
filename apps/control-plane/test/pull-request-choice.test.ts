@@ -148,7 +148,7 @@ describe("before the pull request", () => {
     const hold = { round: 1, heads: { web: "abc" }, since, repos: [{ name: "web", head: "dude/x", base: "main", additions: 3, deletions: 1 }] };
     await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
       VALUES ('wf_prc_hold', ${ORG}, 'task.delivery', 'prc-hold', ${task.id}, 'waiting', 'conductorDecision',
-              ${JSON.stringify({ decision: { point: "before_pull_request" }, hold })}::jsonb)`;
+              ${{ decision: { point: "before_pull_request" }, hold }})`;
     const held = (await (await call("GET", `/v1/tasks/${task.id}`)).json()) as Json;
     expect(held.hold.round).toBe(1);
     expect(Date.parse(held.hold.since)).toBe(Date.parse(since));
