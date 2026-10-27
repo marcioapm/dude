@@ -148,6 +148,19 @@ describe("a task held on Ask me first", () => {
     expect(document.getElementById(open.getAttribute("aria-describedby")!)?.textContent).toBe("Being reviewed and tested again");
   });
 
+  test("sent back and in agent review, the panel stays and the feedback holds the pull request, not the merge", async () => {
+    const client = new Held(atHold({ status: "review", awaitingDecision: null, hold: { ...HOLD, sentBack: true } }));
+    client.feedbackItems = [delivered("f1")];
+    const page = await taskPage(client);
+    const card = await until(() => panel(page), "the panel");
+    expect(card.getAttribute("data-state")).toBe("sent-back");
+    const chip = await until(() => page.querySelector<HTMLElement>("[data-testid=merge-hold]"), "the header's chip");
+    expect(text(chip)).toBe("1 feedback item holds the pull request");
+    await click(chip);
+    await until(() => (page.textContent?.includes("holds the pull request's opening") ? true : null), "the Feedback tab's words");
+    expect(page.textContent).not.toContain("Holding the merge");
+  });
+
   test("running with a hold it is not sent back from (after Open, or a change of the choice) claims no fixer at work", async () => {
     const client = new Held(atHold({ status: "running", awaitingDecision: null, hold: { ...HOLD, sentBack: false } }));
     const page = await taskPage(client);

@@ -16,12 +16,13 @@ export const heldAtGate = (task: GateFacts): boolean =>
 
 /**
  * A fixer works on the feedback sent from the hold before the first pull
- * request: the hold's sentBack, while the delivery runs. An escalation or a
- * stop leaves sentBack set (a Retry goes back to the fix) with nobody at work.
+ * request: the hold's sentBack, while the round runs or is agent-reviewed. An
+ * escalation, a reviewer's question or a stop leaves sentBack set (a Retry
+ * goes back to the fix) with nobody at work.
  */
 export const sentBackFromGate = (task: GateFacts): boolean =>
   task.decider !== "conductor" && !task.pullRequestOpened && !heldAtGate(task) && task.hold?.sentBack === true
-  && task.status === "running" && !task.escalation;
+  && !task.escalation && (task.status === "running" || task.status === "review");
 
 /** Why a task's choice can no longer change: a pull request is open. */
 export const PULL_REQUEST_OPEN_TEXT = "The pull request is already open.";
