@@ -25,7 +25,11 @@ the question, with enough context to answer it (at most 4000 characters)
 {{- end}}
 
 {{- define "tools/ask_person/questions.choices.label" -}}
-the answer, short (at most 120 characters)
+the answer, short (at most 120 characters); left out for a choice with a note, whose label dude writes as its action and note
+{{- end}}
+
+{{- define "tools/ask_person/questions.choices.note" -}}
+a conductor's, on its question about an escalation, for a choice whose action needs the person's reason or direction (a waiver, an acceptance, a stuck or non-converging retry, an amend): the reason or direction you propose, in plain words. The person sees "Waive: <note>"; the owner picking it decides the escalation with your note as theirs. Required for such an action, refused on any other
 {{- end}}
 
 {{- define "tools/ask_person/questions.choices.description" -}}
@@ -41,5 +45,5 @@ the person may pick several choices (default one)
 {{- end}}
 
 {{- define "tools/ask_person/actions" -}}
-a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it, except a waiver or an acceptance of a failed test, which needs the person's own words
+a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it. A choice whose action needs the person's reason or direction (waive, accept of a failed test, a stuck retry, a non-converging loop's retry, accept or amend) carries the one you propose as its note, in questions' choices
 {{- end}}

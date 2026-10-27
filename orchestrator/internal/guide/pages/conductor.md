@@ -48,7 +48,9 @@ Before the pull request, the conductor asks you a fixed question: **Open**, **Dr
 
 An escalation is still a person's decision. The conductor investigates, explains, and recommends one action. Its question offers the escalation's actions as choices. When the owner picks one, it is decided exactly as from the banner.
 
-If the owner answers in their own words instead, the conductor may decide that escalation once, with `decide_escalation`, recording what it decided and why. A waiver, or accepting a failed test, is never a choice: it needs the person's own words.
+A waiver, accepting a failed test, or a retry or change that needs direction is offered with the reason or direction the conductor proposes, shown in the choice ("Waive: the 94 type errors predate this change"). Picking it decides the escalation with those words as the owner's.
+
+If the owner answers in their own words instead, the conductor may decide that escalation once, with `decide_escalation`, recording what it decided and why.
 
 ## Steering an agent
 

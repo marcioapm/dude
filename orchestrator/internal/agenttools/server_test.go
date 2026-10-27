@@ -568,6 +568,9 @@ func TestAskPersonRefusesBothShapesNeitherAndOverTheLimits(t *testing.T) {
 		{`{"questions":[{"header":"H","question":"Q?","choices":[{"label":"a","recommended":true},{"label":"b","recommended":true}]}]}`, "at most one"},
 		{`{"questions":[{"header":"H","question":"Q?"}],"choices":["a"]}`, "own choices"},
 		{`{"questions":[{"header":"A","question":"Q?"},{"header":"B","question":"Q?"}],"actions":["retry"]}`, "actions go with one question"},
+		// A choice's note is a conductor's, on an escalation's question.
+		{`{"questions":[{"header":"H","question":"Q?","choices":[{"note":"it predates the change"},{"label":"b"}]}]}`, "a choice's note is a conductor's"},
+		{`{"questions":[{"header":"H","question":"Q?","choices":[{"description":"no label"}]}]}`, "has no label"},
 	} {
 		status, out := f.post(t, token, "ask_person", c.body)
 		if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, c.want) {
@@ -578,6 +581,31 @@ func TestAskPersonRefusesBothShapesNeitherAndOverTheLimits(t *testing.T) {
 	_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM questions WHERE run_id = 'run_bad'`).Scan(&n)
 	if n != 0 {
 		t.Errorf("%d questions recorded from refused calls", n)
+	}
+}
+
+// A choice's note is refused where no escalation can be decided by it: a
+// conductor's question while none waits on a person, and a session
+// agent's question. Nothing is recorded.
+func TestAChoicesNoteIsRefusedWhereNoEscalationWaits(t *testing.T) {
+	f := setup(t)
+	noted := `{"questions":[{"header":"H","question":"Waive?","choices":[{"note":"it predates the change"},{"label":"Stop"}]}]}`
+	for _, c := range []struct{ name, token, run, want string }{
+		{"a conductor with no escalation", f.run(t, "run_cond_note", "conductor", "running"), "run_cond_note",
+			"a choice's note is for the conductor's question about an escalation waiting on a person; there is none"},
+		{"a session's agent", f.session(t, "ses_note", "Notes", "agent"), "run_ses_note", "a choice's note is a conductor's"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			status, out := f.post(t, c.token, "ask_person", noted)
+			if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, c.want) {
+				t.Fatalf("%d %v, want 422 saying %q", status, out, c.want)
+			}
+			var n int
+			_ = f.owner.QueryRow(context.Background(), `SELECT count(*) FROM questions WHERE run_id = $1`, c.run).Scan(&n)
+			if n != 0 {
+				t.Errorf("%d questions recorded from a refused call", n)
+			}
+		})
 	}
 }
 

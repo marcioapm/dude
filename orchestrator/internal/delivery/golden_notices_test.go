@@ -45,9 +45,17 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"decision-waiting-pr-feedback", decisionWaitingNote(PointPRFeedback, "")},
 		{"decision-waiting-unknown", decisionWaitingNote("somewhere", "")},
 		{"run-failed", runFailedLine("review · security", "run_rev", "lux: the host\nwent away "+strings.Repeat("x", 130))},
-		{"escalated-stuck", escalatedLine("stuck", []string{"retry", "accept", "stop"})},
-		{"escalated-test-failed", escalatedLine(ReasonTestFailedCriteria, []string{"retry", "accept"})},
-		{"escalated-test-blocked", escalatedLine(ReasonTestBlocked, []string{"retry", ActionWaive})},
+		{"escalated-stuck", escalatedLine(&Escalation{Reason: "stuck", Step: "fix"})},
+		{"escalated-test-failed", escalatedLine(&Escalation{Reason: ReasonTestFailedCriteria, Step: "fix", Detail: map[string]any{
+			"criteria": []map[string]any{{"criterion": 2, "status": "fail", "text": "Paying sends\na receipt"}}}})},
+		{"escalated-test-blocked", escalatedLine(&Escalation{Reason: ReasonTestBlocked, Step: "test", Detail: map[string]any{
+			"criteria": []map[string]any{{"criterion": 1, "status": "blocked", "text": "The export downloads"}}}})},
+		{"escalated-checks", escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: map[string]any{"runId": "run_impl",
+			"message": "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
+				"- npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no)\n" +
+				"- missing checks: the legacy Vue jest run covers the changed component (judgement: yes)\n\nRun the missing or unsuccessful checks."}})},
+		{"escalated-checks-many", escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: map[string]any{"runId": "run_impl",
+			"message": "held", "unverified": slices.Repeat([]map[string]any{{"command": "make check", "reason": "exit 1"}}, escalatedItemsMax+3)}})},
 		{"escalation-answered", escalationAnsweredLine("qst_1", "retry")},
 		{"escalation-on-banner", escalationOnBannerLine("accept", "qst_2", false)},
 		{"escalation-checks-finished", escalationOnBannerLine("wait", "qst_2", true)},
@@ -85,6 +93,26 @@ func TestGoldenChecksWaiverTexts(t *testing.T) {
 		{"question", MustText("notices/checks/waived").Render(Check{Command: "make test", Result: CheckFail})},
 		{"context", MustText("notices/checks/waived-context").Render(w)},
 		{"not-covered", MustText("notices/checks/not-covered").Render(map[string]string{"Role": "Implementer", "Reason": "TestGreeting fails too"})},
+	})
+}
+
+// What the checks gate asks the judge about a reported failure or not-run
+// check no waiver covers, and the send-back of one it did not pass.
+func TestGoldenChecksPreexistingTexts(t *testing.T) {
+	type q struct {
+		Check
+		TestPhase bool
+	}
+	failed := Check{Command: "npx tsc --noEmit", Result: CheckFail, Evidence: "95 errors on the parent, 94 with the change"}
+	browser := Check{Command: "open the settings page", Result: CheckNotRun, Evidence: "no browser"}
+	type verdict struct{ Command, Result, Reason, WaiverReason, JudgeReason, Decision string }
+	goldenLines(t, "checks-preexisting", [][2]string{
+		{"fail", MustText("notices/checks/preexisting").Render(q{failed, true})},
+		{"not-run with a test phase", MustText("notices/checks/preexisting").Render(q{browser, true})},
+		{"not-run without a test phase", MustText("notices/checks/preexisting").Render(q{browser, false})},
+		{"send-back", MustText("notices/checks").Render(map[string]any{"Failed": true, "Bases": "api: main at 1111111, web: release/2 at 2222222",
+			"Checks": []verdict{{Command: failed.Command, Result: CheckFail, Reason: failed.Evidence, Decision: "unsure",
+				JudgeReason: MustText("notices/checks/not-preexisting").Render("no run at the task's base is recorded")}}})},
 	})
 }
 

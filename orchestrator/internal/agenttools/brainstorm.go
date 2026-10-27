@@ -722,6 +722,9 @@ func sessionAsk(ctx context.Context, tx pgx.Tx, c Caller, in sessionAskIn) (askO
 	if err != nil {
 		return askOut{}, err
 	}
+	if delivery.HasChoiceNote(items) {
+		return askOut{}, refuseText(rChoiceNoteIsConductorForQuestionAbout)
+	}
 	open, err := delivery.HasOpenQuestion(ctx, tx, c.RunID)
 	if err != nil {
 		return askOut{}, err

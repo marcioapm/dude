@@ -5,6 +5,7 @@ import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
 import type { Router } from "../src/api/router.ts";
 import { createApiKey } from "../src/api/auth.ts";
+import { useConfig } from "../src/config.ts";
 import { promptRoleSchema, REVIEWER_CATEGORIES, ROLE_MODEL_REMOVED } from "@dude/domain";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
@@ -69,6 +70,9 @@ beforeAll(async () => {
   } });
   process.env.DUDE_ORCHESTRATOR_URL = `http://localhost:${server.port}`;
   process.env.DUDE_ORCHESTRATOR_TOKEN = "models-test";
+  // An earlier file in the same process may have resolved the settings
+  // without these variables: resolve them again from the environment.
+  useConfig(null);
   router = buildRouter("");
 });
 
@@ -78,6 +82,7 @@ afterAll(async () => {
   else process.env.DUDE_ORCHESTRATOR_URL = oldUrl;
   if (oldToken === undefined) delete process.env.DUDE_ORCHESTRATOR_TOKEN;
   else process.env.DUDE_ORCHESTRATOR_TOKEN = oldToken;
+  useConfig(null);
   if (app) await closePool(app);
   await owner?.end();
   await admin?.unsafe(`DROP DATABASE IF EXISTS "${NAME}" WITH (FORCE)`);

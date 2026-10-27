@@ -1,7 +1,9 @@
 package fakelux
 
 import (
+	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 )
@@ -18,6 +20,21 @@ func (b *Behaviour) withChecks(spec map[string]any) {
 	if b.Checks == "" && !b.NoChecksReport {
 		b.Checks = fakeagent.NoChecks
 	}
+}
+
+// atCommits writes into a scripted command its first repository's main as
+// the fake's repository has it now (fakeagent.AtMain). Callers hold s.mu.
+func (s *Server) atCommits(run *Run, command string) string {
+	if !strings.Contains(command, fakeagent.AtMain) {
+		return command
+	}
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	repos := specRepos(spec)
+	if len(repos) == 0 {
+		return command
+	}
+	return strings.ReplaceAll(command, fakeagent.AtMain, head(s.repoPath(repos[0].URL), "main"))
 }
 
 // command plays one shell command the agent runs, c = [command, output,

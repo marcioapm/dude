@@ -840,14 +840,25 @@ var CheckOutputs = [2]string{"FAIL: TestGreeting (0.00s)\n    greeting_test.go:9
 // FailingCommand fail with PreexistingOutputs[0], a failure the work does
 // not cause; ChecksNewFailureModel sees the same command fail with that
 // failure and a new one (PreexistingOutputs[1]); ChecksOtherFailureModel
-// sees OtherFailingCommand fail.
+// sees OtherFailingCommand fail; ChecksBaseShownModel is
+// ChecksPreexistingModel that first runs FailingCommand in a separate
+// checkout of the target branch's commit the task builds on (BaseCommand)
+// and sees the same failure.
 const (
 	ChecksPreexistingModel  = "fake/checks-preexisting"
 	ChecksNewFailureModel   = "fake/checks-new-failure"
 	ChecksOtherFailureModel = "fake/checks-other-failure"
+	ChecksBaseShownModel    = "fake/checks-base-shown"
 	FailingCommand          = "make test"
 	OtherFailingCommand     = "make lint"
+	// BaseDir is where BaseCommand checks the task's base out.
+	BaseDir     = "../task-base"
+	BaseCommand = "git worktree add " + BaseDir + " " + AtMain + " && make -C " + BaseDir + " test"
 )
+
+// AtMain in a scripted command is its first repository's main as the fake
+// lux has it when it plays the command.
+const AtMain = "{main}"
 
 var PreexistingOutputs = [2]string{"FAIL: TestClock (0.00s)\n    clock_test.go:4: needs a hardware clock\nexit status 1",
 	"FAIL: TestClock (0.00s)\n    clock_test.go:4: needs a hardware clock\nFAIL: TestGreeting (0.00s)\n    greeting_test.go:9: got \"\", want \"hello\"\nexit status 1"}
@@ -870,6 +881,9 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 			out = PreexistingOutputs[1]
 		}
 		return [][3]string{{FailingCommand, out, "1"}}, ChecksReport([3]string{FailingCommand, "fail", "TestClock needs a hardware clock"}), true
+	case model == ChecksBaseShownModel:
+		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
+			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"}), true
 	case model == ChecksOtherFailureModel:
 		return [][3]string{{OtherFailingCommand, "lint: 1 issue\nexit status 1", "1"}},
 			ChecksReport([3]string{OtherFailingCommand, "fail", "one lint issue"}), true
@@ -879,7 +893,7 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 
 // everyWriterReports are the checks models whose report every writer
 // phase makes, not the implementer's alone.
-var everyWriterReports = map[string]bool{ChecksPreexistingModel: true, ChecksNewFailureModel: true, ChecksOtherFailureModel: true}
+var everyWriterReports = map[string]bool{ChecksPreexistingModel: true, ChecksNewFailureModel: true, ChecksOtherFailureModel: true, ChecksBaseShownModel: true}
 
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.

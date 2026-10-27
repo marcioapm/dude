@@ -24,6 +24,8 @@
 
 {{- define "refusals/tools/tools/actions-are-conductor-for-question-about"}}actions are a conductor's, for a question about an escalation{{end}}
 
+{{- define "refusals/tools/tools/choice-note-is-conductor-for-question-about"}}a choice's note is a conductor's, for a question about an escalation: put what you mean in the choice's label or description{{end}}
+
 {{- define "refusals/tools/tools/type-lowercase-words-joined-by-dots"}}type %q: lowercase words joined by dots, like progress or tests.finished{{end}}
 
 {{- define "refusals/tools/tools/data-too-large-at-most-16"}}data too large: at most 16 KB{{end}}

@@ -80,6 +80,32 @@ describe("checks judgements in the task's Activity", () => {
     ]);
   });
 
+  test("a failure the judge passed reads as pre-existing or deferred with its reason, never as a plain pass or a waiver", () => {
+    const lines = activityLines([
+      judged(impl.id, { turn: 1, round: 0, verified: true, judgePassed: true, message: "", checks: [
+        { command: "npx tsc --noEmit", result: "pre-existing", decision: "yes", reason: "95 errors at the parent, 95 with the change", callId: "mcall_1" },
+        { command: "open the settings page", result: "deferred", decision: "yes", reason: "the tester runs it", callId: "mcall_2" },
+        { command: "make lint", result: "pass", decision: "yes", reason: "clean", callId: "mcall_3" },
+      ] }, 1),
+    ], people, [impl], [], 1);
+    expect(lines.map((l) => [textOf(l.text), l.quote])).toEqual([[
+      "The implementer's checks were verified, with failures the judge passed",
+      "npx tsc --noEmit: pre-existing, passed by the judge: it fails the same at the commit of the target branch the task builds on — 95 errors at the parent, 95 with the change (judgement mcall_1)\n"
+        + "open the settings page: deferred, passed by the judge: a later phase runs it — the tester runs it (judgement mcall_2)\n"
+        + "make lint: pass — clean (judgement mcall_3)",
+    ]]);
+  });
+
+  test("a failure the judge did not pass carries the judge's reason", () => {
+    const lines = activityLines([
+      judged(impl.id, { turn: 1, round: 0, verified: false, message: "Your checks report was not verified.", checks: [
+        { command: "npx tsc --noEmit", result: "fail", decision: "unsure", reason: "94 errors", judgeReason: "not passed by the judge: no run at the parent" },
+      ] }, 1),
+    ], people, [impl], [], 1);
+    expect(lines.map((l) => l.quote)).toEqual([
+      "Your checks report was not verified.\nnpx tsc --noEmit: fail — 94 errors — not passed by the judge: no run at the parent"]);
+  });
+
   test("a test step that started no tester says why, which paths changed, and that the verdicts stand", () => {
     const test1 = run("run_test_cj", "test", "qa_browser");
     const skipped = { ...judged(test1.id, {}, 3), eventType: EventTypes.TestSkipped, runId: null,
