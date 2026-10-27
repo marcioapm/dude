@@ -522,7 +522,12 @@ func TestARealVideosThumbnailIsItsStillPage(t *testing.T) {
 	if err != nil || stderr != "" || shim.count() != 2 || answer["thumbnail"] == nil {
 		t.Fatalf("%v, stderr %q, %d calls, answer %v", err, stderr, shim.count(), answer)
 	}
-	bluePage(t, decodeJPEG(t, shim.file(2)))
+	thumb := decodeJPEG(t, shim.file(2))
+	// A frame smaller than the thumbnail's edge is kept at its own size.
+	if got := thumb.Bounds().Size(); got != image.Pt(160, 120) {
+		t.Fatalf("the thumbnail is %v; want the 160x120 frame, not enlarged", got)
+	}
+	bluePage(t, thumb)
 }
 
 // With an ffmpeg and no ffprobe, the video's length is how far ffmpeg
