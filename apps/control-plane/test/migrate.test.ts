@@ -258,11 +258,18 @@ test("215 gives each failed request of the last 30 days its cause apart from the
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'Acme', 'acme')`;
     const rows: Array<[string, string, string]> = [
+      // Stored unredacted before 214: never copied.
       ["chr_route", "failed", "the routing call failed: the LLM proxy answered 400: bad request"],
+      ["chr_route_reply", "failed", "the routing call failed: the LLM proxy answered 400: sk-x (its reply was not posted: slack chat.postMessage: invalid_auth)"],
       ["chr_gave", "failed", "dude could not act on it: slack conversations.info: missing_scope"],
+      ["chr_gave_pg", "failed", "dude could not act on it: record: ERROR: x (SQLSTATE 23505)"],
       ["chr_tries", "failed", "Slack did not answer after 5 tries"],
-      ["chr_reply", "failed", "A clear task. (its reply was not posted: slack chat.postMessage: invalid_arguments)"],
-      ["chr_make", "failed", "A task (project gone) (no such project)"],
+      ["chr_reply", "failed", "A clear task. (its reply was not posted: slack chat.postMessage: invalid_blocks (blocks[0].text))"],
+      ["chr_reply_gave", "failed", "A clear task. (its reply was not posted: Slack did not answer after 6 tries)"],
+      ["chr_make", "failed", `An epic of three (with parts). (ERROR: insert or update on table "tasks" violates foreign key constraint "tasks_epic_id_fkey" (SQLSTATE 23503))`],
+      ["chr_make_twice", "failed", `A task. (ERROR: a (SQLSTATE 23503)) (ERROR: b (SQLSTATE 23505))`],
+      // The model's words and an unknown clause: nothing to copy.
+      ["chr_words", "failed", "A task (project gone) (no such project)"],
       ["chr_ok", "task", "A clear task (with parentheses)"],
       ["chr_empty", "failed", ""],
       ["chr_aged", "failed", "Slack did not answer after 6 tries"],
@@ -274,17 +281,26 @@ test("215 gives each failed request of the last 30 days its cause apart from the
     // Older than retention keeps: left as it was.
     await sql`UPDATE chat_requests SET created_at = now() - interval '31 days' WHERE id = 'chr_aged'`;
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["215_chat_request_failure_backfill.sql"]);
-    expect(Object.fromEntries((await sql`SELECT id, failure FROM chat_requests ORDER BY id`).map((r: { id: string; failure: string | null }) => [r.id, r.failure])))
-      .toEqual({
-        chr_route: "the routing call failed: the LLM proxy answered 400: bad request",
-        chr_gave: "dude could not act on it: slack conversations.info: missing_scope",
-        chr_tries: "Slack did not answer after 5 tries",
-        chr_reply: "its reply was not posted: slack chat.postMessage: invalid_arguments",
-        chr_make: "no such project",
-        chr_ok: null,
-        chr_empty: null,
-        chr_aged: null,
-      });
+    const failures = Object.fromEntries((await sql`SELECT id, failure FROM chat_requests ORDER BY id`)
+      .map((r: { id: string; failure: string | null }) => [r.id, r.failure]));
+    expect(failures).toEqual({
+      chr_route: null,
+      chr_route_reply: null,
+      chr_gave: "dude could not act on it: slack conversations.info: missing_scope",
+      chr_gave_pg: "dude could not act on it: record: ERROR: x (SQLSTATE 23505)",
+      chr_tries: "Slack did not answer after 5 tries",
+      chr_reply: "its reply was not posted: slack chat.postMessage: invalid_blocks (blocks[0].text)",
+      chr_reply_gave: "its reply was not posted: Slack did not answer after 6 tries",
+      chr_make: `ERROR: insert or update on table "tasks" violates foreign key constraint "tasks_epic_id_fkey" (SQLSTATE 23503)`,
+      chr_make_twice: "ERROR: b (SQLSTATE 23505)",
+      chr_words: null,
+      chr_ok: null,
+      chr_empty: null,
+      chr_aged: null,
+    });
+    for (const f of Object.values(failures)) {
+      expect(String(f)).not.toMatch(/A clear task|An epic of three|A task|sk-x/);
+    }
   } finally {
     await sql.end();
   }
