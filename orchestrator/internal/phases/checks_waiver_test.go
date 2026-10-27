@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,14 +13,16 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
 
-// waiverFake answers the waiver question with waived (or err), Backed with
-// yes and Missing with no, counting the waiver questions it was asked.
+// waiverFake answers the waiver question with waived (or err), the
+// pre-existing question with preexisting ("" is no), Backed with yes and
+// Missing with no, counting the questions it was asked.
 type waiverFake struct {
 	waived     string
 	err        error
 	unrecorded bool
 	// missing answers Missing; "" is no.
-	missing string
+	missing     string
+	preexisting string
 	// offAfterWaiver: every question but the waiver's finds no tier.
 	offAfterWaiver bool
 	asked          []judge.Ask
@@ -39,6 +42,8 @@ func (f *waiverFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judg
 		return judge.Judgement{Decision: f.waived, CallID: id, Reasoning: "the same TestClock failure"}, nil
 	case f.offAfterWaiver:
 		return judge.Judgement{}, judge.ErrOff
+	case isPreexistingQuestion(a):
+		return judge.Judgement{Decision: cmp.Or(f.preexisting, judge.No), CallID: id, Reasoning: "no run at the starting commit"}, nil
 	case strings.Contains(a.Question, "reported pass"):
 		return judge.Judgement{Decision: judge.Yes, CallID: id, Reasoning: "backed"}, nil
 	case f.missing != "":
@@ -55,6 +60,10 @@ func (f *waiverFake) waiverQuestions() int {
 		}
 	}
 	return n
+}
+
+func isPreexistingQuestion(a judge.Ask) bool {
+	return strings.HasPrefix(a.Question, "This Run reported a check that did not pass")
 }
 
 const failingTest = "checks:\n  - command: make test\n    result: fail\n    evidence: TestClock needs a hardware clock\n"
@@ -177,7 +186,7 @@ func TestBesideACarriedFailureThePassesAreBackedAndMissingIsAsked(t *testing.T) 
 			// The send-back names the missing check alone, never the
 			// carried failure or the backed pass.
 			if !tc.verified {
-				if want := checksText.Render(got.Verdicts[2:]); got.Verdicts[2].Command != "missing checks" || got.Message != want {
+				if want := sendBack(got.Verdicts[2:], nil); got.Verdicts[2].Command != "missing checks" || got.Message != want {
 					t.Fatalf("the send-back is\n%s\nwant\n%s", got.Message, want)
 				}
 			}
@@ -237,37 +246,38 @@ func TestTheWaiverQuestionShowsTheWaivedFailure(t *testing.T) {
 }
 
 // Only an attempt waiver of the same failing command, decided before the
-// turn ended, in the Run's own task and attempt, is a candidate; nothing
-// else asks the judge, and the report is rejected as before.
+// turn ended, in the Run's own task and attempt, is a candidate; anything
+// else is asked only the pre-existing question, whose no rejects it.
 func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		report string
-		setup  func(w *harnessWorld)
+		name    string
+		report  string
+		setup   func(w *harnessWorld)
+		waivers int
 	}{
-		{"a run-scoped waiver", failingTest, func(w *harnessWorld) { waive(w, w.run, "", heldFailure) }},
+		{"a run-scoped waiver", failingTest, func(w *harnessWorld) { waive(w, w.run, "", heldFailure) }, 0},
 		{"another command", strings.Replace(failingTest, "make test", "make lint", 1),
-			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }},
+			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }, 0},
 		{"a not-run report of the waived command", strings.Replace(failingTest, "result: fail", "result: not-run", 1),
-			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }},
+			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }, 0},
 		{"a waived not-run", failingTest, func(w *harnessWorld) {
 			waive(w, w.run, delivery.ScopeAttempt, delivery.Check{Command: "make test", Result: delivery.CheckNotRun})
-		}},
+		}, 0},
 		// Not carried in v1, whatever a recorded waiver says it covers.
 		{"a not-run report of a waived not-run", strings.Replace(failingTest, "result: fail", "result: not-run", 1), func(w *harnessWorld) {
 			waive(w, w.run, delivery.ScopeAttempt, delivery.Check{Command: "make test", Result: delivery.CheckNotRun})
-		}},
+		}, 0},
 		{"one of two failures waived", failingTest + "  - command: make lint\n    result: fail\n    evidence: one issue\n",
-			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }},
+			func(w *harnessWorld) { waive(w, w.run, delivery.ScopeAttempt, heldFailure) }, 1},
 		{"another attempt's waiver", failingTest, func(w *harnessWorld) {
 			waive(w, w.otherRun(t, "run_old", w.run.TaskID, 0), delivery.ScopeAttempt, heldFailure)
 			mustOwner(t, w, `UPDATE runs SET attempt = 2 WHERE id = $1`, w.run.ID)
-		}},
+		}, 0},
 		{"another task's waiver", failingTest, func(w *harnessWorld) {
 			mustOwner(t, w, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_other_'||$1, $1, $2, 2, 'T', 'G')`,
 				w.run.Org, w.run.ProjectID)
 			waive(w, w.otherRun(t, "run_other", "wi_other_"+w.run.Org, 1), delivery.ScopeAttempt, heldFailure)
-		}},
+		}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
@@ -277,7 +287,8 @@ func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 			fake := &waiverFake{waived: judge.Yes}
 			w.s.Judge = fake
 			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified || got.Carried || len(fake.asked) != 0 {
+			if err != nil || got.Verified || got.Carried || fake.waiverQuestions() != tc.waivers || len(fake.asked) != tc.waivers+1 ||
+				!isPreexistingQuestion(fake.asked[len(fake.asked)-1]) {
 				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 			}
 		})
@@ -289,7 +300,7 @@ func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 		waive(w, w.run, delivery.ScopeAttempt, heldFailure)
 		fake := &waiverFake{waived: judge.Yes}
 		w.s.Judge = fake
-		if got, err := w.s.judgeChecks(context.Background(), w.run); err != nil || got.Verified || len(fake.asked) != 0 {
+		if got, err := w.s.judgeChecks(context.Background(), w.run); err != nil || got.Verified || fake.waiverQuestions() != 0 {
 			t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 		}
 	})

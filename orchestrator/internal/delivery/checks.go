@@ -24,6 +24,15 @@ const (
 	CheckNotRun = "not-run"
 )
 
+// Recorded results the checks gate's judge gives a reported fail or not-run
+// it passes, never an agent's: CheckPreexisting, a failure the Run's calls
+// show the same at its starting commit; CheckDeferred, a check a later
+// phase of the delivery runs.
+const (
+	CheckPreexisting = "pre-existing"
+	CheckDeferred    = "deferred"
+)
+
 type Check struct {
 	Command  string `json:"command" yaml:"command"`
 	Result   string `json:"result" yaml:"result"`

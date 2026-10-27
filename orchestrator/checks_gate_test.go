@@ -47,6 +47,13 @@ func (j *scriptedJudge) Judge(_ context.Context, _ string, a judge.Ask) (judge.J
 		if failing(this) != "" && failing(this) == failing(waived) {
 			d = judge.Yes
 		}
+	case strings.HasPrefix(a.Question, "This Run reported a check that did not pass"):
+		// Pre-existing: a recorded run at the starting commit fails with
+		// the same tests as the Run's own.
+		d = judge.No
+		if base, head := baseAndHeadFailures(a.Context); base != "" && base == head {
+			d = judge.Yes
+		}
 	case backedQ && failed(lastCompletion(a.Context)):
 		d = judge.No
 	case backedQ:
@@ -87,6 +94,20 @@ func failing(context string) string {
 	}
 	slices.Sort(out)
 	return strings.Join(out, ",")
+}
+
+// baseAndHeadFailures are failing's of the context's recorded call of
+// fakeagent.BaseCommand and of its last other call.
+func baseAndHeadFailures(context string) (base, head string) {
+	_, calls, _ := strings.Cut(context, "### The tool calls this Run recorded, in order")
+	for _, call := range strings.Split(calls, "\n- ")[1:] {
+		if strings.Contains(call, fakeagent.BaseCommand) {
+			base = failing(call)
+		} else {
+			head = failing(call)
+		}
+	}
+	return base, head
 }
 
 func (j *scriptedJudge) count() int {

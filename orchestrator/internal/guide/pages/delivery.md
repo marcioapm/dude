@@ -102,7 +102,9 @@ Otherwise a later tester picks up its previous round. It tests again every crite
 
 ## The checks report
 
-The implementer, fixer and simplifier end their work with a report of the checks they ran. Before their work is published, dude reads it. A missing or malformed report, or a check the agent itself says failed, sends the work back. If the organisation has a judgement tier, dude also asks it whether each reported pass matches the commands the Run actually ran. See [Judgements](help:judgements#what-judgements-are).
+The implementer, fixer and simplifier end their work with a report of the checks they ran. Before their work is published, dude reads it. A missing or malformed report sends the work back. If the organisation has a judgement tier, dude also asks it whether each reported pass matches the commands the Run actually ran. See [Judgements](help:judgements#what-judgements-are).
+
+A check the agent says failed or did not run is sent back unless the judgement tier passes it. A failure passes as **pre-existing** when the Run's own commands show the same command failing the same way at the commit the Run started from, with nothing new and nothing in the files it changed. A check not run passes as **deferred** when it is a browser or manual check of the interface and the delivery has a test phase, or when it needs the pull request or its CI. With judgements off, such a check is always sent back. The pull request and the task's Activity name each pre-existing or deferred check and the judgement's reason; neither is ever shown as a pass.
 
 An unbacked report is sent back up to **Checks report rounds** times (2 by default, in **Settings → GitHub**). Then the owner is asked: **Send it back once more**, or **Waive and go on** with a reason.
 

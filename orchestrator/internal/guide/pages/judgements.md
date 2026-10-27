@@ -14,10 +14,10 @@ Every call is recorded: what was asked, what the model answered, how long it too
 
 ## Where dude uses them
 
-dude uses a judgement to check an agent's **checks report**. The implementer, fixer and simplifier end their work with the checks they ran. dude asks the judgement tier whether each reported pass is backed by the commands the Run actually recorded, and whether any check is missing.
+dude uses a judgement to check an agent's **checks report**. The implementer, fixer and simplifier end their work with the checks they ran. dude asks the judgement tier whether each reported pass is backed by the commands the Run actually recorded, and whether any check is missing. For a check the agent says failed, it asks whether the Run's commands show the same failure at the commit the Run started from; for one not run, whether a later phase of the delivery runs it.
 
 - A check the model does not confirm is **unverified**, and the work is sent back. See [Delivering a task](help:delivery#the-checks-report).
-- With judgements off, dude publishes the work and says visibly that its checks were not model-checked.
+- With judgements off, dude publishes the work and says visibly that its checks were not model-checked. A check the agent says failed or did not run is still sent back.
 
 ## Choosing the tier
 

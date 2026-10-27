@@ -88,6 +88,26 @@ func TestGoldenChecksWaiverTexts(t *testing.T) {
 	})
 }
 
+// What the checks gate asks the judge about a reported failure or not-run
+// check no waiver covers, and the send-back of one it did not pass.
+func TestGoldenChecksPreexistingTexts(t *testing.T) {
+	type q struct {
+		Check
+		TestPhase bool
+	}
+	failed := Check{Command: "npx tsc --noEmit", Result: CheckFail, Evidence: "95 errors on the parent, 94 with the change"}
+	browser := Check{Command: "open the settings page", Result: CheckNotRun, Evidence: "no browser"}
+	type verdict struct{ Command, Result, Reason, WaiverReason, JudgeReason, Decision string }
+	goldenLines(t, "checks-preexisting", [][2]string{
+		{"fail", MustText("notices/checks/preexisting").Render(q{failed, true})},
+		{"not-run with a test phase", MustText("notices/checks/preexisting").Render(q{browser, true})},
+		{"not-run without a test phase", MustText("notices/checks/preexisting").Render(q{browser, false})},
+		{"send-back", MustText("notices/checks").Render(map[string]any{"Failed": true, "Bases": "api@1111111, web@2222222",
+			"Checks": []verdict{{Command: failed.Command, Result: CheckFail, Reason: failed.Evidence, Decision: "unsure",
+				JudgeReason: MustText("notices/checks/not-preexisting").Render("no run at the starting commit is recorded")}}})},
+	})
+}
+
 // A stalled Run with everything a stall says: open calls of each kind, a
 // child waiting on a permission, processes, usage, files, tools, plan.
 func goldenStall() Stall {

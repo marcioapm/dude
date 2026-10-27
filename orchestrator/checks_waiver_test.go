@@ -132,6 +132,41 @@ func (j *scriptedJudge) waiverQuestions() int {
 	return n
 }
 
+// A writer that shows its failure the same at the commit it started from
+// passes without a person: every writer's report is judged pre-existing,
+// nothing is sent back or escalated, and the work reaches the pull request.
+func TestAFailureShownAtTheStartingCommitPassesWithoutAPerson(t *testing.T) {
+	w := newWorld(t)
+	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
+	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
+	j := &scriptedJudge{}
+	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, j)
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:verified,fix:verified,simplify:verified" {
+		t.Errorf("judged %s", got)
+	}
+	if n := w.checksEscalations(wi); n != 0 {
+		t.Errorf("%d checks escalations", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->'checks'->0->>'result' = $3
+		AND payload->'checks'->0->>'callId' = 'mcall_test' AND (payload->>'judgePassed')::bool`, wi, delivery.EvRunChecksJudged, delivery.CheckPreexisting); n != 3 {
+		t.Errorf("%d judgements recording the failure pre-existing, want each writer's", n)
+	}
+}
+
+// The same writer without a run at its starting commit is held as before.
+func TestAFailureNotShownAtTheStartingCommitIsHeld(t *testing.T) {
+	w := newWorld(t)
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Errorf("%d pull requests", n)
+	}
+	if got := w.ids(`SELECT payload->>'message' FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvRunChecksJudged); len(got) != 1 ||
+		!strings.Contains(got[0], "not passed by the judge: the recorded call says so") || !strings.Contains(got[0], "at the commit you started from (target@") {
+		t.Errorf("held %q", got)
+	}
+}
+
 // An unchanged simplifier after an attempt waiver asks the judge nothing.
 func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
 	w := newWorld(t)
@@ -303,8 +338,8 @@ func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
 	// does not cover it.
 	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
 		"- make test: TestClock needs a hardware clock — the Implementer's waiver does not cover this failure: the recorded call says so (judgement: no)\n\n" +
-		"Run the missing or unsuccessful checks as separate commands, read their output, and correct the report. End your next reply with a checks: YAML block. If you cannot proceed, ask a person what you need."
-	if got := w.ids(`SELECT payload->'detail'->>'message' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 || got[1] != want {
+		"A reported failure that predates your change passes once this Run's own tool calls show the same command failing the same way at the commit you started from (target@"
+	if got := w.ids(`SELECT payload->'detail'->>'message' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 || !strings.HasPrefix(got[1], want) {
 		t.Errorf("the fixer's held message is %q, want %q", got, want)
 	}
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, "TestGreeting is flaky too.", delivery.ScopeAttempt); code != 200 {
