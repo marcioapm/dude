@@ -7,8 +7,10 @@ HMAC starts a run whose agent is told the alert's values (quoted as text
 from outside dude: the task it files carries them); the `resolved`
 notification of the same group, which the condition alone would skip, is
 sent to that run as a new input whatever the concurrency; another group's
-alert gets a run of its own (queued behind the live one); a request with a
-wrong signature is refused 401 and stored as a refused row with no body.
+alert gets a run of its own (queued behind the live one); a quiet group's
+resolved alert is skipped by the condition; a request with a wrong
+signature is refused 401 and stored as a refused row with no body or
+headers; an unknown hook stores nothing.
 """
 
 from __future__ import annotations
@@ -49,14 +51,26 @@ def _delivery(env, delivery_id: str) -> dict:
 
 
 def _inputs(env, lux_run: str) -> list[str]:
-    """What the run's agent was given, in order: its prompt, then each input."""
-    res = requests.get(f"{env.lux_url}/v1/runs/{lux_run}/events", headers={"Authorization": f"Bearer {env.lux_key}"}, timeout=10)
-    res.raise_for_status()
-    out = []
-    for e in res.json()["events"]:
-        data = e["data"] if isinstance(e["data"], dict) else json.loads(e["data"])
-        if e["type"] == "lux.input" and data.get("text"):
-            out.append(data["text"])
+    """The text of each input the run's agent was given after its prompt, from its lux output's lux.input records.
+
+    The output streams while the run lives: what is there is read for a second, then the stream is dropped.
+    """
+    out: list[str] = []
+    event = ""
+    with requests.get(f"{env.lux_url}/v1/runs/{lux_run}/output", headers={"Authorization": f"Bearer {env.lux_key}"},
+                      stream=True, timeout=(5, 1)) as res:
+        res.raise_for_status()
+        try:
+            for raw in res.iter_lines():
+                line = raw.decode("utf-8")
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:") and event == "record":
+                    rec = json.loads(line[5:]).get("event") or {}
+                    if rec.get("type") == "lux.input" and (rec.get("data") or {}).get("text"):
+                        out.append(rec["data"]["text"])
+        except requests.exceptions.ConnectionError:
+            pass  # the read timeout: everything recorded so far has been read
     return out
 
 
@@ -98,6 +112,8 @@ def test_an_alert_starts_a_run_its_resolution_reaches_it_and_a_bad_signature_is_
                          message="the firing delivery was never read")
     assert started["verdict"] == "started", started
     assert started["group_key"] == '{}/{alertname="HighErrorRate"}:{service="api"}'
+    # The signature header of an accepted request is kept as ••••.
+    assert started["headers"].get("X-Grafana-Signature") == "••••", started["headers"]
     run_id = started["run_id"]
     lux_run = wait_until(lambda: _lux_run(env, run_id) or None, timeout=90, message="the run never reached lux")
     # The agent was told the alert's values, each quoted as text from outside dude.
@@ -113,28 +129,41 @@ def test_an_alert_starts_a_run_its_resolution_reaches_it_and_a_bad_signature_is_
     sent = wait_until(lambda: (lambda d: d if d.get("verdict") else None)(_delivery(env, resolved.json()["delivery"])), timeout=60,
                       message="the resolved delivery was never read")
     assert sent["verdict"] == "sent_to_run" and sent["run_id"] == run_id, sent
-    # The orchestrator gave it to the running agent as its next input.
+    # The orchestrator gave it to the running agent as its next input: the resolution itself.
     given = lambda: query(env.owner_dsn, "SELECT inputs_sent, jsonb_array_length(payloads) AS n FROM automation_runs WHERE id = %s", (run_id,))[0]
     wait_until(lambda: given()["inputs_sent"] >= 2, timeout=60,
                message=f"the running agent never heard the resolution: {given()} {_inputs(env, lux_run)}")
+    last = wait_until(lambda: (lambda i: i[-1] if i and "resolved⟦/external " in i[-1] else None)(_inputs(env, lux_run)), timeout=30,
+                      message=f"the agent's last input is not the resolution: {_inputs(env, lux_run)}")
+    assert "firing⟦/external " not in last, last
 
     # Another group's alert: a run of its own.
     other = _post(env, hook, _alert("firing", service="db"), secret)
     assert other.status_code == 202, other.text
     own = wait_until(lambda: (lambda d: d if d.get("verdict") else None)(_delivery(env, other.json()["delivery"])), timeout=60,
                      message="the other group's delivery was never read")
-    assert own["run_id"] and own["run_id"] != run_id, own
+    assert own["verdict"] == "started" and own["run_id"] and own["run_id"] != run_id, own
 
-    # A wrong signature: 401, a refused row with no body; the signature header kept as ••••.
+    # A group with no run going whose alert does not hold the condition: skipped, saying which.
+    quiet = _post(env, hook, _alert("resolved", service="web"), secret)
+    assert quiet.status_code == 202, quiet.text
+    skipped = wait_until(lambda: (lambda d: d if d.get("verdict") else None)(_delivery(env, quiet.json()["delivery"])), timeout=60,
+                         message="the resolved alert of a quiet group was never read")
+    assert skipped["verdict"] == "skipped" and skipped["reason"] == "status is resolved, not firing" and skipped["run_id"] is None, skipped
+
+    # A wrong signature: 401, a refused row with no body and no headers.
     bad = _post(env, hook, _alert("firing"), "whsec_not-the-secret")
     assert bad.status_code == 401, bad.text
     assert bad.json()["error"]["code"] == "bad_signature"
     refused = _delivery(env, bad.json()["delivery"])
     assert refused["verdict"] == "refused" and refused["reason"] == "bad_signature" and refused["payload"] is None, refused
-    assert refused["headers"].get("X-Grafana-Signature") == "••••", refused["headers"]
+    assert refused["headers"] == {}, refused["headers"]
 
-    # The Deliveries tab lists all four, newest first.
+    # The Deliveries tab lists all five, newest first.
     listed = client.get(f"/v1/automations/{a['id']}/deliveries").json()["deliveries"]
-    assert [d["verdict"] for d in listed[:4]] == ["refused", "started", "sent_to_run", "started"], listed
+    assert [d["verdict"] for d in listed[:5]] == ["refused", "skipped", "started", "sent_to_run", "started"], listed
     # An unknown hook is not found and stores nothing.
+    count = lambda: query(env.owner_dsn, "SELECT count(*) AS n FROM incoming_deliveries")[0]["n"]
+    before = count()
     assert _post(env, "hk_" + os.urandom(8).hex(), _alert("firing"), secret).status_code == 404
+    assert count() == before
