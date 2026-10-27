@@ -655,7 +655,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
             {!earlier ? lifecycle.marks : null}
             {driver}
-            {!earlier ? <MergeHoldChip count={feedback.blocking} beforePR={heldAtGate(item) || sentBackFromGate(item)} onOpen={() => pickTab("feedback")} /> : null}
+            {!earlier ? <MergeHoldChip count={feedback.blocking} beforePR={held} onOpen={() => pickTab("feedback")} /> : null}
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}

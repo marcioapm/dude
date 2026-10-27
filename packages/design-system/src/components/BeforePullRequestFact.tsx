@@ -53,7 +53,7 @@ export function BeforePullRequestFact<T extends string>({
             disabled={state.kind === "locked" || busy}
             className={styles["select"]}
             aria-label={state.kind === "locked" ? `${label}: ${picked?.label ?? ""}. ${state.reason}` : label}
-            options={options.map((o) => ({ value: o.value, label: o.label, description: o.description }))}
+            options={options}
           />
         </>
       )}

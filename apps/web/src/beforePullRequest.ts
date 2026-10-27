@@ -43,25 +43,26 @@ export const choiceOptions = PULL_REQUEST_CHOICES.map((value) => ({
   description: PULL_REQUEST_CHOICE[value].hint,
 }));
 
-/** "Project default (Open it)". */
-export const projectDefaultLabel = (project: PullRequestChoice) => `Project default (${PULL_REQUEST_CHOICE[project].label})`;
+/** What Deliver does for a task's value: its own, or its project's. */
+const effectiveChoice = (value: TaskPullRequestChoice, project: PullRequestChoice): PullRequestChoice =>
+  value === "project" ? project : value;
 
-/** A task's choices: its project's first, then the three. */
-export const taskChoiceOptions = (project: PullRequestChoice) => [
-  { value: "project" as TaskPullRequestChoice, label: projectDefaultLabel(project), description: PULL_REQUEST_CHOICE[project].hint },
-  ...choiceOptions.map((o) => ({ ...o, value: o.value as TaskPullRequestChoice })),
+/** A task's choices: its project's first ("Project default (Open it)"), then the three. */
+export const taskChoiceOptions = (project: PullRequestChoice): { value: TaskPullRequestChoice; label: string; description: string }[] => [
+  { value: "project", label: `Project default (${PULL_REQUEST_CHOICE[project].label})`, description: PULL_REQUEST_CHOICE[project].hint },
+  ...choiceOptions,
 ];
 
 /** The one line of what Deliver will do for a task's value. */
 export const choiceHint = (value: TaskPullRequestChoice, project: PullRequestChoice) =>
-  PULL_REQUEST_CHOICE[value === "project" ? project : value].hint;
+  PULL_REQUEST_CHOICE[effectiveChoice(value, project)].hint;
 
 /** A task's stored choice (null: its project's) as its control reads it. */
 export const taskChoice = (stored: PullRequestChoice | null | undefined): TaskPullRequestChoice => stored ?? "project";
 
 /** What a person reads once a change is saved: what Deliver will now do. */
 export function choiceToast(value: TaskPullRequestChoice, project: PullRequestChoice): string {
-  switch (value === "project" ? project : value) {
+  switch (effectiveChoice(value, project)) {
     case "ask":
       return "Deliver will ask before opening the pull request.";
     case "draft":
