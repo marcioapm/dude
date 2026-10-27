@@ -264,6 +264,62 @@ func TestAKeptCheckoutIsToldInTheWakeNote(t *testing.T) {
 	}
 }
 
+// A checkout off the task branch with nothing of the conductor's own on it
+// is news, not a reason for a turn: a sync with no note queued (a person's
+// message) records the line and wakes nobody; the next note carries it,
+// once.
+func TestAnOffBranchCheckoutRidesOnTheNextNote(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	offBranch := "your checkout is 1 behind and not on the task branch"
+	notesSaying := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+		AND strpos(payload->>'text', $2) > 0`
+	before := e.count(notesSaying, e.task, offBranch)
+	if status, out := e.chat(e.task, "how is it going?"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	pending := `SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL AND strpos(line, $2) > 0`
+	e.until("the off-branch line recorded", func() bool { return e.count(pending, e.task, offBranch) == 1 })
+	// Past the wake window, over several sweeps: still no note for it.
+	time.Sleep(100 * time.Millisecond)
+	for range 5 {
+		e.pump()
+	}
+	if n := e.count(notesSaying, e.task, offBranch); n != before {
+		t.Fatalf("%d notes woke the conductor for the off-branch line alone", n-before)
+	}
+	if n := e.count(pending, e.task, offBranch); n != 1 {
+		t.Fatalf("the off-branch line is no longer waiting (%d pending)", n)
+	}
+	// A real reason: its note carries the line, said once.
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.until("after the review round", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
+	note := e.wokenWith(e.task, "after a review round")
+	if n := strings.Count(note, offBranch); n != 1 {
+		t.Errorf("the next note says the off-branch line %d times: %q", n, note)
+	}
+	if n := e.count(pending, e.task, offBranch); n != 0 {
+		t.Errorf("%d off-branch lines still waiting after the note", n)
+	}
+}
+
+// A kept checkout with commits of its own still wakes the conductor by
+// itself: there is work of its own in the way.
+func TestAKeptCheckoutWithItsOwnCommitsStillWakes(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	e.current()
+	e.git("switch", "-q", "-c", "mine")
+	e.commit(map[string]string{"NOTE.md": "mine\n"})
+	if status, out := e.chat(e.task, "how is it going?"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	note := e.wokenWith(e.task, "1 commits of its own")
+	if strings.Contains(note, "after") {
+		t.Errorf("the line rode on a decision's note rather than waking alone: %q", note)
+	}
+}
+
 // A checkout line added to a wake note is one of the note's reasons: the
 // note failing unread (its conductor ended before reading it) tells the
 // line again, to the conductor after.

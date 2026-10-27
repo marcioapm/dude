@@ -24,7 +24,17 @@ const wakeLines = 10
 // running, never resuming or starting one by itself (a base that moved).
 const heldWakePrefix = "base-moved:"
 
+// rideWakePrefix keys held news that is never told alone, not even to a
+// conductor running between turns: it rides on the next note a real reason
+// sends (a checkout off the task branch with nothing of its own on it).
+const rideWakePrefix = heldWakePrefix + "ride:"
+
 func heldKey(key string) bool { return strings.HasPrefix(key, heldWakePrefix) }
+
+func rideKey(key string) bool { return strings.HasPrefix(key, rideWakePrefix) }
+
+// RideWakeKey is the key of a reason that only rides on another's note.
+func RideWakeKey(key string) string { return rideWakePrefix + key }
 
 // WakeNote is the note for reasons' lines, in the order they came.
 func WakeNote(lines []string) string {
@@ -116,6 +126,10 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	if parked := runID == "" || paused; parked && !slices.ContainsFunc(pending, func(r reason) bool { return !heldKey(r.Key) }) {
 		// Only news that waits (a base that moved): a parked conductor is
 		// not resumed, nor one started, for it. It goes with the next note.
+		return "", nil
+	}
+	if !slices.ContainsFunc(pending, func(r reason) bool { return !rideKey(r.Key) }) {
+		// Only news that rides on another note: no turn for it alone.
 		return "", nil
 	}
 	lines, kinds := make([]string, len(pending)), make([]string, len(pending))
@@ -394,7 +408,8 @@ func HaltedTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 // paused), or it has none (one is started), or the one it has is ending
 // (it is ended first). Selected before the sweep's batch limit, so tasks
 // that must wait (a conductor mid-turn) cannot fill the batch. Held
-// reasons alone (heldWakePrefix) wait for a conductor running between turns.
+// reasons alone (heldWakePrefix) wait for a conductor running between turns;
+// riding reasons alone (rideWakePrefix) wait for a reason of another kind.
 // A task whose newest delivery a person stopped (Halt) waits for its pick-up.
 const Wakeable = `c.delivered_at IS NULL
 	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
@@ -404,4 +419,6 @@ const Wakeable = `c.delivered_at IS NULL
 		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))
 	AND (EXISTS (SELECT 1 FROM conductor_wakes h WHERE h.task_id = c.task_id AND h.delivered_at IS NULL
 			AND h.key NOT LIKE '` + heldWakePrefix + `%')
-		OR EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND r.status = 'running'))`
+		OR (EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND r.status = 'running')
+			AND EXISTS (SELECT 1 FROM conductor_wakes h WHERE h.task_id = c.task_id AND h.delivered_at IS NULL
+				AND h.key NOT LIKE '` + rideWakePrefix + `%')))`
