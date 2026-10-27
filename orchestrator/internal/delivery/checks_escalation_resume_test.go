@@ -146,6 +146,143 @@ func TestADecidedChecksEscalationAtADecisionWaitsOnTheConductorAgain(t *testing.
 	}
 }
 
+// A decision the conductor took just before a Run of its own was held at
+// the checks gate is carried out once a person decides the escalation.
+func TestADecisionTakenBeforeAChecksEscalationIsCarriedOutAfterIt(t *testing.T) {
+	w := newDecisionWait(t, "conductorDecision", `["conductor.decision"]`,
+		&Pending{Point: PointBeforePR, Policy: "openPullRequest"})
+	if err := w.startReview(); err != nil {
+		t.Fatalf("start_phase review: %v", err)
+	}
+	w.escalateFixer()
+	w.settle()
+	w.waits("decide", SignalHumanDecision)
+	w.decideEscalation("retry", "")
+	w.settle()
+	run, st := w.row()
+	if run.Step != "awaitReview" || st.Decision != nil {
+		t.Fatalf("the decision taken before the escalation was not carried out: at %s/%s awaiting %v, decision %+v",
+			run.Step, run.Status, run.AwaitingSignals, st.Decision)
+	}
+}
+
+// waits says the delivery waits at step on exactly the signals want, in any order.
+func (w decisionWait) waits(step string, want ...string) {
+	w.t.Helper()
+	run, st := w.row()
+	got := slices.Sorted(slices.Values(run.AwaitingSignals))
+	if run.Step != step || run.Status != "waiting" || !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		w.t.Fatalf("the delivery is at %s/%s awaiting %v (escalation %+v), want %s waiting on %v",
+			run.Step, run.Status, run.AwaitingSignals, st.Escalation, step, want)
+	}
+}
+
+func (w decisionWait) taskStatus() string {
+	w.t.Helper()
+	var s string
+	if err := w.owner.QueryRow(w.ctx, `SELECT status::text FROM tasks WHERE id = 'wi_w'`).Scan(&s); err != nil {
+		w.t.Fatal(err)
+	}
+	return s
+}
+
+// A step that waits on no phase Run is waited at again on its own signals
+// once a person decides a checks escalation raised there: the pull request
+// wait on its pull requests and the person, the wait for a reader on their
+// feedback, a gate Deliver holds on the person's answer and feedback.
+func TestADecidedChecksEscalationResumesTheWaitItStopped(t *testing.T) {
+	for _, c := range []struct {
+		name, step, awaiting string
+		state                func(*State)
+		want                 []string
+		status               string
+	}{
+		{"pull request wait", "awaitPullRequest", `["pr.feedback","human.decision","human.feedback","pr.ended"]`,
+			func(st *State) { st.PullRequestIDs = []string{"pr_w"} },
+			[]string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback, SignalPullRequestEnded}, "review"},
+		{"ready to read", "awaitRead", `["human.feedback"]`, func(*State) {}, []string{SignalHumanFeedback}, "review"},
+		{"gate Deliver holds", "conductorDecision", `["conductor.decision","human.feedback"]`,
+			func(st *State) {
+				st.Decider, st.ChoiceGate, st.GateRequired = DeciderPolicy, true, true
+				st.Decision = &Pending{Point: PointBeforePR, Policy: "openPullRequest"}
+			},
+			[]string{SignalConductorDecision, SignalHumanFeedback}, "awaiting_input"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newDecisionWait(t, c.step, c.awaiting, nil)
+			if run, _ := w.row(); run.Step == "conductorDecision" {
+				// Held by the task's Ask me first, with no conductor.
+				w.exec(`UPDATE tasks SET pull_request_choice = 'ask' WHERE id = 'wi_w'`)
+				w.exec(`UPDATE runs SET status = 'completed' WHERE id = 'run_cond'`)
+			}
+			_, st := w.row()
+			c.state(&st)
+			raw, _ := json.Marshal(st)
+			w.exec(`UPDATE workflow_runs SET state = $1 WHERE id = 'wf_w'`, raw)
+			w.escalateFixer()
+			w.decideEscalation("retry", "")
+			w.settle()
+			w.waits(c.step, c.want...)
+			if s := w.taskStatus(); s != c.status {
+				t.Errorf("task %s, want %s", s, c.status)
+			}
+		})
+	}
+}
+
+// A checks escalation of the Run a step waits on goes back to waiting on
+// it, on phase.finished, with the Runs it waited on: the decision is
+// carried out in one pass, which does not run the wait itself.
+func TestADecidedChecksEscalationOfAnAwaitedRunWaitsOnItAgain(t *testing.T) {
+	w := newDecisionWait(t, "awaitFix", `["phase.finished"]`, nil)
+	w.exec(`UPDATE workflow_runs SET state = state || '{"pendingRunIds":["run_fix"]}' WHERE id = 'wf_w'`)
+	w.escalateFixer()
+	w.decideEscalation("retry", "")
+	if _, err := w.rt.Tick(w.ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	w.waits("awaitFix", SignalPhaseFinished)
+	if _, st := w.row(); !slices.Equal(st.PendingRunIDs, []string{"run_fix"}) {
+		t.Errorf("waits on %v, want run_fix", st.PendingRunIDs)
+	}
+}
+
+// A checks escalation stored as every one before this change was, decided
+// there: one at the conductor's decision waits on it again; one at a pull
+// request fix's wait waits on its Run.
+func TestAStoredChecksEscalationResumesWhereItStopped(t *testing.T) {
+	for _, c := range []struct {
+		at, pending string
+		want        []string
+	}{
+		{"conductorDecision", `[]`, []string{SignalConductorDecision}},
+		{"awaitPRFix", `["run_fix"]`, []string{SignalPhaseFinished}},
+	} {
+		t.Run(c.at, func(t *testing.T) {
+			w := newDecisionWait(t, "decide", `["human.decision"]`, &Pending{Point: PointBeforePR, Policy: "openPullRequest"})
+			w.exec(`UPDATE workflow_runs SET state = state || jsonb_build_object('pendingRunIds', $1::jsonb, 'escalation',
+				jsonb_build_object('reason', 'checks_unverified', 'at', $2::text,
+					'detail', '{"runId":"run_fix","message":"held","rounds":2}'::jsonb,
+					'decided', '{"at":"2026-10-27T07:17:00Z","action":"retry","note":""}'::jsonb)) WHERE id = 'wf_w'`, c.pending, c.at)
+			if err := w.in(func(tx pgx.Tx) error {
+				return workflow.SignalTx(w.ctx, tx, w.org, "wf_w", SignalHumanDecision, nil, "")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.rt.Tick(w.ctx, 1); err != nil {
+				t.Fatal(err)
+			}
+			if c.at == "conductorDecision" {
+				w.settle()
+			}
+			w.waits(c.at, c.want...)
+			if c.at == "conductorDecision" {
+				w.conductorStartsAReview()
+			}
+		})
+	}
+}
+
 // conductorStartsAReview has the conductor take start_phase review and
 // checks the workflow carried it out: the review round is created and the
 // decision consumed, so a later decision is not refused as taken already.

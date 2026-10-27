@@ -3040,7 +3040,13 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if d.Action == "stop" {
 			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 		}
-		return workflow.Result{Next: e.At, State: st, AwaitSignals: []string{SignalPhaseFinished}}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action)
+		// The waits on a person reading their pull requests or the work are
+		// in review; every other step sets its own status, or is at work.
+		status := "running"
+		if e.At == "awaitPullRequest" || e.At == "awaitRead" {
+			status = "review"
+		}
+		return resumeChecksAt(st, e.At), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)
 	}
 	switch d.Action {
 	case "stop":
@@ -3163,6 +3169,23 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return park(e.At, st, e.RunIDs()), nil
 	}
 	return retry(st, e.Step, e), nil
+}
+
+// resumeChecksAt goes back to the step a decided checks escalation stopped
+// (at). The held Run need not be one that step waits on: a Run the
+// conductor started itself is gated too, while the delivery waits at a
+// decision or on its pull requests. A step waiting on phase Runs (the keys
+// of AbortedRetryStep) waits on phase.finished again, settling what
+// finished meanwhile. Any other step runs at once and parks on its own
+// signals, as it does each time it runs: conductorDecision on
+// conductor.decision (with human.feedback at a gate Deliver holds),
+// awaitPullRequest on waitForPR's. A signal sent meanwhile is still
+// unconsumed then, and wakes it.
+func resumeChecksAt(st *State, at string) workflow.Result {
+	if AbortedRetryStep[at] != "" {
+		return workflow.Result{Next: at, State: st, AwaitSignals: []string{SignalPhaseFinished}}
+	}
+	return workflow.Result{Next: at, State: st}
 }
 
 // retry runs a step that stopped again, afresh — new Runs, a new budget
