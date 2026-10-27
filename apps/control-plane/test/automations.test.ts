@@ -376,6 +376,32 @@ describe("runs", () => {
     expect(run.failedCallId).toBeNull();
   });
 
+  test("a refused call is one failed call: its own refusal event stands for it, and a refusal with none is failed with its error", async () => {
+    const { body: a } = await create("ana", { name: "Refusals once" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
+      ('arn_rf', ${ORG}, ${a.id}, 'failed', 'post_to_chat failed: Slack is not connected for Acme', 'schedule')`;
+    const ev = (id: string, type: string, at: string, payload: Record<string, unknown>) =>
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
+        VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_rf', 'orchestrator', ${at}::timestamptz, 'arn_rf', ${{ ...payload, automationRunId: "arn_rf" }})`;
+    // What agenttools writes for a refused post: its refusal, then the call's record naming it.
+    await ev("evt_rf1", "slack.message.refused", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
+      reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app" });
+    await ev("evt_rf2", "agent.tool.dude", "2026-10-23T15:03:00.010Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" },
+      error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app", attempted: true, refusalEventId: "evt_rf1" });
+    // A call refused with no event of its own: only its record says so.
+    await ev("evt_rf3", "agent.tool.dude", "2026-10-23T15:04:00Z", { tool: "github_comment", arguments: { issue: 3, body: "x" },
+      error: "automation run is no longer active or the tool is outside its scope", attempted: true });
+    await ev("evt_rf4", "automation.run.failed_on_post", "2026-10-23T15:05:00Z", { automationId: a.id, automationRunId: "arn_rf", eventId: "evt_rf1" });
+    const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_rf`));
+    expect(run.toolCalls).toEqual([
+      { id: "evt_rf1", tool: "post_to_chat", at: "2026-10-23T15:03:00.000Z", status: "failed", args: { channel: "#engineering" }, durationMs: null,
+        error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app", posted: null },
+      { id: "evt_rf3", tool: "github_comment", at: "2026-10-23T15:04:00.000Z", status: "failed", args: { issue: 3 }, durationMs: null,
+        error: "automation run is no longer active or the tool is outside its scope", posted: null },
+    ]);
+    expect(run.failedCallId).toBe("evt_rf1");
+  });
+
   test("a run failed on a post without Slack names the call it failed on; a refusal the agent could fix names none", async () => {
     const { body: a } = await create("ana", { name: "Digest without Slack" });
     await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES

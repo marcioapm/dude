@@ -129,6 +129,15 @@ func TestPostToChatWithoutSlackSaysItIsNotConnected(t *testing.T) {
 		!strings.HasPrefix(said, "Slack is not connected for Acme") || code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
 		t.Errorf("the refusal on the run: %q %q %q %v", said, code, reason, err)
 	}
+	// The call's own record names that refusal, so a reader lists the call once.
+	var refusals, records int
+	if err := c.owner.QueryRow(context.Background(), `SELECT
+		  (SELECT count(*) FROM events WHERE event_type = $1 AND automation_run_id = 'arn_digest'),
+		  (SELECT count(*) FROM events d WHERE d.event_type = $2 AND d.automation_run_id = 'arn_digest'
+		     AND d.payload->>'refusalEventId' = (SELECT id FROM events WHERE event_type = $1 AND automation_run_id = 'arn_digest'))`,
+		agenttools.EvSlackPostRefused, agenttools.EventType).Scan(&refusals, &records); err != nil || refusals != 1 || records != 1 {
+		t.Errorf("refusals %d, records naming it %d: %v", refusals, records, err)
+	}
 }
 
 func TestPostToChatOutsideTheBotsChannelsSaysHowToInviteIt(t *testing.T) {

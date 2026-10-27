@@ -675,6 +675,9 @@ const (
 func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (outcome json.RawMessage, callErr error) {
 	// Refusals roll back the tool transaction; automation feeds still need
 	// an argument-bearing record for that call, including early refusals.
+	// A refusal that wrote its own event (slack.message.refused) is named by
+	// refusalEventId, so a reader lists that call once.
+	var refusalID string
 	defer func() {
 		if c.AutomationID == "" || callErr == nil {
 			return
@@ -684,9 +687,11 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 			if len(input) == 0 {
 				input = json.RawMessage("{}")
 			}
-			_, err := ledger.Append(ctx, tx, c.event(EventType, map[string]any{
-				"tool": t.name, "arguments": input, "error": callErr.Error(), "attempted": true,
-			}))
+			payload := map[string]any{"tool": t.name, "arguments": input, "error": callErr.Error(), "attempted": true}
+			if refusalID != "" {
+				payload["refusalEventId"] = refusalID
+			}
+			_, err := ledger.Append(ctx, tx, c.event(EventType, payload))
 			return err
 		}); err != nil {
 			s.Log.Error("recording automation tool error", "error", err)
@@ -722,7 +727,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		c.env.prepared = t.prepare(ctx, c, args)
 		// A prepare step may refuse the call before its arguments are redacted or counted.
 		if refused, ok := c.env.prepared.(refusal); ok {
-			s.recordRefusal(ctx, c, t, refused)
+			refusalID = s.recordRefusal(ctx, c, t, refused)
 			return nil, refused
 		}
 	}
@@ -803,7 +808,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	})
 	var refused refusal
 	if errors.As(err, &refused) {
-		s.recordRefusal(ctx, c, t, refused)
+		refusalID = s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil || t.outside == nil {
 		if err == nil && (t.name == "start_agent" || t.name == "verify") && s.Kick != nil {
@@ -813,7 +818,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	done, err := t.outside(ctx, c, checked)
 	if errors.As(err, &refused) && refused.event != nil {
-		s.recordRefusal(ctx, c, t, refused)
+		refusalID = s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil {
 		return nil, err
@@ -846,10 +851,12 @@ func childToolAllowed(name string) bool {
 
 // recordRefusal records what a refused call says of itself, once the
 // call's own transaction is gone.
-func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) {
+// It returns the id of the refusal's own event, "" for none.
+func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) (eventID string) {
 	if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if refused.event != nil {
-			_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
+			var err error
+			eventID, err = ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
 			return err
 		}
 		if refused.blocked != nil {
@@ -861,7 +868,9 @@ func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused re
 		return nil
 	}); logged != nil {
 		s.Log.Error("recording a refused call failed", "tool", t.name, "run", c.RunID, "error", logged)
+		return ""
 	}
+	return eventID
 }
 
 // oldName is what a tool was called before, for the calls a Run made

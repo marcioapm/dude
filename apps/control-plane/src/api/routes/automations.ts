@@ -564,13 +564,17 @@ async function toolCalls(scope: OrgScope, runId: string) {
   const out = [];
   for (const e of rows) {
     if (e.type !== "agent.tool.dude" && e.type !== "slack.message.refused") continue;
+    // A refused call's record names the refusal event that already stands for it.
+    if (e.type === "agent.tool.dude" && e.payload.refusalEventId) continue;
     const tool = String(e.payload.tool ?? "");
     const { text: _text, body: _body, ...args } = (e.payload.arguments ?? {}) as Record<string, unknown>;
-    const start = e.type === "agent.tool.dude" && !e.payload.attempted ? null : startOf(tool, e.at);
-    const failed = e.type === "slack.message.refused";
+    const refusedPost = e.type === "slack.message.refused";
+    const failed = refusedPost || e.payload.error != null;
+    // A refusal recorded only on the call's record spent no attempt of its own.
+    const start = refusedPost ? startOf(tool, e.at) : failed || !e.payload.attempted ? null : startOf(tool, e.at);
     out.push({
       id: e.id, tool, at: iso(start ?? e.at)!, status: failed ? "failed" : "completed",
-      args: failed ? { channel: e.payload.channel ?? null } : args,
+      args: refusedPost ? { channel: e.payload.channel ?? null } : args,
       durationMs: start ? Math.max(0, e.at.getTime() - start.getTime()) : null,
       error: failed ? String(e.payload.error ?? "") : null,
       posted: !failed && tool === "post_to_chat" ? posts.shift() ?? null : null,
