@@ -177,6 +177,31 @@ func TestSmallImagesAndOtherFilesGetNoThumbnail(t *testing.T) {
 	}
 }
 
+// An image is its own thumbnail only when it is both at most 640 px and at
+// most 200 KiB: either bound alone exceeded makes one.
+func TestAnImageOverEitherSmallBoundGetsAThumbnail(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	dir := t.TempDir()
+	heavy := filepath.Join(dir, "heavy.png")
+	if b := writePNG(t, heavy, noisy(640, 400)); len(b) <= smallImageBytes {
+		t.Fatalf("heavy.png is %d bytes; want over %d", len(b), smallImageBytes)
+	}
+	wide := filepath.Join(dir, "wide.png")
+	if b := writePNG(t, wide, filled(1600, 900, color.RGBA{10, 20, 30, 255})); len(b) >= smallImageBytes {
+		t.Fatalf("wide.png is %d bytes; want under %d", len(b), smallImageBytes)
+	}
+	for f, size := range map[string]image.Point{heavy: {640, 400}, wide: {640, 360}} {
+		shim := recordingShim(t, 0)
+		answer, stderr, err := publishing(t, f)
+		if err != nil || stderr != "" || shim.count() != 2 || answer["thumbnail"] == nil {
+			t.Fatalf("%s: %v, stderr %q, %d calls, answer %v; want the image and its thumbnail", f, err, stderr, shim.count(), answer)
+		}
+		if got := decodeJPEG(t, shim.file(2)).Bounds().Size(); got != size {
+			t.Fatalf("%s: the thumbnail is %v; want %v", f, got, size)
+		}
+	}
+}
+
 // A transparent image is flattened on white, not on black.
 func TestATransparentImageIsFlattenedOnWhite(t *testing.T) {
 	t.Setenv("LUX_ARTIFACTS", "")
@@ -221,6 +246,16 @@ func TestAPosterIsAVideosThumbnail(t *testing.T) {
 	}
 	if r, _, _, _ := thumb.At(320, 180).RGBA(); r>>8 < 180 {
 		t.Fatalf("the thumbnail is not the poster")
+	}
+
+	// By its first bytes alone (WebM's EBML), with no video extension in
+	// its path or its name, it is still a video that takes a poster.
+	bin := filepath.Join(dir, "abc.bin")
+	os.WriteFile(bin, []byte("\x1a\x45\xdf\xa3 no extension says so"), 0o644)
+	shim = recordingShim(t, 0)
+	answer, stderr, err = publishing(t, bin, "--name", "walkthrough", "--poster", poster)
+	if err != nil || stderr != "" || shim.count() != 2 || answer["thumbnail"] == nil {
+		t.Fatalf("abc.bin: %v, stderr %q, %d calls, answer %v; want it and the poster's thumbnail", err, stderr, shim.count(), answer)
 	}
 }
 
@@ -429,13 +464,49 @@ func TestABlankFrameIsToldFromAPage(t *testing.T) {
 	}
 }
 
+// realFFmpeg is the ffmpeg on PATH; the test is skipped without one, and
+// says so loudly under CI, where the skip would otherwise go unnoticed.
+func realFFmpeg(t *testing.T) string {
+	t.Helper()
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Skip("!!! CI HAS NO FFMPEG ON PATH: this real-ffmpeg thumbnail test DID NOT RUN; the fake-ffmpeg tests still cover videoFrame's choice !!!")
+		}
+		t.Skip("no ffmpeg on PATH")
+	}
+	return ffmpeg
+}
+
+// makeVideo encodes graph's [v] as a VP8 WebM at path, skipping the test
+// when this ffmpeg cannot (a minimal build without lavfi or libvpx).
+func makeVideo(t *testing.T, ffmpeg, graph, path string) {
+	t.Helper()
+	if out, err := exec.Command(ffmpeg, "-nostdin", "-v", "error", "-y", "-filter_complex", graph,
+		"-map", "[v]", "-c:v", "libvpx", "-b:v", "300k", path).CombinedOutput(); err != nil {
+		t.Skipf("this ffmpeg cannot make the test's VP8 WebM: %v\n%s", err, out)
+	}
+}
+
+// bluePage asserts thumb is the blue frame with a white box over its
+// three-eighths point.
+func bluePage(t *testing.T, thumb image.Image) {
+	t.Helper()
+	b := thumb.Bounds()
+	r, g, bl, _ := thumb.At(b.Min.X+5, b.Min.Y+5).RGBA()
+	if r>>8 > 60 || g>>8 > 60 || bl>>8 < 180 {
+		t.Fatalf("the thumbnail's corner is %d,%d,%d; want the blue page", r>>8, g>>8, bl>>8)
+	}
+	if r, g, bl, _ := thumb.At(b.Min.X+b.Dx()*3/8, b.Min.Y+b.Dy()*3/8).RGBA(); r>>8 < 200 || g>>8 < 200 || bl>>8 < 200 {
+		t.Fatalf("the box is %d,%d,%d; want white", r>>8, g>>8, bl>>8)
+	}
+}
+
 // With a real ffmpeg, the thumbnail is the end of the longest still
 // stretch that is not blank: past the page loading, past a longer blank
 // one, and not the middle of the video (moving noise here).
 func TestARealVideosThumbnailIsItsStillPage(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("no ffmpeg on PATH")
-	}
+	ffmpeg := realFFmpeg(t)
 	t.Setenv("LUX_ARTIFACTS", "")
 	video := filepath.Join(t.TempDir(), "walk.webm")
 	// red 0.3 s, green 0.4 s, noise 0.5 s, white 3 s (blank), noise 0.5 s,
@@ -445,21 +516,123 @@ func TestARealVideosThumbnailIsItsStillPage(t *testing.T) {
 		"color=c=white:" + s + ":d=3[d];mandelbrot=" + s + ",trim=duration=0.5,setpts=PTS-STARTPTS[e];" +
 		"color=c=blue:" + s + ":d=2,drawbox=x=40:y=30:w=40:h=30:color=white:t=fill[f];testsrc2=" + s + ":d=7[g];" +
 		"[a][b][c][d][e][f][g]concat=n=7:v=1:a=0,format=yuv420p[v]"
-	if out, err := exec.Command("ffmpeg", "-nostdin", "-v", "error", "-y", "-filter_complex", graph,
-		"-map", "[v]", "-c:v", "libvpx", "-b:v", "300k", video).CombinedOutput(); err != nil {
-		t.Fatalf("making the video: %v\n%s", err, out)
+	makeVideo(t, ffmpeg, graph, video)
+	shim := recordingShim(t, 0)
+	answer, stderr, err := publishing(t, video)
+	if err != nil || stderr != "" || shim.count() != 2 || answer["thumbnail"] == nil {
+		t.Fatalf("%v, stderr %q, %d calls, answer %v", err, stderr, shim.count(), answer)
+	}
+	bluePage(t, decodeJPEG(t, shim.file(2)))
+}
+
+// With an ffmpeg and no ffprobe, the video's length is how far ffmpeg
+// decoded, so a still stretch lasting to the end is closed there and chosen.
+func TestWithoutFFprobeAStretchLastingToTheEndIsTheThumbnail(t *testing.T) {
+	ffmpeg := realFFmpeg(t)
+	t.Setenv("LUX_ARTIFACTS", "")
+	video := filepath.Join(t.TempDir(), "walk.webm")
+	// red 0.3 s, noise 4 s, then blue with a white box 3 s to the end: its
+	// middle (3.65 s) is noise, and the first frame is blank.
+	const s = "s=160x120:r=10"
+	graph := "color=c=red:" + s + ":d=0.3[a];testsrc2=" + s + ":d=4[b];" +
+		"color=c=blue:" + s + ":d=3,drawbox=x=40:y=30:w=80:h=30:color=white:t=fill[c];" +
+		"[a][b][c]concat=n=3:v=1:a=0,format=yuv420p[v]"
+	makeVideo(t, ffmpeg, graph, video)
+	only := t.TempDir()
+	if err := os.Symlink(ffmpeg, filepath.Join(only, "ffmpeg")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", only)
+	if _, err := exec.LookPath("ffprobe"); err == nil {
+		t.Fatal("ffprobe is still on PATH")
 	}
 	shim := recordingShim(t, 0)
 	answer, stderr, err := publishing(t, video)
 	if err != nil || stderr != "" || shim.count() != 2 || answer["thumbnail"] == nil {
 		t.Fatalf("%v, stderr %q, %d calls, answer %v", err, stderr, shim.count(), answer)
 	}
-	thumb := decodeJPEG(t, shim.file(2))
-	r, g, b, _ := thumb.At(5, 5).RGBA()
-	if r>>8 > 60 || g>>8 > 60 || b>>8 < 180 {
-		t.Fatalf("the thumbnail's corner is %d,%d,%d; want the blue page", r>>8, g>>8, b>>8)
+	bluePage(t, decodeJPEG(t, shim.file(2)))
+}
+
+// fakeFFmpeg puts on PATH, alone, an ffmpeg whose scan pass prints log and
+// whose frame at -ss SECONDS is frames[SECONDS] (a PNG file), else blank.
+// It answers the -ss values it was asked, in order.
+func fakeFFmpeg(t *testing.T, log string, frames map[string]string, blank string) (asked func() []string) {
+	t.Helper()
+	dir := t.TempDir()
+	logFile, askedFile := filepath.Join(dir, "log"), filepath.Join(dir, "asked")
+	os.WriteFile(logFile, []byte(log), 0o644)
+	cases := ""
+	for at, png := range frames {
+		cases += "  " + at + ") /bin/cat " + png + " ;;\n"
 	}
-	if r, g, b, _ := thumb.At(60, 45).RGBA(); r>>8 < 200 || g>>8 < 200 || b>>8 < 200 {
-		t.Fatalf("the box is %d,%d,%d; want white", r>>8, g>>8, b>>8)
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o755)
+	script := `#!/bin/sh
+case "$*" in *freezedetect*) /bin/cat ` + logFile + ` >&2; exit 0 ;; esac
+while [ $# -gt 0 ]; do [ "$1" = -ss ] && at=$2; shift; done
+echo "$at" >> ` + askedFile + `
+case "$at" in
+` + cases + `  *) /bin/cat ` + blank + ` ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	return func() []string {
+		b, _ := os.ReadFile(askedFile)
+		return strings.Fields(string(b))
+	}
+}
+
+// Of the still stretches ffmpeg reports, the longest is tried first; its
+// frame being blank, the next one's page is the thumbnail. Every frame
+// blank, there is none, said in one line. No real ffmpeg is needed.
+func TestTheLongestStretchsBlankFrameGivesWayToTheNext(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	dir := t.TempDir()
+	blank := filepath.Join(dir, "blank.png")
+	writePNG(t, blank, filled(320, 240, color.White))
+	page := filepath.Join(dir, "page.png")
+	pageImg := filled(320, 240, color.RGBA{0, 0, 255, 255})
+	for y := 60; y < 120; y++ {
+		for x := 80; x < 240; x++ {
+			pageImg.Set(x, y, color.White)
+		}
+	}
+	writePNG(t, page, pageImg)
+	video := filepath.Join(dir, "abc.webm")
+	os.WriteFile(video, []byte("\x1a\x45\xdf\xa3 a video"), 0o644)
+	// 2–8 s still (longest, blank at 7.9), 9–10 s still (the page at 9.9);
+	// 12 s decoded, so the middle is 6 s.
+	log := `[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 2
+[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 8
+[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 9
+[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 10
+frame=  120 fps=0.0 q=-0.0 Lsize=N/A time=00:00:12.00 bitrate=N/A speed=60x
+`
+	asked := fakeFFmpeg(t, log, map[string]string{"9.900": page}, blank)
+	shim := recordingShim(t, 0)
+	answer, stderr, err := publishing(t, video, "--name", "walk.webm")
+	if err != nil || stderr != "" || shim.count() != 2 || answer["thumbnail"] == nil {
+		t.Fatalf("%v, stderr %q, %d calls, answer %v", err, stderr, shim.count(), answer)
+	}
+	if got := strings.Join(asked(), " "); got != "7.900 9.900" {
+		t.Fatalf("frames asked at %s; want 7.900 then 9.900", got)
+	}
+	bluePage(t, decodeJPEG(t, shim.file(2)))
+
+	asked = fakeFFmpeg(t, log, nil, blank)
+	shim = recordingShim(t, 0)
+	answer, stderr, err = publishing(t, video, "--name", "walk.webm")
+	if err != nil || shim.count() != 1 || answer["thumbnail"] != nil {
+		t.Fatalf("all blank: %v, %d calls, answer %v; want the video alone", err, shim.count(), answer)
+	}
+	if got := strings.Join(asked(), " "); got != "7.900 9.900 6.000" {
+		t.Fatalf("all blank: frames asked at %s; want 7.900 9.900 6.000", got)
+	}
+	if stderr != "dude publish: no thumbnail for walk.webm: no frame tried shows anything\n" {
+		t.Fatalf("all blank: stderr %q", stderr)
 	}
 }
