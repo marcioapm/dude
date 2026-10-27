@@ -353,6 +353,29 @@ func TestNamesAndTitlesRenderLiterallyAndDudesLinkStaysALink(t *testing.T) {
 	}
 }
 
+// Slack sends a message's text mrkdwn-escaped: it is read as the words
+// typed, and a reply quoting them escapes them once.
+func TestEscapedTextIsReadPlainAndRepliedEscapedOnce(t *testing.T) {
+	fake, p, inst := world(t)
+	raw, _ := jsonMarshal(fakeslack.Mention("T1", "Ev1", "C1", "", "1.1", "U1", "R&amp;D &lt;3 &amp;lt;"))
+	ev, err := p.ParseEvent(raw)
+	if err != nil || ev.Mention == nil || ev.Mention.Text != "R&D <3 &lt;" {
+		t.Fatalf("mention %+v, %v", ev.Mention, err)
+	}
+	root := fake.Post("C1", "", "U1", "@dude hi")
+	if _, err := p.PostReply(context.Background(), inst, "C1", root, chat.Reply{Text: "Started a session “" + ev.Mention.Text + "”"}); err != nil {
+		t.Fatal(err)
+	}
+	var blocks []struct {
+		Text struct{ Type, Text string } `json:"text"`
+	}
+	_ = json.Unmarshal(fake.BotMessages()[0].Blocks, &blocks)
+	const want = "Started a session “R&amp;D &lt;3 &amp;lt;”"
+	if len(blocks) != 1 || blocks[0].Text.Type != "mrkdwn" || blocks[0].Text.Text != want || fake.BotMessages()[0].Text != want {
+		t.Fatalf("reply %+v, text %q", blocks, fake.BotMessages()[0].Text)
+	}
+}
+
 func TestRepliesEphemeralsQuestionsAndReactions(t *testing.T) {
 	fake, p, inst := world(t)
 	ctx := context.Background()

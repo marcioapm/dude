@@ -219,6 +219,29 @@ func TestAPageSlackAnswersShortStillSaysThereIsMore(t *testing.T) {
 	}
 }
 
+// A message's text and attachments are mrkdwn (escaped, links as <url|x>);
+// its blocks' plain_text, rich text and URLs are JSON. Each is read as the
+// words it shows, decoded once.
+func TestAMessageIsReadAsTheWordsItShows(t *testing.T) {
+	fake, p, inst := world(t)
+	root := fake.PostApp("C1", "", "BCI", "CI Bot", "R&amp;D &lt;3 &amp;lt; <https://example.com/a?x=1&amp;y=2|the run> <#C1|support> <!here> <@U2>",
+		[]any{map[string]any{"title": "Q&amp;A", "title_link": "https://example.com/t?a=1&b=2"}},
+		[]any{
+			map[string]any{"type": "header", "text": map[string]any{"type": "plain_text", "text": "Ops & <Dev>"}},
+			map[string]any{"type": "rich_text", "elements": []any{map[string]any{"type": "rich_text_section", "elements": []any{
+				map[string]any{"type": "text", "text": "a < b & c "}, map[string]any{"type": "link", "url": "https://example.com/r", "text": "x&y"}}}}},
+		})
+	got, err := p.FetchThread(context.Background(), inst, "C1", root, "")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("thread %+v, %v", got, err)
+	}
+	const want = "R&D <3 &lt; the run (https://example.com/a?x=1&y=2) #support @here @U2\nQ&A https://example.com/t?a=1&b=2\n" +
+		"Ops & <Dev>\na < b & c x&y (https://example.com/r)"
+	if got[0].Text != want {
+		t.Fatalf("text %q,\nwant %q", got[0].Text, want)
+	}
+}
+
 func TestABotsAttachmentsAndBlocksAreReadOnce(t *testing.T) {
 	fake, p, inst := world(t)
 	text, attachments, blocks := ciReport()
@@ -233,7 +256,7 @@ func TestABotsAttachmentsAndBlocksAreReadOnce(t *testing.T) {
 		t.Fatalf("the bot's message %+v", bot)
 	}
 	for _, want := range []string{"Nightly build failed", "acme/api nightly", "Run #812 failed https://github.com/acme/api/actions/runs/812",
-		"2 jobs failed: integration, lint", "Branch: main", "GitHub Actions", "triggered by schedule", "logs: <https://ci.example.com/812>"} {
+		"2 jobs failed: integration, lint", "Branch: main", "GitHub Actions", "triggered by schedule", "logs: https://ci.example.com/812"} {
 		if !strings.Contains(bot.Text, want) {
 			t.Fatalf("the bot's text lacks %q:\n%s", want, bot.Text)
 		}

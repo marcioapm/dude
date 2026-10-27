@@ -198,7 +198,7 @@ func (p *Provider) ParseEvent(body []byte) (chat.Event, error) {
 	}
 	out.Kind = chat.EventMention
 	out.Mention = &chat.Mention{Provider: "slack", WorkspaceID: e.TeamID, EventID: e.EventID, ConversationID: ev.Channel,
-		ThreadID: thread, MessageID: ev.TS, UserID: ev.User, Text: StripMentions(ev.Text), Direct: ev.ChannelType == "im"}
+		ThreadID: thread, MessageID: ev.TS, UserID: ev.User, Text: plainText(StripMentions(ev.Text)), Direct: ev.ChannelType == "im"}
 	return out, nil
 }
 
@@ -206,6 +206,46 @@ func (p *Provider) ParseEvent(body []byte) (chat.Event, error) {
 // among them), spaces collapsed.
 func StripMentions(text string) string {
 	return strings.Join(strings.Fields(mentionRE.ReplaceAllString(text, " ")), " ")
+}
+
+var markupRE = regexp.MustCompile(`<([^<>|]*)(?:\|([^<>]*))?>`)
+
+// mrkdwnUnescape decodes the three entities Slack escapes in message text.
+// The replacer makes one pass and never rescans its output, so "&amp;lt;"
+// becomes "&lt;", not "<".
+var mrkdwnUnescape = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace
+
+// plainText is Slack message text as the words it shows: its <…> markup
+// in plain form (a link as "label (url)" or its url, a channel as
+// "#name", a mention as "@name" or "@U…", a broadcast as "@here"), then
+// its entities decoded. The markup goes first: once decoded, a typed "<"
+// cannot be told from Slack's own.
+func plainText(s string) string {
+	return mrkdwnUnescape(markupRE.ReplaceAllStringFunc(s, func(tag string) string {
+		m := markupRE.FindStringSubmatch(tag)
+		target, label := m[1], m[2]
+		switch {
+		case strings.HasPrefix(target, "@"), strings.HasPrefix(target, "#"):
+			if label != "" {
+				return target[:1] + strings.TrimPrefix(label, target[:1])
+			}
+			return target
+		case strings.HasPrefix(target, "!"):
+			if label != "" {
+				return label
+			}
+			if name, _, _ := strings.Cut(target[1:], "^"); name == "here" || name == "channel" || name == "everyone" {
+				return "@" + name
+			}
+			return target[1:]
+		case strings.Contains(target, "://"), strings.HasPrefix(target, "mailto:"), strings.HasPrefix(target, "tel:"):
+			if label == "" || label == target {
+				return target
+			}
+			return label + " (" + target + ")"
+		}
+		return tag
+	}))
 }
 
 // ParseInteraction reads an interactivity delivery (form field payload): a

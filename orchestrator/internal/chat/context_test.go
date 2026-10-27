@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -240,6 +241,75 @@ func TestChatOnlyTheChannelShownIsStored(t *testing.T) {
 	goal := w.one(`SELECT goal FROM tasks WHERE organization_id = $1 AND origin ? 'channel'`, w.org)
 	if strings.Contains(goal, "note 0 ") || !strings.Contains(goal, "earlier messages left out") {
 		t.Errorf("goal %.300s", goal)
+	}
+}
+
+// Slack's text arrives mrkdwn-escaped, with links as <url|label>: the
+// thread and the channel reach the routing call as the words shown.
+func TestChatTheThreadAndChannelAreQuotedAsTheirWords(t *testing.T) {
+	w := setup(t)
+	w.fake.Post("C1", "", "U2", "R&amp;D's notes: <https://example.com/n|the notes> &lt;draft&gt;")
+	root := w.fake.Post("C1", "", "U9", "Q&amp;A at <https://example.com/qa|the board>")
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+	w.mention("Márcia", "C1", root, "look at this")
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": "t"}))
+	w.mention("Márcia", "C1", "", "and this")
+	var thread, channel map[string]any
+	w.model.mu.Lock()
+	thread, channel = w.model.sent[0], w.model.sent[1]
+	w.model.mu.Unlock()
+	for _, c := range []struct {
+		sent     map[string]any
+		want     string
+		notWants []string
+	}{
+		{thread, "Q&A at the board (https://example.com/qa)", []string{"&amp;", "<https://"}},
+		{channel, "R&D's notes: the notes (https://example.com/n) <draft>", []string{"&amp;", "&lt;", "<https://"}},
+	} {
+		raw, _ := json.Marshal(c.sent)
+		var decoded struct {
+			Messages []struct{ Content any } `json:"messages"`
+		}
+		_ = json.Unmarshal(raw, &decoded)
+		var all strings.Builder
+		for _, m := range decoded.Messages {
+			fmt.Fprint(&all, m.Content, "\n")
+		}
+		if !strings.Contains(all.String(), c.want) {
+			t.Errorf("the routing input lacks %q:\n%s", c.want, all.String())
+		}
+		for _, not := range c.notWants {
+			if strings.Contains(all.String(), not) {
+				t.Errorf("the routing input holds %q:\n%s", not, all.String())
+			}
+		}
+	}
+}
+
+// A mention as Slack sends it ("R&D" arrives as "R&amp;D") starts a
+// session titled with the words typed, and the reply escapes them once.
+func TestChatAMentionWithAnAmpersandIsTitledAndRepliedAsTyped(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "r", "title": ""}))
+	w.mention("Márcia", "C1", "", "look at R&amp;D's build")
+	got := w.requests()
+	if len(got) != 1 || got[0].ResultKind != "session" {
+		t.Fatalf("requests %+v", got)
+	}
+	if title := w.one(`SELECT title FROM sessions WHERE id = $1`, got[0].ResultID); title != "look at R&D's build" {
+		t.Fatalf("title %q", title)
+	}
+	bot := w.fake.BotMessages()
+	if len(bot) != 1 {
+		t.Fatalf("bot messages %+v", bot)
+	}
+	var blocks []struct {
+		Text struct{ Type, Text string } `json:"text"`
+	}
+	_ = json.Unmarshal(bot[0].Blocks, &blocks)
+	if len(blocks) == 0 || blocks[0].Text.Type != "mrkdwn" || !strings.Contains(blocks[0].Text.Text, "“look at R&amp;D's build”") ||
+		strings.Contains(string(bot[0].Blocks), "&amp;amp;") || strings.Count(blocks[0].Text.Text, "R&amp;D") != 1 {
+		t.Fatalf("reply %s", bot[0].Blocks)
 	}
 }
 
