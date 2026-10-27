@@ -13,25 +13,20 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
-  ChatEvent,
   ChatMessage,
   ChatNotice,
-  ChatProgress,
   ChatTranscript,
   CostDisplay,
   EventRow,
   EventStream,
   ChangedFiles,
   ChatAside,
-  QuestionCard,
   Segmented,
   TerminalLink,
   SessionFacts,
   SessionHeader,
   SessionRail,
   SessionRailBlock,
-  ThinkingBlock,
-  ToolCallCard,
   ToolUsage,
   summarizeToolArgs,
   MachineChip,
@@ -42,7 +37,6 @@ import {
   AttachDropZone,
   CanRunContainersBadge,
   ImageViewer,
-  MentionChip,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, IconButton, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, shownRunStatus, waitsForContainerHost } from "@dude/domain";
@@ -50,19 +44,18 @@ import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { WaitingForHost } from "../waiting.tsx";
-import { SetupOutput, StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
+import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, toolUsage, TOOL_USAGE_NOTE, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type HumanTurn, type QuestionTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
-import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
+import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries } from "../childThreads.tsx";
 import { ChildBody } from "../childBody.tsx";
 import { childTitle } from "../childThreadView.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
-import { useAnswerDraft } from "../answerDraft.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { DraftedComposer } from "./DraftedComposer.tsx";
@@ -71,21 +64,20 @@ import { firstName, formatTimestamp, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { instant } from "../instant.ts";
-import { DudeMark, dudeName } from "../DudeMark.tsx";
+import { dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { useFeedbackFocus } from "../feedback.tsx";
-import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type ImageTray, type SentImages } from "../hooks/useImages.tsx";
+import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
-import type { AttachmentInfo } from "@dude/domain";
 import { raisedProvenance, type RaisedMachine } from "../machines.ts";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
 import {
-  DigestView, NoteToldView, PeerRail, PeerTurnView, PeerWaitView, noPeers, peerTool, useCoordination, usePeerContext, waitWords, type PeerContext,
+  PeerRail, useCoordination, usePeerContext, waitWords,
 } from "../coordination.tsx";
-import { asides, clock, interleaved, questionTurnSelector, renderTurn, viewedContext, type AskActions, type ShownImages, type SteerActions, type ViewedTurn } from "./transcriptTurns.tsx";
-// The transcript's renderer lives in transcriptTurns.tsx; its other screens import it from here as before.
-export { asides, BRIEFED_AGAIN, clock, interleaved, mentionChips, pendingReason, questionTurnSelector, renderTurn, viewedContext } from "./transcriptTurns.tsx";
-export type { AskActions, ShownImages, SteerActions, ViewedTurn } from "./transcriptTurns.tsx";
+import { asides, clock, interleaved, questionTurnSelector, renderTurn, viewedContext, type AskActions, type SteerActions, type ViewedTurn } from "./transcriptTurns.tsx";
+// SessionScreen, ChatSection, the mockups and tests import these from RunScreen.
+export { asides, clock, interleaved, pendingReason, questionTurnSelector, renderTurn, viewedContext } from "./transcriptTurns.tsx";
+export type { SteerActions, ViewedTurn } from "./transcriptTurns.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
