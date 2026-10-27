@@ -58,7 +58,7 @@ func publishFile(path, name, description, poster string) (json.RawMessage, error
 	var posterImg image.Image
 	if poster != "" {
 		if !video {
-			return nil, errors.New("usage: --poster is for a video (mp4, m4v, webm, mov, ogv): dude publish VIDEO --poster IMAGE")
+			return nil, errors.New("usage: --poster is for a video (mp4, m4v, webm, mov, ogv): dude publish VIDEO --poster PATH")
 		}
 		img, err := decodeFile(poster)
 		var bad notAPicture

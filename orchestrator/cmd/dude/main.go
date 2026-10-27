@@ -53,7 +53,7 @@
 //	dude task update [--goal G] [--criterion C]... [--no-criteria]
 //	        [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]... [--unrelate KEY]... [--why TEXT]
 //	dude relate KEY --blocks KEY | --related KEY   a brainstorm's: proposed for a member to file
-//	dude publish FILE [--name NAME] [--description TEXT] [--poster IMAGE]
+//	dude publish FILE [--name NAME] [--description TEXT] [--poster PATH]
 //	                                      keep a file for people (lux-shim publish),
 //	                                      with a thumbnail for an image or a video
 //	dude publish [--message M]            a conductor's: publish its commits
@@ -752,7 +752,7 @@ func run(args []string, out io.Writer) error {
 			return show(out, *asJSON, call("publish", map[string]any{"message": *message}))
 		}
 		if len(args) != 1 || *message != "" {
-			return errors.New(`usage: dude publish FILE [--name NAME] [--description "what it is for"] [--poster IMAGE], or a conductor's dude publish [--message M]`)
+			return errors.New(`usage: dude publish FILE [--name NAME] [--description "what it is for"] [--poster PATH], or a conductor's dude publish [--message M]`)
 		}
 		return show(out, *asJSON, func() (json.RawMessage, error) { return publishFile(args[0], *name, *description, *poster) })
 	}
@@ -1106,12 +1106,12 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              it removes only what this task's agents added
   dude relate KEY --blocks KEY | --related KEY [--why TEXT]
                                              a brainstorm's: propose a relation for a member to file
-  dude publish FILE --name NAME --description "what it is for" [--poster IMAGE]
+  dude publish FILE --name NAME --description "what it is for" [--poster PATH]
                                              keep a file for people, shown with the task while
                                              you work; the description is one short line saying
                                              what the file is for. The same name again is a new version.
-                                             A video's card shows --poster IMAGE (a PNG, JPEG, GIF or
-                                             WebP, e.g. the screenshot that shows the outcome); without
+                                             A video's card shows --poster PATH (the file path of a PNG,
+                                             JPEG, GIF or WebP screenshot that shows the outcome); without
                                              it, a still frame ffmpeg picks, when there is an ffmpeg
   dude publish [--message M]                 a conductor's: take what you committed in your checkout
                                              to the task branch (small changes only; you are woken
