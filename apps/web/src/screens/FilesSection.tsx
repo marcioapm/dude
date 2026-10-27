@@ -38,6 +38,7 @@ export function filesOf(artifacts: readonly Artifact[]): GalleryFile[] {
     const v: FileVersion = {
       id: a.id, name: a.name, contentType: a.contentType, sizeBytes: a.sizeBytes, createdAt: a.createdAt,
       role: a.role ?? DEFAULT_RUN_ROLE, session: runLabel(a), version: a.version, description: a.description,
+      ...(a.thumbnailId ? { thumbnailId: a.thumbnailId } : {}),
     };
     byName.set(a.name, [...(byName.get(a.name) ?? []), v]);
   }
@@ -160,13 +161,20 @@ export function ArtifactViewer({ client, files, open, onOpenChange, onOpenSessio
 }
 
 /**
- * Thumbnails for the gallery's images: each read once, when it appears, and
+ * Pictures for the gallery's cards, by each file's latest version: the
+ * thumbnail dude publish made when there is one (an image's or a video's),
+ * else a small enough image itself. Each read once, when it appears, and
  * freed when it goes — a new screenshot does not read the others again.
  */
 function useThumbnails(client: ApiClient, files: readonly GalleryFile[]): Map<string, string> {
+  // The artifact each card's picture is read from, by its version's id.
+  const sources = new Map(files.map((f) => f.versions[0]!).flatMap((v): Array<[string, string]> => {
+    if (v.thumbnailId) return [[v.id, v.thumbnailId]];
+    return artifactKind(v.contentType, v.name) === "image" && v.sizeBytes <= PREVIEW_LIMIT ? [[v.id, v.id]] : [];
+  }));
+  const ids = [...new Set(sources.values())].sort().join(",");
+  // Blob URLs by the artifact read.
   const [urls, setUrls] = useState(new Map<string, string>());
-  const ids = files.map((f) => f.versions[0]!).filter((v) => artifactKind(v.contentType, v.name) === "image" && v.sizeBytes <= PREVIEW_LIMIT)
-    .map((v) => v.id).join(",");
   const made = useRef(new Map<string, string>());
   useEffect(() => {
     const wanted = new Set(ids ? ids.split(",") : []);
@@ -192,7 +200,10 @@ function useThumbnails(client: ApiClient, files: readonly GalleryFile[]): Map<st
   }, [client, ids]);
   // Freed with the gallery.
   useEffect(() => () => made.current.forEach((u) => URL.revokeObjectURL(u)), []);
-  return urls;
+  return new Map([...sources].flatMap(([version, source]): Array<[string, string]> => {
+    const url = urls.get(source);
+    return url ? [[version, url]] : [];
+  }));
 }
 
 /** One version's content, read when it is shown. */

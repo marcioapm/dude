@@ -145,6 +145,18 @@ describe("FileGallery", () => {
     expect(html).toContain("3 KB");
   });
 
+  test("a video with a picture shows it under a play glyph, still a button; without one, the dark card", () => {
+    const html = (thumbnail?: string) => renderToStaticMarkup(<FileGallery files={[files[1]!]} thumbnail={() => thumbnail} onOpen={() => {}} onDownload={() => {}} />);
+    const card = new DOMParser().parseFromString(html("blob:poster"), "text/html").querySelector("[data-testid='file-card']")!;
+    expect(card.tagName).toBe("BUTTON");
+    const picture = card.firstElementChild!;
+    expect(picture.querySelector("img")?.getAttribute("src")).toBe("blob:poster");
+    expect(picture.querySelectorAll("svg").length).toBe(1);
+    const bare = new DOMParser().parseFromString(html(), "text/html").querySelector("[data-testid='file-card']")!.firstElementChild!;
+    expect(bare.querySelector("img")).toBeNull();
+    expect(bare.querySelectorAll("svg").length).toBe(1);
+  });
+
   test("a file's description is a line under its name, in a card and a row, the latest version's; none, no line", async () => {
     const described: GalleryFile[] = [
       { name: "shot.png", versions: [{ ...v("shot.png", "image/png"), description: "The signed-in page" }] },

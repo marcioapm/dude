@@ -623,6 +623,8 @@ export interface Artifact {
   version: number;
   /** How many of its name there are. */
   versions: number;
+  /** The small JPEG dude publish made of it (an image's or a video's), when there is one. */
+  thumbnailId?: string | null;
 }
 
 /** Whether images can be attached, and the limits the browser keeps to (packages/domain attachments.ts). */
