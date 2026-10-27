@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -60,6 +61,23 @@ func startedFrom(w *harnessWorld) *taskHistory {
 	mustOwner(w.t, w, `UPDATE runs SET base_refs = jsonb_build_object('target', $2::text), base_shas = jsonb_build_object('target', $2::text) WHERE id = $1`,
 		w.run.ID, h.Earlier)
 	return h
+}
+
+// compares counts the fake GitHub's compare requests from here on, each
+// answered status (0: as GitHub would).
+func (h *taskHistory) compares(w *harnessWorld, status int) *int {
+	w.t.Helper()
+	n := new(int)
+	h.acc.intercept = func(r *http.Request) int {
+		if strings.Contains(r.URL.Path, "/compare/") {
+			*n++
+			return status
+		}
+		return 0
+	}
+	gh := h.acc.github()
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return gh, nil })
+	return n
 }
 
 // mainMerged is a merge of the target branch, moved on by another task's
@@ -230,6 +248,46 @@ func TestAFailureWithNoTaskBaseIsRejectedUnasked(t *testing.T) {
 	if v := got.Verdicts; len(v) != 1 || v[0].Result != delivery.CheckFail || !strings.Contains(v[0].JudgeReason, "no recorded commit of the target branch") {
 		t.Fatalf("verdicts %+v", v)
 	}
+}
+
+// GitHub failing to compare leaves the turn unjudged, to be judged again
+// once it answers; GitHub refusing to compare leaves the repository with
+// no task base, so the failure is rejected unasked.
+func TestAFailedCompareHoldsTheTurnAndARefusedOneRejectsUnasked(t *testing.T) {
+	t.Run("failing, 503", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		h := startedFrom(w)
+		compares := h.compares(w, http.StatusServiceUnavailable)
+		checksReply(w, failingTsc)
+		endTurn(w)
+		fake := &waiverFake{preexisting: judge.Yes}
+		w.s.Judge = fake
+		pass, _, err := w.s.checksBeforePush(context.Background(), w.run)
+		if err == nil || pass || !forge.Transient(err) {
+			t.Fatalf("pass %v, %v", pass, err)
+		}
+		if *compares == 0 || len(fake.asked) != 0 || w.countEvents(delivery.EvRunChecksJudged) != 0 {
+			t.Fatalf("%d compares, %d judge calls, %d judgements recorded", *compares, len(fake.asked), w.countEvents(delivery.EvRunChecksJudged))
+		}
+	})
+	t.Run("refusing, 404", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		h := startedFrom(w)
+		compares := h.compares(w, http.StatusNotFound)
+		checksReply(w, failingTsc)
+		endTurn(w)
+		fake := &waiverFake{preexisting: judge.Yes}
+		w.s.Judge = fake
+		pass, _, err := w.s.checksBeforePush(context.Background(), w.run)
+		if err != nil || pass || *compares != 1 || len(fake.asked) != 0 {
+			t.Fatalf("pass %v, %v; %d compares, %d judge calls", pass, err, *compares, len(fake.asked))
+		}
+		got := recordedJudgement(w)
+		if v := got.Verdicts; got.Verified || len(v) != 1 || v[0].Result != delivery.CheckFail ||
+			!strings.Contains(v[0].JudgeReason, "no recorded commit of the target branch") {
+			t.Fatalf("recorded %+v", got)
+		}
+	})
 }
 
 // Anything but the judge's recorded yes keeps the failure rejected, with
