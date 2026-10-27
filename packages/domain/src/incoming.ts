@@ -157,13 +157,18 @@ export function describeCondition(c: Pick<Condition, "path" | "op" | "values">):
   return c.op === "exists" ? `${c.path} exists` : `${c.path} ${CONDITION_OP_LABEL[c.op]} ${c.values.join(", ")}`;
 }
 
-/** Why a missed condition skips a delivery: "commonLabels.severity is warning, not one of critical, high". */
+/** How much of the body's value a skip reason quotes, in characters. */
+export const MISS_ACTUAL_CHARS = 200;
+
+/** Why a missed condition skips a delivery: "commonLabels.severity is warning, not one of critical, high". The body's value is cut to MISS_ACTUAL_CHARS and "…". */
 export function conditionMiss(c: Condition, r: ConditionResult): string {
+  const chars = [...r.actual];
+  const actual = chars.length > MISS_ACTUAL_CHARS ? chars.slice(0, MISS_ACTUAL_CHARS).join("") + "…" : r.actual;
   switch (c.op) {
     case "exists": return `${c.path} is missing`;
-    case "is": return `${c.path} is ${r.actual}, not ${c.values[0]}`;
-    case "is_not": return `${c.path} is ${r.actual}`;
-    case "one_of": return `${c.path} is ${r.actual}, not one of ${c.values.join(", ")}`;
+    case "is": return `${c.path} is ${actual}, not ${c.values[0]}`;
+    case "is_not": return `${c.path} is ${actual}`;
+    case "one_of": return `${c.path} is ${actual}, not one of ${c.values.join(", ")}`;
     case "contains": return `${c.path} does not contain ${c.values[0]}`;
   }
 }

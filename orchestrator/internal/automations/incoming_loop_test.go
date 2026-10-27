@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -83,6 +84,78 @@ func TestIncomingGroupFollowUpsReachTheLiveRun(t *testing.T) {
 	}
 	if got := []string{payloads[0].DeliveryID, payloads[1].DeliveryID}; len(payloads) != 2 || !slices.Equal(got, []string{"dlv_1", "dlv_2"}) {
 		t.Errorf("the live run holds %+v", payloads)
+	}
+}
+
+// Deliveries that cannot be decided hold up nothing: 50 whose runs the
+// database refuses fill a whole batch, yet a delivery with a group key
+// longer than the column takes, one whose missed condition quotes a long
+// value, and another organisation's delivery are all decided; after its
+// last try each refused one is skipped, saying why.
+func TestIncomingQueueGoesOnPastDeliveriesItCannotDecide(t *testing.T) {
+	h := newHarness(t)
+	cmd := map[string]any{"command": "true"}
+	incoming := func(id string, conditions []Condition, groupBy string) map[string]any {
+		return map[string]any{"kind": "incoming", "hookId": "hk_" + strings.ReplaceAll(id, "_", "") + "000000000000",
+			"conditions": conditions, "groupBy": groupBy, "ratePerHour": 600, "verify": map[string]any{"mode": "header", "header": "Authorization"}}
+	}
+	h.automation("aut_bad", "command", incoming("aut_bad", nil, ""), cmd)
+	h.automation("aut_good", "command", incoming("aut_good", []Condition{{Path: "status", Op: "is", Values: []string{"firing"}}}, "k"), cmd)
+	exec(t, h.owner, `CREATE FUNCTION refuse_bad() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'refused for the test'; END $$`)
+	exec(t, h.owner, `CREATE TRIGGER refuse_bad BEFORE INSERT ON automation_runs FOR EACH ROW
+		WHEN (NEW.payloads->0->>'deliveryId' LIKE 'bad\_%') EXECUTE FUNCTION refuse_bad()`)
+	for i := range 50 {
+		h.receive("aut_bad", fmt.Sprintf("bad_%02d", i), map[string]any{"n": i})
+	}
+	long := strings.Repeat("k", 2100)
+	h.receive("aut_good", "dlv_long_key", map[string]any{"status": "firing", "k": long})
+	h.receive("aut_good", "dlv_long_value", map[string]any{"status": strings.Repeat("w", 2500), "k": "other"})
+
+	other := dbtest.Org(t, h.owner)
+	exec(t, h.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1 || '_p', $1, 'api', 'api', 'API')`, other)
+	tr, _ := json.Marshal(incoming("aut_other", nil, ""))
+	exec(t, h.owner, `INSERT INTO automations (id, organization_id, project_id, name, kind, enabled, trigger, command, repos)
+		VALUES ('aut_other', $1, $1 || '_p', 'Other', 'command', true, $2, 'true', '"none"')`, other, string(tr))
+	exec(t, h.owner, `INSERT INTO incoming_deliveries (id, organization_id, automation_id, bytes, payload) VALUES ('dlv_other', $1, 'aut_other', 2, '{}')`, other)
+
+	read := func(id string) string {
+		var v string
+		if err := h.owner.QueryRow(context.Background(), `SELECT COALESCE(verdict, '') FROM incoming_deliveries WHERE id = $1`, id).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		_, _ = h.runner.Sweep(context.Background())
+		if read("dlv_long_key") != "" && read("dlv_long_value") != "" && read("dlv_other") != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the deliveries behind the 50 undecidable ones were never decided")
+		}
+	}
+	if d := h.delivery("dlv_long_key"); d.Verdict != VerdictStarted || d.Group != long[:2000] || d.Run == "" {
+		t.Errorf("long group key: %s %d chars run %q", d.Verdict, len(d.Group), d.Run)
+	}
+	if d := h.delivery("dlv_long_value"); d.Verdict != VerdictSkipped || d.Reason != "status is "+strings.Repeat("w", 200)+"…, not firing" {
+		t.Errorf("long value: %s %q", d.Verdict, d.Reason)
+	}
+	if v := read("dlv_other"); v != VerdictStarted {
+		t.Errorf("the other organisation's delivery: %q", v)
+	}
+	if d := h.delivery("bad_00"); d.Verdict != "" {
+		t.Fatalf("an undecidable delivery after one try: %+v", d)
+	}
+	for range MatchAttempts {
+		h.advance(11 * time.Minute)
+		_, _ = h.runner.Sweep(context.Background())
+	}
+	for _, id := range []string{"bad_00", "bad_49"} {
+		if d := h.delivery(id); d.Verdict != VerdictSkipped || !strings.HasPrefix(d.Reason, "could not be matched: ") ||
+			!strings.Contains(d.Reason, "refused for the test") || d.Run != "" {
+			t.Errorf("%s after its last try: %+v", id, d)
+		}
 	}
 }
 

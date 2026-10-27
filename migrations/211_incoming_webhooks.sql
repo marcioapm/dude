@@ -59,6 +59,10 @@ CREATE TABLE incoming_deliveries (
   payload         jsonb,
   payload_purged_at timestamptz,
   run_id          text REFERENCES automation_runs(id) ON DELETE SET NULL,
+  -- The loop's tries at an accepted one it could not decide, and when it
+  -- tries next; after the last it is skipped ("could not be matched: …").
+  attempts        integer NOT NULL DEFAULT 0,
+  next_at         timestamptz,
   UNIQUE (organization_id, id),
   CONSTRAINT incoming_deliveries_refused_bodyless CHECK (verdict IS DISTINCT FROM 'refused' OR payload IS NULL),
   CONSTRAINT incoming_deliveries_refusal_code CHECK (verdict IS DISTINCT FROM 'refused'

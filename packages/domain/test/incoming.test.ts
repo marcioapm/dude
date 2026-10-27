@@ -145,6 +145,12 @@ describe("conditions on a body", () => {
     expect(conditionMiss(c, conditionHolds(c, { commonLabels: { severity: "warning" } })))
       .toBe("commonLabels.severity is warning, not one of critical, high");
   });
+
+  test("a missed condition quotes at most 200 characters of the body's value, as the orchestrator does", () => {
+    const c = { path: "status", op: "is", values: ["firing"] } as Condition;
+    expect(conditionMiss(c, conditionHolds(c, { status: "w".repeat(2500) }))).toBe(`status is ${"w".repeat(200)}…, not firing`);
+    expect(conditionMiss(c, conditionHolds(c, { status: "w".repeat(200) }))).toBe(`status is ${"w".repeat(200)}, not firing`);
+  });
 });
 
 describe("a delivery's headers", () => {

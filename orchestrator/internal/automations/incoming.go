@@ -136,7 +136,7 @@ func Holds(c Condition, body json.RawMessage) ConditionResult {
 	return r
 }
 
-// Evaluate is every condition's result, in order.
+// EvaluateConditions is every condition's result, in order.
 func EvaluateConditions(conditions []Condition, body json.RawMessage) []ConditionResult {
 	out := make([]ConditionResult, len(conditions))
 	for i, c := range conditions {
@@ -145,27 +145,32 @@ func EvaluateConditions(conditions []Condition, body json.RawMessage) []Conditio
 	return out
 }
 
-var opWords = map[string]string{"is": "is", "is_not": "is not", "one_of": "one of", "contains": "contains", "exists": "exists"}
 
-// Miss is why a missed condition skips a delivery, as the Deliveries tab says it.
+// missActualRunes is how much of the body's value a skip reason quotes.
+const missActualRunes = 200
+
+// Miss is why a missed condition skips a delivery, as the Deliveries tab
+// says it; the body's value is cut to missActualRunes characters and "…".
 func Miss(c Condition, r ConditionResult) string {
 	first := ""
 	if len(c.Values) > 0 {
 		first = c.Values[0]
 	}
+	actual := r.Actual
+	if rs := []rune(actual); len(rs) > missActualRunes {
+		actual = string(rs[:missActualRunes]) + "…"
+	}
 	switch c.Op {
 	case "exists":
 		return c.Path + " is missing"
 	case "is":
-		return c.Path + " is " + r.Actual + ", not " + first
+		return c.Path + " is " + actual + ", not " + first
 	case "is_not":
-		return c.Path + " is " + r.Actual
+		return c.Path + " is " + actual
 	case "one_of":
-		return c.Path + " is " + r.Actual + ", not one of " + strings.Join(c.Values, ", ")
-	case "contains":
-		return c.Path + " does not contain " + first
+		return c.Path + " is " + actual + ", not one of " + strings.Join(c.Values, ", ")
 	}
-	return c.Path + " " + opWords[c.Op] + " " + strings.Join(c.Values, ", ")
+	return c.Path + " does not contain " + first
 }
 
 // FirstMiss is the first condition that does not hold, -1 when all do.
@@ -267,15 +272,19 @@ const (
 type pendingIncoming struct {
 	ID, Org, AutomationID string
 	Payload               json.RawMessage
+	Attempts              int
 }
 
 // matchIncoming reads the accepted incoming deliveries not yet read, oldest
-// first, each in its own transaction.
+// first, each in its own transaction. One that fails is backed off as a
+// GitHub delivery is (matchBackoff), never blocking the rest, and after
+// MatchAttempts tries is skipped, saying why.
 func (r *Runner) matchIncoming(ctx context.Context) (int, error) {
 	var batch []pendingIncoming
 	if err := r.DB.InSystem(ctx, "automations", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, automation_id, COALESCE(payload, 'null')
-			FROM incoming_deliveries WHERE verdict IS NULL ORDER BY received_at, id LIMIT 50`)
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, automation_id, COALESCE(payload, 'null'), attempts
+			FROM incoming_deliveries WHERE verdict IS NULL AND (next_at IS NULL OR next_at <= $1)
+			ORDER BY received_at, id LIMIT 50`, r.now())
 		if err != nil {
 			return err
 		}
@@ -291,13 +300,42 @@ func (r *Runner) matchIncoming(ctx context.Context) (int, error) {
 			cancelled, err = ArriveIncoming(ctx, tx, d.AutomationID, d.ID, d.Payload)
 			return err
 		})
-		if err != nil {
-			errs = append(errs, fmt.Errorf("incoming delivery %s: %w", d.ID, err))
+		if err == nil {
+			r.EndCancelled(ctx, cancelled)
 			continue
 		}
-		r.EndCancelled(ctx, cancelled)
+		r.Log.Warn("deciding an incoming delivery failed", "delivery", d.ID, "attempt", d.Attempts+1, "error", err)
+		if berr := r.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+			return r.backOffIncoming(ctx, tx, d, err)
+		}); berr != nil {
+			errs = append(errs, fmt.Errorf("incoming delivery %s: %w", d.ID, berr))
+		}
 	}
 	return len(batch), errors.Join(errs...)
+}
+
+// backOffIncoming counts a failed try at d. After the last it is skipped
+// with why, under a savepoint: should that write fail too, d still backs
+// off rather than being retried on every pass.
+func (r *Runner) backOffIncoming(ctx context.Context, tx pgx.Tx, d pendingIncoming, cause error) error {
+	if d.Attempts+1 >= MatchAttempts {
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = sp.Exec(ctx, `UPDATE incoming_deliveries SET verdict = 'skipped', reason = left($2, 2000), reason_index = NULL,
+			attempts = attempts + 1, next_at = NULL WHERE id = $1`, d.ID, "could not be matched: "+cause.Error())
+		if err == nil {
+			return sp.Commit(ctx)
+		}
+		r.Log.Warn("skipping an undecidable incoming delivery failed", "delivery", d.ID, "error", err)
+		if err := sp.Rollback(ctx); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE incoming_deliveries SET attempts = attempts + 1, next_at = $2 WHERE id = $1`,
+		d.ID, r.now().Add(matchBackoff(d.Attempts)))
+	return err
 }
 
 // ArriveIncoming decides one accepted delivery in tx and records its
@@ -314,8 +352,8 @@ func ArriveIncoming(ctx context.Context, tx pgx.Tx, automationID, deliveryID str
 		return nil, err
 	}
 	verdict := func(v, reason string, index *int, group, run string) error {
-		_, err := tx.Exec(ctx, `UPDATE incoming_deliveries SET verdict = $2, reason = NULLIF($3, ''), reason_index = $4,
-			group_key = NULLIF($5, ''), run_id = NULLIF($6, '') WHERE id = $1`, deliveryID, v, reason, index, group, run)
+		_, err := tx.Exec(ctx, `UPDATE incoming_deliveries SET verdict = $2, reason = left(NULLIF($3, ''), 2000), reason_index = $4,
+			group_key = left(NULLIF($5, ''), 2000), run_id = NULLIF($6, '') WHERE id = $1`, deliveryID, v, reason, index, group, run)
 		return err
 	}
 	if a.Trigger.Kind != "incoming" {
