@@ -5,8 +5,8 @@
 
 .delivery {
   container-type: inline-size;
-  background: var(--ds-tone-info-bg);
-  border-inline-start: 2px solid var(--ds-tone-info-solid);
+  background: color-mix(in srgb, var(--ds-tone-info-mark) var(--ds-tint-highlight), transparent);
+  box-shadow: inset 2px 0 0 var(--ds-tone-info-mark);
   border-radius: 0;
 }
 
@@ -56,7 +56,8 @@
   overflow: auto;
   padding: var(--ds-space-4) var(--ds-space-12) var(--ds-space-8);
   font-size: var(--ds-text-xs);
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--ds-color-text-primary);
 }
 

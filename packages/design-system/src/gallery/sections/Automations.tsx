@@ -204,7 +204,7 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
           </Col>
         </Panes>
       </Block>
-      <Block id="au-feed-delivery" title="FeedDelivery" note="A delivery sent to a running agent, in its transcript where it arrived: the info tint and rail, what it was, its id (a button when it opens the delivery), the time; the chevron shows what the agent was given. Below 480px of its container the id hides.">
+      <Block id="au-feed-delivery" title="FeedDelivery" note="A delivery sent to a running agent, in its transcript where it arrived: the info tint and rail, what it was, its id (a button when it opens the delivery), the time; the chevron shows the delivery's body. Below 480px of its container the id hides.">
         <Panes mode={mode} surface>
           <Col>
             <Label>Folded</Label>

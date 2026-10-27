@@ -175,11 +175,11 @@ describe("FeedDelivery", () => {
     expect(el.querySelector("pre")).toBeNull();
     await act(async () => (el.querySelector('[aria-label="Open delivery dlv_9Wm"]') as HTMLButtonElement).click());
     expect(opened).toBe(1);
-    const toggle = el.querySelector('[aria-label="Show what the agent was sent"]') as HTMLButtonElement;
+    const toggle = el.querySelector(`[aria-label="Show the delivery's body"]`) as HTMLButtonElement;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     await act(async () => toggle.click());
     expect(JSON.parse(el.querySelector("pre")!.textContent!)).toEqual(body);
-    expect(el.querySelector('[aria-label="Hide what the agent was sent"]')!.getAttribute("aria-expanded")).toBe("true");
+    expect(el.querySelector(`[aria-label="Hide the delivery's body"]`)!.getAttribute("aria-expanded")).toBe("true");
   });
 
   test("without onOpen its id is text, not a button", () => {

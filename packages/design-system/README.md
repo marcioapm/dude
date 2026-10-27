@@ -2219,7 +2219,8 @@ MarkdownCheatsheet.
 - **DiffView / DiffFile / parseUnifiedDiff** — per-file unified diffs with
   sticky gutters, kind badges and auto-collapse for large files.
 - **LogStream** — monospace, follows the tail until you scroll, then offers
-  "Jump to latest"; 2000-line render window.
+  "Jump to latest"; 2000-line render window. Each line carries its
+  `data-channel` and `data-level`, so stderr and errors are findable.
 
 `src/components/` — the transcript (the operator's day-to-day screen):
 
@@ -3100,7 +3101,7 @@ densities. No tone of their own: an automation's state is its runs'
 - **ConditionRows** (`value`, `onChange?`, `results?`, `paths?`): an incoming webhook's conditions on its JSON body, AND'd. Each row is a mono path `Input`, an operator `Select` (is, is not, one of, contains, exists) and its value: an `Input`, a `ChipsInput` for one of (values OR'd), nothing for exists. Rows lead with "When"/"and"; with `results` the lead is a ✓ (success tone) or ✗ (danger tone) mark named "Holds"/"Does not hold", and a missed row says what the body had. "+ Condition" adds a row; each row's remove button is named "Remove condition N". The rows are a container: below 420px of their own width (a phone, a narrow dialog, the gallery's 390px sample; a desktop settings row's ~460px control column keeps one line, as the gallery's 460px sample shows) a row stacks path and operator over its value. Its operator words, and `conditionWords`, are the domain's (`CONDITION_OPS`, `CONDITION_OP_LABEL`, `describeCondition` in `@dude/domain`).
 - **DeliveryVerdict** (`verdict`, `onRun?`, `detail?`): what dude did with one delivery, as a chip at the chip height: Started run (success, play glyph), Sent to running agent (info, send), Skipped (neutral, dotted circle) and the condition that missed, Refused · Bad signature / Not JSON / Too large / Rate limited / Turned off (danger, circle-x); Waiting (neutral, clock) while dude has not read it yet. With `onRun` the first two are buttons named "<verdict>: open the run" when they have a run; a sent verdict with none is a plain chip. Tones are the existing five.
 - **IncomingVerdictPanel** (`outcome?`, `ok?`): a test body's live verdict in the Run now dialog: a status region on the sunken shade, square (structure is square), 12/16 padding, its lines (group key, `ConditionRows` with results) and then `outcome` set apart by space, its bold words in danger when `ok` is false. No frame: shade and space tell it apart.
-- **FeedDelivery** (`at`, `deliveryId`, `summary`, `body`, `source`, `onOpen?`): a delivery sent to a running agent, in its transcript where it arrived. A compact row on the info tint with an info rail — glyph, *Sent to this run*, what it was in mono, its id (a button when `onOpen`), the time — that expands to the body the agent was given. Tones are the existing info tone; no new colour.
+- **FeedDelivery** (`at`, `deliveryId`, `summary`, `body`, `source`, `onOpen?`): a delivery sent to a running agent, in its transcript where it arrived. A compact row on the info tint with an info rail — glyph, *Sent to this run*, what it was in mono, its id (a button when `onOpen`), the time — that expands to the delivery's body. Tones are the existing info tone; no new colour.
 - **SettingsDisclosure** takes `icon?` (default `layers`, for something inherited): with another glyph it folds a reference a row offers on demand, e.g. an incoming webhook's How to send (`send`), on the chrome shade with no border. Its body scrolls past 320px; `full` shows it whole (How to send's curl).
 - **Td** `wrap`: a cell allowed onto more lines also gets 6px block padding, so wrapped compact rows keep apart by space.
 

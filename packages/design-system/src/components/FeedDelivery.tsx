@@ -10,7 +10,7 @@ export interface FeedDeliveryProps {
   readonly deliveryId: string;
   /** What it was, in a few words: "resolved · HighErrorRate · checkout-api". */
   readonly summary: string;
-  /** What the agent was given, shown as pretty JSON when opened; undefined while it is not known. */
+  /** The delivery's body, shown as pretty JSON when opened; undefined once it is not kept. */
   readonly body?: unknown;
   readonly source: "incoming" | "github";
   /** Opens the delivery; without it the id is plain text. */
@@ -24,7 +24,7 @@ export interface FeedDeliveryProps {
  * A delivery sent to a running agent, in its transcript where it arrived:
  * a compact row on the info tint with an info rail — glyph, Sent to this
  * run, what it was in mono, its id (a button when `onOpen`), the time —
- * that expands to the body the agent was given.
+ * that expands to the delivery's body.
  */
 export function FeedDelivery({ at, deliveryId, summary, body, source, onOpen, defaultOpen = false, ...rest }: FeedDeliveryProps) {
   const [open, setOpen] = useState(defaultOpen);
@@ -42,7 +42,7 @@ export function FeedDelivery({ at, deliveryId, summary, body, source, onOpen, de
         </span>
         <time className={`${styles["time"]} ds-mono ds-tnum`} dateTime={new Date(at).toISOString()}>{time}</time>
         <IconButton size="sm" variant="quiet" icon={open ? "chevron-down" : "chevron-right"} aria-expanded={open}
-          label={open ? "Hide what the agent was sent" : "Show what the agent was sent"} onClick={() => setOpen(!open)} />
+          label={open ? "Hide the delivery's body" : "Show the delivery's body"} onClick={() => setOpen(!open)} />
       </div>
       {open ? (
         <pre className={`${styles["body"]} ds-mono`}>{body === undefined ? "Not kept." : JSON.stringify(body, null, 2)}</pre>

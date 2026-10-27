@@ -138,6 +138,8 @@ export function LogStream({
               l.seq >= newFrom && styles["lineNew"],
             )}
             data-seq={l.seq}
+            data-channel={l.channel}
+            data-level={l.level}
           >
             <span className={styles["lineNo"]} aria-hidden>
               {lineNumbers ? (firstShownSeq !== undefined ? hidden + i + 1 : i + 1) : ""}
