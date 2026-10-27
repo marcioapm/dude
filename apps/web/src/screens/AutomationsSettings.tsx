@@ -465,7 +465,10 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
           {canRun ? (
             <Button variant="secondary" leadingIcon="play" data-testid="run-now" disabled={runNow.busy}
               onClick={() => a.trigger.kind !== "schedule" ? setRunning(true)
-                : void runNow.save(() => client.runAutomation(a.id, {}), () => onPlace({ id: a.id, tab: "runs" }), "Run started")}>
+                 : void runNow.save(async () => {
+                   const started = await client.runAutomation(a.id, {});
+                   onPlace({ id: a.id, tab: "runs", runId: started.runId });
+                 }, undefined, "Run started")}>
               Run now
             </Button>
           ) : null}
