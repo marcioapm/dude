@@ -13,6 +13,7 @@
 import {
   automationDefaults,
   automationInputSchema,
+  DELIVERY_VERDICTS,
   enabledSchema,
   EventTypes,
   newAutomationSchema,
@@ -39,7 +40,7 @@ import { badRequest, HttpError, json, noContent, notFound, parseBody } from "../
 import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
-import { readDeliveries, readDelivery, runDeliveries } from "./incoming.ts";
+import { readDeliveries, readDelivery, runDeliveries, type DeliveryFilter } from "./incoming.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */
@@ -551,10 +552,13 @@ async function toolCalls(scope: OrgScope, runId: string) {
  * (routes/incoming.ts reads them).
  */
 async function listDeliveries(ctx: RequestContext): Promise<Response> {
+  const verdict = ctx.url.searchParams.get("verdict");
+  const filters = [...DELIVERY_VERDICTS, "pending", "accepted"];
+  if (verdict !== null && !filters.includes(verdict)) throw badRequest(`unknown verdict ${verdict}: one of ${filters.join(", ")}`);
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const a = await readOne(scope, ctx.params.id!);
     if (a.trigger.kind === "schedule") throw badRequest("a scheduled automation runs on no event");
-    return { deliveries: await readDeliveries(scope, a.id, a.trigger) };
+    return { deliveries: await readDeliveries(scope, a.id, a.trigger, verdict as DeliveryFilter | null) };
   });
   return json(out);
 }

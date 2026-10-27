@@ -268,8 +268,11 @@ export interface GithubAppInput {
   clearOauthClientSecret?: boolean;
 }
 
-/** A delivery as the Deliveries tab lists it: with its body, null once refused or past 30 days. */
-export type ListedDelivery = AutomationDelivery & { body: Record<string, unknown> | null };
+/** A delivery as the Deliveries tab lists it: no body (its detail has it). */
+export type ListedDelivery = AutomationDelivery;
+
+/** The Deliveries list's verdict filter on the server: a verdict; "pending" for one not read yet; "accepted" for any not refused. */
+export type DeliveryFilter = NonNullable<AutomationDelivery["verdict"]> | "pending" | "accepted";
 
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
 export interface WebhookHealth {
@@ -1405,9 +1408,9 @@ export class ApiClient {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries`);
   }
 
-  /** The Deliveries tab: every delivery with its verdict; a refused one's body is null. */
-  automationDeliveryList(id: string): Promise<{ deliveries: ListedDelivery[] }> {
-    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries`);
+  /** The Deliveries tab: the last 30 days' deliveries with their verdicts, at most 100, of one verdict when filtered. */
+  automationDeliveryList(id: string, verdict?: DeliveryFilter): Promise<{ deliveries: ListedDelivery[] }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries${verdict ? `?verdict=${verdict}` : ""}`);
   }
 
   automationDelivery(id: string, deliveryId: string): Promise<AutomationDeliveryDetail> {

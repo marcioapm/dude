@@ -118,7 +118,7 @@ const RUNS: Record<string, AutomationRun[]> = {
   ],
 };
 
-const DELIVERIES: PastDelivery[] = [
+const DELIVERIES: Array<PastDelivery & { body: Record<string, unknown> }> = [
   { id: "d6f2a1c0-0001", event: "pull_request", action: "opened", repository: "example/web-console", sender: "ana", receivedAt: iso(13 * MIN),
     body: { action: "opened", repository: { full_name: "example/web-console" }, sender: { login: "ana" }, pull_request: { number: 214, title: "Checkout: keep the cart" } } },
   { id: "d6f2a1c0-0002", event: "pull_request", action: "opened", repository: "example/web-console", sender: "dependabot[bot]", receivedAt: iso(60 * MIN),
@@ -162,10 +162,12 @@ export class FixtureAutomations {
     return settings.trigger.kind === "incoming" ? { ...a, incomingSecret: FIXTURE_SECRET } : a;
   }
 
-  /** The Deliveries tab's list, and one delivery. */
-  deliveryList(id: string) {
+  /** The Deliveries tab's list (no bodies, one verdict when filtered), and one delivery. */
+  deliveryList(id: string, verdict?: string) {
     this.one(id);
-    return { deliveries: deliveriesOf(id).map(({ headers: _h, ...d }) => d) };
+    return { deliveries: deliveriesOf(id).filter((d) => !verdict || d.verdict === verdict || (verdict === "pending" && d.verdict === null)
+      || (verdict === "accepted" && d.verdict !== "refused"))
+      .map(({ headers: _h, body: _b, ...d }) => d) };
   }
 
   delivery(id: string, deliveryId: string) {
@@ -309,7 +311,7 @@ export class FixtureAutomations {
   }
 
   deliveries(): { deliveries: PastDelivery[] } {
-    return { deliveries: DELIVERIES };
+    return { deliveries: DELIVERIES.map(({ body: _b, ...d }) => d) };
   }
 
   runNow(id: string, body: RunNow): { runId: string } {

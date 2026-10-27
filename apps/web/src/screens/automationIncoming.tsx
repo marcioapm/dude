@@ -42,7 +42,7 @@ import {
   type IncomingVerify,
   type IncomingVerifyMode,
 } from "@dude/domain";
-import type { ApiClient, ListedDelivery } from "../api/client.ts";
+import type { ApiClient, DeliveryFilter, ListedDelivery } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 
 const ago = (iso: string) => formatTimestamp(iso, "relative");
@@ -265,7 +265,7 @@ export function sizeOf(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
-const VERDICT_FILTER = [
+const VERDICT_FILTER: Array<{ value: DeliveryFilter | "all"; label: string }> = [
   { value: "all", label: "Every delivery" }, { value: "started", label: "Started run" }, { value: "sent_to_run", label: "Sent to running agent" },
   { value: "skipped", label: "Skipped" }, { value: "refused", label: "Refused" },
 ];
@@ -276,15 +276,19 @@ export function DeliveriesTab({ client, a, onOpen, onRun }: {
 }) {
   const [list, setList] = useState<ListedDelivery[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const [verdict, setVerdict] = useState("all");
-  useEffect(() => { client.automationDeliveryList(a.id).then((r) => setList(r.deliveries), (e: unknown) => setProblem(errorText(e))); }, [client, a.id]);
+  const [verdict, setVerdict] = useState<DeliveryFilter | "all">("all");
+  // Filtered by the server: a burst of refusals filling the newest 100 hides none of the rest.
+  useEffect(() => {
+    setList(null);
+    client.automationDeliveryList(a.id, verdict === "all" ? undefined : verdict).then((r) => setList(r.deliveries), (e: unknown) => setProblem(errorText(e)));
+  }, [client, a.id, verdict]);
   const incoming = a.trigger.kind === "incoming";
-  const shown = (list ?? []).filter((d) => verdict === "all" || d.verdict === verdict);
+  const shown = list ?? [];
   return (
     <div data-testid="deliveries" className="incomingStack">
       <SettingsNote>Every request {incoming ? "to its URL" : "GitHub sent it"} in the last 30 days and what dude did with it. Refused requests keep no body.</SettingsNote>
       <span className="incomingFilter">
-        <Select<string> label="Verdict" size="sm" value={verdict} onValueChange={setVerdict} options={VERDICT_FILTER} />
+        <Select<DeliveryFilter | "all"> label="Verdict" size="sm" value={verdict} onValueChange={setVerdict} options={VERDICT_FILTER} />
       </span>
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       {!list ? <Spinner label="Loading…" /> : shown.length === 0 ? <EmptyState title="No deliveries in the last 30 days" /> : (
@@ -397,19 +401,29 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
   const [mode, setMode] = useState<"past" | "write">(initialMode ?? (initial ? "past" : "write"));
   const [list, setList] = useState<ListedDelivery[] | null>(null);
   const [picked, setPicked] = useState<string | null>(initial ?? null);
+  // The list carries no bodies: a picked delivery's is read from its detail.
+  const [bodies, setBodies] = useState<Record<string, Record<string, unknown> | null>>({});
   const [text, setText] = useState("");
   const [verdict, setVerdict] = useState<IncomingVerdict | null>(null);
   const { busy, problem, save } = useSave();
+  const bodyOf = (id: string) => client.automationDelivery(a.id, id).then((d) => {
+    setBodies((b) => ({ ...b, [id]: d.body }));
+    return d.body;
+  });
   useEffect(() => {
-    client.automationDeliveryList(a.id).then((r) => {
-      const kept = r.deliveries.filter((d) => d.body);
-      setList(kept);
-      setText((t) => t || JSON.stringify(kept[0]?.body ?? { status: "firing", groupKey: "example" }, null, 2));
+    client.automationDeliveryList(a.id, "accepted").then((r) => {
+      setList(r.deliveries);
+      const last = r.deliveries[0];
+      if (!last) { setText((t) => t || JSON.stringify({ status: "firing", groupKey: "example" }, null, 2)); return; }
+      void bodyOf(last.id).then((b) => setText((t) => t || JSON.stringify(b ?? {}, null, 2)), () => undefined);
     }, () => setList([]));
-  }, [client, a.id]);
+  }, [client, a.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (picked && !(picked in bodies)) void bodyOf(picked).catch(() => setBodies((b) => ({ ...b, [picked]: null })));
+  }, [picked]); // eslint-disable-line react-hooks/exhaustive-deps
   const json = checkJson(text);
   const written = json.ok && json.value && typeof json.value === "object" && !Array.isArray(json.value) ? json.value as Record<string, unknown> : null;
-  const body = mode === "past" ? list?.find((d) => d.id === picked)?.body ?? null : written;
+  const body = mode === "past" ? (picked ? bodies[picked] ?? null : null) : written;
   useEffect(() => {
     if (!body) { setVerdict(null); return; }
     const t = setTimeout(() => client.evaluateIncoming(a.id, body).then(setVerdict, () => setVerdict(null)), 250);
@@ -445,7 +459,7 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
             header={<span className="ds-mono">json · the request body</span>}
             footer={<span className="automationEditorFoot">
               <span>{text.split("\n").length} lines</span>
-              <TextButton onClick={() => setText(JSON.stringify(list?.[0]?.body ?? {}, null, 2))}>Reset to the last delivery</TextButton>
+              <TextButton onClick={() => setText(JSON.stringify((list?.[0] && bodies[list[0].id]) ?? {}, null, 2))}>Reset to the last delivery</TextButton>
             </span>} />
         )}
         {body ? <VerdictBox trigger={trigger} verdict={verdict} body={body} />

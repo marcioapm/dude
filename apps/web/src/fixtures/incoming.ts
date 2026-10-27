@@ -5,9 +5,8 @@
  * token, no project yet), and what PR triage's GitHub deliveries came to.
  */
 
-import type { Automation, AutomationRun, AutomationRunDetail, AutomationToolCall, IncomingTrigger, IncomingVerdict } from "@dude/domain";
+import type { Automation, AutomationDeliveryDetail, AutomationRun, AutomationRunDetail, AutomationToolCall, IncomingTrigger, IncomingVerdict } from "@dude/domain";
 import { conditionHolds, groupKeyOf } from "@dude/domain";
-import type { ListedDelivery } from "../api/client.ts";
 
 const MIN = 60_000;
 const iso = (ago: number) => new Date(Date.now() - ago).toISOString();
@@ -66,7 +65,7 @@ export function incomingAutomations(build: (over: Partial<Automation> & Pick<Aut
 const HEADERS = (bytes: number) => ({ "Content-Type": "application/json", "Content-Length": String(bytes), "User-Agent": "Grafana/12.2.0",
   "X-Signature": "sha256=••••••••", "X-Forwarded-For": "203.0.113.24" });
 
-type Row = ListedDelivery & { headers: Record<string, string> };
+type Row = AutomationDeliveryDetail;
 
 function delivery(id: string, ago: number, over: Partial<Row>): Row {
   return { id, receivedAt: iso(ago), verdict: null, reason: null, reasonIndex: null, groupKey: null, bytes: 0, runId: null,

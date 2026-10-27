@@ -626,7 +626,7 @@ export interface AutomationPromptVersion {
 
 export const restorePromptSchema = z.object({ versionId: z.string().min(1).max(100) }).strict();
 
-/** A stored delivery Run now offers: the event's last 30 days. */
+/** A stored delivery Run now offers: the event's last 30 days. Listed without its body (the delivery's detail has it). */
 export interface PastDelivery {
   id: string;
   event: string;
@@ -634,7 +634,6 @@ export interface PastDelivery {
   repository: string | null;
   sender: string | null;
   receivedAt: string;
-  body: Record<string, unknown>;
 }
 
 /** The events an organisation's GitHub sends dude, and where dude read that. */

@@ -271,4 +271,17 @@ describe("an incoming automation's routes", () => {
     expect(detail.headers).toMatchObject({ Authorization: "••••", "User-Agent": "Grafana/12.2.0", "X-Api-Secret": "••••" });
     expect((await call("GET", `/v1/automations/${id}/deliveries/dlv_nope`)).status).toBe(404);
   });
+
+  test("the list carries no bodies and filters by verdict on the server, past a burst of refusals", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
+    await post(hook, `{"status":"firing","pad":"${"x".repeat(5000)}"}`, { authorization: secret });
+    for (let i = 0; i < 101; i++) await post(hook, "{}", { authorization: "wrong" });
+    const all = (await (await call("GET", `/v1/automations/${id}/deliveries`)).json() as Json).deliveries;
+    expect(all).toHaveLength(100);
+    expect(all.every((d: Json) => d.verdict === "refused" && !("body" in d))).toBe(true);
+    const pending = (await (await call("GET", `/v1/automations/${id}/deliveries?verdict=pending`)).json() as Json).deliveries;
+    expect(pending.map((d: Json) => [d.verdict, "body" in d])).toEqual([[null, false]]);
+    expect(pending[0].bytes).toBeGreaterThan(5000);
+    expect((await call("GET", `/v1/automations/${id}/deliveries?verdict=nope`)).status).toBe(400);
+  });
 });

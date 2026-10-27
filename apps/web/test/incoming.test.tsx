@@ -168,6 +168,24 @@ describe("Deliveries", () => {
     expect(d.querySelector("[data-testid=run-with-delivery]")).toBeNull();
   });
 
+  test("the verdict filter asks the server for that verdict", async () => {
+    const client = new FixtureClient("a");
+    const asked: Array<string | undefined> = [];
+    const list = client.automationDeliveryList.bind(client);
+    client.automationDeliveryList = async (id, verdict) => { asked.push(verdict); return list(id, verdict); };
+    const c = await page(client, { id: "aut_alert", tab: "deliveries" });
+    await until(() => c.querySelector("[data-testid=delivery-row]"), "the rows");
+    const select = c.querySelector<HTMLElement>("[data-testid=deliveries] [role=combobox]")!;
+    await click(select);
+    await click(await until(() => [...document.body.querySelectorAll<HTMLElement>("[role=option]")].find((o) => o.textContent === "Refused"), "Refused"));
+    const rows = await until(() => {
+      const r = [...c.querySelectorAll<HTMLElement>("[data-testid=delivery-row]")];
+      return r.length === 4 ? r : null;
+    }, "the refused rows");
+    expect(asked).toEqual([undefined, "refused"]);
+    expect(rows.every((r) => r.querySelector("[data-verdict]")!.textContent!.startsWith("Refused"))).toBe(true);
+  });
+
   test("a GitHub automation has the tab too, its rows naming the event", async () => {
     const c = await page(new FixtureClient("a"), { id: "aut_triage", tab: "deliveries" });
     const rows = await until(() => { const r = [...c.querySelectorAll<HTMLElement>("[data-testid=delivery-row]")]; return r.length ? r : null; }, "the rows");
@@ -200,6 +218,28 @@ describe("Run now on a payload", () => {
       return v?.textContent?.includes("It would be skipped") ? v : null;
     }, "the skip");
     expect(verdict.textContent).toContain("commonLabels.severity is warning, not one of critical, high");
+  });
+
+  test("the past-delivery list carries no bodies: a picked delivery's body is read from its detail", async () => {
+    const client = new FixtureClient("a");
+    const details: string[] = [];
+    const one = client.automationDelivery.bind(client);
+    client.automationDelivery = async (id, deliveryId) => { details.push(deliveryId); return one(id, deliveryId); };
+    const listed = await client.automationDeliveryList("aut_alert", "accepted");
+    expect(listed.deliveries.some((d) => "body" in d)).toBe(false);
+    expect(listed.deliveries.map((d) => d.verdict)).not.toContain("refused");
+    const c = await page(client, { id: "aut_alert" });
+    await click(await until(() => c.querySelector<HTMLElement>("[data-testid=run-now]"), "Run now"));
+    await click(await until(() => button(document.body, "A past delivery"), "the past mode"));
+    const row = await until(() => [...document.body.querySelectorAll<HTMLElement>("[data-testid=test-delivery] tr")]
+      .find((r) => r.textContent?.includes("dlv_4b8r")), "the delivery's row");
+    await click(row);
+    const verdict = await until(() => {
+      const v = document.body.querySelector<HTMLElement>("[data-testid=test-verdict]");
+      return v?.textContent?.includes("status is resolved, not firing") ? v : null;
+    }, "the picked delivery's verdict");
+    expect(verdict).not.toBeNull();
+    expect(details).toContain("dlv_4b8r");
   });
 });
 

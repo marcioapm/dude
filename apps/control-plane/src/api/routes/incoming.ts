@@ -20,6 +20,7 @@ import {
   redactedHeader,
   type AutomationDelivery,
   type AutomationDeliveryDetail,
+  type DeliveryVerdictKind,
   type IncomingVerify,
   type RefusalCode,
 } from "@dude/domain";
@@ -160,11 +161,12 @@ type DeliveryTrigger = { kind: "github"; event: string } | { kind: "incoming" };
 const isoOf = (v: unknown) => (v instanceof Date ? v.toISOString() : (v as string));
 
 // An incoming delivery's columns; a GitHub one's are the same names from
-// webhook_deliveries and the matcher's verdict for this automation.
+// webhook_deliveries and the matcher's verdict for this automation (a
+// delivery stored before bytes existed is measured, until it ages out).
 const INCOMING_COLUMNS = `d.id, d.received_at AS "receivedAt", d.verdict, d.reason, d.reason_index AS "reasonIndex",
   d.group_key AS "groupKey", d.bytes, d.run_id AS "runId", 'incoming' AS event, NULL AS action, NULL AS repository, NULL AS sender`;
 const GITHUB_COLUMNS = `d.id, d.received_at AS "receivedAt", v.verdict, v.reason, NULL::int AS "reasonIndex", NULL AS "groupKey",
-  octet_length(d.payload::text) AS bytes, v.run_id AS "runId", d.event, d.payload->>'action' AS action,
+  COALESCE(d.bytes, octet_length(d.payload::text)) AS bytes, v.run_id AS "runId", d.event, d.payload->>'action' AS action,
   d.payload->'repository'->>'full_name' AS repository, d.payload->'sender'->>'login' AS sender`;
 
 function deliveryOut(r: Record<string, unknown>): AutomationDelivery {
@@ -172,19 +174,30 @@ function deliveryOut(r: Record<string, unknown>): AutomationDelivery {
   return { ...(rest as unknown as AutomationDelivery), receivedAt: isoOf(r.receivedAt) };
 }
 
-/** The last 30 days' deliveries, newest first (at most 100); a GitHub automation's with Run now's body. */
-export async function readDeliveries(scope: OrgScope, automationId: string, trigger: DeliveryTrigger): Promise<Array<AutomationDelivery & { body?: unknown }>> {
+/** The list's verdict filter: a verdict; "pending" for one the loop has not read; "accepted" for any not refused. */
+export type DeliveryFilter = DeliveryVerdictKind | "pending" | "accepted";
+
+/**
+ * The last 30 days' deliveries, newest first (at most 100), of one verdict
+ * when filtered: on the server, so a burst of refusals hides none of the
+ * rest. No bodies: a delivery's detail (readDelivery) has its body.
+ */
+export async function readDeliveries(scope: OrgScope, automationId: string, trigger: DeliveryTrigger, verdict: DeliveryFilter | null = null): Promise<AutomationDelivery[]> {
   if (trigger.kind === "incoming") {
-    const rows = (await scope.sql.unsafe(`SELECT ${INCOMING_COLUMNS}, d.payload AS body FROM incoming_deliveries d
-      WHERE d.automation_id = $1 AND d.received_at > now() - interval '30 days' ORDER BY d.received_at DESC, d.id DESC LIMIT 100`,
-    [automationId])) as Array<Record<string, unknown>>;
-    return rows.map((r) => ({ ...deliveryOut(r), body: r.body }));
+    const rows = (await scope.sql.unsafe(`SELECT ${INCOMING_COLUMNS} FROM incoming_deliveries d
+      WHERE d.automation_id = $1 AND d.received_at > now() - interval '30 days'
+        AND ($2::text IS NULL OR d.verdict = $2 OR ($2 = 'pending' AND d.verdict IS NULL)
+          OR ($2 = 'accepted' AND d.verdict IS DISTINCT FROM 'refused'))
+      ORDER BY d.received_at DESC, d.id DESC LIMIT 100`, [automationId, verdict])) as Array<Record<string, unknown>>;
+    return rows.map(deliveryOut);
   }
-  const rows = (await scope.sql.unsafe(`SELECT ${GITHUB_COLUMNS}, d.payload AS body FROM webhook_deliveries d
+  const rows = (await scope.sql.unsafe(`SELECT ${GITHUB_COLUMNS} FROM webhook_deliveries d
       LEFT JOIN automation_github_verdicts v ON v.delivery_id = d.id AND v.automation_id = $1
-    WHERE d.event = $2 AND d.received_at > now() - interval '30 days' ORDER BY d.received_at DESC, d.id DESC LIMIT 100`,
-  [automationId, trigger.event])) as Array<Record<string, unknown>>;
-  return rows.map((r) => ({ ...deliveryOut(r), body: r.body }));
+    WHERE d.event = $2 AND d.received_at > now() - interval '30 days'
+      AND ($3::text IS NULL OR v.verdict = $3 OR ($3 IN ('pending', 'accepted') AND v.verdict IS NULL)
+        OR ($3 = 'accepted' AND v.verdict IS NOT NULL))
+    ORDER BY d.received_at DESC, d.id DESC LIMIT 100`, [automationId, trigger.event, verdict])) as Array<Record<string, unknown>>;
+  return rows.map(deliveryOut);
 }
 
 /** One delivery with its stored headers and body; null when the automation has none of that id. */

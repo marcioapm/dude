@@ -104,6 +104,9 @@ CREATE POLICY tenant_isolation ON automation_github_verdicts USING (organization
   WITH CHECK (organization_id = current_organization_id());
 CREATE INDEX automation_github_verdicts_delivery_idx ON automation_github_verdicts (delivery_id);
 GRANT SELECT, INSERT, UPDATE, DELETE ON automation_github_verdicts TO dude_sweeper;
+-- A GitHub delivery's size as received, for the Deliveries list without
+-- reading its payload; NULL for a delivery stored before this column.
+ALTER TABLE webhook_deliveries ADD COLUMN bytes integer CHECK (bytes >= 0);
 
 -- A run's payloads gain the delivery's group key ({deliveryId, event:
 -- "incoming", groupKey, body}); a live run's group is its first payload's.
