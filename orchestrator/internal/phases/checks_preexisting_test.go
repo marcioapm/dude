@@ -299,17 +299,20 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 	for _, off := range []error{judge.ErrOff, judge.ErrNoModel} {
 		t.Run(off.Error(), func(t *testing.T) {
 			w := newHarnessWorld(t)
+			startedFrom(w)
 			checksReply(w, failingTsc)
 			endTurn(w)
-			w.s.Judge = &preexistingFake{err: off}
+			fake := &preexistingFake{err: off}
+			w.s.Judge = fake
 			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified || got.Skipped || got.JudgePassed || len(got.Verdicts) != 1 || got.Verdicts[0].Result != delivery.CheckFail {
-				t.Fatalf("%+v %v", got, err)
+			if err != nil || fake.calls != 1 || got.Verified || got.Skipped || got.JudgePassed || len(got.Verdicts) != 1 || got.Verdicts[0].Result != delivery.CheckFail {
+				t.Fatalf("%+v %v, asked %d", got, err, fake.calls)
 			}
 		})
 	}
 	t.Run("through the judge service", func(t *testing.T) {
 		w := newHarnessWorld(t)
+		startedFrom(w)
 		checksReply(w, failingTsc)
 		endTurn(w)
 		w.s.Judge = &judge.Service{DB: w.s.DB}
@@ -318,6 +321,91 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 			t.Fatalf("%+v %v", got, err)
 		}
 	})
+	// The tier is gone for the pre-existing question alone: Backed and
+	// Missing would pass the rest of the report.
+	t.Run("on the pre-existing question alone", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		startedFrom(w)
+		checksReply(w, failingTsc+reportedPass)
+		endTurn(w)
+		fake := &waiverFake{offPreexisting: true}
+		w.s.Judge = fake
+		got, err := w.s.judgeChecks(context.Background(), w.run)
+		if err != nil || got.Verified || got.Skipped || got.JudgePassed || len(got.Verdicts) == 0 || got.Verdicts[0].Result != delivery.CheckFail {
+			t.Fatalf("%+v %v", got, err)
+		}
+	})
+	// The judge passed the failure, then the tier is gone for Backed and
+	// Missing: the judge-passed failure is not let through by the skip.
+	t.Run("after the judge passed the failure", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		startedFrom(w)
+		checksReply(w, failingTsc+reportedPass)
+		endTurn(w)
+		fake := &waiverFake{preexisting: judge.Yes, offAfterPreexisting: true}
+		w.s.Judge = fake
+		got, err := w.s.judgeChecks(context.Background(), w.run)
+		if err != nil || got.Verified || got.Skipped || got.JudgePassed || fake.preexistingQuestions() != 1 || len(fake.asked) != 2 {
+			t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
+		}
+	})
+	t.Run("a not-run check", func(t *testing.T) {
+		w := newHarnessWorld(t)
+		delivering(w, true)
+		checksReply(w, notRunInUI)
+		endTurn(w)
+		fake := &preexistingFake{err: judge.ErrOff}
+		w.s.Judge = fake
+		got, err := w.s.judgeChecks(context.Background(), w.run)
+		if err != nil || fake.calls != 1 || got.Verified || got.Skipped || got.JudgePassed || len(got.Verdicts) != 1 || got.Verdicts[0].Result != delivery.CheckNotRun {
+			t.Fatalf("%+v %v, asked %d", got, err, fake.calls)
+		}
+	})
+}
+
+// The first failure the judge does not pass rejects the report there, and
+// the send-back names it and every failure not yet asked about.
+func TestTheSendBackNamesTheFailuresAfterTheFirstRejected(t *testing.T) {
+	w := newHarnessWorld(t)
+	startedFrom(w)
+	checksReply(w, failingTsc+strings.TrimPrefix(failingTest, "checks:\n"))
+	endTurn(w)
+	fake := &preexistingFake{answer: judge.No}
+	w.s.Judge = fake
+	got, err := w.s.judgeChecks(context.Background(), w.run)
+	if err != nil || got.Verified || fake.calls != 1 || len(got.Verdicts) != 2 || got.Verdicts[1].Command != "make test" {
+		t.Fatalf("%+v %v, asked %d", got, err, fake.calls)
+	}
+	if msg := sendBack(got.Verdicts, got.bases); !strings.Contains(msg, "- make test: TestClock needs a hardware clock\n") {
+		t.Fatalf("the send-back lacks the second failure:\n%s", msg)
+	}
+}
+
+// The task base comes from the commit the checkout really started at
+// (runs.base_shas), never the one it was asked to start from; a repository
+// with no recorded start, or one the task only reads, has none; several
+// are listed by name.
+func TestTheTaskBaseIsMeasuredFromTheRecordedStart(t *testing.T) {
+	w := newHarnessWorld(t)
+	h := startedFrom(w)
+	// web: another repository row over the same fake GitHub repository,
+	// started from the task's earlier work; docs: asked for, never started;
+	// spec: read only.
+	for _, repo := range []struct{ name, access string }{{"web", "write"}, {"docs", "write"}, {"spec", "read"}} {
+		mustOwner(t, w, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+			SELECT 'repo_'||$2||'_'||organization_id, organization_id, project_id, $2, 'https://github.com/acme/target.git', 'main' FROM runs WHERE id = $1`, w.run.ID, repo.name)
+		mustOwner(t, w, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+			SELECT organization_id, task_id, 'repo_'||$2||'_'||organization_id, $3::text::repository_access FROM runs WHERE id = $1`, w.run.ID, repo.name, repo.access)
+	}
+	mustOwner(t, w, `UPDATE runs SET base_refs = jsonb_build_object('target', 'main', 'web', $2::text, 'docs', $2::text),
+		base_shas = jsonb_build_object('web', $2::text, 'target', $2::text, 'spec', $2::text) WHERE id = $1`, w.run.ID, h.Earlier)
+	got, err := w.s.taskBases(context.Background(), w.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "target: main at " + h.Main + ", web: main at " + h.Main; joinBases(got) != want {
+		t.Fatalf("bases %q, want %q", joinBases(got), want)
+	}
 }
 
 // A browser check not run passes as deferred when the attempt's policy
