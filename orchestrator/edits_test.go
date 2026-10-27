@@ -305,6 +305,43 @@ func TestAnOffBranchCheckoutRidesOnTheNextNote(t *testing.T) {
 
 // A kept checkout with commits of its own still wakes the conductor by
 // itself: there is work of its own in the way.
+func TestANewerCheckoutSyncSupersedesOnlyItsOwnRidingWarning(t *testing.T) {
+	e := newEditing(t)
+	e.wokenWith(e.task, "after implement")
+	pending := `SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL AND strpos(line, $2) > 0`
+	if status, out := e.chat(e.task, "check the checkout"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	offBranch := "target: your checkout is 1 behind and not on the task branch"
+	e.until("the first sync's pending warning", func() bool { return e.count(pending, e.task, offBranch) == 1 })
+	otherWarning := "other: your checkout is 2 behind and not on the task branch"
+	mustExec(t, e.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
+		VALUES ('cwk_other_repo', $1, $2, 'checkout', $3, $4)`, e.org, e.task, delivery.RideWakeKey("checkout:earlier:other"), otherWarning)
+	var previousSync string
+	if err := e.owner.QueryRow(context.Background(), `SELECT checkout_sync_id FROM runs WHERE id = $1`, e.cond).Scan(&previousSync); err != nil {
+		t.Fatal(err)
+	}
+	e.current()
+	if status, out := e.chat(e.task, "check again on the task branch"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	e.until("the newer successful sync finished", func() bool {
+		return e.count(`SELECT count(*) FROM runs WHERE id = $1 AND checkout_sync_id <> $2 AND cardinality(checkout_sync_repos) = 0`, e.cond, previousSync) == 1
+	})
+	if n := e.count(pending, e.task, offBranch); n != 0 {
+		t.Fatalf("superseded target warning still pending: %d", n)
+	}
+	if n := e.count(pending, e.task, otherWarning); n != 1 {
+		t.Fatalf("other repository warning lost: %d", n)
+	}
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.until("after review", func() bool { return e.decisionAt(e.task) == delivery.PointReviewed })
+	note := e.wokenWith(e.task, "after a review round")
+	if strings.Contains(note, offBranch) || strings.Count(note, otherWarning) != 1 {
+		t.Fatalf("next real note: %q", note)
+	}
+}
+
 func TestAKeptCheckoutWithItsOwnCommitsStillWakes(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
