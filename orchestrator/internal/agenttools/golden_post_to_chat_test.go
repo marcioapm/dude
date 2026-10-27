@@ -27,15 +27,15 @@ func TestGoldenAutomationTools(t *testing.T) {
 	golden(t, "tool-post_to_chat", fmt.Sprintf("# %s\n\n%s\n\n```json\n%s\n```\n", postToChatTool.name, postToChatTool.description, schema))
 
 	goldenLines(t, "refusals-post-to-chat", [][2]string{
-		{"automations-only", postRefusal("automations-only")},
-		{"name-a-channel", postRefusal("name-a-channel")},
-		{"text-length", fmt.Sprintf(postRefusal("text-length"), postTextMax, 40001)},
-		{"per-run", fmt.Sprintf(postRefusal("per-run"), postsPerRun)},
-		{"not-connected", fmt.Sprintf(postRefusal("not-connected"), "Acme")},
-		{"unknown-channel", fmt.Sprintf(postRefusal("unknown-channel"), "#nowhere")},
-		{"not-in-channel", fmt.Sprintf(postRefusal("not-in-channel"), "#random")},
-		{"lookup-cut", fmt.Sprintf(postRefusal("lookup-cut"), "#team-59")},
-		{"slack-busy", fmt.Sprintf(postRefusal("slack-busy"), "slack chat.postMessage answered 503")},
-		{"slack-refused", fmt.Sprintf(postRefusal("slack-refused"), "slack chat.postMessage: msg_too_long")},
+		{"automations-only", rPostAutomationsOnly},
+		{"name-a-channel", rPostNameAChannel},
+		{"text-length", fmt.Sprintf(rPostTextLength, postTextMax, 40001)},
+		{"per-run", fmt.Sprintf(rPostPerRun, postsPerRun)},
+		{"not-connected", fmt.Sprintf(rPostNotConnected, "Acme")},
+		{"unknown-channel", fmt.Sprintf(rPostUnknownChannel, "#nowhere")},
+		{"not-in-channel", fmt.Sprintf(rPostNotInChannel, "#random")},
+		{"lookup-cut", fmt.Sprintf(rPostLookupCut, "#team-59")},
+		{"slack-busy", fmt.Sprintf(rPostSlackBusy, "slack chat.postMessage answered 503")},
+		{"slack-refused", fmt.Sprintf(rPostSlackRefused, "slack chat.postMessage: msg_too_long")},
 	})
 }
