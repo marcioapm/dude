@@ -95,12 +95,7 @@ func WithSharedImageIDs(text string, images []SentAttachment) string {
 	if len(images) == 0 {
 		return text
 	}
-	type shared struct{ ID, Name string }
-	list := make([]shared, len(images))
-	for i, a := range images {
-		list[i] = shared{a.ID, a.Name}
-	}
-	line := render(sharedImageIDsTmpl, list)
+	line := render(sharedImageIDsTmpl, images)
 	if strings.TrimSpace(text) == "" {
 		return line
 	}
@@ -140,10 +135,10 @@ func WithSessionImages(goal string, images []SessionImage) string {
 func CreateTaskWithSessionImagesTx(ctx context.Context, tx pgx.Tx, org, projectID string, f Filer, epicID, title, goal string,
 	criteria []string, sessionID string, imageIDs []string) (string, string, error) {
 	sources, err := SessionImagesTx(ctx, tx, sessionID, imageIDs)
-	if err != nil || len(sources) == 0 {
-		if err != nil {
-			return "", "", err
-		}
+	if err != nil {
+		return "", "", err
+	}
+	if len(sources) == 0 {
 		return CreateTaskTx(ctx, tx, org, projectID, f, epicID, title, goal, criteria)
 	}
 	copies := make([]SessionImage, len(sources))
