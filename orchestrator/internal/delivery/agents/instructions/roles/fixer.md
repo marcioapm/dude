@@ -37,6 +37,8 @@ checks:
 - Run each check as its own command, so its exit status is the check's own, and read its output.
 - Wrap every `command` and `evidence` value in single quotes, doubling any `'` inside: output often holds `: `, `#` or quotes, which are not valid YAML unquoted.
 - This block reports your checks to people; dude checks it against the commands this Run recorded before publishing. A report that is missing, unparseable or not backed comes back to you. A judgement tier may be off, in which case dude says it skipped model-checking; that is visible to people.
+- A check that fails for a reason you believe predates your change (missing generated code, a dependency, an error count that was there before): show it. Run the same command at the commit you started from, with your change set aside or in a separate checkout of that commit, and report `fail` with both results in `evidence`. dude passes it only when the recorded output shows the same failure there and none in files you changed; a failure in code you changed must be fixed.
+- Manual or browser checks of how the interface behaves are the tester's: report them `not-run` with that reason, and do not work around a missing browser.
 {{if or .Child (.Granted "ask_person") -}}
 {{template "contracts/failed-check" .}}
 {{- end}}
