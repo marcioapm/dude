@@ -159,6 +159,51 @@ func TestIncomingQueueGoesOnPastDeliveriesItCannotDecide(t *testing.T) {
 	}
 }
 
+// A follow-up is kept in the live run by reference ({deliveryId, groupKey}):
+// its body is read from incoming_deliveries when it is sent to the agent.
+// A run already holding FollowUpCap deliveries takes no more: the next is
+// skipped, saying so.
+func TestIncomingFollowUpsByReferenceUpToTheCap(t *testing.T) {
+	h := newHarness(t)
+	h.incoming("aut_ref", nil, "groupKey",
+		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Now {{payload.status}}"}}})
+	h.receive("aut_ref", "dlv_r1", alert("firing", "g", "high"))
+	h.until("the first runs", func() bool {
+		r := h.runs("aut_ref")
+		return len(r) == 1 && r[0].Status == "running" && r[0].LuxRunID != ""
+	})
+	run := h.runs("aut_ref")[0]
+	h.receive("aut_ref", "dlv_r2", alert("resolved", "g", "high"))
+	requestID := "automation-" + run.ID + "-1"
+	h.until("the follow-up reaches the agent", func() bool { return len(h.fake.InputBodies(run.LuxRunID, requestID)) > 0 })
+	var input struct{ Text string }
+	_ = json.Unmarshal([]byte(h.fake.InputBodies(run.LuxRunID, requestID)[0]), &input)
+	if !strings.Contains(input.Text, "⟧resolved⟦/external ") {
+		t.Errorf("the follow-up's input: %s", input.Text)
+	}
+	var second string
+	if err := h.owner.QueryRow(context.Background(), `SELECT payloads->1 FROM automation_runs WHERE id = $1`, run.ID).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	var ref map[string]any
+	_ = json.Unmarshal([]byte(second), &ref)
+	if _, hasBody := ref["body"]; hasBody || ref["deliveryId"] != "dlv_r2" || ref["groupKey"] != "g" {
+		t.Errorf("the run keeps the follow-up as %s, want a reference", second)
+	}
+
+	// Fill the run up to the cap, then one more.
+	exec(t, h.owner, `UPDATE automation_runs SET payloads = payloads || (SELECT jsonb_agg(jsonb_build_object('deliveryId', 'x' || n,
+		'event', 'incoming', 'groupKey', 'g')) FROM generate_series(1, $2 - 2) n), inputs_sent = $2 WHERE id = $1`, run.ID, FollowUpCap)
+	h.receive("aut_ref", "dlv_over", alert("firing", "g", "high"))
+	h.until("the one over the cap is read", func() bool { return h.delivery("dlv_over").Verdict != "" })
+	if d := h.delivery("dlv_over"); d.Verdict != VerdictSkipped || d.Reason != fmt.Sprintf("the live run already holds %d deliveries", FollowUpCap) || d.Run != "" {
+		t.Errorf("over the cap: %+v", d)
+	}
+	if r := h.runs("aut_ref"); len(r) != 1 || r[0].Payloads != FollowUpCap {
+		t.Errorf("runs %+v", r)
+	}
+}
+
 // Once the group's run has ended, the next delivery of that group is
 // checked and fires afresh.
 func TestIncomingAfterTheRunEndedStartsAgain(t *testing.T) {

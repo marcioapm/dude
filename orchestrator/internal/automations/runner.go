@@ -245,7 +245,7 @@ type Payload struct {
 	DeliveryID string          `json:"deliveryId"`
 	Event      string          `json:"event"`
 	Action     string          `json:"action"`
-	Body       json.RawMessage `json:"body"`
+	Body       json.RawMessage `json:"body,omitempty"`
 	// An incoming delivery's group (incoming.go); a live run's group is its first payload's.
 	GroupKey string `json:"groupKey,omitempty"`
 }
@@ -716,6 +716,9 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 			Scan(&run.Source, &run.Payloads, &run.At); err != nil {
 			return err
 		}
+		if err := resolveIncoming(ctx, tx, run.Payloads); err != nil {
+			return err
+		}
 		var err error
 		if a, err = Load(ctx, tx, automationID); err != nil {
 			return err
@@ -1019,11 +1022,14 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	}
 	var cursor, prior string
 	var busy bool
-	var payloads []Payload
-	var inputsSent int
+	var pending []Payload
+	var held, inputsSent int
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, payloads, inputs_sent, COALESCE(log_tail, '') FROM automation_runs WHERE id = $1`, runID).
-			Scan(&cursor, &busy, &payloads, &inputsSent, &prior)
+		// Only the payloads not yet given to the agent: a long-lived run's array is not read whole every pass.
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, jsonb_array_length(payloads), inputs_sent, COALESCE(log_tail, ''),
+			(SELECT COALESCE(jsonb_agg(e ORDER BY i), '[]') FROM jsonb_array_elements(payloads) WITH ORDINALITY p(e, i) WHERE i > inputs_sent)
+			FROM automation_runs WHERE id = $1`, runID).
+			Scan(&cursor, &busy, &held, &inputsSent, &prior, &pending)
 	}); err != nil {
 		return false, err
 	}
@@ -1034,8 +1040,8 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	// Events sent into the run while it works (Concurrency: send): each
 	// reaches its agent as input, and its turn is waited for afresh.
 	sent := 0
-	if a.Kind == "agent" && !lux.Terminal(got.State) && failed == "" && inputsSent < len(payloads) {
-		if sent, err = r.sendInputs(ctx, a, runID, luxRunID, payloads, inputsSent); err != nil {
+	if a.Kind == "agent" && !lux.Terminal(got.State) && failed == "" && inputsSent < held {
+		if sent, err = r.sendInputs(ctx, a, runID, luxRunID, pending, inputsSent); err != nil {
 			return false, err
 		}
 	}
@@ -1085,17 +1091,20 @@ func (r *Runner) endTurnDone(ctx context.Context, a Automation, runID, luxRunID 
 	return true, nil
 }
 
-// sendInputs gives a running agent the payloads after the first sent ones,
-// each as the automation's prompt for that event; it says how many went.
-// A request id per payload makes a retry after a lost answer one input.
-func (r *Runner) sendInputs(ctx context.Context, a Automation, runID, luxRunID string, payloads []Payload, sent int) (int, error) {
+// sendInputs gives a running agent pending, the payloads after the first
+// sent ones, each as the automation's prompt for that event; it says how
+// many went. A request id per payload makes a retry after a lost answer one input.
+func (r *Runner) sendInputs(ctx context.Context, a Automation, runID, luxRunID string, pending []Payload, sent int) (int, error) {
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error { return resolveIncoming(ctx, tx, pending) }); err != nil {
+		return 0, err
+	}
 	n := 0
-	for i := sent; i < len(payloads); i++ {
-		text, _, err := r.prompt(ctx, a, payloads[i:i+1], nil)
+	for i := range pending {
+		text, _, err := r.prompt(ctx, a, pending[i:i+1], nil)
 		if err != nil {
 			return n, err
 		}
-		if err := r.Lux.Input(ctx, luxRunID, lux.InputRequest{Text: text, RequestID: fmt.Sprintf("automation-%s-%d", runID, i)}); err != nil {
+		if err := r.Lux.Input(ctx, luxRunID, lux.InputRequest{Text: text, RequestID: fmt.Sprintf("automation-%s-%d", runID, sent+i)}); err != nil {
 			return n, err
 		}
 		n++
@@ -1363,6 +1372,9 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 		return false, nil
 	}
 	if posted < len(payloads) {
+		if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error { return resolveIncoming(ctx, tx, payloads[posted:]) }); err != nil {
+			return false, err
+		}
 		for i := posted; i < len(payloads); i++ {
 			r.postOnce(ctx, a, runID, base+cfg.Path, signIn, payloads[i])
 		}

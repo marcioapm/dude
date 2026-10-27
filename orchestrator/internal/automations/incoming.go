@@ -367,7 +367,15 @@ func ArriveIncoming(ctx context.Context, tx pgx.Tx, automationID, deliveryID str
 	if live, err := liveGroupRun(ctx, tx, a, group); err != nil {
 		return nil, err
 	} else if live != "" {
-		raw, _ := json.Marshal(payloads)
+		var held int
+		if err := tx.QueryRow(ctx, `SELECT jsonb_array_length(payloads) FROM automation_runs WHERE id = $1`, live).Scan(&held); err != nil {
+			return nil, err
+		}
+		if held >= FollowUpCap {
+			return nil, verdict(VerdictSkipped, fmt.Sprintf("the live run already holds %d deliveries", FollowUpCap), nil, group, "")
+		}
+		// By reference: the body stays in incoming_deliveries until it is sent (resolveIncoming).
+		raw, _ := json.Marshal([]Payload{{DeliveryID: deliveryID, Event: EventIncoming, GroupKey: group}})
 		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, live, raw); err != nil {
 			return nil, err
 		}
@@ -399,6 +407,47 @@ func firedVerdict(ctx context.Context, tx pgx.Tx, fired Fired) (string, string) 
 		return VerdictSentToRun, ""
 	}
 	return VerdictStarted, ""
+}
+
+// FollowUpCap is how many deliveries one live run holds; a later one of
+// its group is skipped.
+const FollowUpCap = 50
+
+// resolveIncoming reads the bodies of incoming follow-ups a run keeps by
+// reference ({deliveryId, groupKey}) from incoming_deliveries. A body
+// retention has emptied reads as JSON null.
+func resolveIncoming(ctx context.Context, tx pgx.Tx, payloads []Payload) error {
+	var want []string
+	for _, p := range payloads {
+		if p.Event == EventIncoming && len(p.Body) == 0 {
+			want = append(want, p.DeliveryID)
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, COALESCE(payload, 'null') FROM incoming_deliveries WHERE id = ANY($1)`, want)
+	if err != nil {
+		return err
+	}
+	bodies := map[string]json.RawMessage{}
+	var id string
+	var body json.RawMessage
+	if _, err := pgx.ForEachRow(rows, []any{&id, &body}, func() error {
+		bodies[id] = slices.Clone(body)
+		return nil
+	}); err != nil {
+		return err
+	}
+	for i, p := range payloads {
+		if p.Event == EventIncoming && len(p.Body) == 0 {
+			payloads[i].Body = json.RawMessage("null")
+			if b, ok := bodies[p.DeliveryID]; ok {
+				payloads[i].Body = b
+			}
+		}
+	}
+	return nil
 }
 
 // liveGroupRun is the automation's queued or running run whose first
