@@ -57,20 +57,13 @@ function digest(run: string, t0: number, step: "running" | "done" | "posted" | "
     message(run, t0 + 16 * SEC, "Getting this week's numbers from `pr-stats` first, then I'll write the digest for #engineering."),
     called(run, t0 + 18 * SEC, "c1", "bash", { command: "pr-stats --org acme --since 7d --format json" }),
   ];
-  if (step === "running" || step === "scrolled") {
-    if (step === "scrolled") {
-      e.push(completed(run, t0 + 36 * SEC, "c1", "bash", { output: out(PR_STATS_HEAD, PR_STATS_TAIL, 23_860), exitCode: 0 }),
-        thought(run, t0 + 42 * SEC, "41 merged against 36 last week; the median time to merge is down from 23.1h to 19.4h. The table comes from the text format, pasted as printed."),
-        called(run, t0 + 44 * SEC, "c2", "read", { filePath: "notes/digest-style.md" }),
-        completed(run, t0 + 44.2 * SEC, "c2", "read", { output: out("Sections, in order: What shipped · Feature highlight · Numbers · Bots · Parting shot.") }));
-    }
-    return e;
-  }
+  if (step === "running") return e;
   e.push(completed(run, t0 + 36 * SEC, "c1", "bash", { output: out(PR_STATS_HEAD, PR_STATS_TAIL, 23_860), exitCode: 0 }),
     thought(run, t0 + 42 * SEC, "41 merged against 36 last week; the median time to merge is down from 23.1h to 19.4h. The table comes from the text format, pasted as printed."),
     called(run, t0 + 44 * SEC, "c2", "read", { filePath: "notes/digest-style.md" }),
-    completed(run, t0 + 44.2 * SEC, "c2", "read", { output: out("Sections, in order: What shipped · Feature highlight · Numbers · Bots · Parting shot.") }),
-    called(run, t0 + 45 * SEC, "c3", "bash", { command: "pr-stats --org acme --since 7d --format text" }),
+    completed(run, t0 + 44.2 * SEC, "c2", "read", { output: out("Sections, in order: What shipped · Feature highlight · Numbers · Bots · Parting shot.") }));
+  if (step === "scrolled") return e;
+  e.push(called(run, t0 + 45 * SEC, "c3", "bash", { command: "pr-stats --org acme --since 7d --format text" }),
     completed(run, t0 + 46.9 * SEC, "c3", "bash", { output: out(NUMBERS), exitCode: 0 }));
   if (step === "done") return e;
   e.push(message(run, t0 + 62 * SEC, "Writing it up: three themes (webhook reliability, the live run feed, billing PDFs), the numbers table as printed, and one line for the bots."),
