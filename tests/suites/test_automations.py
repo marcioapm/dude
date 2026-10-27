@@ -7,7 +7,8 @@ command, whose log carries the event. A written test event that matches is
 accepted (202) and one the filters would skip is refused (422, `filtered`).
 When the owner leaves the organisation, the automation is held by its admins
 and stays on. On an automation's Settings, ticking a secret and saving
-scroll only the main pane, never the document under the app's shell.
+scroll only the main pane, never the document under the app's shell; this
+guards the Checkbox only, Select's half is the design system's own test.
 """
 
 from __future__ import annotations
